@@ -19,6 +19,76 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Live provider results ────────────────────────────────────────────────
+# probe_llm() alone reports only whether KEYS are present. During the 19 Oct
+# outage keys were present while every call returned 402/429, so /health
+# stayed green while no ask could be served. These record the last REAL
+# provider outcome so health can tell "serving" from merely "configured".
+_PROVIDER_STALE_S = 300.0  # a result older than this no longer bears on "serving"
+_PROVIDER_LOCK = threading.Lock()
+# provider -> {"status": "ok"|"exhausted"|"error", "at": epoch, "http": int|None}
+_PROVIDER_LAST: Dict[str, Dict[str, Any]] = {}
+# distinct upstream counters: 402 = billing/credit, 429 = rate/quota
+_PROVIDER_COUNTS: Dict[str, int] = {"billing_402": 0, "rate_429": 0}
+_LAST_SERVED_AT: float = 0.0
+
+
+def record_provider_result(
+    provider: str, status: str, http_status: Optional[int] = None,
+) -> None:
+    """Record one real provider outcome. ``provider`` is a ROLE label
+    ('primary' / 'fallback'), never the provider NAME — /health is public and
+    names nothing. ``status`` is 'ok', 'exhausted' (402/429) or 'error'. Never
+    raises — telemetry must not break a turn."""
+    global _LAST_SERVED_AT
+    try:
+        now = time.time()
+        with _PROVIDER_LOCK:
+            _PROVIDER_LAST[str(provider or "unknown")] = {
+                "status": status, "at": now, "http": http_status,
+            }
+            if status == "ok":
+                _LAST_SERVED_AT = now
+            if http_status == 402:
+                _PROVIDER_COUNTS["billing_402"] += 1
+            elif http_status == 429:
+                _PROVIDER_COUNTS["rate_429"] += 1
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks a turn
+        logger.debug("record_provider_result swallowed %r", exc)
+
+
+def provider_snapshot() -> Dict[str, Any]:
+    """Per-provider last outcome (with age), the distinct 402/429 counts, and a
+    ``serving`` flag. ``serving`` is conservative: a single transient failure
+    does not flip it — only a recent failure with NO recent success does, and a
+    quiet box with no data stays serving. Never raises."""
+    try:
+        now = time.time()
+        with _PROVIDER_LOCK:
+            providers = {
+                p: {"status": r["status"], "age_s": round(now - r["at"], 1),
+                    "http": r.get("http")}
+                for p, r in _PROVIDER_LAST.items()
+            }
+            counts = dict(_PROVIDER_COUNTS)
+            last_served_age = (
+                round(now - _LAST_SERVED_AT, 1) if _LAST_SERVED_AT else None
+            )
+        served_recently = (
+            last_served_age is not None and last_served_age <= _PROVIDER_STALE_S
+        )
+        recent_failure = any(
+            v["status"] != "ok" and v["age_s"] <= _PROVIDER_STALE_S
+            for v in providers.values()
+        )
+        # Unhealthy only when a real failure is recent AND nothing has been
+        # served recently. No data (quiet box) stays serving.
+        serving = served_recently or not recent_failure
+        return {"providers": providers, "counts": counts,
+                "last_served_age_s": last_served_age, "serving": serving}
+    except Exception as exc:  # noqa: BLE001 — a probe never breaks /health
+        return {"serving": True, "error": type(exc).__name__}
+
 _corpus_cache_lock = threading.Lock()
 _corpus_cache_value: Optional[Dict[str, Any]] = None
 _corpus_cache_at: Optional[float] = None
@@ -454,10 +524,14 @@ def probe_llm() -> Dict[str, Any]:
 
         primary = _llm_config()
         key = primary.get("env_key")
-        return {
+        out = {
             "primary_ready": bool(os.getenv(key)) if key else True,
             "fallback_ready": _llm_fallback_config(primary) is not None,
         }
+        # Merge the LAST REAL provider outcomes so health reflects whether the
+        # model can actually be reached, not just whether a key is set.
+        out.update(provider_snapshot())
+        return out
     except Exception as exc:  # noqa: BLE001 - a probe never breaks /health
         return {"primary_ready": False, "fallback_ready": False,
-                "error": type(exc).__name__}
+                "serving": True, "error": type(exc).__name__}

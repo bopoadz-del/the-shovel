@@ -26,7 +26,10 @@ def clean(monkeypatch):
 def test_deepseek_with_an_openrouter_fallback_is_ready(monkeypatch):
     monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", STUB_TOKEN_08)
-    assert probe_llm() == {"primary_ready": True, "fallback_ready": True}
+    out = probe_llm()
+    # probe_llm now also carries live provider telemetry (providers/counts/
+    # serving); assert the readiness subset this test is about.
+    assert out["primary_ready"] is True and out["fallback_ready"] is True
 
 
 @pytest.mark.parametrize("fallback,key", [
@@ -96,7 +99,11 @@ def test_health_shows_it_and_names_nothing(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", STUB_TOKEN_08)
     with TestClient(app) as c:
         body = c.get("/health").json()
-    assert body["checks"]["llm"] == {"primary_ready": True, "fallback_ready": False}
-    text = str(body["checks"]["llm"]).lower()
+    llm = body["checks"]["llm"]
+    assert llm["primary_ready"] is True and llm["fallback_ready"] is False
+    # The name-withholding guard now covers the WHOLE llm payload, including the
+    # new providers/counts telemetry -- it must still name nothing (keys are
+    # ROLE labels, never provider names).
+    text = str(llm).lower()
     for word in ("deepseek", "openrouter", "kimi", "key", "test"):
         assert word not in text.replace("_ready", ""), word

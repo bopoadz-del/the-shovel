@@ -61,7 +61,10 @@ async def test_deepseek_402_does_not_serve_offline_when_fallback_is_ready(monkey
     monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
 
-    assert probe_llm() == {"primary_ready": True, "fallback_ready": True}
+    _llm = probe_llm()
+    # probe_llm now also carries live provider telemetry; assert the readiness
+    # subset this test is about.
+    assert _llm["primary_ready"] is True and _llm["fallback_ready"] is True
 
     urls: list[str] = []
 

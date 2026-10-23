@@ -42,17 +42,21 @@ def _evaluate_health() -> dict:
     db = probe_database()
     emb = probe_embedder()
     corpus = probe_corpus_chunks()
+    llm = probe_llm()
     return {
         # LIVENESS status: the process is up. DB reachability is reflected
         # truthfully as degraded rather than failing this endpoint — /health is
         # Render's liveness probe, so a transient DB blip must NOT restart a
         # live service mid-incident. Use /ready for a hard readiness gate.
-        "status": "healthy" if db["ok"] else "degraded",
+        # Degraded (still 200, so Render liveness is not tripped) when the DB
+        # is unreachable OR the model cannot currently be served -- health that
+        # does not know the model is down is not health (19 Oct outage).
+        "status": "healthy" if (db["ok"] and llm.get("serving", True)) else "degraded",
         "build_sha": _deployed_build_sha(),
         "checks": {
             "database": db,
             "embedder": emb,
-            "llm": probe_llm(),
+            "llm": llm,
             "workflows": _probe_workflows(),
         },
         # Cached estimate of the active chunk table, not the stale
