@@ -772,6 +772,49 @@ def plain_registry_text(text: str) -> str:
     return pattern.sub(replace_id, text)
 
 
+#: Public name for the pure display-name transform (ORDERS_0150Z PR-A0): show
+#: registered formula/tool ids as their display names, leave everything else
+#: alone. Pure, idempotent (display names contain spaces so they never re-match
+#: an id token), no I/O beyond the cached registry maps, no state.
+apply_display_names = plain_registry_text
+
+#: A trailing run of identifier characters at the very end of a chunk — it may
+#: be the first half of a registry id whose second half is in the next chunk.
+_ID_TAIL_RE = re.compile(r"[A-Za-z0-9_.]+$")
+
+
+class DisplayNameStreamer:
+    """Apply :func:`apply_display_names` across STREAMED segments without
+    splitting a registry id that straddles a segment boundary.
+
+    The transform is pure; streaming needs a small per-stream tail buffer
+    because an id can arrive in two deltas (``"delay_"`` then
+    ``"damages_daily"``). :meth:`feed` converts everything up to a trailing
+    run of identifier characters and holds that run back; the next
+    :meth:`feed` re-joins it; :meth:`flush` converts whatever remains at
+    end-of-stream. One instance per stream — the only state is the local tail
+    buffer, so the module stays stateless and the transform stays pure.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, segment: str) -> str:
+        s = self._buf + (segment or "")
+        m = _ID_TAIL_RE.search(s)
+        if m is not None and m.end() == len(s):
+            # Ends mid-identifier-run: convert the safe prefix, hold the run.
+            self._buf = s[m.start():]
+            return apply_display_names(s[: m.start()])
+        self._buf = ""
+        return apply_display_names(s)
+
+    def flush(self) -> str:
+        out = apply_display_names(self._buf)
+        self._buf = ""
+        return out
+
+
 def _result_strings(value: Any) -> List[str]:
     if isinstance(value, str):
         return [value]
