@@ -1,0 +1,34 @@
+# Ruff configuration.
+#
+# The repo previously had NO ruff config — the CI job ran on defaults. This
+# file exists to add ONE rule on top of those defaults, deliberately using
+# `extend-select` rather than `select` so the default rule set is untouched
+# (a bare `select` would REPLACE it and silently drop existing checks).
+
+[lint]
+# S110 — `try`/`except`/`pass`. Flags a handler that swallows an exception
+# with no log and no comment.
+#
+# WHY THIS RULE SPECIFICALLY (repo audit, 2026-08-03): the tree carries 100+
+# silent handlers, and they are not a style problem — they hide real bugs and
+# cost real time:
+#
+#   * `_persist_failed_turn` referenced a module-scope name that did not
+#     exist. The resulting NameError was swallowed by the helper's OWN
+#     `except Exception`, leaving a function that silently persisted nothing.
+#     Only a test caught it.
+#   * `open_plaintext` / the upload pipeline swallowed cleanup failures on
+#     DECRYPTED client documents — plaintext left on disk, no signal.
+#   * `vector_store` swallowed index-creation failures whose cost is measured
+#     in the comment right above them: ~11s sequential scans on the master
+#     corpus, surfacing only as "retrieval got slow".
+#
+# Silence is the failure mode that hides every other failure mode.
+#
+# ROLLOUT: the ruff CI job is report-only (continue-on-error), so enabling
+# this surfaces the remaining sites in the job log without red-walling main.
+# Baseline at the time of writing: 83 -> 77 after the first triage pass.
+# Promote ruff to blocking once the count reaches zero; until then each fix
+# should either log the exception or carry a comment naming what is absorbed
+# and why.
+extend-select = ["S110"]

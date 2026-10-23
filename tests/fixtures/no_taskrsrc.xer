@@ -1,0 +1,21 @@
+ERMHDR	20.12	2026-01-15	Project	SCRIPT	cb-ai	db	Project Manager	Admin		WBS		
+%T	PROJECT
+%F	proj_id	proj_short_name	plan_start_date	plan_end_date
+%R	1	SampleProject	2026-02-01 08:00	2026-12-31 17:00
+%T	CALENDAR
+%F	clndr_id	clndr_name
+%R	1	Standard 5-day
+%T	TASK
+%F	task_id	task_code	task_name	target_drtn_hr_cnt	total_float_hr_cnt	free_float_hr_cnt	act_work_qty	target_work_qty	target_start_date	target_end_date
+%R	101	A1000	Mobilization	40	0	0	0	40	2026-02-01 08:00	2026-02-08 17:00
+%R	102	A1010	Foundation excavation	160	0	0	0	160	2026-02-09 08:00	2026-03-15 17:00
+%R	103	A1020	Concrete foundation pour	80	0	0	0	80	2026-03-16 08:00	2026-03-30 17:00
+%R	104	A1030	Structural steel erection	320	40	0	0	320	2026-04-01 08:00	2026-06-30 17:00
+%R	105	A1040	Commissioning	80	0	0	0	80	2026-12-15 08:00	2026-12-31 17:00
+%T	TASKPRED
+%F	task_id	pred_task_id	pred_type
+%R	102	101	PR_FS
+%R	103	102	PR_FS
+%R	104	103	PR_FS
+%R	105	104	PR_FS
+%E

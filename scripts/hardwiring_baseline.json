@@ -1,0 +1,5 @@
+{
+  "_doctrine": "NO HARDWIRING (owner, 2026-10-02). GRANDFATHERED pre-doctrine forms. This file may only shrink. Regenerate with `python scripts/scan_hardwiring.py --write-baseline` after deleting forms -- never to admit a new one.",
+  "symbols": {},
+  "probe_counts": {}
+}

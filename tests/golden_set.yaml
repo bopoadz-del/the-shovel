@@ -1,0 +1,376 @@
+# Golden set — TASK 4e pilot gate (28 queries).
+#
+# Run by scripts/golden_set_gate.py through the NORMAL chat path
+# (POST /v1/agents/{agent}/chat/stream — nothing bypasses smart_orchestrator).
+# Verdict per query: PASS iff
+#   - EVERY regex in answer_expect matches the final answer text, and
+#   - NO regex in answer_reject matches, and
+#   - when retrieval_expect is set, a cited source (end-event sources list)
+#     has a doc_name or doc_id containing it (case-insensitive substring).
+# All regexes are compiled with re.IGNORECASE | re.MULTILINE.
+#
+# Pilot bar: >= 90% PASS (>= 26/28). The gate runner exits 0 iff the bar is met.
+#
+# Composition:
+#   - 12 fresh-upload grounding queries vs prod project ce1ced1a
+#     ("FIXTURE — Fresh Upload Eval"). Ground truth: the 12 note texts
+#     hardcoded in scripts/rag_fresh_upload_eval.py CASES (the notes were
+#     uploaded to that project on 2026-07-05, RAG_AUDIT_V2.md section 4).
+#     These measure "does the user's own document beat colliding GK content".
+#   - 12 pilot-critical feature queries (mirrors tests/feature_matrix_manifest.yaml
+#     must-cover prompts). Corpus document contents are NOT verifiable from the
+#     repo, so these use structural expects, not pinned facts, except where the
+#     value lives in the repo (construction_kb.json thermal limits).
+#   - 4 demo-flow project-brief questions with structural expects.
+
+defaults:
+  agent: project-assistant
+
+queries:
+
+  # ── 12 × fresh-upload grounding (project ce1ced1a) ─────────────────────────
+  # Ground truth for every entry in this block: the uploaded note text in
+  # scripts/rag_fresh_upload_eval.py CASES (filename named per entry).
+
+  - id: fresh_pier_mix_cement
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "P-217-pier-mix-design.txt" — 385 kg/m3 CEM I 42.5N.
+    prompt: "What is the cement content for the Pier P-217 concrete mix?"
+    retrieval_expect: "P-217-pier-mix-design"
+    answer_expect:
+      - '385\s*kg'
+
+  - id: fresh_r9_lighting_wattage
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "road-R9-street-lighting.txt" — 45 W LED luminaires.
+    # Topic collides with GK lighting content (RAG_AUDIT_V2 s4) but the GK
+    # wattage value is not documented in the repo, so no answer_reject.
+    prompt: "What wattage LED fixture is specified for the Road R-9 lighting poles?"
+    retrieval_expect: "road-R9-street-lighting"
+    answer_expect:
+      - '45\s*W'
+
+  - id: fresh_eot_notice_period
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # MANDATORY CASE. Ground truth: CASES "contract-eot-notice-period.txt" —
+    # this project's PC-20.2 reduces the EOT claim notice to 21 days.
+    # Colliding GK value: docs/knowledge/fidic_2017_administration.md says the
+    # standard SC 20.1 notice is 28 days — the documented project-vs-GK
+    # disagreement from RAG_AUDIT_V2.md section 4. The reject targets 28 given
+    # as the OPERATIVE deadline ("within 28 days" / "28-day notice"), not any
+    # mention of 28: the source note itself says "reduced from the standard
+    # 28 days", so a correct grounded answer may legitimately cite 28 as
+    # context. A bare-context mention alongside the required "21 days" expect
+    # is correct behavior, not GK pollution.
+    prompt: "Within how many days must the Contractor give notice of an EOT claim on this project?"
+    retrieval_expect: "contract-eot-notice-period"
+    answer_expect:
+      - '21\s*days?'
+    answer_reject:
+      - 'within\s+28\s+days'
+      - '28[-\s]day\s+(?:notice|period|time\s*bar)'
+
+  - id: fresh_s4_manhole_spacing
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "sewer-S4-manhole-spacing.txt" — 42 m up to DN400.
+    prompt: "What is the maximum manhole spacing on sewer line S-4?"
+    retrieval_expect: "sewer-S4-manhole-spacing"
+    answer_expect:
+      - '42\s*m\b'
+
+  - id: fresh_design_review_codes
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "design-review-status-codes.txt" — CODE-A / CODE-B /
+    # CODE-C, no other codes used on this project.
+    prompt: "What design review status codes are used on this project?"
+    retrieval_expect: "design-review-status-codes"
+    answer_expect:
+      - 'CODE[-\s]?A'
+      - 'CODE[-\s]?B'
+      - 'CODE[-\s]?C'
+
+  - id: fresh_excavation_rate
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "boq-excavation-rate.txt" — SAR 27.50 per m3 for
+    # ordinary soil (item 2.1.1).
+    prompt: "What is the contract rate per m3 for excavation in ordinary soil?"
+    retrieval_expect: "boq-excavation-rate"
+    answer_expect:
+      - 'SAR'
+      - '27\.50?'
+
+  - id: fresh_rebar_cover
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "rebar-cover-substructure.txt" — 75 mm for
+    # substructure elements in contact with soil.
+    prompt: "What is the minimum concrete cover for substructure elements in contact with soil?"
+    retrieval_expect: "rebar-cover-substructure"
+    answer_expect:
+      - '75\s*mm'
+
+  - id: fresh_wearing_course
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "asphalt-wearing-course.txt" — 60 mm polymer-modified
+    # asphalt (PMB 76-10).
+    prompt: "What thickness and type is the asphalt wearing course on this project?"
+    retrieval_expect: "asphalt-wearing-course"
+    answer_expect:
+      - '60\s*mm'
+      - 'polymer|PMB'
+
+  - id: fresh_permit_to_work
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "hse-permit-to-work.txt" — permit-to-work validity is
+    # 12 hours maximum.
+    prompt: "How long is a permit-to-work valid on this project?"
+    retrieval_expect: "hse-permit-to-work"
+    answer_expect:
+      - '12\s*hours?'
+
+  - id: fresh_mv_soak_test
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "mv-substation-soak-test.txt" — 5-day soak test at
+    # not less than 80 percent load before taking-over.
+    prompt: "How long is the soak test required for the MV substation before taking-over?"
+    retrieval_expect: "mv-substation-soak-test"
+    answer_expect:
+      - '5[-\s]?days?'
+
+  - id: fresh_cpi_threshold
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "evm-cpi-threshold.txt" — CPI below 0.92 (two
+    # consecutive periods) triggers a corrective action plan.
+    prompt: "What CPI threshold triggers a corrective action plan on this project?"
+    retrieval_expect: "evm-cpi-threshold"
+    answer_expect:
+      - '0\.92'
+
+  - id: fresh_mass_concrete_curing
+    feature: fresh_upload_grounding
+    project: "FIXTURE — Fresh Upload Eval"
+    # Ground truth: CASES "mass-concrete-curing.txt" — cured 14 days minimum,
+    # wet hessian and polythene. (The GK KB's 20 degC differential agrees with
+    # the note, so no reject; the duration 14 days is the project-unique fact.)
+    prompt: "How many days must mass concrete pours be cured on this project?"
+    retrieval_expect: "mass-concrete-curing"
+    answer_expect:
+      - '14\s*days?'
+
+  # ── 12 × pilot-critical features (mirrors feature_matrix_manifest must-cover)
+  # Corpus document contents are not verifiable from the repo — structural
+  # expects only, except construction_advisor whose ground truth is in
+  # app/knowledge/construction_kb.json.
+
+  - id: pilot_doc_qa_client_pep
+    feature: process_document
+    project: master_corpus
+    # Mirrors feature_matrix must-cover process_document prompt 1 (the client project PEP).
+    # PEP contents/doc name not verifiable from the repo: structural expect
+    # (names the plan + at least one plan-domain topic), no retrieval_expect.
+    prompt: "what does the the client project project execution plan cover?"
+    answer_expect:
+      - 'execution plan'
+      - '(scope|schedule|quality|risk|procurement|hse|safety|management|organi[sz]ation)'
+
+  - id: pilot_boq_total
+    feature: boq_process
+    project: "FIXTURE — BOQ"
+    # Self-seeded when missing: scripts/seed_fixtures.py --synthetic --only boq
+    # (synthetic_boq.xlsx). The gate runner must never send this display name
+    # as project_id — that 404s. Fail loud only if seed fails.
+    # Mirrors feature_matrix must-cover boq_process (the client project BOQ project, 4
+    # workbooks / 179 chunks). The memory value "demolition BOQ total
+    # SAR 62,236,109" could NOT be verified anywhere in the repo, and a
+    # 2026-07-06 live capture (review_pack/boq_process_1.md) cited a corpus
+    # chunk stating 29,207,138.5 USD for this project — conflicting, so per
+    # the gate rules NO number is pinned: structural expect of a currency
+    # token plus a value in the millions.
+    prompt: "process the bill of quantities and give me the total package value"
+    answer_expect:
+      - '\b(SAR|USD|AED)\b'
+      - '\d{1,3}(?:,\d{3}){2,}(?:\.\d+)?|\d{7,}'
+
+  - id: pilot_spec_extraction
+    feature: spec_analyze
+    project: master_corpus
+    # Mirrors feature_matrix must-cover spec_analyze prompt 1. Structural:
+    # a concrete grade or the word grade, plus a standards body.
+    prompt: "analyze the concrete specification requirements - what grades and standards apply?"
+    answer_expect:
+      - '\bC\d{2}(?:/\d{2})?\b|grade'
+      - '\b(ASTM|ACI|BS|EN|SASO|SBC|ISO)\b'
+
+  - id: pilot_document_metadata
+    feature: document_metadata
+    project: master_corpus
+    # Mirrors feature_matrix must-cover document_metadata prompt 1. Structural:
+    # a list row plus document-type vocabulary or filenames.
+    prompt: "list the documents in this project and what type each one is"
+    answer_expect:
+      - '(?m)^\s*(?:[-*•]|\d{1,3}[.)]|\|)\s*\S'
+      - '\.(pdf|xlsx?|docx?|dwg|dxf|csv)\b|(drawing|report|spec(?:ification)?|boq|bill|schedule|plan|register)'
+
+  - id: pilot_wbs_generation
+    feature: generate_wbs
+    project: master_corpus
+    # Mirrors feature_matrix must-cover generate_wbs prompt 1 (synthetic agent
+    # tool -> ConstructionContainer.generate_wbs). Structural: activities with
+    # day/week/month durations, WBS vocabulary, list/table rows.
+    prompt: "generate a level 2 construction schedule for a 30-storey residential tower, 30 months"
+    answer_expect:
+      - '\d+\s*(?:working\s+)?(?:day|week|month)s?\b'
+      - '(WBS|work breakdown|activit|phase)'
+      - '(?m)^\s*(?:[-*•]|\d{1,3}[.)]|\|)\s*\S|critical path|man-days|ready to download'
+
+  - id: pilot_manpower_histogram
+    feature: resource_histogram
+    project: master_corpus
+    # Mirrors feature_matrix must-cover resource_histogram prompt 1.
+    # Structural: period buckets + labour vocabulary + numbers.
+    prompt: "produce a manpower histogram for the structure works over 12 months"
+    answer_expect:
+      - '\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b|\b(month|period|week)\s*[-#]?\s*\d{1,2}\b|\bM\d{1,2}\b|\bQ[1-4]\b'
+      - '(manpower|labou?r|worker|crew|headcount|staff)'
+      - '\d{2,}'
+
+  - id: pilot_milestones
+    feature: parse_primavera_schedule
+    project: "FIXTURE — Programme+Drawings"
+    # Mirrors feature_matrix must-cover parse_primavera_schedule prompt 1.
+    # Fixture: project_programme.xer (doc 9f8f228a) uploaded 2026-07-06 to
+    # 7ce7b9d0 (per the feature-matrix manifest `needs`). The programme's
+    # actual dates are not in the repo: structural expect of milestone
+    # vocabulary + at least one date-like string. No retrieval_expect —
+    # schedule-parse turns may not emit RAG sources.
+    prompt: "extract the key milestones from the project programme with their dates"
+    answer_expect:
+      - 'milestone'
+      - '\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2,4}|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,?\s+\d{4}|Q[1-4][\s-]?20\d{2}'
+
+  - id: pilot_s_curve
+    feature: cash_flow_forecast
+    project: master_corpus
+    # Mirrors feature_matrix must-cover cash_flow_forecast prompt 1.
+    # Structural: cumulative language + period buckets + a % or currency token.
+    prompt: "build a cash flow forecast with an S-curve for a SAR 60M, 18-month project"
+    answer_expect:
+      - '(cumulative|cum\.|s[- ]?curve)'
+      - '\b(month|period)\b|\bM\d{1,2}\b'
+      - '%|\bSAR\b|\d{1,3}(?:,\d{3}){2,}|\b\d{7,}\b'
+
+  - id: pilot_procurement_list
+    feature: procurement_list_generator
+    project: master_corpus
+    # Mirrors feature_matrix must-cover procurement_list_generator prompt 1.
+    # Structural: line items + procurement vocabulary.
+    prompt: "generate a procurement list for the MEP package"
+    answer_expect:
+      - '(?m)^\s*(?:[-*•]|\d{1,3}[.)]|\|)\s*\S'
+      - '(procure|material|equipment|supplier|package|lead[\s-]?time)'
+
+  - id: pilot_rfp_sections
+    feature: rfp_management
+    project: master_corpus
+    # Mirrors feature_matrix must-cover rfp_management prompt 1 (hint-only
+    # request_for_proposals). Structural: section headings + RFP/tender vocabulary.
+    prompt: "prepare an RFP for the landscaping subcontract package"
+    answer_expect:
+      - '(?m)^(?:#{1,6}\s+\S|(?:\*\*)?\d+(?:\.\d+)*[.)]?\s+[A-Z])'
+      - '(scope of work|instructions to|evaluation|submission|tender|proposal)'
+
+  - id: pilot_kb_mass_concrete
+    feature: construction_advisor
+    project: master_corpus
+    # Mirrors feature_matrix must-cover construction_advisor prompt 1.
+    # Ground truth VERIFIED in app/knowledge/construction_kb.json:
+    #   thermal.core_temp_limit  = 70 degC max core temperature
+    #   thermal.gradient_limit   = 20 degC max core-surface differential
+    # (equilibrium formula 168*(X/1.5)^2 hours exists in the KB but the
+    # computed value for X=1.25 m is rounding-sensitive, so not pinned).
+    prompt: "for a 2.5m thick mass concrete raft, what thermal control limits apply and how long to equilibrium?"
+    answer_expect:
+      - '70\s*(?:°|deg(?:rees)?\s*)?C'
+      - '20\s*(?:°|deg(?:rees)?\s*)?C'
+
+  - id: pilot_qto_floor_area
+    feature: drawing_qto
+    project: "FIXTURE — Programme+Drawings"
+    # Mirrors feature_matrix must-cover drawing_qto prompt 2. Fixture:
+    # ground_floor_plan.dxf (doc ed81d829) uploaded 2026-07-06 to 7ce7b9d0
+    # (per the feature-matrix manifest `needs`). The drawing's measured area
+    # is not in the repo: structural expect of a drawing reference + an
+    # area-like quantity.
+    prompt: "measure the floor area from the ground floor plan drawing"
+    answer_expect:
+      - '(drawing|\.dxf|floor plan)'
+      - '\d+(?:[.,]\d+)?\s*(?:m2|m²|sqm|square met)'
+
+  # ── 4 × demo-flow project-brief questions ──────────────────────────────────
+  # Structural expects only — these certify the conversational demo flow
+  # produces on-topic, evidenced answers, not specific corpus facts.
+
+  - id: demo_project_brief
+    feature: demo_flow
+    project: master_corpus
+    # Demo flow Q1: the opening "what is this project" brief.
+    prompt: "what is this project about? give me a quick brief"
+    answer_expect:
+      - '(project|programme|development)'
+      - '(scope|works|construct|infrastructure|building|road|residential|utilit)'
+
+  - id: demo_biggest_cost_items
+    feature: demo_flow
+    project: master_corpus
+    # Demo flow Q2: cost hot-spots. Structural: cost vocabulary + a sizeable
+    # number (thousands separator or 4+ digits).
+    prompt: "what are the biggest cost items on this project?"
+    answer_expect:
+      - '(cost|value|SAR|USD)'
+      - '\d{1,3}(?:,\d{3})+|\d{4,}'
+
+  - id: demo_open_risks
+    feature: demo_flow
+    project: master_corpus
+    # Demo flow Q3: risk summary. Structural: risk vocabulary + risk-management
+    # framing (mitigation/impact/priority).
+    prompt: "summarize the open risks on this project"
+    answer_expect:
+      - 'risk'
+      - '(mitigat|impact|likelihood|priorit|contingen|action)'
+
+  - id: demo_procure_first
+    feature: demo_flow
+    project: master_corpus
+    # Demo flow Q4: procurement priorities. Structural: procurement vocabulary
+    # + prioritisation reasoning (lead time / critical / early).
+    prompt: "what should we procure first on this project and why?"
+    answer_expect:
+      - '(procur|order|purchas)'
+      - '(lead[\s-]?time|long[\s-]?lead|critical|early|first|priorit)'
+
+  # ── 1 × cost-fabrication regression (2026-07-14 live incident) ──────────────
+  # A drawing-heavy project has no concrete UNIT RATE of its own; the identifier
+  # "kg/cm2" used to pull drawing dimension-tables to the top (+2.0 bonus) and
+  # the LLM lifted "450" from the number-soup. Correct: the real GK Gulf band
+  # (220-280 SAR/m3) WITH a citation, OR a clean refusal. Never a number from a
+  # pipe-bend table. Guards fix (a) identifier tightening + (b) cost gate.
+  - id: cost_fabrication_concrete_rate
+    feature: cost_grounding
+    project: master_corpus
+    prompt: "What is the unit rate for reinforced concrete (250 kg/cm2) in Saudi Arabia? Give SAR per m3 and cite your source."
+    answer_expect:
+      - '(22[0-9]|2[3-7][0-9]|280|indicative|supplier quote|priced BOQ|rate schedule|do(?:es)?n.?t have|no rate|cannot|could ?n.?t|unable)'
+    answer_reject:
+      - '450\s*(?:SAR|/\s*m|per\s*m)'
+      - 'SAR\s*450'

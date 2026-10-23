@@ -1,0 +1,101 @@
+# Run the Drive ingest ONCE, as a task that ends when the script ends.
+#
+# WHY THIS EXISTS (live 2026-10-03, Neon 876 GB egress in 3 days):
+# `the-fork-ingest` was an always-on ECS *service* (desired count 1) whose
+# container ran the one-shot `scripts/p1b_ingest_drive_server.py`. A service
+# exists to keep N copies running: every time the script finished (or died),
+# ECS reported "Essential container in task exited" and launched it again --
+# ~95 minutes per lap, 50+ laps on record -- and each lap `--resume`d over
+# the same files. A completed ingest never stayed completed.
+#
+# An ingest is a job, not a service. This workflow starts exactly one task
+# from the existing `the-fork-ingest` task definition (same image, same
+# WORKER_COMMAND secret, same network as the retired service) and waits for
+# it to stop. When it stops, nothing restarts it. `deploy-aws.yml` keeps the
+# service's desired count at 0 so a deploy can never turn the loop back on.
+name: ingest-run-once
+
+on:
+  workflow_dispatch:
+    inputs:
+      wait:
+        description: "Wait for the task to stop and report its exit code"
+        type: boolean
+        default: true
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  TASK_FAMILY: the-fork-ingest
+  SERVICE_FOR_NETWORK: the-fork-ingest
+
+jobs:
+  run-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Refuse to run while the always-on service is still up
+        # Two ingests over one project would serialise on the index lock and
+        # double the work; the retired service must be at 0 first.
+        run: |
+          running=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_FOR_NETWORK" \
+            --query 'services[?status==`ACTIVE`].runningCount | [0]' --output text 2>/dev/null || echo 0)
+          echo "$SERVICE_FOR_NETWORK runningCount=$running"
+          if [ "$running" != "0" ] && [ "$running" != "None" ]; then
+            echo "::error::$SERVICE_FOR_NETWORK still has $running running task(s); set its desired count to 0 first"
+            exit 1
+          fi
+
+      - name: Start one task
+        id: start
+        run: |
+          # Network placement is read from the retired service at run time so
+          # this file carries no subnet or security-group literals.
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_FOR_NETWORK" \
+            --query 'services[0].networkConfiguration' --output json)
+          if [ "$netcfg" = "null" ] || [ -z "$netcfg" ]; then
+            echo "::error::no network configuration found on $SERVICE_FOR_NETWORK"
+            exit 1
+          fi
+          # The worker command carries --keep-alive (it held finished
+          # containers open for the retired service). A run-once task must
+          # exit when the pass ends: switch it off for this task only.
+          container=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition.containerDefinitions[0].name' --output text)
+          overrides=$(printf '{"containerOverrides":[{"name":"%s","environment":[{"name":"P1B_KEEP_ALIVE","value":"0"}]}]}' "$container")
+          arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_FAMILY" \
+            --launch-type FARGATE --count 1 \
+            --network-configuration "$netcfg" \
+            --overrides "$overrides" \
+            --started-by "ingest-run-once:${{ github.run_id }}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "task=$arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for it to stop and report
+        if: ${{ inputs.wait }}
+        run: |
+          arn="${{ steps.start.outputs.arn }}"
+          # `ecs wait tasks-stopped` gives up after 100 polls; loop it.
+          for i in $(seq 1 30); do
+            if aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null; then
+              break
+            fi
+            echo "still running ($i)"
+          done
+          aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].{status:lastStatus,stoppedReason:stoppedReason,exit:containers[0].exitCode,started:startedAt,stopped:stoppedAt}' \
+            --output table
+          code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "container exit code: $code"
+          [ "$code" = "0" ]

@@ -1,0 +1,17 @@
+hal_profile: jetson_orin
+blocks:
+  chat:
+    provider: local
+    model: llama3.2  # Ollama
+  vector:
+    backend: zvec  # Alibaba lightweight
+  storage:
+    default: local
+    path: /data/storage
+  queue:
+    backend: memory  # No Redis on edge
+
+failover:
+  threshold: 5  # Higher for resource-based
+  recovery_time: 60
+  timeout_ms: 10000

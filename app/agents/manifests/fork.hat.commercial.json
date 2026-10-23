@@ -1,0 +1,122 @@
+{
+  "manifest_version": "1.0",
+  "id": "fork.hat.commercial",
+  "name": "Commercial Hat",
+  "description": "Cost build-ups, interim payment/IPC, cash flow, BOQ pricing, rate analysis. Owns all cost and commercial workflow.",
+  "kind": "hat",
+  "extends": "fork.base",
+  "discipline": "commercial",
+  "system_prompt_guidance": "You are the Commercial discipline agent. You handle cost estimation, BOQ pricing, interim payment certificates (IPC), cash flow forecasting, and rate analysis. Every cost figure must come from a deterministic formula execution or a cited priced BOQ document. You flag when a cost variation implies a change order and hand off to Contracts. You refuse to fabricate unit rates or quantities.",
+  "activation": {
+    "triggers": [
+      {"type": "keyword", "value": "cost", "score": 0.8},
+      {"type": "keyword", "value": "estimate", "score": 0.8},
+      {"type": "keyword", "value": "BOQ", "score": 0.9},
+      {"type": "keyword", "value": "payment", "score": 0.9},
+      {"type": "keyword", "value": "IPC", "score": 0.9},
+      {"type": "keyword", "value": "interim payment", "score": 0.9},
+      {"type": "keyword", "value": "cash flow", "score": 0.8},
+      {"type": "keyword", "value": "rate analysis", "score": 0.8},
+      {"type": "keyword", "value": "cost buildup", "score": 0.9},
+      {"type": "keyword", "value": "concrete price", "score": 0.7},
+      {"type": "keyword", "value": "rebar price", "score": 0.7},
+      {"type": "keyword", "value": "formwork rate", "score": 0.7},
+      {"type": "keyword", "value": "budget", "score": 0.7},
+      {"type": "keyword", "value": "pricing", "score": 0.8},
+      {"type": "intent", "value": "cost_estimation", "score": 1.0},
+      {"type": "intent", "value": "payment_processing", "score": 1.0}
+    ],
+    "mode": "hybrid",
+    "default_enabled": true
+  },
+  "context_sources": [
+    {"kind": "project_documents", "weight": 1.0, "filters": {"type": "priced_BOQ"}, "max_items": 10},
+    {"kind": "official_guidance", "weight": 0.8, "filters": {"source": "curated_kb_rates"}, "max_items": 5},
+    {"kind": "learning_profiles", "weight": 0.6, "filters": {"profile_type": "CostCalibration"}, "max_items": 3}
+  ],
+  "allowed_actions": [
+    "construction_calc:cost_buildup_concrete",
+    "construction_calc:cost_buildup_rebar",
+    "construction_calc:cost_buildup_formwork",
+    "construction_calc:calculate_payment",
+    "boq_cost_analyzer",
+    "cash_flow_forecast",
+    "rate_card_lookup",
+    "interim_certificate_generator"
+  ],
+  "available_tools": ["cash_flow_forecast", "evm_calculate", "payment_certificate"],
+  "handoffs": [
+    {
+      "to": "contracts",
+      "when": "cost variation exceeds threshold or implies a change order",
+      "carry": ["variation_amount", "affected_BOQ_items", "rate_evidence", "approval_status"]
+    },
+    {
+      "to": "planning",
+      "when": "cash flow forecast depends on revised programme milestones",
+      "carry": ["milestone_dates", "forecast_period", "cost_per_milestone"]
+    }
+  ],
+  "verification": {
+    "grounding": "documents_or_formulas",
+    "cite_required": true,
+    "refuse_unaided_figures": true,
+    "standards_advisory": true
+  },
+  "failure_policy": {
+    "on_missing_context": "dependency_required",
+    "on_formula_error": "ask_clarifying",
+    "on_unverified_claim": "flag_and_continue"
+  },
+  "playbook": {
+    "formulas": [
+      {
+        "id": "cost_buildup_concrete",
+        "description": "Full concrete cost build-up (material + plant + labour + indirect + markup)",
+        "implemented_by": "app.lib.construction_formulas.cost_buildup_concrete",
+        "domain": "commercial",
+        "tier": "operational"
+      },
+      {
+        "id": "cost_buildup_rebar",
+        "description": "Rebar cost build-up per tonne (material + waste + labour + crane)",
+        "implemented_by": "app.lib.construction_formulas.cost_buildup_rebar",
+        "domain": "commercial",
+        "tier": "operational"
+      },
+      {
+        "id": "cost_buildup_formwork",
+        "description": "Formwork cost build-up per m2 (shuttering + scaffold + labour + crane)",
+        "implemented_by": "app.lib.construction_formulas.cost_buildup_formwork",
+        "domain": "commercial",
+        "tier": "operational"
+      },
+      {
+        "id": "calculate_payment",
+        "description": "Interim payment calculation with retention and net payment",
+        "implemented_by": "app.core.construction_knowledge.calculate_payment",
+        "domain": "commercial",
+        "tier": "strategic"
+      },
+      {
+        "id": "calculate_interim_payment",
+        "description": "Interim payment after retention deduction (FIDIC Red Book Clause 14.3)",
+        "implemented_by": "app.lib.construction_formulas_additions.calculate_interim_payment",
+        "domain": "commercial",
+        "tier": "operational"
+      }
+    ],
+    "flows": [
+      {
+        "id": "interim_payment",
+        "description": "Generate interim payment certificate",
+        "steps": ["collect_measured_quantities", "apply_rates", "deduct_retention", "calculate_net", "generate_certificate"]
+      },
+      {
+        "id": "cost_buildup",
+        "description": "Build up cost for concrete + rebar + formwork package",
+        "steps": ["input_quantities", "run_cost_buildup_concrete", "run_cost_buildup_rebar", "run_cost_buildup_formwork", "sum_totals", "apply_indirect_markup"]
+      }
+    ]
+  }
+}

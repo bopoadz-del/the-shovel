@@ -1,0 +1,115 @@
+{
+  "manifest_version": "1.0",
+  "id": "fork.hat.contracts",
+  "name": "Contracts Hat",
+  "description": "Variation orders, EOT claims, contractual risk scoring, compliance gates, FIDIC workflow, and dispute handling.",
+  "kind": "hat",
+  "extends": "fork.base",
+  "discipline": "contracts",
+  "system_prompt_guidance": "You are the Contracts discipline agent. You handle variation orders, extension-of-time (EOT) claims, contractual risk scoring, FIDIC workflow, and dispute analysis. You score risks using the deterministic risk engine and cite the specific FIDIC clause or contract reference. You flag when a claim has insufficient evidence (e.g., no baseline programme for delay analysis) and hand off to Planning for schedule evidence. You never fabricate contractual deadlines or precedents.",
+  "activation": {
+    "triggers": [
+      {"type": "keyword", "value": "change order", "score": 0.9},
+      {"type": "keyword", "value": "variation", "score": 0.9},
+      {"type": "keyword", "value": "claim", "score": 0.9},
+      {"type": "keyword", "value": "EOT", "score": 0.9},
+      {"type": "keyword", "value": "extension of time", "score": 0.9},
+      {"type": "keyword", "value": "FIDIC", "score": 0.9},
+      {"type": "keyword", "value": "dispute", "score": 0.8},
+      {"type": "keyword", "value": "risk", "score": 0.8},
+      {"type": "keyword", "value": "compliance", "score": 0.8},
+      {"type": "keyword", "value": "prolongation", "score": 0.9},
+      {"type": "keyword", "value": "delay claim", "score": 0.9},
+      {"type": "keyword", "value": "quantum", "score": 0.8},
+      {"type": "keyword", "value": "entitlement", "score": 0.8},
+      {"type": "intent", "value": "change_order", "score": 1.0},
+      {"type": "intent", "value": "risk_assessment", "score": 1.0}
+    ],
+    "mode": "hybrid",
+    "default_enabled": true
+  },
+  "context_sources": [
+    {"kind": "project_documents", "weight": 1.0, "filters": {"type": "contract"}, "max_items": 10},
+    {"kind": "official_guidance", "weight": 0.9, "filters": {"source": "FIDIC"}, "max_items": 5},
+    {"kind": "learning_profiles", "weight": 0.5, "filters": {"profile_type": "ClaimOutcome"}, "max_items": 3}
+  ],
+  "allowed_actions": [
+    "construction_calc:score_risk",
+    "variation_order_generator",
+    "eot_claim_assessor",
+    "fidic_clause_lookup",
+    "dispute_timeline_builder",
+    "compliance_gate_checker",
+    "construction_calc:generate_doc_number",
+    "construction_calc:enforce_critical_rules",
+    "construction_calc:next_ncr_status"
+  ],
+  "available_tools": ["rfi_generator"],
+  "handoffs": [
+    {
+      "to": "planning",
+      "when": "delay claim requires baseline programme or critical path evidence",
+      "carry": ["delay_days", "affected_activities", "claim_window_dates", "baseline_required"]
+    },
+    {
+      "to": "commercial",
+      "when": "claim quantum needs cost quantification",
+      "carry": ["quantum_estimate", "rate_references", "BOQ_line_items"]
+    }
+  ],
+  "verification": {
+    "grounding": "documents_or_formulas",
+    "cite_required": true,
+    "refuse_unaided_figures": true,
+    "standards_advisory": true
+  },
+  "failure_policy": {
+    "on_missing_context": "dependency_required",
+    "on_formula_error": "ask_clarifying",
+    "on_unverified_claim": "flag_and_continue"
+  },
+  "playbook": {
+    "formulas": [
+      {
+        "id": "score_risk",
+        "description": "Calculate composite risk score from probability, cost, schedule, safety, and quality factors",
+        "implemented_by": "app.core.construction_knowledge.score_risk",
+        "domain": "contracts",
+        "tier": "strategic"
+      },
+      {
+        "id": "generate_doc_number",
+        "description": "Generate a sequential document number for a document type",
+        "implemented_by": "app.core.construction_knowledge.generate_doc_number",
+        "domain": "contracts",
+        "tier": "operational"
+      },
+      {
+        "id": "enforce_critical_rules",
+        "description": "Validate a list of items against critical business rules",
+        "implemented_by": "app.core.construction_knowledge.enforce_critical_rules",
+        "domain": "contracts",
+        "tier": "operational"
+      },
+      {
+        "id": "next_ncr_status",
+        "description": "Determine the next status for a Non-Conformance Report",
+        "implemented_by": "app.core.construction_knowledge.next_ncr_status",
+        "domain": "contracts",
+        "tier": "operational"
+      }
+    ],
+    "flows": [
+      {
+        "id": "variation_order",
+        "description": "Process a variation order from request to approval",
+        "steps": ["receive_request", "assess_impact", "quantify_cost_schedule", "generate_VO", "seek_approval", "notify_parties"]
+      },
+      {
+        "id": "eot_claim",
+        "description": "Assess an EOT claim for entitlement and quantum",
+        "steps": ["receive_claim", "verify_notice_compliance", "assess_entitlement", "quantify_delay", "recommend_decision", "handoff_if_cost_impact"]
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "_comment": "Model weights are NOT git objects. They are release assets of this repo; scripts/fetch_model.py downloads them into data/models/ and refuses any file whose sha256 differs from the value pinned here. To ship new weights: upload them to a NEW release tag (never one matching a workflow trigger such as v*), then change tag + sha256 + size here in the same PR.",
+  "repo": "bopoadz-del/The_Fork",
+  "release_tag": "safety-world-v2",
+  "files": [
+    {
+      "name": "safety_world_v2.onnx",
+      "sha256": "ebc30385cdeec208977fac4764c7c7bdc87dc8e3f89ddc6a4a6ec259192a3385",
+      "size": 50342093,
+      "required_for_image": true
+    },
+    {
+      "name": "safety_world_v2.prompts.json",
+      "sha256": "3606f45ccb472b566f0bf76353549b9781e8c44c16abef95777c3846e9decde2",
+      "size": 1054,
+      "required_for_image": false
+    }
+  ]
+}

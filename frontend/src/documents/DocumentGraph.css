@@ -1,0 +1,89 @@
+.doc-graph {
+  font-family: var(--font-display);
+  font-size: 13px;
+}
+
+.doc-graph__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.doc-graph__count {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.doc-graph__empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+  padding: var(--space-2) 0;
+}
+
+.doc-graph__items {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.doc-graph__node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-input);
+  border: 1px solid transparent;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.doc-graph__node--cited {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
+}
+
+.doc-graph__icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.doc-graph__name {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.doc-graph__cited {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.doc-graph__hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: var(--space-2) 0 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}

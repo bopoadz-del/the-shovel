@@ -1,0 +1,187 @@
+/* 3-column workspace shell — Quarry palette.
+ *
+ * Layout (per Quarry design): 250px left + flexible center + 360px right.
+ * Outer container is 100vh + overflow hidden; chat list inside main owns
+ * the scrollbar.
+ *
+ * When the right panel is in "expanded overlay" mode the shell stamps a
+ * data-right-expanded="true" attribute on itself; the right panel CSS
+ * picks that up and becomes a full-viewport overlay covering main +
+ * left.
+ */
+.workspace-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* PR G — was overflow:hidden. Clip blocks programmatic scroll too;
+   * with overflow:hidden the browser would still pull the shell down
+   * when a deep descendant got focus, shifting scrollTop to 422 and
+   * leaving the composer floating above an empty band. clip prevents
+   * that scroll container from ever forming. */
+  overflow: clip;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+}
+
+.workspace-shell__header {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.workspace-shell__body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  /* PR G — same reason as parent: any overflow from a flex child here
+   * was leaking into shell scroll. clip kills the scroll container. */
+  overflow: clip;
+  position: relative; /* parent for right-panel overlay anchor */
+}
+
+.workspace-shell__left {
+  flex: 0 0 240px;
+  min-height: 0;
+  background: var(--bg-panel-left);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.workspace-shell__main {
+  flex: 1 1 0;
+  min-width: 0;
+  /* PR G — without min-height:0 the chat-list inside this column flex
+   * could grow to its content's intrinsic height and push the composer
+   * out of the visible area, leaving the bottom-half-white band the
+   * operator reported repeatedly. overflow:hidden caps any residual
+   * overflow from descendants that don't respect the bound. */
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base);
+}
+
+.workspace-shell__right {
+  /* Shrinkable, not rigid. `0 0 360px` meant the two side panels claimed a
+   * fixed 600px no matter the viewport. */
+  flex: 0 1 360px;
+  min-width: 280px;
+  min-height: 0;
+  background: var(--bg-panel-right);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+/* Right-panel expanded overlay mode — toggled by the ↗ button in the
+ * RightPanel header. The panel covers the whole body area (left + main),
+ * the rest stays in the DOM but visually hidden behind. */
+.workspace-shell[data-right-expanded="true"] .workspace-shell__right {
+  position: absolute;
+  inset: 0;
+  flex-basis: 100%;
+  z-index: 20;
+  background: var(--bg-panel-right);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Panel toolbar + backdrop exist in the DOM on every viewport but are
+ * hidden on wide desktop; the compact rules below switch them on. */
+.workspace-shell__mobilebar {
+  display: none;
+}
+.workspace-shell__backdrop {
+  display: none;
+}
+
+/* ── Compact desktop (769px–1180px) ───────────────────────────────────────
+ * Measured on the live app 2026-08-02 in an 877px-wide Chrome window:
+ *
+ *   left 240 (fixed) + right 360 (fixed) = 600px of chrome
+ *   -> main (the chat, the PRIMARY surface) got 277px
+ *
+ * Answers wrapped to three words per line while the right panel sat mostly
+ * empty. The only breakpoint was 768px, so every window between ~769px and
+ * ~1180px — a normal half-screen or laptop window — rendered like this.
+ *
+ * Fix: below 1180px the LEFT panel becomes the same off-canvas drawer the
+ * mobile layout already uses (its toolbar button comes with it), and the
+ * right panel narrows. The chat keeps the space. Reuses the existing
+ * drawer mechanics rather than inventing a second pattern. */
+@media (max-width: 1180px) {
+  .workspace-shell__mobilebar {
+    display: flex;
+    gap: 6px;
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 30;
+  }
+  .workspace-shell__mobilebtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-lg);
+    cursor: pointer;
+  }
+
+  .workspace-shell__backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 34;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .workspace-shell__left {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(85vw, 320px);
+    flex: none;
+    z-index: 35;
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+    box-shadow: var(--shadow-lg);
+  }
+  .workspace-shell[data-left-open="true"] .workspace-shell__left {
+    transform: translateX(0);
+  }
+
+  .workspace-shell__right {
+    flex: 0 1 320px;
+  }
+
+  /* Keep the first chat rows clear of the floating toolbar. */
+  .workspace-shell__main {
+    padding-top: 48px;
+  }
+}
+
+/* Mobile (spec 2026-07-24-mobile-ui-design): chat-first single column.
+ * Left panel = off-canvas drawer over a backdrop; right panel appears
+ * only in the existing data-right-expanded overlay mode. */
+/* The drawer, toolbar, backdrop and main padding all come from the compact
+ * block above (it covers every width up to 1180px). Only the rules that are
+ * genuinely PHONE-specific live here: at this width even a narrowed right
+ * panel leaves the chat unusable, so it becomes overlay-only. */
+@media (max-width: 768px) {
+  /* Hidden by default; the data-right-expanded overlay rule above already
+   * promotes it to a full-viewport panel with its own collapse button. */
+  .workspace-shell__right {
+    display: none;
+  }
+  .workspace-shell[data-right-expanded="true"] .workspace-shell__right {
+    display: block;
+    z-index: 40;
+  }
+}

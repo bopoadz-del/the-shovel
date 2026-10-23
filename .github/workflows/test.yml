@@ -1,0 +1,510 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch/PR supersedes the old run. Without this,
+# stuck runs stack: 8 zombie "tests" runs were in_progress at once on
+# 2026-07-05, each burning toward GitHub's 6-hour default job timeout.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Docs-only changes (Markdown, docs/, FLEET_OPS-style report files) do not
+  # run the suites. The suite jobs are skipped by condition, which a required
+  # check counts as passed, so a docs-only PR still merges.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: A random development key for this run
+        # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
+        # source, and none repeats between runs.
+        run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+      - id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          files=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || true)
+          if [ -n "$files" ] && ! echo "$files" | grep -qvE '(^docs/|^FLEET_OPS/|\.md$)'; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"; echo "docs-only change: suites skipped"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    # Hard cap: a healthy run finishes far sooner; anything longer is a hang,
+    # and GitHub's default cap is 6 HOURS of billed minutes per hung job.
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - profile: virgin
+            cerebrum_virgin: "true"
+            cerebrum_domain_kits: ""
+          - profile: production-like
+            cerebrum_virgin: "false"
+            cerebrum_domain_kits: "construction"
+    name: test (${{ matrix.profile }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # diff-cover (per-PR coverage gate below) does a three-dot
+          # diff (origin/<base>...HEAD) which needs the merge base.
+          # The default depth-1 checkout has no ancestry, so diff-cover
+          # dies with "fatal: ... no merge base" before producing any
+          # report (silently, because the step is marked
+          # continue-on-error during initial rollout). fetch-depth: 0
+          # gets full history. Codex P2 fix on PR #31.
+          fetch-depth: 0
+
+      - name: A random development key for this run
+        # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
+        # source, and none repeats between runs.
+        run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system deps for OCR + PDF
+        # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
+        # Each attempt now times out and is retried; the step itself is capped.
+        timeout-minutes: 10
+        run: |
+          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
+          # Some GitHub-hosted 24.04 images ship a Microsoft prod repo that 403s
+          # and is unsigned; it aborts apt-get update. Drop that list up front.
+          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr poppler-utils antiword catdoc; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 10
+          done
+          exit 1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # diff-cover backs the per-PR coverage gate below. It was NEVER
+          # installed, so that step failed with `diff-cover: command not
+          # found` on every pull request from the day it was promoted to
+          # blocking — producing no report and no output, which read as a
+          # coverage failure. Pushes to main were unaffected because the
+          # step is `if: github.event_name == 'pull_request'`, so main
+          # stayed green and only PRs were red.
+          pip install pytest pytest-asyncio pytest-cov pytest-timeout diff-cover pytest-xdist
+
+      - name: Security scan
+        run: python scripts/security_scan.py
+
+      - name: Run the timing tests (first, no coverage instrumentation)
+        # Same assertions, same limits; only the coverage tracer is off, so
+        # the measurement is the event loop's, not the tracer's lock. Run
+        # before the suite: after it, the runner's state from the whole
+        # suite was part of the measurement (#979).
+        run: pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120 -m timing --no-cov
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/data-timing
+          CEREBRUM_VIRGIN: ${{ matrix.cerebrum_virgin }}
+          CEREBRUM_DOMAIN_KITS: ${{ matrix.cerebrum_domain_kits }}
+
+      - name: Run tests
+        # --cov-fail-under is a regression FLOOR (current coverage ~57%);
+        # the global gate fails the job if coverage drops below it or if no
+        # tests collect. The diff-cover step below catches the orthogonal
+        # case: "PR adds 200 lines, tests 5" can stay above 25% global
+        # coverage while ratcheting NEW code toward zero coverage.
+        # --cov-report=xml emits coverage.xml for diff-cover to read.
+        #
+        # --timeout turns a hung test into a FAILURE with a stack dump
+        # instead of a silent 6-hour job. The 2026-07-05 zombie runs all
+        # hung at the same test (first one after test_execute_blocked_
+        # dangerous_code); with this flag the culprit names itself in the
+        # log. 120s is ~40x the slowest healthy test.
+        #
+        # -n auto: one pytest-xdist worker per core; --dist loadfile keeps a
+        # test file on one worker (module-scoped fixtures). Each worker gets
+        # its own DATA_DIR and so its own SQLite database (tests/conftest.py);
+        # pytest-cov merges the workers' coverage, so the gates below read
+        # the same reports as before.
+        run: >
+          pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120
+          -n auto --dist loadfile -m "not serial"
+          --cov=app --cov-report=
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/data
+          CEREBRUM_VIRGIN: ${{ matrix.cerebrum_virgin }}
+          CEREBRUM_DOMAIN_KITS: ${{ matrix.cerebrum_domain_kits }}
+          # Deterministic 256-dim fake embedder — same as the test-postgres
+          # job and the documented local run. Without it, any test that
+          # touches the embedding path on a fresh runner downloads a real
+          # model from HuggingFace inside the 120s per-test budget
+          # (test_scenario_validation timed out this way on the virgin
+          # profile of run 28755289990).
+          RAG_EMBEDDING_MODEL: fake
+
+      - name: Run the serial tests (timing under their own load)
+        # These measure the event loop under a simulated load, so they run
+        # alone, not beside xdist workers competing for the runner's cores.
+        # Coverage appends to the parallel run's and every report is written
+        # here, from the whole suite.
+        # Exit 5 is "nothing selected": in a profile where every serial test
+        # is a timing test, they all run in the timing step instead.
+        run: |
+          rc=0
+          pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120             -m "serial and not timing"             --cov=app --cov-append --cov-report=term-missing --cov-report=xml             --cov-report=json:coverage.json             --cov-fail-under=25 || rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ]
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/data-serial
+          CEREBRUM_VIRGIN: ${{ matrix.cerebrum_virgin }}
+          CEREBRUM_DOMAIN_KITS: ${{ matrix.cerebrum_domain_kits }}
+
+      - name: No undeclared dead functions
+        # Line coverage cannot answer "has this FUNCTION ever run": a module
+        # sits at 80% while a specific function has never executed once. The
+        # 2026-08-15 sweep found 15 such functions behind 76% coverage and
+        # 3500 passing tests. This maps coverage.json back to functions via the
+        # AST and fails on any zero-coverage function with no declared reason.
+        #
+        # Production-like profile ONLY. Under the virgin profile the
+        # construction container is not loaded, so every function in
+        # app/containers/construction reads as dead and the gate would fail on
+        # a build that is behaving correctly. The production-like profile is
+        # the one that mirrors the deployed configuration, so it is the one
+        # whose dead functions actually matter.
+        if: matrix.cerebrum_virgin == 'false'
+        run: python scripts/audit_dead_functions.py coverage.json
+
+      - name: Mutation probes (decision code)
+        # A coverage percentage says a line RAN. It does not say a test would
+        # have noticed if the line were wrong. These probes turn a named guard
+        # off and require the named test to go red; a survivor fails the job.
+        #
+        # Production-like profile only, same reason the dead-function audit is:
+        # the virgin profile does not load the construction container, so some
+        # targets are not importable there.
+        if: matrix.cerebrum_virgin == 'false'
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/mutation-data
+          CEREBRUM_VIRGIN: "false"
+          CEREBRUM_DOMAIN_KITS: construction
+          RAG_EMBEDDING_MODEL: fake
+        run: python scripts/mutation_probes.py
+
+      - name: Diff coverage (per-PR gate on lines changed)
+        # Runs only on pull_request events. Compares coverage.xml against
+        # origin/<base>; fails the PR if <50% of newly-changed lines are
+        # covered. Needs the merge-base so diff-cover's three-dot diff
+        # (origin/<base>...HEAD) resolves — fetch-depth: 0 on the checkout
+        # step above provides it.
+        #
+        # Now blocking: the baseline has held green across many PRs, so per
+        # the rollout plan this gate is enforced — a PR whose newly-changed
+        # lines are <50% covered fails, keeping new code from ratcheting
+        # coverage down during the pilot.
+        if: github.event_name == 'pull_request'
+        continue-on-error: false
+        run: |
+          # The summary must print even when the gate FAILS -- that is the
+          # only time anyone needs to read it. Previously `diff-cover`
+          # exiting non-zero killed the step before the report was shown,
+          # so a failing gate said nothing about which lines were uncovered.
+          status=0
+          diff-cover coverage.xml \
+            --compare-branch="origin/${{ github.base_ref }}" \
+            --fail-under=50 \
+            --html-report=diff-cover.html \
+            --markdown-report=diff-cover.md || status=$?
+          echo "::group::diff-cover summary"
+          cat diff-cover.md 2>/dev/null || echo "(diff-cover produced no markdown report)"
+          echo "::endgroup::"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Diff coverage below 50% on newly-changed lines -- see the summary above."
+          fi
+          exit "$status"
+          echo "::endgroup::"
+
+      - name: Upload diff-cover report
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diff-cover-report
+          path: |
+            diff-cover.html
+            diff-cover.md
+          retention-days: 14
+
+  test-postgres-shard:
+    # The PostgreSQL suite, split four ways by recorded test durations
+    # (.test_durations, pytest-split) and run with one pytest-xdist worker per
+    # core. Every worker gets its own migrated database (tests/conftest.py),
+    # because the suite TRUNCATEs between tests. Same tests as the single job
+    # this replaces -- none skipped, none optional.
+    name: test-postgres (shard ${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    # Same hard cap as the matrix job. This job was the 6h0m zombie in every
+    # stuck run on 2026-07-05 (hung inside "Run tests (PostgreSQL)").
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: thefork
+          POSTGRES_PASSWORD: thefork
+          POSTGRES_DB: thefork
+        ports:
+          - 5432:5432
+        # Docker gives a container 64 MB of /dev/shm; with several workers
+        # building HNSW indexes at once Postgres ran out of it ("could not
+        # resize shared memory segment ... No space left on device").
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://thefork:thefork@localhost:5432/thefork
+      PYTEST_USE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: A random development key for this run
+        # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
+        # source, and none repeats between runs.
+        run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system deps for OCR + PDF
+        # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
+        # Each attempt now times out and is retried; the step itself is capped.
+        timeout-minutes: 10
+        run: |
+          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
+          # Some GitHub-hosted 24.04 images ship a Microsoft prod repo that 403s
+          # and is unsigned; it aborts apt-get update. Drop that list up front.
+          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr poppler-utils antiword catdoc; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 10
+          done
+          exit 1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov pytest-timeout pytest-xdist pytest-split
+
+      - name: Apply Alembic schema
+        run: alembic upgrade head
+
+      - name: Run tests (PostgreSQL, shard ${{ matrix.shard }}/4)
+        # --timeout: see the matrix job note — a hung test must fail loudly,
+        # not park the job at GitHub's 6-hour cap. --dist loadfile keeps each
+        # test file on one worker (module-scoped fixtures). The durations
+        # file is copied first: pytest-split reads it to split and writes
+        # this shard's measured times back into the copy.
+        run: |
+          if [ -f .test_durations ]; then cp .test_durations durations-${{ matrix.shard }}.json; else echo '{}' > durations-${{ matrix.shard }}.json; fi
+          pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120             -n auto --dist loadfile -m 'not serial'             --splits 4 --group ${{ matrix.shard }}             --durations-path durations-${{ matrix.shard }}.json --store-durations             --cov=app --cov-report=
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/data
+          CEREBRUM_VIRGIN: "true"
+          CEREBRUM_DOMAIN_KITS: ""
+          RAG_EMBEDDING_MODEL: fake
+          COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
+
+      - name: Run the serial tests (shard 1, alone)
+        if: matrix.shard == 1
+        run: |
+          rc=0
+          pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120 -m "serial and not timing" --cov=app --cov-append --cov-report= || rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ]
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/data-serial
+          CEREBRUM_VIRGIN: "true"
+          CEREBRUM_DOMAIN_KITS: ""
+          RAG_EMBEDDING_MODEL: fake
+          COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
+
+      - name: Keep this shard's coverage and durations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-postgres-shard-${{ matrix.shard }}
+          path: |
+            .coverage.shard${{ matrix.shard }}
+            durations-${{ matrix.shard }}.json
+          include-hidden-files: true
+          retention-days: 3
+
+  test-timing:
+    # The timing tests (the event loop under 15 users, 250 ms) on a runner and
+    # a database of their own, with nothing run before them: shard 1 ran them
+    # after its whole suite, so the measurement depended on what that runner
+    # had just done (PR runs and main differed). Same service, setup and
+    # schema as a shard; the threshold is the test's own. test-postgres (the
+    # required check) needs this job.
+    name: test-timing (PostgreSQL, alone)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: thefork
+          POSTGRES_PASSWORD: thefork
+          POSTGRES_DB: thefork
+        ports:
+          - 5432:5432
+        # Docker gives a container 64 MB of /dev/shm; with several workers
+        # building HNSW indexes at once Postgres ran out of it ("could not
+        # resize shared memory segment ... No space left on device").
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://thefork:thefork@localhost:5432/thefork
+      PYTEST_USE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: A random development key for this run
+        # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
+        # source, and none repeats between runs.
+        run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system deps for OCR + PDF
+        # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
+        # Each attempt now times out and is retried; the step itself is capped.
+        timeout-minutes: 10
+        run: |
+          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
+          # Some GitHub-hosted 24.04 images ship a Microsoft prod repo that 403s
+          # and is unsigned; it aborts apt-get update. Drop that list up front.
+          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr poppler-utils antiword catdoc; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 10
+          done
+          exit 1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov pytest-timeout pytest-xdist pytest-split
+
+      - name: Apply Alembic schema
+        run: alembic upgrade head
+
+      - name: Run the timing tests (alone, no coverage instrumentation)
+        run: pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120 -m timing --no-cov
+        env:
+          ENV: testing
+          DATA_DIR: ${{ runner.temp }}/data-timing
+          CEREBRUM_VIRGIN: "true"
+          CEREBRUM_DOMAIN_KITS: ""
+          RAG_EMBEDDING_MODEL: fake
+
+  test-postgres:
+    # The required check. Passes only when every shard passed; then the four
+    # shards' coverage is combined and held to the same floor the single job
+    # enforced (--cov-fail-under=25).
+    name: test-postgres
+    runs-on: ubuntu-latest
+    needs: [changes, test-postgres-shard, test-timing]
+    if: always() && needs.changes.outputs.docs_only != 'true'
+    timeout-minutes: 10
+    steps:
+      - name: Every shard passed
+        run: |
+          echo "shards: ${{ needs.test-postgres-shard.result }}"
+          test "${{ needs.test-postgres-shard.result }}" = "success"
+          echo "timing: ${{ needs.test-timing.result }}"
+          test "${{ needs.test-timing.result }}" = "success"
+
+      - uses: actions/checkout@v4
+
+      - name: A random development key for this run
+        # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
+        # source, and none repeats between runs.
+        run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-postgres-shard-*
+          merge-multiple: true
+
+      - name: Coverage floor across all shards
+        run: |
+          pip install -q coverage
+          coverage combine .coverage.shard*
+          coverage report --fail-under=25 | tail -3
+
+      - name: Measured test durations (commit as .test_durations to rebalance)
+        run: python scripts/merge_test_durations.py durations-*.json > test_durations.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-durations
+          path: test_durations.json
+          retention-days: 7

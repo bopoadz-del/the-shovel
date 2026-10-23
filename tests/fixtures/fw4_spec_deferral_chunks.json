@@ -1,0 +1,145 @@
+{
+  "_about": "FW4 S1/S2 pre-injection retrieval fixture. Every chunk body is synthetic (FIXTURE-e-20260927). Bodies keep the structural properties the tests assert: a 3.1.25.8 clause that defers cover to the drawings and states no cover millimetre; a drawing note whose 100 mm footing figure sits about 120 characters after the cover phrase (outside the 64-character window); a 75 mm contact-with-soil drawing note; a lid size 250mm x 250mm; and 95% MDD / CBR 25 compaction clauses. Invented project: Example Harbour Works. No text copied from a client document.",
+  "docs": [
+    {
+      "doc_id": "FIXTURE-e-20260927-spec-vol-a",
+      "name": "FIXTURE-e-20260927 Specification Volume A.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c01",
+          "text": "3.1.25.8 Fixing of bars. Binding wire shall be 1.4 mm in diameter and the ends turned inward. Spacer blocks fixed to the reinforcement shall give the cover specified in this volume, on the Drawings or as the engineer directs. This clause states no cover millimetre."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-dwg-footing-cover",
+      "name": "FIXTURE-e-20260927 DWG footing cover note.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c02",
+          "text": "THE CLEAR CONCRETE COVER TO STEEL REINFORCEMENT SHALL NOT BE LESS THAN THE FOLLOWING: BOTTOM OF FOOTINGS IN CONTACT WITH SOIL ON THIS SHEET : 100mm SURFACES AWAY FROM SOIL : 75mm"
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-dwg-soil-75-a",
+      "name": "FIXTURE-e-20260927 DWG soil contact note A.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c03",
+          "text": "7. MINIMUM CLEAR COVER TO REINFORCEMENT FOR ELEMENTS IN CONTACT WITH SOIL : 75mm FOR THE CHAMBER WALLS."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-dwg-soil-75-b",
+      "name": "FIXTURE-e-20260927 DWG soil contact note B.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c04",
+          "text": "8. CLEAR COVER TO REINFORCEMENT IN CONTACT WITH SOIL : 75mm BESIDE THE SERVICE PIT."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-dwg-soil-75-c",
+      "name": "FIXTURE-e-20260927 DWG soil contact note C.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c05",
+          "text": "9. COVER TO REINFORCEMENT IN CONTACT WITH SOIL : 75mm AT THE DUCT BANK WALL."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-nominal",
+      "name": "FIXTURE-e-20260927 Site notes durability.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c06",
+          "text": "Example Harbour Works durability note. The nominal cover should be 50mm where foundations are cast against blinding and 75mm where foundations are cast against soil."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-60mm",
+      "name": "FIXTURE-e-20260927 Site notes foundation bars.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c07",
+          "text": "Example Harbour Works bar note. For the foundation the minimum concrete cover is 60mm to the outer bar."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-spec-lid",
+      "name": "FIXTURE-e-20260927 Specification Volume B.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c08",
+          "text": "The inspection pit shall be protected by a concrete housing with a concrete cover of 250mm x 250mm x 10mm at grade level."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-spec-earthworks",
+      "name": "FIXTURE-e-20260927 Specification Earthworks.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c09",
+          "text": "Example Harbour Works earthworks. The road pavement subgrade shall be compacted to 95% of maximum dry density so the reported CBR is 25."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-subgrade",
+      "name": "FIXTURE-e-20260927 Site notes subgrade.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c10",
+          "text": "In the cut the road subgrade is compacted to 95% of maximum dry density before the pavement is placed."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-embankment",
+      "name": "FIXTURE-e-20260927 Site notes embankment.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c11",
+          "text": "Embankment fill under the road shall be compacted to 95% of MDD in a single layer."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-layers",
+      "name": "FIXTURE-e-20260927 Site notes layer checks.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c12",
+          "text": "Each embankment layer under the pavement shall reach 95% of maximum dry density."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-pavement",
+      "name": "FIXTURE-e-20260927 Site notes pavement base.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c13",
+          "text": "The pavement subgrade CBR is 25 after compaction to the density stated for the road."
+        }
+      ]
+    },
+    {
+      "doc_id": "FIXTURE-e-20260927-notes-shoulder",
+      "name": "FIXTURE-e-20260927 Site notes shoulder.pdf",
+      "chunks": [
+        {
+          "evidence_chunk": "FIXTURE-e-20260927-c14",
+          "text": "Shoulder fill beside the road pavement is compacted to 95% of maximum dry density."
+        }
+      ]
+    }
+  ]
+}

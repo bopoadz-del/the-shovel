@@ -1,0 +1,287 @@
+# What the driver's model sees for each predefined workflow (run_workflow).
+# Every catalogue entry has a card of the same shape, enforced by
+# tests/test_workflow_catalogue_cards.py:
+#   produces  - the deliverable the workflow returns
+#   use_when  - the request it answers, and what sets it apart from its neighbours
+#   needs     - what must be supplied before it can run, in words
+#   inputs    - parameter key -> display label (the keys run_workflow's params take)
+# A card describes the workflow; it never routes a question to it. The model chooses.
+
+as_built_deviation_report:
+  produces: A deviation report comparing as-built dimensions with the design, flagged against a tolerance
+  use_when: The user asks how built work differs from the drawings or whether it is within tolerance
+  needs: An as-built file and a design file, or as-built measurements and the design measurements
+  inputs:
+    as_built_file: As-built drawing file
+    design_file: Design drawing file
+    measurements: As-built measurements (one figure, a list of figures, or each as type, value and unit)
+    design_measurements: Design measurements (matching the as-built ones by type or by order)
+    tolerance_mm: Tolerance (mm)
+
+carbon_footprint_calculator:
+  produces: An embodied-carbon report for the project's material quantities
+  use_when: The user asks for the embodied carbon of the works or its materials, not a wider ESG report
+  needs: The quantity of each material in the works
+  inputs:
+    quantities: Material quantities
+
+cash_flow_forecast:
+  produces: A month-by-month cash flow forecast (S-curve) for a contract
+  use_when: The user asks how a contract's value will be spent or paid over time
+  needs: The contract value; a duration, programme or BOQ shapes the curve
+  inputs:
+    contract_value: Contract value
+    duration_months: Duration (months)
+    project_start_date: Start date
+    payment_terms: Payment terms
+    schedule_file: Programme file
+    boq: Bill of quantities
+
+cde_post_rfi:
+  produces: An RFI already drafted, posted to the project's common data environment (CDE), which numbers it
+  use_when: The user asks to submit or post an existing RFI draft to the CDE, not to write one
+  needs: The CDE project id and the RFI draft
+  inputs:
+    cde_project_id: CDE project id
+
+change_order_impact:
+  produces: A cost and schedule impact assessment of one proposed change
+  use_when: The user asks what a change or variation will do to cost and time, before any order is drafted
+  needs: The change's type or description, and its direct cost if known
+  inputs:
+    change_type: Change type
+    description: Change description
+    direct_cost: Direct cost
+    trade_involved: Trade involved
+
+claims_builder:
+  produces: An extension-of-time or delay claim with a narrative, the delay quantified and the contract entitlement checked
+  use_when: The user asks to build, draft or prepare a claim or extension-of-time submission for delays already incurred
+  needs: The delay events (description, delay days, responsibility, date, cost impact), or a current and a baseline programme to derive them; the contract file adds the entitlement check
+  inputs:
+    delay_events: Delay events
+    schedule_file: Current programme file
+    baseline_file: Baseline programme file
+    contract_file: Contract file
+    claim_type: Claim type
+    notification_date: Notification date
+
+commissioning_checklist:
+  produces: A commissioning checklist and test plan for building systems and equipment
+  use_when: The user asks for commissioning steps, tests or witness points before handover
+  needs: The systems or equipment list, or the specification
+  inputs:
+    systems: Systems
+    equipment_list: Equipment list
+    spec_file: Specification file
+    substantial_completion_date: Substantial completion date
+
+daily_site_report:
+  produces: A daily site report of the day's work, manpower, observations and photos
+  use_when: The user asks to write up a day on site from notes, voice recordings or photos
+  needs: The day's notes, voice recordings or site photos
+  inputs:
+    voice_files: Voice notes
+    photos: Site photos
+    date: Report date
+    location: Site location
+    supervisor: Supervisor
+
+esg_sustainability_report:
+  produces: An ESG report covering environment, social and governance indicators for a reporting period
+  use_when: The user asks for an ESG or sustainability report across carbon, waste, water, safety, workforce and governance
+  needs: The project's ESG data for the period (carbon, waste, water, safety records, manpower)
+  inputs:
+    project_data: ESG data
+    period: Reporting period
+    boq: Bill of quantities
+    safety_records: Safety records
+    manpower: Manpower records
+
+evm_calculate:
+  produces: Earned-value indices and forecasts (CPI, SPI, variances, estimate at completion)
+  use_when: The user gives planned value, earned value and actual cost and asks how the project is performing
+  needs: Planned value, earned value and actual cost; the budget at completion for forecasts
+  inputs:
+    pv: Planned value
+    ev: Earned value
+    ac: Actual cost
+    bac: Budget at completion
+
+forensic_delay_analysis:
+  produces: A forensic delay analysis comparing a baseline programme with the updated or as-built programme
+  use_when: The user asks what caused delay and who is responsible, by programme analysis, before any claim is drafted
+  needs: A baseline programme and an updated or as-built programme (XER)
+  inputs:
+    baseline_file: Baseline programme file
+    updated_file: Updated programme file
+    delay_events: Delay events
+    method: Analysis method
+
+generate_wbs:
+  produces: A work breakdown structure and cost-loaded baseline schedule for a whole project, as an exportable deliverable
+  use_when: The user asks for a WBS, baseline programme or schedule for a project described in a brief
+  needs: A project brief; BOQ items refine it
+  inputs:
+    project_type: Project type
+    start_date: Start date
+    boq_items: BOQ items
+    currency: Currency
+
+job_requisition:
+  produces: A job requisition, the internal request that a stated piece of work be carried out
+  use_when: The user asks to raise a job requisition inside the organisation, not to invite outside bids
+  needs: The works scope in the message
+  inputs:
+    procedure_title: Procedure title
+
+look_ahead:
+  produces: A three-to-four-week look-ahead of the activities due in the window, with float and critical flags
+  use_when: The user asks what work is coming up in the next weeks from the programme
+  needs: An uploaded Primavera programme (.xer) or its activities
+  inputs:
+    schedule_file: Programme file
+    weeks: Window (weeks)
+    data_date: Data date
+
+om_manual_generator:
+  produces: An operation and maintenance manual for installed equipment
+  use_when: The user asks for an O&M manual or handover documentation for equipment
+  needs: The equipment list (tag, description, system for each item)
+  inputs:
+    equipment_list: Equipment list
+    spec_file: Specification file
+    completion_date: Completion date
+    contractor: Contractor
+
+payment_certificate:
+  produces: An interim payment certificate with retention, advance recovery and previous certificates deducted
+  use_when: The user asks to certify or value a contractor's interim payment for a period
+  needs: The contract value with the percentage of work done, or the gross valuation
+  inputs:
+    contract_value: Contract value
+    work_done_percent: Work done (%)
+    gross_valuation: Gross valuation
+    retention_percent: Retention (%)
+    advance_percent: Advance payment (%)
+    advance_recovery_percent: Advance recovery (%)
+    previous_certified: Previously certified
+    materials_on_site: Materials on site
+
+procurement_list_generator:
+  produces: A prioritised procurement list of the materials to buy, with quantities, values and order dates
+  use_when: The user asks what to buy or order, and when, from a BOQ or quantities
+  needs: BOQ line items or discrete quantities
+  inputs:
+    line_items: BOQ line items
+    quantities: Quantities
+    schedule_start_date: Programme start date
+    budget: Budget
+
+procurement_optimizer:
+  produces: A supplier selection ranked on price, lead time and quality for each material
+  use_when: The user asks which supplier to buy from or how to source materials, given supplier offers
+  needs: The materials required and the suppliers' offers
+  inputs:
+    boq: Materials required
+    suppliers: Supplier offers
+    required_date: Required date
+    constraints: Constraints
+
+resource_histogram:
+  produces: A manpower histogram of crews per period, estimated from a norms-based WBS
+  use_when: The user asks how many workers or crews are needed over time and has no resource-loaded programme
+  needs: A project brief
+  inputs:
+    project_type: Project type
+    start_date: Start date
+
+rfi_generator:
+  produces: Requests for information drafted from drawing or specification issues
+  use_when: The user asks to write RFIs about unclear, conflicting or missing design information
+  needs: The issues, or a question in the message
+  inputs:
+    issues: Issues
+    drawing_ref: Drawing reference
+    contractor_name: Contractor
+    engineer_name: Engineer
+
+rfp_draft:
+  produces: A request for proposal or tender invitation to outside bidders for a package of work
+  use_when: The user asks to invite bids or proposals, before any bids are received
+  needs: The works scope in the message
+  inputs:
+    procedure_title: Procedure title
+
+risk_register_auto_populate:
+  produces: A risk register with owners, severity and mitigations
+  use_when: The user asks for a risk register from risks found in documents, specifications or the programme
+  needs: The risks identified from the documents
+  inputs:
+    risks: Risks
+    auto_risks: Risks found in documents
+    default_owner: Default risk owner
+
+safety_compliance_audit:
+  produces: A safety compliance audit of site photos, listing the hazards found
+  use_when: The user asks to check site photos for safety hazards or compliance
+  needs: Site photos, as a list or a single photo file
+  inputs:
+    photos: Site photos
+    file_path: Photo file
+    audit_type: Audit type
+
+submittal_log_generator:
+  produces: A submittal register of the documents and samples the contractor must submit for approval
+  use_when: The user asks for a submittal log or register from the specification or BOQ
+  needs: Specification sections or BOQ items
+  inputs:
+    spec_sections: Specification sections
+    line_items: BOQ items
+    contract_start_date: Contract start date
+
+tender_bid_analysis:
+  produces: A weighted comparison of tender bids with a recommended bidder
+  use_when: The user asks to compare, evaluate or rank bids received from contractors
+  needs: At least two bids (contractor, price, duration and scores)
+  inputs:
+    bids: Bids
+    weights: Criteria weights
+
+value_engineering:
+  produces: Value-engineering alternatives with savings and their quality and schedule impact
+  use_when: The user asks how to reduce the cost of priced work without losing function
+  needs: A priced BOQ
+  inputs:
+    boq: Priced bill of quantities
+    target_reduction: Target reduction
+
+variation_order_manager:
+  produces: A variation order drafted with its value, pricing method and schedule impact, tracked against the contract
+  use_when: The user asks to draft, issue or log a variation order for instructed changed work
+  needs: The variation's scope and its cost
+  inputs:
+    variation_data: Variation details
+    description: Variation description
+    amount: Variation amount
+    contract_value: Contract value
+    schedule_impact_days: Schedule impact (days)
+
+warranty_maintenance_schedule:
+  produces: A warranty register and planned maintenance schedule for installed systems
+  use_when: The user asks when warranties expire or what maintenance falls due after handover
+  needs: The installed systems or equipment
+  inputs:
+    systems: Systems
+    equipment: Equipment
+    handover_date: Handover date
+    defects_liability_months: Defects liability period (months)
+
+wir_form:
+  produces: A work inspection request form for a stated activity and location
+  use_when: The user asks to raise an inspection request for completed work to be inspected
+  needs: The activity, location and scope in the message
+  inputs:
+    activity: Activity
+    location: Location
+    wir_number: WIR number

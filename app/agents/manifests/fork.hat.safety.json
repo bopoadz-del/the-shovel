@@ -1,0 +1,188 @@
+{
+ "manifest_version": "1.0",
+ "id": "fork.hat.safety",
+ "name": "Safety Hat",
+ "description": "HSE engineering checks: fall arrest, scaffold loading, guardrails, excavation support, crane lifts, wind on temporary works, slope stability, dewatering uplift. Owns the safety verification workflow.",
+ "kind": "hat",
+ "extends": "fork.base",
+ "discipline": "safety",
+ "system_prompt_guidance": "You are the Safety discipline agent (HSE engineering). You verify temporary works and site safety controls with calculations: fall-arrest forces, scaffold load capacity, guardrail geometry, crane lift capacity and planning, wind load on formwork, slope factor of safety, and dewatering uplift. OSHA 29 CFR 1926 Subpart P Appendix B Table B-1 maximum allowable simple slopes (excavations \u2264 20 ft / 6.09 m): Stable rock vertical (90\u00b0); Type A 3/4:1 (53\u00b0); Type B 1:1 (45\u00b0); Type C 1\u00bd:1 / 1.5:1 (34\u00b0). Uncertain soil = Type C. The \u22651.52 m protective-system rule is not a substitute for the slope table. Every verdict must come from a formula execution against stated parameters or a cited standard -- never assert a control is adequate without the check. A failing check is stated plainly as FAILING with the governing number. Life-safety findings are never softened; when a check fails you state the required control before any work proceeds, and when the finding has programme or cost impact you hand off to Planning or Commercial.",
+ "activation": {
+  "triggers": [
+   {
+    "type": "keyword",
+    "value": "safety",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "HSE",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "fall arrest",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "scaffold",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "guardrail",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "trench",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "shoring",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "crane lift",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "lifting plan",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "wind load",
+    "score": 0.7
+   },
+   {
+    "type": "keyword",
+    "value": "slope stability",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "uplift",
+    "score": 0.7
+   },
+   {
+    "type": "keyword",
+    "value": "temporary works",
+    "score": 0.8
+   }
+  ],
+  "mode": "hybrid",
+  "default_enabled": false
+ },
+ "context_sources": [
+  {
+   "kind": "official_guidance",
+   "weight": 1.0,
+   "filters": {
+    "source": "curated_kb_osha"
+   },
+   "max_items": 8
+  },
+  {
+   "kind": "project_documents",
+   "weight": 0.8,
+   "filters": {
+    "type": "method_statement"
+   },
+   "max_items": 5
+  }
+ ],
+ "allowed_actions": [
+  "construction_calc:fall_arrest_force",
+  "construction_calc:scaffold_load_capacity",
+  "construction_calc:guardrail_top_rail_height",
+  "construction_calc:crane_lift_capacity",
+  "construction_calc:crane_planning",
+  "construction_calc:wind_load_on_formwork",
+  "construction_calc:slope_fos_simple",
+  "construction_calc:dewatering_uplift_check"
+ ],
+ "available_tools": [],
+ "handoffs": [
+  {
+   "to": "planning",
+   "when": "a failed safety check stops or resequences work",
+   "carry": [
+    "failed_check",
+    "governing_value",
+    "required_control",
+    "affected_activities"
+   ]
+  },
+  {
+   "to": "commercial",
+   "when": "a required control has material cost impact",
+   "carry": [
+    "required_control",
+    "scope_description",
+    "estimated_quantities"
+   ]
+  }
+ ],
+ "verification": {
+  "grounding": "documents_or_formulas",
+  "cite_required": true,
+  "refuse_unaided_figures": true,
+  "standards_advisory": true
+ },
+ "failure_policy": {
+  "on_missing_context": "dependency_required",
+  "on_formula_error": "ask_clarifying",
+  "on_unverified_claim": "flag_and_continue"
+ },
+ "playbook": {
+  "formulas": [
+   {
+    "id": "fall_arrest_force",
+    "description": "Fall-arrest impact force on anchorage",
+    "implemented_by": "app.lib.construction_formulas.fall_arrest_force",
+    "domain": "safety",
+    "tier": "operational"
+   },
+   {
+    "id": "scaffold_load_capacity",
+    "description": "Scaffold bay load capacity check",
+    "implemented_by": "app.lib.construction_formulas.scaffold_load_capacity",
+    "domain": "safety",
+    "tier": "operational"
+   },
+   {
+    "id": "guardrail_top_rail_height",
+    "description": "Guardrail top-rail height compliance",
+    "implemented_by": "app.lib.construction_formulas.guardrail_top_rail_height",
+    "domain": "safety",
+    "tier": "operational"
+   },
+   {
+    "id": "crane_lift_capacity",
+    "description": "Crane lift capacity vs load at radius",
+    "implemented_by": "app.lib.construction_formulas.crane_lift_capacity",
+    "domain": "safety",
+    "tier": "operational"
+   },
+   {
+    "id": "crane_planning",
+    "description": "Crane selection and lift planning",
+    "implemented_by": "app.lib.construction_formulas.crane_planning",
+    "domain": "safety",
+    "tier": "operational"
+   },
+   {
+    "id": "wind_load_on_formwork",
+    "description": "Wind load on formwork/temporary works",
+    "implemented_by": "app.lib.construction_formulas.wind_load_on_formwork",
+    "domain": "safety",
+    "tier": "operational"
+   }
+  ]
+ }
+}

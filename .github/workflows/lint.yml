@@ -1,0 +1,280 @@
+name: lint
+
+# Closes the "no lint CI gate" gap from the repo audit.
+#
+# ROLLOUT: report-only for now (continue-on-error). A blocking ruff gate on a
+# 900+ commit tree with legacy god-files would throw thousands of pre-existing
+# findings and block every PR on day one. Report-only surfaces NEW issues in
+# the job log without red-walling main. Promote to a hard gate — ideally scoped
+# to changed lines, like the diff-cover coverage gate — once the baseline is
+# triaged or an ignore/per-file-ignores baseline is committed.
+#
+# mypy is intentionally NOT added here yet: the tree is largely untyped, so a
+# useful mypy gate needs a config baseline (ignore-missing-imports + gradual
+# typing) first. Tracked as a follow-up.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ruff
+        # Pinned: the job installed LATEST ruff, so every new ruff release
+        # (0.16.3 on 2026-08-15) added fresh findings repo-wide and flipped
+        # the advisory check red with no repo change. Bump deliberately.
+        run: python -m pip install --upgrade pip ruff==0.16.1
+
+      - name: Ruff check (report-only during rollout)
+        continue-on-error: true # see header note — promote to blocking after baseline triage
+        run: ruff check app tests --output-format=github
+
+      - name: Undefined-name gate (F821) — BLOCKING
+        # Sibling of the S110 gate below, and found the same way: while fixing
+        # an unrelated bug, ruff flagged `logger.debug(...)` in a new handler
+        # in a module whose logger is named `_LOG`. Seven more were already in
+        # the tree, five of them inside `except:` blocks.
+        #
+        # An undefined name in a handler is worse than a silent one. The
+        # handler does not merely hide the error, it raises NameError on top of
+        # it, so a HANDLED failure becomes an unhandled crash on the one path
+        # written to degrade gracefully — including the cost-grounding gate's
+        # "pass the answer through" fallback.
+        #
+        # Three of those came from the 2026-08-03 S110 cleanup itself, which
+        # replaced `except: pass` with `log.warning(...)` in a module that
+        # defines `logger`. Removing a silent handler introduced a crashing
+        # one, and nothing caught it because the branch rarely runs.
+        #
+        # Baseline is 0 and must never be raised: F821 is not style debt, it
+        # is a NameError that has not fired yet.
+        run: |
+          BASELINE=0
+          COUNT=$(ruff check app --select F821 --output-format=concise | grep -c "F821" || true)
+          echo "F821 undefined names: $COUNT (baseline $BASELINE)"
+          if [ "$COUNT" -gt "$BASELINE" ]; then
+            echo "::error::$COUNT undefined names in app/ — up from $BASELINE."
+            echo "::error::Each is a NameError waiting for its branch to run."
+            ruff check app --select F821 --output-format=github
+            exit 1
+          fi
+
+      - name: Silent-exception ratchet (S110) — BLOCKING
+        # The general ruff job reports ~6300 legacy findings, so a new silent
+        # handler would be invisible in it. This step isolates S110
+        # (`try`/`except`/`pass`) and blocks only if the count GOES UP.
+        #
+        # Why S110 specifically, from the 2026-08-03 audit: silent handlers
+        # are not style debt, they hide bugs. A NameError swallowed by its own
+        # `except` left a helper that persisted nothing; cleanup failures on
+        # DECRYPTED client documents left plaintext on disk unnoticed; a
+        # swallowed index-creation failure costs ~11s sequential scans and
+        # surfaces only as "retrieval got slow".
+        #
+        # Started as a ratchet at 77 while the backlog was worked down. The
+        # backlog is now CLEARED, so the baseline is 0 and this is a hard
+        # gate: no new silent handler can enter the tree at all.
+        # It must never be raised.
+        run: |
+          BASELINE=0
+          COUNT=$(ruff check app --select S110 --output-format=concise | grep -c "S110" || true)
+          echo "S110 silent handlers: $COUNT (baseline $BASELINE)"
+          if [ "$COUNT" -gt "$BASELINE" ]; then
+            echo "::error::$COUNT silent try/except/pass handlers — up from $BASELINE."
+            echo "::error::Log the exception or add a comment naming what is absorbed and why."
+            ruff check app --select S110 --output-format=github
+            exit 1
+          fi
+          if [ "$COUNT" -lt "$BASELINE" ]; then
+            echo "::notice::Down to $COUNT from $BASELINE — lower BASELINE in .github/workflows/lint.yml."
+          fi
+
+  integrity:
+    # Three BLOCKING gates that answer the questions a stranger cloning this
+    # repo would actually care about: is anything hollow, is anything
+    # secret in here, and does anything swallow Exception with pass?
+    #
+    # All are cheap (no deps, seconds to run) and the first two have already
+    # caught something real, which is why they block rather than report:
+    #
+    #  - audit_stubs found 41 hollow functions, three of them on the drawing
+    #    ingest path — every drawing came out with no tables, no markups and
+    #    no title block, and nothing said so.
+    #  - scan_secrets found a live Fork API key in a recovery runbook and a
+    #    live Render key hardcoded in a scheduled-task script.
+    #  - scan_exception_pass is the S110 twin for `except Exception: pass`,
+    #    which ruff's default S110 does not cover.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: No unregistered hollow functions
+        # Exits 1 on any hollow function that is not implemented, not an
+        # @abstractmethod, not under tests/, and not registered in
+        # docs/KNOWN_INCOMPLETE.md with a reason. Registration is deliberate and
+        # visible; a hidden stub is not.
+        run: python scripts/audit_stubs.py
+
+      - name: No secret material in tracked files
+        # Scans `git ls-files` — the set that actually gets pushed. An
+        # untracked .env on a developer's disk is where secrets are supposed
+        # to live and is correctly ignored.
+        #
+        # Fail-closed (CI twin 2a): SECRET_SCAN_PATTERNS is the env-fed
+        # client-pattern denylist. If the repository secret is unset the
+        # script exits non-zero and never reports "clean". A missing
+        # denylist is a red gate, not a skip. Patterns are never hardcoded
+        # and a match is never echoed (file:line + pattern index only).
+        env:
+          SECRET_SCAN_PATTERNS: ${{ secrets.SECRET_SCAN_PATTERNS }}
+        run: python scripts/scan_secrets.py
+
+  client-pattern-scan:
+    # CI twin 2a — dedicated blocking job so the fail-closed denylist is a
+    # first-class required-check context (same contract as The_Level's
+    # `client-pattern scan`). Runs on every commit: PR + push to main.
+    # Does not weaken the S110 or audit_stubs gates above.
+    name: client-pattern scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Client-pattern + secret scan (fail-closed)
+        env:
+          SECRET_SCAN_PATTERNS: ${{ secrets.SECRET_SCAN_PATTERNS }}
+        run: python scripts/scan_secrets.py
+
+      # Quote the name: an unquoted `Exception: pass` is invalid YAML
+      # (`: ` starts a mapping), so GitHub skipped the entire lint workflow
+      # and required checks ruff/eslint/integrity never appeared on the PR.
+      - name: "No silent except: pass, and no new silent empty return"
+        # TWO twins, one script, both AST walks over the same tree.
+        #
+        # PASS twin: ruff S110 (check-typed-exception = false) flags bare
+        # `except: pass` only. This flags the typed form S110 misses:
+        # `except Exception: pass` / `... as <name>: pass`. ALLOWLIST is
+        # empty and staying that way.
+        #
+        # RETURN twin: the larger, quieter version -- a handler whose whole
+        # body is `return None` / `{}` / `[]` / `''` / `0`. The caller then
+        # cannot tell "nothing there" from "the lookup failed". 124 of those
+        # existed the day the twin was written, 58 under app/core, so they
+        # are baselined in RETURN_ALLOWLIST by enclosing function
+        # (`path::Class.method` -> how many sites it may hold), not by line,
+        # so an edit above a handler does not redden the gate; a new site
+        # beyond a function's count does. The baseline may only shrink; the
+        # script and a test refuse stale (over-generous) counts.
+        #
+        # Stdlib only. Exit 1 with a file:line list.
+        run: python scripts/scan_exception_pass.py
+
+      - name: "No new hardwiring (NO HARDWIRING doctrine)"
+        # Owner doctrine 2026-10-02: a failing case is never fixed by name.
+        # Rejects any diff that ADDS a per-case form to product code (app/):
+        # a `_rescue_*` function, a `*_NEEDLES` list, a `RAG_*_RESCUE` /
+        # `*_BONUS` / `*_EXTRA_K` knob, or a probe/test-case ID (R18, M3,
+        # E1, UI-PHYS ...). On the day it was written retriever.py held 43
+        # rescues, 7 needle lists, 28 knobs and E1 x64 -- each one a failed
+        # probe turned into a special case, none a retrieval improvement.
+        # Those are GRANDFATHERED in scripts/hardwiring_baseline.json, keyed
+        # by symbol (not line, so the surgery doesn't renumber it) and by
+        # probe-ID count per file. The baseline may only shrink; a test
+        # asserts its ceiling and refuses stale keys. Do not add to it to
+        # pass this check -- say "no general fix found" and stop instead.
+        #
+        # Stdlib only. Exit 1 with a list of new forms.
+        run: python scripts/scan_hardwiring.py
+
+      - name: Repo hygiene (no documents, data, models or live names in git)
+        # Documents never live in the repo: knowledge and codes go in through
+        # the admin path into the database, model weights are a release asset
+        # pinned in data/models/manifest.json. Fails on any tracked image /
+        # PDF / office / archive / database / model file outside the reviewed
+        # exact-path allow-list in the script, any tracked file over 500 KB,
+        # and any live document name, reference code, document id or project
+        # id -- checked offline against config/live_name_hashes.txt (salted
+        # digests generated owner-side by scripts/gen_live_name_hashes.py;
+        # CI never sees the names). Stdlib only.
+        run: python scripts/scan_repo_hygiene.py
+
+  gitleaks:
+    # A credential written anywhere in the tree fails the build (order 0255Z,
+    # LANE4 #981). The checked-out tree is scanned, not history: history is
+    # closed by the move to the clean repository. Values are redacted in the
+    # log. Pinned release; nothing else installed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gitleaks (pinned)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks version
+      - name: No credential in the tree
+        run: ./gitleaks detect --source . --no-git --redact --exit-code 1 --verbose
+
+  eslint:
+    # BLOCKING, unlike ruff above. This gate exists because of a specific
+    # production incident: on 2026-08-03 a `useMemo` added below an early
+    # return in ProjectWorkspace.tsx shipped through CI and crashed the whole
+    # workspace into the ErrorBoundary (React #310). `tsc -b && vite build`
+    # compiles a conditional hook happily — Rules of Hooks is a runtime
+    # contract, not a type error — and no workflow ran eslint, so nothing
+    # caught it. Verified before enabling: eslint reports
+    # `react-hooks/rules-of-hooks` on exactly that shape.
+    #
+    # It can block from day one because the frontend is at 0 errors. The
+    # remaining findings are advisory (react-compiler hints, fast-refresh DX)
+    # and are configured as warnings in eslint.config.js with the reasoning
+    # recorded there. Warnings do NOT fail the build, so the gate stays
+    # honest: it blocks correctness regressions, not style debt.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: ESLint (blocking — errors only)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend unit tests (node --test, no framework)
+        working-directory: frontend
+        run: node --test src/lib/reconnect.test.mjs src/lib/streamOutcome.test.mjs src/chat/SourcesList.visible.test.mjs

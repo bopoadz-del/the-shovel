@@ -1,0 +1,452 @@
+{
+  "version": 1,
+  "variant": "sanitized",
+  "do_not_commit_live_client_pack": true,
+  "note": "Same IDs and assertion shapes as the confidential Drive pack. Figures, names, and document titles are fixture-only. Never copy live client amounts into this file.",
+  "project_name": "UI-PHYS Fixture",
+  "client": "North Spur Demo",
+  "nightly_ids": [
+    "A1",
+    "B1",
+    "E4",
+    "G1",
+    "G5",
+    "H1"
+  ],
+  "sources": {
+    "S1": "S1_contract_data.md",
+    "S2": "S2_demolition_boq.md",
+    "S3": "S3_specification_part1.md",
+    "S4": "S4_specification_part8.md",
+    "S5": "S5_batch_plant_letter.md",
+    "S6": "S6_priced_boq.md"
+  },
+  "forbidden_substrings": [],
+  "cases": {
+    "A1": {
+      "agent": "project-assistant",
+      "ask": "What is the Accepted Contract Amount, excluding VAT?",
+      "must": [
+        "8,640,000.00"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "Contract Data"
+      ],
+      "source": "S1"
+    },
+    "A2": {
+      "agent": "project-assistant",
+      "ask": "What is the Accepted Contract Amount including VAT?",
+      "must": [
+        "9,936,000.00"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "Contract Data"
+      ],
+      "source": "S1"
+    },
+    "A3": {
+      "agent": "project-assistant",
+      "ask": "What is the Time for Completion for the whole of the Works?",
+      "must": [
+        "420"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "1.1.75"
+      ],
+      "source": "S1"
+    },
+    "A4": {
+      "agent": "project-assistant",
+      "ask": "How many Milestones are there and what is the Time for Completion for Milestone 5?",
+      "must": [
+        "6",
+        "310"
+      ],
+      "cite_any": [
+        "S1_contract_data.md"
+      ],
+      "source": "S1"
+    },
+    "A5": {
+      "agent": "project-assistant",
+      "ask": "What are the Delay Damages for the whole of the Works?",
+      "must": [
+        "0.2%"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "8.8.1"
+      ],
+      "source": "S1"
+    },
+    "A6": {
+      "agent": "project-assistant",
+      "ask": "What is the Defects Notification Period?",
+      "must": [
+        "365"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "1.1.27"
+      ],
+      "source": "S1"
+    },
+    "A7": {
+      "agent": "project-assistant",
+      "ask": "What is the value of the Performance Bond?",
+      "must": [
+        "10%"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "4.3.3"
+      ],
+      "source": "S1"
+    },
+    "A8": {
+      "agent": "project-assistant",
+      "ask": "What is the approved method of electronic communication under the contract?",
+      "must": [
+        "ProjectMail"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "1.3.1"
+      ],
+      "source": "S1"
+    },
+    "A9": {
+      "agent": "project-assistant",
+      "ask": "Who is the Engineer under this contract?",
+      "must": [
+        "Northwater Engineers"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "1.3.1"
+      ],
+      "source": "S1"
+    },
+    "B1": {
+      "agent": "quantity-surveyor",
+      "ask": "In the demolition BOQ, what is the rate and amount for general site clearance (item D110)?",
+      "must": [
+        "12",
+        "2,500.00",
+        "30,000.00"
+      ],
+      "cite_any": [
+        "S2_demolition_boq.md",
+        "D110"
+      ],
+      "source": "S2"
+    },
+    "B2": {
+      "agent": "quantity-surveyor",
+      "ask": "How many trees are allowed for removal in existing sidewalks and what's the unit rate (item D290.1)?",
+      "must": [
+        "48",
+        "220.00"
+      ],
+      "cite_any": [
+        "S2_demolition_boq.md",
+        "D290.1"
+      ],
+      "source": "S2"
+    },
+    "B3": {
+      "agent": "quantity-surveyor",
+      "ask": "What is the Part Summary total for page d/3/1 of the Demolition and Site Clearance bill?",
+      "must": [
+        "40,560.00"
+      ],
+      "cite_any": [
+        "S2_demolition_boq.md"
+      ],
+      "source": "S2"
+    },
+    "B4": {
+      "agent": "quantity-surveyor",
+      "ask": "What is the quantity and amount for breaking out existing carriageway including road markings (D599.5)?",
+      "must": [
+        "1,200",
+        "18.00",
+        "21,600.00"
+      ],
+      "cite_any": [
+        "S2_demolition_boq.md",
+        "D599.5"
+      ],
+      "source": "S2"
+    },
+    "B5": {
+      "agent": "quantity-surveyor",
+      "ask": "What is the amount for removal of existing chain link fence (D549.2)?",
+      "must": [
+        "80",
+        "15.00",
+        "1,200.00"
+      ],
+      "cite_any": [
+        "S2_demolition_boq.md",
+        "D549.2"
+      ],
+      "source": "S2"
+    },
+    "B6": {
+      "agent": "quantity-surveyor",
+      "ask": "What is the document number and revision of the priced Bill of Quantities, and who prepared it?",
+      "must": [
+        "FX-2044-0000-AAA-BOQ-CA-000001",
+        "Rev B",
+        "Quarry Quantities"
+      ],
+      "cite_any": [
+        "S6_priced_boq.md"
+      ],
+      "source": "S6"
+    },
+    "C1": {
+      "agent": "project-assistant",
+      "ask": "Under Sub-Clause 1.5.1(d), what is the order of precedence of documents within the Specification? List the first three.",
+      "must": [
+        "Post Tender Clarifications",
+        "Tender Addenda",
+        "Schedule of Project Requirements"
+      ],
+      "cite_any": [
+        "S3_specification_part1.md"
+      ],
+      "source": "S3"
+    },
+    "C2": {
+      "agent": "project-assistant",
+      "ask": "Which specification document covers the Variation Procedure, and what is its number?",
+      "must": [
+        "FX-2044-PMO-SPE-010001",
+        "Variation Procedure"
+      ],
+      "cite_any": [
+        "S4_specification_part8.md"
+      ],
+      "source": "S4"
+    },
+    "C3": {
+      "agent": "project-assistant",
+      "ask": "What scheduling method does Specification 003113 require for programmes?",
+      "must": [
+        "Critical Path Method",
+        "CPM"
+      ],
+      "cite_any": [
+        "S4_specification_part8.md",
+        "003113"
+      ],
+      "source": "S4"
+    },
+    "C4": {
+      "agent": "project-assistant",
+      "ask": "What does Schedule 9 of the contract volumes cover?",
+      "must": [
+        "Health & Safety KPIs"
+      ],
+      "cite_any": [
+        "S1_contract_data.md",
+        "S3_specification_part1.md"
+      ],
+      "source": "S1"
+    },
+    "D1": {
+      "agent": "project-assistant",
+      "ask": "Who signed the letter about the batching plant at Creek Bend, and in what capacity?",
+      "must": [
+        "Mara Chen",
+        "Engineer's Representative"
+      ],
+      "cite_any": [
+        "S5_batch_plant_letter.md"
+      ],
+      "source": "S5"
+    },
+    "D2": {
+      "agent": "project-assistant",
+      "ask": "Per that letter, since when had the land been delivered to the contractor?",
+      "must": [
+        "April 2024"
+      ],
+      "cite_any": [
+        "S5_batch_plant_letter.md"
+      ],
+      "source": "S5"
+    },
+    "D3": {
+      "agent": "project-assistant",
+      "ask": "What reason does the letter give for no longer needing a pre-cast factory?",
+      "must": [
+        "in-situ",
+        "culvert"
+      ],
+      "cite_any": [
+        "S5_batch_plant_letter.md"
+      ],
+      "source": "S5"
+    },
+    "E1": {
+      "agent": "project-assistant",
+      "ask": "Calculate the delay damages per calendar day in SAR for the whole of the Works.",
+      "must": [
+        "0.2%",
+        "8,640,000.00",
+        "17,280.00"
+      ],
+      "show_chain": true,
+      "source": "S1"
+    },
+    "E2": {
+      "agent": "project-assistant",
+      "ask": "If Milestone 1 is 30 days late, what are the milestone delay damages?",
+      "must": [
+        "0.025%",
+        "8,640,000.00",
+        "64,800.00"
+      ],
+      "show_chain": true,
+      "source": "S1"
+    },
+    "E3": {
+      "agent": "quantity-surveyor",
+      "ask": "Verify: does 12 ha at SAR 2,500/ha equal the stated D110 amount?",
+      "must": [
+        "30,000.00"
+      ],
+      "show_chain": true,
+      "source": "S2"
+    },
+    "E4": {
+      "agent": "construction-pm",
+      "ask": "Concrete volume for a raft 30×20×1.5 m including your documented waste factor.",
+      "must": [
+        "900",
+        "945"
+      ],
+      "must_any": [
+        "1.05",
+        "5%",
+        "waste"
+      ],
+      "source": null
+    },
+    "F1": {
+      "agent": "construction-pm",
+      "ask": "Generate a high-level WBS for the demolition and site clearance scope in this project's BOQ.",
+      "must_any": [
+        "clearance",
+        "trees",
+        "pavement"
+      ],
+      "must_not": [
+        "AB-2022",
+        "AB2022",
+        "template scaffold"
+      ],
+      "source": "S2"
+    },
+    "F2": {
+      "agent": "construction-pm",
+      "ask": "Use 45 days for the tree-removal activity and re-run.",
+      "must": [
+        "45"
+      ],
+      "source": "S2"
+    },
+    "F3": {
+      "agent": "construction-pm",
+      "ask": "With M1=180d, M3=240d and M5=310d all starting at right-of-access on the same date, which milestone drives completion and by how much over M1?",
+      "must": [
+        "M5",
+        "130"
+      ],
+      "source": "S1"
+    },
+    "G1": {
+      "agent": "project-assistant",
+      "ask": "What does Schedule 10 of the contract contain?",
+      "must_any": [
+        "Not Used",
+        "not used"
+      ],
+      "must_not": [
+        "KPI",
+        "milestone list"
+      ],
+      "source": "S1"
+    },
+    "G2": {
+      "agent": "project-assistant",
+      "ask": "What is the Time for Completion for Section 2 of the Works?",
+      "must_any": [
+        "Not Applicable",
+        "not applicable"
+      ],
+      "source": "S1"
+    },
+    "G3": {
+      "agent": "project-assistant",
+      "ask": "What is the value of the Parent Company Guarantee?",
+      "must_any": [
+        "Not required",
+        "not required"
+      ],
+      "source": "S1"
+    },
+    "G4": {
+      "agent": "quantity-surveyor",
+      "ask": "What is the total amount for removal of storm water culverts (D529.3)?",
+      "must_any": [
+        "Rate Only",
+        "rate only",
+        "no amount"
+      ],
+      "source": "S2"
+    },
+    "G5": {
+      "agent": "project-assistant",
+      "ask": "Summarize drawing FX-2044-0000-AAA-DWG-CA-999999.",
+      "must_any": [
+        "could not confirm this reference",
+        "not in the corpus",
+        "not in the indexed"
+      ],
+      "source": null
+    },
+    "G6": {
+      "agent": "project-assistant",
+      "ask": "What is the Commencement Date of the contract?",
+      "must_any": [
+        "not populated",
+        "tied to",
+        "LOA"
+      ],
+      "source": "S1"
+    },
+    "H1": {
+      "agent": "project-assistant",
+      "action": "export_docx",
+      "must_any": [
+        "8,640,000.00"
+      ],
+      "footer_must_not": [
+        "localhost",
+        "127.0.0.1"
+      ]
+    }
+  },
+  "forbidden_substrings_note": "Loaded from env UI_PHYS_FORBIDDEN (newline-separated CI secret). Never commit client strings here — the canary list is itself a secret.",
+  "question_source": "UI-PHYS_QP2_results.xlsx :: column 'Question (ask exactly)'",
+  "expectation_source": "FLEET_OPS/artifacts/GROUND_TRUTH_REVISIONS_2026-09-01.md",
+  "wording_policy": "Question strings are frozen. A reworded question is a different measurement; a new question gets a new id. Expectations change only by appending a dated entry to expectation_source, old wording preserved. See README.md in this directory."
+}

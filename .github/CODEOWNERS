@@ -1,0 +1,4 @@
+# Single-admin repo: every path is owned by the operator.
+# Used by GitHub review assignment; required-reviewer policy lives on the
+# branch ruleset / classic branch protection, not in this file.
+* @bopoadz-del

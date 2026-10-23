@@ -1,0 +1,322 @@
+{
+  "generated_at": "2026-07-09T00:13:13.479831+00:00",
+  "project_id": "184921da",
+  "project_name": "Master Folder",
+  "folder": "Master Folder",
+  "folder_path": "X:\\Example Drive\\Master Folder",
+  "embedder": "BAAI/bge-small-en-v1.5",
+  "namespace": "v2",
+  "total_files": 7221,
+  "batch_offset": 0,
+  "batch_limit": 1000,
+  "batch_files": 1000,
+  "successes": 16,
+  "zero_chunk": 1,
+  "skipped_too_large": 9,
+  "skipped_unsupported": 3,
+  "skipped_unreadable": 0,
+  "errors": [
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs UNSIGNED/desktop.ini",
+      "error": "no RAG chunks indexed"
+    }
+  ],
+  "results": [
+    {
+      "path": "Master Folder/.archivetempES Qld Trust Employee Information forms (1).gdoc",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_UNSUPPORTED",
+        "reason": "Google Workspace native or unsupported archive placeholder"
+      }
+    },
+    {
+      "path": "Master Folder/Owner_CV PM.gdoc",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_UNSUPPORTED",
+        "reason": "Google Workspace native or unsupported archive placeholder"
+      }
+    },
+    {
+      "path": "Master Folder/Copy of CAD.rar",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_UNSUPPORTED",
+        "reason": "Google Workspace native or unsupported archive placeholder"
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs UNSIGNED/AB-2023-101_the client project Infra P1_Vol 5 - Other Documents (4 of 6).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 118.3
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs UNSIGNED/desktop.ini",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 0,
+        "skipped_unsupported": 1,
+        "total_chunks": 0
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs UNSIGNED/the client project ACM Contract - Pre-condition site survey requirements.docx",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 1,
+        "rag_indexed": 1
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs UNSIGNED/Extracted references to archaeology works in ACM Contract, H&C and UMA.docx",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 1,
+        "rag_indexed": 1
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs UNSIGNED/Extracted references to THE ENGINEER in AB-2023-101 ACM Contract.docx",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 1,
+        "rag_indexed": 1
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101 - Infrastructure Package 1- vol 1-Executed.pdf",
+      "result": {
+        "status": "error",
+        "error": "ZERO_CHUNK",
+        "banner": "ERROR: document produced 0 chunks — check extractor/OCR.",
+        "project_id": "184921da",
+        "document_id": "c7380e37",
+        "filename": "AB-2023-101 - Infrastructure Package 1- vol 1-Executed.pdf",
+        "indexed": 0,
+        "skipped_unsupported": 0,
+        "total_chunks": 0
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 - Specification (1 of 11) (1).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 244,
+        "rag_indexed": 244
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 - Specification (5 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 29,
+        "rag_indexed": 29
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 - Specification (6 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 579,
+        "rag_indexed": 579
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 - Specification (7 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 173,
+        "rag_indexed": 173
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 - Specification (8 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 333,
+        "rag_indexed": 333
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 - Specification (9 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 31,
+        "rag_indexed": 31
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 – Specification (2 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 376,
+        "rag_indexed": 376
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 – Specification (3 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 376,
+        "rag_indexed": 376
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 2 – Specification (4 of 11).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 641,
+        "rag_indexed": 641
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (1 of 7).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 449.9
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (2 of 7).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 198.1
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (3 of 7).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 329.9
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (4 of 7).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 228.2
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (5 of 7).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 139.4
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (6 of 7).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 186.4
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 3 – Drawings (7 of 7).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 2,
+        "rag_indexed": 2
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 4 - Schedule (1 of 2).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 221.7
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 4 - Schedule (2 of 3).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 28,
+        "rag_indexed": 28
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 5 - Other Documents  (1 of 5).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 174,
+        "rag_indexed": 174
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 5 - Other Documents (2 of 6).pdf",
+      "result": {
+        "status": "ok",
+        "project_id": "184921da",
+        "indexed": 1,
+        "skipped_unsupported": 0,
+        "total_chunks": 485,
+        "rag_indexed": 485
+      }
+    },
+    {
+      "path": "Master Folder/the client project/Contract Docs/Contractor/Contract docs SIGNED/AB-2023-101_the client project II Infrastructure Package 1_Vol 5 - Other Documents (3 of 6).pdf",
+      "result": {
+        "status": "error",
+        "error": "SKIPPED_TOO_LARGE",
+        "size_mb": 100.4
+      }
+    }
+  ]
+}

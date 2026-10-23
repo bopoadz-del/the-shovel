@@ -1,0 +1,31 @@
+# Jetson/ARM64 Edge Deployment - NVIDIA L4T base
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    libopenblas-dev \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (optimized for ARM64)
+COPY requirements-edge.txt .
+RUN pip3 install --no-cache-dir -r requirements-edge.txt
+
+# Copy application
+COPY . .
+
+# Edge-specific environment
+ENV HAL_PROFILE=jetson_orin
+ENV HARDWARE=jetson
+ENV VECTOR_BACKEND=zvec
+ENV LLM_BACKEND=local
+ENV REDIS_URL=redis://localhost:6379/0
+ENV PYTHONPATH=/app
+
+EXPOSE 8000
+
+ENTRYPOINT ["/app/entrypoint.sh"]

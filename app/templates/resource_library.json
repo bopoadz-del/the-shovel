@@ -1,0 +1,29 @@
+{
+  "trades": [
+    {"id": "pm", "name": "Project Manager", "unit": "head", "default_crew_size": 2},
+    {"id": "safety", "name": "Safety Officer", "unit": "head", "default_crew_size": 1},
+    {"id": "draughtsman", "name": "Draughtsman", "unit": "head", "default_crew_size": 2},
+    {"id": "labor", "name": "General Labor", "unit": "head", "default_crew_size": 8},
+    {"id": "excavator", "name": "Excavator Operator", "unit": "head", "default_crew_size": 2},
+    {"id": "truck", "name": "Dump Truck Operator", "unit": "head", "default_crew_size": 3},
+    {"id": "roller", "name": "Roller Operator", "unit": "head", "default_crew_size": 1},
+    {"id": "concrete", "name": "Concrete Crew", "unit": "head", "default_crew_size": 6},
+    {"id": "pump", "name": "Concrete Pump Operator", "unit": "head", "default_crew_size": 1},
+    {"id": "carpenter", "name": "Carpenter", "unit": "head", "default_crew_size": 4},
+    {"id": "steelfixer", "name": "Steelfixer", "unit": "head", "default_crew_size": 4},
+    {"id": "steel", "name": "Steel Erector", "unit": "head", "default_crew_size": 6},
+    {"id": "mason", "name": "Mason", "unit": "head", "default_crew_size": 4},
+    {"id": "mep", "name": "MEP Technician", "unit": "head", "default_crew_size": 4},
+    {"id": "electrician", "name": "Electrician", "unit": "head", "default_crew_size": 4},
+    {"id": "plumber", "name": "Plumber", "unit": "head", "default_crew_size": 3},
+    {"id": "facade", "name": "Facade Installer", "unit": "head", "default_crew_size": 4},
+    {"id": "waterproofing", "name": "Waterproofer", "unit": "head", "default_crew_size": 3},
+    {"id": "glazier", "name": "Glazier", "unit": "head", "default_crew_size": 2},
+    {"id": "tiler", "name": "Tiler", "unit": "head", "default_crew_size": 3},
+    {"id": "joiner", "name": "Joiner", "unit": "head", "default_crew_size": 3},
+    {"id": "painter", "name": "Painter", "unit": "head", "default_crew_size": 3},
+    {"id": "asphalt", "name": "Asphalt Crew", "unit": "head", "default_crew_size": 4},
+    {"id": "it", "name": "IT/Server Technician", "unit": "head", "default_crew_size": 2},
+    {"id": "commissioning", "name": "Commissioning Engineer", "unit": "head", "default_crew_size": 2}
+  ]
+}

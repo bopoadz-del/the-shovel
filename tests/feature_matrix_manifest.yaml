@@ -1,0 +1,548 @@
+# Feature matrix manifest — TASK G (pre-pilot validation sweep)
+#
+# Authoritative source: app/blocks/smart_orchestrator.py ACTION_PATTERNS
+# (17 procedure-routing entries + 42 in-file entries, 6 merged by name =
+# 53 distinct actions, verified from code 2026-07-06; the module docstring's
+# "52" is stale).
+#
+# GOLDEN RULE: every prompt is sent through the normal chat path
+# (POST /v1/agents/project-assistant/chat/stream) and judged on THREE
+# mechanical oracles:
+#   routing:   the `route` SSE event's action (and/or tool_call events) must
+#              match `expect_route` (list = any-of). Wrong action, or no tool
+#              call on a deliverable prompt (TOOL_SKIP), is a routing FAIL.
+#   execution: no error events, no HTTP 4xx, fallback_used absent/false,
+#              answer_chars >= min_chars.
+#   structure: per-feature checks listed under `structure` (regex/pattern
+#              names implemented in the sweep runner). Construction
+#              correctness is NOT certified here — outputs go verbatim to
+#              review_pack/ for the owner.
+#
+# `class: must` = MUST-COVER feature (2 phrasings: canonical + colloquial).
+# `class: coverage` = single-prompt coverage of the remaining registry.
+# `needs` documents fixture requirements; `project` defaults to
+# master_corpus unless the feature needs a specific corpus.
+#
+# NOTE: ~11 actions are hint-only classification labels (no container
+# handler): routing PASS for those = the route event names the action; no
+# structural oracle beyond a non-trivial grounded answer.
+
+defaults:
+  project: master_corpus
+  min_chars: 800
+  agent: project-assistant
+
+features:
+
+  # ── MUST-COVER ────────────────────────────────────────────────────────────
+
+  - action: process_document
+    feature: document/file Q&A against project docs
+    class: must
+    handler: container (document_engine)
+    prompts:
+      - text: "what does the the client project project execution plan cover?"
+        expect_route: [process_document]
+        expect_tool: [search_project_documents]
+      - text: "summarise the MV culvert diversion drawing changes for me"
+        expect_route: [process_document, drawing_qto]
+        expect_tool: [search_project_documents]
+    min_chars: 500
+    structure: [cites_sources]
+    needs: existing corpus (2713 docs) — no fixture
+
+  - action: boq_process
+    feature: BOQ queries
+    class: must
+    handler: container (boq_processor)
+    project: "FIXTURE — BOQ"
+    prompts:
+      - text: "process the bill of quantities and give me the total value"
+        expect_route: [boq_process]
+      - text: "what's in the priced BOQ - break down the cost sheet by section"
+        expect_route: [boq_process, estimate_costs]
+    structure: [has_numbers, has_currency_or_units]
+    needs: BOQ xlsx in project 5c13510e
+
+  - action: estimate_costs
+    project: "FIXTURE — BOQ"
+    needs: BOQ workbook (synthetic_boq.xlsx OK — seed_fixtures --synthetic)
+    feature: BOQ generation / cost estimate
+    class: must
+    handler: container
+    prompts:
+      - text: "generate a cost estimate for a 2km 400mm sewer line in Riyadh"
+        expect_route: [estimate_costs]
+      - text: "how much would the earthworks package roughly cost?"
+        expect_route: [estimate_costs]
+    structure: [has_numbers, has_currency_or_units, boq_rows_have_qty_unit]
+
+  - action: spec_analyze
+    project: "FIXTURE — Operations Pack"
+    needs: spec section doc (synthetic_spec_section_03_concrete.txt — seed_fixtures --synthetic)
+    feature: specs extraction
+    class: must
+    handler: container (spec_analyzer)
+    prompts:
+      - text: "analyze the concrete specification requirements - what grades and standards apply?"
+        expect_route: [spec_analyze, construction_advisor]
+      - text: "pull out the material specs for the road works"
+        expect_route: [spec_analyze]
+    structure: [mentions_standard_or_grade]
+
+  - action: document_metadata
+    project: "FIXTURE — Operations Pack"
+    needs: any indexed documents in the project (operations pack provides several)
+    feature: document metadata queries
+    class: must
+    handler: container (process_document / document listing)
+    prompts:
+      - text: "list the documents in this project and what type each one is"
+        expect_route: [process_document]
+        expect_tool: [search_project_documents]
+      - text: "which drawings do we have for the stormwater network?"
+        expect_route: [process_document, drawing_qto]
+    min_chars: 300
+    structure: [lists_documents]
+
+  - action: generate_wbs
+    feature: schedule generation / WBS
+    class: must
+    handler: synthetic agent tool -> ConstructionContainer.generate_wbs
+    prompts:
+      - text: "generate a level 2 construction schedule for a 30-storey residential tower, 30 months"
+        expect_route: [generate_wbs]
+        expect_tool: [generate_wbs]
+      - text: "draft me a WBS for an infrastructure package - roads, sewer and street lighting"
+        expect_route: [generate_wbs]
+        expect_tool: [generate_wbs]
+    min_chars: 1500
+    structure: [has_activities_and_durations]
+
+  - action: resource_histogram
+    feature: manpower histogram
+    class: must
+    handler: container
+    prompts:
+      - text: "produce a manpower histogram for the structure works over 12 months"
+        expect_route: [resource_histogram]
+      - text: "show me the labor loading month by month for this project"
+        expect_route: [resource_histogram, progress_tracker]
+    structure: [has_period_buckets]
+
+  - action: parse_primavera_schedule
+    project: "FIXTURE — Programme+Drawings"
+    feature: milestones extraction / report
+    class: must
+    handler: container (primavera_parser)
+    prompts:
+      - text: "extract the key milestones from the project programme with their dates"
+        expect_route: [parse_primavera_schedule]
+      - text: "give me a milestone report - what are the major completion dates?"
+        expect_route: [parse_primavera_schedule, progress_tracker]
+    structure: [milestones_have_dates]
+    needs: UPLOADED project_programme.xer in project ff905e29
+
+  - action: cash_flow_forecast
+    feature: S-curve (progress/cost)
+    class: must
+    handler: container
+    prompts:
+      - text: "build a cash flow forecast with an S-curve for a SAR 60M, 18-month project"
+        expect_route: [cash_flow_forecast]
+      - text: "what does the cumulative spend curve look like month by month?"
+        expect_route: [cash_flow_forecast]
+    structure: [scurve_cumulative_nondecreasing, has_period_buckets]
+
+  - action: procurement_list_generator
+    project: "FIXTURE — BOQ"
+    needs: BOQ workbook (synthetic_boq.xlsx OK — seed_fixtures --synthetic)
+    feature: procurement list
+    class: must
+    handler: container
+    prompts:
+      - text: "generate a procurement list for the MEP package"
+        expect_route: [procurement_list_generator]
+      - text: "what materials do we need to buy for the substructure works?"
+        expect_route: [procurement_list_generator, extract_quantities]
+    structure: [has_line_items]
+
+  - action: rfp_management
+    feature: RFP production
+    class: must
+    handler: hint-only (request_for_proposals)
+    prompts:
+      - text: "prepare an RFP for the landscaping subcontract package"
+        expect_route: [rfp_management, job_requisition]
+      - text: "draft the tender package sections for the electrical works"
+        expect_route: [rfp_management, tender_bid_analysis]
+    min_chars: 1200
+    structure: [has_sections]
+
+  - action: construction_advisor
+    feature: calculations drawing on built-in construction KB
+    class: must
+    handler: block construction_advisor (construction_kb.json)
+    prompts:
+      - text: "for a 2.5m thick mass concrete raft, what thermal control limits apply and how long to equilibrium?"
+        expect_route: [construction_advisor]
+      - text: "check the lifting feasibility for a 40 tonne module with a 100t mobile crane"
+        expect_route: [construction_advisor]
+    min_chars: 400
+    structure: [has_numbers, shows_working_or_rule]
+
+  - action: drawing_qto
+    project: "FIXTURE — Programme+Drawings"
+    feature: QTO from drawings
+    class: must
+    handler: container (drawing_qto block)
+    prompts:
+      - text: "do a quantity takeoff from the infrastructure drawings - pipe lengths and manhole counts"
+        expect_route: [drawing_qto, extract_quantities]
+      - text: "measure the floor area from the ground floor plan drawing"
+        expect_route: [drawing_qto, extract_quantities]
+    structure: [references_drawing, has_numbers]
+    needs: UPLOADED ground_floor_plan.dxf in project ff905e29
+
+  - action: commissioning_checklist
+    feature: commissioning checklist (regression baseline)
+    class: must
+    handler: synthetic agent tool -> ConstructionContainer.commissioning_checklist
+    prompts:
+      - text: "generate a commissioning checklist for the MV substation"
+        expect_route: [commissioning_checklist]
+        expect_tool: [commissioning_checklist]
+      - text: "what T&C steps do we need before energising the electrical rooms?"
+        expect_route: [commissioning_checklist]
+    min_chars: 1500
+    structure: [has_checklist_items, cites_standards]
+
+  # ── COVERAGE (one prompt per remaining registry action) ─────────────────
+
+  - action: design_review_workflow
+    class: coverage
+    handler: hint-only (design_review)
+    prompts:
+      - text: "what statuses can a design review package come back with under the design review procedure?"
+        expect_route: [design_review_workflow]
+    min_chars: 200
+
+  - action: design_directive
+    class: coverage
+    handler: hint-only (design_directive)
+    prompts:
+      - text: "draft a design directive instructing the consultant to revise the parking layout"
+        expect_route: [design_directive]
+
+  - action: rfi_management
+    project: "FIXTURE — Operations Pack"
+    needs: RFI register (synthetic_rfi_register.xlsx — seed_fixtures --synthetic)
+    class: coverage
+    handler: hint-only (request_for_information)
+    prompts:
+      - text: "how many RFIs are open and which ones are overdue?"
+        expect_route: [rfi_management, rfi_generator]
+    min_chars: 200
+
+  - action: risk_register_auto_populate
+    class: coverage
+    handler: container
+    prompts:
+      - text: "populate a risk register for deep excavation next to an existing hospital"
+        expect_route: [risk_register_auto_populate]
+    structure: [has_line_items]
+
+  - action: work_package_control
+    class: coverage
+    handler: hint-only (work_package_control)
+    prompts:
+      - text: "give me the work package register status - which packages are overdue?"
+        expect_route: [work_package_control]
+    min_chars: 200
+
+  - action: qa_audit
+    class: coverage
+    handler: hint-only (quality_audit)
+    prompts:
+      - text: "set up a quality audit programme for the piling subcontractor"
+        expect_route: [qa_audit, qa_qc_inspection]
+
+  - action: ncr_management
+    class: coverage
+    handler: hint-only (non_conformance)
+    prompts:
+      - text: "raise an NCR for out-of-tolerance column verticality on level 3 and suggest the disposition"
+        expect_route: [ncr_management, qa_qc_inspection]
+
+  - action: handover_management
+    class: coverage
+    handler: hint-only (handover)
+    prompts:
+      - text: "what are the prerequisites for practical completion and the DLP obligations?"
+        expect_route: [handover_management]
+    min_chars: 300
+
+  - action: inspection_request
+    class: coverage
+    handler: container (wir_form)
+    prompts:
+      - text: "prepare an inspection request for the blinding concrete pour at zone B"
+        expect_route: [inspection_request, wir_form]
+
+  - action: safety_compliance_audit
+    class: coverage
+    handler: container
+    prompts:
+      - text: "run an HSE compliance audit checklist for working at height on the facade"
+        expect_route: [safety_compliance_audit]
+    structure: [has_checklist_items]
+
+  - action: job_requisition
+    class: coverage
+    handler: hint-only (job_requisition)
+    prompts:
+      - text: "start a job requisition and prequalification shortlist for the ELV package"
+        expect_route: [job_requisition, rfp_management]
+
+  - action: tender_bid_analysis
+    class: coverage
+    handler: container
+    prompts:
+      - text: "compare three contractor bids for the earthworks - how should we score them?"
+        expect_route: [tender_bid_analysis]
+    structure: [has_line_items]
+
+  - action: contract_award
+    class: coverage
+    handler: hint-only (contract_award)
+    prompts:
+      - text: "what goes into the letter of award and which bonds do we need before signing?"
+        expect_route: [contract_award, process_contract]
+    min_chars: 300
+
+  - action: payment_certificate
+    class: coverage
+    handler: container
+    prompts:
+      - text: "prepare an interim payment certificate for 42% progress on a SAR 25M contract with 10% retention"
+        expect_route: [payment_certificate]
+    structure: [has_numbers, has_currency_or_units]
+
+  - action: change_order_impact
+    project: "FIXTURE — Operations Pack"
+    needs: VO log + BOQ (synthetic files — seed_fixtures --synthetic)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "assess the cost and time impact of variation order VO-12 adding 300m of storm drain"
+        expect_route: [change_order_impact, variation_order_manager]
+    structure: [has_numbers]
+
+  - action: extract_quantities
+    project: "FIXTURE — BOQ"
+    needs: BOQ workbook (synthetic_boq.xlsx OK — seed_fixtures --synthetic)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "take off the concrete quantities for the ground floor slabs"
+        expect_route: [extract_quantities, drawing_qto]
+    structure: [has_numbers]
+
+  - action: procurement_optimizer
+    project: "FIXTURE — BOQ"
+    needs: BOQ workbook (synthetic_boq.xlsx OK — seed_fixtures --synthetic)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "optimize procurement - which supplier mix gives the cheapest viable steel package?"
+        expect_route: [procurement_optimizer, procurement_list_generator]
+
+  - action: process_specification_full
+    project: "FIXTURE — Operations Pack"
+    needs: spec section doc (synthetic_spec_section_03_concrete.txt — seed_fixtures --synthetic)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "walk through the full specification section for cast-in-place concrete, CSI division 03"
+        expect_route: [process_specification_full, spec_analyze]
+
+  - action: progress_tracker
+    project: "FIXTURE — Programme+Drawings"
+    needs: baseline programme (project_programme.xer — seed_fixtures --synthetic copies the committed test XER)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "how is actual progress tracking against planned - where are we slipping?"
+        expect_route: [progress_tracker]
+    min_chars: 300
+
+  - action: forensic_delay_analysis
+    project: "FIXTURE — Programme+Drawings"
+    needs: baseline programme (project_programme.xer — seed_fixtures --synthetic copies the committed test XER)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "run a forensic delay analysis for the 6-week steel delivery delay - what EOT is supportable?"
+        expect_route: [forensic_delay_analysis, claims_builder]
+
+  - action: bim_analysis
+    project: "FIXTURE — Programme+Drawings"
+    class: coverage
+    handler: container (bim block)
+    prompts:
+      - text: "review the BIM model and give me quantities by element type"
+        expect_route: [bim_analysis, bim_extractor]
+    needs: UPLOADED sample_office.ifc in project ff905e29
+
+  - action: bim_clash_detection
+    project: "FIXTURE — Programme+Drawings"
+    class: coverage
+    handler: container
+    prompts:
+      - text: "run clash detection between the structural and MEP models"
+        expect_route: [bim_clash_detection]
+    needs: UPLOADED sample_office.ifc in project ff905e29
+
+  - action: bim_extractor
+    project: "FIXTURE — Programme+Drawings"
+    class: coverage
+    handler: container (bim_extractor block)
+    prompts:
+      - text: "extract the concrete quantities from the IFC model"
+        expect_route: [bim_extractor, bim_analysis]
+    needs: UPLOADED sample_office.ifc in project ff905e29
+
+  - action: digital_twin_sync
+    class: coverage
+    handler: container
+    prompts:
+      - text: "sync the as-built BIM against the digital twin and list the deltas"
+        expect_route: [digital_twin_sync]
+
+  - action: qa_qc_inspection
+    class: coverage
+    handler: container
+    prompts:
+      - text: "prepare a QC inspection and punch list for the level 5 blockwork"
+        expect_route: [qa_qc_inspection]
+    structure: [has_checklist_items]
+
+  - action: process_contract
+    class: coverage
+    handler: container
+    prompts:
+      - text: "review the contract - what do the FIDIC clauses say about delay damages?"
+        expect_route: [process_contract]
+    min_chars: 300
+
+  - action: variation_order_manager
+    project: "FIXTURE — Operations Pack"
+    needs: VO log (synthetic_variation_order_log.xlsx — seed_fixtures --synthetic)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "update the variation log - what's the status and value of the open VOs?"
+        expect_route: [variation_order_manager, change_order_impact]
+
+  - action: claims_builder
+    class: coverage
+    handler: container
+    prompts:
+      - text: "build a loss and expense claim for the 3-week utility diversion delay"
+        expect_route: [claims_builder, forensic_delay_analysis]
+
+  - action: rfi_generator
+    class: coverage
+    handler: container
+    prompts:
+      - text: "draft an RFI asking the engineer to clarify the rebar detail at the transfer beam"
+        expect_route: [rfi_generator, rfi_management]
+
+  - action: carbon_footprint_calculator
+    class: coverage
+    handler: container
+    prompts:
+      - text: "calculate the embodied carbon for 12,000 m3 of C40 concrete and 900t of rebar"
+        expect_route: [carbon_footprint_calculator]
+    structure: [has_numbers]
+
+  - action: esg_sustainability_report
+    class: coverage
+    handler: container
+    prompts:
+      - text: "produce an ESG sustainability report outline targeting LEED Gold"
+        expect_route: [esg_sustainability_report]
+    structure: [has_sections]
+
+  - action: daily_site_report
+    class: coverage
+    handler: container
+    prompts:
+      - text: "write today's daily site report - 120 workers, slab pour zone A done, crane down 2 hours"
+        expect_route: [daily_site_report]
+    structure: [has_sections]
+
+  - action: submittal_log_generator
+    class: coverage
+    handler: container
+    prompts:
+      - text: "set up a submittal log for the finishes packages with approval status columns"
+        expect_route: [submittal_log_generator]
+    structure: [has_line_items]
+
+  - action: as_built_deviation_report
+    class: coverage
+    handler: container
+    prompts:
+      - text: "report the as-built deviations from design on the drainage runs"
+        expect_route: [as_built_deviation_report]
+
+  - action: warranty_maintenance_schedule
+    class: coverage
+    handler: container
+    prompts:
+      - text: "build the warranty and planned maintenance schedule for the MEP systems"
+        expect_route: [warranty_maintenance_schedule]
+    structure: [has_line_items]
+
+  - action: om_manual_generator
+    class: coverage
+    handler: container
+    prompts:
+      - text: "generate the O&M manual outline for the chilled water plant"
+        expect_route: [om_manual_generator]
+    structure: [has_sections]
+
+  - action: value_engineering
+    project: "FIXTURE — BOQ"
+    needs: BOQ workbook (synthetic_boq.xlsx OK — seed_fixtures --synthetic)
+    class: coverage
+    handler: container
+    prompts:
+      - text: "value engineer the basement - options to cut cost without losing parking spaces"
+        expect_route: [value_engineering]
+    structure: [has_line_items]
+
+  - action: sympy_reason
+    class: coverage
+    handler: container (formula_executor_v2)
+    prompts:
+      - text: "run a variance analysis - planned SAR 4.2M vs actual SAR 5.1M, what drove the 21% overrun?"
+        expect_route: [sympy_reason, progress_tracker]
+    structure: [has_numbers, shows_working_or_rule]
+
+  - action: intelligent_workflow
+    class: coverage
+    handler: container (fallback agent)
+    prompts:
+      - text: "run a full analysis workflow on this project - documents, cost, schedule, risks"
+        expect_route: [intelligent_workflow]
+    min_chars: 500
+
+  - action: health_check
+    class: coverage
+    handler: container
+    prompts:
+      - text: "system health check - is everything alive?"
+        expect_route: [health_check]
+    min_chars: 50

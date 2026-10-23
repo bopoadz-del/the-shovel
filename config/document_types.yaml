@@ -1,0 +1,91 @@
+# Document type registry — Roadmap V2 · Epic 2.
+#
+# Built-in construction document types. Custom types added at runtime via
+# POST /v1/document-types are stored separately (DATA_DIR/custom_document_types.json)
+# and override these by name — no code change or redeploy needed.
+#
+# match scoring: extension +3, filename keyword +2, content keyword +1.
+
+document_types:
+  - name: drawing
+    description: Architectural / engineering drawings
+    match:
+      filename: ["drawing", "dwg", "sheet", "sht", "detail"]
+      extensions: [".dwg", ".dxf"]
+      content: ["scale 1:", "drawing no", "drawing number", "rev."]
+    expected_fields: ["drawing_number", "revision", "scale", "title_block"]
+
+  - name: schedule
+    description: Project programme / schedule (P6, MS Project)
+    match:
+      filename: ["schedule", "programme", "program", "p6", "primavera", "baseline"]
+      extensions: [".xer", ".mpp"]
+      content: ["critical path", "milestone", "baseline", "early start"]
+    expected_fields: ["commencement_date", "completion_date"]
+
+  - name: boq
+    description: Bill of quantities / cost breakdown
+    match:
+      filename: ["boq", "bill of quant", "pricing", "cost plan"]
+      extensions: []
+      content: ["bill of quantities", "unit rate", "provisional sum", "preliminaries"]
+    expected_fields: ["boq_total"]
+
+  - name: contract
+    description: Contract / agreement documents
+    match:
+      filename: ["contract", "agreement", "fidic", "nec"]
+      extensions: []
+      content: ["liquidated damages", "the employer", "the contractor", "defects liability"]
+    expected_fields: ["contract_value", "contract_type", "employer", "contractor"]
+
+  # QA/QC controlled documents (QMS). Listed BEFORE the generic 'report'
+  # entry and with acronym keywords, so an NCR beats 'report' on score:
+  # acronym + full phrase both match -> 4 vs report's 2.
+  - name: ncr
+    description: Non-conformance report (QA/QC)
+    match:
+      filename: ["ncr", "non-conformance", "non conformance", "nonconformance"]
+  - name: inspection_request
+    description: Work / material inspection request (WIR, MIR, RFI-inspection)
+    match:
+      filename: ["wir", "mir", "inspection request", "inspection"]
+  - name: itp
+    description: Inspection and test plan
+    match:
+      filename: ["itp", "inspection and test plan", "test plan"]
+  - name: material_submittal
+    description: Material approval / submittal (MAR, TSF, AMS, SAF)
+    match:
+      filename: ["mar", "material approval", "material submittal", "tsf"]
+  - name: specification
+    description: Technical specifications
+    match:
+      filename: ["spec", "specification"]
+      extensions: []
+      content: ["section ", "csi ", "masterformat", "shall be", "in accordance with"]
+    expected_fields: []
+
+  - name: photo
+    description: Site photographs
+    match:
+      filename: ["photo", "site", "img", "image"]
+      extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+      content: []
+    expected_fields: []
+
+  - name: bim
+    description: BIM / IFC models
+    match:
+      filename: ["bim", "model", "ifc"]
+      extensions: [".ifc"]
+      content: ["ifcproject", "ifcbuilding"]
+    expected_fields: []
+
+  - name: report
+    description: Progress / inspection / site reports
+    match:
+      filename: ["report", "daily", "weekly", "minutes"]
+      extensions: []
+      content: ["progress", "site instruction", "weather", "manpower"]
+    expected_fields: []

@@ -1,0 +1,82 @@
+{
+  "project_type": "infrastructure",
+  "phases": [
+    {
+      "code": "1",
+      "name": "Enabling Works",
+      "sub_phases": [
+        {
+          "code": "1.1",
+          "name": "Mobilization",
+          "activities": [
+            {"name": "Site establishment", "duration": 5, "resources": ["pm", "safety"], "zoneable": false},
+            {"name": "Temporary roads & fencing", "duration": 7, "resources": ["labor"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "2",
+      "name": "Earthworks & Roads",
+      "sub_phases": [
+        {
+          "code": "2.1",
+          "name": "Earthworks",
+          "activities": [
+            {"name": "Clear & grub", "duration": 5, "resources": ["excavator", "labor"], "zoneable": true},
+            {"name": "Cut & fill", "duration": 20, "resources": ["excavator", "truck"], "zoneable": true},
+            {"name": "Subgrade preparation", "duration": 10, "resources": ["roller", "labor"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "2.2",
+          "name": "Roadworks",
+          "activities": [
+            {"name": "Sub-base", "duration": 10, "resources": ["labor"], "zoneable": true},
+            {"name": "Asphalt paving", "duration": 8, "resources": ["asphalt"], "zoneable": true},
+            {"name": "Road furniture", "duration": 5, "resources": ["labor"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "3",
+      "name": "Utilities & Services",
+      "sub_phases": [
+        {
+          "code": "3.1",
+          "name": "Drainage",
+          "activities": [
+            {"name": "Trench excavation", "duration": 12, "resources": ["excavator"], "zoneable": true},
+            {"name": "Pipe laying", "duration": 15, "resources": ["mep", "labor"], "zoneable": true},
+            {"name": "Manholes & chambers", "duration": 10, "resources": ["mep"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "3.2",
+          "name": "Power & Communications",
+          "activities": [
+            {"name": "Cable trenching", "duration": 12, "resources": ["excavator", "labor"], "zoneable": true},
+            {"name": "Duct bank installation", "duration": 14, "resources": ["electrician"], "zoneable": true},
+            {"name": "Cable pulling & jointing", "duration": 12, "resources": ["electrician"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4",
+      "name": "Completion",
+      "sub_phases": [
+        {
+          "code": "4.1",
+          "name": "Testing & Handover",
+          "activities": [
+            {"name": "Testing & commissioning", "duration": 10, "resources": ["commissioning"], "zoneable": false},
+            {"name": "As-built documentation", "duration": 7, "resources": ["pm", "draughtsman"], "zoneable": false},
+            {"name": "Final handover", "duration": 5, "resources": ["pm"], "zoneable": false}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+{
+  "_readme": [
+    "Real construction photographs for evaluating the site-photo bridge.",
+    "IMAGES ARE NOT COMMITTED. scripts/fetch_eval_photos.py downloads them to",
+    "tests/fixtures/photos/ (gitignored) using the Wikimedia Commons API, which",
+    "also re-reads the licence at fetch time so this file cannot drift from the",
+    "source. Every entry is public domain / CC0 / CC BY / CC BY-SA.",
+    "'contains' is a human description of the photograph, written before the",
+    "detector was run on it. 'expect' names the vocabulary prompts a correct",
+    "detector would fire on - it is the yardstick, not an assertion about output."
+  ],
+  "photos": [
+    {
+      "id": "q01_crack_retaining_wall",
+      "title": "File:Detail of vertical crack in concrete retaining wall at Medway Park Sports Centre, Gillingham, Kent, England.jpg",
+      "licence": "CC0",
+      "contains": "Close, well-lit detail of a vertical crack running through a cast concrete retaining wall.",
+      "expect": ["crack in concrete wall"],
+      "group": "quality"
+    },
+    {
+      "id": "q02_crack_reinforcement_swelling",
+      "title": "File:Concrete wall cracking as its steel reinforcing cracks and swells 9061.jpg",
+      "licence": "CC BY-SA 3.0",
+      "contains": "Concrete wall cracked along the line of corroding reinforcement; rust staining visible at the crack.",
+      "expect": ["crack in concrete wall", "rust on steel rebar"],
+      "group": "quality"
+    },
+    {
+      "id": "q03_crack_corroding_rebar",
+      "title": "File:Concrete wall cracking as steel reinforcing corrodes and swells 9058.jpg",
+      "licence": "CC BY-SA 3.0",
+      "contains": "Second view of the same failure mode - spalled concrete face with corroding reinforcement behind.",
+      "expect": ["crack in concrete wall", "rust on steel rebar", "exposed reinforcement bar"],
+      "group": "quality"
+    },
+    {
+      "id": "q04_honeycomb_ring_beam",
+      "title": "File:Concrete honeycomb on ring beam.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Honeycombing on a cast in-situ ring beam - voids where mortar failed to fill around coarse aggregate.",
+      "expect": ["concrete honeycomb voids", "porous holes in concrete surface", "exposed aggregate in concrete surface"],
+      "group": "quality"
+    },
+    {
+      "id": "q05_honeycomb_concrete",
+      "title": "File:Honeycomb concrete 202406.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Honeycombed concrete surface, aggregate exposed across a large area of the pour.",
+      "expect": ["concrete honeycomb voids", "exposed aggregate in concrete surface"],
+      "group": "quality"
+    },
+    {
+      "id": "q06_exposed_rebar_chock",
+      "title": "File:Broken concrete parking chock with exposed rebar.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Broken precast parking chock with reinforcement bar exposed and rusting at the fracture.",
+      "expect": ["exposed reinforcement bar", "rust on steel rebar"],
+      "group": "quality"
+    },
+    {
+      "id": "q07_rebar_stacks",
+      "pageid": 97254175,
+      "licence": "CC0",
+      "contains": "Bundles of reinforcement bar stacked on a metro construction site - stored material, not exposed rebar in a member.",
+      "expect": ["rust on steel rebar", "exposed reinforcement bar"],
+      "group": "quality",
+      "note": "Deliberate edge case: rebar present but as stored stock. Either firing or not firing is defensible; recorded to see which."
+    },
+    {
+      "id": "q08_peeling_paint_bathroom",
+      "title": "File:Paint peeling off bathroom wall.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Paint blistering and peeling from a plastered bathroom wall, damp-related.",
+      "expect": ["peeling paint", "water stain on wall"],
+      "group": "quality"
+    },
+    {
+      "id": "q09_peeling_paint_1",
+      "title": "File:Peeling paint 1.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Close view of paint flaking from a painted surface.",
+      "expect": ["peeling paint"],
+      "group": "quality"
+    },
+    {
+      "id": "q10_cracked_tile_bathroom",
+      "title": "File:2019 broken tile in bathroom.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Cracked ceramic floor tile in a bathroom, crack running corner to corner.",
+      "expect": ["cracked floor tile"],
+      "group": "quality"
+    },
+    {
+      "id": "q11_cracked_tile_flooring",
+      "title": "File:Cracked tile flooring.jpg",
+      "licence": "CC BY-SA 4.0",
+      "contains": "Cracked tiled floor, several tiles affected with grout lines visible.",
+      "expect": ["cracked floor tile", "missing grout between tiles"],
+      "group": "quality"
+    },
+    {
+      "id": "e01_tower_crane_nuremberg",
+      "title": "File:20230107 Construction Site Nuremberg.jpg",
+      "licence": "CC BY 4.0",
+      "contains": "Active building site with a tower crane over a partially built frame.",
+      "expect": ["crane"],
+      "group": "equipment"
+    },
+    {
+      "id": "e02_tower_crane_cabo",
+      "title": "File:Construction site in Cabo San Lucas (near the port) with a tower crane.jpg",
+      "licence": "CC0",
+      "contains": "Construction site with a tower crane standing over it.",
+      "expect": ["crane"],
+      "group": "equipment"
+    },
+    {
+      "id": "e03_scaffolding_amsterdam",
+      "title": "File:Constructions and scaffolding at the Oosterdokseiland, Amsterdam-Centrum.jpg",
+      "licence": "CC0",
+      "contains": "Building under construction with substantial tube-and-fitting scaffolding to the facade.",
+      "expect": ["scaffolding"],
+      "group": "equipment"
+    },
+    {
+      "id": "e04_ladder_peabody",
+      "title": "File:Ladder leaning against the wall, Peabody Institute, 1 E. Mount Vernon Place, Baltimore, MD 21202 (39542915101).jpg",
+      "licence": "CC0",
+      "contains": "Single ladder leaning against an interior wall.",
+      "expect": ["ladder"],
+      "group": "equipment"
+    },
+    {
+      "id": "e05_ladders_oulu",
+      "title": "File:Ladders Ojakatu Oulu 20050227.jpg",
+      "licence": "CC0",
+      "contains": "Ladders fixed to a building exterior in winter light.",
+      "expect": ["ladder"],
+      "group": "equipment"
+    },
+    {
+      "id": "p01_worker_ppe_inspection",
+      "title": "File:Tim Chemical Construction Melakukan Inspeksi Proyek Industri oleh PT Kharisma Utomo Group.png",
+      "licence": "CC0",
+      "contains": "Workers inspecting an industrial project, wearing helmets and high-visibility clothing.",
+      "expect": ["person", "hard hat", "high visibility vest"],
+      "group": "ppe"
+    },
+    {
+      "id": "h01_trench_excavation_geograph",
+      "title": "File:Trench excavation - geograph.org.uk - 3259324.jpg",
+      "licence": "CC BY-SA 2.0",
+      "contains": "Open service trench excavation in a road, spoil alongside.",
+      "expect": ["open excavation pit", "trench without barrier"],
+      "group": "hazard"
+    },
+    {
+      "id": "hard01_honeycomb_archival_tif",
+      "title": "File:DETAIL VIEW OF BUTTRESS 4 SHOWING THE RESULTS OF POOR CONSTRUCTION WORK. THOUGH NOT A SERIOUS STRUCTURAL DEFICIENCY, THE 'HONEYCOMB' TEXTURE OF THE CONCRETE SURFACE WAS THE HAER CAL,10-HUME,1-13.tif",
+      "licence": "Public domain",
+      "contains": "Archival monochrome large-format survey photograph of a honeycombed concrete buttress face.",
+      "expect": ["concrete honeycomb voids", "porous holes in concrete surface"],
+      "group": "hard_case",
+      "hard_because": "Monochrome archival scan. Detector trained on modern colour photography; greyscale film grain is far outside that distribution."
+    },
+    {
+      "id": "hard02_crane_millennium_distant",
+      "title": "File:Crane and the Millennium Tower (301 Mission Street) construction site, SF.JPG",
+      "licence": "CC BY-SA 3.0",
+      "contains": "Tower crane photographed at distance against a city skyline; the crane occupies a small part of the frame.",
+      "expect": ["crane"],
+      "group": "hard_case",
+      "hard_because": "Distant subject. The crane is thin structure against sky, small in frame - the classic small-object recall problem."
+    },
+    {
+      "id": "hard03_damaged_wall_dark_interior",
+      "title": "File:EFTA00002592 - Damaged wall with exposed concrete and peeling paint revealing a dark unfinished interior space.jpg",
+      "licence": "Public domain",
+      "contains": "Damaged wall opening into a dark unfinished interior; exposed concrete and peeling paint in poor light.",
+      "expect": ["peeling paint", "crack in concrete wall"],
+      "group": "hard_case",
+      "hard_because": "Poor light and heavy occlusion - the defect surfaces are partly in shadow behind a dark opening."
+    }
+  ]
+}

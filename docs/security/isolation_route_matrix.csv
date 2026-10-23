@@ -1,0 +1,157 @@
+method,path,file,guard,admin_check,ownership,flags,authz_matrix,notes
+GET,/,static.py,none,no,n/a,public,UNPROVEN,SPA index; deliberate public
+GET,/api,static.py,none,no,n/a,public,UNPROVEN,API name/version/block count; no tenant data
+GET,/{full_path:path},static.py,none,no,n/a,public,UNPROVEN,SPA fallback; reserved prefixes 404
+GET,/livez,health.py,none,no,n/a,public,UNPROVEN,Process liveness; no I/O; deliberate public
+GET,/v1/upload-limits,health.py,none,no,n/a,public,UNPROVEN,Config only; documented unauthenticated
+GET,/health,health.py,none,no,n/a,public,UNPROVEN,Render liveness; build_sha + db/embedder probes
+GET,/ready,health.py,none,no,n/a,public,UNPROVEN,Readiness; 503 if DB down
+GET,/stats,health.py,none,no,n/a,unguarded_non_public,UNPROVEN,Block inventory + version; no auth; not a health probe
+GET,/v1/health,health.py,none,no,n/a,public,UNPROVEN,Health + observability payload
+GET,/v1/system/health,health.py,none,no,n/a,unguarded_non_public,UNPROVEN,Full monitoring health_report; no auth; richer than /health
+GET,/blocks,blocks.py,none,no,n/a,unguarded_non_public,UNPROVEN,Full block catalog + ui_schema; no auth
+GET,/blocks/{block_name},blocks.py,none,no,n/a,unguarded_non_public,UNPROVEN,Block config + instance.get_stats(); no auth
+GET,/v1/blocks,blocks.py,none,no,n/a,unguarded_non_public,UNPROVEN,Alias of GET /blocks
+GET,/v1/blocks/{block_name},blocks.py,none,no,n/a,unguarded_non_public,UNPROVEN,Alias of GET /blocks/{name}
+POST,/execute,execute.py,require_user,privileged_blocks_only,nested project_id/document_id grant (#623),id_no_owner,OTHER_TENANCY,Plain user 403 on PRIVILEGED_BLOCKS (code/sandbox/mcp_consumer/local_drive/web/webhook/google_drive/onedrive)
+POST,/v1/execute,execute.py,require_user,privileged_blocks_only,same as /execute,id_no_owner,OTHER_TENANCY,Alias of /execute. JWT or API key→system user. Privileged blocks 403 to a plain user (Agent F).
+POST,/chain,chain.py,require_user,privileged_blocks_only,none — step inputs may name any project/file,id_no_owner,UNPROVEN,Orchestrator chain; same privilege gate as execute
+POST,/v1/chain,chain.py,require_user,privileged_blocks_only,none,id_no_owner,UNPROVEN,Alias of /chain
+POST,/chat,chat.py,require_user,no,project_id in body: drop if get_project_accessible fails (_with_project_memory/_with_doc_search),—,OTHER_TENANCY,"test_chat_project_memory_tenancy covers helper, not HTTP cross-user. No conversation_id on this model."
+POST,/chat/stream,chat.py,require_user,no,NONE — request.project_id unused; no memory/doc inject,—,UNPROVEN,Streaming chat block; project_id accepted but ignored; no tenant leak path via this handler
+POST,/v1/chat,chat.py,require_user,no,same as /chat,—,OTHER_TENANCY,Alias of /chat
+POST,/v1/chat/stream,chat.py,require_user,privileged pin refused,conversation_id: _enforce_conversation_access; project_id: get_project_accessible drop,—,OTHER_TENANCY,Pinning self-coding/external-mcp/document-ingestion emits an error event (Agent F). Conv check authoritative for ws-*
+POST,/v1/chat/analyze-photo,chat_photos.py,require_user,no,none (ephemeral temp file; no project),—,UNPROVEN,Any signed-in user; no tenant id
+POST,/upload,upload.py,require_api_key,no,optional Form project_id: get_project(user_id) or skip index; file stored regardless,id_no_owner,UNPROVEN,File lands in DATA_DIR even when project_id missing/unowned. API key→SYSTEM_USER_ID. No child-id.
+POST,/v1/upload,upload.py,require_api_key,no,same as /upload,id_no_owner,UNPROVEN,Alias
+POST,/ingest,upload.py,require_api_key,no,none (temp files; no project),—,UNPROVEN,Document engine pipeline; any API-key principal
+POST,/ingest-via-block,upload.py,require_api_key,no,none,—,UNPROVEN,Same pipeline via BLOCK_REGISTRY
+POST,/v1/auth/validate,auth.py,require_api_key,no,body.api_key — any authenticated caller can validate ANY key,id_no_owner,UNPROVEN,No admin gate. Cross-key probe: caller A validates caller B's key
+POST,/v1/auth/keys,auth.py,require_api_key,yes _require_admin,n/a (creates key),—,UNPROVEN,Admin mint
+DELETE,/v1/auth/keys/{api_key},auth.py,require_api_key,yes _require_admin,path api_key; admin global,—,UNPROVEN,Admin revoke by URL
+GET,/v1/auth/keys,auth.py,require_api_key,yes _require_admin,n/a,—,UNPROVEN,Lists all keys
+POST,/v1/auth/keys/revoke,auth.py,require_api_key,yes _require_admin,body key,—,UNPROVEN,Admin revoke
+POST,/v1/auth/keys/rotate,auth.py,require_api_key,yes _require_admin,body key,—,UNPROVEN,Admin rotate
+POST,/v1/auth/check,auth.py,require_api_key,no,body.api_key — any caller can check ANY key's permission,id_no_owner,UNPROVEN,No admin; key-oracle
+GET,/v1/auth/usage,auth.py,require_api_key,no,query key/api_key — any caller can read ANY key usage,id_no_owner,UNPROVEN,No admin; usage leak across keys
+GET,/v1/memory/stats,memory.py,require_api_key,no,none (shared process cache stats),—,UNPROVEN,Any API-key/JWT; not tenant-scoped
+POST,/v1/memory/{action},memory.py,require_api_key,flush/keys admin-only,body.key — get/set/delete/exists have NO per-user namespace,id_no_owner,UNPROVEN,Shared in-process cache. Non-admin can get/set/delete any key. flush/keys require admin.
+GET,/metrics,monitoring.py,none,no,n/a,public,UNPROVEN,Prometheus scrapes; documented aggregates only
+GET,/v1/metrics,monitoring.py,require_api_key,yes role==admin,n/a,—,UNPROVEN,Per-block timings
+GET,/v1/leaderboard,monitoring.py,require_api_key,no,n/a,—,UNPROVEN,Provider reliability; any authenticated caller
+GET,/v1/recommend,monitoring.py,require_api_key,no,n/a,—,UNPROVEN,Provider recommend; any authenticated
+GET,/v1/predict,monitoring.py,require_api_key,no,n/a,—,UNPROVEN,Predictive failover; any authenticated
+POST,/v1/metrics/record,monitoring.py,require_api_key,no,n/a,—,UNPROVEN,Any caller can inject provider metrics
+POST,/v1/projects,projects.py,require_user,no,creates row owned by auth.user_id,—,OTHER_TENANCY,Covered as setup in tenancy tests; not in authz MATRIX surfaces
+PATCH,/v1/projects/{project_id},projects.py,require_user,no,_owned_or_404 owner-only (default read_only=False),—,UNPROVEN,Mutating; not in matrix
+POST,/v1/projects/from-drive,projects.py,require_user,no,new row owned by caller; Drive token is caller's,—,UNPROVEN,Any user; origin=user_drive_import
+GET,/v1/projects,projects.py,require_user,admin sees all,list_projects(user_id) + include_admin_approved; admin unscoped,—,OTHER_TENANCY,test_projects_tenancy list isolation
+GET,/v1/projects/{project_id},projects.py,require_user,admin via role in _owned_or_404,_owned_or_404 read_only=True + role,—,COVERED,MATRIX surface 'open'. Also test_projects_tenancy + test_project_detail_admin_access + test_chat_open_access_gate
+GET,/v1/projects/{project_id}/documents,projects.py,require_user,admin via role,_owned_or_404 read_only=True + role; lists docs of that project,—,COVERED,MATRIX surface 'docs'
+GET,/v1/projects/{project_id}/documents/{document_id}/preview,projects.py,require_user,admin via role,project _owned_or_404 read_only + doc must be in citeable owner set (workspace/MC/GK),—,UNPROVEN,"Child belonging is citeable-set, not strict path-project. Private foreign doc 404s."
+GET,/v1/projects/{project_id}/documents/{document_id}/preview/raw,projects.py,require_user,admin via role,same as preview,—,UNPROVEN,PDF bytes
+DELETE,/v1/projects/{project_id},projects.py,require_user,owner OR admin,get_project scoped unless admin; 403 if not owner/admin,—,COVERED,MATRIX surface 'delete'. Soft-archive.
+POST,/v1/projects/{project_id}/conversations/{conversation_id}/clear,projects.py,require_user,owner OR admin,"project owner/admin + ws- prefix bind + stored conv.project_id in {None,'',pid,resolved}",—,OTHER_TENANCY,test_project_detail_admin_access mutation. Stored row with project_id=None still clears if ws- prefix passes.
+GET,/v1/projects/{project_id}/conversations,projects.py,require_user,owner OR admin,project owner/admin; lists convs for pid+alias,—,UNPROVEN,Owner-only (stranger on shared = 403). Not in matrix.
+POST,/v1/projects/{project_id}/documents,projects.py,require_user,admin via role,_owned_or_404 read_only=True (open-access upload),—,COVERED,MATRIX surface 'upload'. Also test_upload_shared_project_access
+POST,/v1/projects/{project_id}/progress,projects.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,Not in matrix
+GET,/v1/projects/{project_id}/memory,projects.py,require_user,no,_owned_or_404 owner-only,—,OTHER_TENANCY,test_projects_tenancy cross-tenant 404. Shared-project stranger also 404 (owner-only).
+POST,/v1/projects/{project_id}/memory,projects.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,Write facts; not in matrix
+DELETE,/v1/projects/{project_id}/memory/{key},projects.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,Not in matrix
+PATCH,/v1/projects/{project_id}/documents/{document_id},projects.py,require_user,owner OR admin,"project owner/admin + doc.project_id in {path, storage_id}",—,UNPROVEN,Child belonging checked
+DELETE,/v1/projects/{project_id}/documents/{document_id},projects.py,require_user,no,_owned_or_404 owner-only + doc.project_id == path project_id (NO alias),project_only_no_child,UNPROVEN,Strict == path id; master-corpus alias may 404 own docs. Child check exists but alias-blind.
+GET,/v1/projects/{project_id}/audit,projects.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,Audit trail
+GET,/v1/governance,projects.py,require_user,yes role==admin,n/a (policy metadata),—,UNPROVEN,Admin-only status
+POST,/v1/governance/purge,projects.py,require_user,yes role==admin,global purge by age — all tenants,—,UNPROVEN,Admin global. Phase 2 forbids live purge. Not in matrix.
+POST,/v1/projects/{project_id}/connectors/aconex,connectors.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,
+GET,/v1/projects/{project_id}/connectors,connectors.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,
+POST,/v1/projects/{project_id}/connectors/aconex/sync,connectors.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,CDE pull into project
+POST,/v1/projects/{project_id}/connectors/aconex/rfi,connectors.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,
+POST,/v1/projects/{project_id}/connectors/aconex/events,connectors.py,require_user,no,_owned_or_404 owner-only,—,UNPROVEN,
+POST,/v1/projects/{project_id}/export/schedule,exports.py,require_user,no,_check_owner include_admin_approved (open-read),—,UNPROVEN,
+POST,/v1/projects/{project_id}/export/cost-boq,exports.py,require_user,no,_check_owner; body.document_id via get_document WITHOUT project match,project_only_no_child,UNPROVEN,Shared-project stranger can export. document_id from another project is readable if file_path set.
+POST,/v1/projects/{project_id}/price-boq,exports.py,require_user,no,_check_owner; body.document_id get_document no project match,project_only_no_child,UNPROVEN,Same child-id hole
+POST,/v1/projects/{project_id}/export/cost-schedule,exports.py,require_user,no,_check_owner,—,UNPROVEN,
+POST,/v1/projects/{project_id}/export/schedule-from-brief,exports.py,require_user,no,_check_owner; body.conversation_id load_conversation_wbs with NO project bind,project_only_no_child,UNPROVEN,Any accessible project + victim conversation_id stages WBS
+POST,/v1/projects/{project_id}/export/schedule-from-document,exports.py,require_user,no,_check_owner; body.document_ids passed to extract_schedule_feed with NO belonging check,project_only_no_child,UNPROVEN,document_ids list unscoped
+POST,/v1/projects/{project_id}/export/evm,exports.py,require_user,no,_check_owner,—,UNPROVEN,Body periods; no child id
+POST,/v1/projects/{project_id}/conversations/{conversation_id}/export/schedule,exports.py,require_user,no,_check_owner only; conversation_id not bound to project,project_only_no_child,UNPROVEN,WBS of any conversation_id
+POST,/v1/projects/{project_id}/conversations/{conversation_id}/export,exports.py,require_user,no,_check_owner only; get_messages(conversation_id) unscoped,project_only_no_child,UNPROVEN,HIGH: conversation transcript export if caller can open ANY project they can _check_owner
+POST,/v1/projects/{project_id}/export/schedule-from-boq,exports.py,require_user,no,_check_owner; body.document_id get_document no project match,project_only_no_child,UNPROVEN,Same document_id hole
+POST,/v1/schedule/generate,schedule.py,require_user,no,none (brief in body; no project),—,UNPROVEN,Compute from body
+POST,/v1/schedule/cpm,schedule.py,require_user,no,none,—,UNPROVEN,
+POST,/v1/schedule/manpower,schedule.py,require_user,no,none,—,UNPROVEN,
+POST,/v1/schedule/fasttrack,schedule.py,require_user,no,none,—,UNPROVEN,
+POST,/v1/schedule/export,schedule.py,require_user,no,none,—,UNPROVEN,Writes workbook path from body activities
+GET,/v1/usage/today,usage.py,require_user,no,usage_tracker.daily_total(auth.user_id),—,UNPROVEN,Self-scoped
+GET,/v1/usage,usage.py,require_user,no,usage_tracker.history(auth.user_id),—,UNPROVEN,Self-scoped
+GET,/v1/drive/connect,drive.py,require_user,no,state signed with auth.user_id,—,UNPROVEN,
+GET,/v1/drive/callback,drive.py,none,no,signed state HMAC carries user_id,public,UNPROVEN,OAuth redirect; signed state is the gate. Deliberate public.
+GET,/v1/drive/status,drive.py,require_user,no,load_token(auth.user_id),—,UNPROVEN,
+POST,/v1/drive/disconnect,drive.py,require_user,no,clear_token(auth.user_id),—,UNPROVEN,
+GET,/v1/drive/files,drive.py,require_user,no,caller's Drive token,—,UNPROVEN,
+POST,/v1/projects/{project_id}/drive/index-folder,drive.py,require_user,no,get_project(user_id) owner-only,—,UNPROVEN,
+GET,/v1/projects/{project_id}/drive/index-folder/job/{job_id},drive.py,require_user,no,job dict project_id == path; NO project ownership check,id_no_owner,UNPROVEN,Any authenticated user who knows job_id+project_id can poll. Job may include error strings.
+POST,/v1/projects/{project_id}/drive/import,drive.py,require_user,no,get_project(user_id) owner-only,—,OTHER_TENANCY,test_project_ask_tenancy test_drive_import_cross_tenant_404
+POST,/v1/rag/search,rag.py,require_api_key,no,_searchable_project_or_404 → get_project_accessible,—,OTHER_TENANCY,test_rag_search_tenancy. Not in authz MATRIX.
+GET,/v1/rag/gk-status,rag.py,require_api_key,no,_searchable_project_or_404; also lists GK docs globally after gate,—,OTHER_TENANCY,Gate on project_id query; then enumerates all GK project docs. test_rag_search_tenancy.
+POST,/v1/project/ask,project.py,require_user,no,session.user_id == caller; project_id dropped if not accessible,—,OTHER_TENANCY,test_project_ask_tenancy
+POST,/v1/users/register,users.py,none,no,n/a,public,UNPROVEN,Open in dev; prod gated by ALLOW_OPEN_REGISTRATION
+GET,/v1/users/verify-email,users.py,none,no,purpose JWT user_id,public,UNPROVEN,Token is the gate
+POST,/v1/users/resend-verification,users.py,none,no,email lookup; always 202,public,UNPROVEN,Anti-oracle
+POST,/v1/users/login,users.py,none,no,n/a,public,UNPROVEN,Constant-time dummy hash
+GET,/v1/users/me,users.py,require_user,no,auth.user_id,—,UNPROVEN,Self
+GET,/v1/document-types,doc_types.py,require_api_key,no,n/a (global registry),—,UNPROVEN,
+POST,/v1/document-types,doc_types.py,require_user,yes role==admin,n/a (process-global),—,UNPROVEN,
+DELETE,/v1/document-types/{name},doc_types.py,require_user,yes role==admin,n/a,—,UNPROVEN,
+POST,/v1/document-types/classify,doc_types.py,require_api_key,no,n/a,—,UNPROVEN,
+POST,/v1/workflows,workflows.py,require_user,no,owner_id=auth.user_id; body.project_id NOT checked,id_no_owner,OTHER_TENANCY,Can stamp another user's project_id on own workflow row. test_workflows_tenancy covers list/get/delete/run IDOR.
+GET,/v1/workflows,workflows.py,require_user,no,list_workflows(owner_id),—,OTHER_TENANCY,MATRIX-missing; other tenancy yes
+GET,/v1/workflows/{workflow_id},workflows.py,require_user,no,get_workflow(owner_id),—,OTHER_TENANCY,
+DELETE,/v1/workflows/{workflow_id},workflows.py,require_user,no,delete_workflow(owner_id),—,OTHER_TENANCY,
+POST,/v1/workflows/{workflow_id}/run,workflows.py,require_user,no,get_workflow(owner_id) then chain_execute,—,OTHER_TENANCY,
+GET,/mcp/info,mcp.py,require_api_key,no,n/a (tool catalog),—,UNPROVEN,
+GET,/mcp/sse,mcp.py,require_api_key,privileged_blocks_only,none — MCP call_tool executes blocks with caller arguments,id_no_owner,UNPROVEN,Same execute surface as /v1/execute via tools. /mcp/messages Mount in main.py uses validate_key only (not JWT-normalized).
+GET,/v1/agents/conversations/{conversation_id}/messages,agents.py,require_user,no,_enforce_conversation_access (ws-* → project accessible; else stored project_id),—,OTHER_TENANCY,test_chat_open_access_gate. Non-ws missing row allowed (empty 200) after check returns.
+GET,/v1/agents,agents.py,require_user,no,n/a (registry),—,UNPROVEN,
+GET,/v1/agents/{name},agents.py,require_user,privileged hats 404,n/a,—,OTHER_TENANCY,Includes system_prompt. self-coding/external-mcp/document-ingestion 404 for a plain user (Agent F)
+POST,/v1/agents/{name}/chat,agents.py,require_user,privileged hats 404,conversation_id: _enforce_conversation_access; project_id: get_project owner-only (NO include_admin_approved) except master_corpus alias,path_body_id,OTHER_TENANCY,Privileged names 404 for a plain user (Agent F). Stream sibling uses include_admin_approved.
+POST,/v1/agents/{name}/chat/stream,agents.py,require_user,no,conversation_id: _enforce; project_id: get_project include_admin_approved except MC alias,path_body_id,OTHER_TENANCY,test_chat_open_access_gate. Body-only ids (no path id).
+GET,/v1/hydration/latest,hydration.py,require_api_key,no,query project_id with NO ownership check,id_no_owner,UNPROVEN,Any authenticated principal can read any project's latest hydration row
+GET,/v1/hydration/history,hydration.py,require_api_key,no,query project_id unscoped,id_no_owner,UNPROVEN,Same
+POST,/v1/hydration/run,hydration.py,require_api_key,no,body.project_ids unscoped; triggers learning_engine hydrate,id_no_owner,UNPROVEN,Comment says admin-triggered; CODE has no admin check
+GET,/debug/env,debug.py,require_api_key when mounted,yes role==admin + non-prod,n/a,—,OTHER_TENANCY,Production reserved prefix 404 empty (no env fields). Dest: 403 to a plain user.
+GET,/v1/debug/env,debug.py,require_api_key when mounted,yes (delegates),n/a,—,OTHER_TENANCY,Production 404 empty. Dest: 403 to a plain user.
+POST,/v1/projects/{project_id}/documents/{document_id}/redlines,redline.py,require_user,no,get_project(user_id) owner-only + doc.project_id == path,—,UNPROVEN,Owner-only (shared stranger 404). Child belonging checked. No alias.
+POST,/v1/feedback/route,feedback.py,require_api_key,no,body.project_id recorded with NO access check,id_no_owner,UNPROVEN,Writes learning_engine pattern under any project_id. Cross-tenant write to routing corpus.
+GET,/v1/projects/{project_id}/documents/search,doc_search.py,require_user,no,get_project include_admin_approved,—,UNPROVEN,Read-open. Not in matrix.
+GET,/v1/admin/debug/doc-extract,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,query project_id+document_id; admin bypasses tenant; extracts any doc. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/debug/document-download,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,query ids; admin; checks doc.project_id==project_id then decrypts. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/debug/doc-reindex,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin reindex any document. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/debug/doc-reindex/job/{job_id},admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin job poll; job_id unscoped beyond admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/projects/{project_id}/approve,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin approve any project_id. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/documents/{old_id}/supersede,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin; path old_id global. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/projects/archived,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin lists all archived. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/projects/{project_id}/restore,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin restore any. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/projects/{project_id}/purge,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin HARD purge any project. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/training/list,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin training files. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/training/download,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin download training artifact. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/debug/project-reindex,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin reindex any project. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/drive/download-proof,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin Drive proof. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/drive/ingest-proof,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin Drive ingest proof. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/training/generate-scenarios,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/training/job/{job_id},admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin job. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/debug/migrate-sqlite,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin destructive migrate. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/debug/pilot-preflight,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/debug/sentry-smoke,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/corpus/collections,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin corpus listing. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/corpus/bulk-insert,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin write corpus. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/corpus/repair-document-sizes,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/corpus/delete-docs,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin delete corpus docs. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/corpus/reconcile,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/corpus/coverage,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/drive/scan,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin Drive scan. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/projects/approve-from-drive,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin create/approve. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/projects/approve-from-drive/_bg,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin background twin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+GET,/v1/admin/dead-letter,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.
+POST,/v1/admin/debug/sweep-plaintext,admin.py,require_api_key,yes _require_admin,admin global — no tenant ownership (intentional operator bypass),—,UNPROVEN,admin. Plain user 403 if role!=admin. JWT user with role=user 403. API key without role=admin 403. UNPROVEN vs matrix.

@@ -1,0 +1,22 @@
+{
+  "name": "The Fork",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "user": "ubuntu",
+  "install": "set -euo pipefail\nif ! command -v python3.11 >/dev/null 2>&1; then\n  sudo apt-get update\n  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common gpg-agent\n  sudo DEBIAN_FRONTEND=noninteractive add-apt-repository -y ppa:deadsnakes/ppa\n  sudo apt-get update\n  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.11 python3.11-venv python3.11-dev\nfi\npython3.11 -m venv .venv\n.venv/bin/pip install -U pip\n.venv/bin/pip install -r requirements.txt\nnpm --prefix frontend ci",
+  "terminals": [
+    {
+      "name": "uvicorn",
+      "command": "CEREBRUM_VIRGIN=false CEREBRUM_DOMAIN_KITS=construction ENV=development DATA_DIR=\"$PWD/data\" PYTHONIOENCODING=utf-8 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
+      "description": "FastAPI backend + SPA on :8000 (SQLite). Build frontend/dist first for the real UI."
+    }
+  ],
+  "ports": [
+    {
+      "name": "The Fork API + UI",
+      "port": 8000
+    }
+  ]
+}

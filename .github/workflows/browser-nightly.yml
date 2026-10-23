@@ -1,0 +1,82 @@
+name: browser-nightly
+
+# Sanitized UI-PHYS Playwright regression. Same case IDs as the confidential
+# Drive pack; fixture figures only. Does not upload or read live client docs.
+
+on:
+  schedule:
+    - cron: "20 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-nightly
+  cancel-in-progress: true
+
+jobs:
+  ui-phys:
+    name: UI-PHYS Playwright (sanitized)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr poppler-utils
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-browser.txt pytest-timeout
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Build React UI
+        # Empty VITE_API_BASE → same-origin /v1 calls. The default
+        # localhost:8000 build cannot hit a random uvicorn port.
+        run: |
+          npm --prefix frontend ci
+          VITE_API_BASE= npm --prefix frontend run build
+
+      - name: Run sanitized UI-PHYS suite
+        run: >
+          pytest tests/browser/ -v --tb=short --timeout=240
+          -m browser
+        env:
+          UI_PHYS_FORBIDDEN: ${{ secrets.UI_PHYS_FORBIDDEN }}
+          ENV: development
+          RAG_EMBEDDING_MODEL: fake
+          CEREBRUM_VIRGIN: "false"
+          CEREBRUM_DOMAIN_KITS: construction
+          CEREBRUM_UI_PHYS_STUB: "1"
+          PUBLIC_BASE_URL: https://theshovel.ai
+          PYTHONIOENCODING: utf-8
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-phys-playwright
+          path: |
+            test-results/
+            playwright-report/
+            /tmp/ui_phys_uvicorn.log
+            /tmp/ui_phys_stub_miss.log
+          if-no-files-found: ignore

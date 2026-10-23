@@ -1,0 +1,280 @@
+{
+ "manifest_version": "1.0",
+ "id": "fork.hat.procurement",
+ "name": "Procurement Hat",
+ "description": "Tender evaluation, supplier management, purchase orders, material delivery tracking, crane/lifting logistics, procurement lead-time planning. Owns the supply chain and logistics workflow.",
+ "kind": "hat",
+ "extends": "fork.base",
+ "discipline": "procurement",
+ "system_prompt_guidance": "You are the Procurement discipline agent. You handle tender evaluation, supplier selection, purchase order management, material delivery tracking, and lifting logistics (crane planning). You evaluate bids using weighted scoring \u00e2\u20ac\u201d never recommend a supplier without a documented evaluation. You track lead times and flag delays that impact the programme. All cost figures in tenders are handed off to Commercial for validation. All contractual terms in purchase orders are handed off to Contracts for review.",
+ "activation": {
+  "triggers": [
+   {
+    "type": "keyword",
+    "value": "tender",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "bid",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "evaluate supplier",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "procurement",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "purchase order",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "PO",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "lead time",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "delivery schedule",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "material delivery",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "supplier",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "subcontractor",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "crane plan",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "lifting plan",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "logistics",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "RFQ",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "request for quotation",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "vendor",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "goods receipt",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "inspection at source",
+    "score": 0.8
+   },
+   {
+    "type": "intent",
+    "value": "tender_evaluation",
+    "score": 1.0
+   },
+   {
+    "type": "intent",
+    "value": "procurement_planning",
+    "score": 1.0
+   },
+   {
+    "type": "intent",
+    "value": "supplier_management",
+    "score": 1.0
+   }
+  ],
+  "mode": "hybrid",
+  "default_enabled": true
+ },
+ "context_sources": [
+  {
+   "kind": "project_documents",
+   "weight": 1.0,
+   "filters": {
+    "type": "tender_docs"
+   },
+   "max_items": 10
+  },
+  {
+   "kind": "project_documents",
+   "weight": 0.9,
+   "filters": {
+    "type": "purchase_orders"
+   },
+   "max_items": 8
+  },
+  {
+   "kind": "official_guidance",
+   "weight": 0.8,
+   "filters": {
+    "source": "procurement_policies"
+   },
+   "max_items": 5
+  },
+  {
+   "kind": "learning_profiles",
+   "weight": 0.6,
+   "filters": {
+    "profile_type": "SupplierPerformance"
+   },
+   "max_items": 3
+  }
+ ],
+ "allowed_actions": [
+  "tender_evaluator",
+  "supplier_scoring",
+  "po_generator",
+  "crane_planner",
+  "construction_calc:crane_planning",
+  "construction_calc:evaluate_tender"
+ ],
+ "available_tools": ["procurement_list_generator"],
+ "handoffs": [
+  {
+   "to": "commercial",
+   "when": "tender requires cost validation or rate comparison",
+   "carry": [
+    "bid_prices",
+    "quantities",
+    "evaluation_criteria",
+    "recommendation"
+   ]
+  },
+  {
+   "to": "contracts",
+   "when": "purchase order terms need contractual review or change order",
+   "carry": [
+    "po_terms",
+    "deviations_from_contract",
+    "risk_items"
+   ]
+  },
+  {
+   "to": "planning",
+   "when": "delivery schedule affects programme or crane plan conflicts with baseline",
+   "carry": [
+    "delivery_dates",
+    "lead_times",
+    "critical_path_impact",
+    "crane_schedule"
+   ]
+  },
+  {
+   "to": "qaqc",
+   "when": "goods receipt requires inspection or non-conformance at source",
+   "carry": [
+    "inspection_requirements",
+    "goods_description",
+    "supplier_quality_rating"
+   ]
+  }
+ ],
+ "verification": {
+  "grounding": "documents_or_formulas",
+  "cite_required": true,
+  "refuse_unaided_figures": true,
+  "standards_advisory": true
+ },
+ "failure_policy": {
+  "on_missing_context": "dependency_required",
+  "on_formula_error": "ask_clarifying",
+  "on_unverified_claim": "flag_and_continue"
+ },
+ "playbook": {
+  "formulas": [
+   {
+    "id": "crane_planning",
+    "description": "Crane selection and lift planning (radius, capacity, ground bearing)",
+    "implemented_by": "app.lib.construction_formulas.crane_planning",
+    "domain": "procurement",
+    "tier": "operational"
+   },
+   {
+    "id": "evaluate_tender",
+    "description": "Weighted tender evaluation across price, technical, and commercial criteria",
+    "implemented_by": "app.core.construction_knowledge.evaluate_tender",
+    "domain": "procurement",
+    "tier": "strategic"
+   }
+  ],
+  "flows": [
+   {
+    "id": "tender_evaluation",
+    "description": "Evaluate tender from receipt to recommendation",
+    "steps": [
+     "receive_tender",
+     "check_completeness",
+     "evaluate_price",
+     "evaluate_technical",
+     "evaluate_commercial",
+     "score_weighted",
+     "document_recommendation",
+     "handoff_if_cost_question"
+    ]
+   },
+   {
+    "id": "procurement_to_delivery",
+    "description": "Full procurement cycle from RFQ to goods receipt",
+    "steps": [
+     "issue_rfq",
+     "receive_bids",
+     "evaluate_tenders",
+     "place_po",
+     "track_manufacturing",
+     "schedule_delivery",
+     "goods_receipt",
+     "inspect_at_site"
+    ]
+   },
+   {
+    "id": "crane_logistics_plan",
+    "description": "Plan crane operations for material delivery and erection",
+    "steps": [
+     "define_lift_requirements",
+     "select_crane_type",
+     "check_ground_bearing",
+     "plan_lift_radius",
+     "schedule_crane_time",
+     "coordinate_with_delivery"
+    ]
+   }
+  ]
+ }
+}

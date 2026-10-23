@@ -1,0 +1,31 @@
+name: purge guard
+
+# Rejects commits that carry history removed by the 2026-10 rewrite (real
+# project documents and identifiers): pre-rewrite commits, removed blobs,
+# removed paths. Runs on every push to every branch and on every pull request;
+# protect-main requires it, so old history can never merge back.
+# See scripts/check_purged_objects.py.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  purge-guard:
+    name: purge guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the pushed commits
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_purged_objects.py "$BASE" "$HEAD"

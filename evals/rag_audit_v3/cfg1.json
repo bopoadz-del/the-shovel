@@ -1,0 +1,64 @@
+{
+ "config": "cfg1",
+ "recall": {
+  "n": 100,
+  "doc_at_5": 37,
+  "chunk_at_5": 23
+ },
+ "fresh": {
+  "top1": 3,
+  "top3": 6,
+  "per_case": [
+   {
+    "file": "P-217-pier-mix-design.txt",
+    "rank": 5
+   },
+   {
+    "file": "road-R9-street-lighting.txt",
+    "rank": 1
+   },
+   {
+    "file": "contract-eot-notice-period.txt",
+    "rank": null
+   },
+   {
+    "file": "sewer-S4-manhole-spacing.txt",
+    "rank": 3
+   },
+   {
+    "file": "design-review-status-codes.txt",
+    "rank": 3
+   },
+   {
+    "file": "boq-excavation-rate.txt",
+    "rank": 3
+   },
+   {
+    "file": "rebar-cover-substructure.txt",
+    "rank": 1
+   },
+   {
+    "file": "asphalt-wearing-course.txt",
+    "rank": 5
+   },
+   {
+    "file": "hse-permit-to-work.txt",
+    "rank": null
+   },
+   {
+    "file": "mv-substation-soak-test.txt",
+    "rank": 1
+   },
+   {
+    "file": "evm-cpi-threshold.txt",
+    "rank": 4
+   },
+   {
+    "file": "mass-concrete-curing.txt",
+    "rank": 5
+   }
+  ]
+ },
+ "calc_intact": "3/3",
+ "calc_all_pass": true
+}

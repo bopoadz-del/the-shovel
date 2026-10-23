@@ -1,0 +1,107 @@
+document_engine:
+  name: "Document Reasoning Engine"
+  version: "1.0.0"
+
+  supported_formats:
+    - pdf
+    - docx
+    - xlsx
+
+  patterns:
+    glossary:
+      - "(?P<term>[A-Z]{2,5})\\s+[-—:]\\s+(?P<definition>.+)"
+      - "(?P<term>[A-Z][a-zA-Z\\s]+?)\\s+(?:is|means|refers to)\\s+(?P<definition>.+)"
+    obligation:
+      - "\\b(SHALL|MUST|REQUIRED|WILL BE REQUIRED)\\b"
+    constraint:
+      - "(?P<value>\\d+\\.?\\d*)\\s*(?P<unit>MW|kW|V|cfm/kW|ft|%)"
+      - "(?P<operator>[≤≥<>=])\\s*(?P<value>\\d+\\.?\\d*)\\s*(?P<unit>%|ft|MW|kW|V)"
+    schedule_target:
+      - "(?:operational|RFS|completion|substantial completion)\\s+(?:by|before|no later than)\\s+(?P<month>\\w+)\\s+(?P<year>\\d{4})"
+      - "EOY\\s+(?P<year>\\d{4})"
+      - "(?P<month>\\w+)\\s+(?P<year>\\d{4})\\s+(?:target|milestone|RFS)"
+      # Duration-shaped targets -- "completion within 14 months" is the
+      # standard contract phrasing and matched NOTHING before (F37).
+      - "(?:completion|complete|handover|hand-over|duration)\\s+(?:within|in|of)\\s+(?P<qty>\\d+)\\s*(?P<unit>months?|weeks?|days?)"
+    equipment_lead_time:
+      - "(?P<equipment>generator|chiller|switchgear|transformer|UPS|CRAH)\\w*\\s+.*?(?P<days>\\d+)\\s*days?"
+      # weeks capture in its OWN group -- it was captured as <days>, so
+      # "lead time is 16 weeks" recorded 16 DAYS (F37).
+      - "(?P<equipment>generator|chiller|switchgear|transformer|UPS|CRAH)\\w*\\s+.*?(?P<weeks>\\d+)\\s*weeks?"
+    risk:
+      - "\\b(winter|supply chain|Indigenous|TFO|blast radius|load.shed|permit delay|weather|labour shortage)\\b"
+
+  wbs_dictionary:
+    "1.0": "Project Management"
+    "2.0": "Design & Engineering"
+    "3.0": "Procurement"
+    "4.0": "Site Development"
+    "5.0": "Building Construction"
+    "6.0": "Building 1"
+    "7.0": "MEP Systems"
+    "8.0": "IT Infrastructure"
+    "9.0": "Commissioning"
+    "10.0": "Closeout"
+
+  ontology:
+    PCW:
+      wbs: "7.0"
+      category: "mechanical"
+      type: "system"
+    TCS:
+      wbs: "7.0"
+      category: "mechanical"
+      type: "system"
+    CDU:
+      wbs: "7.0"
+      category: "mechanical"
+      type: "equipment"
+    ANR:
+      wbs: "8.0"
+      category: "electrical"
+      type: "system"
+    HAC:
+      wbs: "7.0"
+      category: "electrical"
+      type: "system"
+    generator:
+      wbs: "3.0"
+      category: "procurement"
+      type: "equipment"
+      lead_time: 120
+    chiller:
+      wbs: "3.0"
+      category: "procurement"
+      type: "equipment"
+      lead_time: 90
+    switchgear:
+      wbs: "3.0"
+      category: "procurement"
+      type: "equipment"
+      lead_time: 75
+    transformer:
+      wbs: "3.0"
+      category: "procurement"
+      type: "equipment"
+      lead_time: 80
+    UPS:
+      wbs: "3.0"
+      category: "procurement"
+      type: "equipment"
+      lead_time: 60
+    CRAH:
+      wbs: "3.0"
+      category: "procurement"
+      type: "equipment"
+      lead_time: 70
+
+  output_schema:
+    - project_metadata
+    - glossary
+    - requirements
+    - constraints
+    - schedule_targets
+    - equipment_specs
+    - wbs_mapping
+    - risks
+    - downstream

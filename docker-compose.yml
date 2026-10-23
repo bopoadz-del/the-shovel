@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: thefork-postgres
+    environment:
+      POSTGRES_USER: thefork
+      POSTGRES_PASSWORD: thefork
+      POSTGRES_DB: thefork
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thefork -d thefork"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: thefork-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  cerebrum-blocks:
+    image: cerebrum-blocks:local
+    build: .
+    container_name: cerebrum-blocks
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    # `.env` used to be bind-mounted here as `./.env:/app/.env:ro`. It is
+    # gitignored, so on a FRESH CLONE the file does not exist and Docker
+    # creates a DIRECTORY at that path — the app then tries to read a
+    # directory as a file. `env_file` with `required: false` reads it when
+    # present and is a no-op when it is not, which is the behaviour a
+    # stranger following the README needs.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - DATA_DIR=/app/data
+      - DATABASE_URL=postgresql+psycopg://thefork:thefork@postgres:5432/thefork
+      - REDIS_URL=redis://redis:6379/0
+      - UVICORN_WORKERS=2
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    image: cerebrum-blocks:local
+    build: .
+    container_name: thefork-worker
+    command: ["python", "-m", "app.worker.run_worker"]
+    volumes:
+      - ./data:/app/data
+    # Same fix as cerebrum-blocks above, and the compose-health CI job caught
+    # this one on a FRESH CLONE: `./.env` is gitignored, so bind-mounting it
+    # makes Docker create a DIRECTORY at that path. Every later
+    # `docker compose` command then dies with "failed to read .env: is a
+    # directory" — after the stack had already come up healthy, which is the
+    # kind of failure that is very hard to attribute by hand.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - DATA_DIR=/app/data
+      - DATABASE_URL=postgresql+psycopg://thefork:thefork@postgres:5432/thefork
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

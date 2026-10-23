@@ -1,0 +1,171 @@
+{
+  "generated_at": "2026-07-09T00:30:11.757110+00:00",
+  "source_manifest": "manifests/p1a_drive_manifest_client.json",
+  "tiers": {
+    "1": {
+      "description": "the client project + golden-set/fixture-backing folders",
+      "gate_dependency": "Phase 2 battery gates on this tier",
+      "folders": [
+        {
+          "project_id": "example_infra_pack",
+          "folder_name": "the client project",
+          "folder_id": "1ExampleFolderId001xxxxxxxxxxxxxx",
+          "subfolders": [
+            {
+              "subfolder": "Design",
+              "file_count": 2918,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Contract Docs",
+              "file_count": 1490,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Reporting (various)",
+              "file_count": 590,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Misc",
+              "file_count": 423,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Organizations",
+              "file_count": 308,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Logistics",
+              "file_count": 200,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Presentations",
+              "file_count": 139,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Drone",
+              "file_count": 121,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Trackers",
+              "file_count": 8,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Construction, related docs",
+              "file_count": 4,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Utility Diversions",
+              "file_count": 2,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "Admin",
+              "file_count": 1,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "(root)",
+              "file_count": 1,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            },
+            {
+              "subfolder": "LAT",
+              "file_count": 1,
+              "tier": 1,
+              "note": "the client project — tier 1 by default"
+            }
+          ],
+          "file_count": 6206
+        }
+      ]
+    },
+    "2": {
+      "description": "Other pilot-relevant project folders and company procedures",
+      "gate_dependency": "Phase 2 battery may include spot checks",
+      "folders": [
+        {
+          "project_id": "sop_project_controls",
+          "folder_name": "200-Project Controls Procedures",
+          "folder_id": null,
+          "file_count": null
+        },
+        {
+          "project_id": "sop_delivery_mgmt",
+          "folder_name": "300-Delivery Management Procedures",
+          "folder_id": null,
+          "file_count": null
+        },
+        {
+          "project_id": "sop_construction_mgmt",
+          "folder_name": "400-Construction Management Procedures",
+          "folder_id": null,
+          "file_count": null
+        },
+        {
+          "project_id": "sop_design_mgmt",
+          "folder_name": "500-Design Management Procedures",
+          "folder_id": null,
+          "file_count": null
+        },
+        {
+          "project_id": "sop_procurement_contracts",
+          "folder_name": "600-Procurement & Contracts",
+          "folder_id": null,
+          "file_count": null
+        }
+      ]
+    },
+    "3": {
+      "description": "Reference archives and everything else",
+      "gate_dependency": "Background drain; not pilot-blocking",
+      "folders": [
+        {
+          "project_id": "scanned_high_rise",
+          "folder_name": "Scaned Files - High Rise Building",
+          "folder_id": null,
+          "file_count": null
+        },
+        {
+          "project_id": "scanned_road_works",
+          "folder_name": "Scaned Files - Road Works",
+          "folder_id": null,
+          "file_count": null
+        },
+        {
+          "project_id": "scanned_concrete_problems",
+          "folder_name": "Scaned Files -Concrete Problems",
+          "folder_id": null,
+          "file_count": null
+        }
+      ]
+    }
+  },
+  "summary": {
+    "tier_1_file_count": 6206,
+    "tier_2_file_count": null,
+    "tier_3_file_count": null,
+    "total_known": 6206,
+    "note": "Tier 2/3 counts require folder IDs and a fresh Drive walk once the service-account credential is restored."
+  }
+}

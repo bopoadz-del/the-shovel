@@ -1,0 +1,74 @@
+name: health-watch
+
+# Minimum-viable production alerting, from the repo side.
+#
+# The only scheduled probe is /livez. It is DB-free: it does not open a
+# session, run a statement, or ping a pool. The database bills by
+# compute-time and suspends when idle, so a scheduled dependency check
+# would wake it. curl does not follow redirects, so a 301 is not success,
+# and --proto '=https' refuses an http URL.
+#
+# When a probe fails, GitHub notifies the repository owner (default
+# notification setting for failed scheduled workflows on watched repos).
+# Two attempts a minute apart so a single blip doesn't page.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # liveness — DB-free
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://theshovel.ai
+  # The client-facing hostname. Probing it catches a DNS record pointing at
+  # a dead host, a lapsed custom-domain attachment, or an expired certificate.
+  PUBLIC_URL: https://theshovel.ai
+
+jobs:
+  liveness:
+    # Runs on every trigger — it costs nothing on the database side.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: GET /livez (DB-free liveness)
+        run: |
+          url="$BASE_URL/livez"
+          for attempt in 1 2; do
+            code=$(curl --proto '=https' -sS -o /tmp/livez.json -w '%{http_code}' --max-time 30 "$url" || echo "000")
+            echo "attempt $attempt: GET $url -> $code"
+            cat /tmp/livez.json 2>/dev/null || true
+            echo
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            # One retry a minute later so a transient blip doesn't page.
+            [ "$attempt" = "1" ] && sleep 60
+          done
+          echo "::error::/livez returned $code twice — the service is not serving HTTP at all."
+          exit 1
+
+  public-domain:
+    # Same 15-minute cadence and same DB-free endpoint as `liveness`, but the
+    # failure names the public hostname. Deliberately a SEPARATE job so the
+    # failure names the layer: liveness red = the service is down; this red
+    # while liveness is green = DNS, the custom-domain binding, or TLS.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: GET /livez over the public domain (DNS + custom domain + TLS)
+        run: |
+          url="$PUBLIC_URL/livez"
+          for attempt in 1 2; do
+            code=$(curl --proto '=https' -sS -o /tmp/pub.json -w '%{http_code}' --max-time 30 "$url" || echo "000")
+            echo "attempt $attempt: GET $url -> $code"
+            cat /tmp/pub.json 2>/dev/null || true
+            echo
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            [ "$attempt" = "1" ] && sleep 60
+          done
+          echo "::error::$PUBLIC_URL/livez returned $code twice. Check DNS for theshovel.ai (apex and www), the custom-domain binding, and certificate validity."
+          exit 1

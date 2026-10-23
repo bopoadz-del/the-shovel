@@ -1,0 +1,213 @@
+# Build the image and push it to ECR, then roll the ECS services.
+#
+# Replaces Render's auto-deploy-on-merge. Render built the image itself from
+# this repo's Dockerfile; ECS pulls a prebuilt image, so the build moves into
+# CI rather than depending on one machine having Docker.
+#
+# ONE image serves both the web service and the ingest worker — they are the
+# same application with a different command, exactly as on Render, where the
+# worker ran `python scripts/p1b_ingest_drive_server.py` against the same
+# build. Building once keeps them from drifting apart. The ingest is a JOB:
+# it is started once by ingest-run-once.yml, never kept running as a service
+# (the service's desired count is pinned to 0 below).
+#
+# This does NOT touch DNS. theshovel.ai moves only when a human moves it.
+#
+# A push to this repository's main deploys only after the tests workflow on
+# that same commit finishes green. A pull request, including one whose head
+# branch is named main on a fork, does not deploy. The run checks out and
+# ships workflow_run.head_sha, so a later merge cannot change which commit
+# this deploy builds. Manual workflow_dispatch is unchanged and deploys the
+# ref the owner selected. Overlapping deploys queue; a later run does not
+# cancel one already rolling. After the roll, the job waits for the web
+# service to be stable and for /livez build_sha to equal that commit. The
+# origin is the PUBLIC_BASE_URL repository variable.
+name: deploy-aws
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["tests"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: the-fork
+  ECS_CLUSTER: cerebrum
+
+# Queue, do not cancel. A second green main must not abort an image push
+# or an ECS roll that is already in progress.
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Dispatch stays unconditional. A tests run deploys only when it was a
+    # successful push to this repository's main, not a fork pull request
+    # whose branch happens to be named main.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # The image carries Torch, transformers and OCR wheels; the hosted
+      # runner's 14 GB disk fills during the build without this.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h / | tail -1
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # The detector weights are a release asset, not a git object (see
+      # data/models/manifest.json). Fetch + sha256-verify them into the build
+      # context; a mismatch fails here, and the Dockerfile re-checks it.
+      - name: Fetch and verify model weights
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch_model.py --image
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY"
+          # ECS sets none of the env vars the liveness route reads for build_sha
+          # (RENDER_GIT_COMMIT, GIT_SHA, SOURCE_VERSION). Bake the commit.
+          docker build \
+            --build-arg GIT_SHA="$DEPLOY_SHA" \
+            -t "$IMAGE:$DEPLOY_SHA" \
+            -t "$IMAGE:latest" \
+            .
+          docker push "$IMAGE:$DEPLOY_SHA"
+          docker push "$IMAGE:latest"
+
+      - name: The web task carries the email settings sign-up needs
+        # Sign-up sends its confirmation email only with these three; without
+        # them the deploy would ship a site where nobody can confirm an account.
+        # Names only -- no value is read.
+        run: |
+          td=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services the-fork \
+            --query 'services[0].taskDefinition' --output text)
+          names=$(aws ecs describe-task-definition --task-definition "$td" \
+            --query 'taskDefinition.containerDefinitions[0].[environment[].name, secrets[].name][]' --output text)
+          missing=""
+          for want in PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM; do
+            echo "$names" | tr '\t' '\n' | grep -qx "$want" || missing="$missing $want"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy stopped: email settings missing::the web task definition lacks:$missing"
+            exit 1
+          fi
+          echo "email settings present: PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM"
+
+      - name: Roll the web service
+        run: |
+          for svc in the-fork; do
+            count=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+              --services "$svc" \
+              --query 'length(services[?status==`ACTIVE`])' --output text 2>/dev/null || echo 0)
+            if [ "$count" = "1" ]; then
+              aws ecs update-service --cluster "$ECS_CLUSTER" \
+                --service "$svc" --force-new-deployment >/dev/null
+              echo "$svc: deployment triggered"
+            else
+              echo "$svc: not created yet"
+            fi
+          done
+
+      - name: Keep the ingest service at zero (ingest is a job, not a service)
+        # Live 2026-10-03: this step used to roll `the-fork-ingest` too, and
+        # the service's desired count of 1 restarted the one-shot ingest
+        # script every time it finished -- ~95 min per lap, 50+ laps on
+        # record, each `--resume`ing over the same files and rewriting the
+        # project's doc_index blob per document (Neon: 876 GB egress in 3
+        # days). The service row stays (its network configuration is reused
+        # by ingest-run-once.yml); its desired count is pinned to 0 on every
+        # deploy; an ingest runs ONCE via ingest-run-once.yml. Nothing may
+        # raise this count.
+        run: |
+          svc=the-fork-ingest
+          count=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$svc" \
+            --query 'length(services[?status==`ACTIVE`])' --output text 2>/dev/null || echo 0)
+          if [ "$count" = "1" ]; then
+            aws ecs update-service --cluster "$ECS_CLUSTER" \
+              --service "$svc" --desired-count 0 >/dev/null
+            echo "$svc: desired count pinned to 0 (run it with ingest-run-once)"
+          else
+            echo "$svc: not created"
+          fi
+
+      - name: Wait until the web service is stable
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # aws ecs wait polls every 15s and gives up after 40 tries.
+          # timeout(1) is the hard bound around that waiter.
+          timeout 600 aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services the-fork
+
+      - name: Confirm live build_sha matches the deployed commit
+        timeout-minutes: 5
+        env:
+          DEPLOY_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          # ${var:-} is safe under set -u, so an unset variable and an empty
+          # one take the same path. Parsing this file does not read the
+          # variable; a missing value fails here and does not skip the step.
+          base="${DEPLOY_BASE_URL:-}"
+          base="${base%/}"
+          if [ -z "$base" ]; then
+            echo "::error::repository variable PUBLIC_BASE_URL is unset or empty"
+            exit 1
+          fi
+          case "$base" in
+            https://*) ;;
+            *)
+              echo "::error::repository variable PUBLIC_BASE_URL must be an https origin"
+              exit 1
+              ;;
+          esac
+          url="$base/livez"
+          attempts=12
+          echo "polling $url for build_sha=$DEPLOY_SHA ($attempts attempts)"
+          for attempt in $(seq 1 "$attempts"); do
+            code=$(curl --proto '=https' --max-time 15 -sS -o /tmp/livez.json -w '%{http_code}' "$url" || echo "000")
+            sha=$(python3 scripts/read_livez_build_sha.py /tmp/livez.json)
+            echo "attempt $attempt/$attempts: HTTP $code build_sha=${sha:-<empty>}"
+            if [ "$code" = "200" ] && [ "$sha" = "$DEPLOY_SHA" ]; then
+              echo "live build_sha matches $DEPLOY_SHA"
+              exit 0
+            fi
+            if [ "$attempt" != "$attempts" ]; then
+              sleep 10
+            fi
+          done
+          echo "::error::/livez did not report build_sha $DEPLOY_SHA after $attempts attempts"
+          exit 1

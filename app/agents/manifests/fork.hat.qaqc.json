@@ -1,0 +1,155 @@
+{
+  "manifest_version": "1.0",
+  "id": "fork.hat.qaqc",
+  "name": "QAQC Hat",
+  "description": "Inspection test plans, non-conformance tracking, mix design validation, concrete maturity, thermal cracking checks. Owns all quality and inspection workflow.",
+  "kind": "hat",
+  "extends": "fork.base",
+  "discipline": "qaqc",
+  "system_prompt_guidance": "You are the QAQC discipline agent. You handle inspection test plans (ITPs), non-conformance reports (NCRs), mix design validation, concrete maturity analysis, thermal cracking checks, and grouting calculations. You validate every result against project specifications and flag deviations from standards. When an NCR has contractual implications, you hand off to Contracts. When rework impacts the programme, you hand off to Planning.",
+  "activation": {
+    "triggers": [
+      {"type": "keyword", "value": "quality", "score": 0.8},
+      {"type": "keyword", "value": "inspection", "score": 0.8},
+      {"type": "keyword", "value": "ITP", "score": 0.9},
+      {"type": "keyword", "value": "non-conformance", "score": 0.9},
+      {"type": "keyword", "value": "NCR", "score": 0.9},
+      {"type": "keyword", "value": "mix design", "score": 0.9},
+      {"type": "keyword", "value": "concrete test", "score": 0.8},
+      {"type": "keyword", "value": "cube test", "score": 0.8},
+      {"type": "keyword", "value": "thermal cracking", "score": 0.9},
+      {"type": "keyword", "value": "maturity", "score": 0.8},
+      {"type": "keyword", "value": "grout", "score": 0.8},
+      {"type": "keyword", "value": "commissioning", "score": 0.8},
+      {"type": "keyword", "value": "formwork striking", "score": 0.8},
+      {"type": "keyword", "value": "fineness modulus", "score": 0.8},
+      {"type": "keyword", "value": "shear stress", "score": 0.8},
+      {"type": "keyword", "value": "modulus of rupture", "score": 0.8},
+      {"type": "keyword", "value": "slump test", "score": 0.8},
+      {"type": "keyword", "value": "rebar inspection", "score": 0.8},
+      {"type": "intent", "value": "quality_check", "score": 1.0},
+      {"type": "intent", "value": "inspection_planning", "score": 1.0}
+    ],
+    "mode": "hybrid",
+    "default_enabled": true
+  },
+  "context_sources": [
+    {"kind": "project_documents", "weight": 1.0, "filters": {"type": "ITP"}, "max_items": 10},
+    {"kind": "project_documents", "weight": 1.0, "filters": {"type": "mix_design"}, "max_items": 5},
+    {"kind": "official_guidance", "weight": 0.8, "filters": {"source": "WBDG_QC"}, "max_items": 5},
+    {"kind": "learning_profiles", "weight": 0.6, "filters": {"profile_type": "DefectPattern"}, "max_items": 3}
+  ],
+  "allowed_actions": [
+    "itp_generator",
+    "ncr_tracker",
+    "mix_design_validator",
+    "thermal_crack_assessor",
+    "concrete_maturity_calculator",
+    "grout_pressure_calculator",
+    "construction_calc:concrete_mix_design_sg",
+    "construction_calc:concrete_mix_slip_form",
+    "construction_calc:formwork_striking_time",
+    "construction_calc:concrete_maturity_strength",
+    "construction_calc:concrete_thermal_cracking_check",
+    "construction_calc:modulus_of_rupture",
+    "construction_calc:grout_pressure_calc",
+    "construction_calc:fineness_modulus",
+    "construction_calc:shear_stress_check"
+  ],
+  "available_tools": ["commissioning_checklist"],
+  "handoffs": [
+    {
+      "to": "contracts",
+      "when": "NCR has contractual or variation implications",
+      "carry": ["ncr_reference", "deviation_description", "contract_clause_impact", "cost_of_rework"]
+    },
+    {
+      "to": "planning",
+      "when": "rework affects programme critical path",
+      "carry": ["rework_duration_estimate", "affected_activities", "critical_path_impact"]
+    }
+  ],
+  "verification": {
+    "grounding": "documents_or_formulas",
+    "cite_required": true,
+    "refuse_unaided_figures": true,
+    "standards_advisory": true
+  },
+  "failure_policy": {
+    "on_missing_context": "dependency_required",
+    "on_formula_error": "ask_clarifying",
+    "on_unverified_claim": "flag_and_continue"
+  },
+  "playbook": {
+    "formulas": [
+      {
+        "id": "formwork_striking_time",
+        "description": "Safe formwork striking time per BS 8110 + CIRIA + cube test data",
+        "implemented_by": "app.lib.construction_formulas.formwork_striking_time",
+        "domain": "qaqc",
+        "tier": "operational"
+      },
+      {
+        "id": "concrete_maturity_strength",
+        "description": "Nurse-Saul maturity index and early strength prediction",
+        "implemented_by": "app.lib.construction_formulas.concrete_maturity_strength",
+        "domain": "qaqc",
+        "tier": "operational"
+      },
+      {
+        "id": "concrete_thermal_cracking_check",
+        "description": "Mass concrete thermal crack check (core temp, delta T)",
+        "implemented_by": "app.lib.construction_formulas.concrete_thermal_cracking_check",
+        "domain": "qaqc",
+        "tier": "operational"
+      },
+      {
+        "id": "modulus_of_rupture",
+        "description": "Tensile strength and split cylinder test (ACI)",
+        "implemented_by": "app.lib.construction_formulas.modulus_of_rupture",
+        "domain": "qaqc",
+        "tier": "foundational"
+      },
+      {
+        "id": "grout_pressure_calc",
+        "description": "Post-tensioning grout volume and pressure calculation",
+        "implemented_by": "app.lib.construction_formulas.grout_pressure_calc",
+        "domain": "qaqc",
+        "tier": "operational"
+      },
+      {
+        "id": "fineness_modulus",
+        "description": "Aggregate fineness modulus from sieve analysis",
+        "implemented_by": "app.lib.construction_formulas.fineness_modulus",
+        "domain": "qaqc",
+        "tier": "foundational"
+      },
+      {
+        "id": "validate_design_status",
+        "description": "Validate design review status and timeline compliance",
+        "implemented_by": "app.core.construction_knowledge.validate_design_status",
+        "domain": "qaqc",
+        "tier": "strategic"
+      },
+      {
+        "id": "check_review_timeline",
+        "description": "Check if a review is within its allowed timeline",
+        "implemented_by": "app.core.construction_knowledge.check_review_timeline",
+        "domain": "qaqc",
+        "tier": "operational"
+      }
+    ],
+    "flows": [
+      {
+        "id": "ncr_workflow",
+        "description": "Raise, track, and close an NCR",
+        "steps": ["raise_ncr", "assess_severity", "assign_corrective_action", "verify_closure", "handoff_if_contractual"]
+      },
+      {
+        "id": "mix_design_validation",
+        "description": "Validate a concrete mix design against spec",
+        "steps": ["input_design_parameters", "run_mix_design_calc", "check_against_spec", "flag_deviations", "recommend_adjustments"]
+      }
+    ]
+  }
+}

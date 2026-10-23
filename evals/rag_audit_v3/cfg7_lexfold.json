@@ -1,0 +1,71 @@
+{
+ "config": "cfg7_lexfold",
+ "env": {
+  "RAG_GK_SCORE_MARGIN": "0.15",
+  "RAG_OWN_DOC_BOOST": "0.1",
+  "RAG_GK_TOPK_CAP": "2",
+  "RAG_GK_LEXICAL_FOLD": "1"
+ },
+ "recall": {
+  "n": 100,
+  "doc_at_5": 41,
+  "chunk_at_5": 27
+ },
+ "fresh": {
+  "top1": 12,
+  "top3": 12,
+  "per_case": [
+   {
+    "file": "P-217-pier-mix-design.txt",
+    "rank": 1
+   },
+   {
+    "file": "road-R9-street-lighting.txt",
+    "rank": 1
+   },
+   {
+    "file": "contract-eot-notice-period.txt",
+    "rank": 1
+   },
+   {
+    "file": "sewer-S4-manhole-spacing.txt",
+    "rank": 1
+   },
+   {
+    "file": "design-review-status-codes.txt",
+    "rank": 1
+   },
+   {
+    "file": "boq-excavation-rate.txt",
+    "rank": 1
+   },
+   {
+    "file": "rebar-cover-substructure.txt",
+    "rank": 1
+   },
+   {
+    "file": "asphalt-wearing-course.txt",
+    "rank": 1
+   },
+   {
+    "file": "hse-permit-to-work.txt",
+    "rank": 1
+   },
+   {
+    "file": "mv-substation-soak-test.txt",
+    "rank": 1
+   },
+   {
+    "file": "evm-cpi-threshold.txt",
+    "rank": 1
+   },
+   {
+    "file": "mass-concrete-curing.txt",
+    "rank": 1
+   }
+  ]
+ },
+ "calc_intact": "3/3",
+ "calc_all_pass": true,
+ "eot_note": "contract-eot-notice-period.txt rank 1 (0.7512); GK FIDIC note absent from top-10 (raw score fails the margin)"
+}

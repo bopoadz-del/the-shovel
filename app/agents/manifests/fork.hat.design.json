@@ -1,0 +1,403 @@
+{
+ "manifest_version": "1.0",
+ "id": "fork.hat.design",
+ "name": "Design Hat",
+ "description": "Structural and geotechnical design checks: loads, beams, columns, reinforced concrete and steel members, masonry and earthwork design parameters.",
+ "kind": "hat",
+ "extends": "fork.base",
+ "discipline": "design",
+ "system_prompt_guidance": "You are the design discipline agent. You check structural and geotechnical designs with the platform's design formulas: loads, beam and column capacity, reinforced concrete and steel members, masonry and earthwork parameters. Take every input from the user or a cited project document, state the code or standard each check follows, and say when an input is missing rather than assume it. When a design result changes quantities, hand off to Quantities; when it raises a quality acceptance question, hand off to QAQC.",
+ "activation": {
+  "triggers": [
+   {
+    "type": "keyword",
+    "value": "structural design",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "beam",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "column",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "bending moment",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "deflection",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "reinforcement",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "rebar design",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "load combination",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "steel member",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "footing design",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "retaining wall design",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "masonry wall",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "bearing capacity",
+    "score": 0.8
+   }
+  ],
+  "mode": "hybrid",
+  "default_enabled": true
+ },
+ "context_sources": [
+  {
+   "kind": "project_documents",
+   "weight": 1.0,
+   "max_items": 10
+  },
+  {
+   "kind": "official_guidance",
+   "weight": 0.8,
+   "max_items": 5
+  }
+ ],
+ "allowed_actions": [
+  "construction_calc:beam_deflection_cantilever_point_load",
+  "construction_calc:beam_deflection_cantilever_udl",
+  "construction_calc:beam_deflection_ss_point_load_midspan",
+  "construction_calc:beam_deflection_ss_udl",
+  "construction_calc:beam_moment_fixed_udl",
+  "construction_calc:beam_moment_point_load",
+  "construction_calc:beam_moment_simple",
+  "construction_calc:beam_shear_simple",
+  "construction_calc:bolt_shear_capacity",
+  "construction_calc:carbon_footprint_concrete",
+  "construction_calc:column_axial_capacity",
+  "construction_calc:composite_column_design",
+  "construction_calc:concrete_mix_design_sg",
+  "construction_calc:concrete_mix_slip_form",
+  "construction_calc:dewatering_uplift_check",
+  "construction_calc:dewatering_well_point_spacing",
+  "construction_calc:foundation_bearing_pressure",
+  "construction_calc:live_load_reduction",
+  "construction_calc:masonry_wall_capacity",
+  "construction_calc:modulus_of_elasticity_concrete",
+  "construction_calc:post_tensioning_force",
+  "construction_calc:precast_beam_erection_check",
+  "construction_calc:rc_beam_moment_capacity",
+  "construction_calc:rc_beam_shear_capacity",
+  "construction_calc:rebar_lap_length",
+  "construction_calc:seismic_base_shear",
+  "construction_calc:shear_stress_check",
+  "construction_calc:slab_thickness_min",
+  "construction_calc:slope_fos_simple",
+  "construction_calc:steel_tension_capacity",
+  "construction_calc:thermal_shrinkage_equivalence",
+  "construction_calc:unit_weight_concrete",
+  "construction_calc:weld_capacity",
+  "construction_calc:wind_pressure"
+ ],
+ "available_tools": [],
+ "handoffs": [
+  {
+   "to": "quantities",
+   "when": "a design result changes quantities",
+   "carry": [
+    "member",
+    "dimensions",
+    "design_result"
+   ]
+  },
+  {
+   "to": "qaqc",
+   "when": "a design result raises a quality acceptance question",
+   "carry": [
+    "member",
+    "design_result",
+    "standard"
+   ]
+  }
+ ],
+ "verification": {
+  "grounding": "documents_or_formulas",
+  "cite_required": true,
+  "refuse_unaided_figures": true,
+  "standards_advisory": true
+ },
+ "failure_policy": {
+  "on_missing_context": "ask_clarifying",
+  "on_formula_error": "ask_clarifying",
+  "on_unverified_claim": "flag_and_continue"
+ },
+ "playbook": {
+  "formulas": [
+   {
+    "id": "beam_deflection_cantilever_point_load",
+    "description": "Tip deflection of a cantilever under a point load at its free end.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.beam_deflection_cantilever_point_load",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_deflection_cantilever_udl",
+    "description": "Tip deflection of a cantilever under a uniformly distributed load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.beam_deflection_cantilever_udl",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_deflection_ss_point_load_midspan",
+    "description": "Midspan deflection of a simply supported beam under a central point load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.beam_deflection_ss_point_load_midspan",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_deflection_ss_udl",
+    "description": "Midspan deflection of a simply supported beam under a uniformly distributed load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.beam_deflection_ss_udl",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_moment_fixed_udl",
+    "description": "Support and midspan bending moments of a fixed-ended beam under a uniformly distributed load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_beam_analysis.beam_moment_fixed_udl",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_moment_point_load",
+    "description": "Maximum bending moment of a simply supported beam under one point load at a given position.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_beam_analysis.beam_moment_point_load",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_moment_simple",
+    "description": "Maximum bending moment of a simply supported beam under a uniformly distributed load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_beam_analysis.beam_moment_simple",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "beam_shear_simple",
+    "description": "Maximum shear of a simply supported beam under a distributed load and an optional central point load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_beam_analysis.beam_shear_simple",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "bolt_shear_capacity",
+    "description": "Design shear capacity of a bolt over its shear planes, to the selected code.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_steel.bolt_shear_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "carbon_footprint_concrete",
+    "description": "Embodied carbon of a concrete volume from an emission factor per cubic metre.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_reference_tables.carbon_footprint_concrete",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "column_axial_capacity",
+    "description": "Axial load capacity of a reinforced concrete column, with a slenderness check, to the selected code.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_columns.column_axial_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "composite_column_design",
+    "description": "Compares a composite column with an embedded steel section against a reinforced concrete column for a given axial load.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.composite_column_design",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "concrete_mix_design_sg",
+    "description": "Concrete mix design by the absolute-volume method from specific gravities and the water/cement ratio.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.concrete_mix_design_sg",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "concrete_mix_slip_form",
+    "description": "Mix proportions for slip-formed concrete, flagged as indicative defaults when not supplied.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.concrete_mix_slip_form",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "dewatering_uplift_check",
+    "description": "Whether dewatering can stop: factor of safety of the structure's weight against groundwater uplift.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.dewatering_uplift_check",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "dewatering_well_point_spacing",
+    "description": "Well-point spacing and number of stages for a dewatering depth and soil type.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.dewatering_well_point_spacing",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "foundation_bearing_pressure",
+    "description": "Bearing pressure under a foundation from load and area, and its factor of safety against the soil capacity.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.foundation_bearing_pressure",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "live_load_reduction",
+    "description": "Reduced design live load on a member with a large tributary area.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_loads.live_load_reduction",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "masonry_wall_capacity",
+    "description": "Axial compressive capacity of a masonry wall, allowing for slenderness.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_masonry.masonry_wall_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "modulus_of_elasticity_concrete",
+    "description": "Modulus of elasticity of concrete from its compressive strength, to the selected code.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.modulus_of_elasticity_concrete",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "post_tensioning_force",
+    "description": "Post-tensioning force needed to balance a share of the distributed load, from span and tendon drape.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.post_tensioning_force",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "precast_beam_erection_check",
+    "description": "Crane load for lifting a precast beam: beam plus rigging with a dynamic factor, against crane capacity.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.precast_beam_erection_check",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "rc_beam_moment_capacity",
+    "description": "Design flexural capacity of a singly reinforced rectangular concrete beam.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_rc.rc_beam_moment_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "rc_beam_shear_capacity",
+    "description": "Shear capacity of a concrete section without shear reinforcement.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_rc.rc_beam_shear_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "rebar_lap_length",
+    "description": "Tension lap-splice length of a deformed reinforcing bar.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_rc.rebar_lap_length",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "seismic_base_shear",
+    "description": "Equivalent lateral-force base shear from the seismic coefficient and the seismic weight.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_loads.seismic_base_shear",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "shear_stress_check",
+    "description": "Nominal shear stress on a section from shear force, width and effective depth.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.shear_stress_check",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "slab_thickness_min",
+    "description": "Minimum one-way slab thickness for deflection control, from span and support condition.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_rc.slab_thickness_min",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "slope_fos_simple",
+    "description": "Factor of safety of an infinite slope, with and without cohesion.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_earthwork.slope_fos_simple",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "steel_tension_capacity",
+    "description": "Design tensile strength of a steel member: the lesser of gross-section yielding and net-section rupture.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_steel.steel_tension_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "thermal_shrinkage_equivalence",
+    "description": "Converts a shrinkage strain to the equivalent temperature drop.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.thermal_shrinkage_equivalence",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "unit_weight_concrete",
+    "description": "Unit weight of plain or reinforced concrete, flagged as an indicative default when not supplied.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas.unit_weight_concrete",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "weld_capacity",
+    "description": "Design strength of a fillet weld over its length.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_structural_steel.weld_capacity",
+    "domain": "design",
+    "tier": "operational"
+   },
+   {
+    "id": "wind_pressure",
+    "description": "Wind velocity pressure from a wind speed and the selected code's coefficients.",
+    "implemented_by": "app.agents.hats.design.formulas.construction_formulas_loads.wind_pressure",
+    "domain": "design",
+    "tier": "operational"
+   }
+  ]
+ }
+}

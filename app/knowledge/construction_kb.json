@@ -1,0 +1,2006 @@
+{
+  "schema_version": "1.1.0",
+  "kb_version": "2026.06.30-general-corpus",
+  "entries": [
+    {
+      "id": "thermal.equilibrium_time",
+      "domain": "construction.buildings",
+      "type": "formula",
+      "title": "Mass concrete pour equilibrium time",
+      "statement": "Time for a mass concrete pour of half-thickness X (m) to reach thermal equilibrium with ambient. Result is hours; the constant 168 carries the hour unit while (X / 1.5) is dimensionless (meter/meter).",
+      "expression": "168 * (X / 1.5)**2",
+      "variables": {
+        "X": {
+          "unit": "meter",
+          "desc": "Half-thickness of the pour"
+        }
+      },
+      "thresholds": {
+        "unit": "hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings",
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.swelling_factor",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Earthworks swelling factor from Proctor density and compaction",
+      "statement": "Swelling factor = (Proctor density A x Compaction factor C) / Loose density B. Reference table sub-base row: A=2.18, B=1.6, C=96, expected D=1.31. Unit convention note: the source table treats C as a percentage (96 means 96%); applying the formula with raw C=96 reproduces 130.8 rather than 1.31. To match the published 1.31 use C as a decimal (0.96). The loader returns the raw formula result; the caller picks the convention.",
+      "expression": "(A * C) / B",
+      "variables": {
+        "A": {
+          "unit": "ton/meter**3",
+          "desc": "Modified Proctor density"
+        },
+        "B": {
+          "unit": "ton/meter**3",
+          "desc": "Loose density"
+        },
+        "C": {
+          "unit": "dimensionless",
+          "desc": "Compaction factor (percent, 0-100 scale used as raw number)"
+        }
+      },
+      "thresholds": {
+        "unit": "dimensionless"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180-93"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": "AASHTO T 180-93 (Modified Proctor)"
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "procurement.tender_lifecycle",
+      "domain": "construction.procurement",
+      "type": "workflow",
+      "title": "Construction tender lifecycle",
+      "statement": "Job Requisition -> Sole Source justification (optional) -> Request for Authority to Tender (RAT) -> RFP issue -> Tender queries -> Tender Analysis (RAP) -> Preferred Tenderer -> BAFO -> Award.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "states": [
+        "JOB_REQUISITION",
+        "SOLE_SOURCE_REVIEW",
+        "RAT_REQUESTED",
+        "RAT_ISSUED",
+        "RFP_ISSUED",
+        "TENDER_QUERIES",
+        "TENDER_ANALYSIS",
+        "PREFERRED_TENDERER",
+        "BAFO",
+        "AWARDED"
+      ],
+      "transitions": [
+        {
+          "from": "JOB_REQUISITION",
+          "to": "SOLE_SOURCE_REVIEW",
+          "guard": "context.sole_source == True"
+        },
+        {
+          "from": "JOB_REQUISITION",
+          "to": "RAT_REQUESTED",
+          "guard": "context.sole_source != True"
+        },
+        {
+          "from": "SOLE_SOURCE_REVIEW",
+          "to": "RAT_REQUESTED",
+          "guard": "context.sole_source_signed_by_estimator and context.sole_source_signed_by_vp_pm and context.sole_source_signed_by_contracts_mgr"
+        },
+        {
+          "from": "RAT_REQUESTED",
+          "to": "RAT_ISSUED",
+          "guard": "context.rat_authority_approved == True"
+        },
+        {
+          "from": "RAT_ISSUED",
+          "to": "RFP_ISSUED",
+          "guard": "context.rat_number is not None"
+        },
+        {
+          "from": "RFP_ISSUED",
+          "to": "TENDER_QUERIES",
+          "guard": "True"
+        },
+        {
+          "from": "TENDER_QUERIES",
+          "to": "TENDER_ANALYSIS",
+          "guard": "context.tender_queries_closed == True"
+        },
+        {
+          "from": "TENDER_ANALYSIS",
+          "to": "PREFERRED_TENDERER",
+          "guard": "context.evaluation_report_signed"
+        },
+        {
+          "from": "PREFERRED_TENDERER",
+          "to": "BAFO",
+          "guard": "True"
+        },
+        {
+          "from": "BAFO",
+          "to": "AWARDED",
+          "guard": "context.award_recommendation_letter_issued"
+        }
+      ],
+      "required_documents": [
+        "JobRequisition",
+        "SoleSourceJustification",
+        "RAT",
+        "RFP",
+        "TenderEvaluationReport",
+        "AwardRecommendationLetter"
+      ],
+      "approval_roles": [
+        "Estimator",
+        "Project_Management_Lead",
+        "Contracts_Manager",
+        "Tender_Analysis_Committee",
+        "Project_Director"
+      ],
+      "applicability": {
+        "applies_to": [
+          "construction.procurement"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "job_requisition",
+          "request_for_proposals",
+          "tender_analysis",
+          "contract_award"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document",
+        "verified_against_standard": "procedure catalogue"
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "highrise.definition_contextual",
+      "domain": "construction.buildings",
+      "type": "rule",
+      "title": "High-rise definition is contextual, not a fixed constant",
+      "statement": "There is no single universal floor-count that defines a 'high-rise'. The threshold is jurisdiction- and era-dependent (driven by the local fire-fighting reach, life-safety code, and structural/wind design regime of the day). Treat the floor-count cut-off as a PARAMETER to be looked up per code/era, never as a hard-coded constant. On the Landmark Tower (Abu Dhabi, UAE) the project worked to the local authority's then-current definition; do not transfer that number to another city or another code cycle.",
+      "expression": null,
+      "variables": {
+        "floor_count_threshold": {
+          "unit": "floors",
+          "desc": "Jurisdiction/era-dependent cut-off above which a building is treated as high-rise; look up per local code, do not assume"
+        }
+      },
+      "thresholds": {
+        "unit": "floors",
+        "note": "parameter, not a constant"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "enabling.tech_limits",
+      "domain": "construction.buildings",
+      "type": "reference_design",
+      "title": "High-rise enabling-works technology limits (typical envelopes)",
+      "statement": "Indicative technology envelopes used on high-rise enabling/superstructure works. Deep foundations typically extend to >=50 m depth; bored piles up to 2.0 m diameter. Lift (elevator) speeds range from 2.5 m/s for buildings up to ~25 floors, rising to ~7.0 m/s for tall high-rise. Concrete can be pumped to ~800 m in a single lift with high-pressure pumps. Slip-form rises at ~1.0-1.5 m/day. Concrete grades: 60/80/100 N/mm2 for core and columns; 40-55 N/mm2 for slabs. These are project-observed envelopes, not code limits; verify against specialist sub-contractor capability and spec for each project.",
+      "expression": null,
+      "variables": {
+        "deep_foundation_depth": {
+          "unit": "meter",
+          "desc": "Typical deep-foundation depth, >=50 m"
+        },
+        "pile_diameter_max": {
+          "unit": "meter",
+          "desc": "Max bored pile diameter, <=2.0 m"
+        },
+        "lift_speed_low": {
+          "unit": "meter/second",
+          "desc": "Lift speed up to ~25 floors, 2.5 m/s"
+        },
+        "lift_speed_high": {
+          "unit": "meter/second",
+          "desc": "Lift speed for tall high-rise, up to 7.0 m/s"
+        },
+        "concrete_pump_height": {
+          "unit": "meter",
+          "desc": "Single-lift concrete pumping reach, up to ~800 m"
+        },
+        "slip_form_rate": {
+          "unit": "meter/day",
+          "desc": "Slip-form climb rate, 1.0-1.5 m/day"
+        },
+        "grade_core_columns": {
+          "unit": "N/mm**2",
+          "desc": "Core/column concrete grades: 60, 80, 100"
+        },
+        "grade_slabs": {
+          "unit": "N/mm**2",
+          "desc": "Slab concrete grades: 40-55"
+        }
+      },
+      "thresholds": {
+        "deep_foundation_depth_m": 50,
+        "pile_diameter_max_m": 2.0,
+        "lift_speed_low_mps": 2.5,
+        "lift_speed_low_max_floors": 25,
+        "lift_speed_high_mps": 7.0,
+        "concrete_pump_single_lift_m": 800,
+        "slip_form_rate_m_per_day": [
+          1.0,
+          1.5
+        ],
+        "grade_core_columns_Nmm2": [
+          60,
+          80,
+          100
+        ],
+        "grade_slabs_Nmm2": [
+          40,
+          55
+        ],
+        "unit": "mixed"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "foundation.uplift_fos",
+      "domain": "construction.buildings",
+      "type": "formula",
+      "title": "Foundation uplift factor of safety (counterweight vs uplift)",
+      "statement": "Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + ballast) divided by the uplift force. Result is dimensionless (force/force). Acceptance criterion: FOS >= 1.25. WORKED EXAMPLE: counterweight = 34 (kN), uplift = 100 (kN) gives FOS = 34/100 = 0.34, which is far below 1.25, so the basement/raft would float -> tension (anchor) piles are required. Units must be consistent on both inputs; the ratio cancels them.",
+      "expression": "counterweight / uplift",
+      "variables": {
+        "counterweight": {
+          "unit": "kN",
+          "desc": "Available resisting/counterweight force (self-weight + ballast)"
+        },
+        "uplift": {
+          "unit": "kN",
+          "desc": "Applied uplift / buoyancy force"
+        }
+      },
+      "thresholds": {
+        "unit": "dimensionless",
+        "min_fos": 1.25,
+        "criterion": ">= 1.25"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "If FOS < 1.25, provide tension/anchor piles to make up the deficit (see foundation.uplift_remediation_tension_piles)."
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "foundation.uplift_remediation_tension_piles",
+      "domain": "construction.buildings",
+      "type": "decision_pattern",
+      "title": "Uplift remediation: provide tension/anchor piles when FOS < 1.25",
+      "statement": "Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (counterweight / uplift) falls below 1.25, THEN the gravity counterweight alone is insufficient and tension/anchor piles must be provided to resist the residual uplift. Size the tension-pile group for the deficit (uplift x 1.25 - available counterweight).",
+      "expression": null,
+      "variables": {
+        "fos": {
+          "unit": "dimensionless",
+          "desc": "Computed uplift FOS from foundation.uplift_fos"
+        }
+      },
+      "thresholds": {
+        "unit": "dimensionless",
+        "trigger_below": 1.25
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "provide tension/anchor piles"
+      ],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "foundation.dewatering_stop_floors",
+      "domain": "construction.buildings",
+      "type": "rule",
+      "title": "Dewatering can stop once enough floors are built to counter uplift",
+      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift; once enough floors (and their dead load) are in place to satisfy the uplift FOS, dewatering can be switched off and the water table allowed to recover. [CHECK] The exact number-of-floors trigger / the precise dead-load-vs-uplift formula was ambiguous in the source scan and is project- and groundwater-specific. Do NOT act on a fixed floor count from this entry; recompute via foundation.uplift_fos using the actual staged dead load and design water table before stopping dewatering.",
+      "expression": null,
+      "variables": {
+        "floors_built": {
+          "unit": "floors",
+          "desc": "Number of floors (and their dead load) completed"
+        },
+        "uplift": {
+          "unit": "kN",
+          "desc": "Design uplift force at the dewatering-stop check"
+        }
+      },
+      "thresholds": {
+        "unit": "floors",
+        "note": "trigger ambiguous in source scan"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 2,
+      "needs_review": true
+    },
+    {
+      "id": "foundation.shrinkage_strip_1200mm",
+      "domain": "construction.buildings",
+      "type": "threshold",
+      "title": "Shrinkage (pour) strip at raft/podium junction = 1.2 m",
+      "statement": "A 1.2 m (1200 mm) wide shrinkage/pour strip is left open at the raft-to-podium junction to allow early-age shrinkage and thermal movement before it is later cast to close the structure. Width is project-observed; confirm against the structural engineer's pour-strip detail and the required open duration.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 1.2,
+        "unit": "meter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "diaphragm_wall.panel_sequence",
+      "domain": "construction.buildings",
+      "type": "reference_design",
+      "title": "Diaphragm wall panel sequence and guide-wall geometry",
+      "statement": "Reference construction for a cast-in-situ diaphragm (slurry) wall, built as a 5-step panel sequence (the source gives a 5-step sequence but did not itemise the individual steps, so they are not enumerated here). Panels are excavated and cast in a Primary/Secondary (P/S) sequence with primary panels cast first and secondaries closing the gaps. Typical panel layout 2.0 / 6.53 / 2.0 m (P / S-bite / P). Guide walls are 250 / 1500 / 250 mm (toe / clear gap / toe) and 1400 mm deep. CRITICAL: install/prop the support system BEFORE backfilling against the wall - prop before backfill - to avoid over-stressing the wall.",
+      "expression": null,
+      "variables": {
+        "panel_layout": {
+          "unit": "meter",
+          "desc": "P/S panel widths: 2.0 / 6.53 / 2.0 m"
+        },
+        "guide_wall_section": {
+          "unit": "millimeter",
+          "desc": "Guide-wall 250 / 1500 / 250 mm"
+        },
+        "guide_wall_depth": {
+          "unit": "millimeter",
+          "desc": "Guide-wall depth 1400 mm"
+        }
+      },
+      "thresholds": {
+        "panel_sequence_steps": 5,
+        "panel_layout_m": [
+          2.0,
+          6.53,
+          2.0
+        ],
+        "guide_wall_section_mm": [
+          250,
+          1500,
+          250
+        ],
+        "guide_wall_depth_mm": 1400,
+        "unit": "mixed"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "thermal.core_temp_limit",
+      "domain": "construction.buildings",
+      "type": "threshold",
+      "title": "Mass-concrete peak core temperature limit = 70 degC",
+      "statement": "Peak internal (core) temperature of a mass-concrete pour must be kept at or below 70 degC to limit the risk of delayed ettringite formation (DEF) and thermal cracking. Use with thermal.gradient_limit (core-surface differential) and thermal.monitoring_protocol.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 70,
+        "unit": "degC",
+        "criterion": "<= 70"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings",
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "thermal.gradient_limit",
+      "domain": "construction.buildings",
+      "type": "threshold",
+      "title": "Mass-concrete core-to-surface temperature differential limit = 20 degC",
+      "statement": "The temperature differential between the concrete core and its surface (T_core - T_surface) must be kept at or below 20 degC to control thermal-gradient cracking. Pair with thermal.core_temp_limit (absolute 70 degC cap) and thermal.monitoring_protocol.",
+      "expression": null,
+      "variables": {
+        "T_core": {
+          "unit": "degC",
+          "desc": "Core temperature"
+        },
+        "T_surface": {
+          "unit": "degC",
+          "desc": "Surface temperature"
+        }
+      },
+      "thresholds": {
+        "value": 20,
+        "unit": "degC",
+        "criterion": "T_core - T_surface <= 20"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings",
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "thermal.monitoring_protocol",
+      "domain": "construction.buildings",
+      "type": "checklist",
+      "title": "Mass-concrete thermal monitoring protocol",
+      "statement": "Thermocouple monitoring protocol for mass-concrete pours, used to enforce thermal.core_temp_limit and thermal.gradient_limit.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "thermocouple_spacing_mm": 300,
+        "directions": 3,
+        "reading_interval": "hourly",
+        "min_duration_days": 7,
+        "unit": "mixed"
+      },
+      "checklist": [
+        "Embed thermocouples at 300 mm spacing through the pour depth.",
+        "Monitor in 3 directions (e.g. core, mid, surface / orthogonal axes) to capture the gradient.",
+        "Log readings hourly.",
+        "Continue monitoring for at least 7 days (until peak has passed and the differential is falling).",
+        "Compare against thermal.core_temp_limit (<=70 degC) and thermal.gradient_limit (<=20 degC); act on cooling/insulation if breached."
+      ],
+      "applicability": {
+        "applies_to": [
+          "construction.buildings",
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "thermal.ice_cost_coeff",
+      "domain": "construction.buildings",
+      "type": "reference_design",
+      "title": "Concrete cooling: SCM vs flaked-ice cost coefficient (~10 Dhs/degC)",
+      "statement": "Decision aid for lowering fresh-concrete placing temperature: the choice between supplementary cementitious materials (SCM, e.g. GGBS/fly-ash replacement) and chilling with flaked ice can be screened on cost. Project-observed order-of-magnitude is ~10 Dhs per degC of temperature reduction. Use as a screening coefficient only; get current batching-plant rates for a real comparison.",
+      "expression": null,
+      "variables": {
+        "cooling_cost_coeff": {
+          "unit": "AED/degC",
+          "desc": "Approx cost per degC of placing-temperature reduction, ~10 Dhs/degC"
+        }
+      },
+      "thresholds": {
+        "value": 10,
+        "unit": "AED/degC",
+        "note": "Dhs per degC, order-of-magnitude screening figure"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings",
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "columns.high_strength",
+      "domain": "construction.buildings",
+      "type": "threshold",
+      "title": "High-strength column concrete > 60 N/mm2",
+      "statement": "Columns using concrete characteristic strength above 60 N/mm2 are treated as high-strength and carry additional QA, mix-design, and detailing requirements. Threshold is the lower bound of the high-strength regime for columns.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 60,
+        "unit": "N/mm**2",
+        "criterion": "> 60"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "columns.coupler_rule",
+      "domain": "construction.buildings",
+      "type": "rule",
+      "title": "Couplers required for bars > 32 mm; lap steel <= 6%",
+      "statement": "Reinforcement-splicing rule for columns: mechanical couplers are required for bars larger than 32 mm diameter (lapping such large bars is impractical and congests the section). Where lapping is used, the lapped (lapping) steel should not exceed ~6% of the gross section / reinforcement at a section to avoid congestion. Confirm against the structural spec and applicable code detailing limits.",
+      "expression": null,
+      "variables": {
+        "bar_dia": {
+          "unit": "millimeter",
+          "desc": "Bar diameter; > 32 mm requires couplers"
+        },
+        "lap_steel_ratio": {
+          "unit": "percent",
+          "desc": "Lapped steel proportion at a section; <= 6%"
+        }
+      },
+      "thresholds": {
+        "coupler_required_above_mm": 32,
+        "max_lap_steel_percent": 6,
+        "unit": "mixed"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "columns.value_engineering_grade_up",
+      "domain": "construction.buildings",
+      "type": "decision_pattern",
+      "title": "Value engineering: grade up 60->80 to delete composite I-beam",
+      "statement": "Value-engineering pattern observed on the tower: increasing column concrete grade from 60 to 80 N/mm2 raised capacity enough to DELETE an embedded composite steel I-beam (saving ~20-22 tonnes of structural steel per affected line) and to ease crane/lifting demand and erection sequencing. Trade-off: higher-grade concrete cost and tighter mix/curing control against the steel, fabrication, and crane savings - run the comparison per project.",
+      "expression": null,
+      "variables": {
+        "grade_from": {
+          "unit": "N/mm**2",
+          "desc": "Original column grade, 60"
+        },
+        "grade_to": {
+          "unit": "N/mm**2",
+          "desc": "Upgraded column grade, 80"
+        },
+        "steel_saved": {
+          "unit": "tonne",
+          "desc": "Composite I-beam steel deleted, ~20-22 T"
+        }
+      },
+      "thresholds": {
+        "grade_from_Nmm2": 60,
+        "grade_to_Nmm2": 80,
+        "steel_saved_tonne": [
+          20,
+          22
+        ],
+        "unit": "mixed"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "slabs.flat_vs_drophead",
+      "domain": "construction.buildings",
+      "type": "decision_pattern",
+      "title": "Slab system: flat (two-way) plate vs drop-head/drop-panel",
+      "statement": "Decision pattern for high-rise floor slabs. A flat two-way plate gives the simplest soffit, fastest table-form cycling, and minimum floor-to-floor height, but is governed by punching shear at columns and by deflection - so it suits moderate spans/loads. Adding drop-heads (or drop panels / column capitals) increases punching-shear capacity and stiffness, allowing longer spans or thinner field slabs, at the cost of more complex formwork and slower cycle. Choose flat plate for short, regular grids and repetitive fast cycling; switch to drop-heads when punching shear or deflection governs at the columns.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "facade.sealant_joint_rules",
+      "domain": "construction.buildings",
+      "type": "rule",
+      "title": "Facade weatherseal joint design rules",
+      "statement": "Rules for facade weatherseal (movement-joint) sealant. Minimum sealant depth 6 mm; minimum joint width 6 mm. Target width-to-depth ratio 2:1 (width twice the depth) so the bead can accommodate movement. Maximum sealant depth 15 mm. Joint widths greater than 45 mm are not recommended (use a different joint detail). Avoid eccentric anchors/fixings behind the joint - eccentricity induces prying/peel on the sealant and the substrate.",
+      "expression": null,
+      "variables": {
+        "depth": {
+          "unit": "millimeter",
+          "desc": "Sealant depth, min 6, max 15 mm"
+        },
+        "width": {
+          "unit": "millimeter",
+          "desc": "Joint width, min 6 mm, not recommended > 45 mm"
+        },
+        "wd_ratio": {
+          "unit": "dimensionless",
+          "desc": "Width:depth ratio target 2:1"
+        }
+      },
+      "thresholds": {
+        "min_depth_mm": 6,
+        "max_depth_mm": 15,
+        "min_width_mm": 6,
+        "max_recommended_width_mm": 45,
+        "width_to_depth_ratio": "2:1",
+        "unit": "millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "posttension.storage_checklist",
+      "domain": "construction.buildings",
+      "type": "checklist",
+      "title": "Post-tensioning materials storage checklist",
+      "statement": "Storage/handling checklist for post-tensioning (PT) components before stressing.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "checklist": [
+        "Keep anchorage wedges clean and dry (no oil, grit, or corrosion - contamination causes wedge slip/strand failure).",
+        "Protect sheaths/ducts and strand from damage, moisture, and contamination during storage.",
+        "Store materials in installation/use order (first-needed accessible first) to avoid double-handling and mix-ups.",
+        "Keep strand off the ground and under cover; reject corroded or kinked strand."
+      ],
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "posttension.five_day_cycle",
+      "domain": "construction.buildings",
+      "type": "reference_design",
+      "title": "Post-tensioned floor 5-day construction cycle",
+      "statement": "Reference floor-cycle for a post-tensioned slab high-rise: a 5-day cycle per floor (form/reinforce/place PT, pour, stress, strike and reposition formwork over five working days). Used for programme planning; actual cycle depends on crew, formwork sets, early-strength gain, and stressing schedule.",
+      "expression": null,
+      "variables": {
+        "floor_cycle": {
+          "unit": "day",
+          "desc": "Days per floor, 5"
+        }
+      },
+      "thresholds": {
+        "value": 5,
+        "unit": "day"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "mep.commissioning_sequence",
+      "domain": "construction.buildings",
+      "type": "checklist",
+      "title": "MEP commissioning sequence and activity-interface charts",
+      "statement": "MEP commissioning is sequenced and driven by activity-interface charts that map the dependencies between trades and between MEP and the building fabric - e.g. plumbing<->civil (slab penetrations, builders-work openings, drainage falls) and fire-fighting<->civil (riser shafts, pump-room, tank slabs). Commission systems static-to-dynamic in dependency order.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "checklist": [
+        "Build/maintain activity-interface charts mapping MEP-to-civil and MEP-to-MEP dependencies before commissioning.",
+        "Resolve plumbing<->civil interfaces (penetrations, builders-work openings, drainage falls) ahead of plumbing commissioning.",
+        "Resolve fire-fighting<->civil interfaces (riser shafts, pump room, tank slabs) ahead of fire-system commissioning.",
+        "Complete static checks (installation, pressure/leak tests, cleanliness) before dynamic/functional commissioning.",
+        "Commission in dependency order (power and water available before downstream systems), then integrated/cause-and-effect tests."
+      ],
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "dewatering.method_selection",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Dewatering / groundwater-control method selection",
+      "statement": "Select a dewatering method by soil type, required water-table lowering, and permeability. (1) Interceptor / drainage ditches: open ditches for coarse soils and for fine sand/silt where the water table need only be lowered ~1-2 m. (2) Single-stage well points: each well point ~1 m long, 5 cm diameter; header pipe 15-30 cm; well-point spacing 1-3 m; lowers the water table 5-6 m in one stage; effective in soils of permeability 1e-4 to 10e-6 m/s. (3) Multi-stage well points: used where the water table must be lowered more than 6 m (stages stacked down the excavation). (4) Vacuum well points: for fine and silty sands (effective grain size < 0.05 mm, permeability 1e-5 to 1e-7 m/s); installed in a sand-filter hole ~25 cm diameter with the top ~1 m sealed with clay to hold the vacuum. (5) Deep wells: 30-60 cm diameter, 15-30 m deep, spacing 10-30 m, each with a submersible pump; for deep, high-volume drawdown. Operating rule: once deep-well pumping starts, NEVER stop pumping until the excavation/structure work below the water table is complete (loss of drawdown floods the excavation and can cause base heave/instability).",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "interceptor_ditch_drawdown_m": "1-2",
+        "single_stage_wellpoint_drawdown_m": "5-6",
+        "single_stage_wellpoint_point_length_m": 1,
+        "single_stage_wellpoint_point_dia_cm": 5,
+        "single_stage_wellpoint_header_dia_cm": "15-30",
+        "single_stage_wellpoint_spacing_m": "1-3",
+        "single_stage_wellpoint_permeability_m_s": "1e-4 .. 10e-6",
+        "multistage_wellpoint_trigger_drawdown_m": ">6",
+        "vacuum_wellpoint_effective_size_mm": "<0.05",
+        "vacuum_wellpoint_permeability_m_s": "1e-5 .. 1e-7",
+        "vacuum_wellpoint_sand_filter_hole_cm": 25,
+        "vacuum_wellpoint_clay_seal_top_m": 1,
+        "deep_well_dia_cm": "30-60",
+        "deep_well_depth_m": "15-30",
+        "deep_well_spacing_m": "10-30"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "If drawdown requirement exceeds 5-6 m, move from single-stage to multi-stage well points.",
+        "If soil is fine/silty sand (eff size <0.05 mm), use vacuum well points with a clay-sealed top metre rather than gravity well points.",
+        "Never stop deep-well pumping until below-water-table work is complete."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "stabilization.taxonomy",
+      "domain": "construction.roads",
+      "type": "rule",
+      "title": "Soil stabilization methods taxonomy",
+      "statement": "Stabilization methods classified by mechanism. (1) Mechanical / granular stabilization: blend graded particles so aggregate (> 75 micron) provides strength and binder fines (< 75 micron) provide cohesion/filling. (2) Cement stabilization. (3) Lime stabilization. (4) Bituminous / chemical stabilization. (5) Thermal stabilization: heating above 100 deg C to drive off water and bake the soil, or, conversely, freezing so that ice acts as the cement binding the grains. (6) Electrical stabilization: electro-osmosis to draw water out of fine soils. (7) Grouting: injecting grout into voids/fissures; the governing rule is that grout viscosity must be matched to soil permeability (low-viscosity grouts for low-permeability soils, thicker grouts for coarse/open ground).",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "granular_aggregate_size_micron": ">75",
+        "granular_binder_size_micron": "<75",
+        "thermal_heating_threshold_C": ">100"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "ground_improvement.dynamic_compaction",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Dynamic compaction improvement depth",
+      "statement": "Depth of ground improvement from dynamic (drop-weight) compaction: D = 0.5 * sqrt(M * H), where D is improvement depth in metres, M is the bounder (tamper) mass in tonnes and H is the drop height in metres. Typical drop height H = 7-35 m; weight M = 2-50 t. The constant 0.5 carries the m / sqrt(t.m) dimensional factor. WORKED EXAMPLE: M=20 t, H=20 m gives D = 0.5 * sqrt(20*20) = 0.5 * sqrt(400) = 0.5 * 20 = 10 m. Verified via loader (result 10.0 m).",
+      "expression": "0.5*sqrt(M*H)",
+      "variables": {
+        "M": {
+          "unit": "tonne",
+          "desc": "Bounder (tamper) mass, 2-50 t"
+        },
+        "H": {
+          "unit": "meter",
+          "desc": "Drop height, 7-35 m"
+        }
+      },
+      "thresholds": {
+        "unit": "meter",
+        "drop_height_m": "7-35",
+        "weight_t": "2-50"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "ground_improvement.taxonomy",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Ground improvement methods taxonomy",
+      "statement": "Ground improvement techniques: (1) MSE / reinforced-earth walls (mechanically stabilized earth with facing and soil reinforcement). (2) Pre-compression / surcharge loading to pre-consolidate soft ground before construction. (3) Sand drains (vertical sand columns to accelerate consolidation drainage). (4) Wick drains (prefabricated vertical band drains, same purpose as sand drains). (5) Stone columns. (6) Vibroflotation / terra-probe densification: typical column spacing 1.5 m, treatment depth up to 20 m. (7) Soil removal and replacement (excavate unsuitable soil, replace with engineered fill). (8) Deep soil mixing: auger columns mixing cement or lime into the soil in place.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "vibroflotation_spacing_m": 1.5,
+        "vibroflotation_depth_m": 20
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.compacted_material",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Compacted volume from loose volume and swelling factor",
+      "statement": "Compacted (in-place) quantity = Loose quantity / Swelling factor, i.e. Compacted = E_loose / D where E_loose is the loose (tipper-loose) quantity (table column E) and D is the swelling factor (table column D). NOTE: the symbol is named E_loose, not bare E, because sympy treats E as Euler's number (2.71828) and would NOT substitute it -- pass the value as E_loose=18. WORKED EXAMPLE (Appendix V, Embankment row): E_loose = 18, D = 1.35 gives Compacted = 18 / 1.35 = 13.33, matching the table's tipper-compacted column F (approximately 13.3). Verified via loader (result 13.33). See earthworks.material_properties_table for the full row set and earthworks.swelling_factor for the swelling factor derivation.",
+      "expression": "E_loose/D",
+      "variables": {
+        "E_loose": {
+          "unit": "meter**3",
+          "desc": "Loose (tipper-loose) quantity (table column E)"
+        },
+        "D": {
+          "unit": "dimensionless",
+          "desc": "Swelling factor (table column D)"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180-93"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.material_properties_table",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Earthworks material properties reference table (Appendix V)",
+      "statement": "Reference properties per material layer. Columns: A = Modified Proctor density (t/m3), B = Loose density (t/m3), C = Compaction (%), D = Swelling factor, E = Tipper loose quantity, F = Tipper compacted quantity. Rows -- Embankment: A=1.843, B=1.235, C=91, D=1.35, E=18, F=13.3. Sub-grade: A=1.893, B=1.301, C=93, D=1.35, E=18, F=13.3. Sub-base: A=2.18, B=1.6, C=96, D=1.31, E=18, F=13.7. (F derived as E/D, see earthworks.compacted_material; D derived as (A*C)/B with C as decimal, see earthworks.swelling_factor.)",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "embankment": {
+          "proctor_A": 1.843,
+          "loose_density_B": 1.235,
+          "compaction_pct_C": 91,
+          "swelling_D": 1.35,
+          "tipper_loose_E": 18,
+          "tipper_compacted_F": 13.3
+        },
+        "subgrade": {
+          "proctor_A": 1.893,
+          "loose_density_B": 1.301,
+          "compaction_pct_C": 93,
+          "swelling_D": 1.35,
+          "tipper_loose_E": 18,
+          "tipper_compacted_F": 13.3
+        },
+        "subbase": {
+          "proctor_A": 2.18,
+          "loose_density_B": 1.6,
+          "compaction_pct_C": 96,
+          "swelling_D": 1.31,
+          "tipper_loose_E": 18,
+          "tipper_compacted_F": 13.7
+        }
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180-93"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.equipment_by_haul",
+      "domain": "construction.roads",
+      "type": "decision_pattern",
+      "title": "Earthmoving equipment selection by haul distance",
+      "statement": "Select earthmoving equipment by haul distance: haul <= 200 m, straight dozing (push with dozers); haul <= 500 m, wheeled (motor) scrapers; medium-to-long hauls beyond that, load and haul with trucks. Combine with material type (see earthworks.method_correction_lesson) before finalizing the spread.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "dozing_max_haul_m": 200,
+        "scraper_max_haul_m": 500,
+        "trucks_haul": "medium-to-long (> 500 m)"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.production_rates",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Earthmoving equipment production rates and specs",
+      "statement": "Indicative production rates and specifications. Dozers: D8K 130-200 m3/hr, D9H 160-230 m3/hr. Scraper: Cat 631D rated 23.7 m3 (42.5 T empty / 76.5 T loaded), worked in push-pull teams behind a D9 pusher. Holland loader: cycle time 30-35 s, suitable for dune sand only. Motor graders: G12 (13.5 T, 135 HP, 3.66 m blade), G14 (18.5 T, 180 HP, 4.27 m blade). Grader production: level embankment to +/-3-4 cm tolerance up to 3000 m2/hr; subgrade to +/-1 cm tolerance about 700 m2/hr. Wheel loaders: range 910 to 988B; 966C about 180-260 m3/hr, 988B about 300-330 m3/hr. Trucks: 18 m3 body; cycle = load 6 + maneuver 3 + weigh 3 = 12 min; travel speeds asphalt 65-75, graded road 45-55, bad road 25-35 km/hr. Rollers: C25A / C25D / CA51S (2.13 m drum width).",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "dozer_D8K_m3_hr": "130-200",
+        "dozer_D9H_m3_hr": "160-230",
+        "scraper_631D_capacity_m3": 23.7,
+        "scraper_631D_mass_empty_T": 42.5,
+        "scraper_631D_mass_loaded_T": 76.5,
+        "holland_loader_cycle_s": "30-35",
+        "grader_G12": {
+          "mass_T": 13.5,
+          "power_HP": 135,
+          "blade_m": 3.66
+        },
+        "grader_G14": {
+          "mass_T": 18.5,
+          "power_HP": 180,
+          "blade_m": 4.27
+        },
+        "grader_level_embankment_tol_cm": "3-4",
+        "grader_level_embankment_m2_hr": 3000,
+        "grader_subgrade_tol_cm": 1,
+        "grader_subgrade_m2_hr": 700,
+        "wheel_loader_range": "910-988B",
+        "wheel_loader_966C_m3_hr": "180-260",
+        "wheel_loader_988B_m3_hr": "300-330",
+        "truck_body_m3": 18,
+        "truck_cycle_min": {
+          "load": 6,
+          "maneuver": 3,
+          "weigh": 3,
+          "total": 12
+        },
+        "truck_speed_asphalt_km_hr": "65-75",
+        "truck_speed_graded_km_hr": "45-55",
+        "truck_speed_bad_km_hr": "25-35",
+        "rollers": "C25A / C25D / CA51S (drum 2.13 m)"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "compaction.field_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Field compaction percentage (sand-cone field density)",
+      "statement": "Field compaction percentage = (field dry density / laboratory maximum dry density) * 100, i.e. %Compaction = field_dry_density / lab_mdd * 100. The result is a percentage (the *100 is embedded in the expression so the loader returns the percentage directly). In the sand-cone test the in-place volume is V = Wsand / Dsand (weight of sand poured into the hole divided by the calibrated sand density), and the material dry density is Dmat = W / V (weight of material from the hole divided by that volume). WORKED EXAMPLES (Appendix V6): field 2.104 / lab 2.131 -> 98.7%, and field 2.12 / lab 2.131 -> 99.5%. Both verified via loader (98.73 and 99.48, rounding to 98.7 and 99.5).",
+      "expression": "field_dry_density / lab_mdd * 100",
+      "variables": {
+        "field_dry_density": {
+          "unit": "ton/meter**3",
+          "desc": "In-place (field) dry density from sand-cone test"
+        },
+        "lab_mdd": {
+          "unit": "ton/meter**3",
+          "desc": "Laboratory maximum dry density (Modified Proctor)"
+        }
+      },
+      "thresholds": {
+        "unit": "percent"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180-93"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "compaction.acceptance",
+      "domain": "construction.roads",
+      "type": "threshold",
+      "title": "Compaction acceptance criteria",
+      "statement": "Minimum field compaction acceptance levels (percent of laboratory maximum dry density, Modified Proctor): general backfill >= 90% (or 95% where the spec is stricter); subgrade >= 95% (or 98% where the spec is stricter). Always check the project specification, which governs over these defaults.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "backfill_min_pct": 90,
+        "backfill_strict_pct": 95,
+        "subgrade_min_pct": 95,
+        "subgrade_strict_pct": 98
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180-93"
+        ]
+      },
+      "remediation": [
+        "If field density is below the acceptance threshold, re-work: adjust moisture toward optimum, recompact, and retest before proceeding."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "compaction.aashto_t180_ref",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "AASHTO T 180-93 Modified Proctor test reference",
+      "statement": "AASHTO T 180-93 (Modified Proctor) determines the laboratory maximum dry density and optimum moisture content. Apparatus: 10-lb (4.536 kg) rammer with an 18-in (457 mm) drop. Methods A/B/C/D differ by mold size and maximum particle size: methods using the 4-in or 6-in mold, with soil passing the 4.75 mm (No. 4) or 19.0 mm (3/4 in) sieve respectively. This is the laboratory reference against which field compaction percentages (compaction.field_density) and acceptance criteria (compaction.acceptance) are measured.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "rammer_lb": 10,
+        "rammer_kg": 4.536,
+        "drop_in": 18,
+        "drop_mm": 457,
+        "methods": "A/B/C/D",
+        "mold_in": "4 or 6",
+        "soil_passing_mm": "4.75 or 19.0"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180-93"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": "AASHTO T 180-93 (Modified Proctor)"
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.method_correction_lesson",
+      "domain": "construction.roads",
+      "type": "decision_pattern",
+      "title": "Material-aware earthmoving method correction (lesson learned)",
+      "statement": "Context-aware equipment selection by material. Holland loaders suit DUNE SAND ONLY -- their fast 30-35 s cycle depends on free-flowing sand. On consolidated / cemented ground a Holland loader stalls; switch the spread to dozers plus trucks plus wheel loaders or excavators. Always confirm the actual ground condition (loose dune sand vs consolidated material) before locking in the loading method; combine with earthworks.equipment_by_haul for the haul-distance dimension.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "holland_loader_suitable": "dune sand only",
+        "consolidated_ground_method": "dozers + trucks + wheel loaders/excavators"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "If a Holland loader underperforms, check whether the ground is consolidated rather than dune sand, and switch to dozers + trucks + wheel loaders/excavators."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.grade_selection",
+      "domain": "construction.concrete",
+      "type": "rule",
+      "title": "Concrete grade selection by structural element",
+      "statement": "Select compressive strength grade by element function. Core walls, columns and other primary vertical load-bearing elements typically use high-strength concrete in the 60 / 80 / 100 N/mm2 range, with the higher grades reserved for the most heavily loaded lower-storey columns. Suspended and ground slabs are typically 40-55 N/mm2. Always confirm against the structural designer's specification and mix-design trials; grade also interacts with durability/exposure class.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "core_columns_grades_Nmm2": [
+          60,
+          80,
+          100
+        ],
+        "slabs_grade_range_Nmm2": [
+          40,
+          55
+        ],
+        "unit": "N/mm2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete",
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Confirm the element classification (core/column vs slab) before assigning a grade.",
+        "Cross-check the selected grade against the structural drawings and the project specification.",
+        "Verify the grade is achievable by field trial mix before production."
+      ],
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "rcc.mix_design",
+      "domain": "construction.concrete",
+      "type": "reference_design",
+      "title": "Roller-compacted concrete (RCC) reference mix and placement",
+      "statement": "Reference RCC mix and placement envelope. Aggregate grading (percent passing): 38 mm = 100%, 19 mm = 67-100%, 9.5 mm = 37-75%, No.10 = 25-55%, No.40 = 15-36%, No.200 = 5-15%. Cement content approximately 5% by mass (~100 kg/m3) to be confirmed by field trial. Water content approximately 5-6%. A typical blend is 70% borrow material + 30% 25 mm aggregate + 3% filler. Transport time from plant to placement no more than 2 hours. Place in paver layers no thicker than 300 mm. Keep each layer wet-cured before the next is placed. All proportions are starting points to be validated by trial mix and field density.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "grading_percent_passing": {
+          "38mm": [
+            100,
+            100
+          ],
+          "19mm": [
+            67,
+            100
+          ],
+          "9.5mm": [
+            37,
+            75
+          ],
+          "No.10": [
+            25,
+            55
+          ],
+          "No.40": [
+            15,
+            36
+          ],
+          "No.200": [
+            5,
+            15
+          ]
+        },
+        "cement_percent": 5,
+        "cement_kg_per_m3": 100,
+        "water_percent_range": [
+          5,
+          6
+        ],
+        "blend": {
+          "borrow_percent": 70,
+          "agg_25mm_percent": 30,
+          "filler_percent": 3
+        },
+        "max_transport_hours": 2,
+        "max_paver_layer_mm": 300
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete",
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Confirm cement content (~100 kg/m3) and water content by laboratory and field trial mix.",
+        "Reject loads exceeding the 2-hour transport limit.",
+        "Limit each compacted paver layer to 300 mm and wet-cure between layers."
+      ],
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "rcc.compaction_95spd",
+      "domain": "construction.concrete",
+      "type": "threshold",
+      "title": "RCC minimum compaction (Standard Proctor Density)",
+      "statement": "Roller-compacted concrete must be compacted to greater than 95% of Standard Proctor Density (SPD). Verify by in-situ field density testing on each layer; under-compacted RCC loses strength and durability.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 95,
+        "unit": "percent_SPD"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete",
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Field-test in-situ density on each compacted layer.",
+        "Re-roll or rework layers measuring below 95% SPD before placing the next layer."
+      ],
+      "provenance": {
+        "source": "concrete construction site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.compaction_trial_30m",
+      "domain": "construction.roads",
+      "type": "threshold",
+      "title": "Asphalt compaction trial section minimum length",
+      "statement": "Before full hot-mix asphalt production paving, lay a compaction trial section of at least 30 m to establish the rolling pattern, number of passes, temperatures and achievable density. Production may proceed only once the trial demonstrates the target density is met.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 30,
+        "unit": "meter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Lay and document a >=30 m trial section before production paving.",
+        "Lock the rolling pattern (passes, sequence, temperatures) from the trial results."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.rolling_rules",
+      "domain": "construction.roads",
+      "type": "checklist",
+      "title": "Hot-mix asphalt rolling rules",
+      "statement": "Breakdown rolling checklist for hot-mix asphalt: keep breakdown-rolled layer thickness no greater than 75 mm; roller speed 3-5 km/hr on layers over 75 mm and on harsh/tender mixes; start rolling at transverse/longitudinal joints and at the low edge working toward the high side; turn vibration OFF before the drum reverses direction; keep drums damp to prevent the mat picking up; never let a roller stand idle on the hot mat.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "breakdown_layer_max_mm": 75,
+        "speed_kmhr_range": [
+          3,
+          5
+        ],
+        "unit": "mixed"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Limit breakdown-rolled lift to <=75 mm.",
+        "Hold roller speed to 3-5 km/hr on thick or harsh mixes.",
+        "Begin at joints and the low edge; turn off vibration before reversing.",
+        "Keep drums damp and never park a roller on the hot mat."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.bitumen_content",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Asphalt bitumen content by course",
+      "statement": "Reference bitumen content by asphalt course: base course 3-6%, binder course approximately 4.15%, wearing course approximately 4.45% (by mass of total mix). Typical budget/material allowances: 4.5% for 60/70 penetration-grade bitumen, and 4-8% for 40/50 penetration-grade bitumen. Final binder content must be set by Marshall/Superpave mix design and confirmed on the trial section.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "base_course_percent_range": [
+          3,
+          6
+        ],
+        "binder_course_percent": 4.15,
+        "wearing_course_percent": 4.45,
+        "allowance_60_70_percent": 4.5,
+        "allowance_40_50_percent_range": [
+          4,
+          8
+        ],
+        "unit": "percent_by_mass"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Set the optimum binder content by formal mix design, not by these reference figures alone.",
+        "Confirm the design binder content against the trial-section extraction results."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.plant_layout",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Hot-mix asphalt plant layout components",
+      "statement": "Reference hot-mix asphalt batch plant layout, in process order: cold feed bins, dryer drum, hot elevator(s), vibrating screens, bitumen storage tanks (holding both 40/50 and 60/70 penetration grades), pugmill mixer, and weigh bridge for loaded trucks.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "components": [
+          "cold_bins",
+          "dryer",
+          "hot_elevators",
+          "screens",
+          "bitumen_storage_40_50_and_60_70",
+          "mixer",
+          "weigh_bridge"
+        ]
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Confirm bitumen storage provides separate tanks for each penetration grade used.",
+        "Confirm a calibrated weigh bridge is in the truck egress path."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "roads.tunnel_cross_section",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Cut-and-cover underpass cross-section",
+      "statement": "Reference cross-section for a cut-and-cover road underpass / tunnel. The combined mass-concrete plus wearing-surface depth at the carriageway has a minimum of 500 mm. The cross-section carries carriageway, shoulder, sidewalk and verge elements. At expansion joints, the top of the base slab is set to match the level of the connecting unit so the running surface is continuous across the joint.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "min_wearing_surface": 500,
+        "unit": "mm"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Confirm the mass-concrete + wearing-surface depth is not less than 500 mm.",
+        "At expansion joints, set base-slab top level to match the adjoining unit."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "roads.precast_ibeam_type4",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Precast I-beam Type-4 bridge girder",
+      "statement": "Reference precast prestressed I-beam, Type-4 section: span 22.25 m, weight 66.6 T. Erection is by tandem-crane (two-crane) lift. These figures are a representative reference; confirm the actual girder schedule and weights from the shop drawings for any specific lift.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "span_m": 22.25,
+        "weight_T": 66.6,
+        "erection": "tandem_crane"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Confirm girder span and weight from the approved shop drawings before planning the lift.",
+        "Plan a tandem-crane lift with a documented lift study."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "roads.heavy_lift_feasibility",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Heavy-lift required capacity per crane",
+      "statement": "Required lifted capacity per crane for a multi-crane (tandem) beam erection = beam weight x rigging factor / number of cranes. The rigging factor de-rates for spreader beams, slings and dynamic effects. Worked example: beam_wt=66.6 T, rigging_factor=1.1, n_cranes=2 gives 36.63 T per crane. The lift is feasible only if this value is below each crane's rated capacity at the actual boom length and radius (e.g. a rated 52.30 T at the lift configuration leaves margin over 36.63 T).",
+      "expression": "beam_wt * rigging_factor / n_cranes",
+      "variables": {
+        "beam_wt": {
+          "unit": "ton",
+          "desc": "Beam (girder) weight"
+        },
+        "rigging_factor": {
+          "unit": "dimensionless",
+          "desc": "De-rating multiplier for rigging, spreader and dynamic effects"
+        },
+        "n_cranes": {
+          "unit": "dimensionless",
+          "desc": "Number of cranes sharing the lift"
+        }
+      },
+      "thresholds": {
+        "unit": "ton"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Compare the per-crane required capacity against the crane's rated-load chart at the actual boom/radius.",
+        "Keep a margin; do not plan a lift at 100% of rated capacity."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.crane_rating_check",
+      "domain": "construction.roads",
+      "type": "reference_design",
+      "title": "Crane rated-load chart check",
+      "statement": "Always check the required lifted capacity per crane against the crane's rated-load (capacity) chart at the ACTUAL boom length and working radius for the lift, not the crane's headline maximum capacity. De-rate the load for rigging (spreader beams, slings, hook block) before comparing. The lift is feasible only with positive margin at the planned configuration.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [
+        "Read rated capacity off the chart at the planned boom length and radius.",
+        "Add rigging weight / apply a rigging factor before comparing to the chart.",
+        "Reject any configuration without positive margin."
+      ],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "procurement.interim_payment_flow",
+      "domain": "construction.procurement",
+      "type": "workflow",
+      "title": "Interim Payment Certification Flow",
+      "statement": "Governs the progress / interim payment cycle from a registered contractor payment request through cost-consultant recommendation and a mandatory payment-certificate checklist review to the issuance of a Payment Advice. A Payment Advice cannot be issued unless the payment-certificate checklist has passed.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "states": [
+        "PAYMENT_REQUEST",
+        "PAYMENT_CERT_RECOMMENDATION",
+        "CHECKLIST_REVIEW",
+        "PAYMENT_ADVICE_ISSUED"
+      ],
+      "transitions": [
+        {
+          "from": "PAYMENT_REQUEST",
+          "to": "PAYMENT_CERT_RECOMMENDATION",
+          "guard": "context.payment_request_registered == True"
+        },
+        {
+          "from": "PAYMENT_CERT_RECOMMENDATION",
+          "to": "CHECKLIST_REVIEW",
+          "guard": "True"
+        },
+        {
+          "from": "CHECKLIST_REVIEW",
+          "to": "PAYMENT_ADVICE_ISSUED",
+          "guard": "context.payment_certificate_checklist_passed == True"
+        }
+      ],
+      "required_documents": [
+        "PaymentCertRecommendation",
+        "PaymentCertificateChecklist",
+        "PaymentAdviceLetter"
+      ],
+      "approval_roles": [
+        "Cost_Consultant",
+        "Contract_Administrator"
+      ],
+      "applicability": {
+        "applies_to": [
+          "construction.procurement"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document_pattern",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "procurement.change_management",
+      "domain": "construction.procurement",
+      "type": "workflow",
+      "title": "Change / Variation Management Flow",
+      "statement": "Governs the change-management cycle from a Request for Modification through an internal Back-up Sheet (Cost / Quality / Schedule impact assessment) and a Variation Settlement Recommendation to the issuance of an Employer's Instruction. A Variation Settlement Recommendation cannot proceed without an attached internal Back-up Sheet whose cost, quality and schedule impacts have been assessed.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "states": [
+        "RFM_RAISED",
+        "BACKUP_SHEET",
+        "VSR",
+        "EMPLOYER_INSTRUCTION"
+      ],
+      "transitions": [
+        {
+          "from": "RFM_RAISED",
+          "to": "BACKUP_SHEET",
+          "guard": "True"
+        },
+        {
+          "from": "BACKUP_SHEET",
+          "to": "VSR",
+          "guard": "context.back_up_sheet_attached == True and context.cost_quality_schedule_assessed == True"
+        },
+        {
+          "from": "VSR",
+          "to": "EMPLOYER_INSTRUCTION",
+          "guard": "context.vsr_approved == True"
+        }
+      ],
+      "required_documents": [
+        "RequestForModification",
+        "BackUpSheet",
+        "VariationSettlementRecommendation",
+        "EmployersInstruction"
+      ],
+      "approval_roles": [
+        "Contract_Administrator",
+        "Project_Director"
+      ],
+      "applicability": {
+        "applies_to": [
+          "construction.procurement"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "construction procurement procedures (general)",
+        "project": null,
+        "confidence": "controlled_document_pattern",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 4,
+      "needs_review": false
+    }
+  ]
+}

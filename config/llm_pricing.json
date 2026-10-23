@@ -1,0 +1,19 @@
+{
+  "_comment": "Per-provider, per-model LLM rates in USD per 1,000,000 tokens. Edit this file to update pricing without a code change. Anything not listed defaults to $0 (cost still 0; tokens still recorded).",
+  "_last_updated": "2026-06-06",
+  "providers": {
+    "kimi": {
+      "kimi-k2.6": {"prompt": 0.0, "completion": 0.0}
+    },
+    "groq": {
+      "_note": "Groq free tier prices at $0; tokens still tracked so the operator can see TPD usage. Update when moving to a paid tier.",
+      "llama-3.3-70b-versatile":                       {"prompt": 0.0, "completion": 0.0},
+      "llama-3.1-8b-instant":                           {"prompt": 0.0, "completion": 0.0},
+      "meta-llama/llama-4-scout-17b-16e-instruct":      {"prompt": 0.0, "completion": 0.0},
+      "openai/gpt-oss-20b":                              {"prompt": 0.0, "completion": 0.0},
+      "openai/gpt-oss-120b":                             {"prompt": 0.0, "completion": 0.0},
+      "qwen/qwen3-32b":                                  {"prompt": 0.0, "completion": 0.0},
+      "groq/compound":                                   {"prompt": 0.0, "completion": 0.0}
+    }
+  }
+}

@@ -1,0 +1,111 @@
+name: smoke-live
+
+# Routine deliverable smoke against the LIVE deployment.
+# Uses repository secrets FORK_API_KEY + FORK_BASE_URL (never printed).
+# VERDICT: scripts/smoke.sh exit 0 (all runs succeed + tool path fired).
+
+on:
+  # Nightly. It had no schedule at all: 5 runs ever, the last on 2026-08-17,
+  # so "smoke is green" had meant nothing for a month. 03:40 UTC keeps it
+  # clear of browser-nightly (02:20).
+  schedule:
+    - cron: "40 3 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "SMOKE_RUNS (routine=3, release=10)"
+        default: "3"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-live
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: live deliverable smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install smoke client deps
+        run: pip install httpx
+
+      - name: Check credentials are configured
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+        run: |
+          if [ -z "$FORK_API_KEY" ] && [ -z "$FORK_TOKEN" ] && { [ -z "$FORK_EMAIL" ] || [ -z "$FORK_PASSWORD" ]; }; then
+            echo "::error::Missing credentials. Add FORK_API_KEY (or FORK_TOKEN, or FORK_EMAIL + FORK_PASSWORD) as repository secrets."
+            exit 1
+          fi
+          echo "credentials present"
+
+      - name: Preflight auth (status only, no secrets)
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          import httpx
+          base = (os.environ.get("FORK_BASE_URL") or "https://theshovel.ai").rstrip("/")
+          parsed = urlparse(base)
+          print(f"base_scheme={parsed.scheme}")
+          print(f"base_host={parsed.netloc}")
+          key = os.environ.get("FORK_API_KEY") or ""
+          print(f"key_set={bool(key)} key_len={len(key)}")
+          # The single instance answers 502 while it restarts (every deploy,
+          # and under load). Wait for it rather than scoring a restart as a
+          # product failure -- then FAIL FAST, with the reason, if the target
+          # or the key is wrong, instead of three opaque "HTTP 404" runs.
+          import sys, time
+          deadline = time.time() + 180
+          while True:
+              try:
+                  live = httpx.get(f"{base}/livez", timeout=15).status_code
+              except httpx.HTTPError as exc:
+                  live = type(exc).__name__
+              if live == 200 or time.time() > deadline:
+                  break
+              print(f"livez={live} -- waiting for the instance")
+              time.sleep(10)
+          print(f"livez={live}")
+          if live != 200:
+              sys.exit(f"::error::{parsed.netloc} is not serving (/livez={live}) after 180s. "
+                       "Site down or restarting -- not a product regression.")
+          r = httpx.get(
+              f"{base}/v1/projects",
+              headers={"Authorization": f"Bearer {key}"} if key else {},
+              timeout=30,
+          )
+          print(f"projects_http={r.status_code}")
+          if r.status_code == 404:
+              sys.exit("::error::/v1/projects is 404: FORK_BASE_URL points at a host that "
+                       "is not this app.")
+          if r.status_code in (401, 403):
+              sys.exit("::error::/v1/projects refused the credential: FORK_API_KEY is "
+                       "wrong, revoked or expired.")
+          PY
+
+      - name: Run scripts/smoke.sh against live
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+          SMOKE_RUNS: ${{ inputs.runs || '3' }}
+        run: bash scripts/smoke.sh

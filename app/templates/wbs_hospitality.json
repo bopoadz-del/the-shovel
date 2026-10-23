@@ -1,0 +1,91 @@
+{
+  "project_type": "hospitality",
+  "phases": [
+    {
+      "code": "1",
+      "name": "Preliminaries & Site",
+      "sub_phases": [
+        {
+          "code": "1.1",
+          "name": "Mobilization",
+          "activities": [
+            {"name": "Site setup & hoarding", "duration": 5, "resources": ["pm", "safety"], "zoneable": false},
+            {"name": "Temporary services", "duration": 7, "resources": ["mep"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "1.2",
+          "name": "Earthworks",
+          "activities": [
+            {"name": "Demolition", "duration": 10, "resources": ["excavator", "labor"], "zoneable": false},
+            {"name": "Excavation", "duration": 12, "resources": ["excavator"], "zoneable": true},
+            {"name": "Foundations", "duration": 15, "resources": ["concrete", "steelfixer"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "2",
+      "name": "Structure",
+      "sub_phases": [
+        {
+          "code": "2.1",
+          "name": "Superstructure",
+          "activities": [
+            {"name": "Columns & slabs", "duration": 20, "resources": ["concrete", "carpenter"], "zoneable": true},
+            {"name": "Structural steel", "duration": 18, "resources": ["steel"], "zoneable": true},
+            {"name": "Masonry & blockwork", "duration": 15, "resources": ["mason", "labor"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "3",
+      "name": "Building Envelope & MEP",
+      "sub_phases": [
+        {
+          "code": "3.1",
+          "name": "Envelope",
+          "activities": [
+            {"name": "Facade", "duration": 20, "resources": ["facade", "labor"], "zoneable": true},
+            {"name": "Roofing & waterproofing", "duration": 12, "resources": ["waterproofing"], "zoneable": true},
+            {"name": "Glazing", "duration": 10, "resources": ["glazier"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "3.2",
+          "name": "MEP Rough-in",
+          "activities": [
+            {"name": "Electrical rough-in", "duration": 18, "resources": ["electrician"], "zoneable": true},
+            {"name": "Plumbing rough-in", "duration": 15, "resources": ["plumber"], "zoneable": true},
+            {"name": "HVAC ducting", "duration": 16, "resources": ["mep"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4",
+      "name": "Fit-out & Commissioning",
+      "sub_phases": [
+        {
+          "code": "4.1",
+          "name": "Internal Fit-out",
+          "activities": [
+            {"name": "Drywall & ceilings", "duration": 14, "resources": ["carpenter"], "zoneable": true},
+            {"name": "Flooring & tiling", "duration": 12, "resources": ["tiler"], "zoneable": true},
+            {"name": "Joinery & FF&E", "duration": 15, "resources": ["joiner"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "4.2",
+          "name": "Commissioning & Handover",
+          "activities": [
+            {"name": "MEP commissioning", "duration": 10, "resources": ["commissioning"], "zoneable": false},
+            {"name": "Snagging", "duration": 7, "resources": ["pm"], "zoneable": false},
+            {"name": "Practical completion", "duration": 5, "resources": ["pm"], "zoneable": false}
+          ]
+        }
+      ]
+    }
+  ]
+}

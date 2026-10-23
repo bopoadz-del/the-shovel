@@ -1,0 +1,25 @@
+# Keep the build context (and image layers) lean — exclude VCS, virtualenvs,
+# caches, dependency trees, local data, and CI files. Application source and
+# requirements.txt are still copied in.
+.git
+.gitignore
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+node_modules
+frontend/node_modules
+frontend/.vite
+data
+!data/models/safety_world_v2.onnx
+!data/models/manifest.json
+uploads
+logs
+*.log
+.github
+*.md
+# ...but bundle the RAG knowledge docs so boot-time seeding can ingest them.
+!docs/knowledge/*.md

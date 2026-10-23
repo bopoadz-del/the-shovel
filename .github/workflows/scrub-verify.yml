@@ -1,0 +1,77 @@
+# Verify the scrub-at-source clean did not cut into ordinary words; repair
+# only the affected rows if it did. Counts only -- never a rule, a match or
+# row text. The rule list is read inside this job from the previous version
+# of the live task's shared secret and discarded at exit.
+#
+# Modes (workflow_dispatch):
+#   measure  -- restore branch (read-only endpoint): as-run vs whole-word
+#   repair   -- confirm=REPAIR: affected rows only, whole-word re-clean
+#   dryrun   -- live: whole-word matches and matches inside words
+#   tsvector -- live: how the full-text column is kept current
+name: scrub-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "measure | repair | dryrun | tsvector"
+        type: choice
+        options: [measure, repair, dryrun, tsvector]
+        default: measure
+      restore_endpoint:
+        description: "Neon endpoint id on the restore-point branch (ep-...)"
+        type: string
+        default: ""
+      confirm:
+        description: "Must be REPAIR when mode is repair"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  ECS_SERVICE: the-fork
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Requirements
+        run: python -m pip install -q -r requirements.txt
+
+      - name: Embedder stack (as the live image installs it)
+        if: ${{ inputs.mode == 'repair' }}
+        run: |
+          python -m pip install -q --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.5.1"
+          python -m pip install -q "sentence-transformers==5.5.1" "transformers==5.18.0"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Load live task env (values masked, never printed)
+        run: |
+          set +x
+          python scripts/load_live_task_env.py --github-env "$GITHUB_ENV"
+
+      - name: Run (counts only)
+        env:
+          VERIFY_MODE: ${{ inputs.mode }}
+          VERIFY_ENDPOINT: ${{ inputs.restore_endpoint }}
+          VERIFY_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set +x
+          python scripts/scrub_verify.py --mode "$VERIFY_MODE" --endpoint "$VERIFY_ENDPOINT" --confirm "$VERIFY_CONFIRM"

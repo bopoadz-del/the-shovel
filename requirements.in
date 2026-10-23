@@ -1,0 +1,119 @@
+# Human-edited direct dependencies for The Fork.
+# Generate pinned lockfile: pip-compile requirements.in -o requirements.txt
+#
+# Database (Phase 1 unified schema)
+sqlalchemy>=2.0.0
+psycopg[binary]>=3.1.0
+alembic>=1.13.0
+pgvector>=0.3.0
+
+# FastAPI & Server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+aiofiles>=23.2.0
+python-dotenv>=1.0.0
+
+# HTTP Client
+aiohttp>=3.14.3
+httpx>=0.25.0
+requests>=2.25.0
+
+# Web Scraping
+beautifulsoup4>=4.12.0
+# CVE-2026-85999 / CVE-2026-86000 fixed in soupsieve 2.9. Floor the
+# transitive pin so a later pip-compile cannot walk it back to 2.8.4.
+soupsieve>=2.9
+# CVE-2026-63374 / CVE-2026-64847 fixed in anyio 4.14.2. Transitive (httpx,
+# starlette, mcp, sse-starlette, anthropic), so floored here for the same
+# reason as soupsieve: a later pip-compile must not walk it back to 4.13.0.
+anyio>=4.14.2
+ddgs>=1.0.0
+
+# Image Processing
+pillow>=12.3.0
+
+numpy>=1.24.0
+
+# OCR
+pytesseract>=0.3.10
+
+# PDF Processing
+pymupdf>=1.23.0
+pdfplumber>=0.11.0
+
+# Construction Intelligence Blocks
+sympy>=1.12
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Construction Domain Blocks
+ezdxf>=1.1.0
+shapely>=2.0.0
+
+# Intelligence Blocks
+pint>=0.23
+ifcopenshell>=0.7.0
+scikit-learn>=1.4.0
+model2vec>=0.4.0
+
+# Reasoning Engine
+# CVE-2026-55830 (sandbox escape via positional-only args) is fixed in 8.3.
+# Pin the stable line, not 8.3a1.dev0 (Dependabot #437). PyPI latest stable: 8.5.
+RestrictedPython>=8.3
+
+# Encryption & JWT
+cryptography>=50.0.0
+PyJWT>=2.8.0
+
+# Multi-worker shared state & observability
+redis>=5.0.0
+arq>=0.26
+sentry-sdk[fastapi]>=2.0.0
+# /metrics Prometheus exposition (PR #98) — app/routers/monitoring.py
+# returns 503 without it.
+prometheus-client>=0.20.0
+
+python-docx>=1.1.0
+python-pptx>=1.0.0
+
+# Text extractors (app/core/text_extractors.py): Outlook .msg, legacy .xls, .rtf
+olefile>=0.47
+xlrd>=2.0
+striprtf>=0.0.29
+
+# MCP
+mcp>=1.30.0  # CVE-2026-59951 fixed in 1.30.0
+
+# AI APIs
+anthropic>=0.40.0
+
+# Voice
+SpeechRecognition>=3.10.0
+gTTS>=2.5.0
+# pydub converts browser-recorded WebM/MP3/m4a to WAV before STT.
+# Needs ffmpeg installed on the host (Render: add `apt install ffmpeg` to
+# build steps; local dev: `choco install ffmpeg` / `apt install ffmpeg`).
+# Without ffmpeg, voice falls back to a clear "WAV/AIFF/FLAC only" error.
+pydub>=0.25.0
+
+# Translation — Google Translate via requests (no deep-translator package; PYSEC-2022-252)
+
+# Google Drive service account
+google-auth>=2.23.0
+
+# Testing
+# Floors raised to pytest 9 / pytest-asyncio 1.x for PYSEC-2026-1845 —
+# the suite passes against this combination (verified 2026-08-04, PRR fix PR).
+pytest>=9.0.3
+pytest-asyncio>=1.0
+pytest-cov>=4.1.0
+pytest-json-report>=1.5.0
+diff-cover>=8.0.0
+python-magic>=0.4.27
+
+# Windows-only transitive dependency; pin with a platform marker so Linux
+# container builds (Render, Docker) skip it instead of failing with
+# "No matching distribution found for pywin32".
+pywin32==312; platform_system == "Windows"

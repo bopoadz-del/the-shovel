@@ -1,0 +1,226 @@
+/* ─────────────────────────────────────────────
+   Shared page-level styles — uses design tokens
+   ───────────────────────────────────────────── */
+
+/* ── Page Shell ── */
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  background: var(--bg);
+}
+
+/* ── Header ── */
+.page-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.page-header__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.page-header__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  /* Gold logo tile per the Quarry standalone design — fixed colors in both
+   * themes so the mark stays recognizable. */
+  background: #f4e7cc;
+  color: #bc8a22;
+  border-radius: var(--radius-sm);
+}
+
+.brand-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.page-header__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nav-item {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: default;
+  transition: color var(--transition);
+}
+
+.nav-item--active {
+  color: var(--text);
+}
+
+.nav-sep {
+  font-size: 13px;
+  color: var(--text-subtle);
+  user-select: none;
+}
+
+/* ── Main Content ── */
+.page-main {
+  flex: 1;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--space-10) var(--space-6);
+}
+
+.content-header {
+  margin-bottom: var(--space-8);
+}
+
+.page-description {
+  margin-top: var(--space-2);
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* ── Auth / Login Center ── */
+.page-center {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: var(--space-8);
+}
+
+.auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-10) var(--space-10);
+  width: 100%;
+  max-width: 380px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.auth-card__logo {
+  margin-bottom: var(--space-6);
+  display: flex;
+  justify-content: center;
+}
+
+.auth-card__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  /* Gold logo tile per the Quarry standalone design (same as .brand-mark). */
+  background: #f4e7cc;
+  color: #bc8a22;
+  border-radius: var(--radius-md);
+}
+
+.auth-card__title {
+  font-size: 24px;
+  margin-bottom: var(--space-2);
+}
+
+.auth-card__subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: var(--space-8);
+  line-height: 1.5;
+}
+
+.auth-card__meta {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ── Tags / Badges ── */
+.tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+  background: var(--surface-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.badge--scaffold {
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid rgba(30, 95, 168, 0.2);
+}
+
+/* ── Workspace Meta Table ── */
+.workspace-meta {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  max-width: 560px;
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-light);
+  gap: var(--space-4);
+}
+
+.meta-row:last-child {
+  border-bottom: none;
+}
+
+.meta-label {
+  font-size: 13px;
+  width: 110px;
+  flex-shrink: 0;
+}
+
+.meta-value {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}

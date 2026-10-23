@@ -1,0 +1,104 @@
+name: eval-battery
+
+# One-click pre-pilot eval battery against the LIVE deployment:
+#   1. seed_fixtures.py --synthetic   (BOQ / registers / spec / DXF / XER stand-ins)
+#   2. run_eval_battery.py            (feature matrix + golden-set gate + recall)
+#
+# Requires two repository secrets (Settings → Secrets and variables → Actions):
+#   FORK_EMAIL / FORK_PASSWORD   — a live login (or set FORK_TOKEN instead)
+# Optional: FORK_BASE_URL to target a non-prod instance.
+#
+# The golden-set gate (>= 90% PASS) decides the job's exit status. All report
+# artifacts are uploaded regardless of outcome.
+
+on:
+  workflow_dispatch:
+    inputs:
+      delay:
+        description: "seconds between requests (protect a small live box)"
+        default: "15"
+        required: false
+      skip:
+        description: "comma list of stages to skip (matrix,golden,recall)"
+        default: "recall"
+        required: false
+  # Bot-triggerable path: pushing any change to .github/trigger/eval-battery
+  # fires a run with the defaults (delay 15, recall skipped). Lets automation
+  # with push access start the battery when the API's workflow-dispatch scope
+  # is unavailable.
+  push:
+    branches: [main]
+    paths: [".github/trigger/eval-battery"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-battery-live
+  cancel-in-progress: false
+
+jobs:
+  battery:
+    name: live eval battery
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install battery deps (scripts only — not the full app)
+        run: pip install httpx pyyaml openpyxl ezdxf
+
+      - name: Check credentials are configured
+        env:
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+        run: |
+          if [ -z "$FORK_TOKEN" ] && [ -z "$FORK_API_KEY" ] && { [ -z "$FORK_EMAIL" ] || [ -z "$FORK_PASSWORD" ]; }; then
+            echo "::error::Missing credentials. Add FORK_API_KEY (or FORK_TOKEN, or FORK_EMAIL + FORK_PASSWORD) as repository secrets: Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "credentials present"
+
+      - name: Seed fixtures (synthetic stand-ins for anything missing)
+        env:
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+        run: python scripts/seed_fixtures.py --synthetic
+
+      - name: Run the battery
+        env:
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+        run: |
+          SKIP_ARGS=""
+          IFS=',' read -ra STAGES <<< "${{ inputs.skip || 'recall' }}"
+          for s in "${STAGES[@]}"; do
+            [ -n "$s" ] && SKIP_ARGS="$SKIP_ARGS --skip $s"
+          done
+          python scripts/run_eval_battery.py --delay "${{ inputs.delay || '15' }}" $SKIP_ARGS
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-battery-reports
+          path: |
+            EVAL_BATTERY_SUMMARY.md
+            FEATURE_MATRIX.md
+            GOLDEN_SET_REPORT.md
+            feature_matrix_results.jsonl
+            golden_set_results.jsonl
+            review_pack/
+          if-no-files-found: warn

@@ -1,0 +1,20 @@
+hal_profile: cloud_render
+blocks:
+  chat:
+    provider: kimi
+    fallback: groq
+    emergency: groq
+  vector:
+    backend: chroma
+    fallback: memory
+  storage:
+    default: gdrive
+    fallback: local
+  queue:
+    backend: redis
+    fallback: memory
+
+failover:
+  threshold: 3
+  recovery_time: 30
+  timeout_ms: 5000

@@ -1,0 +1,79 @@
+/* ─────────────────────────────────────────────
+   Public front page — extends pages.css / auth.css tokens
+   ───────────────────────────────────────────── */
+
+.landing {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6, 24px);
+  padding-inline: 16px;
+  text-align: left;
+}
+
+.landing__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 12px);
+}
+
+.landing__title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.landing__lede {
+  margin: 0;
+  max-width: 60ch;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.landing__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-4, 16px);
+}
+
+.landing__item {
+  padding-block: var(--space-3, 12px);
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+
+.landing__item-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.landing__item-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
+.landing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4, 16px);
+}
+
+.landing__actions .auth-submit {
+  width: auto;
+  padding-inline: 28px;
+}
+
+.landing__secondary {
+  font-size: 14px;
+}

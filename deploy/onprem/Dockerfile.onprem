@@ -1,0 +1,59 @@
+# On-prem image — extends the base app image with BAKED model weights + offline
+# flags so the running container never touches HuggingFace / ultralytics.
+# STEP 4 of the on-prem sovereignty program.
+#
+# Build (install.sh does this for you):
+#   docker build -t the-fork:base .                       # base app image
+#   docker build -t the-fork:onprem \
+#     --build-arg BASE_IMAGE=the-fork:base \
+#     -f deploy/onprem/Dockerfile.onprem .
+#
+# The embedder is downloaded ONCE at build time (build box has network) and
+# baked into the image; at runtime HF_HUB_OFFLINE=1 forbids any fetch.
+
+ARG BASE_IMAGE=the-fork:base
+FROM ${BASE_IMAGE}
+
+ARG RAG_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+
+# CRITICAL: the HF cache must live OUTSIDE /app/data. The compose mounts a named
+# volume at /app/data, which would SHADOW a cache baked under it (the classic
+# "my baked weights vanished at runtime" bug). Bake to /opt/models/hf instead.
+ENV HF_HOME=/opt/models/hf
+
+# Bake the embedder weights into the image. sentence-transformers first (prod
+# path), model2vec fallback. Build-time egress only — acceptable per the ledger.
+RUN python - <<'PY'
+import os
+model = os.environ.get("RAG_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+try:
+    from sentence_transformers import SentenceTransformer
+    SentenceTransformer(model)
+    print(f"baked embedder (sentence-transformers): {model}")
+except Exception as e:
+    print(f"sentence-transformers bake failed ({e}); trying model2vec")
+    from model2vec import StaticModel
+    StaticModel.from_pretrained(model)
+    print(f"baked embedder (model2vec): {model}")
+PY
+
+# Offline flags — set in the IMAGE so transformers/HF/ultralytics never phone
+# home at runtime. These are what deployment_profile.check_onprem_ready asserts.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    YOLO_OFFLINE=1 \
+    RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL} \
+    DEPLOYMENT_PROFILE=onprem
+
+# Prove the bake at build time: load the embedder with offline flags ON. If the
+# weights weren't baked correctly this FAILS THE BUILD (fail-loud, not at the
+# customer site). Embedding-identity is separately asserted by the app at boot
+# (vector_store._verify_embedding_identity).
+RUN HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python - <<'PY'
+from app.core.rag.embeddings import get_embedder
+emb = get_embedder()
+v = emb.encode(["offline bake self-test"])
+assert getattr(v, "shape", [None, None])[1] or len(v[0]) > 0, "embedder produced no vector"
+print(f"offline embedder OK — model={emb.identity['model']} dim={emb.identity['dim']}")
+PY

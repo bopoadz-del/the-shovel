@@ -1,0 +1,203 @@
+# Intent → tool map. Runtime loads this file; adding a row never edits
+# app/agents/runtime.py. Each row needs at least two `phrasings` — the
+# matrix test asserts both force `tool` via _forced_specific_tool.
+#
+# `phrases` are substring matchers (same contract as the old tuple).
+# `phrasings` are full user messages used only by the matrix test.
+
+rows:
+  - tool: commissioning_checklist
+    phrases:
+      - commissioning checklist
+      - commissioning plan
+      - commissioning schedule
+      - testing and commissioning
+      - t&c checklist
+    phrasings:
+      - produce a commissioning checklist for the HVAC system
+      - draft a testing and commissioning plan for the plant
+
+  - tool: primavera_parser
+    phrases:
+      - primavera
+      - xer
+      - p6
+      - baseline programme
+      - baseline program
+      - programme milestones
+      - program milestones
+      - project milestones
+      - schedule milestones
+      - milestones from
+    phrasings:
+      - parse the primavera xer for programme milestones
+      - extract baseline programme milestones from the p6 file
+
+  # Procurement list is a construction-container deliverable, not a
+  # calculator. Must sit above construction_calc so "material list" /
+  # tool-shaped asks cannot fall through to construction_calc.
+  - tool: procurement_list_generator
+    phrases:
+      - procurement_list_generator
+      - procurement list
+      - material list
+      - purchase list
+      - buy list
+      - vendor list
+      - materials list
+      - what materials
+      - need to buy
+    phrasings:
+      - generate a procurement list for the MEP package
+      - what materials do we need to buy for the substructure works?
+
+  # Quantity takeoff from drawings is a file tool, not a calculator.
+  # Must sit above construction_calc so "quantity takeoff" / tool-shaped
+  # `drawing_qto` asks cannot fall through to construction_calc (live
+  # exit 78bd9ca: drawing_qto ask stolen by construction_calc because
+  # tool_choice=required had no named tool). Self-contained L×W×D
+  # volume asks do not match these phrases and stay on construction_calc
+  # (leftover L6).
+  - tool: drawing_qto
+    phrases:
+      - drawing_qto
+      - quantity takeoff
+      - quantity take-off
+      - extract quantities
+      - measure the floor area
+      - floor plan drawing
+      - infrastructure drawings
+    phrasings:
+      - do a quantity takeoff from the infrastructure drawings - pipe lengths and manhole counts
+      - measure the floor area from the ground floor plan drawing
+
+  # RFI draft is a construction-container deliverable, not a
+  # calculator. Must sit above construction_calc so "rebar detail"
+  # / tool-shaped asks cannot fall through to construction_calc.
+  - tool: rfi_generator
+    phrases:
+      - rfi_generator
+      - request for information
+      - follow-on rfi
+      - draft an rfi
+      - draft a rfi
+      - raise an rfi
+      - create a request for information
+    phrasings:
+      - draft an RFI asking the engineer to clarify the rebar detail at the transfer beam
+      - create a request for information document
+
+  - tool: construction_calc
+    phrases:
+      - dewatering
+      - uplift check
+      - mix design
+      - formwork striking
+      - modulus of rupture
+      - well point spacing
+      - well-point spacing
+      - diaphragm wall volume
+      - crane capacity
+      - crane planning
+      - bearing pressure
+      - beam deflection
+      - earned value
+      - evm
+      - cost performance index
+      - schedule performance index
+      - estimate at completion
+      - interim payment
+      - net payment due
+      - tender evaluation
+      - evaluate tenders
+      - score the tenders
+      - bid evaluation
+      - risk score
+      - probability and impact
+      # Phase 2 F–W (#43–84): plain-engineer asks skip construction_calc
+      # because _looks_like_self_contained_calculation needs a calc verb
+      # plus ≥2 unit-bearing dimensions. Distinctive two-word names force
+      # the tool without a runtime.py edit.
+      - fineness modulus
+      - grout pressure
+      - guardrail height
+      - top rail height
+      - top-rail height
+      - interior finishes
+      - finishes takeoff
+      - laser scan
+      - leed points
+      - live load reduction
+      - masonry wall
+      - material consumption
+      - material required
+      - mobilization cost
+      - mobilisation cost
+      - site mobilization
+      - site mobilisation
+      - mob cost
+      - modulus of elasticity
+      - unit convert
+      - plumbing flow
+      - post tensioning
+      - post-tensioning
+      - precast beam
+      - manpower duration
+      - productivity rate
+      - progress quantity
+      - moment capacity
+      - shear capacity
+      - rebar by area
+      - lap length
+      - rebar weight
+      - resource line
+      - daily output
+      - day rate
+      - return on investment
+      - scaffold load
+      - base shear
+      - shear stress
+      - slab thickness
+      - slope fos
+      - slope stability
+      - tension capacity
+      - supervision ratio
+      - thermal shrinkage
+      - unit cost total
+      - unit weight of concrete
+      - weld capacity
+      - wind load on formwork
+      - wind pressure
+    phrasings:
+      - run a dewatering uplift check for 23 m water depth
+      - compute the earned value for this month
+
+  # MEP coordination kit (Cerebrum-Blocks: mep_coordination). Thin mount --
+  # the kit is vendored through the Store like every other kit; no kit code
+  # lives in this repo.
+  #
+  # Vendored ref: Cerebrum-Blocks main @ d7cff230453efd273388491e1cbf1d18f3ebefd5
+  # (PR #108, the full 7-block kit). #512 landed while the kit was still on
+  # branch docs/mep-inventory; a hat vendored from a branch breaks on the next
+  # rebase, so the ref is recorded here against main and nothing else.
+  #
+  # Deliberately does NOT capture "extract quantities from this IFC": that is
+  # bim_extractor's job. The two are easy to confuse because both take an IFC,
+  # and routing a quantities ask to the clash judge returns a clash report to
+  # someone who asked for a schedule of quantities.
+  - tool: mep_coordination
+    phrases:
+      - clash detection
+      - clash report
+      - clashes
+      - clash judge
+      - coordination report
+      - coordination issues
+      - clearance violation
+      - clearance between
+      - services clash
+      - mep coordination
+      - bcf
+    phrasings:
+      - run clash detection on this model
+      - is there enough clearance between the gas main and the LV cable

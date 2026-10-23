@@ -1,0 +1,4 @@
+# Optional deps for the Playwright nightly only.
+# Regular CI does not install these (tests/browser is ignored).
+playwright==1.55.0
+pytest-playwright==0.7.1

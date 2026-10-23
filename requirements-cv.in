@@ -1,0 +1,2 @@
+# Optional CV tier — pip-compile requirements-cv.in -o requirements-cv.txt
+ultralytics>=8.0.0

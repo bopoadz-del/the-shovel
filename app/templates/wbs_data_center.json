@@ -1,0 +1,98 @@
+{
+  "project_type": "data_center",
+  "phases": [
+    {
+      "code": "1",
+      "name": "Enabling & Site",
+      "sub_phases": [
+        {
+          "code": "1.1",
+          "name": "Mobilization & Logistics",
+          "activities": [
+            {"name": "Mobilize site compound", "duration": 5, "resources": ["pm", "safety"], "zoneable": false},
+            {"name": "Install site utilities", "duration": 10, "resources": ["mep"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "1.2",
+          "name": "Earthworks",
+          "activities": [
+            {"name": "Topsoil strip", "duration": 7, "resources": ["excavator", "labor"], "zoneable": true},
+            {"name": "Bulk excavation", "duration": 15, "resources": ["excavator"], "zoneable": true},
+            {"name": "Backfill & compaction", "duration": 10, "resources": ["labor", "roller"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "2",
+      "name": "Structure & Building Envelope",
+      "sub_phases": [
+        {
+          "code": "2.1",
+          "name": "Substructure",
+          "activities": [
+            {"name": "Formwork & rebar for raft", "duration": 12, "resources": ["carpenter", "steelfixer"], "zoneable": true},
+            {"name": "Concrete pour", "duration": 5, "resources": ["concrete", "pump"], "zoneable": true},
+            {"name": "Cure & strip", "duration": 7, "resources": ["carpenter"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "2.2",
+          "name": "Superstructure",
+          "activities": [
+            {"name": "Erect structural steel", "duration": 20, "resources": ["steel"], "zoneable": true},
+            {"name": "Cast upper floors", "duration": 15, "resources": ["concrete", "carpenter"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "3",
+      "name": "MEP & Power",
+      "sub_phases": [
+        {
+          "code": "3.1",
+          "name": "Electrical",
+          "activities": [
+            {"name": "Medium-voltage switchgear install", "duration": 14, "resources": ["electrician"], "zoneable": true},
+            {"name": "UPS & PDU installation", "duration": 10, "resources": ["electrician"], "zoneable": true},
+            {"name": "Cable tray & pulling", "duration": 18, "resources": ["electrician", "labor"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "3.2",
+          "name": "Mechanical",
+          "activities": [
+            {"name": "Chiller installation", "duration": 12, "resources": ["mep"], "zoneable": true},
+            {"name": "AHU & CRAH install", "duration": 10, "resources": ["mep"], "zoneable": true},
+            {"name": "Pipework & ducting", "duration": 20, "resources": ["mep", "labor"], "zoneable": true}
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4",
+      "name": "Fit-out & Commissioning",
+      "sub_phases": [
+        {
+          "code": "4.1",
+          "name": "Internal Fit-out",
+          "activities": [
+            {"name": "Raised floor install", "duration": 10, "resources": ["labor"], "zoneable": true},
+            {"name": "Server rack install", "duration": 12, "resources": ["it", "labor"], "zoneable": true}
+          ]
+        },
+        {
+          "code": "4.2",
+          "name": "Commissioning",
+          "activities": [
+            {"name": "MEP testing & balancing", "duration": 14, "resources": ["mep", "commissioning"], "zoneable": false},
+            {"name": "Integrated systems testing", "duration": 10, "resources": ["commissioning"], "zoneable": false},
+            {"name": "Handover & closeout", "duration": 7, "resources": ["pm"], "zoneable": false}
+          ]
+        }
+      ]
+    }
+  ]
+}

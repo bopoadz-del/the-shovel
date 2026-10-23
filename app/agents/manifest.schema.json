@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thefork.build/agents/manifest.schema.json",
+  "title": "The Fork Agent Manifest",
+  "description": "Discipline-agent manifest for construction management agents. One base + swappable hats.",
+  "type": "object",
+  "required": ["manifest_version", "id", "name", "description", "kind", "discipline", "system_prompt_guidance", "activation", "context_sources", "allowed_actions", "verification", "failure_policy", "playbook"],
+  "properties": {
+    "manifest_version": { "type": "string", "const": "1.0" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "enum": ["base", "hat"] },
+    "extends": { "type": "string", "description": "Base manifest id (required when kind=hat)" },
+    "discipline": { "type": "string", "enum": ["base", "planning", "commercial", "contracts", "qaqc", "procurement", "quantities", "safety", "design"] },
+    "system_prompt_guidance": { "type": "string", "minLength": 1 },
+    "activation": {
+      "type": "object",
+      "required": ["triggers", "mode", "default_enabled"],
+      "properties": {
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": ["keyword", "intent", "action_id", "formula_id"] },
+              "value": { "type": "string" },
+              "score": { "type": "number", "default": 0.5 },
+              "case_sensitive": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "mode": { "type": "string", "enum": ["manual", "auto", "hybrid"], "default": "hybrid" },
+        "default_enabled": { "type": "boolean", "default": true },
+        "put_off_by": { "type": "string", "description": "User toggle disables hat for this turn" }
+      }
+    },
+    "context_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["project_documents", "official_guidance", "learning_profiles", "industry_benchmarks", "action_metadata"] },
+          "weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 },
+          "filters": { "type": "object" },
+          "max_items": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "allowed_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "available_tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The tools this hat's package registers (app.agents.base or app.agents.hats.<discipline>)."
+    },
+    "handoffs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["to", "when"],
+        "properties": {
+          "to": { "type": "string", "description": "Target discipline hat id" },
+          "when": { "type": "string", "description": "Condition description" },
+          "carry": { "type": "array", "items": { "type": "string" }, "description": "Data keys to carry to target" }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "save_on_turn_end": { "type": "array", "items": { "type": "string" } },
+        "never_persist": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["grounding"],
+      "properties": {
+        "grounding": { "type": "string", "enum": ["documents_or_learning_only", "formulas_only", "documents_or_formulas", "none"] },
+        "cite_required": { "type": "boolean", "default": true },
+        "refuse_unaided_figures": { "type": "boolean", "default": true },
+        "standards_advisory": { "type": "boolean", "default": true }
+      }
+    },
+    "failure_policy": {
+      "type": "object",
+      "required": ["on_missing_context"],
+      "properties": {
+        "on_missing_context": { "type": "string", "enum": ["dependency_required", "ask_clarifying", "use_best_effort", "refuse"] },
+        "on_formula_error": { "type": "string", "enum": ["ask_clarifying", "use_best_effort", "refuse"], "default": "ask_clarifying" },
+        "on_unverified_claim": { "type": "string", "enum": ["flag_and_continue", "refuse"], "default": "flag_and_continue" }
+      }
+    },
+    "playbook": {
+      "type": "object",
+      "required": ["formulas"],
+      "properties": {
+        "formulas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "description"],
+            "properties": {
+              "id": { "type": "string" },
+              "description": { "type": "string" },
+              "implemented_by": { "type": "string", "description": "Python path to callable" },
+              "domain": { "type": "string" },
+              "tier": { "type": "string", "enum": ["foundational", "operational", "strategic"], "default": "operational" }
+            }
+          }
+        },
+        "flows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "description": { "type": "string" },
+              "steps": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

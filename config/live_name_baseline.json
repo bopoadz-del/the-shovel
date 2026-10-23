@@ -1,0 +1,405 @@
+{
+ ".env.example": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "DECISIONS.md": {
+  "03725f2fc780df6bfd97": 2,
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "alembic/versions/0008_drop_photo_chunks.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "deploy/onprem/onprem.env.example": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "docs/CLIENT_DESK_READINESS_20260802.md": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "docs/CONVERGENCE_CAMPAIGN_20260814.md": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "docs/LIVE_CHAT_TEST_REPORT.md": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "docs/RAG_GAPS_REVIEW_2026-09-12.md": {
+  "03725f2fc780df6bfd97": 7,
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "docs/SOVEREIGNTY_REPORT.md": {
+  "03725f2fc780df6bfd97": 4,
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "docs/archive/FLEET_FORENSICS.md": {
+  "af5bb6f7c922e0cd54bf": 11
+ },
+ "docs/archive/GOLDEN_SET_BASELINE.md": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "docs/archive/GOLDEN_SET_REPORT.md": {
+  "0b85fdc5849d055f60f2": 2,
+  "29e0c0ee87e43636f435": 2,
+  "37152e13f9c30cc00686": 2,
+  "4f7a2cd36ae35357e82f": 2,
+  "55c06635d90608bfc807": 2,
+  "7601241502e9d8b63cf2": 2,
+  "a303340d0c9f30e1284e": 2,
+  "d03acc7871ec727a3003": 2,
+  "e5ff022c58316dc6284a": 4,
+  "ea823359623aa6c67e23": 2,
+  "fde79f52e676b9f70a2f": 2
+ },
+ "docs/archive/PROGRESS.md": {
+  "03725f2fc780df6bfd97": 2,
+  "37152e13f9c30cc00686": 1,
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "docs/archive/RAG_AUDIT.md": {
+  "af5bb6f7c922e0cd54bf": 6
+ },
+ "docs/archive/RAG_AUDIT_V2.md": {
+  "af5bb6f7c922e0cd54bf": 1,
+  "e5ff022c58316dc6284a": 1
+ },
+ "docs/archive/RAG_AUDIT_V3.md": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 4
+ },
+ "docs/archive/RECONCILIATION.md": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "docs/backup-and-recovery.md": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "docs/closing-run-handoff-prompt.md": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "docs/fork-discipline-agent-build-spec.md": {
+  "03725f2fc780df6bfd97": 2
+ },
+ "docs/layered-rag-golive.md": {
+  "03725f2fc780df6bfd97": 2
+ },
+ "docs/pilot-doc-control-plan.md": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "docs/rag-reranker.md": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "docs/retrieval-lane-2026-06-13.md": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "docs/step0-retrieval-isolation.md": {
+  "03725f2fc780df6bfd97": 4,
+  "af5bb6f7c922e0cd54bf": 4
+ },
+ "docs/superpowers/plans/2026-07-23-layered-rag.md": {
+  "03725f2fc780df6bfd97": 3,
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "evals/rag_audit_v3/cfg0.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg1.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg2.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg3.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg4.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg5.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg6.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg7.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "evals/rag_audit_v3/cfg7_lexfold.json": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 2,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "frontend/src/lib/exportEndpoint.ts": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "frontend/src/pages/AdminPage.tsx": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "frontend/src/pages/ProjectWorkspace.tsx": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "render.yaml": {
+  "03725f2fc780df6bfd97": 2,
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "scripts/_build_drive_archive_eval_set.py": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "scripts/_probe_hybrid_vs_vector.py": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "scripts/_probe_retrieval_full.py": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "scripts/_test_ollama_drive_archive.py": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "scripts/audit_training_data.py": {
+  "af5bb6f7c922e0cd54bf": 5
+ },
+ "scripts/benchmark_embedders.py": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "af5bb6f7c922e0cd54bf": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 2,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "scripts/generate_scenarios_drive_archive.py": {
+  "af5bb6f7c922e0cd54bf": 4
+ },
+ "scripts/generate_scenarios_drive_archive_v2.py": {
+  "af5bb6f7c922e0cd54bf": 7
+ },
+ "scripts/index_drive_archive.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "scripts/migrate_drive_archive_to_render.py": {
+  "af5bb6f7c922e0cd54bf": 4
+ },
+ "scripts/p0d_one_doc_proof_bge.py": {
+  "55c06635d90608bfc807": 2
+ },
+ "scripts/rag_calc_intact_eval.py": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "scripts/rag_fresh_upload_eval.py": {
+  "2951f7fa217f45ac0a87": 1,
+  "37152e13f9c30cc00686": 1,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 1,
+  "55c06635d90608bfc807": 1,
+  "5d39ba5cf1b604eb49ff": 1,
+  "a303340d0c9f30e1284e": 1,
+  "d03acc7871ec727a3003": 1,
+  "e5ff022c58316dc6284a": 2,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 1
+ },
+ "scripts/rag_recall_eval.py": {
+  "af5bb6f7c922e0cd54bf": 4
+ },
+ "scripts/rag_render_bulk_ingest.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "scripts/reconcile_migration.py": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "scripts/rerank_offline_proof.py": {
+  "af5bb6f7c922e0cd54bf": 2
+ },
+ "scripts/smoke_hybrid_retrieval.py": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "tests/golden_set.yaml": {
+  "0b85fdc5849d055f60f2": 1,
+  "2951f7fa217f45ac0a87": 1,
+  "29e0c0ee87e43636f435": 1,
+  "37152e13f9c30cc00686": 2,
+  "4852771974bd82b5b5b3": 1,
+  "4f7a2cd36ae35357e82f": 2,
+  "55c06635d90608bfc807": 2,
+  "5d39ba5cf1b604eb49ff": 1,
+  "7601241502e9d8b63cf2": 1,
+  "a303340d0c9f30e1284e": 2,
+  "d03acc7871ec727a3003": 2,
+  "e5ff022c58316dc6284a": 3,
+  "ea823359623aa6c67e23": 1,
+  "fa8598ddb35ab127a9ef": 1,
+  "fde79f52e676b9f70a2f": 2
+ },
+ "tests/test_admin_corpus_collections.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_admin_corpus_reconcile.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_answer_report_export.py": {
+  "af5bb6f7c922e0cd54bf": 22
+ },
+ "tests/test_backfill_layers.py": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "tests/test_chat_open_access_gate.py": {
+  "03725f2fc780df6bfd97": 3
+ },
+ "tests/test_e1_delay_damages_daily_retrieval.py": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "tests/test_eot_notice_period_not_claims_builder.py": {
+  "37152e13f9c30cc00686": 1
+ },
+ "tests/test_export_offers.py": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "tests/test_hybrid_retrieval.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_index_chunks_layering.py": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "tests/test_knowledge_seed.py": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "tests/test_layered_retrieval_rerank.py": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "tests/test_leftover_f1_boq_wbs.py": {
+  "af5bb6f7c922e0cd54bf": 3
+ },
+ "tests/test_leftover_f1_wrong_contract_refuse.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_project_chunk_counts.py": {
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_project_visibility.py": {
+  "03725f2fc780df6bfd97": 2
+ },
+ "tests/test_projects_tenancy.py": {
+  "03725f2fc780df6bfd97": 2
+ },
+ "tests/test_rag_chunk_table_name.py": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_rag_identifier_retrieval.py": {
+  "af5bb6f7c922e0cd54bf": 5
+ },
+ "tests/test_rag_layer_classify.py": {
+  "03725f2fc780df6bfd97": 6
+ },
+ "tests/test_rag_reranker.py": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_revision_currency.py": {
+  "03725f2fc780df6bfd97": 1
+ },
+ "tests/test_step0_retrieval_isolation.py": {
+  "03725f2fc780df6bfd97": 1,
+  "af5bb6f7c922e0cd54bf": 1
+ },
+ "tests/test_user_upload_layer.py": {
+  "03725f2fc780df6bfd97": 2
+ },
+ "tests/test_user_upload_wiring.py": {
+  "03725f2fc780df6bfd97": 1
+ }
+}

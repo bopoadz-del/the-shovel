@@ -1,0 +1,104 @@
+/* Quarry typefaces: Albert Sans for UI, IBM Plex Mono for code / IDs / numbers.
+ * Loaded via Google Fonts so the first paint has the right family even
+ * when the operator's system doesn't ship it. */
+@import url('https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+/* Quarry palette — operator-supplied design 2026-06-21.
+ *
+ * Warm earth tones: stone, sand, terracotta. Replaces the blue/grey
+ * tokens from the PR #90 redesign.
+ *
+ * Two token sets in one place:
+ *   1. New Quarry tokens (--bg-base, --bg-panel-left, --bg-panel-right,
+ *      --bg-surface, --text-primary, --text-secondary, --accent, --border).
+ *   2. Aliases for legacy class names that pre-date the redesign.
+ *
+ * Dark theme inverts to a dim warm slate; aliases re-derive
+ * automatically through var(--bg-base) etc.
+ */
+
+:root {
+  /* ── Quarry palette (light) ────────────────────────────────────────── */
+  --bg-base: #faf9f5;          /* outer canvas */
+  --bg-panel-left: #E7DBCB;    /* left sidebar (Projects + Chat history) */
+  --bg-panel-right: #EEE4D6;   /* right sidebar (description / unit / rate) */
+  --bg-surface: #FBF6EE;       /* main chat surface (cards, bubbles) */
+  --bg-surface-alt: #F1E9DE;   /* secondary surface (project cards, dividers) */
+
+  --text-primary: #2B2017;     /* primary text */
+  --text-secondary: #7a6e62;   /* muted labels */
+  --text-tertiary: #a8927a;    /* hints, placeholder */
+
+  --accent: #CE8B66;           /* terracotta — primary CTA + active state */
+  --accent-fg: #FBF6EE;        /* foreground on accent */
+  --accent-hover: #b87856;     /* darker on hover */
+  --accent-tint: rgba(206, 139, 102, 0.12); /* very light wash for active list rows */
+
+  --border: #D4CAB4;           /* primary divider */
+  --border-strong: #c4b09a;    /* heavier border for inputs / focus rings */
+  --border-soft: #E2D3BE;      /* lightest dividers, list-item separators */
+
+  /* Derived */
+  --accent-light: color-mix(in srgb, var(--accent) 14%, transparent);
+
+  --shadow-sm: 0 1px 2px 0 rgba(43, 32, 23, 0.04);
+  --shadow-md: 0 4px 12px -2px rgba(43, 32, 23, 0.08), 0 2px 4px -1px rgba(43, 32, 23, 0.05);
+  --shadow-lg: 0 16px 40px -10px rgba(43, 32, 23, 0.18);
+
+  --radius-input: 10px;
+  --radius-card: 14px;
+  --radius-bubble: 18px;
+  --radius-popover: 12px;
+
+  /* ── Legacy alias map ──────────────────────────────────────────────── */
+  --bg: var(--bg-base);
+  --surface: var(--bg-surface);
+  --surface-2: var(--bg-surface-alt);
+  --bg-panel: var(--bg-panel-left);
+  --text: var(--text-primary);
+  --text-muted: var(--text-secondary);
+  --text-subtle: var(--text-tertiary);
+  --border-light: var(--border-soft);
+  --accent-text: var(--accent-fg);
+
+  --font-display: 'Albert Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  /* Quarry dark — warm slate, not pure black */
+  --bg-base: #1f1a14;
+  --bg-panel-left: #2a231b;
+  --bg-panel-right: #2e261d;
+  --bg-surface: #25201a;
+  --bg-surface-alt: #2a2419;
+
+  --text-primary: #f1e9de;
+  --text-secondary: #c4b09a;
+  --text-tertiary: #9c8973;
+
+  --accent: #d99577;            /* lifted accent for contrast on dark */
+  --accent-fg: #1f1a14;
+  --accent-hover: #c98567;
+  --accent-tint: rgba(217, 149, 119, 0.18);
+
+  --border: #3a3024;
+  --border-strong: #4a3e30;
+  --border-soft: #322a1f;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.6), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 16px 40px -10px rgba(0, 0, 0, 0.7);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+}

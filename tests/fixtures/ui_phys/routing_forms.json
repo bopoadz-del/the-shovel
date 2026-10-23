@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "note": "Second form of every battery question, for the routing golden matrix. The routing decision must not depend on sentence shape (F-PHRASE-1). E4's and C2's second forms are the paraphrases MEASURED on 87c7996 and recorded in gate_battery_13b2bf7_2026-08-31.md -- not written for this file. The rest were written for this matrix and are marked as such.",
+  "measured_from_evidence_pack": [
+    "C2",
+    "E4"
+  ],
+  "forms": {
+    "A1": {
+      "alt": "how much is the accepted contract amount before VAT",
+      "origin": "written"
+    },
+    "A2": {
+      "alt": "and what's that amount with VAT included?",
+      "origin": "written"
+    },
+    "A3": {
+      "alt": "how long do we have to complete the whole of the Works?",
+      "origin": "written"
+    },
+    "A4": {
+      "alt": "how many milestones does the contract have, and when is Milestone 5 due?",
+      "origin": "written"
+    },
+    "A5": {
+      "alt": "what delay damages apply if the whole of the Works is late?",
+      "origin": "written"
+    },
+    "A6": {
+      "alt": "how long is the defects notification period?",
+      "origin": "written"
+    },
+    "A7": {
+      "alt": "how much is the performance bond worth?",
+      "origin": "written"
+    },
+    "A8": {
+      "alt": "which system are we meant to use for formal correspondence under the contract?",
+      "origin": "written"
+    },
+    "A9": {
+      "alt": "who has been appointed as the Engineer on this job?",
+      "origin": "written"
+    },
+    "B1": {
+      "alt": "general site clearance, item D110 — what rate and amount are in the demolition bill?",
+      "origin": "written"
+    },
+    "B2": {
+      "alt": "how many trees can we take out of the existing sidewalks, and at what rate? item D290.1",
+      "origin": "written"
+    },
+    "B3": {
+      "alt": "what does page d/3/1 of the demolition bill total?",
+      "origin": "written"
+    },
+    "B4": {
+      "alt": "breaking out existing carriageway including road markings, D599.5 — quantity and amount?",
+      "origin": "written"
+    },
+    "B5": {
+      "alt": "removal of existing chain link fence D549.2 — what is the amount?",
+      "origin": "written"
+    },
+    "B6": {
+      "alt": "which document number and revision is the priced BOQ, and who produced it?",
+      "origin": "written"
+    },
+    "C1": {
+      "alt": "order of precedence within the Specification, first three, per Sub-Clause 1.5.1(d)?",
+      "origin": "written"
+    },
+    "C2": {
+      "alt": "Which specification section sets out the procedure for variations and adjustments?",
+      "origin": "measured"
+    },
+    "C3": {
+      "alt": "which scheduling method is required for programmes under Specification 003113?",
+      "origin": "written"
+    },
+    "C4": {
+      "alt": "what is Schedule 9 about in the contract volumes?",
+      "origin": "written"
+    },
+    "D1": {
+      "alt": "who put their name to the Creek Bend batching plant letter, and in what role?",
+      "origin": "written"
+    },
+    "D2": {
+      "alt": "how long ago had the land been handed to the contractor, per that letter?",
+      "origin": "written"
+    },
+    "D3": {
+      "alt": "why does the letter say a pre-cast factory is no longer needed?",
+      "origin": "written"
+    },
+    "E1": {
+      "alt": "what are the delay damages per calendar day, in SAR, for the whole of the Works?",
+      "origin": "written"
+    },
+    "E2": {
+      "alt": "Milestone 1 runs 30 days late — how much are the milestone delay damages?",
+      "origin": "written"
+    },
+    "E3": {
+      "alt": "does 12 ha at SAR 2,500 per ha come to the D110 amount that is stated?",
+      "origin": "written"
+    },
+    "E4": {
+      "alt": "I'm pouring a raft 30 m long, 20 m wide and 1.5 m thick, how much concrete do I need including waste, and how many truck loads?",
+      "origin": "measured"
+    },
+    "F1": {
+      "alt": "give me a high-level WBS covering the demolition and site clearance scope in this project's BOQ",
+      "origin": "written"
+    },
+    "F2": {
+      "alt": "make the tree-removal activity 45 days and run it again",
+      "origin": "written"
+    },
+    "F3": {
+      "alt": "if M1 is 180d, M3 is 240d and M5 is 310d and they all start at right-of-access on the same date, which one drives completion, and by how much more than M1?",
+      "origin": "written"
+    },
+    "G1": {
+      "alt": "what is in Schedule 10 of the contract?",
+      "origin": "written"
+    },
+    "G2": {
+      "alt": "how long is the Time for Completion for Section 2 of the Works?",
+      "origin": "written"
+    },
+    "G3": {
+      "alt": "how much is the parent company guarantee?",
+      "origin": "written"
+    },
+    "G4": {
+      "alt": "removal of storm water culverts D529.3 — what is the total amount?",
+      "origin": "written"
+    },
+    "G5": {
+      "alt": "give me a summary of drawing FX-2044-0000-AAA-DWG-CA-999999",
+      "origin": "written"
+    },
+    "G6": {
+      "alt": "when does the contract commence?",
+      "origin": "written"
+    }
+  }
+}

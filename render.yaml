@@ -1,0 +1,442 @@
+# Render Blueprint — version-controlled deploy config for The Shovel / The Fork.
+#
+# ⚠ DO NOT "APPLY BLUEPRINT" WITHOUT RE-CHECKING THE DIFF FIRST (2026-08-23).
+#
+# This file is a RECORD of the service, and it has drifted from it four times
+# already: `plan: starter` (live pro), `MAX_DOC_UPLOAD_SIZE` 50 MB, `sizeGB: 1`
+# (live 50), `autoDeploy: false` (live on-commit) and — worst — an embedding
+# model that would have taken retrieval down for all 172,809 chunks. Applying
+# reconciles EVERY value here onto the running service, so a stale line is not
+# documentation debt, it is an outage waiting for someone to click a button.
+#
+# Known remaining mismatches against live, deliberately NOT reconciled here:
+#
+#   UVICORN_WORKERS   declared 2, UNSET live (so one worker). Applying would
+#                     double worker count on a 4 GB box; nobody has tested
+#                     two workers against the extraction memory profile.
+#   44 env vars       set live and absent here (LLM keys, FORK_*,
+#                     RAG_GK_*, GDRIVE_*). Verify how apply treats undeclared
+#                     vars BEFORE applying — if it prunes them, applying is a
+#                     credential wipe.
+#
+# To compare before applying:
+#   GET /v1/services/<id>/env-vars  and diff against the `value:` lines below.
+#
+# Purpose: make the production service reproducible and the env surface
+# reviewable. Secrets are `sync: false` — they are entered once in the Render
+# dashboard and never live in this file or git. Non-secret values below are
+# safe infra config or match the application's code defaults.
+#
+# 2026-08-09 — Postgres moved OFF Render to Neon, and the background worker
+# was dropped. The stack is now exactly two Render resources:
+#
+#   * one WEB service (the-fork)  — the only compute
+#   * one REDIS instance          — cache, sessions, rate-limit window
+#
+# The database is external: DATABASE_URL is `sync: false` and holds the Neon
+# DIRECT connection string (not the `-pooler` host — psycopg3 prepares
+# statements automatically, which transaction-mode poolers can reject).
+#
+# WHY NO WORKER: the worker existed only to drain the arq ingest queue so
+# uploads processed in the background. At pilot scale, inline ingestion in
+# the web request is acceptable, and dropping it halves the compute bill.
+# Redis stays regardless — sessions and rate limiting use it too. To bring
+# the worker back, restore the `type: worker` block from git history
+# (present through 2026-08-08), set INGEST_WORKER_ENABLED=true, and redeploy.
+#
+# INGEST_WORKER_ENABLED IS WHAT MAKES THE ABOVE TRUE. Deleting the worker did
+# NOT switch ingestion to the inline path: upload_v1 only falls back to inline
+# indexing when enqueue_ingest() returns False, and that used to depend solely
+# on REDIS_URL — which is still set, because Redis serves sessions too. So from
+# 2026-08-08 every uploaded document was enqueued to a queue nobody drained and
+# stayed at chunk_count 0 (found by live-fire campaign run 1, 2026-08-14).
+# The queue is now opt-in: no INGEST_WORKER_ENABLED means index inline. Do not
+# set it unless a worker service is actually deployed and draining.
+#
+# NEON IS BILLED BY COMPUTE-TIME, NOT 24/7. That makes any endpoint which
+# touches the database expensive to poll: every probe wakes the compute and
+# starts a fresh billing window. `healthCheckPath` therefore points at
+# `/livez`, which is deliberately DB-FREE — see app/routers/health.py. Do
+# not repoint it at `/health` or `/ready`; both run a real `SELECT 1` and
+# Render polls the health path continuously, which would hold Neon awake
+# around the clock and defeat scale-to-zero entirely.
+
+services:
+  - type: redis
+    name: the-fork-redis
+    plan: free
+    region: oregon
+
+  - type: web
+    name: the-fork
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # The live service runs `pro` (4 GB / 2 CPU) and has since well before this
+    # file said `starter`. Declaring starter here made "Apply Blueprint" a
+    # DOWNGRADE waiting to happen, on a service that is also the only thing
+    # holding the 50 GB corpus disk.
+    plan: pro
+    region: oregon
+    branch: main
+    # CI IS THE AUTO-DEPLOY GATE.
+    #
+    # `autoDeployTrigger: checksPass` is Render's native "After CI Checks
+    # Pass" setting (replaces the deprecated `autoDeploy: true/false`).
+    # On a push to `main`, Render waits for this commit's GitHub check runs
+    # and deploys only when every conclusion is success / neutral / skipped.
+    # A single failure — or zero checks detected — skips the deploy. Manual
+    # Dashboard / API deploys still bypass the gate.
+    #
+    # Standing hole this closes: 612a2d89 (#436) went red on required checks
+    # `pip-audit` and `test-postgres` while auto-deploy was still on-commit,
+    # so a red SHA could already be live. Required checks on `main` (ruleset)
+    # are: test (virgin), test (production-like), test-postgres, integrity,
+    # eslint, ruff, pip-audit, compose up (fresh clone) + health. Render
+    # waits for ALL check runs on the SHA, not only the required set — that
+    # is stricter, not weaker.
+    #
+    # THIS LINE DOES NOT TAKE EFFECT FROM A GIT PUSH ALONE. Like
+    # `buildFilter` below, the live service keeps its current Auto-Deploy
+    # value until someone changes Dashboard → Settings → Auto-Deploy to
+    # "After CI Checks Pass", or Applies this Blueprint. Prefer the one
+    # dashboard toggle. Apply Blueprint still reconciles every other field
+    # (plan, disk, env) and remains dangerous — see the header.
+    #
+    # No GitHub deploy job: the-fork is a Git-linked Docker build (not a
+    # prebuilt image), so `checksPass` is valid. A workflow `needs:` deploy
+    # would require RENDER_API_KEY and would not stop on-commit auto-deploy
+    # until the dashboard is flipped anyway.
+    autoDeployTrigger: checksPass
+    # Documentation-only commits must not redeploy a live client service.
+    # Observed 2026-08-02: merging a markdown-only PR rebuilt the image and
+    # returned 502 for ~40s. Nothing in this list can change runtime
+    # behaviour, so skipping a rebuild for them costs nothing and removes a
+    # self-inflicted outage per docs commit.
+    #
+    # NOTE: buildFilter applies to Render's auto-deploy trigger. It is
+    # reconciled when this blueprint is applied — like every other change in
+    # this file, it does not take effect from a git push alone.
+    buildFilter:
+      ignoredPaths:
+        - "docs/**"
+        - "review_pack/**"
+        - "**/*.md"
+        - "LICENSE"
+        - ".github/**"
+    # DB-FREE by design — see the Neon note in the header. `/health` and
+    # `/ready` both execute a real `SELECT 1`; pointing Render's continuous
+    # health check at either would keep Neon's compute awake permanently.
+    healthCheckPath: /livez
+    # The live disk is 50 GB and holds the uploaded-document corpus. This said
+    # `1`, which is the third value in this file that disagreed with the
+    # running service (see `plan` and `autoDeployTrigger`).
+    #
+    # THIS DISK IS WHY DEPLOYS BOUNCE. A Render service with a persistent disk
+    # cannot deploy with zero downtime and cannot run more than one instance:
+    # the disk mounts to exactly one instance, so the old one must release it
+    # before the new one can boot. That gap is the post-deploy 502 window
+    # clients see — it is structural, not an application bug, and no health
+    # check tuning removes it. Removing it means moving the corpus off local
+    # disk (object storage), which is an architecture change, not a config one.
+    disk:
+      name: the-fork-data
+      mountPath: /app/data
+      sizeGB: 50
+    envVars:
+      # ── Infra config (safe to commit) ──────────────────────────────────
+      - key: ENV
+        value: production
+      - key: DATA_DIR
+        value: /app/data
+      - key: PYTHONIOENCODING
+        value: utf-8
+
+      # ── Pilot master-corpus alias (match app/core/projects.py defaults) ─
+      # NOTE: these are the intended live values; render.yaml env does NOT
+      # auto-sync to the dashboard, so the live env must be set to match.
+      - key: MASTER_CORPUS_PROJECT_ID
+        value: master_corpus
+      - key: MASTER_CORPUS_SOURCE_PROJECT_ID
+        value: drive_archive
+      - key: MASTER_CORPUS_NAME
+        value: Master Corpus
+      # GK = the always-on, DISCLOSED general-knowledge layer only: genuinely
+      # cross-project reference (FIDIC / OSHA / units / rates) in `curated_kb`.
+      # STEP 0 (2026-07-17): client corpora (drive_archive / example_infra_pack)
+      # were removed from this list — they were silently merging the client project into every
+      # other project (the ha_long -> the client project leak). The client/Master corpus now
+      # surfaces ONLY as the labeled empty/thin fallback via
+      # MASTER_CORPUS_SOURCE_PROJECT_ID; the retriever also structurally strips
+      # that id from this list even if a stale env re-adds it. See
+      # docs/step0-retrieval-isolation.md. Set to "" to make GK fallback-only too.
+      - key: RAG_GENERAL_KNOWLEDGE_PROJECTS
+        value: curated_kb
+      # PINNED, and it must stay in lockstep with the Dockerfile's
+      # RAG_EMBEDDING_MODEL build ARG — that ARG decides which weights get
+      # baked into the image, and HF_HUB_OFFLINE=1 means a mismatch cannot be
+      # papered over by a runtime download: the embedder simply fails to load.
+      #
+      # It also must not change without re-embedding the corpus. Every vector
+      # carries an embedding identity ({model, dim, normalized}) and
+      # VectorStore._verify_embedding_identity refuses a namespace whose stamp
+      # disagrees, so a new model name takes retrieval down until every chunk
+      # is rebuilt.
+      #
+      # This was previously UNSET, which left the value to code defaults
+      # (embeddings.DEFAULT_MODEL2VEC) — meaning the model production embedded
+      # its whole corpus with was implicit, and a change to that constant would
+      # have silently invalidated the corpus. Pinned to the value already in
+      # use, so this is a no-op for existing data.
+      #
+      # THIS FILE HAD THE WRONG VALUE. It declared minishlab/potion-base-8M
+      # while the live service runs BAAI/bge-small-en-v1.5 — and every one of
+      # the 172,809 rows in chunks_v2 is stamped:
+      #
+      #     BAAI/bge-small-en-v1.5   dim 384   normalized True   172,809 chunks
+      #
+      # So applying this blueprint would have done exactly what the paragraph
+      # above warns about: _verify_embedding_identity would refuse the
+      # namespace and retrieval would go down across the whole corpus. Pinned
+      # to what the vectors actually are.
+      - key: RAG_EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      # HF_HOME must stay /opt/hf — that is where the Dockerfile bakes the
+      # embedder. A dashboard override to /app/data/hf-cache lands on the
+      # persistent volume (empty on a new disk / clear-cache deploy) and
+      # produces LocalEntryNotFoundError / RAG_INDEX_FAILED under
+      # HF_HUB_OFFLINE=1 even when the image baked BAAI/bge-small-en-v1.5.
+      - key: HF_HOME
+        value: /opt/hf
+      # Phase 1 pilot: route the schedule workflow through the orchestrator's
+      # predefined reasoning. Non-breaking (only intercepts high-confidence
+      # generate_wbs intents); remove to revert to the tool-agent path.
+      - key: ORCHESTRATOR_PREDEFINED
+        value: "1"
+      # Intent routing uses the PRIMARY provider's default model (Kimi
+      # kimi-k2.6 on cloud). Do NOT pin ORCHESTRATOR_INTENT_MODEL to an
+      # Ollama id such as gpt-oss:20b-cloud: Moonshot 400s that name every
+      # turn and the exception is swallowed, so ORCHESTRATOR_PREDEFINED
+      # never fires. To use a lighter Kimi/Groq id, set it in the dashboard
+      # to a model THAT provider actually serves.
+      # Kimi reasoning bursts exceed the old 90s stream wall-clock; 240s
+      # is the live value that cleared the deadline (PLATFORM_HEALTH_REPORT).
+      - key: CHAT_STREAM_TIMEOUT_SECONDS
+        value: "240"
+      # Client-facing origin for export footers and email-verify links.
+      # RENDER_EXTERNAL_URL is the onrender slug; without this override,
+      # generated files stamp the-fork-jn3t.onrender.com instead of the
+      # hostname clients actually use.
+      - key: PUBLIC_BASE_URL
+        value: https://theshovel.ai
+      # No ingest worker is deployed (see header). Pin false so a leftover
+      # dashboard `true` cannot enqueue uploads onto a queue nobody drains.
+      - key: INGEST_WORKER_ENABLED
+        value: "false"
+      # Matches the live service. This used to declare 50 MB "so one large BIM
+      # file can't OOM the box", which production never applied — and which was
+      # the wrong lever anyway: the file that actually OOM-killed the instance
+      # was 4.4 MB (measured 2026-08-20, peak 3892 MB of 4096 then SIGKILL).
+      # File size does not predict extraction memory; a 4.4 MB text PDF blows
+      # up where a 200 MB scan does not. The real bound is now RLIMIT_AS on the
+      # extraction child (DOC_EXTRACT_MEM_MB, app/core/extract_isolated.py), so
+      # this cap is back to being what it should always have been: a limit on
+      # absurd uploads, not a memory guard. 50 MB would reject real contract
+      # volumes (Vol 4 Schedule is 221 MB).
+      - key: MAX_DOC_UPLOAD_SIZE
+        value: "524288000" # 500 MB
+
+      # ── Required in production (set in dashboard) ──────────────────────
+      - key: SECRET_KEY # JWT signing — app refuses to start in prod without it
+        sync: false
+      - key: DATA_ENCRYPTION_KEY # encrypts uploaded files at rest — required in prod
+        sync: false
+      - key: CEREBRUM_MASTER_KEY # admin API key
+        sync: false
+      - key: DATABASE_URL # Neon (or other) Postgres — required in prod
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+
+      # ── Block registry (this repo is source of truth; do not pull store kits) ─
+      - key: CEREBRUM_VIRGIN
+        value: "false"
+      - key: CEREBRUM_DOMAIN_KITS
+        value: construction
+
+      # ── LLM providers (set in dashboard) ───────────────────────────────
+      # DeepSeek native API (optional cloud primary; OpenRouter free 402s
+      # a $0-credit account):
+      #   LLM_PROVIDER=deepseek
+      #   DEEPSEEK_API_KEY=…               (dashboard; never commit)
+      #   DEEPSEEK_MODEL=deepseek-chat     (or deepseek-reasoner)
+      #   LLM_FALLBACK_PROVIDER=kimi       (or groq)
+      # OpenRouter FREE models (DECISIONS.md 2026-09-05):
+      #   LLM_PROVIDER=openrouter
+      #   OPENROUTER_MODEL=openrouter/free   (or any :free slug)
+      #   OPENROUTER_API_KEY=…               (dashboard; never commit)
+      # Kimi and Groq stay optional. Paid OpenRouter slugs are refused unless
+      # OPENROUTER_ALLOW_PAID=1.
+      # Historical: PRIMARY = Kimi K2 (LLM_PROVIDER=kimi, KIMI_MODEL=kimi-k2.6
+      # — reasoning model, tool_choice=auto); FALLBACK = Groq (413s payloads
+      # >~12k tokens on the free account). Unset LLM_PROVIDER still resolves
+      # to Kimi — do not change that default here.
+      # Ollama is the ON-PREM provider only (see deploy/onprem). Do not point
+      # OLLAMA_URL at OpenRouter — use LLM_PROVIDER=openrouter.
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_FALLBACK_PROVIDER
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_MODEL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        sync: false
+      - key: KIMI_API_KEY
+        sync: false
+      - key: KIMI_MODEL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false
+
+      # ── Google Drive integration (set in dashboard) ────────────────────
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+
+      # ── Bootstrap admin + misc (set in dashboard) ──────────────────────
+      - key: BOOTSTRAP_USER_EMAIL
+        sync: false
+      - key: BOOTSTRAP_USER_PASSWORD
+        sync: false
+
+      # ── Redis + worker infra (P5) ──────────────────────────────────────
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: the-fork-redis
+          property: connectionString
+      - key: UVICORN_WORKERS
+        value: "2"
+
+  # ── TIER-1/2/3 Drive ingestion — background worker ───────────────────────
+  #
+  # NOT YET CREATED. Like every other block in this file, writing it here does
+  # NOT create the service; a git push changes nothing on Render. Create it in
+  # the Dashboard (New → Background Worker, same repo, same Dockerfile) and do
+  # NOT "Apply Blueprint" — see the header, applying reconciles every field of
+  # the web service too.
+  #
+  # WHY A WORKER AND NOT THE WEB SHELL. scripts/p1b_ingest_drive_server.py has
+  # been run from a Render Web Shell, and that is the direct cause of runs
+  # dying with no traceback and no final tally:
+  #
+  #   * A shell-launched process sits in that pty's foreground process group.
+  #     Closing the tab, an idle timeout or a network blip delivers SIGHUP and
+  #     the run is gone. manifests/INGESTION_STATUS.md logs this verbatim:
+  #     "500-file batch killed by session close at file 22."
+  #   * Its stdout/stderr go to the interactive session, not to the container's
+  #     PID-1 streams, so Render's log collector never sees them. When the
+  #     session ends the only record of the run ends with it.
+  #   * It shares the web service's 4 GB with uvicorn. The OOM measurement in
+  #     the MAX_DOC_UPLOAD_SIZE note above (3892 MB of 4096, then SIGKILL) was
+  #     taken on that box.
+  #
+  # In a worker the ingest process IS PID 1 — entrypoint.sh `exec`s
+  # WORKER_COMMAND — so every line the script prints lands in Render's durable,
+  # searchable log stream and process exit shows up in Events. That is what
+  # makes RENDER, not a report file and not a Neon row count, the completion
+  # authority for this job. Grep the log for the single terminal line:
+  #
+  #     [p1b-server] run_id=<id> RUNSUMMARY {"accounting":{...},"run_complete":true,...}
+  #
+  # NO DISK. A Render disk mounts to exactly one instance and the-fork already
+  # holds the-fork-data, so this worker CANNOT share /app/data. DATA_DIR below
+  # is therefore ephemeral scratch, which is fine for the ingest path — the
+  # script deletes each download right after indexing (the platform keeps no
+  # copy of an original) and the durable outputs are the Neon rows plus the
+  # Render log. The JSON report and shard manifest the worker writes die with
+  # the container; do not treat their absence as evidence, and do not treat a
+  # stale copy as current. On the disk-backed WEB path the same script writes
+  # them under DATA_DIR (=/app/data) instead, where they survive.
+  #
+  # NOT A CRON JOB. Cron runs are capped at 12 hours and cannot attach a disk.
+  # Tier 1's remainder may fit; tiers 2 and 3 will not.
+  #
+  # --keep-alive is load-bearing: Render restarts a worker whose process exits,
+  # so without it a finished pass would loop forever re-walking Drive. With it,
+  # a finished worker parks and the last log line stays readable.
+  - type: worker
+    name: the-fork-ingest
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # 4 GB. Extraction peaks are documented above and are not a function of
+    # file size; a 4.4 MB PDF is what produced the 3892 MB peak.
+    plan: pro
+    region: oregon
+    branch: main
+    # Ingestion is started deliberately, never by a merge landing on main.
+    autoDeploy: false
+    envVars:
+      - key: ENV
+        value: production
+      # Ephemeral — see the NO DISK note above.
+      - key: DATA_DIR
+        value: /app/data
+      - key: PYTHONIOENCODING
+        value: utf-8
+      # One file at a time. The default of 2 keeps two raw file bodies plus two
+      # extraction forks resident at once, which is what the OOM measurement
+      # was taken against.
+      - key: P1B_PARALLELISM
+        value: "1"
+      - key: WORKER_COMMAND
+        value: >-
+          python scripts/p1b_ingest_drive_server.py --tier 1 --resume
+          --keep-alive
+      # Must match the web service exactly — vectors carry an embedding
+      # identity and VectorStore._verify_embedding_identity refuses a
+      # namespace whose stamp disagrees.
+      - key: RAG_EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      # Same pin as the web service: baked weights are at /opt/hf, not on
+      # the ephemeral /app/data volume. Do not point HF_HOME at hf-cache
+      # under DATA_DIR.
+      - key: HF_HOME
+        value: /opt/hf
+      - key: CEREBRUM_VIRGIN
+        value: "false"
+      - key: CEREBRUM_DOMAIN_KITS
+        value: construction
+      # Ingest needs 1-2 live Postgres connections; the default pool of 10 per
+      # process is what knocked Postgres into recovery when five ingest
+      # workers ran at once (see app/core/db.py).
+      - key: DB_POOL_SIZE
+        value: "2"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      # No inbound HTTP, so no queue draining here either.
+      - key: INGEST_WORKER_ENABLED
+        value: "false"
+      # ── Secrets (set in the dashboard, never in git) ───────────────────
+      - key: DATABASE_URL
+        sync: false
+      - key: DATA_ENCRYPTION_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: GDRIVE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: SENTRY_DSN
+        sync: false

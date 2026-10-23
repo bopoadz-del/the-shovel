@@ -1,0 +1,6 @@
+# Shell scripts and entrypoints must keep LF endings so they run on Linux
+# targets (a CRLF shebang breaks `#!/usr/bin/env bash`). Critical for the
+# on-prem deploy scripts and Docker entrypoints.
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+Dockerfile* text eol=lf

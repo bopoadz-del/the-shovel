@@ -1,0 +1,96 @@
+name: pr-quality
+
+# Pre-merge gate that catches three patterns from this repo's history:
+#
+#   1. Empty-body PRs (#1, #2, #9) — 18k+ LOC merged with zero description.
+#      Permanently opaque to future audits.
+#   2. Untouched-template PRs — body is the literal `.github/pull_request_template.md`
+#      with the comment placeholders intact. Codex P1 fix on PR #28: the
+#      earlier `sed 's/<!--.*-->//g'` check only handled single-line HTML
+#      comments; the template uses multiline blocks so untouched submissions
+#      sailed through.
+#   3. Zero-diff PRs (#9 — literally "+0/-0 (0 files)" merged with title
+#      "Merge"). Adds noise to PR history.
+#
+# The job runs on PR open / edit / sync. It does NOT block PRs that hold
+# the "trivial" label, so single-line typo fixes don't need the template.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check-body-and-size:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo (need the template for untouched-template comparison)
+        uses: actions/checkout@v4
+
+      - name: Reject empty body, untouched template, and zero-diff PRs
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
+          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          # Trivial PRs may skip the template (single-typo fixes etc.)
+          if printf '%s' "$PR_LABELS" | tr ',' '\n' | grep -qx 'trivial'; then
+            echo "::notice::'trivial' label set — skipping PR-quality gate"
+            exit 0
+          fi
+
+          # Codex P1 fix on PR #28: use Python for proper multiline regex
+          # support (sed can't span newlines portably) and compare the
+          # cleaned body against the cleaned template — an untouched template
+          # leaves the section headings (`## Summary`, `## Why`, …) which
+          # are NOT comments, so a "strip comments + check non-empty" gate
+          # always passed for an empty fill-in.
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+
+          body = os.environ.get("PR_BODY") or ""
+          # Strip ALL HTML comments, including multiline blocks (re.DOTALL).
+          body_clean = re.sub(r"<!--.*?-->", "", body, flags=re.DOTALL)
+
+          tmpl_path = pathlib.Path(".github/pull_request_template.md")
+          if tmpl_path.exists():
+              tmpl = tmpl_path.read_text(encoding="utf-8")
+              tmpl_clean = re.sub(r"<!--.*?-->", "", tmpl, flags=re.DOTALL)
+              # Compare in normalised form (all whitespace collapsed).
+              body_compact = "".join(body_clean.split())
+              tmpl_compact = "".join(tmpl_clean.split())
+              extra = len(body_compact) - len(tmpl_compact)
+              # 80 chars ≈ one short filled-in sentence beyond the headings.
+              # Generous floor — we want to block "untouched template" not
+              # "terse but real" submissions. Bump if false positives appear.
+              if extra < 80:
+                  sys.stderr.write(
+                      f"::error::PR body looks like an untouched template "
+                      f"(only {extra} non-template characters beyond the section "
+                      f"headings). Fill out Summary / Why / Test plan, or add the "
+                      f"'trivial' label.\n"
+                  )
+                  sys.exit(1)
+          else:
+              # Repo without a template — fall back to "is body non-empty
+              # after stripping comments + whitespace?"
+              if not "".join(body_clean.split()):
+                  sys.stderr.write("::error::PR body is empty.\n")
+                  sys.exit(1)
+          PY
+
+          # Zero-diff PRs (PR #9 class).
+          if [ "${PR_ADDITIONS:-0}" -eq 0 ] && [ "${PR_DELETIONS:-0}" -eq 0 ]; then
+            echo "::error::PR has zero additions and zero deletions — nothing to merge."
+            exit 1
+          fi
+
+          echo "PR-quality checks passed."

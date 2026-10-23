@@ -1,0 +1,1668 @@
+{
+ "_meta": {
+  "provenance": "Extracted 2026-08-15 from the operator's REAL documents: a contract-volume priced bill (.xls, arithmetic-validated rows), a scanned 2016-17 tender BOQ answer key (OCR rows accepted only where qty*rate=amount within 2%), a 2013 Primavera P6 baseline .xer (scheduler's own floats), and the conditions of contract (retention 10%). Descriptions and identifiers stripped; the numbers are the test.",
+  "exclusions": "XER activities whose P6 float disagrees with date arithmetic (multi-calendar artifacts) are excluded at extraction and counted here. Excluded: 1261; kept: 19."
+ },
+ "line_extensions": [
+  {
+   "source": "contract_volume_bill",
+   "qty": 87,
+   "rate": 684,
+   "amount": 59508
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 296,
+   "rate": 408,
+   "amount": 120768
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 3,
+   "rate": 579,
+   "amount": 1737
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 343,
+   "rate": 1159.2,
+   "amount": 397605.6
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 685,
+   "rate": 986.24,
+   "amount": 675574.4
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 310,
+   "rate": 986.24,
+   "amount": 305734.4
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1,
+   "rate": 986.24,
+   "amount": 986.24
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 803,
+   "rate": 1262.24,
+   "amount": 1013578.72
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 344,
+   "rate": 579,
+   "amount": 199176
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 685,
+   "rate": 408,
+   "amount": 279480
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 310,
+   "rate": 348,
+   "amount": 107880
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 803,
+   "rate": 348,
+   "amount": 279444
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 78,
+   "rate": 14092.2,
+   "amount": 1099191.6
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 18,
+   "rate": 15053.03,
+   "amount": 270954.54
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 46,
+   "rate": 9127.9,
+   "amount": 419883.4
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 8967.76,
+   "amount": 17935.52
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 6,
+   "rate": 8647.49,
+   "amount": 51884.94
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 87,
+   "rate": 13451.65,
+   "amount": 1170293.55
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1,
+   "rate": 15053.03,
+   "amount": 15053.03
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 3,
+   "rate": 17615.25,
+   "amount": 52845.75
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 216,
+   "rate": 3578.88,
+   "amount": 773038.08
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 184,
+   "rate": 6859.52,
+   "amount": 1262151.68
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 233,
+   "rate": 5608.32,
+   "amount": 1306738.56
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 49,
+   "rate": 9428.36,
+   "amount": 461989.64
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1,
+   "rate": 1788.16,
+   "amount": 1788.16
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 6362.45,
+   "amount": 12724.9
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 11403,
+   "rate": 8,
+   "amount": 91224
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2026,
+   "rate": 8,
+   "amount": 16208
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 9823,
+   "rate": 45,
+   "amount": 442035
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2963,
+   "rate": 8,
+   "amount": 23704
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1180,
+   "rate": 125,
+   "amount": 147500
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 449,
+   "rate": 320,
+   "amount": 143680
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 8251,
+   "rate": 45,
+   "amount": 371295
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 928,
+   "rate": 125,
+   "amount": 116000
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1168,
+   "rate": 55.56,
+   "amount": 64894.08
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 90,
+   "rate": 45,
+   "amount": 4050
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 8,
+   "rate": 320,
+   "amount": 2560
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 21,
+   "rate": 400,
+   "amount": 8400
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 679,
+   "rate": 1115,
+   "amount": 757085
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 97,
+   "rate": 260,
+   "amount": 25220
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 346,
+   "rate": 1367,
+   "amount": 472982
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 332,
+   "rate": 870,
+   "amount": 288840
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1022,
+   "rate": 380,
+   "amount": 388360
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 332,
+   "rate": 644,
+   "amount": 213808
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 97,
+   "rate": 225,
+   "amount": 21825
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1022,
+   "rate": 11,
+   "amount": 11242
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2498,
+   "rate": 54.08,
+   "amount": 135091.84
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1275,
+   "rate": 45,
+   "amount": 57375
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 2300,
+   "amount": 39100
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 68,
+   "rate": 1262.24,
+   "amount": 85832.32
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 1262.24,
+   "amount": 21458.08
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 119,
+   "rate": 986.24,
+   "amount": 117362.56
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 2300,
+   "amount": 39100
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 119,
+   "rate": 438,
+   "amount": 52122
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 744,
+   "amount": 12648
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 1680,
+   "amount": 28560
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 14758.4,
+   "amount": 250892.8
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 5282.5,
+   "amount": 89802.5
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 2746.9,
+   "amount": 46697.3
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 1927.5,
+   "amount": 32767.5
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 1460.7,
+   "amount": 24831.9
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 1947.6,
+   "amount": 33109.2
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 1623,
+   "amount": 27591
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 15,
+   "rate": 106.84,
+   "amount": 1602.6
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 32,
+   "rate": 75.58,
+   "amount": 2418.56
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 825,
+   "amount": 14025
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 51,
+   "rate": 43.33,
+   "amount": 2209.83
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 26,
+   "rate": 45.45,
+   "amount": 1181.7
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 663,
+   "rate": 32,
+   "amount": 21216
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 187,
+   "rate": 120,
+   "amount": 22440
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 236,
+   "rate": 36,
+   "amount": 8496
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 79,
+   "amount": 1343
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 34,
+   "rate": 79,
+   "amount": 2686
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 34,
+   "rate": 79,
+   "amount": 2686
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 221,
+   "rate": 54.08,
+   "amount": 11951.68
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 9,
+   "amount": 153
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 68,
+   "rate": 30,
+   "amount": 2040
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 13,
+   "amount": 221
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 17,
+   "rate": 11,
+   "amount": 187
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 3,
+   "rate": 986.24,
+   "amount": 2958.72
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 7,
+   "rate": 348,
+   "amount": 2436
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 5,
+   "rate": 1674.4,
+   "amount": 8372
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 61,
+   "rate": 45,
+   "amount": 2745
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 6,
+   "rate": 303.13,
+   "amount": 1818.78
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 4,
+   "rate": 11,
+   "amount": 44
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 4,
+   "rate": 23,
+   "amount": 92
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 6,
+   "rate": 11,
+   "amount": 66
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 200,
+   "amount": 400
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 800,
+   "amount": 1600
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 2000,
+   "amount": 4000
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 1,
+   "rate": 986.24,
+   "amount": 986.24
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 348,
+   "amount": 696
+  },
+  {
+   "source": "contract_volume_bill",
+   "qty": 2,
+   "rate": 38,
+   "amount": 76
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2696.0,
+   "rate": 20.0,
+   "amount": 53920.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 32088.0,
+   "rate": 20.0,
+   "amount": 641760.0000000001
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 31721.0,
+   "rate": 13.0,
+   "amount": 412373.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3387.0,
+   "rate": 31.0,
+   "amount": 104997.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 367.0,
+   "rate": 293.0,
+   "amount": 107531.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 155.0,
+   "rate": 332.0,
+   "amount": 51460.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2611.0,
+   "rate": 305.0,
+   "amount": 796355.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1304.0,
+   "rate": 315.0,
+   "amount": 410760.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 619.0,
+   "rate": 330.0,
+   "amount": 204270.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 111.0,
+   "rate": 414.0,
+   "amount": 45954.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5704.0,
+   "rate": 414.0,
+   "amount": 2361456.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5.0,
+   "rate": 414.0,
+   "amount": 2070.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 847.0,
+   "rate": 414.0,
+   "amount": 350658.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3544.0,
+   "rate": 414.0,
+   "amount": 1467216.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 538.0,
+   "rate": 414.0,
+   "amount": 222732.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 310.0,
+   "rate": 414.0,
+   "amount": 128340.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 549.0,
+   "rate": 414.0,
+   "amount": 227286.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 71.0,
+   "rate": 414.0,
+   "amount": 29394.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2.0,
+   "rate": 410.0,
+   "amount": 820.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 152.0,
+   "rate": 410.0,
+   "amount": 62320.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2698.0,
+   "rate": 423.0,
+   "amount": 1141254.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3355.0,
+   "rate": 361.0,
+   "amount": 1211155.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1815.0,
+   "rate": 361.0,
+   "amount": 655215.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 13384.0,
+   "rate": 361.0,
+   "amount": 4831624.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 4112.0,
+   "rate": 361.0,
+   "amount": 1484432.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 712.0,
+   "rate": 361.0,
+   "amount": 257032.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 182.0,
+   "rate": 361.0,
+   "amount": 65702.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1184.0,
+   "rate": 361.0,
+   "amount": 427424.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 241.0,
+   "rate": 361.0,
+   "amount": 87001.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 7.0,
+   "rate": 363.0,
+   "amount": 2541.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 730.0,
+   "rate": 363.0,
+   "amount": 264990.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 7.0,
+   "rate": 422.0,
+   "amount": 2954.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 355.0,
+   "rate": 422.0,
+   "amount": 149810.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 11.0,
+   "rate": 422.0,
+   "amount": 4642.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 110.0,
+   "rate": 422.0,
+   "amount": 46420.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 350.0,
+   "rate": 422.0,
+   "amount": 147700.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 489.0,
+   "rate": 431.0,
+   "amount": 210759.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 58.0,
+   "rate": 361.0,
+   "amount": 20938.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 20.0,
+   "rate": 357.0,
+   "amount": 7140.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 132.0,
+   "rate": 357.0,
+   "amount": 47124.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5512.0,
+   "rate": 357.0,
+   "amount": 1967784.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 494.0,
+   "rate": 357.0,
+   "amount": 176358.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 21812.0,
+   "rate": 357.0,
+   "amount": 7786884.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2674.0,
+   "rate": 357.0,
+   "amount": 954618.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 859.0,
+   "rate": 357.0,
+   "amount": 306663.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2768.0,
+   "rate": 357.0,
+   "amount": 988176.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 181.0,
+   "rate": 357.0,
+   "amount": 64617.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 587.0,
+   "rate": 357.0,
+   "amount": 209559.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2406.0,
+   "rate": 357.0,
+   "amount": 858942.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 191.0,
+   "rate": 357.0,
+   "amount": 68187.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1110.0,
+   "rate": 357.0,
+   "amount": 396270.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1216.0,
+   "rate": 357.0,
+   "amount": 434112.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 41.0,
+   "rate": 362.0,
+   "amount": 14842.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 158.0,
+   "rate": 362.0,
+   "amount": 57196.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5.0,
+   "rate": 362.0,
+   "amount": 1810.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 72.0,
+   "rate": 362.0,
+   "amount": 26064.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 22.0,
+   "rate": 362.0,
+   "amount": 7964.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 61.0,
+   "rate": 375.0,
+   "amount": 22875.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 10.0,
+   "rate": 375.0,
+   "amount": 3750.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 133.0,
+   "rate": 375.0,
+   "amount": 49875.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2037.0,
+   "rate": 362.0,
+   "amount": 737394.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 489.0,
+   "rate": 375.0,
+   "amount": 183375.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 39.0,
+   "rate": 375.0,
+   "amount": 14625.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 13.0,
+   "rate": 375.0,
+   "amount": 4875.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 149.0,
+   "rate": 367.0,
+   "amount": 54683.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 7.0,
+   "rate": 367.0,
+   "amount": 2569.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 9.0,
+   "rate": 3324.0,
+   "amount": 29916.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2.0,
+   "rate": 3324.0,
+   "amount": 6648.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 4713.0,
+   "rate": 3324.0,
+   "amount": 15666012.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 60.0,
+   "rate": 3324.0,
+   "amount": 199440.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5154.0,
+   "rate": 3324.0,
+   "amount": 17131896.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 44.0,
+   "rate": 3324.0,
+   "amount": 146256.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 71.0,
+   "rate": 3324.0,
+   "amount": 236004.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 75.0,
+   "rate": 3324.0,
+   "amount": 249300.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 109.0,
+   "rate": 3324.0,
+   "amount": 362316.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 4000.0,
+   "rate": 3324.0,
+   "amount": 13296000.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1146.0,
+   "rate": 3324.0,
+   "amount": 3809304.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 432.0,
+   "rate": 3324.0,
+   "amount": 1435968.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 71.0,
+   "rate": 3324.0,
+   "amount": 236004.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 4.0,
+   "rate": 3324.0,
+   "amount": 13296.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 30.0,
+   "rate": 3324.0,
+   "amount": 99720.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 18.0,
+   "rate": 3324.0,
+   "amount": 59832.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 130775.0,
+   "rate": 90.0,
+   "amount": 11769750.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 939.0,
+   "rate": 108.0,
+   "amount": 101412.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2262.0,
+   "rate": 108.0,
+   "amount": 244296.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1380.0,
+   "rate": 90.0,
+   "amount": 124200.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 18037.0,
+   "rate": 107.0,
+   "amount": 1929959.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 251.0,
+   "rate": 113.0,
+   "amount": 28363.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1321.0,
+   "rate": 92.0,
+   "amount": 121532.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 748.0,
+   "rate": 95.0,
+   "amount": 71060.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 56.0,
+   "rate": 90.0,
+   "amount": 5040.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 81.0,
+   "rate": 90.0,
+   "amount": 7290.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 75.0,
+   "rate": 107.0,
+   "amount": 8025.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2371.0,
+   "rate": 92.0,
+   "amount": 218132.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 4911.0,
+   "rate": 107.0,
+   "amount": 525477.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 79485.0,
+   "rate": 107.0,
+   "amount": 8504895.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 11132.0,
+   "rate": 101.0,
+   "amount": 1124332.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1076.0,
+   "rate": 108.0,
+   "amount": 116208.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 163.0,
+   "rate": 19.0,
+   "amount": 3097.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 132.0,
+   "rate": 23.0,
+   "amount": 3036.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 9312.0,
+   "rate": 28.0,
+   "amount": 260736.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 367.0,
+   "rate": 32.0,
+   "amount": 11744.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3551.0,
+   "rate": 37.0,
+   "amount": 131387.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 317.0,
+   "rate": 51.0,
+   "amount": 16167.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 809.0,
+   "rate": 616.0,
+   "amount": 498344.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 26509.0,
+   "rate": 18.0,
+   "amount": 477162.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1940.0,
+   "rate": 93.0,
+   "amount": 180420.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 15435.0,
+   "rate": 103.0,
+   "amount": 1589805.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 28462.0,
+   "rate": 108.0,
+   "amount": 3073896.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 25302.0,
+   "rate": 126.0,
+   "amount": 3188052.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 29798.0,
+   "rate": 77.0,
+   "amount": 2294446.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 130.0,
+   "rate": 83.0,
+   "amount": 10790.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5483.0,
+   "rate": 77.0,
+   "amount": 422191.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1685.0,
+   "rate": 545.0,
+   "amount": 918325.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1685.0,
+   "rate": 162.0,
+   "amount": 272970.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1782.0,
+   "rate": 173.0,
+   "amount": 308286.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1863.0,
+   "rate": 168.0,
+   "amount": 312984.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 13128.0,
+   "rate": 42.0,
+   "amount": 551376.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 20896.0,
+   "rate": 19.0,
+   "amount": 397024.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 8895.0,
+   "rate": 42.0,
+   "amount": 373590.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 15088.0,
+   "rate": 17.0,
+   "amount": 256496.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 7213.0,
+   "rate": 191.0,
+   "amount": 1377683.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 402.0,
+   "rate": 432.0,
+   "amount": 173664.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 26079.0,
+   "rate": 97.0,
+   "amount": 2529663.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2371.0,
+   "rate": 113.0,
+   "amount": 267923.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2456.0,
+   "rate": 113.0,
+   "amount": 277528.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 277.0,
+   "rate": 113.0,
+   "amount": 31301.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3069.0,
+   "rate": 7.0,
+   "amount": 21483.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 632.0,
+   "rate": 49.0,
+   "amount": 30968.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 8.0,
+   "rate": 1828.0,
+   "amount": 14624.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 7.0,
+   "rate": 4248.0,
+   "amount": 29736.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 26381.0,
+   "rate": 162.0,
+   "amount": 4273722.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1392.0,
+   "rate": 216.0,
+   "amount": 300672.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1264.0,
+   "rate": 910.0,
+   "amount": 1150240.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 621.0,
+   "rate": 1293.0,
+   "amount": 802953.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 130.0,
+   "rate": 1143.0,
+   "amount": 148590.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 4584.0,
+   "rate": 779.0,
+   "amount": 3570936.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3020.0,
+   "rate": 1270.0,
+   "amount": 3835400.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2430.0,
+   "rate": 1143.0,
+   "amount": 2777490.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 2302.0,
+   "rate": 1293.0,
+   "amount": 2976486.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 8670.0,
+   "rate": 43.0,
+   "amount": 372810.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 3315.0,
+   "rate": 114.0,
+   "amount": 377910.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 7121.0,
+   "rate": 31.0,
+   "amount": 220751.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5076.0,
+   "rate": 21.0,
+   "amount": 106596.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 6365.0,
+   "rate": 16.0,
+   "amount": 101840.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 14.0,
+   "rate": 1914.0,
+   "amount": 26796.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 9.0,
+   "rate": 340.0,
+   "amount": 3060.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 8.0,
+   "rate": 557.0,
+   "amount": 4456.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 6.0,
+   "rate": 1135.0,
+   "amount": 6810.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1.0,
+   "rate": 4094.0,
+   "amount": 4094.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1.0,
+   "rate": 1987.0,
+   "amount": 1987.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1.0,
+   "rate": 2479.0,
+   "amount": 2479.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 1.0,
+   "rate": 1185.0,
+   "amount": 1185.0
+  },
+  {
+   "source": "scanned_tender_boq",
+   "qty": 5.0,
+   "rate": 3338.0,
+   "amount": 16690.0
+  }
+ ],
+ "xer_floats": [
+  {
+   "source": "baseline_xer_2013",
+   "es": 8.625,
+   "ef": 8.625,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": -9.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  },
+  {
+   "source": "baseline_xer_2013",
+   "es": 0.0,
+   "ef": 0.0,
+   "ls": 0.0,
+   "lf": 0.0,
+   "p6_total_float_days": 0.0,
+   "p6_critical": true
+  }
+ ],
+ "payment": {
+  "source": "conditions-of-contract retention 10%",
+  "gross_valuation": 15184347.9,
+  "retention_percent": 10.0
+ }
+}

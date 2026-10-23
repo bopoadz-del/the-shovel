@@ -1,0 +1,96 @@
+# Fork-in-a-box — the on-prem, air-gapped stack (STEP 4).
+#
+# Three services, all local, zero external egress at runtime:
+#   postgres  — pgvector store (the RAG corpus + app DB)
+#   ollama    — local LLM server; models live in a named volume (pre-pulled by
+#               install.sh on a staging box, then shipped for air-gap)
+#   app       — The Fork under DEPLOYMENT_PROFILE=onprem (asserts leak-free boot)
+#
+# Bring up:   cd deploy/onprem && ./install.sh    (first time — pulls + seeds)
+#             docker compose --env-file onprem.env up -d
+# Health:     docker compose ps   (all healthy)   +   curl localhost:8000/health
+# Backup:     ./backup.sh    Restore:  ./restore.sh <backup-dir>
+#
+# Multi-arch: the app image builds for linux/amd64 (24 GB x86 box) and
+# linux/arm64 (AGX Orin) via `docker buildx build --platform`. See README.md.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: fork-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fork}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fork}
+      POSTGRES_DB: ${POSTGRES_DB:-fork}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    # No published ports — reachable only on the internal compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fork} -d ${POSTGRES_DB:-fork}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: fork-ollama
+    volumes:
+      - ollama_models:/root/.ollama   # models pre-pulled by install.sh
+    restart: unless-stopped
+    # GPU: uncomment on the 24 GB box (needs nvidia-container-toolkit).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/onprem/Dockerfile.onprem
+      # Bake the embedder + offline flags into the image (see Dockerfile.onprem).
+      args:
+        RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      platforms:
+        - linux/amd64
+        # - linux/arm64   # enable for AGX Orin builds
+    image: the-fork:onprem
+    container_name: fork-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - onprem.env
+    environment:
+      # Wire the two local services (override the env-file localhost defaults so
+      # the app reaches the compose-network hostnames, not the host).
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-fork}:${POSTGRES_PASSWORD:-fork}@postgres:5432/${POSTGRES_DB:-fork}
+      OLLAMA_URL: http://ollama:11434
+      DATA_DIR: /app/data
+    volumes:
+      - app_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres_data:
+  ollama_models:
+  app_data:

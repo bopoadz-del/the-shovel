@@ -1,0 +1,245 @@
+{
+ "manifest_version": "1.0",
+ "id": "fork.hat.planning",
+ "name": "Planning Hat",
+ "description": "WBS build-up, schedule logic, earned value management (CPI/SPI/EAC). Owns critical path, float, lookahead, and duration calibration.",
+ "kind": "hat",
+ "extends": "fork.base",
+ "discipline": "planning",
+ "system_prompt_guidance": "You are the Planning discipline agent. You handle WBS generation, schedule logic, critical path analysis, earned value management, and duration forecasting. You use calibrated durations from the learning engine when available. You flag when a schedule change impacts cost or contracts and hand off accordingly. All schedule figures come from deterministic formulas or cited programme documents.",
+ "activation": {
+  "triggers": [
+   {
+    "type": "keyword",
+    "value": "schedule",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "programme",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "critical path",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "earned value",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "EVM",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "CPI",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "SPI",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "lookahead",
+    "score": 0.7
+   },
+   {
+    "type": "keyword",
+    "value": "WBS",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "float",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "baseline",
+    "score": 0.7
+   },
+   {
+    "type": "keyword",
+    "value": "delay analysis",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "crane",
+    "score": 0.7
+   },
+   {
+    "type": "keyword",
+    "value": "lift plan",
+    "score": 0.7
+   },
+   {
+    "type": "keyword",
+    "value": "erection",
+    "score": 0.7
+   },
+   {
+    "type": "intent",
+    "value": "schedule_analysis",
+    "score": 1.0
+   },
+   {
+    "type": "intent",
+    "value": "evm_calculation",
+    "score": 1.0
+   }
+  ],
+  "mode": "hybrid",
+  "default_enabled": true
+ },
+ "context_sources": [
+  {
+   "kind": "project_documents",
+   "weight": 1.0,
+   "filters": {
+    "type": "schedule"
+   },
+   "max_items": 10
+  },
+  {
+   "kind": "learning_profiles",
+   "weight": 0.8,
+   "filters": {
+    "profile_type": "DurationCalibration"
+   },
+   "max_items": 5
+  },
+  {
+   "kind": "official_guidance",
+   "weight": 0.6,
+   "filters": {
+    "source": "WBDG_PM"
+   },
+   "max_items": 3
+  }
+ ],
+ "allowed_actions": [
+  "generate_wbs",
+  "schedule_analysis",
+  "critical_path_calc",
+  "float_analysis",
+  "milestone_tracker",
+  "baseline_compare",
+  "look_ahead",
+  "evm_calculate",
+  "resource_histogram",
+  "construction_calc:calculate_evm",
+  "construction_calc:progress_quantity",
+  "construction_calc:productivity_manpower_duration",
+  "construction_calc:pe_unit_convert",
+  "construction_calc:material_consumption",
+  "construction_calc:concrete_mix_proportions"
+ ],
+ "available_tools": ["generate_wbs", "look_ahead", "resource_histogram"],
+ "handoffs": [
+  {
+   "to": "commercial",
+   "when": "schedule delay exceeds 14 days or affects cost-critical activities",
+   "carry": [
+    "delay_duration_days",
+    "affected_activities",
+    "cost_impact_estimate"
+   ]
+  },
+  {
+   "to": "contracts",
+   "when": "schedule change triggers variation or EOT clause",
+   "carry": [
+    "delay_duration_days",
+    "critical_path_evidence",
+    "contract_clause_reference"
+   ]
+  }
+ ],
+ "verification": {
+  "grounding": "documents_or_learning_only",
+  "cite_required": true,
+  "refuse_unaided_figures": true,
+  "standards_advisory": true
+ },
+ "failure_policy": {
+  "on_missing_context": "dependency_required",
+  "on_formula_error": "ask_clarifying",
+  "on_unverified_claim": "flag_and_continue"
+ },
+ "playbook": {
+  "formulas": [
+   {
+    "id": "calculate_evm",
+    "description": "Earned Value Management: CPI, SPI, EAC, ETC, VAC (requires PV/EV/AC; BAC optional)",
+    "implemented_by": "app.core.construction_knowledge.calculate_evm",
+    "domain": "planning",
+    "tier": "strategic"
+   },
+   {
+    "id": "progress_quantity",
+    "description": "PE sheet: Planned%/Actual%/Remaining qty/Progress variance",
+    "implemented_by": "app.lib.construction_formulas.progress_quantity",
+    "domain": "planning",
+    "tier": "operational"
+   },
+   {
+    "id": "productivity_manpower_duration",
+    "description": "PE sheet: productivity → manhours → manpower → duration",
+    "implemented_by": "app.lib.construction_formulas.productivity_manpower_duration",
+    "domain": "planning",
+    "tier": "operational"
+   },
+   {
+    "id": "pe_unit_convert",
+    "description": "PE sheet unit conversions (m↔ft, m2↔ft2, m3↔ft3, day↔hour)",
+    "implemented_by": "app.lib.construction_formulas.pe_unit_convert",
+    "domain": "planning",
+    "tier": "foundational"
+   },
+   {
+    "id": "material_consumption",
+    "description": "PE sheet material required from qty/output (+ optional waste)",
+    "implemented_by": "app.lib.construction_formulas.material_consumption",
+    "domain": "planning",
+    "tier": "operational"
+   },
+   {
+    "id": "concrete_mix_proportions",
+    "description": "PE sheet concrete mix from caller-supplied cement:sand:agg ratios",
+    "implemented_by": "app.lib.construction_formulas.concrete_mix_proportions",
+    "domain": "planning",
+    "tier": "operational"
+   }
+  ],
+  "flows": [
+   {
+    "id": "schedule_delay_analysis",
+    "description": "Analyse schedule delay and assess cost/contract impact",
+    "steps": [
+     "extract_baseline_dates",
+     "compare_actual_dates",
+     "calculate_float_consumption",
+     "assess_cost_impact",
+     "handoff_if_contractual"
+    ]
+   },
+   {
+    "id": "evm_report",
+    "description": "Generate EVM report from project data",
+    "steps": [
+     "collect_bcws_bcwp_acwp",
+     "calculate_evm_metrics",
+     "interpret_variances",
+     "forecast_completion"
+    ]
+   }
+  ]
+ }
+}

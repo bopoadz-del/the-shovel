@@ -1,0 +1,238 @@
+{
+ "manifest_version": "1.0",
+ "id": "fork.hat.quantities",
+ "name": "Quantities Hat",
+ "description": "Quantity take-off and BOQ production: concrete, rebar, formwork, earthworks, room take-off from drawings, line-item extensions. Owns measurement and bill production workflow.",
+ "kind": "hat",
+ "extends": "fork.base",
+ "discipline": "quantities",
+ "system_prompt_guidance": "You are the Quantities discipline agent (quantity surveyor take-off). You measure from drawings and documents, produce bills of quantities, and extend line items. Every quantity must come from a formula execution over stated dimensions or from a cited document -- never estimate a dimension that a drawing states. Interior wall quantities (paint, blockwork, skirting) go through the interior_finishes_takeoff calculator, which REQUIRES the floor-to-ceiling height: when a project variable (height, door schedule, productivity, rate) is not in the documents, the project facts, or this conversation, you ASK the operator for it -- you never assume a value, because these variables change per project and per floor. Room areas and perimeters come from the drawing take-off; concrete, rebar and earthwork volumes come from the geometry formulas; line extensions are qty x rate exactly. When a take-off needs pricing you hand off to Commercial; when a measured quantity implies a variation against the contract bill you hand off to Contracts.",
+ "activation": {
+  "triggers": [
+   {
+    "type": "keyword",
+    "value": "take-off",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "takeoff",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "quantity",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "BOQ",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "bill of quantities",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "concrete volume",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "rebar",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "excavation",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "backfill",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "cut and fill",
+    "score": 0.9
+   },
+   {
+    "type": "keyword",
+    "value": "room area",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "floor area",
+    "score": 0.8
+   },
+   {
+    "type": "keyword",
+    "value": "measure",
+    "score": 0.6
+   },
+   {
+    "type": "keyword",
+    "value": "drawing",
+    "score": 0.6
+   }
+  ],
+  "mode": "hybrid",
+  "default_enabled": false
+ },
+ "context_sources": [
+  {
+   "kind": "project_documents",
+   "weight": 1.0,
+   "filters": {
+    "type": "drawing"
+   },
+   "max_items": 10
+  },
+  {
+   "kind": "project_documents",
+   "weight": 0.9,
+   "filters": {
+    "type": "boq"
+   },
+   "max_items": 10
+  },
+  {
+   "kind": "official_guidance",
+   "weight": 0.7,
+   "filters": {
+    "source": "curated_kb_measurement"
+   },
+   "max_items": 5
+  }
+ ],
+ "allowed_actions": [
+  "construction_calc:concrete_volume",
+  "construction_calc:excavation_volume",
+  "construction_calc:backfill_volume",
+  "construction_calc:cut_fill_balance",
+  "construction_calc:rebar_weight",
+  "construction_calc:rebar_by_area",
+  "construction_calc:unit_cost_total",
+  "construction_calc:interior_finishes_takeoff",
+  "construction_calc:resource_line_cost"
+ ],
+ "available_tools": [],
+ "handoffs": [
+  {
+   "to": "commercial",
+   "when": "a completed take-off needs rates applied or a priced bill produced",
+   "carry": [
+    "line_items",
+    "units",
+    "quantities",
+    "measurement_basis"
+   ]
+  },
+  {
+   "to": "contracts",
+   "when": "a measured quantity differs from the contract bill implying a variation",
+   "carry": [
+    "boq_item_ref",
+    "contract_qty",
+    "measured_qty",
+    "difference_basis"
+   ]
+  }
+ ],
+ "verification": {
+  "grounding": "documents_or_formulas",
+  "cite_required": true,
+  "refuse_unaided_figures": true,
+  "standards_advisory": true
+ },
+ "failure_policy": {
+  "on_missing_context": "dependency_required",
+  "on_formula_error": "ask_clarifying",
+  "on_unverified_claim": "flag_and_continue"
+ },
+ "playbook": {
+  "formulas": [
+   {
+    "id": "concrete_volume",
+    "description": "Concrete volume for slab/cylinder/trapezoidal elements with waste factor",
+    "implemented_by": "app.lib.construction_formulas.concrete_volume",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "excavation_volume",
+    "description": "Bank excavation volume and bulked haulage volume",
+    "implemented_by": "app.lib.construction_formulas.excavation_volume",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "backfill_volume",
+    "description": "Backfill volume with compaction allowance",
+    "implemented_by": "app.lib.construction_formulas.backfill_volume",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "cut_fill_balance",
+    "description": "Cut/fill earthworks balance",
+    "implemented_by": "app.lib.construction_formulas.cut_fill_balance",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "rebar_weight",
+    "description": "Bar mass per BS 8666 relation (pi/4 d^2 rho)",
+    "implemented_by": "app.lib.construction_formulas.rebar_weight",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "rebar_by_area",
+    "description": "Reinforcement tonnage from area and density rate",
+    "implemented_by": "app.lib.construction_formulas.rebar_by_area",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "diaphragm_wall_panel_volume",
+    "description": "Diaphragm wall panel concrete volume",
+    "implemented_by": "app.lib.construction_formulas.diaphragm_wall_panel_volume",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "unit_cost_total",
+    "description": "Line-item extension qty x rate",
+    "implemented_by": "app.lib.construction_formulas.unit_cost_total",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "cost_per_area",
+    "description": "Unit area cost total/area",
+    "implemented_by": "app.lib.construction_formulas.cost_per_area",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "interior_finishes_takeoff",
+    "description": "Interior finishes quantities from a room take-off; height and door schedule are required project variables",
+    "implemented_by": "app.lib.construction_formulas.interior_finishes_takeoff",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "resource_line_cost",
+    "description": "Material/labour/plant split for one line; productivity and day rate are required project variables",
+    "implemented_by": "app.lib.construction_formulas.resource_line_cost",
+    "domain": "quantities",
+    "tier": "operational"
+   }
+  ]
+ }
+}
