@@ -1,6 +1,6 @@
 """A failed turn must leave a trace in the conversation, not a silent gap.
 
-LIVE 2026-08-02, operator's own thread (project Chad):
+LIVE 2026-08-02, operator's own thread (project <project>):
 
     user:      "the client project package 1"
     assistant: <nothing — ever>

@@ -1,10 +1,10 @@
 """A typo must not be mistaken for a construction reference.
 
-LIVE INCIDENT 2026-08-02 (operator's own session, project Chad):
+LIVE INCIDENT 2026-08-02 (operator's own session, project <project>):
 
     user: "You should find it in the project specif8cation not drawings"
     app:  "I could not confirm this reference in the indexed project sources
-           for Chad. Please check whether the document is indexed or provide
+           for <project>. Please check whether the document is indexed or provide
            the exact filename."
 
 That message was a CONVERSATIONAL CORRECTION, not a document lookup. The
