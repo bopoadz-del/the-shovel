@@ -24,6 +24,14 @@ except ImportError:
 # The rate limiter's own tests re-enable it explicitly via monkeypatch.
 os.environ["RATE_LIMIT_PER_MINUTE"] = "0"
 
+# Drive dev-only behaviour (open registration, dev API key) from ENV, not from
+# detecting the pytest runner in sys.modules. That `"pytest" in sys.modules`
+# check shipped in production code (users.py, core/auth.py) and would open
+# registration + the dev-key path if pytest were ever importable in prod.
+# setdefault so a shard that wants to exercise production behaviour can set its
+# own ENV and keep it.
+os.environ.setdefault("ENV", "test")
+
 # Isolate the suite's DATA_DIR so tests never write to the live ./data/ — the
 # projects store, doc index, agent memory, and upload dir all derive their
 # location from $DATA_DIR. Without this, every test that creates a project

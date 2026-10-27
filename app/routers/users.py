@@ -2,7 +2,6 @@
 import logging
 import os
 import secrets
-import sys
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
@@ -49,9 +48,6 @@ def _registration_allowed() -> bool:
     # Allow open registration if the flag is set
     if os.getenv("ALLOW_OPEN_REGISTRATION", "").strip().lower() in {"1", "true", "yes"}:
         return True
-    # Always allow during pytest runs (mirrors APIKeyAuth._is_dev_environment)
-    if "pytest" in sys.modules:
-        return True
     return False
 
 
@@ -67,7 +63,7 @@ def _public_base_url() -> str:
 
 def _is_dev_env() -> bool:
     env = os.getenv("ENV", os.getenv("ENVIRONMENT", "production")).strip().lower()
-    return env in {"dev", "development", "local", "test", "testing"} or "pytest" in sys.modules
+    return env in {"dev", "development", "local", "test", "testing"}
 
 
 async def _send_verification(user: dict) -> bool:

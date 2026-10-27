@@ -15,10 +15,8 @@ _DEV_ENVS = {"dev", "development", "local", "test", "testing"}
 
 
 def is_dev_environment() -> bool:
-    import sys
-
     env = os.getenv("ENV", os.getenv("ENVIRONMENT", "production")).strip().lower()
-    return env in _DEV_ENVS or "pytest" in sys.modules
+    return env in _DEV_ENVS
 
 
 def dev_key() -> Optional[str]:
