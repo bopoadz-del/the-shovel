@@ -10,9 +10,11 @@ through that block.
 What one pass does, per project that had activity yesterday (UTC by default):
 
 1. Read every conversation message in the window from ``agent_memory.db``.
-2. Summarize the day with ChatBlock, four-section markdown. If no LLM is
-   reachable, ``_heuristic_project_summary`` produces the same shape from
-   real signals (top keywords, friction patterns).
+2. Summarize the day as four-section markdown. The heuristic summarizer
+   (``_heuristic_project_summary``, real signals: top keywords, friction
+   patterns) is the DEFAULT — the nightly pass spends no model call unless
+   ``HYDRATION_LLM_SUMMARY`` is opted in. When opted in, ChatBlock produces
+   the summary and the heuristic is the fallback if no LLM is reachable.
 3. **Close the loop**: write recurring topics + friction signals back to
    ``projects.set_fact`` (read by the chat router via
    ``project_memory.build_memory_context``) AND ``agent_memory.set_agent_fact``
@@ -34,6 +36,7 @@ isolated, errors are captured per-project in the row's ``facts`` payload.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -47,6 +50,22 @@ logger = logging.getLogger(__name__)
 
 _MAX_MESSAGES_PER_PROJECT = 400
 _SUMMARY_MAX_TOKENS = 600
+
+
+def _llm_summary_enabled() -> bool:
+    """Whether hydration may spend a model call on its day summaries.
+
+    OFF by default. Hydration runs unattended every night and the LLM
+    summary is a nicety, not load-bearing — the heuristic path produces the
+    same four-section shape from real signals. Defaulting to an LLM call
+    meant the nightly pass billed the provider on a schedule with no user in
+    the loop (one global summary every night even on a zero-activity day,
+    plus one per active project). The capability stays; it is now opt-in via
+    ``HYDRATION_LLM_SUMMARY`` so a fresh deploy never spends unasked.
+    """
+    return os.getenv("HYDRATION_LLM_SUMMARY", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 # ── Public entry points ───────────────────────────────────────────────────
@@ -100,7 +119,7 @@ async def run(
     global_summary_md, global_provider = await _summarize_global(
         results_per_project, target_date
     )
-    if global_provider in ("offline_template", "unavailable", "error"):
+    if global_provider in ("offline_template", "unavailable", "error", "disabled"):
         global_summary_md = await off_loop_in("background", 
             _heuristic_global_summary, target_date, results_per_project, global_errors
         )
@@ -164,7 +183,7 @@ async def _hydrate_project(
         messages = messages[-_MAX_MESSAGES_PER_PROJECT:]
 
     summary_md, provider = await _summarize_project(project_id, messages, run_date)
-    if provider in ("offline_template", "unavailable", "error"):
+    if provider in ("offline_template", "unavailable", "error", "disabled"):
         summary_md = await off_loop_in("background", _heuristic_project_summary, project_id, run_date, messages)
 
     # ── Close the loop: write back to surfaces the next chat will read.
@@ -621,7 +640,16 @@ def _heuristic_global_summary(
 async def _call_chat(prompt: str, max_tokens: int = 600) -> tuple[str, str]:
     """Invoke the ChatBlock and return (text, provider). The ChatBlock's
     fallback chain (DeepSeek → OpenRouter → offline template) guarantees
-    a response so hydration never crashes on a missing model."""
+    a response so hydration never crashes on a missing model.
+
+    No-ops with provider ``"disabled"`` unless ``HYDRATION_LLM_SUMMARY`` is
+    opted in: the model is never called on the nightly path by default, and
+    the caller falls through to the heuristic summary. The ChatBlock is not
+    even imported in the disabled case, so there is no model spend."""
+    if not _llm_summary_enabled():
+        return ("_LLM summary disabled (HYDRATION_LLM_SUMMARY off); heuristic used._",
+                "disabled")
+
     from app.blocks import BLOCK_REGISTRY
 
     cls = BLOCK_REGISTRY.get("chat")

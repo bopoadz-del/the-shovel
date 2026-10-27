@@ -758,3 +758,78 @@ def _seed_conversation_with_project(project_id: str, ts: str, user_msg: str, ass
     """Like _seed_conversation but assumes the project row already exists.
     Used by the writeback tests which create real projects via _make_project."""
     return _seed_conversation(project_id, ts, user_msg, assistant_msg)
+
+
+# ── HYDRATION_LLM_SUMMARY opt-in (nightly pass is heuristic-by-default) ──────
+
+
+@pytest.mark.asyncio
+async def test_call_chat_disabled_by_default(monkeypatch):
+    """Default (flag unset): _call_chat never touches the model — returns
+    provider 'disabled' and does not even reach BLOCK_REGISTRY."""
+    import app.blocks as _blocks
+    from app.core.learning import hydration as hydration_module
+
+    monkeypatch.delenv("HYDRATION_LLM_SUMMARY", raising=False)
+
+    class _Boom:
+        def __init__(self):
+            raise AssertionError("ChatBlock must not be constructed when disabled")
+
+    monkeypatch.setitem(_blocks.BLOCK_REGISTRY, "chat", _Boom)
+
+    text, provider = await hydration_module._call_chat("summarize the day", max_tokens=50)
+    assert provider == "disabled"
+    assert "disabled" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_call_chat_opt_in_invokes_block(monkeypatch):
+    """With HYDRATION_LLM_SUMMARY=true the ChatBlock is invoked and its
+    provider flows back (capability preserved behind the opt-in)."""
+    import app.blocks as _blocks
+    from app.core.learning import hydration as hydration_module
+
+    monkeypatch.setenv("HYDRATION_LLM_SUMMARY", "true")
+
+    class _FakeChat:
+        async def execute(self, data, params):
+            return {"response": "## summary\n- ok\n", "provider": "deepseek"}
+
+    monkeypatch.setitem(_blocks.BLOCK_REGISTRY, "chat", lambda: _FakeChat())
+
+    text, provider = await hydration_module._call_chat("summarize", max_tokens=50)
+    assert provider == "deepseek"
+    assert "summary" in text
+
+
+@pytest.mark.asyncio
+async def test_run_uses_heuristic_when_llm_summary_disabled(isolated_data_dir, monkeypatch):
+    """End-to-end: with the flag off, a real run records provider 'disabled'
+    and a heuristic summary for both project and global scopes — zero model
+    calls. The ChatBlock is booby-trapped to prove it is never invoked."""
+    import app.blocks as _blocks
+    from app.core.learning import hydration as hydration_module
+    from app.core import hydration_store
+
+    monkeypatch.delenv("HYDRATION_LLM_SUMMARY", raising=False)
+
+    class _Boom:
+        def __init__(self):
+            raise AssertionError("model must not be called when HYDRATION_LLM_SUMMARY is off")
+
+    monkeypatch.setitem(_blocks.BLOCK_REGISTRY, "chat", _Boom)
+
+    target = "2026-05-26"
+    _seed_conversation("alpha", "2026-05-26T10:00:00Z", "how much rebar?", "120 kg/m3")
+
+    result = await hydration_module.run(target_date=target)
+    assert result["status"] == "success"
+    assert result["projects_processed"] == 1
+
+    alpha = hydration_store.get_latest("project", "alpha")
+    glob = hydration_store.get_latest("global")
+    assert alpha["provider"] == "disabled"
+    assert glob["provider"] == "disabled"
+    # heuristic global summary carries its signature line
+    assert "heuristic" in glob["summary_md"].lower()
