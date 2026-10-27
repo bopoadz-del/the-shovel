@@ -56,7 +56,7 @@ retriever filters them out by filename pattern at query time.
 
 Configuration:
 - `RAG_NOISE_FILENAME_REGEX` env var, default
-  `^(~\$|nambae-menu|SandsChina_Application)`. Operator can append more
+  `^(~\$|<client-menu-prefix>|<client-form-prefix>)`. Operator can append more
   patterns over time without a redeploy.
 - Matched docs are skipped from the candidate pool BEFORE top-K selection,
   so they cannot consume a slot a real doc would have taken.
@@ -314,7 +314,7 @@ completed 2026-06-08):
   - Example Client RFP Appendix B 010101.xlsx (`d0c0001b`, 14.5 KB)
   - PRC-921 Time Management.pdf
   - PRC-931 Request for Information.pdf
-  - Plus two unrelated docs (nambae-menu pptx, SandsChina docx) and a
+  - Plus two unrelated docs (a client menu deck and a client application form) and a
     `~$C-201` Office lockfile artifact — these will appear in the index but
     are noise for the regression queries.
 - **the client BOQ Test project (`3f6f28b2`):**

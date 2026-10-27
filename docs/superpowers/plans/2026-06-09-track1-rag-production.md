@@ -21,7 +21,7 @@ Live state assumed by this plan:
   - BOD `ca6292f9` (`Example Client - Performance Basis of Design.pdf`)
   - Appendix B `0f9ffc6b` (`Example Client - RFP Appendix B 010101.xlsx`)
   - PRC-921, PRC-931 procurement PDFs
-  - Three noise files: `nambae-menu(4).pptx`, `SandsChina_Application_ChaD.docx`, `~$C-201_Time Management.docx`
+  - Three noise files: `<client-menu-prefix>(4).pptx`, `<client-form-prefix>_<person>.docx`, `~$C-201_Time Management.docx`
 - Project `3f6f28b2` (the client BOQ Test) holds the client project BOQ `c6dae280` (`the client project - Infra-1 - Demolition BOQ.pdf`).
 - Render env already has `LLM_PROVIDER=ollama`, `OLLAMA_URL=<tunnel>`, `OLLAMA_MODEL=qwen3-coder:480b-cloud`. No new env vars exist yet for any of `RAG_*`.
 
@@ -377,8 +377,8 @@ def test_noise_filter_default_regex_matches_known_garbage():
     from app.core.rag.retriever import _is_noise_filename
     # The defaults from the spec.
     assert _is_noise_filename("~$C-201_Time Management.docx") is True
-    assert _is_noise_filename("nambae-menu(4).pptx") is True
-    assert _is_noise_filename("SandsChina_Application_ChaD.docx") is True
+    assert _is_noise_filename("<client-menu-prefix>(4).pptx") is True
+    assert _is_noise_filename("<client-form-prefix>_<person>.docx") is True
     # And NOT a real doc.
     assert _is_noise_filename("Example Client - Performance Basis of Design.pdf") is False
     assert _is_noise_filename("RFP_Appendix_B.xlsx") is False
@@ -387,7 +387,7 @@ def test_noise_filter_default_regex_matches_known_garbage():
 def test_noise_filter_env_override(monkeypatch):
     monkeypatch.setenv(
         "RAG_NOISE_FILENAME_REGEX",
-        r"^(~\$|nambae-menu|SandsChina_Application|MyCustomNoise)",
+        r"^(~\$|<client-menu-prefix>|<client-form-prefix>|MyCustomNoise)",
     )
     from app.core.rag.retriever import _is_noise_filename
     assert _is_noise_filename("MyCustomNoise_v3.txt") is True
@@ -408,7 +408,7 @@ import os
 import re
 
 
-_NOISE_DEFAULT = r"^(~\$|nambae-menu|SandsChina_Application)"
+_NOISE_DEFAULT = r"^(~\$|<client-menu-prefix>|<client-form-prefix>)"
 
 
 def _noise_regex():
