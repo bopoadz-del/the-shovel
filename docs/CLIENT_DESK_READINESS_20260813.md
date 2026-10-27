@@ -88,8 +88,8 @@ the bug.
 | Aspect | Result | Evidence |
 |---|---|---|
 | Local matrix, both CI profiles, frozen tree | virgin **3377 passed** / production-like **3474 passed** | `scripts/test_matrix.py` at `825edf8`; an earlier run was discarded because the tree was edited mid-run |
-| PR #331 CI | all 12 checks pass | github.com/bopoadz-del/The_Fork/pull/331 |
-| PR #332 CI | all 13 checks pass | github.com/bopoadz-del/The_Fork/pull/332 |
+| PR #331 CI | all 12 checks pass | github.com/bopoadz-del/the-shovel/pull/331 |
+| PR #332 CI | all 13 checks pass | github.com/bopoadz-del/the-shovel/pull/332 |
 | Main at `991e348` | tests, test-postgres, Docker Build and Publish, lint, CodeQL, dependency-audit, **health-watch** — all success | Actions, `head_sha=991e348` |
 | health-watch deep dispatch | liveness + DB-touching readiness both success | run 31647554946 |
 | Live health | `/livez` alive; `/ready` healthy — Neon 15-699 ms, embedder loaded, 37/37 blocks | live probes 2026-08-12 22:01–22:57 UTC |

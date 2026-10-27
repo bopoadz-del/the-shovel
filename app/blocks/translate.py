@@ -21,7 +21,7 @@ _MAX_TEXT_LEN = 5000
 _REQUEST_TIMEOUT = 30
 _MAX_RETRIES = 3
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-_USER_AGENT = "CerebrumBlocks/2.0 (translate; +https://github.com/bopoadz-del/The_Fork)"
+_USER_AGENT = "CerebrumBlocks/2.0 (translate; +https://github.com/bopoadz-del/the-shovel)"
 
 
 def _normalize_lang(lang: str) -> str:

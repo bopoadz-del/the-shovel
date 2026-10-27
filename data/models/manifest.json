@@ -1,6 +1,6 @@
 {
   "_comment": "Model weights are NOT git objects. They are release assets of this repo; scripts/fetch_model.py downloads them into data/models/ and refuses any file whose sha256 differs from the value pinned here. To ship new weights: upload them to a NEW release tag (never one matching a workflow trigger such as v*), then change tag + sha256 + size here in the same PR.",
-  "repo": "bopoadz-del/The_Fork",
+  "repo": "bopoadz-del/the-shovel",
   "release_tag": "safety-world-v2",
   "files": [
     {

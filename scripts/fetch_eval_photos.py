@@ -30,7 +30,7 @@ API = "https://commons.wikimedia.org/w/api.php"
 # clients to identify themselves with a contact URL; requests without one are
 # refused with a 429 citing the robot policy. This is that identification.
 UA = ("TheFork-photo-eval/1.0 "
-      "(https://github.com/bopoadz-del/The_Fork; construction QA research) "
+      "(https://github.com/bopoadz-del/the-shovel; construction QA research) "
       "python-urllib/3.11")
 
 # Permissive only. Anything else is not used — an unclear licence is a reason

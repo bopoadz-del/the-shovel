@@ -436,7 +436,7 @@ turn summary: total=2.48s  events=45  answer_chars=290
 
 ## Why Fixes Didn't Land on Live Pilot
 
-The `guardrail_top_rail_height` and `calculate_interim_payment` formulas were added to `app/lib/construction_formulas_additions.py` in the **local working directory** (`/mnt/agents/output/fork_agents/`). The deployed pilot on Render runs from the GitHub repo (`bopoadz-del/The_Fork`, commit `66f48df9`), which does **not** include these additions yet.
+The `guardrail_top_rail_height` and `calculate_interim_payment` formulas were added to `app/lib/construction_formulas_additions.py` in the **local working directory** (`/mnt/agents/output/fork_agents/`). The deployed pilot on Render runs from the GitHub repo (`bopoadz-del/the-shovel`, commit `66f48df9`), which does **not** include these additions yet.
 
 **To deploy:**
 1. Commit `app/lib/construction_formulas_additions.py` to the repo

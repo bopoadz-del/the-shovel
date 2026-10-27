@@ -148,7 +148,7 @@ brace-expansion 5.0.9. #299 carries pyasn1 0.6.3 -> 0.6.4 (three HIGHs).
 predicted.**
 
 ```
-$ gh api repos/bopoadz-del/The_Fork/dependabot/alerts --paginate \
+$ gh api repos/bopoadz-del/the-shovel/dependabot/alerts --paginate \
     -q '[.[]|select(.state=="open" and .security_advisory.severity=="high")]|length'
 4      # t+30s after merge
 1      # t+60s after merge
