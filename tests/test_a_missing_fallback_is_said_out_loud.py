@@ -14,6 +14,11 @@ from tests._fixture_values import STUB_TOKEN_06, STUB_TOKEN_08
 _ENV = ("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER", "DEEPSEEK_API_KEY",
         "OPENROUTER_API_KEY", "OPENROUTER_MODEL")
 
+# probe_llm() returns the two readiness booleans plus live provider telemetry.
+# These are the ONLY non-readiness keys allowed; the readiness contract is
+# asserted exactly after separating them.
+_LLM_TELEMETRY = {"providers", "counts", "last_served_age_s", "serving", "error"}
+
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
@@ -27,9 +32,13 @@ def test_deepseek_with_an_openrouter_fallback_is_ready(monkeypatch):
     monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", STUB_TOKEN_08)
     out = probe_llm()
-    # probe_llm now also carries live provider telemetry (providers/counts/
-    # serving); assert the readiness subset this test is about.
-    assert out["primary_ready"] is True and out["fallback_ready"] is True
+    # Exact readiness contract (PR-B had loosened this to a subset check).
+    # probe_llm now also returns live telemetry keys; separate the known
+    # telemetry, assert the readiness dict EXACTLY, and assert no UNKNOWN key
+    # appears (so a future stray readiness key cannot slip in unnoticed).
+    assert {k: v for k, v in out.items() if k not in _LLM_TELEMETRY} == {
+        "primary_ready": True, "fallback_ready": True}
+    assert set(out) - {"primary_ready", "fallback_ready"} <= _LLM_TELEMETRY
 
 
 @pytest.mark.parametrize("fallback,key", [
@@ -100,7 +109,11 @@ def test_health_shows_it_and_names_nothing(monkeypatch):
     with TestClient(app) as c:
         body = c.get("/health").json()
     llm = body["checks"]["llm"]
-    assert llm["primary_ready"] is True and llm["fallback_ready"] is False
+    # Exact readiness contract restored (see note above); telemetry keys split
+    # off, and no unknown key tolerated.
+    assert {k: v for k, v in llm.items() if k not in _LLM_TELEMETRY} == {
+        "primary_ready": True, "fallback_ready": False}
+    assert set(llm) - {"primary_ready", "fallback_ready"} <= _LLM_TELEMETRY
     # The name-withholding guard now covers the WHOLE llm payload, including the
     # new providers/counts telemetry -- it must still name nothing (keys are
     # ROLE labels, never provider names).

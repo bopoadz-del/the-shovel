@@ -74,3 +74,48 @@ def test_probe_llm_includes_providers_and_serving():
     out = hp.probe_llm()
     assert "serving" in out and "providers" in out
     assert out["serving"] is True
+
+
+def test_health_endpoint_degrades_when_not_serving(monkeypatch):
+    """Integration seam (the 19 Oct outage): /health must flip status to
+    'degraded' when the model cannot be served, while STILL returning 200 so
+    the liveness probe does not restart a live service mid-incident.
+
+    Failing-first: on main (before PR-B wired llm.serving into the status) a
+    not-serving LLM left status 'healthy'.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    # Force not-serving: both roles exhausted, no recent success.
+    hp.record_provider_result("primary", "exhausted", 402)
+    hp.record_provider_result("fallback", "exhausted", 429)
+
+    with TestClient(app) as c:
+        resp = c.get("/health")
+
+    assert resp.status_code == 200  # liveness never trips on degraded
+    body = resp.json()
+    # Pin that it is the LLM, not the DB, driving the degrade.
+    assert body["checks"]["database"]["ok"] is True
+    assert body["checks"]["llm"]["serving"] is False
+    assert body["status"] == "degraded"
+
+
+def test_health_endpoint_healthy_when_serving(monkeypatch):
+    """Control: a served-recently LLM + ok DB reads 'healthy'."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    hp.record_provider_result("primary", "ok")
+
+    with TestClient(app) as c:
+        resp = c.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["checks"]["llm"]["serving"] is True
+    if body["checks"]["database"]["ok"]:
+        assert body["status"] == "healthy"

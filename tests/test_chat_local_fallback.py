@@ -62,9 +62,13 @@ async def test_deepseek_402_does_not_serve_offline_when_fallback_is_ready(monkey
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
 
     _llm = probe_llm()
-    # probe_llm now also carries live provider telemetry; assert the readiness
-    # subset this test is about.
-    assert _llm["primary_ready"] is True and _llm["fallback_ready"] is True
+    # Exact readiness contract (PR-B had loosened this to a subset check).
+    # probe_llm now also returns live telemetry keys; separate the known
+    # telemetry, assert readiness EXACTLY, and tolerate no unknown key.
+    _telemetry = {"providers", "counts", "last_served_age_s", "serving", "error"}
+    assert {k: v for k, v in _llm.items() if k not in _telemetry} == {
+        "primary_ready": True, "fallback_ready": True}
+    assert set(_llm) - {"primary_ready", "fallback_ready"} <= _telemetry
 
     urls: list[str] = []
 
