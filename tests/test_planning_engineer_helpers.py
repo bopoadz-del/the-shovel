@@ -222,7 +222,7 @@ def test_productivity_refuses_without_pairs():
 
 
 def test_productivity_rate_plus_crew_cost_computes_sar():
-    """Live A2-1 first call: productivity_rate + crew_cost_per_day."""
+    """productivity_rate + crew_cost_per_day price the computed duration."""
     r = productivity_manpower_duration(
         quantity=3400,
         productivity_rate=42,
