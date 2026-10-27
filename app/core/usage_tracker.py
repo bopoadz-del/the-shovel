@@ -218,3 +218,86 @@ def history(user_id: Optional[str], days: int = 7) -> List[Dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+def totals(since_days: Optional[int] = None) -> Dict[str, Any]:
+    """Global model-call meter: ``{calls, tokens, cost_usd}`` across ALL users.
+
+    ``calls`` is the number of recorded LLM round-trips, ``tokens`` the summed
+    ``total_tokens``, ``cost_usd`` the summed estimated cost. ``since_days=None``
+    is all-time; an integer keeps only runs on or after that UTC-date cutoff.
+
+    This is the name-free aggregate the public ``/health`` and the public
+    Prometheus ``/metrics`` expose — it carries NO provider or model name (those
+    stay on the admin ``/v1/metrics``; see ``totals_by_provider_model``). The
+    meter must never break a health or metrics surface, so any error returns
+    zeros rather than raising.
+    """
+    try:
+        init_db()
+        stmt = select(
+            func.count(UsageRun.id),
+            func.coalesce(func.sum(UsageRun.total_tokens), 0),
+            func.coalesce(func.sum(UsageRun.estimated_cost_usd), 0.0),
+        )
+        if since_days is not None:
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=since_days)
+            ).strftime("%Y-%m-%d")
+            stmt = stmt.where(func.substr(UsageRun.created_at, 1, 10) >= cutoff)
+        with _LOCK:
+            with SessionLocal() as session:
+                calls, tokens, cost = session.execute(stmt).one()
+        return {
+            "calls": int(calls or 0),
+            "tokens": int(tokens or 0),
+            "cost_usd": round(float(cost or 0.0), 6),
+        }
+    except Exception as exc:  # noqa: BLE001 — the meter never breaks a surface
+        logger.debug("usage_tracker.totals swallowed %r", exc)
+        return {"calls": 0, "tokens": 0, "cost_usd": 0.0}
+
+
+def totals_by_provider_model(since_days: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Per provider+model meter rows: ``{provider, model, calls, tokens,
+    cost_usd}``, highest call count first.
+
+    This row set carries provider and model NAMES, so it is for ADMIN surfaces
+    only (``/v1/metrics``) — never the public ``/health`` or public
+    ``/metrics``. ``since_days`` behaves as in :func:`totals`. Never raises: an
+    error returns an empty list.
+    """
+    try:
+        init_db()
+        calls_col = func.count(UsageRun.id)
+        stmt = select(
+            UsageRun.provider,
+            UsageRun.model,
+            calls_col.label("calls"),
+            func.coalesce(func.sum(UsageRun.total_tokens), 0).label("tokens"),
+            func.coalesce(func.sum(UsageRun.estimated_cost_usd), 0.0).label("cost"),
+        )
+        if since_days is not None:
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=since_days)
+            ).strftime("%Y-%m-%d")
+            stmt = stmt.where(func.substr(UsageRun.created_at, 1, 10) >= cutoff)
+        stmt = stmt.group_by(UsageRun.provider, UsageRun.model).order_by(
+            calls_col.desc()
+        )
+        with _LOCK:
+            with SessionLocal() as session:
+                rows = session.execute(stmt).all()
+        return [
+            {
+                "provider": r.provider,
+                "model": r.model,
+                "calls": int(r.calls),
+                "tokens": int(r.tokens),
+                "cost_usd": round(float(r.cost), 6),
+            }
+            for r in rows
+        ]
+    except Exception as exc:  # noqa: BLE001 — the meter never breaks a surface
+        logger.debug("usage_tracker.totals_by_provider_model swallowed %r", exc)
+        return []

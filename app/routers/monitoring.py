@@ -8,7 +8,8 @@ from app.dependencies import (
     get_monitoring_block,
     require_api_key,
 )
-from app.infra.monitoring import block_metrics
+from app.core import usage_tracker
+from app.infra.monitoring import block_metrics, register_llm_meter_collector
 from app.routers.health import health_v1
 
 router = APIRouter()
@@ -23,8 +24,13 @@ def prometheus_metrics() -> Response:
 
       the_fork_requests_total              (method, status)
       the_fork_cm_template_match_total     (outcome)
+      the_fork_llm_calls                   (no labels)
 
-    Both are counts with a fixed, low-cardinality label set. No user text,
+    All are counts/gauges with a fixed, low-cardinality label set. The single
+    llm_* figure is the model-call meter read from the usage DB at scrape
+    time: the GLOBAL call COUNT with NO provider or model label and NO tokens
+    or cost (ORDERS_0715Z) — the tokens/cost figures and the per-provider,model
+    breakdown are admin-only (/v1/metrics). No user text,
     project identifier or document reference is exposed. Anything carrying
     those — including the raw phrasings behind a template miss, which are
     customer messages — stays out of here; the miss text is gated behind
@@ -42,6 +48,9 @@ def prometheus_metrics() -> Response:
         from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     except Exception:
         raise HTTPException(status_code=503, detail="prometheus-client not installed")
+    # Expose the global model-call meter (calls/tokens/cost, no provider label).
+    # Idempotent — registers the scrape-time collector on first scrape only.
+    register_llm_meter_collector()
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -67,7 +76,15 @@ def get_block_metrics(auth: dict = Depends(require_api_key)):
     """
     if auth.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    return block_metrics.snapshot()
+    payload = block_metrics.snapshot()
+    # Model-call meter, admin view: the global aggregate PLUS the per
+    # provider+model breakdown (provider/model names are admin-only; the
+    # public /health and /metrics carry the name-free aggregate only).
+    payload["llm_usage"] = {
+        "totals": usage_tracker.totals(),
+        "by_provider_model": usage_tracker.totals_by_provider_model(),
+    }
+    return payload
 
 
 @router.get("/v1/leaderboard")

@@ -417,6 +417,60 @@ def _bump_prometheus_request_counter(method: str, status: int) -> None:
         )
 
 
+# ── Model-call meter on public /metrics ───────────────────────────────────
+# The usage figures live in the usage DB (usage_tracker), not in an in-process
+# counter, so a scrape-time collector reads the current aggregate each time
+# /metrics is scraped. NAME-FREE: global calls/tokens/cost only, no provider or
+# model label — provider+model breakdown stays on the admin /v1/metrics.
+_LLM_METER_COLLECTOR_REGISTERED = False
+
+
+def register_llm_meter_collector() -> None:
+    """Register (once) the scrape-time collector exposing the global model-call
+    meter on the public Prometheus /metrics:
+
+      the_fork_llm_calls      LLM round-trips recorded (all users)
+      the_fork_llm_tokens     LLM total tokens recorded (all users)
+      the_fork_llm_cost_usd   LLM estimated cost in USD (all users)
+
+    Gauges, read live from the usage DB at collect time. Idempotent; a missing
+    prometheus-client, or a duplicate registration, is a quiet no-op. Carries no
+    provider/model name, so it does not widen what the unauthenticated endpoint
+    serves beyond non-sensitive aggregates."""
+    global _LLM_METER_COLLECTOR_REGISTERED
+    if _LLM_METER_COLLECTOR_REGISTERED:
+        return
+    try:
+        from prometheus_client.core import REGISTRY, GaugeMetricFamily
+    except ImportError:
+        logger.debug("llm meter: prometheus-client unavailable", exc_info=True)
+        return
+
+    class _LLMMeterCollector:
+        def collect(self):
+            try:
+                from app.core import usage_tracker
+                t = usage_tracker.totals()
+            except Exception:  # noqa: BLE001 -- a collector never breaks a scrape
+                logger.debug("llm meter collect() swallowed an error", exc_info=True)
+                t = {"calls": 0}
+            # Public /metrics is NAME-FREE and COUNT-ONLY (ORDERS_0715Z): the
+            # call count only -- no tokens, no cost_usd. Token and cost figures
+            # are admin-only on /v1/metrics.
+            yield GaugeMetricFamily(
+                "the_fork_llm_calls",
+                "LLM round-trips recorded (all users)",
+                value=float(t.get("calls", 0) or 0),
+            )
+
+    try:
+        REGISTRY.register(_LLMMeterCollector())
+    except ValueError:
+        # Already registered on a prior scrape — a duplicate registration is fine.
+        logger.debug("llm meter collector already registered", exc_info=True)
+    _LLM_METER_COLLECTOR_REGISTERED = True
+
+
 # ── Provider monitoring block (Lego layer) ────────────────────────────────
 
 from app.infra.lego_base import LegoBlock

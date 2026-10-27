@@ -62,6 +62,13 @@ def _evaluate_health() -> dict:
         # Cached estimate of the active chunk table, not the stale
         # documents.chunk_count column. A probe error does not fail liveness.
         "corpus": corpus,
+        # Model-call meter: total LLM call COUNT across all users. NAME-FREE and
+        # COUNT-ONLY by design -- /health is public, so it carries no provider or
+        # model name and NO tokens or cost (ORDERS_0715Z); the tokens/cost figures
+        # and the per-provider,model breakdown are admin-only on /v1/metrics.
+        # Reads an aggregate off the usage DB /health already touches; a meter
+        # error returns a zero count, never failing liveness.
+        "llm_usage": _llm_usage_meter(),
         "blocks_loaded": len(block_instances),
         "blocks_available": len(BLOCK_REGISTRY),
         "blocks_failed": {
@@ -172,6 +179,18 @@ async def full_health():
         return await health_v1()
     block = get_monitoring_block()
     return await block.execute({"action": "health_report"})
+
+
+def _llm_usage_meter() -> dict:
+    """Name-free, COUNT-ONLY model-call meter for the public /health: the total
+    LLM call count across all users and nothing else — no provider/model name,
+    and no tokens or cost (ORDERS_0715Z); those stay on the admin /v1/metrics.
+    Never breaks /health: on error returns a zero count with the exception type."""
+    try:
+        from app.core import usage_tracker
+        return {"calls": usage_tracker.totals()["calls"]}
+    except Exception as exc:  # noqa: BLE001 -- a meter never breaks /health
+        return {"calls": 0, "error": type(exc).__name__}
 
 
 def _probe_workflows() -> dict:
