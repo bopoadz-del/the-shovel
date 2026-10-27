@@ -59,8 +59,9 @@ async def adapt_construction(call: ToolCall, block_input: Any, block_params: Any
         if isinstance(block_params, dict):
             block_params = (await _off_loop(_resolve_block_file_input, project_id, block_params))
     if user_message:
-        # Live M14: the model rewrote wir_form scope to "blinding pour"
-        # so refuse missed the operator RFP / job-req / claim.
+        # The model may rewrite the scope of these document actions, so the
+        # refuse path would miss the operator's original request. Pass the
+        # operator's message through to them.
         action = ""
         if isinstance(block_params, dict):
             action = str(block_params.get("action") or "")
