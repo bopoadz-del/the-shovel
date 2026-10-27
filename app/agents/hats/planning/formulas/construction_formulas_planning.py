@@ -280,11 +280,10 @@ def productivity_manpower_duration(
     the value ("m2 per gang-day", "per hour") has to reach this function
     whole; a numeric declaration would keep only the leading number.
 
-    Live A2-1: ``productivity_rate`` (m2 per gang-day) pairs with
-    ``quantity`` as daily production, and ``crew_cost_per_day`` prices
-    the resulting duration. Those aliases were previously stripped, so
-    the first live call failed "paired inputs" and the retry shipped a
-    formula-only note.
+    ``productivity_rate`` (m2 per gang-day) pairs with ``quantity`` as
+    daily production, and ``crew_cost_per_day`` prices the resulting
+    duration. These aliases must reach the function, or a call that uses
+    them is refused for missing paired inputs.
     """
     # The unit written on the rate decides the output field. A per-day rate
     # is duration in days; an hour rate is man-hours. A bare productivity
