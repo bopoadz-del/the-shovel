@@ -213,6 +213,16 @@ jobs:
         # Stdlib only. Exit 1 with a list of new forms.
         run: python scripts/scan_hardwiring.py
 
+      - name: "Hardwiring gap report (NON-BLOCKING, informational)"
+        # `--gaps --report` lists the per-case forms the gate above cannot see
+        # (probe-id citations, ref-code tuples, kill-switch knobs, project-noun
+        # routing, filter regexes). It prints findings and ALWAYS exits 0, and
+        # continue-on-error keeps even a crash of the report from failing the
+        # build. It is never baselined and never blocks; owner decides when it
+        # becomes a gate.
+        continue-on-error: true
+        run: python scripts/scan_hardwiring.py --gaps --report
+
       - name: Repo hygiene (no documents, data, models or live names in git)
         # Documents never live in the repo: knowledge and codes go in through
         # the admin path into the database, model weights are a release asset

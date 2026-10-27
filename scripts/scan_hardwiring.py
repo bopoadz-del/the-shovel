@@ -16,6 +16,8 @@ of these hardwiring forms to product code:
   2. a ``*_NEEDLES`` list            -- literal strings photographed from one corpus
   3. a ``RAG_*_RESCUE`` / ``*_BONUS`` / ``*_EXTRA_K`` env knob -- a per-case switch
   4. a probe / test-case ID          -- R18, M3, E1, UI-PHYS, SET5 ... in product code
+  (opt-in ``--gaps`` pass, ``--gaps --report`` never fails: probe-id shapes, reference-code lists, non-RAG_* knobs,
+   project-noun keyword lists, filename / number+unit regex tables; never baselined)
 
 and, in the blocks (``BLOCK_TABLE_ROOTS``: ``app/blocks/``), where a reader of
 one project's documents turns into a reader of that project only:
@@ -566,6 +568,184 @@ def leakage_findings(cases: dict | None = None, live: dict | None = None,
     return sorted(set(findings))
 
 
+# ── gaps pass (opt-in: ``--gaps``) ────────────────────────────────────────────
+#
+# Forms the six-form gate cannot see. Opt-in so the default gate, its baseline
+# (0 entries) and ``PROBE_LINE_ALLOWLIST`` stay exactly as they are; nothing here
+# is ever baselined or allowlisted. Keys: ``<rel>::gap_<kind>::<name>``.
+#
+#   gap_probe   a probe-id shaped token ([A-Z]{1,2}\d{1,2}) named by a probe cue
+#               (live / leftover / battery / wave / probe before it, 'Set <n> <ID>',
+#               'question <ID>', '<ID> (live', '<ID> ... probe')
+#   gap_ref     a collection holding >= 2 reference-code literals ("AB-", "CD-12")
+#   gap_knob    a non-RAG_* env knob named for one case (..._FETCH, ..._RESCUE ...)
+#   gap_noun    a keyword collection holding a project-type noun
+#   gap_regex   a module-level regex / term table with a filename-like literal
+#               or a literal number + unit
+
+_GAP_ID = r"[A-Z]{1,2}\d{1,2}(?![A-Za-z0-9_])"
+#: A probe id is named by a probe word that PRECEDES it directly: "Live M15",
+#: "Leftover-hat L4", "WAVE 2 B4", "Live UI pack E4", "Live Wave-1 A2", "Set 3 B3",
+#: and slash/comma chains ("Live M1/M2/M6"). "live" or "set" elsewhere on the line
+#: (a verb, "set C30") does not name an id.
+_GAP_PROBE_CHAIN = re.compile(
+    r"(?i:\b(?:live|leftover|battery|wave|probe)\b)"
+    r"(?:[- ](?!(?:on|an|a|the|in|at|of|to|for|with|is|are|as|by)\b)\w{1,12}|\s\d{4}-\d{2}-\d{2}){0,3}[ :(-]*"
+    r"(?<![A-Za-z0-9_])(" + _GAP_ID + r"(?:\s*(?:/|,|&|and)\s*" + _GAP_ID + r")*)"
+)
+_GAP_PROBE_SET = re.compile(r"(?i:\bset)\s+\d+\s+(" + _GAP_ID + r")")
+#: Three more cues (repair 2 of PR #7), each anchored to the id so a verb elsewhere on
+#: the line cannot trigger them:
+#:   * ``question <ID>``                 -> "gate battery <date>, question F2"
+#:   * ``<ID> (live|probe|leftover``     -> "F26 (live OOM <date>)"
+#:   * ``<ID> [<=2 words] probe``        -> "W4 planted-RFP probe", "F7 probe"
+_GAP_PROBE_QUESTION = re.compile(r"(?i:\bquestion)\s+(" + _GAP_ID + r")")
+_GAP_PROBE_TRAIL_PAREN = re.compile(
+    r"(?<![A-Za-z0-9_])(" + _GAP_ID + r")\s*\((?i:live|probe|leftover)\b"
+)
+_GAP_PROBE_TRAIL = re.compile(
+    r"(?<![A-Za-z0-9_])(" + _GAP_ID + r")(?:\s+[\w-]{1,16}){0,2}\s+(?i:probe)\b"
+)
+_GAP_PROBE_CUES = (_GAP_PROBE_CHAIN, _GAP_PROBE_SET, _GAP_PROBE_QUESTION,
+                   _GAP_PROBE_TRAIL_PAREN, _GAP_PROBE_TRAIL)
+#: KNOWN LOSSES of the probe rule (recall paid for precision; each one is pinned by a test):
+#:   * M2 -- "(F19, phase-3 campaign). Two live gates": the id has no probe word next to it
+#:     (the word is a sentence away). Widening the window re-fires the classes below, so it
+#:     stays out of reach (strict xfail: test_m2_f19_is_not_reached_known_loss).
+#:   * "BM25" ("Live <date>: one question issued BM25 ..."): an algorithm name, not an id;
+#:     'question' counts only when the id FOLLOWS it directly (pinned silent).
+#:   * "W6 -- live activation ...": W6 is a feature id and 'live' is a dash-separated word
+#:     AFTER it; only the '(live' form counts (pinned silent).
+#:   * "K2 rejects ... three live rounds": a model name before a far 'live' (pinned silent).
+_GAP_ID_RE = re.compile(r"[A-Z]{1,2}\d{1,2}(?![A-Za-z0-9_])")
+#: Tokens of that shape that are ordinary domain words (paper sizes, storage,
+#: percentiles, headings), not probe ids. Detector-side vocabulary, not an allowlist.
+_GAP_NOT_A_PROBE = frozenset({"A4", "R2", "S3", "P50", "P90", "P95", "P99", "H1", "H2", "H3", "H4"})
+#: Reference-code literal: a 2-5 letter prefix with a hyphen ("RFI-", "AB-1201") or
+#: letters+digits ("QH2291"). One-letter grades (C40, S460) are material classes.
+_GAP_REF_ELEM = re.compile(r"^[A-Z]{2,5}-(?:\d{1,6})?$|^[A-Z]{2,5}[-_ ]?\d{2,6}$")
+_GAP_PREFIX_ELEM = re.compile(r"^[A-Z]{2,5}-$")
+_GAP_KNOB_SUFFIX = re.compile(
+    r"_(?:FETCH|RESCUE|BONUS|EXTRA_K|BOOST|FIX|GRAFT|PATCH|OVERRIDE|FALLBACK|REPAIR|SHORTCUT)$"
+)
+#: A project-type noun counts only as a WHOLE element ("hospital", "data center"),
+#: and only when two or more elements are nouns: equipment ("tower crane"),
+#: ``tags = [...]`` metadata and a JSON-schema ``"enum"`` (a declared input domain)
+#: are not routing by project type.
+_GAP_PROJECT_NOUNS = frozenset({
+    "tower", "villa", "mall", "hospital", "hotel", "airport", "bridge", "tunnel",
+    "stadium", "warehouse", "data center", "data centre", "datacenter", "residential",
+    "infrastructure", "hospitality", "highway", "refinery", "school", "campus",
+    "solar plant", "wind farm", "power plant",
+})
+#: A regex/table NAMED for filtering file names (noise / skip / exclude ...).
+_GAP_FILTER_NAME = re.compile(r"NOISE|SKIP|EXCLUDE|IGNORE|DENY|BLOCK|FILENAME|FILE_NAME", re.IGNORECASE)
+_GAP_NUM_UNIT = re.compile(
+    r"(?<![\w.-])\d+(?:\.\d+)?\s?(?:mm|cm|m2|m3|m|kg|kn|mpa|sar|aed|usd|days?|hours?|hrs?)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _gap_str_elts(node: ast.AST) -> list[str]:
+    elts = getattr(node, "elts", [])
+    return [e.value for e in elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+
+
+def _gap_assigned(tree: ast.AST) -> dict[int, list[str]]:
+    """id(value node) -> assigned names; a JSON-schema ``"enum"`` value is named ``enum``."""
+    out: dict[int, list[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if isinstance(k, ast.Constant) and k.value == "enum":
+                    out[id(v)] = ["enum"]
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            out[id(node.value)] = _assigned_names(node)
+    return out
+
+
+def _gap_ast_findings(rel: str, tree: ast.AST, text: str = "") -> list[str]:
+    out: list[str] = []
+    assigned = _gap_assigned(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            strs = _gap_str_elts(node)
+            if len(strs) >= 3 and len(strs) >= 0.5 * len(node.elts) and all(len(s) <= 40 for s in strs):
+                if (sum(1 for s in strs if _GAP_REF_ELEM.match(s)) >= 2
+                        or any(_GAP_PREFIX_ELEM.match(s) for s in strs)):
+                    out.append(f"{rel}::gap_ref::line{node.lineno}")
+                names = assigned.get(id(node), [])
+                nouns = sum(1 for s in strs if s.lower().replace("_", " ").strip() in _GAP_PROJECT_NOUNS)
+                if nouns >= 2 and not {"tags", "enum"} & set(names):
+                    out.append(f"{rel}::gap_noun::line{node.lineno}")
+        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and node.value.isupper() and not node.value.startswith("RAG_")
+                and _GAP_KNOB_SUFFIX.search(node.value)):
+            out.append(f"{rel}::gap_knob::{node.value}")
+    for node in getattr(tree, "body", []):
+        if not (isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None):
+            continue
+        names = _assigned_names(node) or [f"line{node.lineno}"]
+        val = node.value
+        consts = [
+            n.value for n in ast.walk(val)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        ]
+        if not consts:
+            continue
+        is_regex = isinstance(val, ast.Call) and getattr(val.func, "attr", "") == "compile"
+        is_term_table = isinstance(val, (ast.Tuple, ast.List, ast.Set)) or (
+            isinstance(val, ast.Call) and getattr(val.func, "id", "") == "frozenset")
+        flagged = False
+        # (1) a filter regex/table named for file names, with literal alternatives
+        if (is_regex or is_term_table or isinstance(val, ast.Constant)) and any(
+            _GAP_FILTER_NAME.search(n) for n in names
+        ):
+            flagged = any(
+                "|" in c and any(len(b) >= 4 and b.isalpha() or "_" in b or "-" in b
+                                 for b in c.strip("^()$").split("|") if b and "\\" not in b)
+                for c in consts
+            )
+        # (2) a number+unit literal in a short term/regex table that is also used to match
+        if not flagged and (is_regex or is_term_table):
+            short = [c for c in consts if len(c) <= 60]
+            if any(_GAP_NUM_UNIT.search(c) for c in short):
+                flagged = any(
+                    re.search(re.escape(n) + r"\.(?:search|match|fullmatch|finditer|findall|sub|split)\(", text)
+                    or re.search(r"\bin\s+" + re.escape(n) + r"\b", text)
+                    for n in names
+                )
+        if flagged:
+            for n in names:
+                out.append(f"{rel}::gap_regex::{n}")
+    return out
+
+
+def _gap_probe_findings(rel: str, text: str) -> list[str]:
+    ids: set[str] = set()
+    for line in text.splitlines():
+        for cue in _GAP_PROBE_CUES:
+            for m in cue.finditer(line):
+                ids.update(t for t in _GAP_ID_RE.findall(m.group(1)) if t not in _GAP_NOT_A_PROBE)
+    return [f"{rel}::gap_probe::{i}" for i in sorted(ids)]
+
+
+def gap_findings(root: Path | None = None) -> list[str]:
+    """Findings of the gaps pass over product code. Never baselined."""
+    out: list[str] = []
+    for rel, abs_path in iter_product_files(root):
+        text = abs_path.read_text(encoding="utf-8", errors="ignore")
+        out.extend(_gap_probe_findings(rel, text))
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        out.extend(_gap_ast_findings(rel, tree, text))
+    return sorted(set(out))
+
+
+
 def _arg(flag: str) -> str | None:
     if flag in sys.argv:
         i = sys.argv.index(flag)
@@ -574,6 +754,15 @@ def _arg(flag: str) -> str | None:
 
 
 def main() -> int:
+    if "--gaps" in sys.argv:
+        root_arg = _arg("--root")
+        found = gap_findings(Path(root_arg) if root_arg else None)
+        for item in found:
+            sys.stdout.write(f"  {item}\n")
+        sys.stdout.write(f"GAPS: {len(found)} finding(s) (opt-in pass, never baselined)\n")
+        if "--report" in sys.argv:
+            return 0  # report-only: informs, never fails the build
+        return 1 if found else 0
     cases_path = _arg("--cases")
     if cases_path or "--live-names" in sys.argv:
         found = leakage_findings(
