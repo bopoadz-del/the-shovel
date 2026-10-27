@@ -34,7 +34,13 @@ import os
 import re
 
 
-_NOISE_DEFAULT = r"^(~\$|nambae-menu|SandsChina_Application)"
+# Default noise filter: the generic Microsoft Office owner/lock temp prefix
+# ("~$name.docx"), which is garbage on ANY project. No client or project
+# file-name is baked in — operators add project-specific garbage patterns via
+# RAG_NOISE_FILENAME_REGEX (and per-project exclusion is by ingest status, not
+# a name list). Shipping two clients' file-name prefixes here dropped their
+# documents on every tenant.
+_NOISE_DEFAULT = r"^~\$"
 
 # Construction reference labels used to anchor identifier extraction.
 # These are generic categories, not project-specific values.

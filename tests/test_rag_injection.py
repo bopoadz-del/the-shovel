@@ -99,24 +99,57 @@ def test_budget_rollover_at_new_day_resets_consumed(monkeypatch, tmp_path):
     assert budget.snapshot(day="2026-06-10")["consumed"] == 0
 
 
-def test_noise_filter_default_regex_matches_known_garbage():
+def test_noise_filter_default_is_generic_office_lockfiles_only():
+    # P1 (HARDWIRING): the default dropped two specific clients' file-name
+    # prefixes on every tenant. The default now matches ONLY the generic
+    # Microsoft Office owner/lock temp prefix "~$", which is garbage on any
+    # project; no client/project name is baked in. (Reversed-with-evidence:
+    # the old asserts that two named client files matched the DEFAULT are the
+    # hardwiring this removes; project-specific garbage is now an operator
+    # override, covered by test_noise_filter_env_override.)
     from app.core.rag.retriever import _is_noise_filename
-    # The defaults from the spec.
     assert _is_noise_filename("~$C-201_Time Management.docx") is True
-    assert _is_noise_filename("nambae-menu(4).pptx") is True
-    assert _is_noise_filename("SandsChina_Application_ChaD.docx") is True
-    # And NOT a real doc.
+    assert _is_noise_filename("~$anything at all.xlsx") is True
+    # No client/project name in the default: an odd-looking client file is kept
+    # unless an operator opts to filter it.
+    assert _is_noise_filename("some-vendor-brochure(4).pptx") is False
     assert _is_noise_filename("Example Client - Performance Basis of Design.pdf") is False
     assert _is_noise_filename("RFP_Appendix_B.xlsx") is False
 
 
+def test_default_noise_pattern_is_a_single_branch_no_alternation():
+    # Structural (P1): the shipped default is exactly the generic Office
+    # owner/lock prefix — one branch, no alternation — so no client/project
+    # file-name can hide in it. Red on the pre-fix default (which had
+    # alternation with two client prefixes), green now.
+    from app.core.rag.retriever import _NOISE_DEFAULT
+
+    assert _NOISE_DEFAULT == r"^~\$"
+    assert "|" not in _NOISE_DEFAULT
+
+
+def test_override_with_two_generic_prefixes_drops_those_and_keeps_lockfiles(monkeypatch):
+    # Project-specific garbage is an operator override of two (or more) generic
+    # prefixes; it must drop those AND keep the ~$ lock-file behaviour. No
+    # client name appears here.
+    monkeypatch.setenv("RAG_NOISE_FILENAME_REGEX", r"^(~\$|aaa_|bbb_)")
+    from app.core.rag.retriever import _is_noise_filename
+
+    assert _is_noise_filename("aaa_export.csv") is True
+    assert _is_noise_filename("bbb_form.docx") is True
+    assert _is_noise_filename("~$still-a-lockfile.docx") is True
+    assert _is_noise_filename("Real Document.pdf") is False
+
+
 def test_noise_filter_env_override(monkeypatch):
+    # Operators add project-specific garbage patterns without a code change.
     monkeypatch.setenv(
         "RAG_NOISE_FILENAME_REGEX",
-        r"^(~\$|nambae-menu|SandsChina_Application|MyCustomNoise)",
+        r"^(~\$|MyCustomNoise)",
     )
     from app.core.rag.retriever import _is_noise_filename
     assert _is_noise_filename("MyCustomNoise_v3.txt") is True
+    assert _is_noise_filename("~$lock.docx") is True
     assert _is_noise_filename("Real Document.pdf") is False
 
 
