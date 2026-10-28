@@ -899,6 +899,17 @@ async def export_schedule_from_brief(
     if req.conversation_id:
         _require_conversation_in_project(project_id, req.conversation_id, auth)
     name = req.project_name or proj.get("name") or "Project"
+    # Computed 400 naming the missing input (S-1, ORDERS_28OCT_0815Z): a schedule
+    # is derived from real input, never a template, so a request that carries
+    # none — no brief text, no BOQ rows, no staged conversation WBS — is a bad
+    # request. The message lists what is absent for THIS request, not fixed text.
+    if not (req.brief or "").strip() and not req.boq_items and not req.conversation_id:
+        raise HTTPException(
+            400,
+            "No schedulable input supplied: provide a brief describing the work, "
+            "a BOQ (boq_items), or a conversation_id with a staged WBS — none of "
+            "the three was in this request.",
+        )
     from app.core.conversation_wbs import (
         load_conversation_wbs,
         refuse_scaffold_for_boq_wbs_ask,

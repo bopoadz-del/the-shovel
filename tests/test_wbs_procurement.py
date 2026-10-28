@@ -28,9 +28,9 @@ def _wbs(**params):
 # are handed over, which the procurement-only tests above still exercise).
 BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
 BOQ_ITEMS = [
-    {"item_key": "D110", "description": "General site clearance"},
-    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks"},
-    {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 20, "unit": "m"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr"},
 ]
 
 

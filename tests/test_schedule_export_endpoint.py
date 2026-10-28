@@ -39,9 +39,9 @@ def test_schedule_from_brief_returns_valid_workbook(client):
         json={"brief": "high-level WBS for the demolition and site clearance bill of quantities scope",
               "target_count": 40, "start_date": "2026-01-05",
               "boq_items": [
-                  {"item_key": "D110", "description": "General site clearance"},
-                  {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks"},
-                  {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+                  {"item_key": "D110", "description": "General site clearance", "quantity": 1, "unit": "item"},
+                  {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 12, "unit": "nr"},
+                  {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 340, "unit": "m"},
               ]},
         headers=H,
     )
@@ -66,8 +66,8 @@ def test_no_day_rate_means_no_cost_column(client):
         json={"brief": "high-level WBS for the demolition and site clearance bill of quantities scope",
               "target_count": 30,
               "boq_items": [
-                  {"item_key": "D110", "description": "General site clearance"},
-                  {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+                  {"item_key": "D110", "description": "General site clearance", "quantity": 1, "unit": "item"},
+                  {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 340, "unit": "m"},
               ]},
         headers=H,
     )
@@ -87,6 +87,19 @@ def test_schedule_from_brief_no_scope_is_422(client):
         headers=H,
     )
     assert r.status_code == 422, r.text
+
+
+def test_schedule_from_brief_no_input_is_computed_400(client):
+    # No brief, no BOQ, no conversation -> computed 400 naming the missing input.
+    pid = _pid(client)
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-brief",
+        json={"brief": "", "target_count": 40},
+        headers=H,
+    )
+    assert r.status_code == 400, r.text
+    body = r.text.lower()
+    assert "brief" in body and "boq" in body and "conversation" in body
 
 
 def test_schedule_from_document_injects_extracted_lead_times(client, tmp_path):
