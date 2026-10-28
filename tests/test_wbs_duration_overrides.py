@@ -16,6 +16,19 @@ from app.lib.wbs_duration_overrides import (
 from app.containers.construction import ConstructionContainer
 from app.agents import runtime as runtime_module
 
+# PR#3 (ORDERS_28OCT_0345Z/0415Z): generate_wbs derives from real structured
+# input, not a template. The two generate_wbs integration tests below drive the
+# override matcher over a BOQ demolition scope that includes a slab row — the
+# override subject is unchanged ("use N days per <activity>" changes the
+# matched activity and recomputes CPM); only the base WBS source moves from the
+# removed building template to the measured BOQ scope.
+_BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
+_BOQ_ITEMS = [
+    {"item_key": "D110", "description": "General site clearance"},
+    {"item_key": "D700.1", "description": "Breaking out existing concrete ground slab"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+]
+
 
 @pytest.mark.parametrize(
     "text,match,days",
@@ -131,14 +144,13 @@ def test_tree_removal_override_hits_remove_trees_and_site_clearance():
 async def test_generate_wbs_override_changes_slab_days_and_recomputes_cpm():
     container = ConstructionContainer()
     baseline = await container.generate_wbs(
-        {},
-        {"target_count": 40, "project_type": "building"},
+        {"brief": _BOQ_ASK, "boq_items": _BOQ_ITEMS},
+        {"target_count": 40},
     )
     overridden = await container.generate_wbs(
-        {},
+        {"brief": _BOQ_ASK, "boq_items": _BOQ_ITEMS},
         {
             "target_count": 40,
-            "project_type": "building",
             "user_message": "use 6 days per slab and re-run",
         },
     )
@@ -163,11 +175,10 @@ async def test_generate_wbs_override_changes_slab_days_and_recomputes_cpm():
 async def test_generate_wbs_explicit_param_overrides_brief():
     container = ConstructionContainer()
     result = await container.generate_wbs(
-        {},
+        {"brief": _BOQ_ASK, "boq_items": _BOQ_ITEMS},
         {
             "target_count": 30,
-            "project_type": "building",
-            "brief": "use 9 days per slab",
+            "user_message": "use 9 days per slab",
             "duration_overrides": {"slab": 6},
         },
     )
