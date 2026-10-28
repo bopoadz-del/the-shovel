@@ -220,10 +220,11 @@ class ScheduleFromBriefRequest(BaseModel):
     )
     boq_items: Optional[list] = Field(
         None,
-        description="Measured BOQ demolition/site-clearance rows to derive the "
-                    "WBS scope from — the input-derived path (PR#3). Without a "
-                    "structured scope (BOQ here, or a staged conversation WBS) a "
-                    "prose brief yields no schedulable scope (422).",
+        description="Measured BOQ rows (any trade) to derive the WBS scope "
+                    "from — the input-derived path (PR#3). Without a structured "
+                    "scope (BOQ here, a structured brief, or a staged "
+                    "conversation WBS) a prose brief with no derivable scope "
+                    "yields no schedulable scope (422).",
     )
     conversation_id: Optional[str] = Field(
         None,

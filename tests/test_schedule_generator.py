@@ -64,12 +64,27 @@ async def test_schedule_generator_activity_shape(block):
 
 
 @pytest.mark.asyncio
-async def test_schedule_generator_prose_brief_is_no_scope(block):
-    """Delegation preserves the no-scope contract: a prose brief with no
-    structured scope returns the no-scope error, never a template."""
-    result = await block.process({}, params={"target_count": 5})
-    assert result["status"] == "error"
-    assert result["activities"] == []
+async def test_schedule_generator_prose_brief_derives_with_egress_else_no_scope(block, monkeypatch):
+    """1030Z re-point: delegation structures a prose brief into a derived
+    schedule when the egress is configured; a brief with no derivable scope is
+    the no-scope error, never a template."""
+    from app.core import llm_client
+
+    async def fake(system, user, **k):
+        if "pour" in (user or "").lower():
+            return {"activities": [
+                {"name": "Pour slab", "source_span": "pour the slab", "duration_days": 3, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    derived = await block.process({"brief": "Then pour the slab."}, params={"target_count": 5})
+    assert derived["status"] == "success"
+    assert any(a["name"] == "Pour slab" for a in derived["activities"])
+
+    no_scope = await block.process({}, params={"target_count": 5})
+    assert no_scope["status"] == "error"
+    assert no_scope["activities"] == []
 
 
 def test_schedule_generator_block_metadata():

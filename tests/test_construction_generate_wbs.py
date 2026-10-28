@@ -87,17 +87,35 @@ async def test_generate_wbs_activity_shape(container):
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_prose_brief_is_refused_as_no_scope(container):
-    """The subject Stage 2 (LLM extraction) will legitimately change: a prose
-    brief with no structured scope yields no activities and an explicit
-    no-scope error — never a template scaffold."""
-    result = await container.generate_wbs(
+async def test_generate_wbs_prose_brief_derives_with_egress_else_no_scope(container, monkeypatch):
+    """1030Z re-point: with the LLM egress configured, a prose brief is
+    STRUCTURED into a derived schedule (not a template, not a refusal). Only a
+    brief the egress derives no scope from is the no-scope error."""
+    from app.core import llm_client
+
+    async def fake(system, user, **k):
+        if "excavate" in (user or "").lower():
+            return {"activities": [
+                {"name": "Excavate", "source_span": "excavate the pad", "duration_days": 5, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    derived = await container.generate_wbs(
+        input_data={"brief": "First excavate the pad."},
+        params={"target_count": 40},
+    )
+    assert derived["status"] == "success"
+    assert [a["name"] for a in derived["activities"]] == ["Excavate"]
+    assert derived["scaffold"]["source"] == "brief"
+
+    no_scope = await container.generate_wbs(
         input_data={"brief": "Build a 50MW hyperscale data center."},
         params={"target_count": 200, "project_type": "data_center"},
     )
-    assert result["status"] == "error"
-    assert result["activities"] == []
-    assert "no schedulable scope" in result["error"].lower()
+    assert no_scope["status"] == "error"
+    assert no_scope["activities"] == []
+    assert "no schedulable scope" in no_scope["error"].lower()
 
 
 @pytest.mark.asyncio

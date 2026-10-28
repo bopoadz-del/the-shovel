@@ -666,12 +666,13 @@ _WBS_REFUSE_RE = re.compile(
     r"can\s*'?\s*t\s+generate|i\s+(?:cannot|can\s*'?\s*t|could\s+not))\b"
 )
 _WBS_HIERARCHY_RE = re.compile(r"(?m)^(?:### )?\d+(?:\.\d+)*\s+\S")
-_WBS_CESMM_D_RE = re.compile(r"(?i)\bD\d{2,4}(?:\.\d+)?\b")
+# Any CESMM / priced-bill item code (class letter + 2–4 digits), ANY trade —
+# D110 demolition, E200 concrete, R10 roads. Not demolition-specific.
+_WBS_BILL_CODE_RE = re.compile(r"(?i)(?<![A-Za-z0-9])[A-Z]\d{2,4}(?:\.\d+)?(?![A-Za-z0-9])")
 _WBS_TEMPLATE_RE = re.compile(
     r"(?i)template\s+scaffold|site\s+preparation|superstructure|"
     r"project_type\s+inferred:\s*building"
 )
-_WBS_DEMOLITION_SCOPE_RE = re.compile(r"(?i)\b(?:demolit|site\s+clear)\w*")
 
 
 def _source_contract_recency(name: str) -> Optional[Tuple[int, int]]:
@@ -752,11 +753,12 @@ def boq_wbs_answer_fails_wrong_contract(answer: str) -> bool:
 
 
 def boq_wbs_answer_is_grounded(answer: str) -> bool:
-    """True for a demolition / site-clearance WBS from BOQ rows, not a refuse.
+    """True for a BOQ-scope WBS answer from bill rows (ANY trade), not a refuse.
 
-    Requires the demolition/site-clearance scope AND either a numbered
-    hierarchy or CESMM D-codes. A mere mention of demolition is not enough.
-    Template scaffold and contract-number cites fail.
+    Trade-neutral (rework 2): a grounded answer carries a numbered hierarchy or
+    CESMM/bill item codes of any class — a concrete, roads or demolition bill
+    alike. A template scaffold, a contract-number cite, or a refuse with no
+    bill codes is not grounded. There is no demolition/site-clearance word gate.
     """
     blob = answer or ""
     if not blob.strip():
@@ -765,11 +767,9 @@ def boq_wbs_answer_is_grounded(answer: str) -> bool:
         return False
     if _WBS_TEMPLATE_RE.search(blob):
         return False
-    if _WBS_REFUSE_RE.search(blob) and not _WBS_CESMM_D_RE.search(blob):
+    if _WBS_REFUSE_RE.search(blob) and not _WBS_BILL_CODE_RE.search(blob):
         return False
-    if not _WBS_DEMOLITION_SCOPE_RE.search(blob):
-        return False
-    return bool(_WBS_HIERARCHY_RE.search(blob) or _WBS_CESMM_D_RE.search(blob))
+    return bool(_WBS_HIERARCHY_RE.search(blob) or _WBS_BILL_CODE_RE.search(blob))
 
 
 def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
@@ -907,7 +907,7 @@ def _items_from_named_boq_docs(project_id: str) -> List[Dict[str, Any]]:
 
 
 def retrieve_boq_scope_items(query: str, project_id: str) -> List[Dict[str, Any]]:
-    """Retrieve measured BOQ rows for a demolition / site-clearance WBS ask.
+    """Retrieve measured BOQ rows for a BOQ-scope WBS ask (any trade).
 
     Prefers chunks from BOQ-named documents already in the project pool
     (filename listing). Semantic ``retrieve_with_filter`` is a fallback

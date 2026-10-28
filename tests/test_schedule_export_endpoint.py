@@ -110,15 +110,34 @@ def test_no_day_rate_means_no_cost_column(client):
     assert "Total Cost" not in summ and "Total Man-days" in summ
 
 
-def test_schedule_from_brief_no_scope_is_422(client):
-    # The prose-brief path (no BOQ, no staged WBS) is now refused as no-scope.
+def test_schedule_from_brief_derives_with_egress_else_422(client, monkeypatch):
+    # 1030Z re-point: with the egress configured a prose brief is structured
+    # into a derived schedule (200); 422 only for a brief with no derivable
+    # scope.
+    from app.core import llm_client
+
+    async def fake(system, user, **k):
+        if "excavate" in (user or "").lower():
+            return {"activities": [
+                {"name": "Excavate", "source_span": "excavate the site", "duration_days": 5, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
     pid = _pid(client)
-    r = client.post(
+    ok = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-brief",
+        json={"brief": "First excavate the site.", "target_count": 40},
+        headers=H,
+    )
+    assert ok.status_code == 200, ok.text
+
+    no_scope = client.post(
         f"/v1/projects/{pid}/export/schedule-from-brief",
         json={"brief": "hyperscale data center", "target_count": 40},
         headers=H,
     )
-    assert r.status_code == 422, r.text
+    assert no_scope.status_code == 422, no_scope.text
 
 
 def test_schedule_from_brief_no_input_is_computed_400(client):

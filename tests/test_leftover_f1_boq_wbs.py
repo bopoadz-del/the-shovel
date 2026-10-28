@@ -213,6 +213,38 @@ async def test_concrete_boq_and_demolition_boq_derive_different_scopes():
 
 
 @pytest.mark.asyncio
+async def test_boq_stated_rate_duration_is_the_kernel_value_not_a_constant():
+    """Kills a hardwired BOQ-path duration (G6 M2): two rows with stated rates
+    yield two DIFFERENT kernel durations derived from quantity/rate."""
+    r = await ConstructionContainer().generate_wbs(
+        {"brief": "WBS from the BOQ scope", "boq_items": [
+            {"item_key": "E10", "description": "Concrete to foundations", "quantity": 120, "unit": "m3", "productivity_rate": "40 m3 per gang-day"},
+            {"item_key": "E20", "description": "Concrete to walls", "quantity": 300, "unit": "m3", "productivity_rate": "50 m3 per gang-day"},
+        ]},
+        {"target_count": 40},
+    )
+    durs = {a["boq"]["item_key"]: a["duration_days"] for a in r["activities"] if a.get("boq")}
+    assert durs["E10"] == 3     # 120 / 40
+    assert durs["E20"] == 6     # 300 / 50
+
+
+def test_boq_wbs_answer_grounded_is_trade_neutral():
+    """Rework 2: the product-path grounding check accepts a BOQ-scope WBS of
+    ANY trade (concrete, roads), not only demolition; refuse / template /
+    wrong-contract-cite are still rejected."""
+    from app.lib.boq_schedule import boq_wbs_answer_is_grounded
+    concrete = "WBS\n1 Concrete\n1.1 E200 Reinforced concrete to foundations\n1.2 E210 Concrete to walls"
+    roads = "WBS\n1 Roads/Paving\n1.1 R100 Asphalt wearing course to carriageway"
+    demolition = "WBS\n1 Demolition\n1.1 D110 General site clearance"
+    assert boq_wbs_answer_is_grounded(concrete)
+    assert boq_wbs_answer_is_grounded(roads)
+    assert boq_wbs_answer_is_grounded(demolition)
+    assert not boq_wbs_answer_is_grounded("I cannot produce a WBS from these excerpts.")
+    assert not boq_wbs_answer_is_grounded("Template scaffold: Site Preparation / Superstructure")
+    assert not boq_wbs_answer_is_grounded("Per contract AB-2022-101 the scope is as described.")
+
+
+@pytest.mark.asyncio
 async def test_generate_wbs_f1_ask_uses_boq_items_not_building_template():
     r = await ConstructionContainer().generate_wbs(
         {"brief": F1_ASK, "boq_items": _BOQ_ITEMS},
