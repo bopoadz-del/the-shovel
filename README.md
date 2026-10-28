@@ -1,31 +1,24 @@
-# The First Product that intiated this Syetem - The Fork
+# The Fork (the-shovel)
 
 A construction-intelligence platform: FastAPI backend + React frontend +
 Postgres with pgvector + hybrid retrieval (BM25 + vector RRF) + an
 agent runtime that handles project Q&A, BOQ extraction, drawing QTO,
 WBS generation, and cost analysis.
 
-**Live:** [the-fork-jn3t.onrender.com](https://the-fork-jn3t.onrender.com)
-
-The deployed instance runs on Render (FastAPI web service + Postgres
-16 with pgvector). Chat is provider-driven via `LLM_PROVIDER`: the
-cloud ladder may be OpenRouter free models (`OPENROUTER_MODEL=openrouter/free`)
-as primary, with Kimi and Groq optional — Ollama is the
-on-prem provider only, not a cloud fallback. The canonical `chunks_v2`
-store held ~10,500 indexed chunks across 53 docs at last count
-(PILOT_READINESS.md, 2026-07-12); no "142k" figure is sourced anywhere
-in the repo.
+Deployed on AWS ECS.
 
 ---
 
-> ### Part of the CEREBRUM ecosystem — industrialized AI delivery
->
-> **The Store — [Cerebrum-Blocks](https://github.com/bopoadz-del/Cerebrum-Blocks):** 94+ certified AI blocks, 17 industry kits, one universal API. Build a capability once; every sector inherits it.  
-> **The Factory — [CerebrumDev.ai](https://github.com/bopoadz-del/CerebrumDev.ai):** the client-facing interface that assembles blocks into governed, deployable vertical platforms — evaluation gates in CI, release certification, honest closure reporting.  
-> **The Products — [The Fork](https://github.com/bopoadz-del/the-shovel)** (construction AI — enterprise client pilot) **· [RetailOps](https://github.com/bopoadz-del/TEKsystems_GlobalRetailMNC)** (retail operations — assembled, CI-gated and deployed in under three days).  
-> **The Edge:** sovereign deployment proven — zero-egress on-premise profile, executed air-gap acceptance test, signed sovereignty report.
->
-> **You are here: A PRODUCT** — the flagship construction vertical, in enterprise client pilot. CerebrumDev's platform generator pins this repo as its reference baseline for new verticals.
+## Where this sits
+
+The Fork (the-shovel) was built first, by hand, from block code; its blocks
+were extracted to create the Store (cerebrum-blocks); the Factory
+(CerebrumDev.ai) was built on the Store afterwards.
+The Fork is not a Factory product.
+
+Its role: the construction-intelligence product (theshovel.ai).
+
+The Factory assembles Store blocks into deployable vertical platforms.
 
 ---
 
@@ -38,8 +31,8 @@ schedules, reports) and gives the operator a chat surface that:
   corpus and citing the source
 - Extracts structured Bill of Quantities from PDF / XLSX / CSV
 - Runs quantity takeoff on drawings (PDF + DXF)
-- Generates CPM-validated work breakdown structures (200+ activities,
-  full ES/EF/LS/LF, critical path)
+- Generates CPM-validated work breakdown structures (full ES/EF/LS/LF,
+  critical path)
 - Reconciles drawing quantities against BOQ totals (variance math via
   sympy) and produces recommendations
 - Answers engineering questions from a curated **construction knowledge
@@ -61,45 +54,41 @@ schedules, reports) and gives the operator a chat surface that:
                                 │  /v1/agents/project-assistant/chat
 ┌───────────────────────────────▼──────────────────────────────────┐
 │  FastAPI backend (app/)                                           │
-│  - 41 blocks under app/blocks/ (boq_processor, drawing_qto, …)    │
+│  - blocks under app/blocks/ (boq_processor, drawing_qto, …)       │
 │  - Agent runtime (app/agents/) with smart_orchestrator routing    │
 │  - Hybrid retriever (BM25 + vector RRF) over the chunks table     │
 │  - JWT auth + admin-gated /v1/admin/* endpoints                   │
 └─────┬─────────────────────────┬──────────────────────────────────┘
       │                         │
-      │  pgvector(384)          │  direct HTTPS
-      │  + tsvector GIN         │  to LLM provider
+      │  pgvector               │  HTTPS to the cloud
+      │  + tsvector GIN         │  LLM provider
       ▼                         ▼
-┌──────────────┐         ┌──────────────────┐
-│  Postgres 16 │         │  Kimi K2 primary │
-│  + pgvector  │         │  Groq fallback   │
-│  on Render   │         │                  │
-└──────────────┘         └──────────────────┘
+┌──────────────┐         ┌──────────────────────────────┐
+│  Postgres 16 │         │  Cloud LLM via LLM_PROVIDER   │
+│  + pgvector  │         │                               │
+└──────────────┘         └──────────────────────────────┘
 ```
 
 Storage:
 - **Postgres** — users, projects, documents, conversations, messages,
   chunks (text + embedding + tsvector), agent_facts, hydration_runs.
-  15 GB disk on Render basic_256mb plan, daily backups, 7-day
-  retention. See [docs/backup-and-recovery.md](docs/backup-and-recovery.md).
-- **Render persistent disk** (`/app/data`) — uploaded source documents,
+  See [docs/backup-and-recovery.md](docs/backup-and-recovery.md).
+- **Data directory** (`DATA_DIR`, `/app/data`) — uploaded source documents,
   audit log, evidence vault, learning engine state, Google Drive OAuth
-  refresh tokens, `.secret_key` fallback. Daily snapshots, 7-day
-  retention.
+  refresh tokens, `.secret_key` fallback.
 
 Retrieval:
-- Hybrid: 50 semantic + 50 BM25 candidates fused via Reciprocal Rank
-  Fusion at the store layer, then re-ranked by cosine + identifier/GK
-  signals and a hard project-scope filter. `app/core/rag/retriever.py`,
+- Hybrid: semantic + BM25 candidates fused via Reciprocal Rank Fusion at
+  the store layer, then re-ranked by cosine + identifier/GK signals and a
+  hard project-scope filter. `app/core/rag/retriever.py`,
   `app/core/rag/vector_store.py`.
-- Embeddings: shipped default `minishlab/potion-base-8M` (model2vec,
-  256-dim, `app/core/rag/embeddings.py`), overridable via
-  `RAG_EMBEDDING_MODEL` — prod currently overrides to
-  `BAAI/bge-small-en-v1.5`, 384-dim. The store table width follows the
-  embedder's actual dimension.
-- RAG injection gate: only the `project-assistant` agent gets
-  per-turn RAG context (`app/core/rag/inject.py`). Confidence
-  threshold 0.4, daily token budget 500K, fallback prefix on miss.
+- Embeddings: the shipped default is a small `model2vec` model (256-dim,
+  `app/core/rag/embeddings.py`), overridable via `RAG_EMBEDDING_MODEL`;
+  production runs `BAAI/bge-small-en-v1.5` (384-dim). The store table width
+  follows the embedder's actual dimension.
+- RAG injection gate: only the `project-assistant` agent gets per-turn RAG
+  context (`app/core/rag/inject.py`), with a confidence threshold, a daily
+  token budget, and a fallback prefix on miss.
 
 ---
 
@@ -136,7 +125,7 @@ worked example before committing.
 
 ```bash
 git clone https://github.com/bopoadz-del/the-shovel.git
-cd The_Fork
+cd the-shovel
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -231,7 +220,7 @@ The platform exposes:
 
 ```bash
 python -m pytest tests/e2e/ -q   # the six demo flows — seconds
-python -m pytest tests/ -q       # the full suite — ~35-40 minutes, 3100+ tests
+python -m pytest tests/ -q       # the full suite — ~35-40 minutes
 python scripts/test_matrix.py    # BOTH CI profiles — what CI green actually means
 ```
 
@@ -243,8 +232,7 @@ runs the suite twice — once with `CEREBRUM_VIRGIN=true` (the generic block set
 and once with `CEREBRUM_VIRGIN=false` + `CEREBRUM_DOMAIN_KITS=construction` (the
 full platform) — and some tests only run under one of them. A plain
 `pytest tests/` covers one profile, so it can report a clean pass on a change
-that CI rejects; that happened on 2026-08-11, where a green local run of 3302
-tests missed an `ImportError` that only the production-like profile executes.
+that CI rejects.
 
 `test_matrix.py` reads the matrix and env straight out of
 `.github/workflows/test.yml` rather than keeping its own copy, so it cannot
@@ -261,7 +249,7 @@ CI gates, all blocking on every PR:
 |---|---|
 | `tests` | full suite, two profiles (virgin / production-like) + a Postgres job |
 | `diff-cover` | ≥50 % of newly-changed lines covered |
-| coverage floor | 25 % overall, a regression floor |
+| coverage floor | overall regression floor |
 | `audit_stubs` | no hollow function that is not registered in [docs/KNOWN_INCOMPLETE.md](docs/KNOWN_INCOMPLETE.md) |
 | `scan_secrets` | no secret material in tracked files |
 | `scan_exception_pass` | zero `except Exception: pass` handlers — S110 twin; empty allowlist |
@@ -279,5 +267,5 @@ either implemented or it is on that page with a reason.
 - [.env.example](.env.example) — every environment variable with
   REQUIRED-PROD / RECOMMENDED / OPTIONAL labels
 - [docs/backup-and-recovery.md](docs/backup-and-recovery.md) — backup
-  posture + restore procedure for Postgres + disk
+  posture + restore procedure for Postgres + data directory
 - [deploy/PILOT.md](deploy/PILOT.md) — deployment runbook
