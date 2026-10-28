@@ -720,7 +720,7 @@ async def _chat_impl(
                   and error_nudges < _TOOL_ERROR_NUDGE_CAP):
                 error_nudges += 1
                 pending_nudges.append({"role": "user", "content": _nudge_for_failed_tool(
-                    tool_result, self) + (await _off_loop(_file_tool_hint, messages, project_id, self.allowed_blocks))})
+                    tool_result, self, project_id=project_id, messages=messages) + (await _off_loop(_file_tool_hint, messages, project_id, self.allowed_blocks))})
         messages.extend(pending_nudges)
 
     # Hit the cap without a final answer — force one more call with tools disabled
