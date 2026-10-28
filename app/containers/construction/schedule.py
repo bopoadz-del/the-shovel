@@ -2383,6 +2383,7 @@ class ConstructionScheduleMixin:
             start_date = stated_today or datetime.now(timezone.utc).date().isoformat()
 
         structuring_unstated_durations: List[str] = []
+        brief_structured = False
         if boq_derived:
             from app.lib.boq_schedule import (
                 activities_from_boq_scope_outline,
@@ -2400,6 +2401,7 @@ class ConstructionScheduleMixin:
             activities, structuring_unstated_durations = await _structure_activities_from_text(
                 brief or user_message
             )
+            brief_structured = bool(activities)
             wbs_tree = {}
 
         # Long-lead procurement + target milestones extracted from a BOD/RFP
@@ -2532,10 +2534,38 @@ class ConstructionScheduleMixin:
                     + (f" Items: {', '.join(citations)}." if citations else "")
                 ),
             }
+        elif brief_structured:
+            # Derivation self-declaration (66f3bca ruling): the output states
+            # WHERE its activities came from and which kernel computed the
+            # schedule. Here the activities were STRUCTURED from the brief /
+            # document text by the single LLM egress (structuring only); the
+            # schedule (durations/sequence/CPM) is the deterministic construction
+            # kernel, pm_computations. Every activity traces to a verbatim span.
+            result["scaffold"] = {
+                "source": "document" if (p.get("document_ids") or data.get("document_ids")) else "brief",
+                "project_type": project_type,
+                "project_type_inferred": type_inferred,
+                "derived_from_boq": False,
+                "zone_labels": "none",
+                "kernel": "pm_computations.compute_cpm",
+                "unstated_durations": list(structuring_unstated_durations),
+                "declaration": (
+                    "Activities were structured from the input text; durations, "
+                    "sequence and CPM are computed by the construction CPM kernel "
+                    "(pm_computations). No template, per-type scaffold or "
+                    "placeholder zones were added; every activity traces to a "
+                    "verbatim span of the input."
+                    + (
+                        f" Durations not stated in the input (kept blank, not "
+                        f"defaulted): {', '.join(structuring_unstated_durations)}."
+                        if structuring_unstated_durations else ""
+                    )
+                ),
+            }
         else:
-            # Non-BOQ success means the activities are the document feed's
-            # long-lead procurement items (the only other real input); there
-            # is no template scaffold any more.
+            # Non-BOQ, non-structured success means the activities are the
+            # document feed's long-lead procurement items (the remaining real
+            # input); there is no template scaffold any more.
             result["scaffold"] = {
                 "source": "document_procurement",
                 "project_type": project_type,
