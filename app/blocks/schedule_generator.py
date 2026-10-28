@@ -53,6 +53,10 @@ class ScheduleGeneratorBlock(UniversalBlock):
             "target_milestones": data.get("target_milestones")
             or params.get("target_milestones")
             or [],
+            # Measured BOQ demolition/site-clearance rows — the shim must
+            # forward them so the BOQ scope path is reachable through this
+            # roadmap-named entry, not only the container method directly.
+            "boq_items": data.get("boq_items") or params.get("boq_items") or [],
         }
 
         try:

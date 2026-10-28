@@ -3,11 +3,23 @@
 The real WBS generator is tested in ``tests/test_construction_generate_wbs.py``;
 this file only proves that ``app.blocks.schedule_generator.ScheduleGeneratorBlock``
 delegates to that working implementation and returns the expected shape.
+
+PR#3 (ORDERS_28OCT_0345Z/0415Z): generate_wbs derives from real structured
+input, so the delegation/shape tests are re-pointed to the BOQ scope (the
+template-scaling clamp test is removed — the BOQ path keeps the measured row
+count and never scales to a target).
 """
 
 import pytest
 
 from app.blocks.schedule_generator import ScheduleGeneratorBlock
+
+BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
+BOQ_ITEMS = [
+    {"item_key": "D110", "description": "General site clearance"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+]
 
 
 @pytest.fixture
@@ -18,13 +30,14 @@ def block():
 @pytest.mark.asyncio
 async def test_schedule_generator_delegates_to_generate_wbs(block):
     result = await block.process(
-        {"brief": "Build a 50MW hyperscale data center."},
-        params={"target_count": 60, "project_type": "data_center"},
+        {"brief": BOQ_ASK, "boq_items": BOQ_ITEMS},
+        params={"target_count": 60},
     )
 
     assert result["status"] == "success"
-    assert result["project_type"] == "data_center"
-    assert result["actual_count"] >= 60
+    assert result["scaffold"]["derived_from_boq"] is True
+    # One activity per retrieved BOQ row — delegation produces input-derived rows.
+    assert result["actual_count"] == len(BOQ_ITEMS)
     assert len(result["activities"]) == result["actual_count"]
     assert isinstance(result.get("wbs_tree"), dict) and result["wbs_tree"]
     assert isinstance(result.get("summary"), dict)
@@ -34,8 +47,8 @@ async def test_schedule_generator_delegates_to_generate_wbs(block):
 @pytest.mark.asyncio
 async def test_schedule_generator_activity_shape(block):
     result = await block.process(
-        {},
-        params={"target_count": 30, "project_type": "building"},
+        {"brief": BOQ_ASK, "boq_items": BOQ_ITEMS},
+        params={"target_count": 30},
     )
     activities = result["activities"]
     assert activities
@@ -48,10 +61,12 @@ async def test_schedule_generator_activity_shape(block):
 
 
 @pytest.mark.asyncio
-async def test_schedule_generator_clamps_low_target(block):
+async def test_schedule_generator_prose_brief_is_no_scope(block):
+    """Delegation preserves the no-scope contract: a prose brief with no
+    structured scope returns the no-scope error, never a template."""
     result = await block.process({}, params={"target_count": 5})
-    assert result["target_count"] == 20
-    assert result["actual_count"] >= 20
+    assert result["status"] == "error"
+    assert result["activities"] == []
 
 
 def test_schedule_generator_block_metadata():
