@@ -767,15 +767,31 @@ def test_named_boq_docs_gate_refuses_codeless_rows(monkeypatch):
     assert bs._items_from_named_boq_docs("p1") == []
 
 
-def test_semantic_retrieval_gate_refuses_codeless_rows(monkeypatch):
-    """rework-2 e (call site boq_schedule.py:923 semantic retrieve): the
-    semantic caller refuses a codeless 'BOQ line item' chunk; flipping the gate
-    False admits it -> this fails (kills that mutant)."""
+def test_retrieve_passes_require_measured_gate_true_to_the_semantic_call(monkeypatch):
+    """rework-2 e (call site boq_schedule.py:923 semantic retrieve), tests-only:
+    retrieve_boq_scope_items must pass require_measured_gate=True to the
+    semantic _items_from_chunk_text call. A spy records the flag each call
+    receives; flipping that call site to False is caught here (the final
+    structured_boq_rows would otherwise mask it at the output). The named-doc
+    sites :861/:884 are pinned by test_named_boq_docs_gate_refuses_codeless_rows."""
     from app.core.rag.vector_store import Chunk
     from app.lib import boq_schedule as bs
+
+    seen_gates = []
+    orig = bs._items_from_chunk_text
+
+    def spy(text, filename, *, require_measured_gate):
+        seen_gates.append(require_measured_gate)
+        return orig(text, filename, require_measured_gate=require_measured_gate)
+
+    monkeypatch.setattr(bs, "_items_from_chunk_text", spy)
+    monkeypatch.setattr("app.core.projects.list_documents", lambda *a, **k: [])  # no pool docs
     monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: pid)
     ch = Chunk(chunk_id="s0", project_id="p1", doc_id="s0", chunk_index=0, text=_CODELESS_BOQ_LINE)
     ch.source_name = "notes.pdf"
     monkeypatch.setattr("app.core.rag.retriever.retrieve_with_filter", lambda *a, **k: ([ch], 0))
     monkeypatch.setattr("app.core.rag.retriever._doc_name_for_id", lambda did: "notes.pdf")
-    assert bs._items_from_semantic_retrieval("WBS for the BOQ scope", "p1") == []
+
+    bs.retrieve_boq_scope_items("WBS for the BOQ scope", "p1")
+    assert seen_gates, "the semantic path must call _items_from_chunk_text"
+    assert all(g is True for g in seen_gates)
