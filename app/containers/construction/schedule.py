@@ -451,16 +451,30 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
         # defaulted — the activity is incomplete and the chain is reported so.
         duration_days: Optional[int] = None
         basis = "unknown"
+        has_qty = isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0
+        has_rate = isinstance(rate, str) and bool(rate.strip())
         if has_dur:
             duration_days, basis = int(dur), "stated"
-        elif (
-            isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0
-            and isinstance(rate, str) and rate.strip()
-        ):
+        elif has_qty and has_rate:
+            # Stated quantity + STATED rate -> kernel estimate (the stated rate
+            # always wins; a norm is never consulted here).
             est = _estimate_duration_from_rate(qty, rate)
             if est is not None:
                 duration_days = est
                 basis = f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
+        elif has_qty:
+            # Stated quantity but NO rate -> a GENERIC, sourced productivity
+            # norm for the trade (S-1b). No matching trade -> stays UNKNOWN.
+            from app.lib.productivity_norms import norm_rate_for
+            norm = norm_rate_for(name)
+            if norm is not None:
+                est = _estimate_duration_from_rate(qty, norm["rate"])
+                if est is not None:
+                    duration_days = est
+                    basis = (
+                        "estimated — kernel productivity_manpower_duration, "
+                        f"norm {norm['rate']} ({norm['source']})"
+                    )
         if duration_days is None:
             unstated.append(name)
         aid = f"B{idx}"
