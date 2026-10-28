@@ -218,6 +218,13 @@ class ScheduleFromBriefRequest(BaseModel):
         None,
         description="Activity-name substring → working days (e.g. {\"slab\": 6}).",
     )
+    boq_items: Optional[list] = Field(
+        None,
+        description="Measured BOQ demolition/site-clearance rows to derive the "
+                    "WBS scope from — the input-derived path (PR#3). Without a "
+                    "structured scope (BOQ here, or a staged conversation WBS) a "
+                    "prose brief yields no schedulable scope (422).",
+    )
     conversation_id: Optional[str] = Field(
         None,
         description="When set, export the conversation's staged WBS instead of regenerating.",
@@ -932,6 +939,7 @@ async def export_schedule_from_brief(
         "start_date": req.start_date,
         "user_message": req.brief,
         "duration_overrides": req.duration_overrides,
+        "boq_items": req.boq_items or [],
         "project_id": project_id,
     })
     refusal = refuse_scaffold_for_boq_wbs_ask(req.brief or "", req.brief or "", wbs)

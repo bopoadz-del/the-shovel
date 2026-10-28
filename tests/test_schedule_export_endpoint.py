@@ -30,11 +30,19 @@ def _pid(client):
 
 
 def test_schedule_from_brief_returns_valid_workbook(client):
+    # PR#3: schedule-from-brief derives from structured scope, not a template.
+    # Pass the measured BOQ demolition/site-clearance scope (a prose brief with
+    # no scope is 422 — see test_schedule_from_brief_no_scope_is_422).
     pid = _pid(client)
     r = client.post(
         f"/v1/projects/{pid}/export/schedule-from-brief",
-        json={"brief": "hyperscale data center", "target_count": 40,
-              "project_type": "data_center", "start_date": "2026-01-05"},
+        json={"brief": "high-level WBS for the demolition and site clearance bill of quantities scope",
+              "target_count": 40, "start_date": "2026-01-05",
+              "boq_items": [
+                  {"item_key": "D110", "description": "General site clearance"},
+                  {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks"},
+                  {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+              ]},
         headers=H,
     )
     assert r.status_code == 200, r.text
@@ -55,7 +63,12 @@ def test_no_day_rate_means_no_cost_column(client):
     pid = _pid(client)
     r = client.post(
         f"/v1/projects/{pid}/export/schedule-from-brief",
-        json={"brief": "data center", "target_count": 30, "project_type": "data_center"},
+        json={"brief": "high-level WBS for the demolition and site clearance bill of quantities scope",
+              "target_count": 30,
+              "boq_items": [
+                  {"item_key": "D110", "description": "General site clearance"},
+                  {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
+              ]},
         headers=H,
     )
     assert r.status_code == 200, r.text
@@ -63,6 +76,17 @@ def test_no_day_rate_means_no_cost_column(client):
     summ = "\n".join(str(c.value) for row in wb["Summary"].iter_rows()
                      for c in row if c.value is not None)
     assert "Total Cost" not in summ and "Total Man-days" in summ
+
+
+def test_schedule_from_brief_no_scope_is_422(client):
+    # The prose-brief path (no BOQ, no staged WBS) is now refused as no-scope.
+    pid = _pid(client)
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-brief",
+        json={"brief": "hyperscale data center", "target_count": 40},
+        headers=H,
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_schedule_from_document_injects_extracted_lead_times(client, tmp_path):
