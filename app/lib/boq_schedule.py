@@ -637,11 +637,13 @@ def structured_boq_rows(
     """Keep measured BOQ rows by STRUCTURE — any trade (ORDERS_28OCT_0700Z #1a).
 
     A row qualifies when it carries a label (``description`` or ``item_key``)
-    AND a measure (``quantity``/``qty`` or ``unit``): i.e. it is a bill-of-
-    quantities line, whatever the work type. There is no demolition/site-
-    clearance keyword gate — any measured BOQ scope derives a WBS. De-dupes on
-    CESMM code + normalised description, exactly as the old trade filter did,
-    and never invents rows.
+    AND bill-of-quantities STRUCTURE — either a measure (``quantity``/``qty``
+    or ``unit``) OR a bill item code (``item_key`` shaped like a CESMM/section
+    code, e.g. ``D110``, ``E20``). Either is a BOQ line, whatever the trade; a
+    bare prose scrap with neither ("Hall A slab") is not. There is no
+    demolition/site-clearance keyword gate — any measured BOQ scope derives a
+    WBS. De-dupes on CESMM code + normalised description, exactly as the old
+    trade filter did, and never invents rows.
     """
     out: List[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -649,13 +651,16 @@ def structured_boq_rows(
     for item in items or []:
         if not isinstance(item, dict):
             continue
-        label = str(item.get("description") or item.get("item_key") or "").strip()
+        item_key = str(item.get("item_key") or "").strip()
+        label = str(item.get("description") or item_key).strip()
         has_measure = (
             item.get("quantity") is not None
             or item.get("qty") is not None
             or str(item.get("unit") or "").strip() != ""
         )
-        if not label or not has_measure:
+        # A bill item code (letters then a digit) is itself BOQ structure.
+        has_code = bool(re.match(r"(?i)^[A-Z]{1,4}\d", item_key))
+        if not label or not (has_measure or has_code):
             continue
         code = _compact_cesmm_code(str(item.get("item_key") or ""))
         key = (code, _norm_desc(item.get("description") or item.get("item_key")))

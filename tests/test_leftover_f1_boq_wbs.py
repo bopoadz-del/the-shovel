@@ -37,7 +37,6 @@ from app.core.predefined_reasoning import (
 )
 from app.lib.boq_schedule import (
     activities_from_boq_scope_outline,
-    filter_demolition_site_clearance_items,
     parse_boq_measured_rows,
     retrieve_boq_scope_items,
     wbs_tree_from_boq_items,
@@ -63,10 +62,10 @@ S2_BOQ = (Path(__file__).parent / "fixtures" / "ui_phys" / "S2_demolition_boq.md
 )
 
 _BOQ_ITEMS = [
-    {"item_key": "D110", "description": "General site clearance", "source": "S2_demolition_boq.md"},
-    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks"},
-    {"item_key": "D549.2", "description": "Removal of existing chain link fence"},
-    {"item_key": "D599.5", "description": "Breaking out existing carriageway including road markings"},
+    {"item_key": "D110", "description": "General site clearance", "quantity": 12, "unit": "ha", "source": "S2_demolition_boq.md"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 48, "unit": "nr"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 80, "unit": "m"},
+    {"item_key": "D599.5", "description": "Breaking out existing carriageway including road markings", "quantity": 1200, "unit": "m2"},
 ]
 
 
@@ -119,20 +118,23 @@ def test_parse_s2_fixture_rows_does_not_invent():
     assert not any("part summary" in (r.get("description") or "").lower() for r in rows)
 
 
-def test_filter_drops_non_demolition_rows():
+def test_wbs_tree_keeps_any_measured_trade_not_only_demolition():
+    """De-hardwired (rework-1): the WBS-build path elects by STRUCTURE
+    (label + quantity/unit), ANY trade — not a demolition keyword filter. A
+    concrete row with a quantity is now in the tree; an unmeasured scrap
+    ("Hall A slab", no quantity) is dropped for want of a measure, not for its
+    words."""
     mixed = _BOQ_ITEMS + [
-        {"item_key": "C20", "description": "Concrete to columns"},
-        {"description": "Hall A slab"},
+        {"item_key": "C20", "description": "Concrete to columns", "quantity": 55, "unit": "m3"},
+        {"description": "Hall A slab"},  # no measure -> not a BOQ row
     ]
-    scoped = filter_demolition_site_clearance_items(mixed)
-    codes = {r.get("item_key") for r in scoped}
-    assert codes == {"D110", "D290.1", "D549.2", "D599.5"}
     tree = wbs_tree_from_boq_items(mixed)
     blob = " ".join(tree.values()).lower()
     assert "d110" in blob and "site clearance" in blob
-    assert "superstructure" not in blob
+    # The concrete row IS elected now (any trade) — the demolition filter is gone.
+    assert "concrete to columns" in blob
+    # The unmeasured scrap is not a BOQ row.
     assert "hall a" not in blob
-    assert "concrete to columns" not in blob
 
 
 def test_tree_and_activities_are_only_retrieved_rows():
@@ -171,31 +173,46 @@ async def test_generate_wbs_f1_ask_uses_boq_items_not_building_template():
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_office_brief_still_ignores_silent_boq():
-    """F1b boundary for a generic brief: a leftover boq key is not an election."""
-    r = await ConstructionContainer().generate_wbs(
+async def test_a_measured_boq_is_elected_regardless_of_brief_wording():
+    """De-hardwired (rework-1): election is by STRUCTURE, not the brief's
+    words. A MEASURED boq row (quantity/unit) is elected even under a generic
+    office brief; an UNMEASURED boq key is not a BOQ row and is not elected
+    (and there is no template to fall back to)."""
+    measured = await ConstructionContainer().generate_wbs(
         {
             "brief": "office building, 12 storeys",
-            "boq": [{"item_key": "D110", "description": "General site clearance"}],
-            "boq_items": [{"item_key": "D110", "description": "General site clearance"}],
+            "boq_items": [{"item_key": "E10", "description": "Reinforced concrete to foundations", "quantity": 340, "unit": "m3"}],
         },
         {"target_count": 40},
     )
-    assert r["scaffold"]["derived_from_boq"] is False
-    assert "template scaffold" in r["scaffold"]["declaration"].lower()
-    assert "D110" not in r["wbs_tree"].values()
+    assert measured["scaffold"]["derived_from_boq"] is True
+    assert "E10" in " ".join(measured["wbs_tree"].values())
+
+    unmeasured = await ConstructionContainer().generate_wbs(
+        {
+            "brief": "office building, 12 storeys",
+            # A prose scrap with no bill code and no measure is not a BOQ row.
+            "boq_items": [{"description": "some site clearance work"}],
+        },
+        {"target_count": 40},
+    )
+    # Not a BOQ row, and a prose brief has no structured scope -> no-scope
+    # (never a template scaffold).
+    assert unmeasured["status"] == "error"
+    assert not unmeasured.get("activities")
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_f1_without_rows_keeps_honest_scaffold():
+async def test_generate_wbs_f1_without_rows_is_no_scope_not_a_template():
+    """De-hardwired: with no BOQ rows and no provider to structure the prose,
+    the F1 ask yields no scope — never the building template scaffold."""
     r = await ConstructionContainer().generate_wbs(
         {"brief": F1_ASK},
         {"target_count": 40, "project_type": "building"},
     )
-    assert r["scaffold"]["derived_from_boq"] is False
-    assert "template scaffold" in r["scaffold"]["declaration"].lower()
-    blob = " ".join(r["wbs_tree"].values()).lower()
-    assert "d110" not in blob
+    assert r["status"] == "error"
+    assert not r.get("activities")
+    assert "no schedulable scope" in (r.get("error") or "").lower()
 
 
 def test_deliver_f1_boq_tree_has_no_template_scaffold():
@@ -397,12 +414,6 @@ async def test_generate_wbs_retrieves_when_project_has_boq(monkeypatch):
     )
     assert r["scaffold"]["derived_from_boq"] is True
     assert "D110" in " ".join(r["wbs_tree"].values())
-
-
-def test_kill_switch_restores_template_election(monkeypatch):
-    monkeypatch.setenv("BOQ_SCOPE_WBS", "0")
-    assert not message_wants_boq_scope_wbs(F1_ASK)
-    assert message_wants_wbs_outline(F1_ASK)
 
 
 @pytest.mark.asyncio
