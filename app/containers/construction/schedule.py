@@ -363,6 +363,85 @@ def _activities_from_text(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+# Brief/document -> structured activities (S-1, ORDERS_28OCT_0815Z). The LLM
+# STRUCTURES the prose into named activities + stated durations + stated
+# dependencies ONLY; it never computes a schedule — durations/sequence/CPM run
+# in the deterministic kernel (_attach_cpm_to_activities -> pm_computations).
+# Anti-hallucination: every activity must carry a source_span copied verbatim
+# from the input; activities whose span is not in the input are dropped. A
+# missing duration is kept as 0 (flagged "not stated"), never defaulted.
+_BRIEF_WBS_SYSTEM = (
+    "You structure a construction project brief into a work breakdown. Return "
+    "ONLY JSON: {\"activities\": [{\"name\": string, \"source_span\": string "
+    "(a verbatim substring of the brief that names this activity), "
+    "\"duration_days\": integer or null (ONLY if the brief states a duration for "
+    "it, else null), \"predecessors\": [activity name strings that the brief "
+    "says must finish first, else []]}]}. Extract only activities the brief "
+    "actually names. Never invent activities, durations or dependencies. Every "
+    "source_span must be copied verbatim from the brief text."
+)
+
+
+async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Structure a prose brief / document into WBS activities via the single
+    LLM egress (``llm_client.complete_json``), structuring ONLY. Returns
+    ``(activities, unstated_duration_names)``. Activities carry the WBS-generate
+    shape (id/code/name/duration_days/predecessors/wbs*). A source_span absent
+    from the input drops the activity (anti-hallucination). Durations are the
+    brief's stated values or 0 (never a default); predecessor NAMES resolve to
+    ids only among activities that survived."""
+    blob = (text or "").strip()
+    if not blob:
+        return [], []
+    try:
+        from app.core import llm_client
+        data = await llm_client.complete_json(_BRIEF_WBS_SYSTEM, blob, max_tokens=1500)
+    except Exception:  # noqa: BLE001 — no provider / network: no scope, not a crash
+        logger.info("brief->WBS structuring: LLM egress unavailable", exc_info=True)
+        return [], []
+    raw = data.get("activities") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return [], []
+    low = blob.lower()
+    acts: List[Dict[str, Any]] = []
+    unstated: List[str] = []
+    seen: set = set()
+    for idx, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        span = str(item.get("source_span") or "").strip()
+        # Anti-hallucination gate: the span must exist verbatim in the input.
+        if not name or not span or span.lower() not in low:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        dur = item.get("duration_days")
+        has_dur = isinstance(dur, (int, float)) and not isinstance(dur, bool) and dur > 0
+        if not has_dur:
+            unstated.append(name)
+        aid = f"B{idx}"
+        acts.append({
+            "id": aid, "code": aid, "name": name[:160],
+            "duration_days": int(dur) if has_dur else 0,
+            "predecessors": [],  # resolved from names below
+            "resources": [],
+            "wbs": aid, "wbs_code": aid, "wbs_phase": "brief",
+            "source_span": span[:240],
+            "_pred_names": [
+                str(p).strip().lower()
+                for p in (item.get("predecessors") or [])
+                if isinstance(p, str) and str(p).strip()
+            ],
+        })
+    name_to_id = {a["name"].lower(): a["id"] for a in acts}
+    for a in acts:
+        a["predecessors"] = [name_to_id[n] for n in a.pop("_pred_names") if n in name_to_id]
+    return acts, unstated
+
+
 def _coerce_date_safe(token: str) -> str | None:
     """ISO / dd-mm-yyyy through the shared coercer, as a string or None."""
     try:
@@ -2303,6 +2382,7 @@ class ConstructionScheduleMixin:
             ))
             start_date = stated_today or datetime.now(timezone.utc).date().isoformat()
 
+        structuring_unstated_durations: List[str] = []
         if boq_derived:
             from app.lib.boq_schedule import (
                 activities_from_boq_scope_outline,
@@ -2311,14 +2391,15 @@ class ConstructionScheduleMixin:
             activities = activities_from_boq_scope_outline(boq_items)
             wbs_tree = wbs_tree_from_boq_items(boq_items)
         else:
-            # No canned template — the per-type 206-row scaffold WAS the
-            # hardwiring (ORDERS_28OCT_0345Z #1). The base activity set is
-            # empty here; a schedule is assembled only from real structured
-            # input: long-lead procurement injected from a document feed
-            # below, or BOQ scope above. A prose brief with no structured
-            # scope therefore yields no activities and is refused as no-scope
-            # (422) below — never a template.
-            activities = []
+            # No canned template (the per-type scaffold was the hardwiring).
+            # The brief / document / typed-activity text is STRUCTURED into
+            # activities via the single LLM egress (S-1, ORDERS_28OCT_0815Z) —
+            # structuring ONLY; durations/sequence/CPM run in the kernel below.
+            # Long-lead procurement from a document feed is injected below. No
+            # structured input -> no activities -> the computed no-scope error.
+            activities, structuring_unstated_durations = await _structure_activities_from_text(
+                brief or user_message
+            )
             wbs_tree = {}
 
         # Long-lead procurement + target milestones extracted from a BOD/RFP
