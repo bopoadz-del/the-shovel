@@ -714,9 +714,11 @@ def register_configured_rag_namespace() -> Optional[type]:
     the serving table never depends on which caller (or test shard) reaches
     ``make_rag_chunk_class`` first. The legacy namespace ``""`` is ``RagChunk``.
 
-    If the embedder cannot be constructed here, nothing is registered and the
-    failure is logged; ``get_store`` raises the same error loudly on first use.
+    If the embedder cannot be constructed here, nothing is registered, the
+    failure is logged and recorded in ``RAG_REGISTRATION_ERROR``; the boot
+    identity gate then blocks serving, exactly as for an identity mismatch.
     """
+    global RAG_REGISTRATION_ERROR
     namespace = os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()
     if not namespace:
         return RagChunk
@@ -724,15 +726,18 @@ def register_configured_rag_namespace() -> Optional[type]:
         from app.core.rag.embeddings import get_embedder
 
         ident = get_embedder().identity
-    except Exception:  # noqa: BLE001 — reported again, loudly, by get_store()
+    except Exception as exc:  # noqa: BLE001 — blocks serving via the boot gate
         logging.getLogger(__name__).error(
             "import-time RAG namespace registration skipped: embedder "
             "unavailable", exc_info=True,
         )
+        RAG_REGISTRATION_ERROR = f"{type(exc).__name__}: {exc}"
         return None
     return make_rag_chunk_class(
         namespace, int(ident["dim"]), ident["model"], bool(ident["normalized"]),
     )
 
 
+#: Set when import-time registration failed; read by the boot serving gate.
+RAG_REGISTRATION_ERROR: Optional[str] = None
 register_configured_rag_namespace()

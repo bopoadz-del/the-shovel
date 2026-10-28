@@ -2503,6 +2503,18 @@ def run_boot_identity_check() -> Optional[Dict[str, Any]]:
     mismatch. Best-effort: an empty/new store or an unreadable probe is NOT a
     mismatch. Returns the mismatch dict or None."""
     global _IDENTITY_SERVING_BLOCKED
+    from app.core import models as _models
+
+    if _models.RAG_REGISTRATION_ERROR is not None:
+        # The configured namespace could not be registered at import (the
+        # embedder could not be built): serving would run on an unknown
+        # identity, so it is blocked exactly like an identity mismatch.
+        _IDENTITY_SERVING_BLOCKED = True
+        logger.error(
+            "RAG NAMESPACE NOT REGISTERED AT IMPORT — refusing to serve: %s",
+            _models.RAG_REGISTRATION_ERROR,
+        )
+        return {"registration_error": _models.RAG_REGISTRATION_ERROR}
     try:
         mismatch = get_store().check_identity()
     except EmbeddingIdentityMismatch as exc:

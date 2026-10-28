@@ -260,3 +260,61 @@ def test_models_embedding_dim_follows_the_resolved_embedder(monkeypatch, dim):
     assert models.EMBEDDING_DIM == dim
     col = models.RagChunk.__table__.c.embedding
     assert str(col.type.load_dialect_impl(postgresql.dialect())) == f"VECTOR({dim})"
+
+
+_BOOT_WITH_BROKEN_EMBEDDER = r"""
+import json
+from app.core.rag import embeddings
+def _broken(model_name=None):
+    raise RuntimeError("embedder construction failed (forced)")
+embeddings.get_embedder = _broken            # fails during models import
+from app.core import models
+from app.core.rag import vector_store as vs
+from starlette.responses import Response
+from app.routers import health
+registered = models.rag_chunk_table_name("brokenns") in models.Base.metadata.tables
+result = vs.run_boot_identity_check()
+health._evaluate_health = lambda: {"checks": {"database": {"ok": True}}}
+resp = Response()
+payload = health.ready(resp)
+try:
+    vs.get_store()
+    store_refused = False
+except Exception:
+    store_refused = True
+print(json.dumps({"registered": registered, "result": result,
+                  "blocked": vs.identity_serving_blocked(),
+                  "ready_status": resp.status_code, "ready": payload["ready"],
+                  "store_refused": store_refused}))
+"""
+
+
+def test_failed_import_registration_blocks_serving_like_a_mismatch(tmp_path):
+    """ORDERS 1330Z: embedder construction fails while the models import, so
+    the configured namespace is not registered. A fresh process then runs the
+    real boot gate: serving is blocked (identity_serving_blocked, /ready 503)
+    and the store refuses to open."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'broken.db'}",
+        "RAG_VECTOR_NAMESPACE": "brokenns",
+        "RAG_EMBEDDING_MODEL": "fake",
+        "ENV": "test",
+    })
+    env.pop("PYTEST_USE_POSTGRES", None)
+    out = subprocess.run(
+        [sys.executable, "-c", _BOOT_WITH_BROKEN_EMBEDDER],
+        env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["registered"] is False
+    assert "registration_error" in got["result"]
+    assert got["blocked"] is True
+    assert got["ready_status"] == 503 and got["ready"] is False
+    assert got["store_refused"] is True
