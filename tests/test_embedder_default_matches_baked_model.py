@@ -35,9 +35,9 @@ def test_resolve_model_name_precedence_defaults_off_the_one_config_model(monkeyp
     # Unset -> the one config default, which is NOT the legacy 256-dim model2vec.
     assert embeddings._resolve_model_name(None) == embeddings.DEFAULT_EMBEDDING_MODEL
     assert embeddings.DEFAULT_EMBEDDING_MODEL != embeddings.DEFAULT_MODEL2VEC
-    # The config dim is the default model's dim, not the legacy model2vec one —
-    # asserted by the named constants, with no dimension literal in the test.
-    assert embeddings.EMBEDDING_DIM != embeddings.EMBEDDING_DIM_MODEL2VEC
+    # There is no runtime EMBEDDING_DIM constant any more; the runtime width is
+    # the live embedder's dim (see test_store_width_follows_the_resolved_embedder).
+    assert not hasattr(embeddings, "EMBEDDING_DIM")
     # Env and an explicit argument take precedence, in that order.
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "x/custom-model")
     assert embeddings._resolve_model_name(None) == "x/custom-model"
@@ -98,3 +98,46 @@ def test_ready_returns_503_when_identity_serving_blocked(monkeypatch):
     payload = health.ready(resp)
     assert resp.status_code == 503
     assert payload["ready"] is False
+
+
+def test_real_check_identity_flags_stored_vs_embedder_dim_mismatch(tmp_path, monkeypatch):
+    """(b) Drive the REAL VectorStore.check_identity: a row seeded at D1/model m1,
+    then the embedder resolves to D2/model m2 -> the real SQL read + comparison
+    returns the mismatch dict (no stub)."""
+    import numpy as np
+
+    monkeypatch.setattr(vs, "get_embedder", lambda model_name=None: _StubEmbedder("m1", 8))
+    store = vs.get_store(db_path=str(tmp_path / "id.db"), namespace="idns")
+    assert store.dim == 8
+    cls = store._rag_chunk_cls
+    with store._session_factory()() as s:
+        s.add(cls(
+            chunk_id="c1", project_id="p1", doc_id="d1", chunk_index=0, text="t",
+            embedding=np.zeros(8, dtype=np.float32), created_at="2026-01-01",
+            embedding_model="m1", embedding_dim=8, embedding_normalized=True,
+        ))
+        s.commit()
+    # The embedder now reports a different identity than the stored index.
+    store.model_name = "m2"
+    store.dim = 16
+    result = store.check_identity()
+    assert result is not None
+    assert result["stored"]["dim"] == 8 and result["stored"]["model"] == "m1"
+    assert result["expected"]["dim"] == 16 and result["expected"]["model"] == "m2"
+
+
+def test_make_rag_chunk_class_is_idempotent_across_import_order():
+    """(1) One table registers ONCE on the shared MetaData, order-independent:
+    even if the per-namespace cache is lost while Base.metadata persists, a
+    second make_rag_chunk_class reuses the existing mapper instead of raising
+    'Table ... is already defined for this MetaData instance'."""
+    from app.core import models as m
+
+    ns = "orderns"
+    c1 = m.make_rag_chunk_class(ns, 8, "m1")
+    m._RAG_CHUNK_CLASS_CACHE.pop(ns, None)          # simulate cache/metadata desync
+    c2 = m.make_rag_chunk_class(ns, 8, "m1")        # must NOT raise
+    assert c1 is c2
+    assert c1.__tablename__ == m.rag_chunk_table_name(ns)
+    # And the width is the requested one, derived per call — not a module constant.
+    assert c1.embedding_identity["dim"] == 8

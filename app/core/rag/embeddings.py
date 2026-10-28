@@ -46,8 +46,9 @@ def _resolve_model_name(model_name: Optional[str]) -> str:
     cache, the health probe and every caller agree (S1)."""
     return model_name or os.getenv("RAG_EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
 
-# Legacy constants kept only for reference / old tests that import them.
-EMBEDDING_DIM = 384
+# Model2Vec's fixed width, used only when the baked model2vec embedder loads
+# (Embedder below). There is NO hand-typed runtime dimension constant any more:
+# the store/table width is always the live ``get_embedder().dim`` (rework-2 #3).
 EMBEDDING_DIM_MODEL2VEC = 256
 
 
