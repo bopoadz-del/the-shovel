@@ -128,3 +128,47 @@ async def test_kernel_detection_two_quantities_two_durations(monkeypatch):
     d1 = r1["activities"][0]["duration_days"]
     d2 = r2["activities"][0]["duration_days"]
     assert d1 and d2 and d2 > d1, "a larger quantity must yield a larger kernel duration"
+
+
+@pytest.mark.asyncio
+async def test_typed_programme_becomes_rows_without_the_structurer(monkeypatch):
+    """S-1 rework-1 #3: a programme the operator TYPED (named rows + date
+    pairs) becomes the WBS rows directly — no LLM structuring call — with the
+    duration taken from the typed dates and a 'typed_programme' source."""
+    async def boom(*a, **k):
+        raise AssertionError("a typed programme must not call the structurer")
+    monkeypatch.setattr(llm_client, "complete_json", boom)
+    r = await ConstructionContainer().generate_wbs(
+        {"brief": "Excavation 05 Jan 2026 to 15 Jan 2026; "
+                  "Foundations 16 Jan 2026 to 30 Jan 2026"},
+        {"target_count": 40},
+    )
+    assert r["status"] == "success"
+    names = {a["name"] for a in r["activities"]}
+    assert "Excavation" in names and "Foundations" in names
+    assert r["scaffold"]["source"] == "typed_programme"
+    exc = next(a for a in r["activities"] if a["name"] == "Excavation")
+    assert exc["duration_days"] == 10          # 05 -> 15 Jan
+    assert "typed" in exc["duration_basis"]
+
+
+@pytest.mark.asyncio
+async def test_histogram_from_structured_schedule_needs_no_xer(monkeypatch):
+    """S-1 rework-1 #3: a manpower/activity histogram is built from the
+    STRUCTURED schedule (prose brief -> generate_wbs activities) with no .xer
+    upload — the capability restored on the structured path."""
+    _patch_llm(monkeypatch, {
+        "job": [
+            {"name": "Excavate", "source_span": "excavate", "duration_days": 5, "predecessors": []},
+            {"name": "Pour", "source_span": "pour", "duration_days": 7, "predecessors": ["Excavate"]},
+        ],
+    })
+    wbs = await ConstructionContainer().generate_wbs(
+        {"brief": "The job: excavate then pour."}, {"target_count": 40},
+    )
+    assert wbs["status"] == "success"
+    hist = await ConstructionContainer().resource_histogram(
+        {"activities": wbs["activities"]}, {"period_unit": "week"},
+    )
+    assert hist["status"] == "success", hist
+    assert hist.get("periods")

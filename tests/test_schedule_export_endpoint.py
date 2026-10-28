@@ -59,6 +59,38 @@ def test_schedule_from_brief_returns_valid_workbook(client):
     assert "PROJECT COMPLETION" in ms_txt and "2026-" in ms_txt
 
 
+def test_two_different_boqs_give_two_different_workbooks(client):
+    """Route-level two-input pin (S-1 rework-1 #4): two different BOQ inputs
+    produce two different, input-derived workbooks — the route does not emit a
+    fixed template."""
+    pid = _pid(client)
+
+    def _names(boq):
+        r = client.post(
+            f"/v1/projects/{pid}/export/schedule-from-brief",
+            json={"brief": "WBS from the project BOQ scope", "boq_items": boq,
+                  "target_count": 40, "start_date": "2026-01-05"},
+            headers=H,
+        )
+        assert r.status_code == 200, r.text
+        wb = openpyxl.load_workbook(io.BytesIO(r.content))
+        ws = wb["L2 Schedule"]
+        return "\n".join(
+            str(c.value) for row in ws.iter_rows() for c in row if c.value is not None
+        )
+
+    concrete = _names([
+        {"item_key": "E10", "description": "Reinforced concrete to foundations", "quantity": 340, "unit": "m3"},
+        {"item_key": "E20", "description": "Mass concrete fill", "quantity": 55, "unit": "m3"},
+    ])
+    paving = _names([
+        {"item_key": "R10", "description": "Asphalt wearing course to carriageway", "quantity": 1200, "unit": "m2"},
+    ])
+    assert "concrete" in concrete.lower()
+    assert "asphalt" in paving.lower() or "carriageway" in paving.lower()
+    assert concrete != paving  # different inputs -> different schedules
+
+
 def test_no_day_rate_means_no_cost_column(client):
     pid = _pid(client)
     r = client.post(

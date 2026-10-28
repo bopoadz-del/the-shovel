@@ -903,12 +903,19 @@ async def export_schedule_from_brief(
     # is derived from real input, never a template, so a request that carries
     # none — no brief text, no BOQ rows, no staged conversation WBS — is a bad
     # request. The message lists what is absent for THIS request, not fixed text.
-    if not (req.brief or "").strip() and not req.boq_items and not req.conversation_id:
+    absent = []
+    if not (req.brief or "").strip():
+        absent.append("a brief describing the work")
+    if not req.boq_items:
+        absent.append("a BOQ (boq_items)")
+    if not req.conversation_id:
+        absent.append("a conversation_id with a staged WBS")
+    if len(absent) == 3:  # none of the three schedulable inputs is present
         raise HTTPException(
             400,
-            "No schedulable input supplied: provide a brief describing the work, "
-            "a BOQ (boq_items), or a conversation_id with a staged WBS — none of "
-            "the three was in this request.",
+            "No schedulable input supplied: provide "
+            + ", or ".join(absent)
+            + ". None of these was in this request.",
         )
     from app.core.conversation_wbs import (
         load_conversation_wbs,
@@ -990,15 +997,25 @@ async def export_schedule_from_document(
     for document_id in req.document_ids:
         _require_document_in_project(project_id, document_id)
     name = req.project_name or proj.get("name") or "Project"
-    from app.lib.schedule_feed import extract_schedule_feed
+    from app.lib.schedule_feed import extract_documents_text, extract_schedule_feed
     lead_times, target_milestones = await extract_schedule_feed(req.document_ids)
 
     from app.containers.construction import ConstructionContainer
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
     from app.lib.pm_excel import generate_cost_loaded_schedule
 
+    # The document TEXT is structured into activities the same way a brief is
+    # (#3) — not a synthesized "Schedule from N documents" placeholder. A
+    # request brief, when given, leads; the real document text is the fallback
+    # structuring input; the synthesized string is only a last resort. The
+    # long-lead procurement feed is injected on top regardless.
+    doc_text = extract_documents_text(req.document_ids)
+    structuring_brief = (
+        req.brief or doc_text or f"Schedule from {len(req.document_ids)} source document(s)"
+    )
+
     wbs = await ConstructionContainer().generate_wbs({}, {
-        "brief": req.brief or f"Schedule from {len(req.document_ids)} source document(s)",
+        "brief": structuring_brief,
         "target_count": req.target_count,
         "project_type": req.project_type,
         "start_date": req.start_date,

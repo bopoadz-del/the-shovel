@@ -138,13 +138,76 @@ def test_wbs_tree_keeps_any_measured_trade_not_only_demolition():
 
 
 def test_tree_and_activities_are_only_retrieved_rows():
+    from app.lib.boq_schedule import boq_scope_phase
     tree = wbs_tree_from_boq_items(_BOQ_ITEMS)
-    assert tree["1"] == "Demolition and Site Clearance"
+    # Phase 1 is DERIVED from the elected rows' own trades (rework-1), never a
+    # hardwired name. These rows categorize to Demolition + site-clearance
+    # (Other) -> "Mixed scope"; a single-trade bill names that trade.
+    assert tree["1"] == boq_scope_phase(_BOQ_ITEMS)
+    assert tree["1"] != "Demolition and Site Clearance"
     assert "D110" in tree["1.1"]
     acts = activities_from_boq_scope_outline(_BOQ_ITEMS)
     assert [a["boq"]["item_key"] for a in acts] == ["D110", "D290.1", "D549.2", "D599.5"]
+    # Each activity's trade/category is derived per row (not a demolition default).
+    assert all(a["boq"]["category"] for a in acts)
     assert wbs_tree_from_boq_items([]) == {}
     assert activities_from_boq_scope_outline([]) == []
+
+
+def test_structured_boq_rows_elects_by_structure_not_trade():
+    """G2 M3/M5/M6/M7: election is by STRUCTURE (a measure or a bill code),
+    any trade; a prose scrap is dropped; duplicate codes de-dupe."""
+    from app.lib.boq_schedule import structured_boq_rows
+    # A measured row with NO code is elected (the measure is the structure).
+    assert len(structured_boq_rows(
+        [{"description": "Excavate to reduced level", "quantity": 100, "unit": "m3"}]
+    )) == 1
+    # The SAME row with no measure and no code is a prose scrap -> dropped.
+    assert structured_boq_rows([{"description": "Excavate to reduced level"}]) == []
+    # Unit-only and quantity-only rows are each elected.
+    assert len(structured_boq_rows([{"description": "Blockwork", "unit": "m2"}])) == 1
+    assert len(structured_boq_rows([{"description": "Concrete", "quantity": 40}])) == 1
+    # Duplicate CESMM codes de-dupe to one package.
+    assert len(structured_boq_rows([
+        {"item_key": "E10", "description": "Concrete to foundations", "quantity": 40, "unit": "m3"},
+        {"item_key": "E10", "description": "E10 is a rate-only item note", "quantity": 0},
+    ])) == 1
+
+
+@pytest.mark.asyncio
+async def test_concrete_boq_and_demolition_boq_derive_different_scopes():
+    """Two-trade pin (G6 executes this): a concrete BOQ and a demolition BOQ
+    derive DIFFERENT phases, resources, declarations and durations — the path
+    no longer wears the demolition case for every bill."""
+    concrete = await ConstructionContainer().generate_wbs(
+        {"brief": "Generate a WBS for the concrete BOQ scope.",
+         "boq_items": [
+            {"item_key": "E10", "description": "Reinforced concrete to foundations", "quantity": 340, "unit": "m3"},
+            {"item_key": "E20", "description": "Mass concrete fill", "quantity": 55, "unit": "m3"}]},
+        {"target_count": 40},
+    )
+    demo = await ConstructionContainer().generate_wbs(
+        {"brief": "Generate a WBS for the demolition BOQ scope.",
+         "boq_items": [
+            {"item_key": "D20", "description": "Demolish existing structures", "quantity": 120, "unit": "m3"},
+            {"item_key": "D30", "description": "Breaking out existing slab", "quantity": 200, "unit": "m2"}]},
+        {"target_count": 40},
+    )
+    assert concrete["status"] == "success" and demo["status"] == "success"
+    # Different derived phase headings.
+    assert concrete["wbs_tree"]["1"] == "Concrete"
+    assert concrete["wbs_tree"]["1"] != demo["wbs_tree"]["1"]
+    # Different derived resources/trades.
+    c_res = {r for a in concrete["activities"] for r in a.get("resources", [])}
+    d_res = {r for a in demo["activities"] for r in a.get("resources", [])}
+    assert "concrete" in c_res and c_res != d_res
+    # Declaration names the real trade, not demolition for a concrete bill.
+    assert "concrete" in concrete["scaffold"]["declaration"].lower()
+    assert "demolition" not in concrete["scaffold"]["declaration"].lower()
+    assert concrete["scaffold"]["project_type"] == "concrete"
+    # Durations are kernel-derived from the quantities (not a flat placeholder).
+    c_durs = [a["duration_days"] for a in concrete["activities"]]
+    assert any(isinstance(d, int) and d > 1 for d in c_durs)
 
 
 @pytest.mark.asyncio

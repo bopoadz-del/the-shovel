@@ -363,6 +363,44 @@ def _activities_from_text(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _typed_programme_activities(text: str) -> List[Dict[str, Any]]:
+    """Operator-typed programme rows (``name date1 to date2``) as WBS
+    activities (S-1 rework-1, ORDERS_28OCT_1030Z #3). The typed dates give each
+    activity's duration; the kernel re-derives the sequence/CPM. [] when the
+    text is not a typed programme — a prose brief then goes to the structurer.
+    """
+    from datetime import date as _date
+    typed = _activities_from_text(text)
+    if not typed:
+        return []
+    acts: List[Dict[str, Any]] = []
+    prev: Optional[str] = None
+    for idx, row in enumerate(typed, start=1):
+        aid = f"T{idx}"
+        dur: Optional[int] = None
+        try:
+            start_d = _date.fromisoformat(str(row["start"])[:10])
+            finish_d = _date.fromisoformat(str(row["finish"])[:10])
+            span = (finish_d - start_d).days
+            dur = span if span > 0 else 1
+        except Exception:  # noqa: BLE001 — unparseable date pair -> UNKNOWN
+            dur = None
+        acts.append({
+            "id": aid,
+            "code": aid,
+            "name": str(row["name"])[:160],
+            "duration_days": dur,
+            "duration_basis": "typed — operator programme dates",
+            "predecessors": [prev] if prev else [],
+            "resources": [],
+            "wbs": aid,
+            "wbs_code": aid,
+            "wbs_phase": "programme",
+        })
+        prev = aid
+    return acts
+
+
 # Brief/document -> structured activities (S-1, ORDERS_28OCT_0815Z). The LLM
 # STRUCTURES the prose into named activities + stated durations + stated
 # dependencies ONLY; it never computes a schedule — durations/sequence/CPM run
@@ -1339,6 +1377,62 @@ class ConstructionScheduleMixin:
         p = params or {}
         schedule_file = data.get("schedule_file") or p.get("schedule_file")
         period_unit = (p.get("period_unit") or "week").lower()
+
+        # Histogram FROM the structured schedule (a prose brief or BOQ run
+        # through generate_wbs), no .xer required (#3, capability restored
+        # 0712Z): the activities generate_wbs produced are time-phased into
+        # period buckets directly. UNKNOWN-duration rows have no span to phase
+        # and are excluded; with no resource loading the buckets are activity
+        # counts, not fabricated man-hours.
+        inline_acts = data.get("activities") or p.get("activities")
+        if not schedule_file and inline_acts:
+            schedulable = [
+                a for a in inline_acts
+                if isinstance(a, dict)
+                and isinstance(a.get("duration_days"), int)
+                and not isinstance(a.get("duration_days"), bool)
+                and a["duration_days"] > 0
+            ]
+            if not schedulable:
+                return {
+                    "status": "error",
+                    "action": "resource_histogram",
+                    "error": (
+                        "The structured schedule has no dated activities to "
+                        "phase (every duration is UNKNOWN)."
+                    ),
+                }
+            from app.schemas.cpm import (
+                Activity as CPMActivity, Dependency, ResourceAssignment,
+            )
+            kept_ids = {str(a.get("id")) for a in schedulable}
+            cpm_acts = [
+                CPMActivity(
+                    id=str(a["id"]),
+                    name=a.get("name", ""),
+                    duration=int(a["duration_days"]),
+                    predecessors=[
+                        Dependency(predecessor_id=str(pr))
+                        for pr in (a.get("predecessors") or [])
+                        if str(pr) in kept_ids
+                    ],
+                    wbs_code=str(a.get("wbs_phase", "")),
+                    resources=[
+                        ResourceAssignment(trade=str(t), count=1.0)
+                        for t in (a.get("resources") or [])
+                    ],
+                )
+                for a in schedulable
+            ]
+            return self._histogram_from_activity_counts(
+                cpm_acts,
+                period_unit,
+                reason=(
+                    "Histogram built from the structured schedule's activity "
+                    "spans; no resource loading was supplied, so the buckets are "
+                    "activity counts, not man-hours"
+                ),
+            )
 
         if not schedule_file:
             return {
@@ -2440,6 +2534,7 @@ class ConstructionScheduleMixin:
 
         structuring_unstated_durations: List[str] = []
         brief_structured = False
+        typed_programme = False
         if boq_derived:
             from app.lib.boq_schedule import (
                 activities_from_boq_scope_outline,
@@ -2449,16 +2544,23 @@ class ConstructionScheduleMixin:
             wbs_tree = wbs_tree_from_boq_items(boq_items)
         else:
             # No canned template (the per-type scaffold was the hardwiring).
-            # The brief / document / typed-activity text is STRUCTURED into
-            # activities via the single LLM egress (S-1, ORDERS_28OCT_0815Z) —
+            # A programme the operator TYPED (named rows with date pairs) is used
+            # directly as rows (#3); otherwise the brief / document text is
+            # STRUCTURED into activities via the single LLM egress (S-1) —
             # structuring ONLY; durations/sequence/CPM run in the kernel below.
             # Long-lead procurement from a document feed is injected below. No
             # structured input -> no activities -> the computed no-scope error.
-            activities, structuring_unstated_durations = await _structure_activities_from_text(
-                brief or user_message
-            )
-            brief_structured = bool(activities)
-            wbs_tree = {}
+            typed_activities = _typed_programme_activities(brief or user_message or "")
+            if typed_activities:
+                activities = typed_activities
+                typed_programme = True
+                wbs_tree = {}
+            else:
+                activities, structuring_unstated_durations = await _structure_activities_from_text(
+                    brief or user_message
+                )
+                brief_structured = bool(activities)
+                wbs_tree = {}
 
         # Long-lead procurement + target milestones extracted from a BOD/RFP
         # (document_engine.downstream.schedule_engine). Injecting the real lead
@@ -2481,10 +2583,10 @@ class ConstructionScheduleMixin:
                 "action": "generate_wbs",
                 "error": (
                     "no schedulable scope found: a work breakdown is built from "
-                    "a project's measured BOQ (demolition / site-clearance) scope "
-                    "or from source documents' long-lead procurement feed, not "
-                    "from a prose brief alone. Provide a BOQ or source documents "
-                    "with equipment lead times."
+                    "a project's measured BOQ scope (any trade), a structured "
+                    "brief/document, or source documents' long-lead procurement "
+                    "feed. Provide a BOQ, a brief the engine can structure, or "
+                    "source documents with equipment lead times."
                 ),
                 "project_type": project_type,
                 "project_type_inferred": type_inferred,
@@ -2544,8 +2646,21 @@ class ConstructionScheduleMixin:
         enriched = stamp_hierarchical_wbs_codes(enriched, wbs_tree)
 
         operator_ms = _operator_milestones_from_text(brief)
+        # BOQ project_type + trade list are DERIVED from the elected rows'
+        # trades (any trade), never a demolition literal. A single-trade bill
+        # names that trade; a mixed bill is "mixed".
+        boq_trades: List[str] = []
         if boq_derived:
-            project_type = "demolition_site_clearance"
+            for a in activities:
+                c = (a.get("boq") or {}).get("category")
+                if c and c not in boq_trades:
+                    boq_trades.append(c)
+            if len(boq_trades) == 1:
+                project_type = re.sub(r"[^a-z0-9]+", "_", boq_trades[0].lower()).strip("_") or "boq_scope"
+            elif boq_trades:
+                project_type = "mixed"
+            else:
+                project_type = "boq_scope"
         result: Dict[str, Any] = {
             "status": "success",
             "wbs_id": f"wbs-{uuid.uuid4().hex[:8]}",
@@ -2570,10 +2685,15 @@ class ConstructionScheduleMixin:
             ],
             "assumptions": (
                 [
-                    "Scope packages are the retrieved BOQ demolition / site-"
-                    "clearance rows; none were invented.",
-                    "Durations are placeholders (1 working day) so CPM can "
-                    "run; they are not productivity-derived from quantities.",
+                    "Scope packages are the elected BOQ rows ("
+                    + (", ".join(boq_trades) if boq_trades else "measured scope")
+                    + "); none were invented.",
+                    "Durations are derived from each row's quantity via the "
+                    "construction kernel — a stated productivity rate where the "
+                    "row carries one, otherwise a generic sourced productivity "
+                    "norm for the row's trade; a row with neither is left "
+                    "UNKNOWN (not defaulted) and the schedule is reported "
+                    "incomplete.",
                     "FS-only predecessors; no SS/FF/SF; zero lag.",
                 ] if boq_derived else [
                 "Activities are the long-lead procurement items extracted from "
@@ -2598,18 +2718,43 @@ class ConstructionScheduleMixin:
                 # contract year's id, which must not be cited as governing.
                 if code and code not in citations:
                     citations.append(code)
+            trade_phrase = ", ".join(boq_trades) if boq_trades else "measured scope"
             result["scaffold"] = {
                 "source": "boq",
-                "project_type": "demolition_site_clearance",
+                "project_type": project_type,
                 "project_type_inferred": False,
                 "derived_from_boq": True,
                 "zone_labels": "none",
+                "trades": list(boq_trades),
                 "citations": citations,
                 "declaration": (
-                    "High-level WBS derived from this project's BOQ "
-                    "demolition and site clearance items. Only retrieved "
-                    "measured rows are shown; no template packages were added."
+                    "High-level WBS derived from this project's BOQ ("
+                    + trade_phrase
+                    + "). Only elected measured rows are shown; no template "
+                    "packages were added. Durations are computed by the "
+                    "construction kernel from each row's quantity (a stated "
+                    "rate or a generic sourced productivity norm); rows with "
+                    "neither are left UNKNOWN."
                     + (f" Items: {', '.join(citations)}." if citations else "")
+                ),
+            }
+        elif typed_programme:
+            # The operator typed the programme (named rows + date pairs). The
+            # rows are theirs; durations come from the typed dates and the
+            # sequence/CPM from the kernel. No structuring LLM call was made.
+            result["scaffold"] = {
+                "source": "typed_programme",
+                "project_type": project_type,
+                "project_type_inferred": type_inferred,
+                "derived_from_boq": False,
+                "zone_labels": "none",
+                "kernel": "pm_computations.compute_cpm",
+                "declaration": (
+                    "Activities are the programme the operator typed (named rows "
+                    "with start/finish dates); durations are those typed dates and "
+                    "the sequence/CPM are computed by the construction CPM kernel "
+                    "(pm_computations). No template, per-type scaffold or "
+                    "placeholder activities were added."
                 ),
             }
         elif brief_structured:

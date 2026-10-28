@@ -82,7 +82,6 @@ PREFERRED = {
         "_parse_event_date",
         "_apportion_delay",
         "generate_wbs",
-        "_build_wbs_activities",
         "_attach_cpm_to_activities",
         "primavera_parse",
         "_process_schedule",
@@ -414,8 +413,6 @@ def preferred_module(name: str) -> str:
 def balance_assignments(sizes: dict[str, int]) -> dict[str, str]:
     """Assign every method to a module; keep each pool under its line budget."""
     assignment: dict[str, str] = {}
-    if "_WBS_TEMPLATES" in sizes:
-        assignment["_WBS_TEMPLATES"] = "schedule"
     if "_DEFECT_KEYWORDS" in sizes:
         assignment["_DEFECT_KEYWORDS"] = "documents"
 
@@ -488,7 +485,7 @@ def balance_assignments(sizes: dict[str, int]) -> dict[str, str]:
                     n
                     for n, m in assignment.items()
                     if m == mod and n not in FACADE and n not in PINNED
-                    and n not in {"_WBS_TEMPLATES", "_DEFECT_KEYWORDS"}
+                    and n not in {"_DEFECT_KEYWORDS"}
                 ]
                 movable.sort(key=lambda n: sizes[n])
                 moved = False
