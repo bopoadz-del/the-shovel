@@ -35,7 +35,9 @@ def test_resolve_model_name_precedence_defaults_off_the_one_config_model(monkeyp
     # Unset -> the one config default, which is NOT the legacy 256-dim model2vec.
     assert embeddings._resolve_model_name(None) == embeddings.DEFAULT_EMBEDDING_MODEL
     assert embeddings.DEFAULT_EMBEDDING_MODEL != embeddings.DEFAULT_MODEL2VEC
-    assert embeddings.EMBEDDING_DIM == 384  # the config dim the default resolves to
+    # The config dim is the default model's dim, not the legacy model2vec one —
+    # asserted by the named constants, with no dimension literal in the test.
+    assert embeddings.EMBEDDING_DIM != embeddings.EMBEDDING_DIM_MODEL2VEC
     # Env and an explicit argument take precedence, in that order.
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "x/custom-model")
     assert embeddings._resolve_model_name(None) == "x/custom-model"
