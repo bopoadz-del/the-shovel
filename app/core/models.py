@@ -6,6 +6,8 @@ import datetime
 import os
 import re
 import uuid
+import logging
+import threading
 from typing import Optional, Type
 
 import numpy as np
@@ -31,13 +33,32 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-# Legacy constant kept for old imports/tests that reference it. The actual
-# dimension used for new tables is supplied to make_embedding_vector().
-EMBEDDING_DIM = 256
+def _configured_embedding_dim() -> int:
+    """Width of the configured embedder: ``get_embedder().dim``.
+
+    The ONE source for every width this module does not get passed explicitly
+    (``EMBEDDING_DIM`` and the legacy ``EmbeddingVector``). Resolved on use, not
+    at import, so importing the models (alembic, workers) never loads a model.
+    """
+    from app.core.rag.embeddings import get_embedder
+
+    return int(get_embedder().dim)
 
 
-def make_embedding_vector(dim: int):
+def __getattr__(name: str):
+    # ``models.EMBEDDING_DIM`` is DERIVED from the configured embedder on every
+    # read (PEP 562). There is no hand-typed width in this module any more.
+    if name == "EMBEDDING_DIM":
+        return _configured_embedding_dim()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def make_embedding_vector(dim):
     """Return a TypeDecorator that stores ``dim``-dim float32 vectors.
+
+    ``dim`` is an int, or a zero-arg callable resolved when the column is first
+    compiled for a dialect (used by the legacy ``EmbeddingVector``, whose width
+    follows the configured embedder).
 
     PostgreSQL uses pgvector ``vector(dim)``; SQLite stores raw float32 bytes.
     The dimension is bound at factory time so each namespace/table can have the
@@ -50,7 +71,7 @@ def make_embedding_vector(dim: int):
 
         def load_dialect_impl(self, dialect):
             if dialect.name == "postgresql":
-                return dialect.type_descriptor(Vector(dim))
+                return dialect.type_descriptor(Vector(dim() if callable(dim) else dim))
             return dialect.type_descriptor(LargeBinary())
 
         def process_bind_param(self, value, dialect):
@@ -71,25 +92,24 @@ def make_embedding_vector(dim: int):
     return DynamicEmbeddingVector
 
 
-class EmbeddingVector(make_embedding_vector(EMBEDDING_DIM)):
-    """Legacy 256-dim vector type used by the original ``chunks`` table."""
+class EmbeddingVector(make_embedding_vector(_configured_embedding_dim)):
+    """Vector type of the original ``chunks`` table; its width follows the
+    configured embedder (``get_embedder().dim``), never a constant."""
 
     pass
 
 
-# Registry so the vector store can request the same dynamic class for the
-# same namespace without re-declaring it on SQLAlchemy's Base.
-#
-# Keyed by NAMESPACE ALONE, because that is the real identity: a namespace maps
-# to exactly one table (``chunks_<ns>``) and the table name does not encode the
-# dim. Keying by ``(namespace, dim)`` let one namespace hold two classes, and
-# the second ``type(...)`` call then tried to define the SAME table name twice
-# on one MetaData -- SQLAlchemy raises "Table 'chunks_v2' is already defined".
-# Seen 2026-08-20 as a full-suite-only failure: something registers ("v2", 384)
-# from the live embedder, then a later caller asks for ("v2", 256), misses the
-# cache, and blows up. Passing in isolation and failing in a full run is the
-# signature of exactly this.
-_RAG_CHUNK_CLASS_CACHE: dict[str, type] = {}
+# Registry of namespaced chunk classes, filled ONLY by the deterministic factory
+# ``_rag_chunk_class_factory`` and keyed by ``(namespace, dim)``. A namespace
+# owns one table (``chunks_<ns>``) and so exactly one key; asking for a second
+# width or a second embedding model on the same namespace RAISES (never a
+# reuse of the existing class: that hands back a vector(N) column for a vector(M)
+# caller). The configured namespace is registered at import, at the bottom of
+# this module, so the active table is on ``Base.metadata`` before any caller.
+_RAG_CHUNK_CLASSES: dict[tuple[str, int], type] = {}
+_RAG_CHUNK_NAMESPACE_KEY: dict[str, tuple[str, int]] = {}
+_RAG_CHUNK_LOCK = threading.RLock()
+
 
 
 #: RAG namespaces are interpolated into raw SQL table identifiers, which cannot
@@ -130,24 +150,25 @@ def rag_chunk_class_for(namespace: str):
     """
     if namespace == "":
         return RagChunk
-    return _RAG_CHUNK_CLASS_CACHE.get(namespace)
+    key = _RAG_CHUNK_NAMESPACE_KEY.get(namespace)
+    return _RAG_CHUNK_CLASSES.get(key) if key is not None else None
 
 
-def _mapped_rag_chunk_class_for_table(table_name: str):
-    """The mapped class already bound to ``table_name`` on the shared
-    ``Base.metadata``, or ``None``.
+class RagNamespaceIdentityConflict(ValueError):
+    """A namespace is already registered at another width or embedding model."""
 
-    Lets ``make_rag_chunk_class`` register a table exactly ONCE on the one
-    MetaData, whatever the import/shard order: if the table is already there
-    (e.g. the per-namespace cache was cleared while the metadata persisted),
-    its existing mapper is reused instead of a colliding second ``type()``.
-    """
-    if table_name not in Base.metadata.tables:
-        return None
-    for mapper in Base.registry.mappers:
-        if getattr(mapper.class_, "__tablename__", None) == table_name:
-            return mapper.class_
-    return None
+    def __init__(self, namespace: str, registered: dict, requested: dict):
+        self.namespace = namespace
+        self.registered = registered
+        self.requested = requested
+        super().__init__(
+            f"namespace {namespace!r} is already mapped at dim "
+            f"{registered['dim']} / model {registered['model']!r}; cannot remap "
+            f"it to dim {requested['dim']} / model {requested['model']!r}. A "
+            f"namespace has one table ({rag_chunk_table_name(namespace)}) and "
+            f"therefore one embedding identity. Use a different namespace, or "
+            f"change RAG_VECTOR_NAMESPACE together with the embedder."
+        )
 
 
 def make_rag_chunk_class(
@@ -156,56 +177,49 @@ def make_rag_chunk_class(
     model_name: str,
     normalized: bool = True,
 ) -> type:
-    """Return a SQLAlchemy model class for ``chunks_<namespace>``.
+    """Return the SQLAlchemy model class for ``chunks_<namespace>``.
 
-    The class is cached per NAMESPACE so repeated calls return the same mapped
-    class. ``model_name`` only affects the default value of the
-    ``embedding_model`` column and the attached identity metadata; it does
-    NOT change the table schema, so a namespace opened with a different
-    model reuses the same class and relies on ``VectorStore`` to fail loud
-    on identity mismatch.
+    Thin front to the deterministic factory: the same ``(namespace, dim)`` and
+    model always returns the same class, and a request whose ``dim`` or
+    ``model_name`` differs from the registered one RAISES
+    :class:`RagNamespaceIdentityConflict` (a ``ValueError``). The width guard is
+    never bypassed by reusing whatever class is already bound to the table.
 
-    ``dim`` is different: it sets the ``vector(N)`` width of the embedding
-    column, so it is part of the table's shape, not just its metadata. A
-    namespace owns exactly one table and therefore one width -- asking for a
-    second width raises ``ValueError`` rather than returning a class whose
-    column does not match what the caller asked for.
-
-    The legacy namespace (empty string) reuses the static ``RagChunk`` class
-    so the original ``chunks`` table has exactly one mapped class.
+    The legacy namespace (empty string) is the static ``RagChunk`` class.
     """
     if namespace == "":
         return RagChunk
+    return _rag_chunk_class_factory(namespace, int(dim), model_name, normalized)
 
-    cached = rag_chunk_class_for(namespace)
-    if cached is not None:
-        cached_dim = cached.embedding_identity["dim"]
-        if cached_dim != dim:
-            # One namespace = one table = one embedding width. Returning the
-            # cached class would hand back a vector(N) column for a caller that
-            # asked for vector(M) -- a silent width mismatch, the false-agreement
-            # class of bug this file keeps stamping out. Refuse instead.
-            raise ValueError(
-                f"namespace {namespace!r} is already mapped at dim "
-                f"{cached_dim}; cannot remap it to dim {dim}. A namespace has "
-                f"one table ({rag_chunk_table_name(namespace)}) and therefore "
-                f"one embedding width. Use a different namespace, or change "
-                f"RAG_VECTOR_NAMESPACE together with the embedder."
-            )
-        return cached
 
+def _rag_chunk_class_factory(
+    namespace: str, dim: int, model_name: str, normalized: bool = True,
+) -> type:
+    """The ONE place a namespaced chunk class is built, keyed ``(namespace, dim)``.
+
+    Deterministic: the class name, table name, columns and identity are a pure
+    function of the key and model, so building namespaces in any order yields
+    the same ``Base.metadata``. Each key is built once, under a lock.
+    """
+    requested = {"model": model_name, "dim": dim, "normalized": normalized}
+    with _RAG_CHUNK_LOCK:
+        key = _RAG_CHUNK_NAMESPACE_KEY.get(namespace)
+        if key is not None:
+            cls = _RAG_CHUNK_CLASSES[key]
+            registered = dict(cls.embedding_identity)
+            if registered != requested:
+                raise RagNamespaceIdentityConflict(namespace, registered, requested)
+            return cls
+        cls = _build_rag_chunk_class(namespace, dim, model_name, normalized)
+        _RAG_CHUNK_CLASSES[(namespace, dim)] = cls
+        _RAG_CHUNK_NAMESPACE_KEY[namespace] = (namespace, dim)
+        return cls
+
+
+def _build_rag_chunk_class(
+    namespace: str, dim: int, model_name: str, normalized: bool,
+) -> type:
     table_name = rag_chunk_table_name(namespace)
-    # Idempotent SINGLE registration (rework-2 #1): if this table is already on
-    # Base.metadata — because the module-level cache was cleared/reset while the
-    # shared MetaData persisted, or two shards/imports reached here in either
-    # order — reuse the mapped class already bound to it. A second
-    # ``type(class_name, (Base,), {"__tablename__": table_name})`` would raise
-    # "Table '<table>' is already defined for this MetaData instance". One
-    # table has one mapper, registered once, order-independent, no skip/retry.
-    existing = _mapped_rag_chunk_class_for_table(table_name)
-    if existing is not None:
-        _RAG_CHUNK_CLASS_CACHE[namespace] = existing
-        return existing
     vector_type = make_embedding_vector(dim)
     class_name = f"RagChunk_{namespace or 'legacy'}_{dim}"
 
@@ -250,9 +264,7 @@ def make_rag_chunk_class(
         },
     }
 
-    DynamicRagChunk = type(class_name, (Base,), attrs)
-    _RAG_CHUNK_CLASS_CACHE[namespace] = DynamicRagChunk
-    return DynamicRagChunk
+    return type(class_name, (Base,), attrs)
 
 
 class Base(DeclarativeBase):
@@ -693,3 +705,34 @@ class AuditEvent(Base):
     event: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[str | None] = mapped_column(String, nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# ── Import-time registration of the configured namespace ──────────────────────
+def register_configured_rag_namespace() -> Optional[type]:
+    """Register ``chunks_<RAG_VECTOR_NAMESPACE>`` on ``Base.metadata`` through
+    the factory, at the configured embedder's identity. Runs once at import, so
+    the serving table never depends on which caller (or test shard) reaches
+    ``make_rag_chunk_class`` first. The legacy namespace ``""`` is ``RagChunk``.
+
+    If the embedder cannot be constructed here, nothing is registered and the
+    failure is logged; ``get_store`` raises the same error loudly on first use.
+    """
+    namespace = os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()
+    if not namespace:
+        return RagChunk
+    try:
+        from app.core.rag.embeddings import get_embedder
+
+        ident = get_embedder().identity
+    except Exception:  # noqa: BLE001 — reported again, loudly, by get_store()
+        logging.getLogger(__name__).error(
+            "import-time RAG namespace registration skipped: embedder "
+            "unavailable", exc_info=True,
+        )
+        return None
+    return make_rag_chunk_class(
+        namespace, int(ident["dim"]), ident["model"], bool(ident["normalized"]),
+    )
+
+
+register_configured_rag_namespace()

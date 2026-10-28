@@ -55,26 +55,99 @@ def test_store_width_follows_the_resolved_embedder(tmp_path, monkeypatch, dim):
     assert store.dim == dim
 
 
-def test_boot_identity_mismatch_refuses_to_serve(monkeypatch):
-    # (b) stored dim D1 vs embedder dim D2 -> boot check blocks serving.
-    class _Mismatch:
-        def check_identity(self):
-            return {"expected": {"model": "m2", "dim": 16},
-                    "stored": {"model": "m1", "dim": 8}}
+def _install_embedder(monkeypatch, model: str, dim: int):
+    """Make the REAL get_embedder() resolve to ``model`` at width ``dim``.
 
-    monkeypatch.setattr(vs, "get_store", lambda *a, **k: _Mismatch())
+    Uses the real Embedder in its no-model mode with the identity overridden,
+    installed in the real process cache under the env-resolved name, so every
+    caller (get_store, the import-time registration, models.EMBEDDING_DIM)
+    resolves it through the production code path. No model is loaded.
+    """
+    emb = embeddings.Embedder(model_name="fake")
+    emb.model_name = model
+    emb._dim = dim
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", model)
+    monkeypatch.setattr(embeddings, "_EMBEDDER_CACHE", emb)
+    return emb
+
+
+_BOOT_IN_FRESH_PROCESS = r"""
+import json, os, sys
+from app.core.rag import embeddings
+emb = embeddings.Embedder(model_name="fake")
+emb.model_name = os.environ["RAG_EMBEDDING_MODEL"]
+emb._dim = int(sys.argv[1])
+embeddings._EMBEDDER_CACHE = emb
+from app.core.rag import vector_store as vs   # imports models -> registers ns
+mismatch = vs.run_boot_identity_check()
+print(json.dumps({"blocked": vs.identity_serving_blocked(), "mismatch": mismatch}))
+"""
+
+
+def test_boot_check_blocks_serving_when_the_index_was_built_at_another_dim(
+    tmp_path, monkeypatch,
+):
+    """(b) A namespace indexed at D1, then a FRESH process whose embedder
+    resolves to D2: the real run_boot_identity_check opens the real store, the
+    real VectorStore.check_identity reads the stored D1 stamp, and serving is
+    blocked. Nothing between the check and the flag is stubbed."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    import numpy as np
+
+    ns = "bootd1d2"
+    db = tmp_path / "boot.db"
+    d1 = embeddings.get_embedder("fake")
+    d1_dim = d1.dim
+    store = vs.get_store(db_path=str(db), namespace=ns, model_name="fake")
+    store.upsert_chunks("p1", "d1", ["t"], np.zeros((1, d1_dim), dtype=np.float32))
+    assert store.check_identity() is None  # the index is consistent at D1
+
+    d2_dim = d1_dim + 128
+    env = dict(os.environ)
+    env.update({
+        "DATABASE_URL": f"sqlite:///{db}",
+        "RAG_VECTOR_NAMESPACE": ns,
+        "RAG_EMBEDDING_MODEL": "emb-d2",
+        "ENV": "test",
+    })
+    env.pop("PYTEST_USE_POSTGRES", None)
+    out = subprocess.run(
+        [sys.executable, "-c", _BOOT_IN_FRESH_PROCESS, str(d2_dim)],
+        env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["blocked"] is True
+    assert got["mismatch"]["stored"]["dim"] == d1_dim
+    assert got["mismatch"]["expected"]["dim"] == d2_dim
+    assert got["mismatch"]["expected"]["model"] == "emb-d2"
+
+
+def test_boot_check_blocks_serving_when_the_namespace_is_mapped_at_another_dim(
+    monkeypatch,
+):
+    """(b, in-process) The namespace is already open at D1 in this process and
+    the embedder now resolves to D2: the real run_boot_identity_check -> real
+    get_store hits the width guard, and that too blocks serving (it used to be
+    swallowed as an "unreadable probe")."""
     monkeypatch.setattr(vs, "_IDENTITY_SERVING_BLOCKED", False, raising=False)
+    d1 = embeddings.get_embedder("fake")
+    vs.get_store(model_name="fake")                 # active namespace at D1
+    vs.reset_store_cache()
+    _install_embedder(monkeypatch, "emb-d2", d1.dim + 128)
     result = vs.run_boot_identity_check()
     assert result is not None
+    assert result["stored"]["dim"] == d1.dim
+    assert result["expected"]["dim"] == d1.dim + 128
     assert vs.identity_serving_blocked() is True
 
 
 def test_boot_identity_match_serves(monkeypatch):
-    class _Match:
-        def check_identity(self):
-            return None
-
-    monkeypatch.setattr(vs, "get_store", lambda *a, **k: _Match())
+    # Same identity, empty namespace: the real check finds nothing to refuse.
     monkeypatch.setattr(vs, "_IDENTITY_SERVING_BLOCKED", False, raising=False)
     assert vs.run_boot_identity_check() is None
     assert vs.identity_serving_blocked() is False
@@ -100,44 +173,90 @@ def test_ready_returns_503_when_identity_serving_blocked(monkeypatch):
     assert payload["ready"] is False
 
 
-def test_real_check_identity_flags_stored_vs_embedder_dim_mismatch(tmp_path, monkeypatch):
-    """(b) Drive the REAL VectorStore.check_identity: a row seeded at D1/model m1,
-    then the embedder resolves to D2/model m2 -> the real SQL read + comparison
-    returns the mismatch dict (no stub)."""
-    import numpy as np
+_BUILD_IN_ORDER = r"""
+import json, sys
+from app.core import models as m
+from app.core.rag.embeddings import get_embedder
+ident = get_embedder().identity
+active = m.rag_chunk_table_name(__import__("os").environ["RAG_VECTOR_NAMESPACE"])
+at_import = active in m.Base.metadata.tables
+plan = [("orda", 8), ("ordb", 16)]
+if sys.argv[1] == "reverse":
+    plan.reverse()
+for ns, dim in plan:
+    m.make_rag_chunk_class(ns, dim, "m-" + ns)
+conflicts = []
+for ns, dim in plan:
+    for bad_dim, bad_model in ((dim * 2, "m-" + ns), (dim, "other")):
+        try:
+            m.make_rag_chunk_class(ns, bad_dim, bad_model)
+            conflicts.append("reused")
+        except ValueError:
+            conflicts.append("raised")
+tables = {}
+for name in sorted(m.Base.metadata.tables):
+    if name.startswith("chunks_"):
+        t = m.Base.metadata.tables[name]
+        tables[name] = [[c.name, str(c.type.load_dialect_impl(
+            __import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect()))
+            if hasattr(c.type, "load_dialect_impl") else str(c.type)] for c in t.columns]
+print(json.dumps({"at_import": at_import, "conflicts": conflicts,
+                  "tables": tables, "active_dim": ident["dim"]}))
+"""
 
-    monkeypatch.setattr(vs, "get_embedder", lambda model_name=None: _StubEmbedder("m1", 8))
-    store = vs.get_store(db_path=str(tmp_path / "id.db"), namespace="idns")
-    assert store.dim == 8
-    cls = store._rag_chunk_cls
-    with store._session_factory()() as s:
-        s.add(cls(
-            chunk_id="c1", project_id="p1", doc_id="d1", chunk_index=0, text="t",
-            embedding=np.zeros(8, dtype=np.float32), created_at="2026-01-01",
-            embedding_model="m1", embedding_dim=8, embedding_normalized=True,
-        ))
-        s.commit()
-    # The embedder now reports a different identity than the stored index.
-    store.model_name = "m2"
-    store.dim = 16
-    result = store.check_identity()
-    assert result is not None
-    assert result["stored"]["dim"] == 8 and result["stored"]["model"] == "m1"
-    assert result["expected"]["dim"] == 16 and result["expected"]["model"] == "m2"
+
+def test_chunk_tables_register_at_import_and_build_identically_in_either_order(
+    tmp_path,
+):
+    """(1) Two fresh processes import the models and build two namespaces in
+    opposite orders. Both must: have the configured namespace's table on
+    Base.metadata straight after import (fails if lazy first-use registration
+    returns), end with an identical chunk-table MetaData, and RAISE -- never
+    reuse -- on a second width or model for an already-registered namespace."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    runs = {}
+    for order in ("forward", "reverse"):
+        env = dict(os.environ)
+        env.update({
+            "DATABASE_URL": f"sqlite:///{tmp_path / (order + '.db')}",
+            "RAG_VECTOR_NAMESPACE": "ordactive",
+            "RAG_EMBEDDING_MODEL": "fake",
+            "ENV": "test",
+        })
+        env.pop("PYTEST_USE_POSTGRES", None)
+        out = subprocess.run(
+            [sys.executable, "-c", _BUILD_IN_ORDER, order],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+        assert out.returncode == 0, out.stderr[-2000:]
+        runs[order] = json.loads(out.stdout.strip().splitlines()[-1])
+
+    for got in runs.values():
+        assert got["at_import"] is True
+        assert got["conflicts"] == ["raised"] * 4
+        assert "chunks_ordactive" in got["tables"]
+    assert runs["forward"]["tables"] == runs["reverse"]["tables"]
+    widths = {
+        name: dict(cols)["embedding"] for name, cols in runs["forward"]["tables"].items()
+    }
+    assert widths["chunks_orda"] == "VECTOR(8)"
+    assert widths["chunks_ordb"] == "VECTOR(16)"
+    assert widths["chunks_ordactive"] == f"VECTOR({runs['forward']['active_dim']})"
 
 
-def test_make_rag_chunk_class_is_idempotent_across_import_order():
-    """(1) One table registers ONCE on the shared MetaData, order-independent:
-    even if the per-namespace cache is lost while Base.metadata persists, a
-    second make_rag_chunk_class reuses the existing mapper instead of raising
-    'Table ... is already defined for this MetaData instance'."""
-    from app.core import models as m
+@pytest.mark.parametrize("dim", [384, 16])
+def test_models_embedding_dim_follows_the_resolved_embedder(monkeypatch, dim):
+    """(3) models.EMBEDDING_DIM and the legacy EmbeddingVector width are derived
+    from get_embedder().dim -- no hand-typed width in models.py."""
+    from sqlalchemy.dialects import postgresql
 
-    ns = "orderns"
-    c1 = m.make_rag_chunk_class(ns, 8, "m1")
-    m._RAG_CHUNK_CLASS_CACHE.pop(ns, None)          # simulate cache/metadata desync
-    c2 = m.make_rag_chunk_class(ns, 8, "m1")        # must NOT raise
-    assert c1 is c2
-    assert c1.__tablename__ == m.rag_chunk_table_name(ns)
-    # And the width is the requested one, derived per call — not a module constant.
-    assert c1.embedding_identity["dim"] == 8
+    from app.core import models
+
+    _install_embedder(monkeypatch, f"emb-{dim}", dim)
+    assert models.EMBEDDING_DIM == dim
+    col = models.RagChunk.__table__.c.embedding
+    assert str(col.type.load_dialect_impl(postgresql.dialect())) == f"VECTOR({dim})"

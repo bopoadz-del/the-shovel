@@ -41,7 +41,11 @@ import json as json_lib
 
 from app.core.db import _engine_for_url, _session_factory_for_url, get_database_url
 from app.core.models import Document, Project
-from app.core.models import make_rag_chunk_class, rag_chunk_table_name
+from app.core.models import (
+    RagNamespaceIdentityConflict,
+    make_rag_chunk_class,
+    rag_chunk_table_name,
+)
 # S1: the fallback table width derives from the one config dim — the resolved
 # default embedder (BAAI/bge-small-en-v1.5, 384) — NOT the legacy models.py
 # EMBEDDING_DIM (256, the old `chunks` table). get_store() still prefers the
@@ -931,6 +935,15 @@ def _ensure_schema(url: str, rag_chunk_cls: type) -> None:
 # ── Store ────────────────────────────────────────────────────────────────
 
 
+class EmbeddingIdentityMismatch(RuntimeError):
+    """The namespace holds vectors from a different embedder identity.
+    ``mismatch`` is the :meth:`VectorStore.check_identity` dict."""
+
+    def __init__(self, mismatch: Dict[str, Any], message: str):
+        self.mismatch = mismatch
+        super().__init__(message)
+
+
 class VectorStore:
     """SQLAlchemy-backed chunk store with pgvector search on PostgreSQL.
 
@@ -974,11 +987,24 @@ class VectorStore:
         # Build the namespaced model class. The old ``chunks`` table is
         # retired in place: namespace="" maps to it, but prod defaults to
         # namespace="v2" so new writes never touch the contaminated table.
-        self._rag_chunk_cls = make_rag_chunk_class(
-            namespace=self.namespace,
-            dim=dim,
-            model_name=self.model_name,
-        )
+        try:
+            self._rag_chunk_cls = make_rag_chunk_class(
+                namespace=self.namespace,
+                dim=self.dim,
+                model_name=self.model_name,
+            )
+        except RagNamespaceIdentityConflict as exc:
+            # The namespace is already mapped in this process at another
+            # identity: the same mixed-model condition the stored-row check
+            # refuses, caught before any table is touched. Same error, same
+            # mismatch shape, so callers and the boot gate see one condition.
+            mismatch = {"expected": exc.requested, "stored": exc.registered}
+            raise EmbeddingIdentityMismatch(
+                mismatch,
+                f"Embedding identity mismatch in namespace {self.namespace!r}: "
+                f"expected {mismatch['expected']}, found {mismatch['stored']}. "
+                f"Mixed-model namespaces are not allowed.",
+            ) from exc
         self._table_name = rag_chunk_table_name(self.namespace)
         _ensure_schema(self._database_url, self._rag_chunk_cls)
         # Fail loud if the namespace already contains vectors from a
@@ -1101,7 +1127,8 @@ class VectorStore:
         """
         mismatch = self.check_identity()
         if mismatch is not None:
-            raise RuntimeError(
+            raise EmbeddingIdentityMismatch(
+                mismatch,
                 f"Embedding identity mismatch in namespace {self.namespace!r}: "
                 f"expected {mismatch['expected']}, found {mismatch['stored']}. "
                 f"Mixed-model namespaces are not allowed."
@@ -2478,6 +2505,15 @@ def run_boot_identity_check() -> Optional[Dict[str, Any]]:
     global _IDENTITY_SERVING_BLOCKED
     try:
         mismatch = get_store().check_identity()
+    except EmbeddingIdentityMismatch as exc:
+        # Opening the store ran the REAL check_identity and it disagreed: the
+        # stored index and the resolved embedder differ. That IS the mismatch;
+        # it must block serving, not be skipped as an unreadable probe.
+        mismatch = exc.mismatch
+    except RagNamespaceIdentityConflict as exc:
+        # The namespace is already mapped in this process at another identity
+        # than the resolved embedder: same condition, caught one step earlier.
+        mismatch = {"expected": exc.requested, "stored": exc.registered}
     except Exception:  # noqa: BLE001 — a boot probe never crashes startup
         logger.info("boot identity check: store probe skipped", exc_info=True)
         return None

@@ -52,10 +52,15 @@ def test_one_namespace_cannot_be_remapped_to_a_second_dim():
 
     ns = "dimconflict_probe"
     first = make_rag_chunk_class(ns, 256, "fake-model")
-    assert make_rag_chunk_class(ns, 256, "other-model") is first, (
-        "same namespace + same dim must reuse the cached class; model_name is "
-        "metadata only"
-    )
+    assert make_rag_chunk_class(ns, 256, "fake-model") is first
+    # REVERSED (PR #2, ORDERS_28OCT_1230Z item 1): a second embedding MODEL on
+    # the same namespace used to reuse the class ("model_name is metadata
+    # only"). Evidence it must raise: the class carries the model as the
+    # embedding_model column default and in embedding_identity, so the reuse
+    # stamped one model's name on another model's vectors. One namespace has
+    # one identity; a different model is refused like a different width.
+    with pytest.raises(ValueError, match="already mapped at dim"):
+        make_rag_chunk_class(ns, 256, "other-model")
 
     with pytest.raises(ValueError, match="already mapped at dim"):
         make_rag_chunk_class(ns, 384, "fake-model")

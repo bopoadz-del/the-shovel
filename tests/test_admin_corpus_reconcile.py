@@ -18,7 +18,6 @@ from sqlalchemy.exc import OperationalError
 from app.main import app
 from app.core.db import SessionLocal, engine
 from app.core.models import (
-    EMBEDDING_DIM,
     Document,
     Project,
     User,
@@ -46,11 +45,16 @@ def _chunk_cls():
     table is what makes these tests fail against that bug.
     """
     ns = _active_namespace()
-    # Reuse whatever width this namespace was already opened at. A namespace
-    # owns one table and therefore one vector width, so guessing EMBEDDING_DIM
-    # here would trip the dim-conflict guard whenever the live embedder (384)
-    # registered the namespace first.
-    cls = rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+    # Reuse whatever identity this namespace was already opened at; otherwise
+    # register it at the RESOLVED embedder's identity -- the one the app's
+    # store opens it at. A namespace owns one table and one identity, so a
+    # guessed width or a made-up model name trips the conflict guard.
+    from app.core.rag.embeddings import get_embedder
+
+    ident = get_embedder().identity
+    cls = rag_chunk_class_for(ns) or make_rag_chunk_class(
+        ns, ident["dim"], ident["model"], ident["normalized"],
+    )
     # Race-safe: this helper and the app's own _ensure_schema both create the
     # namespaced table, on different engines, and checkfirst=True is
     # check-then-create rather than atomic. The loser used to fail the test
@@ -72,8 +76,7 @@ def _chunk_dim() -> int:
     np.zeros(256) into a vector(384) column passes locally and fails only in
     the test-postgres CI job.
     """
-    ident = getattr(_chunk_cls(), "embedding_identity", None)
-    return int(ident["dim"]) if ident else EMBEDDING_DIM
+    return int(_chunk_cls().embedding_identity["dim"])
 
 
 @pytest.fixture
