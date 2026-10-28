@@ -199,6 +199,16 @@ async def test_two_briefs_give_two_different_derived_wbs_trees(monkeypatch):
     assert t1 != t2, "two different briefs must give two different trees"
     for r in (r1, r2):
         tree = r["wbs_tree"]
+        # Hierarchy, not a flat dump (ORDERS_1530Z / G2's note): at least one
+        # phase node (a bare key) with at least one child package under it, and
+        # every package nests beneath a declared phase.
+        phase_keys = [k for k in tree if "." not in k]
+        package_keys = [k for k in tree if "." in k]
+        assert phase_keys and package_keys, (
+            f"wbs_tree must be a phase/package hierarchy, got {sorted(tree)}"
+        )
+        for pk in package_keys:
+            assert pk.split(".")[0] in tree, f"package {pk!r} has no parent phase"
         for a in r["activities"]:
             code = str(a.get("wbs_code") or a.get("wbs") or "")
             assert code in tree, f"activity code {code!r} is not a wbs_tree key"
