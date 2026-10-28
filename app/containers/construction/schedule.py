@@ -2195,31 +2195,26 @@ class ConstructionScheduleMixin:
         brief: str,
         user_message: str,
     ) -> List[Dict[str, Any]]:
-        """Return demolition / site-clearance BOQ rows when the ask elects them.
-
-        Empty list means keep the template scaffold. Retrieval failure or a
-        kill-switch also returns empty — we do not invent items.
+        """Return the measured BOQ rows to derive a WBS from, elected by
+        STRUCTURE (ORDERS_28OCT_0700Z #1a): any rows carrying a label
+        (description/item_key) + a measure (quantity/unit), of ANY trade. There
+        is no demolition/site-clearance keyword gate on the ask and no trade
+        filter on the rows — any measured BOQ scope derives a schedule. Empty
+        list means no structured scope was handed over; we never invent rows.
         """
-        from app.core.predefined_reasoning import message_wants_boq_scope_wbs
         from app.lib.boq_schedule import (
-            filter_demolition_site_clearance_items,
             retrieve_boq_scope_items,
+            structured_boq_rows,
         )
-        if not (
-            message_wants_boq_scope_wbs(brief)
-            or message_wants_boq_scope_wbs(user_message)
-        ):
-            return []
-        raw = (
-            params.get("boq_items")
-            or data.get("boq_items")
-        )
-        if isinstance(raw, list) and raw:
-            return filter_demolition_site_clearance_items(raw)
+        raw = params.get("boq_items") or data.get("boq_items")
+        rows = structured_boq_rows(raw if isinstance(raw, list) else [])
+        if rows:
+            return rows
+        # No explicit rows handed over: retrieve measured BOQ scope from the
+        # project corpus (keyword-free; returns [] when there is none).
         project_id = params.get("project_id") or data.get("project_id")
-        query = brief if message_wants_boq_scope_wbs(brief) else user_message
         if project_id:
-            return retrieve_boq_scope_items(query, str(project_id))
+            return retrieve_boq_scope_items(user_message or brief, str(project_id))
         return []
 
     async def generate_wbs(self, input_data: Any, params: Dict) -> Dict:
@@ -2241,10 +2236,14 @@ class ConstructionScheduleMixin:
         data = input_data if isinstance(input_data, dict) else {}
         p = params or {}
 
+        # No hardwired default input (ORDERS_28OCT_0700Z #1b): an empty/blank
+        # brief stays empty and, with no structured scope, is refused as
+        # no-scope below (422 over HTTP) rather than silently scheduling a
+        # canned project.
         brief: str = (
             data.get("brief")
             or p.get("brief")
-            or "Generic data-center construction project."
+            or ""
         )
         user_message = (
             p.get("user_message")

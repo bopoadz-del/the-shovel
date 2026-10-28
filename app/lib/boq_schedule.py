@@ -631,6 +631,45 @@ def filter_demolition_site_clearance_items(
     return out
 
 
+def structured_boq_rows(
+    items: Iterable[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Keep measured BOQ rows by STRUCTURE — any trade (ORDERS_28OCT_0700Z #1a).
+
+    A row qualifies when it carries a label (``description`` or ``item_key``)
+    AND a measure (``quantity``/``qty`` or ``unit``): i.e. it is a bill-of-
+    quantities line, whatever the work type. There is no demolition/site-
+    clearance keyword gate — any measured BOQ scope derives a WBS. De-dupes on
+    CESMM code + normalised description, exactly as the old trade filter did,
+    and never invents rows.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    seen_codes: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("description") or item.get("item_key") or "").strip()
+        has_measure = (
+            item.get("quantity") is not None
+            or item.get("qty") is not None
+            or str(item.get("unit") or "").strip() != ""
+        )
+        if not label or not has_measure:
+            continue
+        code = _compact_cesmm_code(str(item.get("item_key") or ""))
+        key = (code, _norm_desc(item.get("description") or item.get("item_key")))
+        if not key[1] or key in seen:
+            continue
+        if code and code in seen_codes:
+            continue
+        seen.add(key)
+        if code:
+            seen_codes.add(code)
+        out.append(item)
+    return out
+
+
 def _chunk_looks_like_measured_boq(text: str, filename: str) -> bool:
     """True when the excerpt is a bill row, not contract prose about the bill."""
     try:
@@ -967,7 +1006,7 @@ def retrieve_boq_scope_items(query: str, project_id: str) -> List[Dict[str, Any]
         )
     # Elect the later-year bill BEFORE CESMM-code dedupe. Filtering first
     # would keep an earlier-year D110 and drop the later-year twin.
-    return filter_demolition_site_clearance_items(
+    return structured_boq_rows(
         _prefer_newer_contract_year_items(collected),
     )
 
@@ -982,7 +1021,7 @@ def wbs_tree_from_boq_items(
     Package names keep the CESMM code when the row had one. No template
     packages are added.
     """
-    scoped = filter_demolition_site_clearance_items(items)
+    scoped = structured_boq_rows(items)
     if not scoped:
         return {}
     tree: Dict[str, str] = {"1": phase}
@@ -1007,7 +1046,7 @@ def activities_from_boq_scope_outline(
     Durations are placeholders (1 day). This is a high-level scope WBS, not
     a productivity-derived programme — callers must say so.
     """
-    scoped = filter_demolition_site_clearance_items(items)
+    scoped = structured_boq_rows(items)
     activities: List[Dict[str, Any]] = []
     prev: Optional[str] = None
     phase_slug = _slug(phase)
