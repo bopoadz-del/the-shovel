@@ -423,30 +423,34 @@ _BRIEF_WBS_SYSTEM = (
 )
 
 
-def _estimate_duration_from_rate(quantity: float, rate: str) -> Optional[int]:
+def _estimate_duration_from_rate(quantity: float, rate: str) -> Tuple[Optional[int], Optional[str]]:
     """Working days for ``quantity`` at a STATED productivity ``rate`` via the
-    construction kernel (productivity_manpower_duration). Returns None when the
-    kernel cannot compute it — it never invents a rate (0845Z ruling: no rate,
-    no estimate)."""
+    construction kernel (productivity_manpower_duration).
+
+    Returns ``(days, error)``. ``days`` is None when the kernel produced no
+    usable figure (0845Z: no rate -> no estimate). ``error`` is None in that
+    ordinary case, but when the kernel RAISED it is a short tag NAMING the
+    failure, logged at WARNING — so the caller surfaces a kernel BREAK as a
+    distinct computed failure instead of silently treating it as a plain
+    missing-input UNKNOWN."""
     try:
         from app.agents.hats.planning.formulas.construction_formulas_planning import (
             productivity_manpower_duration,
         )
         res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
-    except Exception:  # noqa: BLE001 — kernel refusal / bad input: no estimate
-        logger.debug(
-            "productivity kernel could not estimate duration (quantity=%r rate=%r); "
-            "returning UNKNOWN",
-            quantity, rate, exc_info=True,
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "productivity kernel raised estimating duration (quantity=%r rate=%r): %s",
+            quantity, rate, exc, exc_info=True,
         )
-        return None
+        return None, f"productivity kernel error: {type(exc).__name__}"
     if not isinstance(res, dict):
-        return None
+        return None, None
     for k in ("duration_days", "duration", "days", "remaining_days"):
         v = res.get(k)
         if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
-            return int(math.ceil(v))
-    return None
+            return int(math.ceil(v)), None
+    return None, None
 
 
 async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -501,23 +505,28 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
         elif has_qty and has_rate:
             # Stated quantity + STATED rate -> kernel estimate (the stated rate
             # always wins; a norm is never consulted here).
-            est = _estimate_duration_from_rate(qty, rate)
+            est, est_err = _estimate_duration_from_rate(qty, rate)
             if est is not None:
                 duration_days = est
                 basis = f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
+            elif est_err:
+                # Kernel BREAK (not a missing input): surface it distinctly.
+                basis = f"kernel-error — {est_err}"
         elif has_qty:
             # Stated quantity but NO rate -> a GENERIC, sourced productivity
             # norm for the trade (S-1b). No matching trade -> stays UNKNOWN.
             from app.lib.productivity_norms import norm_rate_for
             norm = norm_rate_for(name, item.get("unit"))
             if norm is not None:
-                est = _estimate_duration_from_rate(qty, norm["rate"])
+                est, est_err = _estimate_duration_from_rate(qty, norm["rate"])
                 if est is not None:
                     duration_days = est
                     basis = (
                         "estimated — kernel productivity_manpower_duration, "
                         f"norm {norm['rate']} ({norm['source']})"
                     )
+                elif est_err:
+                    basis = f"kernel-error — {est_err}"
         if duration_days is None:
             unstated.append(name)
         aid = f"B{idx}"

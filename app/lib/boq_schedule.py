@@ -956,29 +956,32 @@ def boq_scope_phase(scoped: Iterable[Dict[str, Any]]) -> str:
     return "Mixed scope"
 
 
-def _kernel_duration_days(quantity: float, rate: str) -> Optional[int]:
+def _kernel_duration_days(quantity: float, rate: str) -> Tuple[Optional[int], Optional[str]]:
     """Working days for ``quantity`` at a per-gang-day production ``rate`` via
-    the construction kernel (productivity_manpower_duration). None when it
-    cannot compute — mirrors the brief path's estimator; never invents a rate."""
+    the construction kernel (productivity_manpower_duration).
+
+    Returns ``(days, error)`` — the same contract as the brief path's estimator.
+    ``days`` is None when the kernel produced no usable figure; ``error`` is a
+    short tag NAMING the failure (logged at WARNING) only when the kernel RAISED,
+    so a kernel BREAK is surfaced distinctly from a plain missing-input UNKNOWN."""
     try:
         from app.agents.hats.planning.formulas.construction_formulas_planning import (
             productivity_manpower_duration,
         )
         res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
-    except Exception:  # noqa: BLE001 — kernel refusal / bad input: no estimate
-        logger.debug(
-            "productivity kernel could not estimate duration (quantity=%r rate=%r); "
-            "returning UNKNOWN",
-            quantity, rate, exc_info=True,
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "productivity kernel raised estimating duration (quantity=%r rate=%r): %s",
+            quantity, rate, exc, exc_info=True,
         )
-        return None
+        return None, f"productivity kernel error: {type(exc).__name__}"
     if not isinstance(res, dict):
-        return None
+        return None, None
     for k in ("duration_days", "duration", "days", "remaining_days"):
         v = res.get(k)
         if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
-            return int(math.ceil(v))
-    return None
+            return int(math.ceil(v)), None
+    return None, None
 
 
 def boq_row_duration(item: Dict[str, Any]) -> Tuple[Optional[int], str]:
@@ -990,20 +993,25 @@ def boq_row_duration(item: Dict[str, Any]) -> Tuple[Optional[int], str]:
     qty = _qty(item)
     rate = (item or {}).get("productivity_rate")
     if qty > 0 and isinstance(rate, str) and rate.strip():
-        d = _kernel_duration_days(qty, rate)
+        d, kerr = _kernel_duration_days(qty, rate)
         if d is not None:
             return d, f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
+        if kerr:
+            # Kernel BREAK (not a missing input): surface it distinctly.
+            return None, f"kernel-error — {kerr}"
     if qty > 0:
         from app.lib.productivity_norms import norm_rate_for
         desc = str((item or {}).get("description") or (item or {}).get("item_key") or "")
         norm = norm_rate_for(desc, (item or {}).get("unit"))
         if norm is not None:
-            d = _kernel_duration_days(qty, norm["rate"])
+            d, kerr = _kernel_duration_days(qty, norm["rate"])
             if d is not None:
                 return d, (
                     "estimated — kernel productivity_manpower_duration, "
                     f"norm {norm['rate']} ({norm['source']})"
                 )
+            if kerr:
+                return None, f"kernel-error — {kerr}"
     return None, "unknown"
 
 
