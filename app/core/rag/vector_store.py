@@ -46,7 +46,7 @@ from app.core.models import make_rag_chunk_class, rag_chunk_table_name
 # default embedder (BAAI/bge-small-en-v1.5, 384) — NOT the legacy models.py
 # EMBEDDING_DIM (256, the old `chunks` table). get_store() still prefers the
 # live embedder's actual dim; this only sets the width for a brand-new store.
-from app.core.rag.embeddings import EMBEDDING_DIM, get_embedder
+from app.core.rag.embeddings import get_embedder
 from app.core.rag.text_repair import repair_fake_bold
 
 logger = logging.getLogger(__name__)
@@ -517,7 +517,12 @@ def get_lexical_store(
     if not model_name:
         model_name = (os.getenv("RAG_EMBEDDING_MODEL") or "").strip() or "unknown"
     if not dim:
-        dim = EMBEDDING_DIM
+        # No stored width (empty/new table): open at the CONFIGURED embedder's
+        # actual dimension, never a hardcoded constant, so the table width is
+        # the width that will be written. model_name "unknown" == env unset ->
+        # resolve the default embedder.
+        probe = None if model_name == "unknown" else model_name
+        dim = get_embedder(model_name=probe).identity["dim"]
 
     key = (url, ns, model_name, dim)
     with _CACHE_LOCK:
@@ -937,12 +942,16 @@ class VectorStore:
     def __init__(
         self,
         db_path: str,
-        dim: int = EMBEDDING_DIM,
+        dim: Optional[int] = None,
         namespace: Optional[str] = None,
         model_name: Optional[str] = None,
     ):
         self.db_path = db_path
-        self.dim = dim
+        # No explicit width -> follow the configured embedder's actual dim, so
+        # the store table width always matches the vectors written. Never a
+        # hardcoded constant (all real callers pass an explicit dim via
+        # get_store(); this resolves the safety-net default only).
+        self.dim = dim if dim is not None else get_embedder(model_name=model_name).identity["dim"]
         self.namespace = namespace if namespace is not None else _rag_vector_namespace()
         if self.namespace == "" and _is_production():
             # namespace "" is the RETIRED legacy ``chunks`` table. Production

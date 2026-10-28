@@ -78,3 +78,23 @@ def test_boot_identity_match_serves(monkeypatch):
     monkeypatch.setattr(vs, "_IDENTITY_SERVING_BLOCKED", False, raising=False)
     assert vs.run_boot_identity_check() is None
     assert vs.identity_serving_blocked() is False
+
+
+def test_ready_returns_503_when_identity_serving_blocked(monkeypatch):
+    # (c) The S1 identity-block flag alone must fail the readiness gate. With
+    # the database healthy, a blocked embedder identity makes GET /ready return
+    # 503 — driven through the REAL ready() handler reading the REAL
+    # identity_serving_blocked(), so the flag is the sole cause of the 503.
+    from starlette.responses import Response
+
+    from app.routers import health
+
+    monkeypatch.setattr(
+        health, "_evaluate_health",
+        lambda: {"checks": {"database": {"ok": True}}},
+    )
+    monkeypatch.setattr(vs, "_IDENTITY_SERVING_BLOCKED", True, raising=False)
+    resp = Response()
+    payload = health.ready(resp)
+    assert resp.status_code == 503
+    assert payload["ready"] is False
