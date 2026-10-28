@@ -371,6 +371,15 @@ def _warm_parse_libraries() -> None:
             logger.info("parse library %s not installed; the parse reports it when used", name)
 
 
+def _check_embedder_identity() -> None:
+    """S1: after the embedder is warm, compare the live index's identity to the
+    resolved embedder and block serving on a dim/model mismatch (readiness then
+    fails closed). Runs in the background warm-up — it builds the (now cached)
+    embedder and reads one row, so it must not be inline in lifespan."""
+    from app.core.rag import vector_store
+    vector_store.run_boot_identity_check()
+
+
 async def _warm_models() -> None:
     """Warm the heavy models — and seed the knowledge base — WITHOUT blocking startup.
 
@@ -395,6 +404,7 @@ async def _warm_models() -> None:
     # ordering it last means the seed never pays a second model load.
     for label, fn in (("safety detector", _warm_safety_detector),
                       ("RAG embedder", _warm_embedder),
+                      ("embedder identity check", _check_embedder_identity),
                       ("knowledge seed", _seed_knowledge),
                       ("parse libraries", _warm_parse_libraries)):
         try:

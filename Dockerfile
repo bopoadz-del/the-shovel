@@ -188,9 +188,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # same trap the safety detector weights already work around by copying to
 # /app/models).
 COPY --from=builder /opt/hf /opt/hf
+# S1: pin the runtime embedder to the model the builder baked, so a container
+# started without RAG_EMBEDDING_MODEL in its task def still loads the 384-dim
+# BAAI/bge-small-en-v1.5 (matching the index) instead of the code's old
+# 256-dim fallback. A task-def env still overrides this.
+ARG RAG_EMBEDDING_MODEL="BAAI/bge-small-en-v1.5"
 ENV HF_HOME=/opt/hf \
     HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL}
 
 COPY . .
 # Replace the (gitignored) frontend/dist with the freshly built one.

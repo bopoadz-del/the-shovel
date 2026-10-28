@@ -1,8 +1,10 @@
 -- The Fork unified PostgreSQL schema (reverse-engineered from SQLite stores).
 -- Source modules: users, projects, workflows, agent_memory, doc_index,
 -- usage_tracker, hydration_store, rag/budget, rag/vector_store.
--- Embedding dimension: 256 (model2vec minishlab/potion-base-8M; see
--- app/core/models.py EMBEDDING_DIM and embeddings.py EMBEDDING_DIM_MODEL2VEC).
+-- Embedding dimension: the live prod table is the NAMESPACED chunks_v2, whose
+-- width follows the resolved embedder — the default BAAI/bge-small-en-v1.5 is
+-- 384-dim (embeddings.py EMBEDDING_DIM). The legacy `chunks` table below is the
+-- retired 256-dim model2vec store (models.py EMBEDDING_DIM), kept for history.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -203,7 +205,10 @@ CREATE TABLE rag_budget (
 );
 
 -- ── RAG vector store (app/core/rag/vector_store.py) ─────────────────────────
--- embedding: vector(256) per EMBEDDING_DIM in app/core/models.py (model2vec).
+-- LEGACY, retired in place: the original 256-dim model2vec `chunks` table.
+-- Production reads/writes the namespaced chunks_v2 table instead, whose
+-- embedding width follows the resolved embedder (384 for the default
+-- BAAI/bge-small-en-v1.5), not this fixed vector(256).
 
 CREATE TABLE chunks (
     chunk_id    TEXT PRIMARY KEY,

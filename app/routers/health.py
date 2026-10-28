@@ -148,7 +148,16 @@ def ready(response: Response):
     readiness / the smoke suite — it fails closed, unlike /health (liveness).
     """
     payload = _evaluate_health()
-    payload["ready"] = payload["checks"]["database"]["ok"]
+    # S1: refuse to serve if the live index and the resolved embedder disagree
+    # on model/dim — retrieval would be silently wrong. Boot sets this flag.
+    try:
+        from app.core.rag.vector_store import identity_serving_blocked
+        embedder_ok = not identity_serving_blocked()
+    except Exception:  # noqa: BLE001 — a probe never breaks readiness evaluation
+        embedder_ok = True
+    payload["ready"] = payload["checks"]["database"]["ok"] and embedder_ok
+    if not embedder_ok:
+        payload["embedder_identity"] = "mismatch — serving blocked"
     if not payload["ready"]:
         response.status_code = 503
     return payload

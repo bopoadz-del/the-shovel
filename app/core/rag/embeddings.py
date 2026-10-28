@@ -32,6 +32,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_MODEL2VEC = "minishlab/potion-base-8M"
 
+# The model the image BAKES and the live service SERVES (S1: the code default
+# must match the baked/served model, else a task started without
+# RAG_EMBEDDING_MODEL loads a 256-dim model and queries a 384-dim index ->
+# RAG_INDEX_FAILED / empty retrieval). This is the only default used when the
+# env is unset; the legacy constants above are kept for old imports/tests.
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+
+
+def _resolve_model_name(model_name: Optional[str]) -> str:
+    """The model name an embedder call resolves to: an explicit argument, then
+    ``RAG_EMBEDDING_MODEL``, then the baked/served default. One place so the
+    cache, the health probe and every caller agree (S1)."""
+    return model_name or os.getenv("RAG_EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
+
 # Legacy constants kept only for reference / old tests that import them.
 EMBEDDING_DIM = 384
 EMBEDDING_DIM_MODEL2VEC = 256
@@ -49,10 +63,11 @@ def get_embedder(model_name: Optional[str] = None) -> "Embedder":
     """Return the process-cached embedder, creating it on first call.
 
     ``model_name=None`` honors the ``RAG_EMBEDDING_MODEL`` env var, then
-    falls back to ``DEFAULT_MODEL2VEC``. Pass ``"fake"`` for tests.
+    falls back to ``DEFAULT_EMBEDDING_MODEL`` (the baked/served model). Pass
+    ``"fake"`` for tests.
     """
     global _EMBEDDER_CACHE
-    name = model_name or os.getenv("RAG_EMBEDDING_MODEL") or DEFAULT_MODEL2VEC
+    name = _resolve_model_name(model_name)
     with _CACHE_LOCK:
         if _EMBEDDER_CACHE is None or _EMBEDDER_CACHE.model_name != name:
             _EMBEDDER_CACHE = Embedder(model_name=name)
@@ -121,7 +136,7 @@ def embedder_health() -> dict:
     raises: a health probe that dies tells you nothing.
     """
     global _LOAD_FAILURE
-    name = os.getenv("RAG_EMBEDDING_MODEL") or DEFAULT_MODEL2VEC
+    name = _resolve_model_name(None)
     report = {
         "ok": False, "model": name, "backend": None,
         "dim": None, "loaded": embedder_is_loaded(), "error": None,
