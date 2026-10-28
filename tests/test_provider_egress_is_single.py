@@ -71,28 +71,44 @@ def _const_str(node):
 _LLM_URL_CONST_RE = re.compile(r"_(API|BASE)_URL$")
 
 
-def _expr_is_llm_origin(node, origin) -> bool:
+def _expr_is_llm_origin(node, origin, hosts) -> bool:
     """Whether an expression originates from the LLM provider config.
 
     `origin` is the set of names in the module already known to hold the LLM
     config or a value derived from it (built by whole-module propagation), so
     recognising a config object needs no hand-typed list of variable names:
     a name counts because it was bound from ``_llm_config()`` somewhere, not
-    because it is spelled ``cfg``.
+    because it is spelled ``cfg``. `hosts` is the app-derived provider-host set,
+    so a string constant whose VALUE is a provider URL counts as an origin even
+    when its variable name is not ``*_API_URL``.
     """
     if node is None:
         return False
-    # A provider-URL constant, or a name already known to be LLM-derived.
+    # A string constant whose host is a known provider host: a provider-URL
+    # VALUE constant, regardless of the name it is bound to.
+    lit = _const_str(node)
+    if lit is not None and "://" in lit:
+        netloc = urlparse(lit).netloc.lower()
+        if netloc and any(h in netloc for h in hosts):
+            return True
+    # A *_API_URL/_BASE_URL constant, or a name already known to be LLM-derived.
     if isinstance(node, ast.Name):
         return node.id in origin or bool(_LLM_URL_CONST_RE.search(node.id))
     if isinstance(node, ast.Attribute):
         return bool(_LLM_URL_CONST_RE.search(node.attr))
+    # A container literal carrying an LLM-origin element is itself an origin.
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(_expr_is_llm_origin(e, origin, hosts) for e in node.elts)
+    if isinstance(node, ast.Dict):
+        return any(_expr_is_llm_origin(v, origin, hosts) for v in node.values)
     if isinstance(node, ast.Subscript):
         key = _const_str(node.slice)
         if key and _LLM_KEY_RE.search(key.upper()):     # os.environ["LLM_..."]
             return True
         if key == "url":                                 # <llm-cfg>["url"]
-            return _expr_is_llm_origin(node.value, origin)
+            return _expr_is_llm_origin(node.value, origin, hosts)
+        # Indexing an origin container (urls[0], d["u"]) yields an origin value.
+        return _expr_is_llm_origin(node.value, origin, hosts)
     if isinstance(node, ast.Call):
         f = node.func
         if isinstance(f, ast.Name) and f.id == "_llm_config":
@@ -101,15 +117,36 @@ def _expr_is_llm_origin(node, origin) -> bool:
             return True
         if isinstance(f, ast.Attribute) and f.attr == "get" and node.args \
                 and _const_str(node.args[0]) == "url":   # <llm-cfg>.get("url")
-            return _expr_is_llm_origin(f.value, origin)
-        # os.getenv("...LLM...") / os.environ.get("...PROVIDER...")
-        if isinstance(f, ast.Attribute) and f.attr in ("getenv", "get") and node.args \
-                and _const_str(node.args[0]) and _LLM_KEY_RE.search(_const_str(node.args[0]).upper()):
-            return True
+            return _expr_is_llm_origin(f.value, origin, hosts)
+        if isinstance(f, ast.Attribute) and f.attr in ("getenv", "get") and node.args:
+            k0 = _const_str(node.args[0])
+            if k0 and _LLM_KEY_RE.search(k0.upper()):    # os.getenv("...LLM...")
+                return True
+            # os.getenv("FOO", "<provider-url>") — a provider-URL default.
+            if len(node.args) > 1 and _expr_is_llm_origin(node.args[1], origin, hosts):
+                return True
     return False
 
 
-def _origin_names(tree) -> set:
+def _bind_targets(target, origin) -> bool:
+    """Add every Name bound by an assignment/for/comprehension target to
+    ``origin`` when its source is LLM-derived. Handles plain names, tuple/list
+    unpacking and starred targets (``a, *rest = ...``). Returns True if the set
+    grew."""
+    added = False
+    if isinstance(target, ast.Name):
+        if target.id not in origin:
+            origin.add(target.id)
+            added = True
+    elif isinstance(target, ast.Starred):
+        added = _bind_targets(target.value, origin) or added
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            added = _bind_targets(elt, origin) or added
+    return added
+
+
+def _origin_names(tree, hosts) -> set:
     """Whole-module set of names bound, transitively, from the LLM config.
 
     Scope-INSENSITIVE on purpose: a ``cfg = _llm_config()`` in one function and
@@ -117,18 +154,39 @@ def _origin_names(tree) -> set:
     the same provider origin (the chat.py ``_call_cloud`` -> ``_stream_generator``
     shape). Over-flagging a non-LLM reuse of the same name is the safe direction
     — it forces the call through the metered chokepoint; a miss would not.
+
+    Propagation covers direct assignment, tuple/starred unpacking, ``for``/
+    comprehension iteration over an LLM-origin collection, and ``list.append``
+    of an LLM-origin value onto a name.
     """
     origin: set = set()
     assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
+    fors = [n for n in ast.walk(tree) if isinstance(n, (ast.For, ast.AsyncFor))]
+    comps = [n for n in ast.walk(tree) if isinstance(n, ast.comprehension)]
+    appends = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "append" and n.args
+    ]
     changed = True
     while changed:
         changed = False
         for n in assigns:
-            if _expr_is_llm_origin(n.value, origin):
+            if _expr_is_llm_origin(n.value, origin, hosts):
                 for t in n.targets:
-                    if isinstance(t, ast.Name) and t.id not in origin:
-                        origin.add(t.id)
-                        changed = True
+                    changed = _bind_targets(t, origin) or changed
+        for n in fors:
+            if _expr_is_llm_origin(n.iter, origin, hosts):
+                changed = _bind_targets(n.target, origin) or changed
+        for n in comps:
+            if _expr_is_llm_origin(n.iter, origin, hosts):
+                changed = _bind_targets(n.target, origin) or changed
+        for n in appends:
+            if _expr_is_llm_origin(n.args[0], origin, hosts):
+                recv = n.func.value
+                if isinstance(recv, ast.Name) and recv.id not in origin:
+                    origin.add(recv.id)
+                    changed = True
     return origin
 
 
@@ -136,7 +194,7 @@ def scan_source(src: str, is_chokepoint: bool, hosts: set) -> list:
     if is_chokepoint:
         return []
     tree = ast.parse(src)
-    origin = _origin_names(tree)
+    origin = _origin_names(tree, hosts)
     offenders = []
     for call in ast.walk(tree):
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
@@ -155,7 +213,7 @@ def scan_source(src: str, is_chokepoint: bool, hosts: set) -> list:
         # a cfg["url"]/cfg.get("url") on an _llm_config-derived name, a provider
         # URL constant, an LLM env key, or a name aliased from any of those
         # anywhere in the module (closures included).
-        if _expr_is_llm_origin(url, origin):
+        if _expr_is_llm_origin(url, origin, hosts):
             offenders.append(call.lineno)
     return offenders
 
@@ -252,5 +310,81 @@ def test_guard_passes_a_non_llm_dict_get_url():
         "async def f(client, data):\n"
         "    url = data.get('url')\n"
         "    return await client.post(url, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS) == []
+
+
+# ── strengthened propagation: the new shapes the guard must now catch ────────
+
+def test_guard_flags_a_provider_url_value_constant_by_any_name():
+    # A module constant whose VALUE is a provider URL is an origin even though
+    # its name is not *_API_URL (value-based, not name-based).
+    host = sorted(_HOSTS)[0]
+    src = (
+        f"CHAT_ENDPOINT = 'https://{host}/v1/chat/completions'\n"
+        "async def f(client):\n"
+        "    return await client.post(CHAT_ENDPOINT, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "a provider-URL value constant must FAIL"
+
+
+def test_guard_flags_os_getenv_with_a_provider_url_default():
+    # os.getenv("X", "<provider-url>") resolves to the provider URL when unset,
+    # so the call originates from the provider config.
+    host = sorted(_HOSTS)[0]
+    src = (
+        "import os\n"
+        "async def f(client):\n"
+        f"    url = os.getenv('CHAT_URL', 'https://{host}/v1/chat/completions')\n"
+        "    return await client.post(url, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "a provider-URL getenv default must FAIL"
+
+
+def test_guard_flags_a_for_loop_over_an_origin_collection():
+    # Iterating an LLM-origin container binds the loop var as an origin.
+    src = (
+        "async def f(client):\n"
+        "    cfg = _llm_config()\n"
+        "    urls = [cfg['url']]\n"
+        "    for u in urls:\n"
+        "        await client.post(u, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "a loop var over an origin list must FAIL"
+
+
+def test_guard_flags_tuple_and_starred_unpacking_of_the_config():
+    # Tuple/starred unpacking of an origin RHS binds every target as origin.
+    src = (
+        "async def f(client):\n"
+        "    cfg = _llm_config()\n"
+        "    primary, *rest = [cfg['url'], 'https://fallback.example/x']\n"
+        "    return await client.post(primary, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "unpacked origin target must FAIL"
+
+
+def test_guard_flags_append_then_index_of_an_origin_value():
+    # list.append of an origin value marks the receiver list as origin; an
+    # index of that list is then an origin value.
+    src = (
+        "async def f(client):\n"
+        "    cfg = _llm_config()\n"
+        "    acc = []\n"
+        "    acc.append(cfg['url'])\n"
+        "    return await client.post(acc[0], json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "index of an append-of-origin list must FAIL"
+
+
+def test_guard_passes_a_non_provider_container_and_loop():
+    # A container/loop over NON-provider URLs stays clean — the strengthened
+    # propagation over-approximates only toward the provider config, not every
+    # collection.
+    src = (
+        "async def f(client):\n"
+        "    urls = ['https://search.example/a', 'https://maps.example/b']\n"
+        "    for u in urls:\n"
+        "        await client.post(u, json={})\n"
     )
     assert scan_source(src, False, _HOSTS) == []
