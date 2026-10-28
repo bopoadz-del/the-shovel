@@ -434,11 +434,13 @@ class TestPaymentCertificateDeliver:
 
 class TestGenerateWbsDeliver:
     @pytest.mark.asyncio
-    async def test_building_brief_delivers_tree(self, container):
+    async def test_building_brief_delivers_tree(self, container, monkeypatch):
         """target_count 20 on project_type=building → at least 20 activities,
         a non-empty wbs_tree, and CPM fields on the first activity.
         Empty-input default brief is not used when brief is supplied.
         """
+        from tests import _wbs_fakes
+        _wbs_fakes.install(monkeypatch, min_activities=20)
         result = await container.generate_wbs(
             {"brief": "Two-storey office shell and core."},
             {"target_count": 20, "project_type": "building", "start_date": "2026-01-05"},

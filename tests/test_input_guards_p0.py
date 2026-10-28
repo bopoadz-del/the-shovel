@@ -30,6 +30,8 @@ from app.core import jwt_auth
 from app.core import users as users_store
 from app.main import app
 
+from tests import _wbs_fakes
+
 
 @pytest.fixture
 def client():
@@ -100,7 +102,8 @@ def test_schedule_generate_refuses_an_empty_brief(client, h, body):
     assert r.status_code == 422, r.text
 
 
-def test_schedule_generate_still_works_with_a_real_brief(client, h):
+def test_schedule_generate_still_works_with_a_real_brief(client, h, monkeypatch):
+    _wbs_fakes.install(monkeypatch, min_activities=30)
     r = client.post(
         "/v1/schedule/generate",
         headers=h,

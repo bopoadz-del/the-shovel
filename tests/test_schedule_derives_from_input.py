@@ -172,3 +172,33 @@ async def test_histogram_from_structured_schedule_needs_no_xer(monkeypatch):
     )
     assert hist["status"] == "success", hist
     assert hist.get("periods")
+
+
+@pytest.mark.asyncio
+async def test_two_briefs_give_two_different_derived_wbs_trees(monkeypatch):
+    """ORDERS_28OCT_1415Z ruling (a): the brief path DERIVES its wbs_tree from
+    its own structured activities (grouped by the trade each resolves to), so a
+    brief WBS carries a real hierarchy and two different briefs give two
+    different, non-empty trees — never a template. Each activity's stamped code
+    is a key of its own tree (the chat-outline / xlsx-export contract)."""
+    _patch_llm(monkeypatch, {
+        "tower": [
+            {"name": "Excavate basement", "source_span": "excavate the basement", "duration_days": 10, "predecessors": []},
+            {"name": "Pour raft", "source_span": "pour the raft", "duration_days": 6, "predecessors": ["Excavate basement"]},
+        ],
+        "road": [
+            {"name": "Clear the route", "source_span": "clear the route", "duration_days": 4, "predecessors": []},
+            {"name": "Lay subbase", "source_span": "lay the subbase", "duration_days": 8, "predecessors": ["Clear the route"]},
+        ],
+    })
+    r1 = await _wbs("A tower: excavate the basement then pour the raft.")
+    r2 = await _wbs("A road: clear the route then lay the subbase.")
+    t1, t2 = r1["wbs_tree"], r2["wbs_tree"]
+    assert isinstance(t1, dict) and t1, "a brief WBS must carry a derived tree"
+    assert isinstance(t2, dict) and t2
+    assert t1 != t2, "two different briefs must give two different trees"
+    for r in (r1, r2):
+        tree = r["wbs_tree"]
+        for a in r["activities"]:
+            code = str(a.get("wbs_code") or a.get("wbs") or "")
+            assert code in tree, f"activity code {code!r} is not a wbs_tree key"

@@ -10,6 +10,7 @@ from app.schemas.project_session import ProjectSession
 from app.core.predefined_reasoning import (
     run_workflow, is_deliverable_request,
 )
+from tests import _wbs_fakes
 
 
 def _ctx(message, **kw):
@@ -26,7 +27,8 @@ def test_deliverable_detection():
     assert not is_deliverable_request("what is the critical path")
 
 
-def test_question_answers_inline_no_offer():
+def test_question_answers_inline_no_offer(monkeypatch):
+    _wbs_fakes.install(monkeypatch)
     s = ProjectSession.new("q1")
     out = asyncio.run(run_workflow("generate_wbs", _ctx("how long is procurement on the schedule?"), s))
     assert out["handled"] and out["status"] == "success", out
@@ -36,7 +38,8 @@ def test_question_answers_inline_no_offer():
     assert "download" not in out["answer"].lower()
 
 
-def test_produce_offers_the_render_endpoint():
+def test_produce_offers_the_render_endpoint(monkeypatch):
+    _wbs_fakes.install(monkeypatch)
     s = ProjectSession.new("d1")
     out = asyncio.run(run_workflow(
         "generate_wbs", _ctx("produce the schedule", project_id="proj1"), s))

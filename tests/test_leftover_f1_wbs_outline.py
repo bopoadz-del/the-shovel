@@ -158,8 +158,29 @@ def test_format_wbs_result_renders_tree_codes():
     assert out.index("1.2 Earthworks") < out.index("Template activities:")
 
 
-def test_f1_run_workflow_answer_has_numbered_wbs():
-    """End-to-end predefined path: the live leftover prompt, no LLM."""
+def test_f1_run_workflow_answer_has_numbered_wbs(monkeypatch):
+    """End-to-end predefined path: the live leftover prompt, no LLM.
+
+    The project's BOQ demolition / site-clearance rows are stubbed test-side
+    (input-derived, reflecting the ask — there is no live corpus here) so the
+    BOQ-scope path elects them; the numbered WBS then comes from
+    ``wbs_tree_from_boq_items``, not a template.
+    """
+    from app.containers.construction import ConstructionContainer
+
+    f1_rows = [
+        {"item_key": "D110", "description": "Site clearance by excavation to reduce levels",
+         "quantity": 100, "unit": "m2", "productivity_rate": "50 m2 per gang-day"},
+        {"item_key": "D200", "description": "Demolition of existing structures",
+         "quantity": 60, "unit": "m3", "productivity_rate": "20 m3 per gang-day"},
+        {"item_key": "D290", "description": "Removal of existing trees and obstructions",
+         "quantity": 30, "unit": "nr", "productivity_rate": "15 nr per gang-day"},
+    ]
+    monkeypatch.setattr(
+        ConstructionContainer,
+        "_elect_boq_scope_wbs_items",
+        lambda self, data, p, brief, user_message: [dict(r) for r in f1_rows],
+    )
     ctx = {
         "message": F1_ASK,
         "project_name": "Master Corpus",

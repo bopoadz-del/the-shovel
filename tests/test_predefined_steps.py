@@ -10,16 +10,18 @@ import os
 from app.schemas.execution_plan import ExecutionPlan, PlanStep
 from app.schemas.project_session import ProjectSession
 from app.core.plan_executor import PlanExecutor
+from tests import _wbs_fakes
 
 
 def _run(plan, session):
     return asyncio.run(PlanExecutor().run(plan, session))
 
 
-def test_cost_load_stages_without_materializing():
+def test_cost_load_stages_without_materializing(monkeypatch):
+    _wbs_fakes.install(monkeypatch, min_activities=5)
     s = ProjectSession.new("s1")
     res = _run(ExecutionPlan(steps=[
-        PlanStep(type="build_wbs", args={"project_type": "data_center", "target_count": 60, "start_date": "2026-01-05"}),
+        PlanStep(type="build_wbs", args={"project_type": "data_center", "target_count": 60, "start_date": "2026-01-05", "brief": "Data centre: pour foundations, erect steel, install MEP, fit out."}),
         PlanStep(type="cost_load", args={"project_name": "DC"}),
     ]), s)
     assert res.status == "success", res
@@ -29,10 +31,11 @@ def test_cost_load_stages_without_materializing():
     assert s.artifacts == []                        # but NOT exposed
 
 
-def test_render_artifact_materializes_the_staged_workbook():
+def test_render_artifact_materializes_the_staged_workbook(monkeypatch):
+    _wbs_fakes.install(monkeypatch, min_activities=5)
     s = ProjectSession.new("s2")
     res = _run(ExecutionPlan(steps=[
-        PlanStep(type="build_wbs", args={"project_type": "data_center", "target_count": 60}),
+        PlanStep(type="build_wbs", args={"project_type": "data_center", "target_count": 60, "brief": "Data centre: pour foundations, erect steel, install MEP, fit out."}),
         PlanStep(type="cost_load", args={}),
         PlanStep(type="render_artifact", args={"name": "Schedule.xlsx"}),
     ]), s)

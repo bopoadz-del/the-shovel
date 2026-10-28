@@ -434,6 +434,11 @@ def _estimate_duration_from_rate(quantity: float, rate: str) -> Optional[int]:
         )
         res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
     except Exception:  # noqa: BLE001 — kernel refusal / bad input: no estimate
+        logger.debug(
+            "productivity kernel could not estimate duration (quantity=%r rate=%r); "
+            "returning UNKNOWN",
+            quantity, rate, exc_info=True,
+        )
         return None
     if not isinstance(res, dict):
         return None
@@ -2592,6 +2597,15 @@ class ConstructionScheduleMixin:
                 "project_type_inferred": type_inferred,
                 "activities": [],
             }
+
+        # Brief / typed-programme paths derive their high-level WBS tree from the
+        # structured activities themselves — grouped by the trade each activity
+        # resolves to through the shared categorizer (the same classifier the BOQ
+        # path uses). Input-derived, no template: two briefs give two different
+        # trees. The BOQ path already built its tree above.
+        if not boq_derived:
+            from app.lib.boq_schedule import wbs_tree_from_activities
+            wbs_tree = wbs_tree_from_activities(activities)
 
         # User duration overrides ("use 6 days per slab and re-run") replace
         # template days BEFORE CPM so the recomputed ES/EF/TF match N.

@@ -966,6 +966,11 @@ def _kernel_duration_days(quantity: float, rate: str) -> Optional[int]:
         )
         res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
     except Exception:  # noqa: BLE001 — kernel refusal / bad input: no estimate
+        logger.debug(
+            "productivity kernel could not estimate duration (quantity=%r rate=%r); "
+            "returning UNKNOWN",
+            quantity, rate, exc_info=True,
+        )
         return None
     if not isinstance(res, dict):
         return None
@@ -1025,6 +1030,51 @@ def wbs_tree_from_boq_items(
         name = f"{code} {desc}".strip() if code else desc
         if name:
             tree[f"1.{idx}"] = name
+    return tree
+
+
+def _phase_label_for_category(category: str) -> str:
+    """Human phase heading for a trade category. Uncategorised activities group
+    under a neutral heading rather than naming a trade they do not resolve to."""
+    if category and category != "Other/Uncategorized":
+        return category
+    return "General scope"
+
+
+def wbs_tree_from_activities(
+    activities: Iterable[Dict[str, Any]],
+) -> Dict[str, str]:
+    """High-level WBS tree DERIVED from structured (brief / typed) activities.
+
+    Each activity is classified by its own NAME through the shared pricing
+    categorizer (the same classifier the BOQ path uses); activities are grouped
+    into one phase per trade (first-seen order) with one package per activity.
+    The tree is input-derived — two different briefs yield two different trees —
+    and carries no template packages. Each activity's ``wbs`` / ``wbs_code`` /
+    ``wbs_phase`` is stamped with its hierarchical package code so the chat
+    outline and the xlsx export agree (same contract as the BOQ path)."""
+    phases: List[Tuple[str, List[Dict[str, Any]]]] = []
+    position: Dict[str, int] = {}
+    for act in activities or []:
+        if not isinstance(act, dict):
+            continue
+        name = str(act.get("name") or "").strip()
+        if not name:
+            continue
+        label = _phase_label_for_category(categorize(name))
+        if label not in position:
+            position[label] = len(phases)
+            phases.append((label, []))
+        phases[position[label]][1].append(act)
+    tree: Dict[str, str] = {}
+    for p, (label, acts) in enumerate(phases, start=1):
+        tree[str(p)] = label
+        for q, act in enumerate(acts, start=1):
+            code = f"{p}.{q}"
+            tree[code] = str(act.get("name") or "")[:120]
+            act["wbs"] = code
+            act["wbs_code"] = code
+            act["wbs_phase"] = _slug(label)
     return tree
 
 

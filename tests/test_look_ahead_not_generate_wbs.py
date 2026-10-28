@@ -29,6 +29,7 @@ from app.containers.construction import ConstructionContainer
 from app.core.action_router import best_action, needs_planning
 from app.core.predefined_reasoning import lookup_question_hijack
 from tests.conftest import requires_construction_kit
+from tests import _wbs_fakes
 
 # Collision phrasings that currently let generate_wbs / parse_primavera win:
 # "construction schedule", "master schedule", "project schedule", "programme".
@@ -123,7 +124,8 @@ async def test_generate_wbs_refuses_look_ahead_ask(message):
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_still_builds_real_wbs_brief():
+async def test_generate_wbs_still_builds_real_wbs_brief(monkeypatch):
+    _wbs_fakes.install(monkeypatch)
     result = await ConstructionContainer().generate_wbs(
         {},
         {

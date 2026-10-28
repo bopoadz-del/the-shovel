@@ -25,6 +25,7 @@ import app.containers.construction.schedule as schedule_mod
 import app.lib.pm_computations as pm
 from app.agents.runtime import _graft_composed_delay_damages_daily
 from app.lib import construction_formulas_commercial as cc
+from tests import _wbs_fakes
 
 SECTION_ASK = "What are the delay damages in SAR per calendar day for a section?"
 MILESTONE_ASK = (
@@ -217,6 +218,7 @@ def test_generate_wbs_uses_a_stated_today_when_start_date_is_absent(monkeypatch)
     from app.containers.construction import ConstructionContainer
 
     _freeze(monkeypatch, date(2026, 9, 27))
+    _wbs_fakes.install(monkeypatch)
     out = asyncio.run(ConstructionContainer().generate_wbs({}, {
         "brief": "Small office fit-out.",
         "user_message": "Today is 21 September 2026. Build a WBS for this office.",
@@ -226,10 +228,11 @@ def test_generate_wbs_uses_a_stated_today_when_start_date_is_absent(monkeypatch)
     assert out["start_date"] == "2026-09-21"
 
 
-def test_generate_wbs_keeps_an_explicit_start_date():
+def test_generate_wbs_keeps_an_explicit_start_date(monkeypatch):
     """A caller-supplied start_date is not replaced by a stated today."""
     from app.containers.construction import ConstructionContainer
 
+    _wbs_fakes.install(monkeypatch)
     out = asyncio.run(ConstructionContainer().generate_wbs({}, {
         "brief": "Small office fit-out.",
         "user_message": "Today is 21 September 2026. Build a WBS for this office.",

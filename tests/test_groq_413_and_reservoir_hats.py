@@ -53,6 +53,7 @@ from app.agents.runtime import (
     _text_needs_tool_recovery,
 )
 from tests.conftest import requires_construction_kit
+from tests import _wbs_fakes
 
 M1 = (
     "From Annexure 2 - Baseline Program XER.xer and Contract Data, build a WBS "
@@ -669,9 +670,10 @@ async def test_ipc_parses_accepted_contract_amount_m7():
 
 
 @pytest.mark.asyncio
-async def test_wbs_keeps_operator_milestones_m1():
+async def test_wbs_keeps_operator_milestones_m1(monkeypatch):
     from app.containers.construction import ConstructionContainer
 
+    _wbs_fakes.install(monkeypatch)
     out = await ConstructionContainer().generate_wbs(
         {}, {"brief": M1, "target_count": 20},
     )
@@ -937,7 +939,9 @@ async def test_rfi_generator_drafts_follow_on_from_operator_text():
 
 @requires_construction_kit
 @pytest.mark.asyncio
-async def test_remaining_uses_operator_text_not_polluted_last_bubble():
+async def test_remaining_uses_operator_text_not_polluted_last_bubble(monkeypatch):
+    _wbs_fakes.install(monkeypatch)
+
     class _A:
         allowed_blocks = ["construction"]
         name = "construction-pm"

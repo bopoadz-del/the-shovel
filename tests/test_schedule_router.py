@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from tests._dev_key import DEV_KEY
+from tests import _wbs_fakes
 
 H = {"Authorization": "Bearer " + DEV_KEY}
 
@@ -68,7 +69,8 @@ def test_schedule_fasttrack_endpoint(client):
     assert data["scenarios"]
 
 
-def test_schedule_generate_endpoint(client):
+def test_schedule_generate_endpoint(client, monkeypatch):
+    _wbs_fakes.install(monkeypatch, min_activities=30)
     payload = {"brief": "small office building", "target_count": 30, "project_type": "building"}
     r = client.post("/v1/schedule/generate", json=payload, headers=H)
     assert r.status_code == 200, r.text
