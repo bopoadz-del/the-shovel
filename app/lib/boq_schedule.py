@@ -784,7 +784,6 @@ def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
             documents_matching_filename_terms,
             documents_matching_title_phrase,
         )
-        from app.core.rag.retriever import document_is_a_bill_of_quantities
     except Exception as exc:  # noqa: BLE001
         logger.warning("BOQ-scope WBS document listing unavailable: %s", exc)
         return []
@@ -793,11 +792,12 @@ def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
     seen: set[str] = set()
 
     def _add(doc: Dict[str, str]) -> None:
+        # Election is STRUCTURAL (rework-2 #3): a listed candidate is NOT
+        # dropped for its name — the measured-row gate downstream decides, so a
+        # bill named e.g. "foundations.xlsx" whose rows elect is found. The
+        # filename/title listings only seed candidates; they never gate.
         doc_id = str((doc or {}).get("id") or "").strip()
         if not doc_id or doc_id in seen:
-            return
-        name = str(doc.get("original_name") or doc.get("file_path") or "")
-        if not document_is_a_bill_of_quantities(name):
             return
         seen.add(doc_id)
         found.append({
@@ -816,7 +816,7 @@ def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
         for doc in documents_matching_filename_terms(
             project_id,
             list(_BOQ_SCOPE_FILENAME_TERMS),
-            min_terms=2,
+            min_terms=1,
             require_letter=False,
             limit=8,
         ):
@@ -877,7 +877,7 @@ def _items_from_named_boq_docs(project_id: str) -> List[Dict[str, Any]]:
             for text in texts or []:
                 collected.extend(
                     _items_from_chunk_text(
-                        text or "", filename, require_measured_gate=False,
+                        text or "", filename, require_measured_gate=True,
                     )
                 )
         if collected:
@@ -900,7 +900,7 @@ def _items_from_named_boq_docs(project_id: str) -> List[Dict[str, Any]]:
             _items_from_chunk_text(
                 getattr(chunk, "text", "") or "",
                 filename,
-                require_measured_gate=False,
+                require_measured_gate=True,
             )
         )
     return collected
@@ -957,10 +957,11 @@ def boq_row_trade_category(item: Dict[str, Any]) -> str:
 
 
 def boq_scope_phase(scoped: Iterable[Dict[str, Any]]) -> str:
-    """Phase heading DERIVED from the elected rows' own trades: the single
-    trade when the bill is one trade, else ``Mixed scope``. Never a hardwired
-    demolition name — a concrete bill reads ``Concrete``, a paving bill
-    ``Roads/Paving``."""
+    """Phase heading DERIVED from the elected rows' own trades: one trade names
+    itself (``Concrete``); two or three trades are named together
+    (``Concrete + Reinforcement``); only beyond three trades does it collapse to
+    ``Mixed scope`` (rework 2 #6). Two different bills give two different
+    headings — never a hardwired demolition name."""
     cats: List[str] = []
     for item in scoped or []:
         c = boq_row_trade_category(item)
@@ -968,8 +969,8 @@ def boq_scope_phase(scoped: Iterable[Dict[str, Any]]) -> str:
             cats.append(c)
     if not cats:
         return "Scope"
-    if len(cats) == 1:
-        return cats[0]
+    if len(cats) <= 3:
+        return " + ".join(cats)
     return "Mixed scope"
 
 

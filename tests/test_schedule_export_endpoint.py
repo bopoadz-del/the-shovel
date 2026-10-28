@@ -153,6 +153,44 @@ def test_schedule_from_brief_no_input_is_computed_400(client):
     assert "brief" in body and "boq" in body and "conversation" in body
 
 
+def test_schedule_from_document_structures_the_document_text(client, tmp_path, monkeypatch):
+    """rework-2 #4: the document TEXT itself is STRUCTURED into activities (not
+    only lead times) — the structurer receives the doc text, so an activity the
+    document names appears in the schedule. Reverting the doc_text merge would
+    starve the structurer and this activity would vanish."""
+    from docx import Document
+    from app.core import projects as store
+    from app.core import llm_client
+
+    async def fake(system, user, **k):
+        if "excavate the basement" in (user or "").lower():
+            return {"activities": [
+                {"name": "Excavate basement", "source_span": "excavate the basement",
+                 "duration_days": 8, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    pid = _pid(client)
+    doc_path = tmp_path / "scope.docx"
+    d = Document()
+    d.add_paragraph("Scope of works.")
+    d.add_paragraph("First excavate the basement, then pour the raft.")
+    d.save(str(doc_path))
+    did = store.add_document(pid, "scope.docx", doc_path.name, str(doc_path))["id"]
+
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-document",
+        json={"document_ids": [did], "target_count": 40, "start_date": "2026-01-05"},
+        headers=H,
+    )
+    assert r.status_code == 200, r.text
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    txt = "\n".join(str(c.value) for row in wb["L2 Schedule"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "Excavate basement" in txt
+
+
 def test_schedule_from_document_injects_extracted_lead_times(client, tmp_path):
     """A BOD/RFP with real equipment lead times drives long-lead procurement +
     target milestones in the workbook (the document_engine -> schedule wiring)."""

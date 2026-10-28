@@ -228,6 +228,27 @@ async def test_boq_stated_rate_duration_is_the_kernel_value_not_a_constant():
     assert durs["E20"] == 6     # 300 / 50
 
 
+@pytest.mark.asyncio
+async def test_boq_injected_cited_norm_duration_is_the_kernel_value(monkeypatch):
+    """rework-2 #5b: on the BOQ path, a row with a quantity and NO stated rate
+    takes the injected CITED norm's rate through the kernel to an exact value
+    (and only when the row unit matches the norm unit)."""
+    from app.lib import productivity_norms
+    monkeypatch.setattr(productivity_norms, "_NORMS", [
+        {"keywords": ["concrete"], "rate": "40 m3 per gang-day", "unit": "m3",
+         "citation": "TEST ONLY — Example Norms, 1st ed., tbl 2 (not shipped)"},
+    ])
+    r = await ConstructionContainer().generate_wbs(
+        {"brief": "WBS from the BOQ scope", "boq_items": [
+            {"item_key": "E10", "description": "Concrete to foundations", "quantity": 120, "unit": "m3"},
+        ]},
+        {"target_count": 40},
+    )
+    a = next(x for x in r["activities"] if x.get("boq"))
+    assert a["duration_days"] == 3          # 120 / 40, from the injected cited norm
+    assert "norm" in a["duration_basis"]
+
+
 def test_boq_wbs_answer_grounded_is_trade_neutral():
     """Rework 2: the product-path grounding check accepts a BOQ-scope WBS of
     ANY trade (concrete, roads), not only demolition; refuse / template /
@@ -460,6 +481,35 @@ def _install_boq_pool(monkeypatch, *, texts=None, alias_source=None):
         lambda did: DD23_BOQ_NAME if did == "boq1" else DD22_COC_NAME,
     )
     return seen_store
+
+
+def test_boq_found_by_structural_rows_not_filename(monkeypatch):
+    """rework-2 #3: a bill whose NAME is not bill-ish (foundations.xlsx) is
+    still found — election is by the measured rows, not the filename gate."""
+    from app.lib import boq_schedule as bs
+
+    NAME = "foundations.xlsx"
+    rows_text = (
+        "E10 Reinforced concrete to foundations 120 m3\n"
+        "E20 Mass concrete fill 55 m3\n"
+    )
+    doc = {"id": "f1", "original_name": NAME, "file_path": f"/docs/{NAME}"}
+
+    class _Store:
+        def doc_chunk_texts(self, project_id, doc_ids):
+            return {did: [rows_text] for did in (doc_ids or [])}
+
+    monkeypatch.setattr("app.core.projects.documents_matching_title_phrase",
+                        lambda *a, **k: [doc])
+    monkeypatch.setattr("app.core.projects.documents_matching_filename_terms",
+                        lambda *a, **k: [doc])
+    monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: pid)
+    monkeypatch.setattr("app.core.rag.vector_store.get_store", lambda **_k: _Store())
+    monkeypatch.setattr("app.core.rag.retriever.retrieve_with_filter", lambda *a, **k: ([], 0))
+
+    items = bs.retrieve_boq_scope_items("Generate a WBS for the project BOQ scope", "p1")
+    codes = {i.get("item_key") for i in items}
+    assert "E10" in codes and "E20" in codes
 
 
 def test_retrieve_boq_scope_items_parses_named_bill(monkeypatch):

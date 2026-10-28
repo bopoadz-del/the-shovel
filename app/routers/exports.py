@@ -1005,15 +1005,18 @@ async def export_schedule_from_document(
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
     from app.lib.pm_excel import generate_cost_loaded_schedule
 
-    # The document TEXT is structured into activities the same way a brief is
-    # (#3) — not a synthesized "Schedule from N documents" placeholder. A
-    # request brief, when given, leads; the real document text is the fallback
-    # structuring input; the synthesized string is only a last resort. The
-    # long-lead procurement feed is injected on top regardless.
+    # Brief AND the attached documents' TEXT are BOTH structured into
+    # activities (rework-2 #4), merged under source tags so the single egress
+    # structures each. There is no synthesized "Schedule from N documents"
+    # placeholder — only real input text reaches the structurer. The long-lead
+    # procurement feed is injected on top regardless.
     doc_text = extract_documents_text(req.document_ids)
-    structuring_brief = (
-        req.brief or doc_text or f"Schedule from {len(req.document_ids)} source document(s)"
-    )
+    structuring_parts = []
+    if (req.brief or "").strip():
+        structuring_parts.append("[brief]\n" + req.brief.strip())
+    if doc_text:
+        structuring_parts.append("[documents]\n" + doc_text)
+    structuring_brief = "\n\n".join(structuring_parts)
 
     wbs = await ConstructionContainer().generate_wbs({}, {
         "brief": structuring_brief,
