@@ -70,6 +70,14 @@ def _const_str(node):
 # A provider-URL constant by name: DEEPSEEK_API_URL, rt.OPENROUTER_BASE_URL, …
 _LLM_URL_CONST_RE = re.compile(r"_(API|BASE)_URL$")
 
+# Builtins that wrap an iterable without changing what it carries: iterating
+# `enumerate(cfgs)` / `zip(cfgs, keys)` / `list(cfgs)` still yields the LLM
+# config, so the wrapper is origin iff one of its iterable args is. This is
+# what carries the origin through `for i, (cfg, key, model) in enumerate(...)`.
+_ITER_WRAPPERS = frozenset(
+    {"enumerate", "reversed", "iter", "list", "tuple", "set", "frozenset", "sorted", "zip"}
+)
+
 
 def _expr_is_llm_origin(node, origin, hosts) -> bool:
     """Whether an expression originates from the LLM provider config.
@@ -115,6 +123,11 @@ def _expr_is_llm_origin(node, origin, hosts) -> bool:
             return True
         if isinstance(f, ast.Attribute) and f.attr == "_llm_config":
             return True
+        # An iterable wrapper (enumerate/zip/list/…) is origin iff one of its
+        # iterable args is — so a `for i, (cfg, …) in enumerate(cfgs)` binds
+        # cfg as origin when cfgs is.
+        if isinstance(f, ast.Name) and f.id in _ITER_WRAPPERS:
+            return any(_expr_is_llm_origin(a, origin, hosts) for a in node.args)
         if isinstance(f, ast.Attribute) and f.attr == "get" and node.args \
                 and _const_str(node.args[0]) == "url":   # <llm-cfg>.get("url")
             return _expr_is_llm_origin(f.value, origin, hosts)
@@ -339,6 +352,21 @@ def test_guard_flags_os_getenv_with_a_provider_url_default():
         "    return await client.post(url, json={})\n"
     )
     assert scan_source(src, False, _HOSTS), "a provider-URL getenv default must FAIL"
+
+
+def test_guard_flags_enumerate_for_loop_tuple_unpack_of_the_config():
+    # The agents/core/llm.py shape: attempts is a list of (cfg, key, model)
+    # tuples; `for i, (a_cfg, a_key, a_model) in enumerate(attempts)` binds
+    # a_cfg as origin through the enumerate() wrapper and the nested unpack,
+    # so a raw client.post(a_cfg["url"]) in the loop body FAILS.
+    src = (
+        "async def f(client):\n"
+        "    cfg = _llm_config()\n"
+        "    attempts = [(cfg, 'k', 'm')]\n"
+        "    for i, (a_cfg, a_key, a_model) in enumerate(attempts):\n"
+        "        await client.post(a_cfg['url'], json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "enumerate for-loop tuple-unpack origin must FAIL"
 
 
 def test_guard_flags_a_for_loop_over_an_origin_collection():
