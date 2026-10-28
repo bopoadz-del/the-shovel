@@ -5356,13 +5356,12 @@ def _graft_composed_concrete_volume(
     text: str,
     messages: list[dict[str, Any]] | None,
 ) -> str:
-    """Leftover E4: write 945 m³ when the model hung on validate.
+    """Compose the with-waste concrete/raft volume from the ask.
 
-    Live FAIL: construction-pm streamed "Let me validate…" after (or
-    instead of) ``construction_calc`` and never composed the with-waste
-    volume. Numbers are in the question; compose from the existing
-    calculator. Kill-switch ``COMPOSE_CONCRETE_VOLUME=0`` restores the
-    hang. Delay-damages and other non-concrete-volume asks pass
+    When the model streamed a validate preamble (or ran ``construction_calc``
+    but never composed the with-waste volume), compose it from the question's
+    dimensions and the existing calculator. Delay-damages and other
+    non-concrete-volume asks pass
     through.
     """
     try:
@@ -5428,12 +5427,12 @@ def _graft_composed_user_priced_takeoff(
     text: str,
     messages: list[dict[str, Any]] | None,
 ) -> str:
-    """Cost gate: volume × user rate after 0-token force_synthesis.
+    """Compose a priced take-off (quantity × a user-supplied rate).
 
-    Live FAIL: construction_calc succeeded, synthesis emitted nothing, and
-    volume-only recover (one footing, or 14× without the rate) shipped a
-    silent / incomplete bubble. Numbers are in the question; do not invent
-    a rate. Kill-switch ``COMPOSE_USER_PRICED_TAKEOFF=0`` restores the FAIL.
+    When ``construction_calc`` succeeded but synthesis emitted nothing and the
+    recovery shipped a volume-only or incomplete bubble, compose the priced
+    total from the question's quantity and the user-supplied rate. The rate is
+    never invented; an ask with no rate passes through.
     """
     try:
         from app.lib.construction_formulas_commercial import (
@@ -6878,10 +6877,9 @@ def _graft_hypothetical_milestone_arithmetic(
 ) -> str:
     """Lead with user-supplied milestone arithmetic, not a premise veto.
 
-    Live ~27d6940 rejected user-stated milestone durations (397d, 487d,
-    731d, same start) from
-    Contract Data access dates. The numbers in the question are the
-    operands. Kill-switch ``HYPOTHETICAL_MILESTONE_ARITHMETIC=0``.
+    When the model rejected user-stated milestone durations (from the
+    Contract Data access dates), the numbers in the question are the
+    operands and the arithmetic is composed from them.
     """
     try:
         from app.core.hypothetical_milestone_arithmetic import (
@@ -8259,10 +8257,10 @@ def _graft_computed_slab_thickness(
 ) -> str:
     """Replace a corpus refusal with the slab_thickness_min result.
 
-    Live minimum-slab-thickness asks: the model cited the named-standard guard and never
-    called the calculator, including turns that named slab_thickness_min
-    and offered to run it. The figure is computed. Provenance is the
-    calculator's standard field.
+    On a minimum-slab-thickness ask the model sometimes cited the
+    named-standard guard and never called the calculator (including turns
+    that named slab_thickness_min and offered to run it). The figure is
+    computed; provenance is the calculator's standard field.
     """
     user = _latest_operator_ask(messages)
     if not user:
@@ -8600,6 +8598,56 @@ def _scrub_registry_ids(text: str) -> str:
         return text
 
 
+# ── Answer composers ──────────────────────────────────────────────────────
+# Ordered question-type rules that replace the former per-case graft cascade.
+# Each entry is (question_type, apply), where apply(text, messages, rag_sys_msg,
+# project_id, extra_project_ids) returns the (possibly composed) answer. The
+# question type is detected structurally from the ask + the kernel/tool payload
+# (the looks_like_*_ask / compose_*_from_* helpers in app.lib); no entry names a
+# probe case. Order is preserved from the original cascade; the two lists bracket
+# the grounding gates (pre-gate composers run before _cost_grounding_gate /
+# _calc_figure_grounding_gate, post-gate ones after).
+_PRE_GATE_ANSWER_COMPOSERS: list[tuple[str, Any]] = [
+    ("complete_calc", lambda t, m, r, p, e: _graft_complete_calc_answer(t, m)),
+    ("boq_scope_wbs", lambda t, m, r, p, e: _graft_boq_scope_wbs_if_wrong_contract(t, m)),
+    ("operator_claim_facts", lambda t, m, r, p, e: _graft_operator_claim_facts(t, _operator_user_text(m))),
+    ("concrete_volume", lambda t, m, r, p, e: _graft_composed_concrete_volume(t, m)),
+    ("user_priced_takeoff", lambda t, m, r, p, e: _graft_composed_user_priced_takeoff(t, m)),
+    ("stated_total_follow_up", lambda t, m, r, p, e: _graft_stated_total_follow_up(t, m)),
+    ("milestone_arithmetic", lambda t, m, r, p, e: _graft_hypothetical_milestone_arithmetic(t, m)),
+    ("delay_damages_daily", lambda t, m, r, p, e: _graft_composed_delay_damages_daily(t, r, m, project_id=p, extra_project_ids=e)),
+    ("delay_damages_over_period", lambda t, m, r, p, e: _graft_composed_delay_damages_over_period(t, r, m, project_id=p, extra_project_ids=e)),
+    ("asked_contract_particular", lambda t, m, r, p, e: _graft_asked_contract_particular(t, r, m, project_id=p, extra_project_ids=e or None)),
+    ("percentage_of_aca", lambda t, m, r, p, e: _graft_composed_percentage_of_aca(t, r, m, project_id=p, extra_project_ids=e)),
+    ("priced_boq_item", lambda t, m, r, p, e: _graft_priced_boq_item(t, r, m)),
+    ("part_summary_total", lambda t, m, r, p, e: _graft_part_summary_total(t, r, m)),
+    ("combined_part_summary_total", lambda t, m, r, p, e: _graft_combined_part_summary_total(t, r, m)),
+    ("named_community_tfc_span", lambda t, m, r, p, e: _graft_named_community_tfc_span(t, r, m, project_id=p, extra_project_ids=e)),
+    ("rate_only_item", lambda t, m, r, p, e: _graft_rate_only_item(t, r, m)),
+    ("honest_contract_refusal", lambda t, m, r, p, e: _graft_honest_contract_refusal(t, r, m)),
+    ("deterministic_cost", lambda t, m, r, p, e: _graft_deterministic_cost_calc(t, m)),
+    ("supplied_input_calculation", lambda t, m, r, p, e: _graft_supplied_input_calculation(t, m, r)),
+]
+_POST_GATE_ANSWER_COMPOSERS: list[tuple[str, Any]] = [
+    ("computed_slab_thickness", lambda t, m, r, p, e: _graft_computed_slab_thickness(t, m)),
+    ("named_standard_attribution", lambda t, m, r, p, e: _graft_named_standard_attribution(t, r, m)),
+]
+
+
+def _run_answer_composers(
+    text: str,
+    composers: list[tuple[str, Any]],
+    messages: list[dict[str, Any]] | None,
+    rag_sys_msg: dict[str, Any] | None,
+    project_id: str | None,
+    extra_project_ids: list[str] | None,
+) -> str:
+    """Apply each question-type composer in order (replaces the graft cascade)."""
+    for _question_type, apply in composers:
+        text = apply(text, messages, rag_sys_msg, project_id, extra_project_ids)
+    return text
+
+
 @_turn_timing_stage("postprocess")
 def _postprocess_answer(
     text: str,
@@ -8628,81 +8676,14 @@ def _postprocess_answer(
     # ship "Tool result exceeded … char_offset=" to the operator.
     if _looks_like_tool_truncation_notice(text):
         text = ""
-    # Empty / incomplete construction_calc: a formula-name note or a
-    # 1 m rebar demo is not a complete answer. Graft the computed ask.
-    text = _graft_complete_calc_answer(text, messages)
-    # Leftover F1: refuse + AB-2022 CoC cite is FAIL. If generate_wbs
-    # already produced a BOQ-derived tree, that draft is the answer.
-    text = _graft_boq_scope_wbs_if_wrong_contract(text, messages)
-    text = _graft_operator_claim_facts(text, _operator_user_text(messages))
-    # Leftover E4: compose raft volume + documented waste when the model
-    # hung on "Let me validate…" and never wrote 945 m³.
-    text = _graft_composed_concrete_volume(text, messages)
-    # Cost gate: calc succeeded, force_synthesis emitted 0 tokens.
-    # Volume-only recover is not a priced take-off — compose from the ask.
-    text = _graft_composed_user_priced_takeoff(text, messages)
-    # "Add a waste allowance and price the total" continues from the prior
-    # count (24 caps / 180 m³), not from one element the tool just recomputed.
-    text = _graft_stated_total_follow_up(text, messages)
-    # Live ~27d6940: user-supplied M#=Nd + common start is arithmetic.
-    text = _graft_hypothetical_milestone_arithmetic(text, messages)
-    # Delay-damages daily-amount ask: compose rate × ACA into SAR/day from retrieved client
-    # text before the cost gate. A percentage-only excerpt still cannot
-    # invent a daily figure; both operands must be in the excerpts or
-    # the loaded CD volume (last-chance after refuse-prone top-k).
+    # Answer composers (question-type → kernel/excerpt composition), pre-gate.
+    # project_id + extra_project_ids are resolved once here for the commercial
+    # composers (delay-damages / contract-particular), which read the loaded
+    # Contract Data volume as a last chance after refuse-prone top-k.
     pid, extra_pids = _audit_project_ids_for_daily_damages(project_id, audit_rec)
-    text = _graft_composed_delay_damages_daily(
-        text, rag_sys_msg, messages, project_id=pid,
-        extra_project_ids=extra_pids,
+    text = _run_answer_composers(
+        text, _PRE_GATE_ANSWER_COMPOSERS, messages, rag_sys_msg, pid, extra_pids,
     )
-    # A delay of N days (combined milestones) is a money
-    # answer. Runs after the daily composer so a period ask is not
-    # left on SAR/day or on the unbound 0% of 0 note.
-    text = _graft_composed_delay_damages_over_period(
-        text, rag_sys_msg, messages, project_id=pid,
-        extra_project_ids=extra_pids,
-    )
-    # The model answered delay damages for an including-VAT ACA ask, or
-    # said a TfC / Engineer particular was absent. Graft the asked row from excerpts only.
-    text = _graft_asked_contract_particular(
-        text, rag_sys_msg, messages, project_id=pid,
-        extra_project_ids=extra_pids or None,
-    )
-    # Named percentage × ACA when the ask wants SAR, not
-    # the percentage-only particular.
-    text = _graft_composed_percentage_of_aca(
-        text, rag_sys_msg, messages, project_id=pid,
-        extra_project_ids=extra_pids,
-    )
-    # Priced BOQ row first: a priced CESMM row beats Rate Only / Excluded
-    # siblings. The Rate Only graft runs after so it cannot overwrite 280,320.
-    text = _graft_priced_boq_item(text, rag_sys_msg, messages)
-    # BOQ page Part Summary total (no CESMM code).
-    text = _graft_part_summary_total(text, rag_sys_msg, messages)
-    # Combined printed page totals (d/3/1+d/3/2+d/3/3).
-    # A one-page total stays on the graft above.
-    text = _graft_combined_part_summary_total(text, rag_sys_msg, messages)
-    # Set3 F1: longest/shortest Time for Completion among a named
-    # community's milestones (Northern Community 547 / 150).
-    text = _graft_named_community_tfc_span(
-        text, rag_sys_msg, messages, project_id=pid,
-        extra_project_ids=extra_pids,
-    )
-    # Rate Only BOQ item ask: state Rate Only when the retrieved BOQ row already
-    # says so and no priced triple exists. The live FAIL greeted
-    # ("I'm ready to help…") and never named D529.3 / Rate Only.
-    text = _graft_rate_only_item(text, rag_sys_msg, messages)
-    # PCG / commencement asks: Contract Data "not required" / empty commencement
-    # over Schedule 8 form % and commencement-pack dates.
-    text = _graft_honest_contract_refusal(text, rag_sys_msg, messages)
-    # Default-rate cost build-up: the calculator result is the total.
-    # A project-document figure and the no-rate refusal are not.
-    text = _graft_deterministic_cost_calc(text, messages)
-    # User-supplied operands that complete a registered formula: the
-    # calculator's result is the answer, recorded as a tool run so the
-    # credit path can name it. Runs before the cost gate so that result
-    # is what the gate sees.
-    text = _graft_supplied_input_calculation(text, messages, rag_sys_msg)
     gated = text
     text = _cost_grounding_gate(text, rag_sys_msg, messages)
     text = _calc_figure_grounding_gate(text, messages)
@@ -8729,8 +8710,9 @@ def _postprocess_answer(
     # Computed slab thickness is not a retrieved claim. Replace a guard
     # refusal (or an offer to run slab_thickness_min that never calls it)
     # before the attribution graft, which must leave the calculator line.
-    text = _graft_computed_slab_thickness(text, messages)
-    text = _graft_named_standard_attribution(text, rag_sys_msg, messages)
+    text = _run_answer_composers(
+        text, _POST_GATE_ANSWER_COMPOSERS, messages, rag_sys_msg, pid, extra_pids,
+    )
     # Another project's documents never reach this answer (retrieval is
     # scoped to the project plus the shared layer, and the shared layer was
     # cleaned at source). The PARTIES
@@ -12646,9 +12628,10 @@ def _graft_complete_calc_answer(
 ) -> str:
     """Replace formula-only / 1 m-demo calc answers with the computed ask.
 
-    Live A2-1: duration note without SAR cost. Live A2-2: Y16 1 m demo
-    instead of metres run for 12 t. Numbers come from the operator ask
-    and/or the last successful construction_calc payload.
+    A productivity-cost ask that got a duration note without the cost, or a
+    rebar-metres-run ask that got a 1 m demo instead of the run for the stated
+    tonnage, is recomposed. Numbers come from the operator ask and/or the last
+    successful construction_calc payload.
     """
     user = _latest_operator_ask(messages)
     if not user:

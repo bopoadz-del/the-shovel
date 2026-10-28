@@ -162,19 +162,17 @@ def test_unwrap_hostile_envelope_still_composes_from_the_ask():
     _assert_priced(out)
 
 
-def test_successful_calc_plus_truly_empty_never_ships_blank(monkeypatch):
-    """Last-chance: if compose is off, emit a cut-off sentence, not ''."""
-    monkeypatch.setenv("COMPOSE_USER_PRICED_TAKEOFF", "0")
-    monkeypatch.setenv("COMPOSE_CONCRETE_VOLUME", "0")
-    msgs = _msgs(payload=_volume_ok(volume=WASTE_VOL, net=NET))
-    # Recovery may still write a volume line; strip that path by using
-    # an envelope with no formatable volume and empty synthesis.
+def test_successful_calc_plus_truly_empty_never_ships_blank():
+    """Last-chance: a success-but-empty calc with a non-composable ask still
+    emits a cut-off sentence, not ''."""
+    # A non-calc ask matches no answer composer, and the envelope carries no
+    # formatable volume, so nothing composes and synthesis stays empty.
     hostile = {
         "status": "success",
         "calculation": "concrete_volume",
         "result": {"ok": True},
     }
-    msgs = _msgs(payload=hostile)
+    msgs = _msgs(ask="Please give me a short project status update.", payload=hostile)
     out = _postprocess_answer("", None, msgs)
     assert out.strip()
     assert "22912" not in out.replace(",", "")
