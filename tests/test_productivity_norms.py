@@ -1,19 +1,16 @@
-"""S-1b (ORDERS_28OCT_0900Z): generic, sourced productivity norms.
+"""S-1b (ruling ORDERS_28OCT_1045Z): the productivity-norm table is sourced
+kernel DATA. A row stays only with a REAL citation + unit; no verifiable
+published figures are shipped in code, so the table is EMPTY and the schedule
+path yields UNKNOWN until sourced rows exist.
 
-When a brief states a *quantity* for an activity but no productivity *rate*,
-the schedule estimator consults a GENERIC per-trade norm table so the activity
-gets a kernel-computed duration instead of UNKNOWN. The norm figures are
-generic planning values (no client/project data), each sourced, and a rate
-stated in the brief always wins over a norm.
-
-These pins (complete_json monkeypatched, construction kernel live):
-  * two quantities of one trade -> two input-derived durations (the norm is a
-    rate, not a canned answer);
-  * mutate the norm rate -> the duration moves (kernel-detection);
-  * a STATED rate is used and the norm is NOT consulted;
-  * a trade the table does not cover -> UNKNOWN (never a default);
-  * the derived duration is labelled with the norm source;
-  * every norm row is generic + sourced.
+These pin the ruling and the mechanism (the mechanism is exercised with an
+injected, clearly-labelled TEST row — never a shipped one):
+  * every shipped row (if any) is cited + united; the table may be empty;
+  * no matching cited row -> norm_rate_for None -> duration UNKNOWN;
+  * an uncited row never applies even if present;
+  * a cited, unit-matching row -> kernel duration; two quantities -> two
+    durations; mutating the rate moves the duration (kernel-detection);
+  * a unit mismatch -> UNKNOWN; a stated rate wins; word-boundary matching.
 """
 from __future__ import annotations
 
@@ -23,6 +20,15 @@ from app.containers.construction import ConstructionContainer
 from app.core import llm_client
 from app.lib import productivity_norms
 from app.lib.productivity_norms import norm_rate_for
+
+# A cited, united row injected ONLY to exercise the mechanism. It is explicitly
+# marked not-shipped; it never lives in app/lib/productivity_norms.py._NORMS.
+_TEST_ROW = {
+    "keywords": ["excavation", "excavate"],
+    "rate": "200 m3 per gang-day",
+    "unit": "m3",
+    "citation": "TEST ONLY — Example Norms, 1st ed., tbl 1 (not shipped)",
+}
 
 
 def _patch_llm(monkeypatch, mapping):
@@ -40,113 +46,101 @@ async def _wbs(brief):
 
 
 def _act(result, name):
-    for a in result.get("activities", []):
-        if a["name"] == name:
-            return a
-    for a in result.get("unscheduled_activities", []) or []:
-        if a["name"] == name:
+    for a in result.get("activities") or []:
+        if isinstance(a, dict) and a.get("name") == name:
             return a
     return None
 
 
-# ---- the norm lookup itself ------------------------------------------------
+# ---- the ruling -----------------------------------------------------------
 
-def test_norm_rate_for_matches_generic_trades_and_is_sourced():
-    exc = norm_rate_for("Bulk excavation to reduced level")
-    assert exc is not None
-    assert "per gang-day" in exc["rate"]
-    assert exc["source"]
-    assert norm_rate_for("General site clearance")["rate"] == "500 m2 per gang-day"
-    # An uncovered / bespoke trade has no generic norm.
-    assert norm_rate_for("Install the proprietary widget assembly") is None
+def test_every_shipped_row_is_cited_and_united():
+    for row in productivity_norms._NORMS:
+        assert str(row.get("citation") or "").strip(), "a shipped norm row must cite a real source"
+        assert str(row.get("unit") or "").strip(), "a shipped norm row must carry its unit"
+
+
+def test_empty_shipped_table_resolves_to_none():
+    assert norm_rate_for("Bulk excavation", "m3") is None
+    assert norm_rate_for("General site clearance", "m2") is None
     assert norm_rate_for("") is None
 
 
-def test_every_norm_row_is_generic_and_sourced():
-    for row in productivity_norms._NORMS:
-        assert row["keywords"] and all(isinstance(k, str) and k for k in row["keywords"])
-        assert "per gang-day" in str(row["rate"])
-        assert str(row["source"]).strip()
-        # generic: the source declares it is not project-specific
-        assert "not project-specific" in str(row["source"]).lower()
+def test_uncited_row_never_applies(monkeypatch):
+    monkeypatch.setattr(productivity_norms, "_NORMS", [
+        {"keywords": ["excavation"], "rate": "200 m3 per gang-day", "unit": "m3", "citation": ""},
+    ])
+    assert norm_rate_for("excavation", "m3") is None
 
 
-# ---- integration through generate_wbs --------------------------------------
+# ---- the mechanism, exercised with an injected cited row ------------------
+
+def test_cited_row_matches_word_boundary_and_unit(monkeypatch):
+    monkeypatch.setattr(productivity_norms, "_NORMS", [_TEST_ROW])
+    got = norm_rate_for("Bulk excavation to reduced level", "m3")
+    assert got and got["rate"] == "200 m3 per gang-day" and got["unit"] == "m3"
+    assert "TEST ONLY" in got["source"]
+    assert norm_rate_for("Bulk excavation", "m2") is None          # unit mismatch
+    assert norm_rate_for("preexcavateway survey", "m3") is None    # word boundary
+
 
 @pytest.mark.asyncio
-async def test_two_quantities_one_trade_give_two_input_derived_durations(monkeypatch):
+async def test_no_matching_norm_quantity_without_rate_is_unknown(monkeypatch):
+    _patch_llm(monkeypatch, {
+        "job": [{"name": "Bulk excavation", "source_span": "excavation", "quantity": 400, "unit": "m3"}],
+    })
+    r = await _wbs("The job: 400 m3 of excavation.")  # empty shipped table
+    a = _act(r, "Bulk excavation")
+    assert a is not None and a["duration_days"] is None
+    assert r.get("schedule_incomplete") is True
+
+
+@pytest.mark.asyncio
+async def test_injected_cited_norm_two_quantities_two_durations(monkeypatch):
+    monkeypatch.setattr(productivity_norms, "_NORMS", [_TEST_ROW])
     _patch_llm(monkeypatch, {
         "small": [{"name": "Bulk excavation", "source_span": "excavation", "quantity": 200, "unit": "m3"}],
         "large": [{"name": "Bulk excavation", "source_span": "excavation", "quantity": 800, "unit": "m3"}],
     })
     small = await _wbs("A small job: 200 m3 of excavation.")
     large = await _wbs("A large job: 800 m3 of excavation.")
-    a_small = _act(small, "Bulk excavation")
-    a_large = _act(large, "Bulk excavation")
-    assert a_small and a_large
-    # norm 200 m3/gang-day -> 1 day vs 4 days; derived from the quantity.
-    assert a_small["duration_days"] == 1
-    assert a_large["duration_days"] == 4
-    assert a_large["duration_days"] > a_small["duration_days"]
+    assert _act(small, "Bulk excavation")["duration_days"] == 1   # 200/200
+    assert _act(large, "Bulk excavation")["duration_days"] == 4   # 800/200
 
 
 @pytest.mark.asyncio
-async def test_mutating_the_norm_moves_the_duration(monkeypatch):
-    """Kernel-detection: the duration tracks the norm, it is not canned."""
+async def test_mutating_the_cited_norm_moves_the_duration(monkeypatch):
     _patch_llm(monkeypatch, {
         "job": [{"name": "Bulk excavation", "source_span": "excavation", "quantity": 400, "unit": "m3"}],
     })
-
-    monkeypatch.setattr(
-        productivity_norms, "norm_rate_for",
-        lambda _n: {"rate": "100 m3 per gang-day", "source": "test norm A (not project-specific)"},
-    )
+    monkeypatch.setattr(productivity_norms, "_NORMS", [{**_TEST_ROW, "rate": "100 m3 per gang-day"}])
     slow = await _wbs("The job: 400 m3 of excavation.")
-    monkeypatch.setattr(
-        productivity_norms, "norm_rate_for",
-        lambda _n: {"rate": "200 m3 per gang-day", "source": "test norm B (not project-specific)"},
-    )
+    monkeypatch.setattr(productivity_norms, "_NORMS", [{**_TEST_ROW, "rate": "200 m3 per gang-day"}])
     fast = await _wbs("The job: 400 m3 of excavation.")
-    assert _act(slow, "Bulk excavation")["duration_days"] == 4   # 400/100
-    assert _act(fast, "Bulk excavation")["duration_days"] == 2   # 400/200
+    assert _act(slow, "Bulk excavation")["duration_days"] == 4    # 400/100
+    assert _act(fast, "Bulk excavation")["duration_days"] == 2    # 400/200
 
 
 @pytest.mark.asyncio
-async def test_stated_rate_wins_over_the_norm(monkeypatch):
-    """A rate in the brief is used verbatim; the norm is not consulted."""
+async def test_unit_mismatch_is_unknown(monkeypatch):
+    monkeypatch.setattr(productivity_norms, "_NORMS", [_TEST_ROW])  # unit m3
+    _patch_llm(monkeypatch, {
+        "job": [{"name": "Bulk excavation", "source_span": "excavation", "quantity": 100, "unit": "m2"}],
+    })
+    r = await _wbs("The job: 100 m2 of excavation.")
+    assert _act(r, "Bulk excavation")["duration_days"] is None
+
+
+@pytest.mark.asyncio
+async def test_stated_rate_wins_over_injected_norm(monkeypatch):
+    monkeypatch.setattr(productivity_norms, "_NORMS", [_TEST_ROW])  # 200 m3/gd
     _patch_llm(monkeypatch, {
         "job": [{
             "name": "Bulk excavation", "source_span": "excavation",
-            "quantity": 200, "unit": "m3",
-            "productivity_rate": "100 m3 per gang-day",  # half the norm's 200
+            "quantity": 200, "unit": "m3", "productivity_rate": "100 m3 per gang-day",
         }],
     })
     r = await _wbs("The job: 200 m3 of excavation at 100 m3 per gang-day.")
     a = _act(r, "Bulk excavation")
-    assert a["duration_days"] == 2   # 200/100 from the STATED rate, not 1 from the norm
-    assert "basis" in a["duration_basis"]
-    assert "norm" not in a["duration_basis"]
-
-
-@pytest.mark.asyncio
-async def test_uncovered_trade_with_quantity_stays_unknown(monkeypatch):
-    _patch_llm(monkeypatch, {
-        "job": [{"name": "Install proprietary widget", "source_span": "widget", "quantity": 50, "unit": "nr"}],
-    })
-    r = await _wbs("The job: install the widget, 50 nr.")
-    a = _act(r, "Install proprietary widget")
-    assert a is not None
-    assert a["duration_days"] is None           # UNKNOWN, never a default
-    assert r.get("schedule_incomplete") is True
-
-
-@pytest.mark.asyncio
-async def test_norm_derived_duration_is_labelled_with_the_source(monkeypatch):
-    _patch_llm(monkeypatch, {
-        "job": [{"name": "Blockwork to walls", "source_span": "blockwork", "quantity": 150, "unit": "m2"}],
-    })
-    r = await _wbs("The job: 150 m2 of blockwork.")
-    a = _act(r, "Blockwork to walls")
-    assert a["duration_days"] == 10             # 150 / 15 m2 gang-day
-    assert "norm" in a["duration_basis"]
-    assert "not project-specific" in a["duration_basis"].lower()
+    assert a["duration_days"] == 2                       # stated 100/gd, not the norm's 1
+    assert "basis" in a["duration_basis"] and "norm" not in a["duration_basis"]

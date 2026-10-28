@@ -504,7 +504,7 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
             # Stated quantity but NO rate -> a GENERIC, sourced productivity
             # norm for the trade (S-1b). No matching trade -> stays UNKNOWN.
             from app.lib.productivity_norms import norm_rate_for
-            norm = norm_rate_for(name)
+            norm = norm_rate_for(name, item.get("unit"))
             if norm is not None:
                 est = _estimate_duration_from_rate(qty, norm["rate"])
                 if est is not None:

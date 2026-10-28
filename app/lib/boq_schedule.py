@@ -1008,7 +1008,7 @@ def boq_row_duration(item: Dict[str, Any]) -> Tuple[Optional[int], str]:
     if qty > 0:
         from app.lib.productivity_norms import norm_rate_for
         desc = str((item or {}).get("description") or (item or {}).get("item_key") or "")
-        norm = norm_rate_for(desc)
+        norm = norm_rate_for(desc, (item or {}).get("unit"))
         if norm is not None:
             d = _kernel_duration_days(qty, norm["rate"])
             if d is not None:

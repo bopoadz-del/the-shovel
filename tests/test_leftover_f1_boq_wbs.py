@@ -205,9 +205,11 @@ async def test_concrete_boq_and_demolition_boq_derive_different_scopes():
     assert "concrete" in concrete["scaffold"]["declaration"].lower()
     assert "demolition" not in concrete["scaffold"]["declaration"].lower()
     assert concrete["scaffold"]["project_type"] == "concrete"
-    # Durations are kernel-derived from the quantities (not a flat placeholder).
-    c_durs = [a["duration_days"] for a in concrete["activities"]]
-    assert any(isinstance(d, int) and d > 1 for d in c_durs)
+    # These rows carry no stated rate and the shipped norm table is empty
+    # (1045Z) — so durations are honestly UNKNOWN and the schedule is reported
+    # incomplete, never a fabricated placeholder day.
+    assert concrete.get("schedule_incomplete") is True
+    assert all(a["duration_days"] is None for a in concrete["activities"])
 
 
 @pytest.mark.asyncio

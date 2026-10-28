@@ -24,9 +24,9 @@ from app.agents import runtime as runtime_module
 # removed building template to the measured BOQ scope.
 _BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
 _BOQ_ITEMS = [
-    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2"},
-    {"item_key": "D700.1", "description": "Breaking out existing concrete ground slab", "quantity": 20, "unit": "m"},
-    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr"},
+    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2", "productivity_rate": "5 m2 per gang-day"},
+    {"item_key": "D700.1", "description": "Breaking out existing concrete ground slab", "quantity": 20, "unit": "m", "productivity_rate": "4 m per gang-day"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr", "productivity_rate": "15 nr per gang-day"},
 ]
 
 

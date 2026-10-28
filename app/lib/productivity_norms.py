@@ -1,80 +1,77 @@
-"""Generic construction productivity norms — sourced kernel DATA (S-1b).
+"""Sourced productivity-norm table — kernel DATA (S-1b; ruling ORDERS_28OCT_1045Z).
 
-ORDERS_28OCT_0900Z: when a brief states a *quantity* for an activity but no
-productivity *rate*, the schedule estimator may fall back to a GENERIC,
-per-trade productivity norm so the activity gets a kernel-computed duration
-instead of UNKNOWN. These are the rules this table lives under:
+When a brief/BOQ states a *quantity* for an activity but no productivity
+*rate*, the schedule estimator may read a per-trade productivity norm from this
+table so the activity gets a kernel-computed duration instead of UNKNOWN. The
+1045Z ruling is strict about what may live here:
 
-  * GENERIC ONLY. Every row is an industry order-of-magnitude planning norm
-    keyed to a trade (excavation, concrete, blockwork, …). There are NO
-    client names, NO project names, NO probe-specific values, and NO
-    activity strings copied from any test or corpus. The keywords are the
-    plain vocabulary of the trades, nothing case-specific. (NO HARDWIRING,
-    AGENTS.md standing order.)
-  * SOURCED. Every row carries a ``source`` naming the provenance of the
-    figure, and the duration the estimator derives is labelled
-    ``estimated — kernel …, norm <source>`` so a reader always sees the
-    number is a generic default, not their own data.
-  * A STATED RATE ALWAYS WINS. This table is consulted ONLY when the input
-    gave a quantity and no rate. A rate stated in the brief is used verbatim
-    and never overridden by a norm (see schedule.py).
-  * NO NORM → UNKNOWN. A trade this table does not cover yields no estimate;
-    the activity stays UNKNOWN (duration None) and the schedule is reported
-    incomplete. The table never invents a rate for an unknown trade.
+  * REAL CITATION PER ROW. A row stays only if it cites a real published norm
+    — a ``citation`` naming the publication, edition and table/item. A
+    self-declared "generic planning norm" is NOT a citation. A row without one
+    is removed. This is the same bar the Store ST-3 rows were held to.
+  * EMPTY UNTIL SOURCED. No verifiable published figures are shipped in code,
+    so ``_NORMS`` is EMPTY. ``norm_rate_for`` therefore returns ``None`` and
+    the schedule path yields UNKNOWN (the honest 0845Z fallback) until sourced
+    rows exist. The table is meant to be populated as a Store DATA item whose
+    rows each carry provenance — never hand-written, self-declared defaults.
+  * UNIT PER ROW, CHECKED. Each row carries the unit its rate is measured in;
+    a quantity whose unit does not match the row's unit yields UNKNOWN (a m2
+    norm is never applied to a m3 quantity).
+  * WORD-BOUNDARY TRADE MATCH. Keywords match on word boundaries, so "concrete"
+    does not match inside an unrelated word.
 
-The rate strings are per-gang-day production rates in the exact text form the
-kernel ``productivity_manpower_duration`` parses (``"<n> <unit> per gang-day"``):
-paired with the stated quantity they yield a duration in working days. The
-figures are deliberately round, generic planning values — provenance below.
+Row schema (when populated): ``{"keywords": [str, ...], "rate": "<n> <unit> per
+gang-day", "unit": "<unit>", "citation": "<publication, edition, table/item>"}``.
+The ``rate`` text is the exact form the kernel ``productivity_manpower_duration``
+parses; paired with a matching-unit quantity it yields a duration in days.
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional
 
-# Provenance for the generic figures below. These are standard construction
-# estimating / planning references from which order-of-magnitude single-gang
-# daily outputs are drawn; the rows carry generic planning values, never a
-# project-measured rate.
-_SOURCE = "generic construction planning norm (industry single-gang daily output; not project-specific)"
-
-# Each row: trade keywords (plain trade vocabulary) + a generic per-gang-day
-# production rate (kernel rate text) + a source. Ordered most-specific first so
-# a compound trade ("reinforced concrete") matches before a broader one.
-_NORMS: List[Dict[str, object]] = [
-    {"keywords": ["site clearance", "clear site", "site preparation"], "rate": "500 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["tree removal", "remove tree", "removal of tree", "tree felling", "grubbing"], "rate": "20 nr per gang-day", "source": _SOURCE},
-    {"keywords": ["reinforced concrete", "rc "], "rate": "35 m3 per gang-day", "source": _SOURCE},
-    {"keywords": ["blinding concrete", "mass concrete", "concrete pour", "concrete placing", "concrete to", "concrete"], "rate": "40 m3 per gang-day", "source": _SOURCE},
-    {"keywords": ["reinforcement", "rebar", "steel fixing", "bar bending"], "rate": "1.5 t per gang-day", "source": _SOURCE},
-    {"keywords": ["formwork", "shuttering", "falsework"], "rate": "20 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["blockwork", "block wall", "masonry"], "rate": "15 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["brickwork", "brick wall"], "rate": "12 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["plaster", "render", "skim"], "rate": "25 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["paint", "decorat"], "rate": "80 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["tiling", "floor finish", "screed"], "rate": "25 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["asphalt", "carriageway", "road pavement", "paving", "kerb"], "rate": "300 m2 per gang-day", "source": _SOURCE},
-    {"keywords": ["fence", "fencing", "chain link"], "rate": "40 m per gang-day", "source": _SOURCE},
-    {"keywords": ["pipe laying", "pipelaying", "drainage", "culvert", "ducting"], "rate": "30 m per gang-day", "source": _SOURCE},
-    {"keywords": ["piling", "bored pile", "driven pile"], "rate": "8 nr per gang-day", "source": _SOURCE},
-    {"keywords": ["demolition", "demolish", "breaking out", "break out", "break up"], "rate": "30 m3 per gang-day", "source": _SOURCE},
-    {"keywords": ["bulk excavation", "excavation", "excavate", "earthwork", "cut and fill"], "rate": "200 m3 per gang-day", "source": _SOURCE},
-    {"keywords": ["backfill", "filling", "compaction"], "rate": "250 m3 per gang-day", "source": _SOURCE},
-]
+# EMPTY until rows with real published provenance exist (1045Z ruling). Do NOT
+# add a row without a real ``citation`` and a ``unit`` — an uncited row is a
+# self-declaration and is rejected. Populate this as a sourced Store data item.
+_NORMS: List[Dict[str, object]] = []
 
 
-def norm_rate_for(activity_name: str) -> Optional[Dict[str, str]]:
-    """Return ``{"rate", "source"}`` for the generic productivity norm whose
-    trade matches ``activity_name``, or ``None`` when no generic trade matches.
+def _norm_unit(unit: Optional[str]) -> str:
+    """Normalise a unit token for comparison (m²->m2, sqm->m2, blank-safe)."""
+    u = (unit or "").strip().lower().replace("²", "2").replace("³", "3")
+    u = u.replace(" ", "")
+    return {"sqm": "m2", "cubicm": "m3", "cum": "m3", "number": "nr", "no": "nr", "no.": "nr", "nos": "nr"}.get(u, u)
 
-    Matching is by plain keyword containment on the lower-cased name, most-
-    specific row first. It never invents a rate for an unmatched trade — the
-    caller then leaves the activity UNKNOWN.
+
+def _row_is_cited(row: Dict[str, object]) -> bool:
+    """A row may ship only with a real citation AND a unit (1045Z)."""
+    return bool(str(row.get("citation") or "").strip()) and bool(str(row.get("unit") or "").strip())
+
+
+def norm_rate_for(activity_name: str, quantity_unit: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Return ``{"rate", "unit", "source"}`` for the sourced productivity norm
+    whose trade matches ``activity_name`` AND whose unit matches
+    ``quantity_unit`` (when given), or ``None`` when no cited, unit-matching row
+    applies. With an empty ``_NORMS`` it always returns ``None`` — the caller
+    then leaves the activity UNKNOWN. Matching is word-boundary; a row with no
+    real citation is never used even if present.
     """
     name = (activity_name or "").lower().strip()
     if not name:
         return None
+    want_unit = _norm_unit(quantity_unit)
     for row in _NORMS:
-        for kw in row["keywords"]:  # type: ignore[union-attr]
-            if kw in name:
-                return {"rate": str(row["rate"]), "source": str(row["source"])}
+        if not _row_is_cited(row):
+            continue  # uncited rows never apply
+        row_unit = _norm_unit(str(row.get("unit") or ""))
+        if want_unit and row_unit and want_unit != row_unit:
+            continue  # unit mismatch -> not applicable (caller -> UNKNOWN)
+        for kw in row.get("keywords", []):  # type: ignore[union-attr]
+            kw_l = str(kw).lower().strip()
+            if kw_l and re.search(r"\b" + re.escape(kw_l) + r"\b", name):
+                return {
+                    "rate": str(row["rate"]),
+                    "unit": str(row.get("unit") or ""),
+                    "source": str(row["citation"]),
+                }
     return None

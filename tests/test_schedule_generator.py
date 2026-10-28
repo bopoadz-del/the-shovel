@@ -15,10 +15,13 @@ import pytest
 from app.blocks.schedule_generator import ScheduleGeneratorBlock
 
 BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
+# Stated rates so durations are kernel-derived (the shipped norm table is empty
+# until sourced — ruling 1045Z); the shape test needs CPM fields, i.e. real
+# durations.
 BOQ_ITEMS = [
-    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2"},
-    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 20, "unit": "m"},
-    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr"},
+    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2", "productivity_rate": "5 m2 per gang-day"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 20, "unit": "m", "productivity_rate": "10 m per gang-day"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr", "productivity_rate": "15 nr per gang-day"},
 ]
 
 
