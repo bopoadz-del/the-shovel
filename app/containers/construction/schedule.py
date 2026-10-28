@@ -374,12 +374,36 @@ _BRIEF_WBS_SYSTEM = (
     "You structure a construction project brief into a work breakdown. Return "
     "ONLY JSON: {\"activities\": [{\"name\": string, \"source_span\": string "
     "(a verbatim substring of the brief that names this activity), "
-    "\"duration_days\": integer or null (ONLY if the brief states a duration for "
-    "it, else null), \"predecessors\": [activity name strings that the brief "
-    "says must finish first, else []]}]}. Extract only activities the brief "
-    "actually names. Never invent activities, durations or dependencies. Every "
-    "source_span must be copied verbatim from the brief text."
+    "\"duration_days\": integer or null (ONLY if the brief STATES a duration "
+    "for it, else null), \"quantity\": number or null (ONLY if the brief states "
+    "a quantity for it), \"unit\": string or null, \"productivity_rate\": string "
+    "or null (ONLY if the brief states a rate, e.g. \"50 m2 per gang-day\"), "
+    "\"predecessors\": [activity name strings that the brief says must finish "
+    "first, else []]}]}. Extract only activities the brief actually names. "
+    "Never invent activities, durations, quantities, rates or dependencies. "
+    "Every source_span must be copied verbatim from the brief text."
 )
+
+
+def _estimate_duration_from_rate(quantity: float, rate: str) -> Optional[int]:
+    """Working days for ``quantity`` at a STATED productivity ``rate`` via the
+    construction kernel (productivity_manpower_duration). Returns None when the
+    kernel cannot compute it — it never invents a rate (0845Z ruling: no rate,
+    no estimate)."""
+    try:
+        from app.agents.hats.planning.formulas.construction_formulas_planning import (
+            productivity_manpower_duration,
+        )
+        res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
+    except Exception:  # noqa: BLE001 — kernel refusal / bad input: no estimate
+        return None
+    if not isinstance(res, dict):
+        return None
+    for k in ("duration_days", "duration", "days", "remaining_days"):
+        v = res.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return int(math.ceil(v))
+    return None
 
 
 async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -420,12 +444,30 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
         seen.add(key)
         dur = item.get("duration_days")
         has_dur = isinstance(dur, (int, float)) and not isinstance(dur, bool) and dur > 0
-        if not has_dur:
+        qty = item.get("quantity")
+        rate = item.get("productivity_rate")
+        # 0845Z ruling: 0 is not a duration. Stated -> use it; stated quantity +
+        # stated rate -> kernel estimate (labelled); else UNKNOWN (None), never
+        # defaulted — the activity is incomplete and the chain is reported so.
+        duration_days: Optional[int] = None
+        basis = "unknown"
+        if has_dur:
+            duration_days, basis = int(dur), "stated"
+        elif (
+            isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0
+            and isinstance(rate, str) and rate.strip()
+        ):
+            est = _estimate_duration_from_rate(qty, rate)
+            if est is not None:
+                duration_days = est
+                basis = f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
+        if duration_days is None:
             unstated.append(name)
         aid = f"B{idx}"
         acts.append({
             "id": aid, "code": aid, "name": name[:160],
-            "duration_days": int(dur) if has_dur else 0,
+            "duration_days": duration_days,
+            "duration_basis": basis,
             "predecessors": [],  # resolved from names below
             "resources": [],
             "wbs": aid, "wbs_code": aid, "wbs_phase": "brief",
@@ -2457,13 +2499,33 @@ class ConstructionScheduleMixin:
                 activities, overrides
             )
 
+        # 0845Z ruling: an activity whose duration is UNKNOWN (None) is not
+        # scheduled and never gets a fabricated 0-day. CPM runs over the
+        # activities that carry a real duration; the UNKNOWN ones are carried
+        # in the output with no CPM dates and the chain is reported incomplete.
+        schedulable = [
+            a for a in activities
+            if isinstance(a.get("duration_days"), int)
+            and not isinstance(a.get("duration_days"), bool)
+            and a["duration_days"] > 0
+        ]
+        unscheduled = [a for a in activities if a not in schedulable]
+
         # The CPM pass is CPU work (a production LOOP_STALL): never on the
         # event loop.
         from app.core.offload import off_loop
 
         enriched, summary, cpm_error = await off_loop(
-            self._attach_cpm_to_activities, activities, start_date
+            self._attach_cpm_to_activities, schedulable, start_date
         )
+        # Re-attach the UNKNOWN-duration activities (no CPM dates; duration
+        # stays None, basis "unknown") so the answer shows them but never
+        # pretends they are scheduled.
+        for a in unscheduled:
+            a.setdefault("duration_basis", "unknown")
+        enriched = list(enriched) + unscheduled
+        schedule_incomplete = bool(unscheduled)
+        unscheduled_names = [a.get("name") for a in unscheduled]
         from app.core.conversation_wbs import stamp_hierarchical_wbs_codes
         enriched = stamp_hierarchical_wbs_codes(enriched, wbs_tree)
 
@@ -2479,6 +2541,8 @@ class ConstructionScheduleMixin:
             "actual_count": len(enriched),
             "start_date": start_date,
             "activities": enriched,
+            "schedule_incomplete": schedule_incomplete,
+            "unscheduled_activities": unscheduled_names,
             "wbs_tree": wbs_tree,
             "summary": summary,
             "procurement_injected": procurement_injected,
