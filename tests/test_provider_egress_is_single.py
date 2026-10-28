@@ -282,6 +282,22 @@ def test_guard_flags_a_cfg_url_from_llm_config_on_any_receiver():
     assert scan_source(src, False, _HOSTS), "self.client.post(cfg['url']) must FAIL"
 
 
+def test_guard_flags_a_comprehension_bound_config_url():
+    # cfgs is the LLM config; a comprehension binds each cfg from it and the raw
+    # post sits INSIDE the comprehension. Only comprehension-target origin
+    # propagation marks cfg as origin — remove that branch in _origin_names and
+    # this must stop flagging (the missing mutation case, G1 PR#1).
+    src = (
+        "def f(client):\n"
+        "    cfgs = _llm_config()\n"
+        "    return [client.post(cfg['url'], json={}) for cfg in cfgs]\n"
+    )
+    assert scan_source(src, False, _HOSTS), (
+        "client.post(cfg['url']) with cfg bound by a comprehension over the "
+        "LLM config must FAIL"
+    )
+
+
 def test_guard_flags_a_closure_alias_of_the_config_url():
     # The chat.py shape: cfg assigned in the outer function, aliased to url, and
     # the raw stream call sits inside a nested closure. Whole-module propagation
