@@ -9712,7 +9712,7 @@ def _resolve_openrouter_model(name: str | None) -> str:
     return OPENROUTER_DEFAULT_MODEL
 
 
-def _llm_config() -> dict[str, Any]:
+def _llm_config(provider: "str | None" = None) -> dict[str, Any]:
     """Pick the active LLM provider's URL + env-key + default model.
 
     Two providers are supported:
@@ -9729,8 +9729,10 @@ def _llm_config() -> dict[str, Any]:
     Per-provider override envs let the operator pin a specific model
     without code changes: ``DEEPSEEK_MODEL`` / ``OPENROUTER_MODEL``.
     """
-    # Unset or unrecognized LLM_PROVIDER resolves to DeepSeek (primary).
-    provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    # Explicit arg wins (used by the cross-provider fallback so it never has to
+    # mutate the process-wide LLM_PROVIDER env — mutating it is not thread-safe
+    # under concurrent chats). Unset/unrecognised resolves to DeepSeek (primary).
+    provider = (provider if provider is not None else os.getenv("LLM_PROVIDER") or "").strip().lower()
     if provider == "openrouter":
         # max_tokens ceiling is applied in _provider_max_tokens (env
         # OPENROUTER_MAX_TOKENS), not here — the same chokepoint on every
@@ -9761,15 +9763,10 @@ def _cross_provider_fallback(primary: dict[str, Any]) -> dict[str, Any] | None:
     name = (os.getenv("LLM_FALLBACK_PROVIDER") or "").strip().lower()
     if not name or name == primary.get("provider"):
         return None
-    prev = os.environ.get("LLM_PROVIDER")
-    os.environ["LLM_PROVIDER"] = name
-    try:
-        cfg = _llm_config()
-    finally:
-        if prev is None:
-            os.environ.pop("LLM_PROVIDER", None)
-        else:
-            os.environ["LLM_PROVIDER"] = prev
+    # Build the fallback provider's config by passing the name explicitly — no
+    # mutation of the shared os.environ["LLM_PROVIDER"], which raced under
+    # concurrent chats and could flip another request's provider mid-flight.
+    cfg = _llm_config(provider=name)
     if cfg.get("provider") == primary.get("provider"):
         return None
     if cfg.get("env_key") and not os.getenv(cfg["env_key"]):
