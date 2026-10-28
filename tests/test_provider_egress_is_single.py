@@ -67,38 +67,41 @@ def _const_str(node):
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
-# The LLM config object, by convention (cfg = _llm_config()); a module whose
-# own dict happens to hold a "url" (e.g. a webhook payload named `data`) is not
-# the LLM config and must not be flagged.
-_CFG_NAMES = {"cfg", "a_cfg", "fallback_cfg", "active_cfg"}
+# A provider-URL constant by name: DEEPSEEK_API_URL, rt.OPENROUTER_BASE_URL, …
+_LLM_URL_CONST_RE = re.compile(r"_(API|BASE)_URL$")
 
 
-def _expr_is_llm_origin(node) -> bool:
-    """Direct (non-Name) expressions that originate from the LLM config."""
+def _expr_is_llm_origin(node, origin) -> bool:
+    """Whether an expression originates from the LLM provider config.
+
+    `origin` is the set of names in the module already known to hold the LLM
+    config or a value derived from it (built by whole-module propagation), so
+    recognising a config object needs no hand-typed list of variable names:
+    a name counts because it was bound from ``_llm_config()`` somewhere, not
+    because it is spelled ``cfg``.
+    """
     if node is None:
         return False
+    # A provider-URL constant, or a name already known to be LLM-derived.
+    if isinstance(node, ast.Name):
+        return node.id in origin or bool(_LLM_URL_CONST_RE.search(node.id))
+    if isinstance(node, ast.Attribute):
+        return bool(_LLM_URL_CONST_RE.search(node.attr))
     if isinstance(node, ast.Subscript):
         key = _const_str(node.slice)
-        # os.environ["LLM_..."] etc. — the KEY itself names the provider.
-        if key and _LLM_KEY_RE.search(key.upper()):
+        if key and _LLM_KEY_RE.search(key.upper()):     # os.environ["LLM_..."]
             return True
-        # cfg["url"] — the LLM config object by name, or _llm_config()["url"].
-        if key == "url":
-            if isinstance(node.value, ast.Name) and node.value.id in _CFG_NAMES:
-                return True
-            if isinstance(node.value, ast.Call):
-                return _expr_is_llm_origin(node.value)
+        if key == "url":                                 # <llm-cfg>["url"]
+            return _expr_is_llm_origin(node.value, origin)
     if isinstance(node, ast.Call):
         f = node.func
         if isinstance(f, ast.Name) and f.id == "_llm_config":
             return True
         if isinstance(f, ast.Attribute) and f.attr == "_llm_config":
             return True
-        # cfg.get("url") — only on the LLM config object.
         if isinstance(f, ast.Attribute) and f.attr == "get" and node.args \
-                and _const_str(node.args[0]) == "url" \
-                and isinstance(f.value, ast.Name) and f.value.id in _CFG_NAMES:
-            return True
+                and _const_str(node.args[0]) == "url":   # <llm-cfg>.get("url")
+            return _expr_is_llm_origin(f.value, origin)
         # os.getenv("...LLM...") / os.environ.get("...PROVIDER...")
         if isinstance(f, ast.Attribute) and f.attr in ("getenv", "get") and node.args \
                 and _const_str(node.args[0]) and _LLM_KEY_RE.search(_const_str(node.args[0]).upper()):
@@ -106,16 +109,22 @@ def _expr_is_llm_origin(node) -> bool:
     return False
 
 
-def _llm_origin_names(func) -> set:
-    """Names assigned (anywhere in func) from an LLM-origin expr, transitively."""
+def _origin_names(tree) -> set:
+    """Whole-module set of names bound, transitively, from the LLM config.
+
+    Scope-INSENSITIVE on purpose: a ``cfg = _llm_config()`` in one function and
+    a ``url = cfg["url"]`` alias consumed inside a nested closure in another are
+    the same provider origin (the chat.py ``_call_cloud`` -> ``_stream_generator``
+    shape). Over-flagging a non-LLM reuse of the same name is the safe direction
+    — it forces the call through the metered chokepoint; a miss would not.
+    """
     origin: set = set()
-    assigns = [n for n in ast.walk(func) if isinstance(n, ast.Assign)]
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
     changed = True
     while changed:
         changed = False
         for n in assigns:
-            val = n.value
-            if _expr_is_llm_origin(val) or (isinstance(val, ast.Name) and val.id in origin):
+            if _expr_is_llm_origin(n.value, origin):
                 for t in n.targets:
                     if isinstance(t, ast.Name) and t.id not in origin:
                         origin.add(t.id)
@@ -127,8 +136,7 @@ def scan_source(src: str, is_chokepoint: bool, hosts: set) -> list:
     if is_chokepoint:
         return []
     tree = ast.parse(src)
-    funcs = [n for n in ast.walk(tree)
-             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    origin = _origin_names(tree)
     offenders = []
     for call in ast.walk(tree):
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
@@ -143,16 +151,12 @@ def scan_source(src: str, is_chokepoint: bool, hosts: set) -> list:
             if any(h in lit.lower() for h in hosts):
                 offenders.append(call.lineno)
             continue
-        if _expr_is_llm_origin(url):
+        # Literal-free URL: flag it when it originates from the LLM config —
+        # a cfg["url"]/cfg.get("url") on an _llm_config-derived name, a provider
+        # URL constant, an LLM env key, or a name aliased from any of those
+        # anywhere in the module (closures included).
+        if _expr_is_llm_origin(url, origin):
             offenders.append(call.lineno)
-            continue
-        if isinstance(url, ast.Name):
-            cands = [f for f in funcs
-                     if f.lineno <= call.lineno <= (f.end_lineno or f.lineno)]
-            if cands:
-                enc = min(cands, key=lambda f: (f.end_lineno or f.lineno) - f.lineno)
-                if url.id in _llm_origin_names(enc):
-                    offenders.append(call.lineno)
     return offenders
 
 
@@ -196,12 +200,39 @@ def test_guard_flags_a_hardcoded_provider_host_literal():
     assert scan_source(src, False, _HOSTS), "a literal provider-host URL must FAIL"
 
 
-def test_guard_flags_a_cfg_url_on_any_receiver():
+def test_guard_flags_a_cfg_url_from_llm_config_on_any_receiver():
+    # cfg is the config because it is bound from _llm_config(), not because it
+    # is spelled "cfg" (no hand-typed name set).
     src = (
-        "async def f(self, cfg):\n"
+        "async def f(self):\n"
+        "    cfg = _llm_config()\n"
         "    return await self.client.post(cfg['url'], json={})\n"
     )
     assert scan_source(src, False, _HOSTS), "self.client.post(cfg['url']) must FAIL"
+
+
+def test_guard_flags_a_closure_alias_of_the_config_url():
+    # The chat.py shape: cfg assigned in the outer function, aliased to url, and
+    # the raw stream call sits inside a nested closure. Whole-module propagation
+    # must catch it (this is the offender the intra-function guard missed).
+    src = (
+        "def outer(client):\n"
+        "    cfg = _llm_config()\n"
+        "    url = cfg['url']\n"
+        "    async def inner():\n"
+        "        async with client.stream('POST', url, json={}) as r:\n"
+        "            return r\n"
+        "    return inner\n"
+    )
+    assert scan_source(src, False, _HOSTS), "closure alias of cfg['url'] must FAIL"
+
+
+def test_guard_flags_a_provider_url_constant():
+    src = (
+        "async def f(client):\n"
+        "    return await client.post(DEEPSEEK_API_URL, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS), "a *_API_URL provider constant must FAIL"
 
 
 def test_guard_passes_a_non_llm_variable_url():
@@ -209,6 +240,17 @@ def test_guard_passes_a_non_llm_variable_url():
     src = (
         "async def f(client):\n"
         "    url = 'https://search.example/api'\n"
+        "    return await client.post(url, json={})\n"
+    )
+    assert scan_source(src, False, _HOSTS) == []
+
+
+def test_guard_passes_a_non_llm_dict_get_url():
+    # A webhook payload's data.get('url') is not the LLM config (data is not
+    # bound from _llm_config), so it must pass — no hand-typed name exceptions.
+    src = (
+        "async def f(client, data):\n"
+        "    url = data.get('url')\n"
         "    return await client.post(url, json={})\n"
     )
     assert scan_source(src, False, _HOSTS) == []

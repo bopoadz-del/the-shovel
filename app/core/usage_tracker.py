@@ -205,8 +205,8 @@ def history(user_id: Optional[str], days: int = 7) -> List[Dict[str, Any]]:
         UsageRun.agent_name,
         UsageRun.provider,
         UsageRun.model,
-        func.sum(UsageRun.total_tokens).label("tokens"),
-        func.sum(UsageRun.estimated_cost_usd).label("cost"),
+        func.coalesce(func.sum(UsageRun.total_tokens), 0).label("tokens"),
+        func.coalesce(func.sum(UsageRun.estimated_cost_usd), 0.0).label("cost"),
     ).where(day_expr >= cutoff)
     if user_id is not None:
         stmt = stmt.where(UsageRun.user_id == user_id)
