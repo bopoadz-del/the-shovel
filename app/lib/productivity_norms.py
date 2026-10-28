@@ -50,11 +50,11 @@ def _row_is_cited(row: Dict[str, object]) -> bool:
 
 def norm_rate_for(activity_name: str, quantity_unit: Optional[str] = None) -> Optional[Dict[str, str]]:
     """Return ``{"rate", "unit", "source"}`` for the sourced productivity norm
-    whose trade matches ``activity_name`` AND whose unit matches
-    ``quantity_unit`` (when given), or ``None`` when no cited, unit-matching row
-    applies. With an empty ``_NORMS`` it always returns ``None`` — the caller
-    then leaves the activity UNKNOWN. Matching is word-boundary; a row with no
-    real citation is never used even if present.
+    whose trade matches ``activity_name`` AND whose unit the ``quantity_unit``
+    matches, or ``None`` when no cited, unit-matching row applies. A quantity
+    with NO unit (or a unit that differs) is a mismatch → ``None`` (1130Z); an
+    unverified unit is never a free pass. With an empty ``_NORMS`` it always
+    returns ``None``. Matching is word-boundary; an uncited row is never used.
     """
     name = (activity_name or "").lower().strip()
     if not name:
@@ -64,8 +64,11 @@ def norm_rate_for(activity_name: str, quantity_unit: Optional[str] = None) -> Op
         if not _row_is_cited(row):
             continue  # uncited rows never apply
         row_unit = _norm_unit(str(row.get("unit") or ""))
-        if want_unit and row_unit and want_unit != row_unit:
-            continue  # unit mismatch -> not applicable (caller -> UNKNOWN)
+        # The quantity's unit must be PRESENT and match the row's (1045Z/1130Z):
+        # an absent or unverified quantity unit is a mismatch, not a free pass,
+        # so a quantity with no unit yields no norm (caller -> UNKNOWN).
+        if row_unit and want_unit != row_unit:
+            continue
         for kw in row.get("keywords", []):  # type: ignore[union-attr]
             kw_l = str(kw).lower().strip()
             if kw_l and re.search(r"\b" + re.escape(kw_l) + r"\b", name):

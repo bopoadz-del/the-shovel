@@ -144,3 +144,26 @@ async def test_stated_rate_wins_over_injected_norm(monkeypatch):
     a = _act(r, "Bulk excavation")
     assert a["duration_days"] == 2                       # stated 100/gd, not the norm's 1
     assert "basis" in a["duration_basis"] and "norm" not in a["duration_basis"]
+
+
+def test_quantity_with_no_unit_is_unknown(monkeypatch):
+    """1130Z: an absent/unverified quantity unit is a mismatch, not a free
+    pass — a norm applies only when the quantity's unit is present and matches."""
+    monkeypatch.setattr(productivity_norms, "_NORMS", [_TEST_ROW])   # unit m3
+    assert norm_rate_for("Bulk excavation", None) is None
+    assert norm_rate_for("Bulk excavation", "") is None
+    assert norm_rate_for("Bulk excavation", "m3") is not None        # present + match applies
+
+
+def test_word_boundary_counter_examples(monkeypatch):
+    """Measured counter-examples: a trade keyword inside another word must NOT
+    match (word-boundary), so these descriptions take no norm."""
+    monkeypatch.setattr(productivity_norms, "_NORMS", [
+        {"keywords": ["fence"], "rate": "40 m per gang-day", "unit": "m", "citation": "T (not shipped)"},
+        {"keywords": ["render"], "rate": "25 m2 per gang-day", "unit": "m2", "citation": "T (not shipped)"},
+        {"keywords": ["kerb"], "rate": "300 m2 per gang-day", "unit": "m2", "citation": "T (not shipped)"},
+    ])
+    assert norm_rate_for("Defence barrier", "m") is None        # 'fence' inside 'defence'
+    assert norm_rate_for("Surrender of keys", "m2") is None     # 'render' inside 'surrender'
+    assert norm_rate_for("Kerbside bins", "m2") is None         # 'kerb' inside 'kerbside'
+    assert norm_rate_for("Timber fence to boundary", "m") is not None   # a real boundary match

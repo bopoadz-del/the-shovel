@@ -247,6 +247,30 @@ async def test_boq_injected_cited_norm_duration_is_the_kernel_value(monkeypatch)
     a = next(x for x in r["activities"] if x.get("boq"))
     assert a["duration_days"] == 3          # 120 / 40, from the injected cited norm
     assert "norm" in a["duration_basis"]
+    assert "TEST ONLY" in a["duration_basis"]   # the citation rides in the label
+
+
+@pytest.mark.asyncio
+async def test_boq_unit_mismatch_or_missing_unit_is_unknown(monkeypatch):
+    """1130Z: on the BOQ path a quantity whose unit differs from the cited
+    norm's unit, or has no unit at all, stays UNKNOWN — the norm is never
+    force-fit (kills the drop-unit mutant)."""
+    from app.lib import productivity_norms
+    monkeypatch.setattr(productivity_norms, "_NORMS", [
+        {"keywords": ["concrete"], "rate": "40 m3 per gang-day", "unit": "m3",
+         "citation": "TEST ONLY — Example Norms, 1st ed., tbl 2 (not shipped)"},
+    ])
+    r = await ConstructionContainer().generate_wbs(
+        {"brief": "WBS from the BOQ scope", "boq_items": [
+            {"item_key": "E10", "description": "Concrete to foundations", "quantity": 120, "unit": "m2"},  # m2 vs m3
+            {"item_key": "E11", "description": "Concrete to walls", "quantity": 80},                       # no unit
+        ]},
+        {"target_count": 40},
+    )
+    durs = {a["boq"]["item_key"]: a["duration_days"] for a in r["activities"] if a.get("boq")}
+    assert durs["E10"] is None     # unit mismatch m2 vs m3 -> UNKNOWN
+    assert durs["E11"] is None     # no unit -> UNKNOWN
+    assert r.get("schedule_incomplete") is True
 
 
 def test_boq_wbs_answer_grounded_is_trade_neutral():
