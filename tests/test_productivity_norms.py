@@ -167,3 +167,17 @@ def test_word_boundary_counter_examples(monkeypatch):
     assert norm_rate_for("Surrender of keys", "m2") is None     # 'render' inside 'surrender'
     assert norm_rate_for("Kerbside bins", "m2") is None         # 'kerb' inside 'kerbside'
     assert norm_rate_for("Timber fence to boundary", "m") is not None   # a real boundary match
+
+
+def test_cited_row_without_a_unit_is_not_cited(monkeypatch):
+    """ORDERS_1200Z d (M11): a row with a citation but NO unit is NOT cited
+    (rejected by _row_is_cited), so it never matches any quantity."""
+    assert productivity_norms._row_is_cited(
+        {"citation": "Pub, 1st ed, tbl 1", "unit": ""}) is False
+    assert productivity_norms._row_is_cited(
+        {"citation": "Pub, 1st ed, tbl 1", "unit": "m3"}) is True
+    monkeypatch.setattr(productivity_norms, "_NORMS", [
+        {"keywords": ["concrete"], "rate": "40 m3 per gang-day", "unit": "",
+         "citation": "Pub, 1st ed, tbl 1"},
+    ])
+    assert norm_rate_for("concrete to foundations", "m3") is None

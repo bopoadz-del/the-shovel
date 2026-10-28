@@ -246,8 +246,11 @@ async def test_boq_injected_cited_norm_duration_is_the_kernel_value(monkeypatch)
     )
     a = next(x for x in r["activities"] if x.get("boq"))
     assert a["duration_days"] == 3          # 120 / 40, from the injected cited norm
-    assert "norm" in a["duration_basis"]
-    assert "TEST ONLY" in a["duration_basis"]   # the citation rides in the label
+    # The FULL label: kernel name + norm rate + citation (ORDERS_1200Z d), not a substring.
+    assert a["duration_basis"] == (
+        "estimated — kernel productivity_manpower_duration, "
+        "norm 40 m3 per gang-day (TEST ONLY — Example Norms, 1st ed., tbl 2 (not shipped))"
+    )
 
 
 @pytest.mark.asyncio
@@ -437,22 +440,6 @@ def _install_boq_pool(monkeypatch, *, texts=None, alias_source=None):
     texts = texts if texts is not None else { "boq1": [S2_BOQ] }
     seen_store: dict = {}
 
-    def fake_title(pid, phrase, limit=8):
-        needle = (phrase or "").lower()
-        return [
-            doc for doc in _pool_docs()
-            if needle and needle in (
-                f"{doc['original_name']} {doc['file_path']}".lower()
-            )
-        ][:limit]
-
-    def fake_terms(pid, terms, min_terms=2, require_letter=False, limit=8):
-        blob = f"{DD23_BOQ_NAME}".lower()
-        hits = sum(1 for t in (terms or []) if t and t.lower() in blob)
-        if hits < (min_terms or 1):
-            return []
-        return _pool_docs()[:limit]
-
     class _Store:
         def doc_chunk_texts(self, project_id, doc_ids):
             seen_store["rag_pid"] = project_id
@@ -484,11 +471,9 @@ def _install_boq_pool(monkeypatch, *, texts=None, alias_source=None):
     )
     coc.source_name = DD22_COC_NAME
 
+    # Candidate listing is the project's document list (extension-seeded, #3).
     monkeypatch.setattr(
-        "app.core.projects.documents_matching_title_phrase", fake_title,
-    )
-    monkeypatch.setattr(
-        "app.core.projects.documents_matching_filename_terms", fake_terms,
+        "app.core.projects.list_documents", lambda *a, **k: _pool_docs(),
     )
     monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: (
         alias_source if alias_source and pid == "master_corpus" else pid
@@ -507,33 +492,44 @@ def _install_boq_pool(monkeypatch, *, texts=None, alias_source=None):
     return seen_store
 
 
-def test_boq_found_by_structural_rows_not_filename(monkeypatch):
-    """rework-2 #3: a bill whose NAME is not bill-ish (foundations.xlsx) is
-    still found — election is by the measured rows, not the filename gate."""
+def test_boq_candidates_are_listed_by_extension_not_filename(monkeypatch):
+    """rework-2 #3 (ORDERS_1200Z a): bill candidates are EVERY spreadsheet/CSV/
+    PDF of the project, seeded by extension with NO filename/title term — so a
+    bill named foundations.xlsx (no bill word) is listed and elected on its
+    measured rows, exactly like priced_bill.xlsx. Re-adding a name filter, or
+    dropping the extension candidate, must fail this test."""
     from app.lib import boq_schedule as bs
 
-    NAME = "foundations.xlsx"
-    rows_text = (
-        "E10 Reinforced concrete to foundations 120 m3\n"
-        "E20 Mass concrete fill 55 m3\n"
-    )
-    doc = {"id": "f1", "original_name": NAME, "file_path": f"/docs/{NAME}"}
+    docs = [
+        {"id": "f1", "original_name": "foundations.xlsx", "file_path": "/docs/foundations.xlsx"},
+        {"id": "p1doc", "original_name": "priced_bill.xlsx", "file_path": "/docs/priced_bill.xlsx"},
+        {"id": "readme", "original_name": "README.md", "file_path": "/docs/README.md"},  # not a bill ext
+    ]
+    rows_by_doc = {
+        "f1": ["E10 Reinforced concrete to foundations 120 m3\nE20 Mass concrete fill 55 m3\n"],
+        "p1doc": ["D110 General site clearance 12 ha\nD290.1 Removal of trees 48 nr\n"],
+        "readme": ["This project builds things."],
+    }
 
     class _Store:
         def doc_chunk_texts(self, project_id, doc_ids):
-            return {did: [rows_text] for did in (doc_ids or [])}
+            return {did: rows_by_doc.get(did, []) for did in (doc_ids or [])}
 
-    monkeypatch.setattr("app.core.projects.documents_matching_title_phrase",
-                        lambda *a, **k: [doc])
-    monkeypatch.setattr("app.core.projects.documents_matching_filename_terms",
-                        lambda *a, **k: [doc])
+    # Candidate listing is the project's real document list (by extension only).
+    monkeypatch.setattr("app.core.projects.list_documents", lambda *a, **k: docs)
     monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: pid)
     monkeypatch.setattr("app.core.rag.vector_store.get_store", lambda **_k: _Store())
     monkeypatch.setattr("app.core.rag.retriever.retrieve_with_filter", lambda *a, **k: ([], 0))
 
+    # Both bills are LISTED by extension (README.md is not).
+    listed = {d["id"] for d in bs._list_boq_scope_documents("p1")}
+    assert listed == {"f1", "p1doc"}
+
     items = bs.retrieve_boq_scope_items("Generate a WBS for the project BOQ scope", "p1")
     codes = {i.get("item_key") for i in items}
+    # Rows from the non-bill-named foundations.xlsx AND priced_bill.xlsx both elect.
     assert "E10" in codes and "E20" in codes
+    assert "D110" in codes
 
 
 def test_retrieve_boq_scope_items_parses_named_bill(monkeypatch):
@@ -701,3 +697,41 @@ async def test_f1_run_workflow_pool_is_not_building_template(monkeypatch):
     assert "no quantity is priced" not in answer.lower()
     packages = [ln for ln in answer.splitlines() if ln.startswith("1.")]
     assert len([p for p in packages if "D529.3" in p]) <= 1
+
+
+def test_phase_heading_names_trades_mixed_beyond_three_and_drops_uncategorised():
+    """ORDERS_1200Z c: two/three trades are named together, four -> Mixed scope,
+    and uncategorised rows never appear in the heading. Two different bills give
+    two different headings."""
+    from app.lib.boq_schedule import boq_scope_phase
+    concrete = [
+        {"item_key": "E10", "description": "Reinforced concrete to foundations", "quantity": 1, "unit": "m3"},
+        {"item_key": "B10", "description": "High yield steel bar reinforcement", "quantity": 1, "unit": "t"},
+    ]
+    demolition = [
+        {"item_key": "D29", "description": "Removal of trees in existing sidewalks", "quantity": 1, "unit": "nr"},
+    ]
+    assert boq_scope_phase(concrete) == "Concrete + Reinforcement"
+    assert boq_scope_phase(demolition) == "Demolition"
+    assert boq_scope_phase(concrete) != boq_scope_phase(demolition)
+    four = concrete + [
+        {"item_key": "M10", "description": "Blockwork to walls", "quantity": 1, "unit": "m2"},
+        {"item_key": "P10", "description": "Painting to walls", "quantity": 1, "unit": "m2"},
+    ]
+    assert boq_scope_phase(four) == "Mixed scope"          # four distinct trades
+    with_unc = [
+        {"item_key": "E10", "description": "Reinforced concrete to foundations", "quantity": 1, "unit": "m3"},
+        {"item_key": "X99", "description": "Demolish existing structures", "quantity": 1, "unit": "m3"},  # Other/Uncategorized
+    ]
+    assert boq_scope_phase(with_unc) == "Concrete"          # uncategorised row not named
+
+
+def test_require_measured_gate_admits_only_structured_rows():
+    """ORDERS_1200Z e: the measured gate admits only structured rows. An indexer
+    'BOQ line item' line is a codeless, measureless row — parseable but not
+    measured: refused with the gate ON, admitted with it OFF (kills the
+    gate-always-False mutant)."""
+    from app.lib.boq_schedule import _items_from_chunk_text
+    text = "BOQ line item — General site works: total quantity to be confirmed."
+    assert _items_from_chunk_text(text, "", require_measured_gate=True) == []
+    assert len(_items_from_chunk_text(text, "", require_measured_gate=False)) == 1

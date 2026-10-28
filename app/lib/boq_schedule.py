@@ -500,18 +500,6 @@ _TRAILING_MEASURED_RE = re.compile(
     r"(?:ha|m2|m²|m3|m³|nr|nos|no\.?|m|lm|sum|item|kg|t)\b.*$",
     re.IGNORECASE,
 )
-# Generic bill-of-quantities discovery terms — ANY trade. The real BOQ gate
-# is ``document_is_a_bill_of_quantities`` (applied per document below); these
-# only seed candidate documents. No demolition/site-clearance words: a concrete
-# or MEP bill is elected exactly as a demolition one.
-_BOQ_SCOPE_TITLE_PHRASES = (
-    "bill of quantities",
-    "schedule of quantities",
-    "boq",
-)
-_BOQ_SCOPE_FILENAME_TERMS = ("boq", "bill", "quantities", "schedule", "priced", "measured")
-
-
 def _compact_cesmm_code(code: str) -> str:
     return re.sub(r"\s+", "", (code or "").strip()).upper()
 
@@ -772,33 +760,42 @@ def boq_wbs_answer_is_grounded(answer: str) -> bool:
     return bool(_WBS_HIERARCHY_RE.search(blob) or _WBS_BILL_CODE_RE.search(blob))
 
 
-def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
-    """Bills of quantities already in the project document pool.
+# A bill of quantities is a spreadsheet, CSV, or PDF. These extensions seed the
+# CANDIDATE set; nothing is gated on the file NAME (rework-2 #3, ORDERS_1200Z).
+_BOQ_CANDIDATE_EXTS = (".xlsx", ".xls", ".csv", ".pdf")
 
-    Filename / title listing, not cosine top-k. Live leftover F1 after
-    #524 still hit the building template because ``retrieve_with_filter``
-    never returned the demolition BOQ from a 2700-doc corpus.
+
+def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
+    """Candidate bill documents in the project pool — EVERY spreadsheet / CSV /
+    PDF, with NO filename or title-term seeding (ORDERS_1200Z #3).
+
+    The document NAME never decides membership: a bill named e.g.
+    ``foundations.xlsx`` is a candidate purely by its extension, and the
+    measured-row gate downstream (``_chunk_looks_like_measured_boq`` /
+    ``structured_boq_rows``) alone decides whether its rows elect. This replaces
+    the old ``_BOQ_SCOPE_FILENAME_TERMS`` / title-phrase seeding, which dropped
+    a bill whose name carried no bill word.
     """
     try:
-        from app.core.projects import (
-            documents_matching_filename_terms,
-            documents_matching_title_phrase,
-        )
+        from app.core.projects import list_documents
     except Exception as exc:  # noqa: BLE001
         logger.warning("BOQ-scope WBS document listing unavailable: %s", exc)
         return []
 
     found: List[Dict[str, str]] = []
     seen: set[str] = set()
-
-    def _add(doc: Dict[str, str]) -> None:
-        # Election is STRUCTURAL (rework-2 #3): a listed candidate is NOT
-        # dropped for its name — the measured-row gate downstream decides, so a
-        # bill named e.g. "foundations.xlsx" whose rows elect is found. The
-        # filename/title listings only seed candidates; they never gate.
+    try:
+        docs = list_documents(project_id) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("BOQ-scope WBS list_documents failed: %s", exc)
+        return []
+    for doc in docs:
         doc_id = str((doc or {}).get("id") or "").strip()
         if not doc_id or doc_id in seen:
-            return
+            continue
+        name = str(doc.get("original_name") or doc.get("file_path") or "")
+        if not name.lower().endswith(_BOQ_CANDIDATE_EXTS):
+            continue
         seen.add(doc_id)
         found.append({
             "id": doc_id,
@@ -806,31 +803,8 @@ def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
             "file_path": str(doc.get("file_path") or ""),
         })
 
-    for phrase in _BOQ_SCOPE_TITLE_PHRASES:
-        try:
-            for doc in documents_matching_title_phrase(project_id, phrase, limit=8):
-                _add(doc)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("BOQ-scope title listing failed: %s", exc)
-    try:
-        for doc in documents_matching_filename_terms(
-            project_id,
-            list(_BOQ_SCOPE_FILENAME_TERMS),
-            min_terms=1,
-            require_letter=False,
-            limit=8,
-        ):
-            _add(doc)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("BOQ-scope filename listing failed: %s", exc)
-
-    # Any bill in the pool, no trade preference (the demolition-name bias was
-    # the hardwiring). When two contract years are present the later package
-    # owns the ask — arrival order used to hand generate_wbs the earlier bill
-    # (or only its Conditions of Contract prose) and synthesis then refused.
-    pool = _prefer_newer_contract_year_docs(found)
-    chosen = pool[:4]
-    return chosen
+    # When two contract years are present the later package owns the ask.
+    return _prefer_newer_contract_year_docs(found)
 
 
 def _items_from_chunk_text(
@@ -841,8 +815,15 @@ def _items_from_chunk_text(
 ) -> List[Dict[str, Any]]:
     if require_measured_gate and not _chunk_looks_like_measured_boq(text, filename):
         return []
+    rows = parse_boq_measured_rows(text)
+    if require_measured_gate:
+        # The gate admits only MEASURED/structured rows — a bill code or a
+        # measure (ORDERS_1200Z e). A codeless, measureless line (e.g. an
+        # indexer "BOQ line item — …" description) is NOT a measured row and is
+        # refused here; with the gate off it would be admitted.
+        rows = structured_boq_rows(rows)
     out: List[Dict[str, Any]] = []
-    for row in parse_boq_measured_rows(text):
+    for row in rows:
         item = dict(row)
         if filename:
             item["source"] = filename
@@ -965,7 +946,8 @@ def boq_scope_phase(scoped: Iterable[Dict[str, Any]]) -> str:
     cats: List[str] = []
     for item in scoped or []:
         c = boq_row_trade_category(item)
-        if c and c not in cats:
+        # Uncategorised rows do not name a trade in the heading (ORDERS_1200Z c).
+        if c and c != "Other/Uncategorized" and c not in cats:
             cats.append(c)
     if not cats:
         return "Scope"

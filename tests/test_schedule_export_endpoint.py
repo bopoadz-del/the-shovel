@@ -224,3 +224,56 @@ def test_schedule_from_document_injects_extracted_lead_times(client, tmp_path):
     l2 = "\n".join(str(c.value) for row in wb["L2 Schedule"].iter_rows()
                    for c in row if c.value is not None)
     assert "long-lead" in l2.lower(), "procurement activities must appear in the L2 schedule"
+
+
+def test_schedule_from_brief_and_two_documents_are_both_structured(client, tmp_path, monkeypatch):
+    """ORDERS_1200Z b: a brief AND two documents in one request are BOTH
+    structured and merged under [brief]/[documents] source tags; each source's
+    activities appear in the schedule. Dropping the brief, dropping the doc
+    text, or stripping the tags must fail."""
+    from docx import Document
+    from app.core import projects as store
+    from app.core import llm_client
+
+    seen = {}
+
+    async def fake(system, user, **k):
+        seen["user"] = user or ""
+        low = (user or "").lower()
+        acts = []
+        if "excavate the basement" in low:
+            acts.append({"name": "Excavate basement", "source_span": "excavate the basement", "duration_days": 5, "predecessors": []})
+        if "pour the raft" in low:
+            acts.append({"name": "Pour raft", "source_span": "pour the raft", "duration_days": 6, "predecessors": []})
+        if "erect the steel frame" in low:
+            acts.append({"name": "Erect steel", "source_span": "erect the steel frame", "duration_days": 7, "predecessors": []})
+        return {"activities": acts}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    pid = _pid(client)
+
+    def _doc(nm, line):
+        p = tmp_path / nm
+        d = Document()
+        d.add_paragraph(line)
+        d.save(str(p))
+        return store.add_document(pid, nm, p.name, str(p))["id"]
+
+    d1 = _doc("scopeA.docx", "First excavate the basement on site.")
+    d2 = _doc("scopeB.docx", "Then pour the raft foundation.")
+
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-document",
+        json={"document_ids": [d1, d2],
+              "brief": "The programme must erect the steel frame.",
+              "target_count": 40, "start_date": "2026-01-05"},
+        headers=H,
+    )
+    assert r.status_code == 200, r.text
+    assert "[brief]" in seen["user"] and "[documents]" in seen["user"]
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    txt = "\n".join(str(c.value) for row in wb["L2 Schedule"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "Excavate basement" in txt    # document 1
+    assert "Pour raft" in txt            # document 2
+    assert "Erect steel" in txt          # the brief
