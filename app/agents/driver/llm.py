@@ -41,6 +41,7 @@ async def call(agent: Any, messages: List[Dict[str, Any]], tools: Optional[List[
     import httpx
 
     from app.agents.runtime import _llm_config
+    from app.core import llm_client
 
     cfg = _llm_config()
     key = os.getenv(cfg["env_key"]) or ""
@@ -48,12 +49,15 @@ async def call(agent: Any, messages: List[Dict[str, Any]], tools: Optional[List[
         return {"status": "error", "error": "The language model is not configured."}
     payload = _payload(cfg, agent, messages, tools, model, stream=False)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(cfg["url"], json=payload,
-                                     headers={"Authorization": f"Bearer {key}"})
-        if resp.status_code != 200:
+        # The single non-streaming provider egress (records usage on 200).
+        resp, data = await llm_client.provider_post(
+            cfg["url"], payload, {"Authorization": f"Bearer {key}"},
+            timeout=timeout, provider=cfg.get("provider", ""),
+            model=payload.get("model", ""), agent_name=getattr(agent, "name", "driver"),
+        )
+        if resp.status_code != 200 or not data:
             return {"status": "error", "error": f"The language model answered HTTP {resp.status_code}."}
-        choice = (resp.json().get("choices") or [{}])[0]
+        choice = (data.get("choices") or [{}])[0]
         return {"status": "success", "message": choice.get("message") or {}}
     except httpx.HTTPError as exc:
         return {"status": "error", "error": f"The language model could not be reached ({type(exc).__name__})."}
@@ -67,9 +71,10 @@ async def stream(agent: Any, messages: List[Dict[str, Any]], tools: Optional[Lis
     "error", ...})``."""
     import json
 
-    import httpx
+    import contextlib
 
     from app.agents.runtime import _llm_config
+    from app.core import llm_client
 
     cfg = _llm_config()
     key = os.getenv(cfg["env_key"]) or ""
@@ -77,43 +82,46 @@ async def stream(agent: Any, messages: List[Dict[str, Any]], tools: Optional[Lis
         yield "done", {"status": "error", "error": "The language model is not configured."}
         return
     payload = _payload(cfg, agent, messages, tools, model, stream=True)
+    payload.setdefault("stream_options", {"include_usage": True})
     content: List[str] = []
     calls: Dict[int, Dict[str, Any]] = {}
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", cfg["url"], json=payload,
-                                     headers={"Authorization": f"Bearer {key}"}) as resp:
-                if resp.status_code != 200:
-                    yield "done", {"status": "error",
-                                   "error": f"The language model answered HTTP {resp.status_code}."}
-                    return
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        chunk = json.loads(data)
-                    except ValueError:
-                        continue
-                    delta = ((chunk.get("choices") or [{}])[0].get("delta") or {})
-                    text = delta.get("content")
-                    if text:
-                        content.append(text)
-                        yield "content", text
-                    for tc in delta.get("tool_calls") or []:
-                        slot = calls.setdefault(int(tc.get("index") or 0),
-                                                {"id": None, "type": "function",
-                                                 "function": {"name": "", "arguments": ""}})
-                        if tc.get("id"):
-                            slot["id"] = tc["id"]
-                        fn = tc.get("function") or {}
-                        slot["function"]["name"] += fn.get("name") or ""
-                        slot["function"]["arguments"] += fn.get("arguments") or ""
-    except httpx.HTTPError as exc:
+        # The single streaming provider egress (records usage at the egress);
+        # aclosing closes it deterministically when we stop consuming.
+        async with contextlib.aclosing(llm_client.provider_stream(
+            cfg["url"], payload, {"Authorization": f"Bearer {key}"},
+            timeout=timeout, provider=cfg.get("provider", ""),
+            model=payload.get("model", ""), agent_name=getattr(agent, "name", "driver"),
+        )) as _stream:
+            async for line in _stream:
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                delta = ((chunk.get("choices") or [{}])[0].get("delta") or {})
+                text = delta.get("content")
+                if text:
+                    content.append(text)
+                    yield "content", text
+                for tc in delta.get("tool_calls") or []:
+                    slot = calls.setdefault(int(tc.get("index") or 0),
+                                            {"id": None, "type": "function",
+                                             "function": {"name": "", "arguments": ""}})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    slot["function"]["name"] += fn.get("name") or ""
+                    slot["function"]["arguments"] += fn.get("arguments") or ""
+    except llm_client.ProviderStreamError as exc:
         yield "done", {"status": "error",
-                       "error": f"The language model could not be reached ({type(exc).__name__})."}
+                       "error": (f"The language model answered HTTP {exc.status}."
+                                 if exc.status
+                                 else "The language model could not be reached.")}
         return
     message: Dict[str, Any] = {"content": "".join(content)}
     if calls:

@@ -58,14 +58,21 @@ def test_keyword_patterns_are_compiled_at_import():
 
 
 def test_no_usage_record_runs_on_the_event_loop():
-    """Every usage_tracker.record call in the model-call code is awaited
-    through off_loop (a database write per model call)."""
+    """Usage recording is always awaited through off_loop (a DB write per model
+    call), never a direct usage_tracker.record() on the event loop. Recording is
+    centralized at the single provider egress (llm_client.record_provider_usage)
+    since ORDERS_1920Z; this previously asserted >=2 off_loop sites in
+    agents/core/llm.py, before that move consolidated them to one."""
     import ast
     from pathlib import Path
 
-    src = Path("app/agents/core/llm.py").read_text(encoding="utf-8")
-    direct = [n.lineno for n in ast.walk(ast.parse(src))
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-              and n.func.attr == "record" and getattr(n.func.value, "id", "") == "usage_tracker"]
-    assert direct == [], f"usage_tracker.record called directly at lines {direct}"
-    assert src.count("usage_tracker.record,") >= 2
+    # No module in the model-call path calls usage_tracker.record directly.
+    for path in ("app/core/llm_client.py", "app/agents/core/llm.py"):
+        src = Path(path).read_text(encoding="utf-8")
+        direct = [n.lineno for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                  and n.func.attr == "record" and getattr(n.func.value, "id", "") == "usage_tracker"]
+        assert direct == [], f"{path}: usage_tracker.record called directly at lines {direct}"
+    # The single egress records off the event loop.
+    egress = Path("app/core/llm_client.py").read_text(encoding="utf-8")
+    assert egress.count("usage_tracker.record,") >= 1

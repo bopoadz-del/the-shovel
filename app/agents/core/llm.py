@@ -222,13 +222,14 @@ async def _call_llm(
             )
             openrouter_402_retries = 0
             openrouter_429_retries = 0
+            from app.core import llm_client
             while True:
-                async with httpx.AsyncClient(timeout=attempt_timeout) as client:
-                    r = await client.post(
-                        a_cfg["url"],
-                        json=payload,
-                        headers=headers,
-                    )
+                # The single non-streaming provider egress (records usage on 200).
+                r, _resp_data = await llm_client.provider_post(
+                    a_cfg["url"], payload, headers, timeout=attempt_timeout,
+                    provider=a_cfg.get("provider", ""),
+                    model=a_model, user_id=user_id, agent_name=self.name,
+                )
                 if (
                     r.status_code == 402
                     and a_cfg.get("provider") == "openrouter"
@@ -396,24 +397,8 @@ async def _call_llm(
         try:
             data = r.json()
             choice = (data.get("choices") or [{}])[0]
-            # Best-effort cost tracking — never let it sink an LLM call.
-            try:
-                from app.core import usage_tracker
-                from app.core.offload import off_loop
-                # A database write: off the event loop (live: 1.0 s stall at 15 users).
-                await off_loop(
-                    usage_tracker.record,
-                    user_id=user_id,
-                    agent_name=self.name,
-                    provider=active_cfg.get("provider", ""),
-                    model=data.get("model") or active_cfg.get("default_model") or "",
-                    usage=data.get("usage"),
-                )
-            except Exception:  # noqa: BLE001
-                _LOG.warning(
-                    "swallowed %s in _call_llm() — continuing",
-                    "Exception", exc_info=True,
-                )
+            # Usage is recorded at the single egress (llm_client.provider_post),
+            # not here, so every provider call is metered the same way.
             msg = choice.get("message") or {}
             if msg and not (msg.get("tool_calls") or []):
                 # Observe-only tripwire: the model answered a turn whose
@@ -538,64 +523,60 @@ async def _stream_synthesis(
         if api_key
         else {"Content-Type": "application/json"}
     )
-    usage: dict[str, Any] | None = None
     # Reasoning-phase deltas seen but deliberately not yielded (see below).
     reasoning_deltas = 0
     content_deltas = 0
     finish_reason = ""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": stream_max_tokens,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    import contextlib
+    from app.core import llm_client
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(_llm_http_timeout(), read=_llm_http_timeout())) as client:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": stream_max_tokens,
-                "stream": True,
-                "stream_options": {"include_usage": True},
-            }
-            async with client.stream(
-                "POST", cfg["url"], json=payload, headers=headers,
-            ) as r:
-                if r.status_code != 200:
-                    await r.aread()
-                    raise _SynthStreamError(
-                        f"{cfg['provider']} HTTP {r.status_code}: {r.text[:200]}"
-                    )
-                async for line in r.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        evt = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = evt.get("choices") or []
-                    if choices:
-                        finish_reason = str(choices[0].get("finish_reason") or finish_reason)
-                        _delta_obj = choices[0].get("delta") or {}
-                        # Reasoning models (e.g. deepseek-reasoner) stream a
-                        # THINKING phase as ``reasoning_content`` before
-                        # any ``content`` arrives. It is not the answer:
-                        # it contains discarded intermediate claims that
-                        # would read as authoritative in the UI, and it
-                        # is not what gets persisted. Count it so the
-                        # caller can tell "model is working" apart from
-                        # "provider returned nothing", but never yield
-                        # it as answer text.
-                        if _delta_obj.get("reasoning_content"):
-                            reasoning_deltas += 1
-                        delta = _delta_obj.get("content")
-                        if delta:
-                            content_deltas += 1
-                            yield delta
-                    if evt.get("usage"):
-                        usage = evt["usage"]
-    except _SynthStreamError:
-        raise
-    except Exception as e:  # noqa: BLE001 — network/transport/parse
-        raise _SynthStreamError(f"{cfg['provider']} stream error: {e}")
+        # The single streaming provider egress (records usage at the egress).
+        # aclosing guarantees the generator is closed when we break on [DONE],
+        # so its finally/backstop runs deterministically.
+        async with contextlib.aclosing(llm_client.provider_stream(
+            cfg["url"], payload, headers,
+            timeout=_llm_http_timeout(),
+            provider=cfg.get("provider", ""), model=model,
+            user_id=user_id, agent_name=self.name,
+        )) as _stream:
+            async for line in _stream:
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    evt = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                choices = evt.get("choices") or []
+                if choices:
+                    finish_reason = str(choices[0].get("finish_reason") or finish_reason)
+                    _delta_obj = choices[0].get("delta") or {}
+                    # Reasoning models (e.g. deepseek-reasoner) stream a THINKING
+                    # phase as ``reasoning_content`` before any ``content`` arrives.
+                    # It is not the answer and is never yielded; count it so the
+                    # caller can tell "model is working" from "returned nothing".
+                    if _delta_obj.get("reasoning_content"):
+                        reasoning_deltas += 1
+                    delta = _delta_obj.get("content")
+                    if delta:
+                        content_deltas += 1
+                        yield delta
+                # usage is recorded by provider_stream at the single egress.
+    except llm_client.ProviderStreamError as e:
+        raise _SynthStreamError(
+            f"{cfg['provider']} HTTP {e.status}: {e.text[:200]}"
+            if e.status else f"{cfg['provider']} stream error: {e.text}"
+        )
     if reasoning_deltas and not content_deltas:
         # HTTP 200 with a full thinking phase and no answer. The caller sees
         # zero tokens and falls back to non-streaming, which is correct but
@@ -605,25 +586,6 @@ async def _stream_synthesis(
             "falling back to non-streaming synthesis",
             cfg["provider"], reasoning_deltas,
         )
-    # Best-effort cost tracking — never let it sink the turn.
-    if usage is not None:
-        try:
-            from app.core import usage_tracker
-            from app.core.offload import off_loop
-            # A database write: off the event loop (live: 628 ms stall at 10 users).
-            await off_loop(
-                usage_tracker.record,
-                user_id=user_id,
-                agent_name=self.name,
-                provider=cfg.get("provider", ""),
-                model=model,
-                usage=usage,
-            )
-        except Exception:  # noqa: BLE001
-            _LOG.warning(
-                "swallowed %s in _stream_synthesis() — continuing",
-                "Exception", exc_info=True,
-            )
     if content_deltas and finish_reason.lower() in ("length", "max_tokens"):
         # Every token is already out; the caller ends the answer on its last
         # whole sentence instead of where the limit fell.

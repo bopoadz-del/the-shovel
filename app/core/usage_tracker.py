@@ -131,14 +131,23 @@ def record(
     model: str,
     usage: Optional[Dict[str, Any]],
 ) -> None:
-    """Persist one LLM round-trip's usage. Safe to call with usage=None
-    (provider didn't return a usage block — nothing recorded)."""
-    if not usage:
-        return
-    pt = int(usage.get("prompt_tokens") or 0)
-    ct = int(usage.get("completion_tokens") or 0)
-    tt = int(usage.get("total_tokens") or (pt + ct))
-    cost = _estimate_cost(provider, model, pt, ct)
+    """Persist one LLM round-trip's usage. A round-trip that returned no usage
+    block is still recorded as a call with tokens unknown (0) — the meter
+    counts the CALL; token/cost totals are unaffected by a zero row. (Before
+    ORDERS_1920Z this no-oped on a falsy usage, so streamed/usage-less calls
+    went uncounted.)"""
+    # A round-trip with no usage block still counts as a CALL, but its tokens
+    # are UNKNOWN, not zero — store NULL so an admin row can tell "we don't know"
+    # apart from "a genuinely empty response" (ORDERS_2050Z). SUM() skips NULLs,
+    # so token/cost totals are unaffected; COUNT() still counts the call.
+    if usage:
+        pt: int | None = int(usage.get("prompt_tokens") or 0)
+        ct: int | None = int(usage.get("completion_tokens") or 0)
+        tt: int | None = int(usage.get("total_tokens") or (pt + ct))
+        cost: float | None = _estimate_cost(provider, model, pt, ct)
+    else:
+        pt = ct = tt = None
+        cost = None
     init_db()
     with _LOCK:
         with SessionLocal() as session:
