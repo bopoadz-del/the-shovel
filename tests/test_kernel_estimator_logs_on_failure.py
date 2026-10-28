@@ -8,6 +8,7 @@ only a kernel BREAK is the surfaced, distinguishable outcome.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 
 import pytest
 
@@ -20,25 +21,47 @@ def _make_kernel_raise(monkeypatch):
     monkeypatch.setattr(_kern, "productivity_manpower_duration", boom)
 
 
-def test_brief_estimator_surfaces_the_kernel_error(monkeypatch, caplog):
+@contextmanager
+def _capture(logger_name):
+    """Capture records straight off the named logger, independent of handler
+    propagation or the ambient log level (pytest ``caplog`` relies on root
+    propagation, which app startup can switch off in CI)."""
+    lg = logging.getLogger(logger_name)
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.setLevel(logging.DEBUG)
+    handler.emit = records.append  # type: ignore[assignment]
+    prev_level, prev_disabled = lg.level, lg.disabled
+    lg.addHandler(handler)
+    lg.setLevel(logging.DEBUG)
+    lg.disabled = False
+    try:
+        yield records
+    finally:
+        lg.removeHandler(handler)
+        lg.setLevel(prev_level)
+        lg.disabled = prev_disabled
+
+
+def test_brief_estimator_surfaces_the_kernel_error(monkeypatch):
     from app.containers.construction import schedule as sched
     _make_kernel_raise(monkeypatch)
-    with caplog.at_level(logging.WARNING, logger="app.containers.construction.schedule"):
+    with _capture("app.containers.construction.schedule") as records:
         days, error = sched._estimate_duration_from_rate(100.0, "50 m2 per gang-day")
     assert days is None  # no fabricated number
     assert error and "kernel error" in error.lower() and "RuntimeError" in error
-    assert any(r.levelno >= logging.WARNING for r in caplog.records), \
+    assert any(r.levelno >= logging.WARNING for r in records), \
         "the kernel break must be logged at a visible level"
 
 
-def test_boq_estimator_surfaces_the_kernel_error(monkeypatch, caplog):
+def test_boq_estimator_surfaces_the_kernel_error(monkeypatch):
     from app.lib import boq_schedule as bs
     _make_kernel_raise(monkeypatch)
-    with caplog.at_level(logging.WARNING, logger="app.lib.boq_schedule"):
+    with _capture("app.lib.boq_schedule") as records:
         days, error = bs._kernel_duration_days(200.0, "40 m3 per gang-day")
     assert days is None
     assert error and "kernel error" in error.lower() and "RuntimeError" in error
-    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+    assert any(r.levelno >= logging.WARNING for r in records)
 
 
 def test_boq_row_duration_basis_names_the_kernel_error_not_unknown(monkeypatch):
