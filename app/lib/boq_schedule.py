@@ -887,6 +887,30 @@ def _items_from_named_boq_docs(project_id: str) -> List[Dict[str, Any]]:
     return collected
 
 
+def _items_from_semantic_retrieval(query: str, project_id: str) -> List[Dict[str, Any]]:
+    """Measured BOQ rows from the semantic ``retrieve_with_filter`` fallback,
+    gated (require_measured_gate=True) so a Conditions-of-Contract or other
+    non-bill chunk contributes nothing. Returned pre-dedupe so the gate is
+    observable at this boundary (rework-2 e; the final structured_boq_rows in
+    the caller would otherwise mask a flipped gate)."""
+    source_id = _resolve_rag_project_id(project_id)
+    try:
+        from app.core.rag.retriever import _doc_name_for_id, retrieve_with_filter
+        chunks, _noise = retrieve_with_filter(query, source_id, k=8)
+    except Exception as exc:  # noqa: BLE001 — named-doc rows still stand
+        logger.warning("BOQ-scope WBS retrieval failed: %s", exc)
+        return []
+    out: List[Dict[str, Any]] = []
+    for chunk in chunks or []:
+        text = getattr(chunk, "text", "") or ""
+        filename = (
+            getattr(chunk, "source_name", "")
+            or _doc_name_for_id(getattr(chunk, "doc_id", "") or "")
+        )
+        out.extend(_items_from_chunk_text(text, filename, require_measured_gate=True))
+    return out
+
+
 def retrieve_boq_scope_items(query: str, project_id: str) -> List[Dict[str, Any]]:
     """Retrieve measured BOQ rows for a BOQ-scope WBS ask (any trade).
 
@@ -903,26 +927,7 @@ def retrieve_boq_scope_items(query: str, project_id: str) -> List[Dict[str, Any]
         collected.extend(_items_from_named_boq_docs(project_id))
     except Exception as exc:  # noqa: BLE001
         logger.warning("BOQ-scope WBS named-doc retrieval failed: %s", exc)
-
-    source_id = _resolve_rag_project_id(project_id)
-    try:
-        from app.core.rag.retriever import _doc_name_for_id, retrieve_with_filter
-        chunks, _noise = retrieve_with_filter(query, source_id, k=8)
-    except Exception as exc:  # noqa: BLE001 — named-doc rows still stand
-        logger.warning("BOQ-scope WBS retrieval failed: %s", exc)
-        chunks = []
-
-    for chunk in chunks or []:
-        text = getattr(chunk, "text", "") or ""
-        filename = (
-            getattr(chunk, "source_name", "")
-            or _doc_name_for_id(getattr(chunk, "doc_id", "") or "")
-        )
-        collected.extend(
-            _items_from_chunk_text(
-                text, filename, require_measured_gate=True,
-            )
-        )
+    collected.extend(_items_from_semantic_retrieval(query, project_id))
     # Elect the later-year bill BEFORE CESMM-code dedupe. Filtering first
     # would keep an earlier-year D110 and drop the later-year twin.
     return structured_boq_rows(

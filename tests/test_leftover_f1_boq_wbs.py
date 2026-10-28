@@ -735,3 +735,47 @@ def test_require_measured_gate_admits_only_structured_rows():
     text = "BOQ line item — General site works: total quantity to be confirmed."
     assert _items_from_chunk_text(text, "", require_measured_gate=True) == []
     assert len(_items_from_chunk_text(text, "", require_measured_gate=False)) == 1
+
+
+_CODELESS_BOQ_LINE = "BOQ line item — General site works: total quantity to be confirmed."
+
+
+def test_named_boq_docs_gate_refuses_codeless_rows(monkeypatch):
+    """rework-2 e (call sites boq_schedule.py:861 doc_chunk_texts + :884
+    chunks_for_docs): the named-doc caller refuses a codeless, measureless
+    'BOQ line item' chunk. Flipping require_measured_gate to False at either
+    call site admits it -> this test fails (kills those mutants). Tested at the
+    caller boundary because the final structured_boq_rows in
+    retrieve_boq_scope_items would otherwise mask the flip."""
+    from app.core.rag.vector_store import Chunk
+    from app.lib import boq_schedule as bs
+    doc = {"id": "d1", "original_name": "bill.pdf", "file_path": "/docs/bill.pdf"}
+    monkeypatch.setattr("app.core.projects.list_documents", lambda *a, **k: [doc])
+    monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: pid)
+
+    class _StoreDocChunk:          # exercises :861 (doc_chunk_texts)
+        def doc_chunk_texts(self, project_id, doc_ids):
+            return {did: [_CODELESS_BOQ_LINE] for did in (doc_ids or [])}
+    monkeypatch.setattr("app.core.rag.vector_store.get_store", lambda **_k: _StoreDocChunk())
+    assert bs._items_from_named_boq_docs("p1") == []
+
+    class _StoreChunksFor:         # exercises :884 (no doc_chunk_texts -> chunks_for_docs)
+        def chunks_for_docs(self, project_id, doc_ids, k_per_doc=12):
+            return [Chunk(chunk_id="c0", project_id=project_id, doc_id="d1",
+                          chunk_index=0, text=_CODELESS_BOQ_LINE)]
+    monkeypatch.setattr("app.core.rag.vector_store.get_store", lambda **_k: _StoreChunksFor())
+    assert bs._items_from_named_boq_docs("p1") == []
+
+
+def test_semantic_retrieval_gate_refuses_codeless_rows(monkeypatch):
+    """rework-2 e (call site boq_schedule.py:923 semantic retrieve): the
+    semantic caller refuses a codeless 'BOQ line item' chunk; flipping the gate
+    False admits it -> this fails (kills that mutant)."""
+    from app.core.rag.vector_store import Chunk
+    from app.lib import boq_schedule as bs
+    monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: pid)
+    ch = Chunk(chunk_id="s0", project_id="p1", doc_id="s0", chunk_index=0, text=_CODELESS_BOQ_LINE)
+    ch.source_name = "notes.pdf"
+    monkeypatch.setattr("app.core.rag.retriever.retrieve_with_filter", lambda *a, **k: ([ch], 0))
+    monkeypatch.setattr("app.core.rag.retriever._doc_name_for_id", lambda did: "notes.pdf")
+    assert bs._items_from_semantic_retrieval("WBS for the BOQ scope", "p1") == []
