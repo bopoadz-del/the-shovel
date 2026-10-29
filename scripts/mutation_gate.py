@@ -152,19 +152,22 @@ class MutantResult:
     path: str
     function: str
     mutant: str
-    outcome: str  # killed | survived | uncovered
+    outcome: str  # killed | survived | uncovered | timeout
 
 
-def run_tests(repo: Path, tests: Sequence[str], workdir: str, pytest_args: Sequence[str]) -> bool:
-    """True when the suite PASSES (i.e. the mutant survived)."""
+def run_tests(repo: Path, tests: Sequence[str], workdir: str, pytest_args: Sequence[str]) -> str:
+    """Outcome of the suite against a mutant: ``survived`` (suite passed),
+    ``killed`` (suite failed) or ``timeout`` -- a hang proves nothing, so it
+    is reported as its own red outcome, never counted as a kill."""
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *pytest_args, *tests],
             check=False, cwd=repo / workdir, capture_output=True, text=True, timeout=TEST_TIMEOUT_S,
         )
-    except subprocess.TimeoutExpired:
-        return False
-    return proc.returncode == 0
+    except subprocess.TimeoutExpired as exc:
+        print(f"mutation_gate: suite timed out after {exc.timeout}s: {list(tests)}", file=sys.stderr)
+        return "timeout"
+    return "survived" if proc.returncode == 0 else "killed"
 
 
 def mutation_gate(repo: Path, base: str, src_roots: Sequence[str], test_roots: Sequence[str], workdir: str, pytest_args: Sequence[str]) -> list[MutantResult]:
@@ -188,10 +191,10 @@ def mutation_gate(repo: Path, base: str, src_roots: Sequence[str], test_roots: S
                     continue
                 try:
                     file.write_text(ast.unparse(ast.fix_missing_locations(mtree)) + "\n", "utf-8")
-                    survived = run_tests(repo, wd_rel, workdir, pytest_args)
+                    outcome = run_tests(repo, wd_rel, workdir, pytest_args)
                 finally:
                     file.write_text(original, "utf-8")
-                results.append(MutantResult(path, fname, kind, "survived" if survived else "killed"))
+                results.append(MutantResult(path, fname, kind, outcome))
     return results
 
 
@@ -222,10 +225,9 @@ def _asserts_value(fn: ast.FunctionDef) -> bool:
 
 
 def _test_fns(src: str) -> dict[str, ast.FunctionDef]:
-    try:
-        tree = ast.parse(src)
-    except SyntaxError:
-        return {}
+    # A test file that does not parse is not linted around: the SyntaxError
+    # propagates and the gate goes red with it.
+    tree = ast.parse(src)
     out = {}
     for n in ast.walk(tree):
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test"):
