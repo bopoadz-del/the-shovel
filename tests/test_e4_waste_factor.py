@@ -12,7 +12,6 @@ THE CAUSE. Leftover L6 aliased unnamed L×W×D to excavation_volume, which
 returns bank volume only. E4 is a concrete/raft ask; the calc path must
 pin concrete_volume and apply the project's documented waste (5%).
 
-Kill switch: APPLY_DOCUMENTED_WASTE=0 restores the FAIL (900).
 These tests pin the machinery (no live LLM, no corpus).
 """
 from __future__ import annotations
@@ -37,9 +36,7 @@ from app.lib import construction_formulas as _cf
 from app.lib.construction_formulas_quantities import (
     DOCUMENTED_CONCRETE_WASTE_FACTOR,
     answer_states_volume,
-    compose_concrete_volume_enabled,
     compose_concrete_volume_from_ask,
-    documented_waste_enabled,
     format_concrete_volume_line,
     looks_like_concrete_volume_ask,
     parse_lwt_metres,
@@ -227,33 +224,6 @@ def test_resolve_is_a_no_op_for_leftover_l6():
 
 
 # ── kill switch / mutation ──────────────────────────────────────────────────
-
-
-def test_kill_switch_restores_the_fail_900(monkeypatch):
-    """APPLY_DOCUMENTED_WASTE=0 is the operator's escape hatch and the
-    mutation that proves the waste factor is load-bearing."""
-    monkeypatch.setenv("APPLY_DOCUMENTED_WASTE", "0")
-    assert not documented_waste_enabled()
-    r = _cf.run_calculation(
-        "concrete_volume",
-        {"length_m": 30, "width_m": 20, "thickness_m": 1.5, "text": E4_ASK_ASCII},
-    )
-    assert r.get("status") == "success", r
-    assert _net(r) == pytest.approx(900.0)
-    assert _volume(r) == pytest.approx(900.0)
-    assert r["result"]["waste_factor"] == pytest.approx(0.0)
-
-
-@pytest.mark.asyncio
-async def test_kill_switch_on_the_container_path_returns_900(monkeypatch):
-    monkeypatch.setenv("APPLY_DOCUMENTED_WASTE", "0")
-    r = await ConstructionContainer().construction_calc(
-        {"text": E4_ASK_UNICODE},
-        {"action": "construction_calc"},
-    )
-    assert r.get("status") == "success", r
-    assert _volume(r) == pytest.approx(900.0)
-    assert _volume(r) != pytest.approx(945.0)
 
 
 def test_mutation_resolve_no_op_leaves_excavation_900():
@@ -457,17 +427,6 @@ def test_construction_calc_success_still_forces_synthesis():
         },
     }
     assert _should_force_synthesis(rec) is True
-
-
-def test_compose_kill_switch_restores_the_validate_hang(monkeypatch):
-    monkeypatch.setenv("COMPOSE_CONCRETE_VOLUME", "0")
-    assert not compose_concrete_volume_enabled()
-    assert compose_concrete_volume_from_ask(E4_ASK_UNICODE) is None
-    out = _graft_composed_concrete_volume(
-        E4_VALIDATE_PREAMBLE, _e4_msgs(),
-    )
-    assert out == E4_VALIDATE_PREAMBLE
-    assert "945" not in out
 
 
 def test_format_line_names_waste_and_945():

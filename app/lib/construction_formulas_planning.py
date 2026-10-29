@@ -115,7 +115,7 @@ def format_productivity_cost_line(inner: dict, currency: str = "SAR") -> str:
     return ". ".join(bits) + "."
 
 def compose_productivity_cost_from_ask(text: str) -> dict | None:
-    """Run duration × gang-day rate from the operator ask (live A2-1)."""
+    """Run duration × gang-day rate from the operator ask."""
     if not looks_like_productivity_cost_ask(text):
         return None
     qty, daily, cost, currency = parse_productivity_cost_ask(text)

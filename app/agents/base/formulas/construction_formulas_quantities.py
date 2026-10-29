@@ -6,15 +6,9 @@ from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import logging
 import math
-import os
 
 
 logger = logging.getLogger(__name__)
-
-def documented_waste_enabled() -> bool:
-    """ON by default. ``APPLY_DOCUMENTED_WASTE=0/false/no/off`` is the kill-switch."""
-    raw = (os.getenv("APPLY_DOCUMENTED_WASTE", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
 
 def _concrete_quantity(quantity: float) -> float | None:
     """Element count. None when the value is not a positive number."""
@@ -69,8 +63,8 @@ def concrete_volume(
     ``quantity`` is how many such elements (24 pile caps). It used to be
     dropped on bind, so a follow-up priced one cap.
 
-    Headline ``volume_m3`` is the with-waste figure (E4 expects 945, not net
-    900). ``APPLY_DOCUMENTED_WASTE=0`` zeros the factor and restores net.
+    Headline ``volume_m3`` is the with-waste figure (net volume × the
+    documented waste factor), not the net figure.
     """
     if min(float(length_m), float(width_m), float(thickness_m),
            float(diameter_m), float(height_m), float(top_width_m),
@@ -79,10 +73,7 @@ def concrete_volume(
     qty = _concrete_quantity(quantity)
     if qty is None:
         return {"error": "concrete_volume quantity must be > 0."}
-    if not documented_waste_enabled():
-        waste_factor = 0.0
-    else:
-        waste_factor = float(waste_factor)
+    waste_factor = float(waste_factor)
     if waste_factor < 0:
         return {"error": "waste_factor must be >= 0."}
     s = (shape or "rectangular").strip().lower()

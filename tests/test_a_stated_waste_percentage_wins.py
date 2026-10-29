@@ -95,11 +95,6 @@ def test_an_ask_with_no_waste_words_at_all_still_gets_the_default():
     assert out["waste_factor"] == pytest.approx(0.05)
 
 
-def test_the_kill_switch_still_zeroes_it(monkeypatch):
-    monkeypatch.setenv("APPLY_DOCUMENTED_WASTE", "0")
-    assert _resolved(ASK)["waste_factor"] == pytest.approx(0.0)
-
-
 def test_a_nonsense_percentage_falls_back_rather_than_poisoning_the_quantity():
     # 900% waste is a parse artefact, not an instruction.
     assert q.waste_factor_from_text("add 900% waste") is None
