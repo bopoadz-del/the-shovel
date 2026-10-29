@@ -1,7 +1,8 @@
 """Per-project chunk store backed by SQLAlchemy.
 
 Storage shape: one row per chunk in the ``chunks`` table. On PostgreSQL
-embeddings use ``pgvector`` ``vector(256)`` with cosine-distance ANN search
+embeddings use ``pgvector`` ``vector(N)`` (N = the model's dimension, 384 for
+the default BAAI/bge-small-en-v1.5) with cosine-distance ANN search
 (``ORDER BY embedding <=> :q`` scoped by ``project_id``). On SQLite the
 same table stores float32 BLOBs and search falls back to numpy cosine
 similarity over the project's rows — slower but works everywhere.
@@ -39,8 +40,12 @@ from sqlalchemy.orm import Session
 import json as json_lib
 
 from app.core.db import _engine_for_url, _session_factory_for_url, get_database_url
-from app.core.models import EMBEDDING_DIM, Document, Project
+from app.core.models import Document, Project
 from app.core.models import make_rag_chunk_class, rag_chunk_table_name
+# S1: the fallback table width derives from the one config dim — the resolved
+# default embedder (BAAI/bge-small-en-v1.5, 384) — NOT the legacy models.py
+# EMBEDDING_DIM (256, the old `chunks` table). get_store() still prefers the
+# live embedder's actual dim; this only sets the width for a brand-new store.
 from app.core.rag.embeddings import get_embedder
 from app.core.rag.text_repair import repair_fake_bold
 
@@ -512,7 +517,12 @@ def get_lexical_store(
     if not model_name:
         model_name = (os.getenv("RAG_EMBEDDING_MODEL") or "").strip() or "unknown"
     if not dim:
-        dim = EMBEDDING_DIM
+        # No stored width (empty/new table): open at the CONFIGURED embedder's
+        # actual dimension, never a hardcoded constant, so the table width is
+        # the width that will be written. model_name "unknown" == env unset ->
+        # resolve the default embedder.
+        probe = None if model_name == "unknown" else model_name
+        dim = get_embedder(model_name=probe).identity["dim"]
 
     key = (url, ns, model_name, dim)
     with _CACHE_LOCK:
@@ -932,12 +942,16 @@ class VectorStore:
     def __init__(
         self,
         db_path: str,
-        dim: int = EMBEDDING_DIM,
+        dim: Optional[int] = None,
         namespace: Optional[str] = None,
         model_name: Optional[str] = None,
     ):
         self.db_path = db_path
-        self.dim = dim
+        # No explicit width -> follow the configured embedder's actual dim, so
+        # the store table width always matches the vectors written. Never a
+        # hardcoded constant (all real callers pass an explicit dim via
+        # get_store(); this resolves the safety-net default only).
+        self.dim = dim if dim is not None else get_embedder(model_name=model_name).identity["dim"]
         self.namespace = namespace if namespace is not None else _rag_vector_namespace()
         if self.namespace == "" and _is_production():
             # namespace "" is the RETIRED legacy ``chunks`` table. Production
@@ -1049,26 +1063,17 @@ class VectorStore:
             return set()
         return {str(r) for r in rows}
 
-    def _verify_embedding_identity(self) -> None:
-        """Fail loud if the namespace contains chunks from a different model.
-
-        Checks a representative row. If any row has a different model/dim/
-        normalized flag, the store refuses to operate. This is the structural
-        guard that makes mixed-model contamination impossible.
-
-        Skipped for the legacy namespace because the original ``chunks`` table
-        predates the identity columns; it is retired in place and never used
-        for new embeddings.
-        """
+    def check_identity(self) -> Optional[Dict[str, Any]]:
+        """Read-only: compare the stored corpus identity (model/dim/normalized)
+        to this store's resolved embedder. Returns ``None`` when they match (or
+        there is nothing to check — legacy namespace or empty table), else
+        ``{"expected": ..., "stored": ...}`` (model names + dims only, no
+        secrets). The dim is the load-bearing field: a 384-dim index queried by
+        a 256-dim embedder returns garbage."""
         cls = self._rag_chunk_cls
-        # Legacy table has no identity columns — nothing to verify.
         if not hasattr(cls, "embedding_model"):
-            return
-        expected = {
-            "model": self.model_name,
-            "dim": self.dim,
-            "normalized": True,
-        }
+            return None
+        expected = {"model": self.model_name, "dim": self.dim, "normalized": True}
         with self._lock:
             with self._session_factory()() as session:
                 row = session.execute(
@@ -1079,16 +1084,26 @@ class VectorStore:
                     ).limit(1)
                 ).first()
         if row is None:
-            return
+            return None
         stored = {
             "model": row.embedding_model,
             "dim": row.embedding_dim,
             "normalized": row.embedding_normalized,
         }
-        if stored != expected:
+        return None if stored == expected else {"expected": expected, "stored": stored}
+
+    def _verify_embedding_identity(self) -> None:
+        """Fail loud if the namespace contains chunks from a different model.
+
+        The structural guard that makes mixed-model contamination impossible,
+        enforced on the write path. Skipped for the legacy namespace, whose
+        original ``chunks`` table predates the identity columns.
+        """
+        mismatch = self.check_identity()
+        if mismatch is not None:
             raise RuntimeError(
                 f"Embedding identity mismatch in namespace {self.namespace!r}: "
-                f"expected {expected}, found {stored}. "
+                f"expected {mismatch['expected']}, found {mismatch['stored']}. "
                 f"Mixed-model namespaces are not allowed."
             )
 
@@ -2442,3 +2457,37 @@ def _rrf_combine(
         scored.append((rrf, c))
     scored.sort(key=lambda x: -x[0])
     return [c for _, c in scored[:top_k]]
+
+
+# ── Boot-time serving gate (S1) ──────────────────────────────────────────────
+# A dim/model mismatch between the live index and the resolved embedder makes
+# retrieval silently wrong, so the service refuses to serve until it is fixed
+# (the readiness gate reads this). Set once at startup, names/dims only.
+_IDENTITY_SERVING_BLOCKED = False
+
+
+def identity_serving_blocked() -> bool:
+    return _IDENTITY_SERVING_BLOCKED
+
+
+def run_boot_identity_check() -> Optional[Dict[str, Any]]:
+    """At startup, compare the live corpus identity to the resolved embedder.
+    Logs an ERROR (model/dim only — no secrets) and blocks serving on a
+    mismatch. Best-effort: an empty/new store or an unreadable probe is NOT a
+    mismatch. Returns the mismatch dict or None."""
+    global _IDENTITY_SERVING_BLOCKED
+    try:
+        mismatch = get_store().check_identity()
+    except Exception:  # noqa: BLE001 — a boot probe never crashes startup
+        logger.info("boot identity check: store probe skipped", exc_info=True)
+        return None
+    if mismatch is not None:
+        _IDENTITY_SERVING_BLOCKED = True
+        logger.error(
+            "EMBEDDER IDENTITY MISMATCH — refusing to serve: index is "
+            "model=%s dim=%s but the resolved embedder is model=%s dim=%s. "
+            "Set RAG_EMBEDDING_MODEL to the index's model (or re-embed).",
+            mismatch["stored"]["model"], mismatch["stored"]["dim"],
+            mismatch["expected"]["model"], mismatch["expected"]["dim"],
+        )
+    return mismatch

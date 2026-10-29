@@ -133,6 +133,23 @@ def rag_chunk_class_for(namespace: str):
     return _RAG_CHUNK_CLASS_CACHE.get(namespace)
 
 
+def _mapped_rag_chunk_class_for_table(table_name: str):
+    """The mapped class already bound to ``table_name`` on the shared
+    ``Base.metadata``, or ``None``.
+
+    Lets ``make_rag_chunk_class`` register a table exactly ONCE on the one
+    MetaData, whatever the import/shard order: if the table is already there
+    (e.g. the per-namespace cache was cleared while the metadata persisted),
+    its existing mapper is reused instead of a colliding second ``type()``.
+    """
+    if table_name not in Base.metadata.tables:
+        return None
+    for mapper in Base.registry.mappers:
+        if getattr(mapper.class_, "__tablename__", None) == table_name:
+            return mapper.class_
+    return None
+
+
 def make_rag_chunk_class(
     namespace: str,
     dim: int,
@@ -178,6 +195,17 @@ def make_rag_chunk_class(
         return cached
 
     table_name = rag_chunk_table_name(namespace)
+    # Idempotent SINGLE registration (rework-2 #1): if this table is already on
+    # Base.metadata — because the module-level cache was cleared/reset while the
+    # shared MetaData persisted, or two shards/imports reached here in either
+    # order — reuse the mapped class already bound to it. A second
+    # ``type(class_name, (Base,), {"__tablename__": table_name})`` would raise
+    # "Table '<table>' is already defined for this MetaData instance". One
+    # table has one mapper, registered once, order-independent, no skip/retry.
+    existing = _mapped_rag_chunk_class_for_table(table_name)
+    if existing is not None:
+        _RAG_CHUNK_CLASS_CACHE[namespace] = existing
+        return existing
     vector_type = make_embedding_vector(dim)
     class_name = f"RagChunk_{namespace or 'legacy'}_{dim}"
 

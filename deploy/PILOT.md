@@ -60,7 +60,7 @@ Copy `.env.example` → `.env` and set at minimum:
 | `UVICORN_WORKERS`      | `1` on Render starter; `2` only after RAM upgrade                             |
 | `REDIS_URL`            | Shared Redis for sessions/rate limits (optional)                              |
 | `SENTRY_DSN`           | Project DSN                                                                   |
-| `RAG_EMBEDDING_MODEL`  | **Unset** on Render (model2vec 256-dim default) or `minishlab/potion-base-8M` |
+| `RAG_EMBEDDING_MODEL`  | `BAAI/bge-small-en-v1.5` (384-dim) — the baked/served default; unset resolves to the same (S1). The old model2vec 256-dim default is retired. |
 
 
 ## 4. Boot and smoke

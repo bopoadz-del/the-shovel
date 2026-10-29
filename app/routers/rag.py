@@ -91,7 +91,6 @@ async def rag_search(
     """
     from app.core.rag import retriever as _r
     from app.core.rag.vector_store import get_store
-    from app.core.models import EMBEDDING_DIM
 
     # Access check FIRST: an unauthorised caller must not be able to tell
     # "no such project" from "the RAG stack is not installed" either.
@@ -115,7 +114,9 @@ async def rag_search(
         # Unexpected — log + 503 so dashboards can surface "retrieval down"
         raise HTTPException(status_code=503, detail=f"retrieval failed: {exc}")
 
-    store = get_store(dim=EMBEDDING_DIM)
+    # No hardcoded dim: the store width follows the resolved embedder's actual
+    # dimension so it always matches the vectors in the index (S1).
+    store = get_store()
     return RagSearchResponse(
         chunks=[
             RagSearchChunk(
