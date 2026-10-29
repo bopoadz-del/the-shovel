@@ -101,6 +101,24 @@ def _run_sandboxed_with_timeout(
     )
 
 
+
+def kernel_covering(task: str) -> Optional[str]:
+    """Registry kernel name the ask names (name or display phrase), else None.
+
+    Order of preference: kernel, then Store, then labelled improvisation.
+    No Store formula lookup exists in this repo yet, so a miss here falls
+    through to codegen, whose output is labelled ``improvised``.
+    """
+    try:
+        from app.lib.construction_formulas import calculator_name_from_text
+        from app.lib import formula_registry
+    except Exception:  # noqa: BLE001 -- never break the block on import
+        return None
+    name = calculator_name_from_text(task or "")
+    if name and formula_registry.get(name) is not None:
+        return name
+    return None
+
 class FormulaExecutorV2Block(UniversalBlock):
     name = "formula_executor_v2"
     version = "2.0.0"
@@ -133,7 +151,7 @@ class FormulaExecutorV2Block(UniversalBlock):
             ],
         },
         "quick_actions": [
-            {"icon": "", "label": "Calculate", "prompt": "Calculate concrete volume for a 10x8m slab, 200mm thick"},
+            {"icon": "", "label": "Calculate", "prompt": "Area of a 10 x 8 m room minus a 2 x 1 m void"},
         ],
     }
 
@@ -171,6 +189,19 @@ class FormulaExecutorV2Block(UniversalBlock):
         if not task.strip():
             return _error("No task description provided")
 
+        # Kernel first: when a registered kernel formula covers the ask, the
+        # model must not write its own -- refuse codegen and name the kernel.
+        kernel = kernel_covering(task)
+        if kernel:
+            return {
+                "status": "error",
+                "error": f"kernel {kernel} covers this; use construction_calc",
+                "kernel": kernel,
+                "use_action": "construction_calc",
+                "provenance": "kernel",
+                "task": task,
+            }
+
         timeout_seconds = int(self.config.get("timeout_seconds", 10))
         session = data.get("session") or params.get("session")
         key = _cache_key(task, variables)
@@ -184,6 +215,8 @@ class FormulaExecutorV2Block(UniversalBlock):
             if sandbox.success:
                 return {
                     "status": "success",
+                    "provenance": "improvised",
+                    "certified": False,
                     "generated_code": cached_code,
                     "result": sandbox.result,
                     "stdout": sandbox.stdout,
@@ -242,6 +275,8 @@ class FormulaExecutorV2Block(UniversalBlock):
                     session.code_cache[key] = code
                 return {
                     "status": "success",
+                    "provenance": "improvised",
+                    "certified": False,
                     "generated_code": code,
                     "result": sandbox.result,
                     "stdout": sandbox.stdout,
