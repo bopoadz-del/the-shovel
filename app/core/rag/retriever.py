@@ -699,17 +699,13 @@ class _ContractScope:
                         )
                         for _n, text in scoped
                     )
-                    if priced_boq_compose_enabled():
-                        self._priced_item_in_pool = any(
-                            chunk_states_priced_item(
-                                text, self._rate_only_codes, query=self.query,
-                            )
-                            for _n, text in scoped
+                    self._priced_item_in_pool = any(
+                        chunk_states_priced_item(
+                            text, self._rate_only_codes, query=self.query,
                         )
-            if (
-                part_summary_compose_enabled()
-                and query_asks_for_part_summary_total(self.query)
-            ):
+                        for _n, text in scoped
+                    )
+            if query_asks_for_part_summary_total(self.query):
                 self._part_summary_refs = extract_asked_boq_page_refs(
                     self.query,
                 )
@@ -6868,18 +6864,15 @@ def percentage_of_aca_excerpts_from_loaded_cd_volume(
     Advance-payment amount ask: top-k had neither operand and the model shipped the
     fetch truncation notice. When those rows exist later in the same
     volume, return them so compose can state SAR — do not invent a
-    figure. Kill-switch: COMPOSE_PERCENTAGE_OF_ACA=0.
+    figure.
     """
     try:
         from app.lib.construction_formulas_commercial import (
-            compose_percentage_of_aca_enabled,
             extract_named_percentage_particular,
             query_asks_percentage_particular_in_money,
         )
     except Exception:  # noqa: BLE001 — never break a turn over an import
         logger.debug("percentage-of-ACA import failed", exc_info=True)
-        return ""
-    if not compose_percentage_of_aca_enabled():
         return ""
     if not query_asks_percentage_particular_in_money(query):
         return ""
@@ -6910,20 +6903,16 @@ def milestone_period_excerpts_from_loaded_cd_volume(
     """Join Milestone N | a milestone rate rows + excl-VAT ACA from the loaded volume.
 
     Per-milestone delay damages ask: top-k packed whole-of-Works 0.1% under "per Milestone".
-    Scan for the real milestone rate rows. Kill-switch:
-    COMPOSE_DELAY_DAMAGES_PERIOD=0.
+    Scan for the real milestone rate rows.
     """
     try:
         from app.lib.construction_formulas_commercial import (
-            compose_delay_damages_period_enabled,
             parse_asked_milestones,
             parse_milestone_delay_rate_percent,
             query_asks_delay_damages_over_a_period,
         )
     except Exception:  # noqa: BLE001 — never break a turn over an import
         logger.debug("milestone-period import failed", exc_info=True)
-        return ""
-    if not compose_delay_damages_period_enabled():
         return ""
     if not query_asks_delay_damages_over_a_period(query):
         return ""
@@ -7679,7 +7668,7 @@ def answer_states_rate_only(text: str) -> bool:
 # currency token between @/= and the figure. B4 is often bare
 # ``340904 m2 31.00 10568024``. Compose from the isolated window
 # only. Do not invent: qty × rate must already equal the printed
-# amount. Kill-switch: COMPOSE_PRICED_BOQ_ROW=0 restores the hang.
+# amount.
 _BOQ_CURRENCY_ATOM = (
     r"(?:SAR|SR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR|EGP|CNY|INR|JPY|riyal[s]?)"
 )
@@ -7723,10 +7712,6 @@ def _priced_boq_triples(blob: str):
     yield from _PRICED_BOQ_TRIPLE_RE.finditer(blob)
     yield from _PRICED_BOQ_TRIPLE_UNIT_FIRST_RE.finditer(blob)
 
-
-def priced_boq_compose_enabled() -> bool:
-    """ON by default. ``COMPOSE_PRICED_BOQ_ROW=0`` restores the B4/B5 empty hang."""
-    return _env_flag_on("COMPOSE_PRICED_BOQ_ROW")
 
 
 def _plain_boq_number(value: float) -> str:
@@ -7809,8 +7794,6 @@ def compose_priced_boq_row(query: str, excerpt: str) -> Optional[Dict[str, Any]]
     Rate-Only-only ask and an Excluded-only culvert are not this.
     Does not invent: qty × rate must already equal the printed amount.
     """
-    if not priced_boq_compose_enabled():
-        return None
     codes = extract_asked_cesmm_codes(query)
     if not codes or not excerpt:
         return None
@@ -7881,7 +7864,7 @@ def answer_states_priced_boq(text: str, parsed: Dict[str, Any]) -> bool:
 # code. Line-item chunks from the same demolition page (D110 / D290.1)
 # outrank the sparse footer, then synthesis hangs or says the total
 # was not found. Compose the printed page total only — do not sum
-# OCR line items. Kill-switch: COMPOSE_PART_SUMMARY=0.
+# OCR line items.
 _BOQ_PAGE_REF_RE = re.compile(
     r"(?i)\b([A-Za-z])\s*[/\-]\s*(\d{1,3})\s*[/\-]\s*(\d{1,3})\b"
 )
@@ -7940,10 +7923,6 @@ _PART_SUMMARY_ROW_CUT_RE = re.compile(
     r"\bpart\s+summary\b)"
 )
 
-
-def part_summary_compose_enabled() -> bool:
-    """ON by default. ``COMPOSE_PART_SUMMARY=0`` restores the B3 hang."""
-    return _env_flag_on("COMPOSE_PART_SUMMARY")
 
 
 def normalize_boq_page_ref(token: str) -> str:
@@ -8182,8 +8161,6 @@ def compose_part_summary_total(
     The figure must already be printed next to a Part Summary / page-
     total label. Line items on the same page are not summed.
     """
-    if not part_summary_compose_enabled():
-        return None
     refs = extract_asked_boq_page_refs(query)
     if not refs or not excerpt:
         return None
@@ -8242,8 +8219,6 @@ def compose_combined_part_summary_total(
     Example: 1,000 + 2,500 + 4,000 = 7,500.
     Does not invent a missing page and does not elect a neighbour.
     """
-    if not part_summary_compose_enabled():
-        return None
     if not query_asks_combined_part_summary(query):
         return None
     refs = extract_asked_boq_page_refs(query)
@@ -8328,8 +8303,6 @@ def _apply_part_summary_boost(
     scored: List[Tuple[float, Chunk]],
 ) -> None:
     """In-place: lift the asked Part Summary page total over line items."""
-    if not part_summary_compose_enabled():
-        return
     if not query_names_part_summary_pages(query):
         return
     refs = extract_asked_boq_page_refs(query)
@@ -8357,8 +8330,6 @@ def _pool_page_total_rows(
     backup when the sparse footer never entered the candidate set.
     Failures never raise. GK rate-book notes are not searched.
     """
-    if not part_summary_compose_enabled():
-        return 0
     if not query_names_part_summary_pages(query):
         return 0
     refs = extract_asked_boq_page_refs(query)
@@ -8445,8 +8416,6 @@ def _apply_priced_boq_boost(
     scored: List[Tuple[float, Chunk]],
 ) -> None:
     """In-place: lift the asked priced CESMM row over Rate Only / Excluded."""
-    if not priced_boq_compose_enabled():
-        return
     if not query_asks_for_boq_item_amount(query):
         return
     codes = extract_asked_cesmm_codes(query)

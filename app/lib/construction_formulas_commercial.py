@@ -35,8 +35,6 @@ logger = logging.getLogger(__name__)
 # ACA ask surfaces the ACA.
 # The model quoted sources and never multiplied. This path composes
 # rate × ACA into a daily figure and must not invent either operand.
-# Kill-switch: COMPOSE_DELAY_DAMAGES_DAILY=0 restores the FAIL (rate
-# quoted, no SAR/day). Distinct from the delay-rate rescue (#503).
 _DD_ASK_RE = re.compile(r"(?i)(?:delay|liquidated)\s+damages")
 
 _DD_CAP_KEY_RE = re.compile(
@@ -110,11 +108,6 @@ _TOY_EXAMPLE_CUE_RE = re.compile(
     r"(?i)\b(?:for\s+example|worked\s+example|daily\s+amount|"
     r"if\s+the\s+accepted\s+contract\s+amount)\b",
 )
-
-def compose_delay_damages_daily_enabled() -> bool:
-    """ON by default. ``COMPOSE_DELAY_DAMAGES_DAILY=0`` is the kill-switch."""
-    raw = (os.getenv("COMPOSE_DELAY_DAMAGES_DAILY", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
 
 def delay_damages_rate_is_coc_lookalike(rate: float, ctx: str = "") -> bool:
     """True for CoC 8.7/8.8 0.015%-of-ACA, not Contract Data 0.1% of Price.
@@ -793,11 +786,9 @@ def compose_delay_damages_daily_from_excerpts(
 ) -> dict | None:
     """Compose rate × ACA from retrieved client text, or None.
 
-    Returns None when the ask is not a daily-amount ask, the kill-switch is off,
-    or either operand is missing — never invents a figure.
+    Returns None when the ask is not a daily-amount ask or either operand is
+    missing — never invents a figure.
     """
-    if not compose_delay_damages_daily_enabled():
-        return None
     # The cap is a percentage of the Accepted Contract Amount, not SAR/day.
     if query_names_delay_damages_cap(query):
         return None
@@ -917,14 +908,6 @@ _UNBOUND_DD_NOTE_RE = re.compile(
     r"(?i)0\s*%\s+of\s+(?:SAR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR)"
     r"\s+0(?:\.00)?",
 )
-
-def compose_percentage_of_aca_enabled() -> bool:
-    raw = (os.getenv("COMPOSE_PERCENTAGE_OF_ACA", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-def compose_delay_damages_period_enabled() -> bool:
-    raw = (os.getenv("COMPOSE_DELAY_DAMAGES_PERIOD", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
 
 def _asked_percentage_spec(query: str):
     q = query or ""
@@ -1125,8 +1108,6 @@ def compose_percentage_of_aca_from_excerpts(
     excerpts: str,
 ) -> dict | None:
     """Compose named-row % × ACA, or None. Never invents an operand."""
-    if not compose_percentage_of_aca_enabled():
-        return None
     if not query_asks_percentage_particular_in_money(query):
         return None
     parsed = extract_named_percentage_particular(query, excerpts)
@@ -1348,8 +1329,6 @@ def compose_delay_damages_over_period_from_excerpts(
     the whole-of-Works 0.1% when the ask is a Milestone scenario — that
     product is a different figure.
     """
-    if not compose_delay_damages_period_enabled():
-        return None
     if not query_asks_delay_damages_over_a_period(query):
         return None
     days = parse_delay_period_days(query)

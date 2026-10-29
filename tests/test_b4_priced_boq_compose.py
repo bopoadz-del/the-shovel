@@ -14,8 +14,7 @@ isolated window. Live REAL SHIP #547 tip d94b740 then FAILed B5:
 
 Ship-pack OCR is ``3,504 m @ SAR 80.00 = SAR 280,320.00`` — a currency
 token the B4 triple regex did not accept. Expected: 3,504 @ 80.00 =
-280,320. G4 (D529.3) stays Rate Only. Kill-switch:
-COMPOSE_PRICED_BOQ_ROW=0 restores the empty hang.
+280,320. G4 (D529.3) stays Rate Only.
 """
 from __future__ import annotations
 
@@ -40,7 +39,6 @@ from app.core.rag.retriever import (
     chunk_states_rate_only_item,
     compose_priced_boq_row,
     format_priced_boq_line,
-    priced_boq_compose_enabled,
 )
 from app.core.rag.vector_store import Chunk
 from tests._fixture_values import STUB_TOKEN_02
@@ -192,20 +190,6 @@ def test_compose_does_not_invent_from_rate_only_or_excluded():
     assert compose_priced_boq_row(LIVE_B4, priced_excluded) is None
 
 
-def test_kill_switch_restores_the_empty_hang(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PRICED_BOQ_ROW", "0")
-    assert priced_boq_compose_enabled() is False
-    assert compose_priced_boq_row(LIVE_B4, SOUP) is None
-    assert compose_priced_boq_row(LIVE_B5, LIVE_B5_SAR) is None
-    rag = _sys(SOUP)
-    out = _graft_priced_boq_item("", rag, _msgs(LIVE_B4))
-    assert out == ""
-    assert not _has_b4_figures(out)
-    b5 = _graft_priced_boq_item("", _sys(LIVE_B5_SAR), _msgs(LIVE_B5))
-    assert b5 == ""
-    assert not _has_b5_figures(b5)
-
-
 def _plain(value: float) -> str:
     return str(int(round(value)))
 
@@ -317,14 +301,6 @@ def test_retry_skip_composes_instead_of_another_llm_hop():
     assert answer_states_priced_boq(filled, parsed)
 
 
-def test_retry_skip_is_off_when_kill_switch(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PRICED_BOQ_ROW", "0")
-    rag = _sys(SOUP)
-    assert _compose_priced_boq_instead_of_retry(
-        SEARCH_PROMISE, rag, _msgs(LIVE_B4),
-    ) == ""
-
-
 def test_inject_fires_priced_header_on_b4_not_g4():
     chunks = [
         Chunk(
@@ -379,14 +355,6 @@ def test_short_circuit_skips_provider_when_priced_row_is_in_rag():
     ) == ""
     assert _should_short_circuit_priced_boq(
         rag, _msgs(LIVE_G4), has_predispatch=False,
-    ) == ""
-
-
-def test_short_circuit_kill_switch_restores_provider_hop(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PRICED_BOQ_ROW", "0")
-    rag = _sys(SOUP)
-    assert _should_short_circuit_priced_boq(
-        rag, _msgs(LIVE_B4), has_predispatch=False,
     ) == ""
 
 
@@ -516,17 +484,6 @@ def test_short_circuit_skips_provider_when_b5_priced_row_is_in_rag():
     ) == ""
     assert _should_short_circuit_priced_boq(
         rag, _msgs(LIVE_G4), has_predispatch=False,
-    ) == ""
-
-
-def test_short_circuit_b5_kill_switch_restores_provider_hop(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PRICED_BOQ_ROW", "0")
-    rag = _sys(LIVE_B5_SAR)
-    assert _should_short_circuit_priced_boq(
-        rag, _msgs(LIVE_B5), has_predispatch=False,
-    ) == ""
-    assert _compose_priced_boq_instead_of_retry(
-        B5_SEARCH_PROMISE, rag, _msgs(LIVE_B5),
     ) == ""
 
 

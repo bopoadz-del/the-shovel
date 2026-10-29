@@ -12,8 +12,7 @@ the demolition bill is indexed — the sparse Part Summary footer lost
 to line items and compose never ran (B4/B5 require a CESMM code).
 
 Sanitized fixture S2 prints 40,560.00 on that page. Live-shaped OCR
-below pins 34,645,529.00. Do not sum line items. Kill-switch:
-COMPOSE_PART_SUMMARY=0 restores the empty hang.
+below pins 34,645,529.00. Do not sum line items.
 """
 from __future__ import annotations
 
@@ -38,7 +37,6 @@ from app.core.rag.retriever import (
     compose_priced_boq_row,
     extract_asked_boq_page_refs,
     format_part_summary_line,
-    part_summary_compose_enabled,
     query_asks_for_boq_item_amount,
     query_asks_for_part_summary_total,
 )
@@ -181,16 +179,6 @@ def test_compose_does_not_elect_line_item_rate_from_same_page():
     assert _plain(parsed["amount"]) != "10560"
 
 
-def test_kill_switch_restores_the_empty_hang(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PART_SUMMARY", "0")
-    assert part_summary_compose_enabled() is False
-    assert compose_part_summary_total(LIVE_B3, S2) is None
-    assert compose_part_summary_total(LIVE_B3, LIVE_OCR) is None
-    out = _graft_part_summary_total("", _sys(S2), _msgs(LIVE_B3))
-    assert out == ""
-    assert not _has_fixture_total(out)
-
-
 def test_graft_replaces_empty_echo_not_found_and_search_promise():
     rag = _sys(S2)
     for hung in (
@@ -234,14 +222,6 @@ def test_retry_skip_composes_instead_of_another_llm_hop():
     assert answer_states_part_summary(filled, parsed)
 
 
-def test_retry_skip_is_off_when_kill_switch(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PART_SUMMARY", "0")
-    rag = _sys(S2)
-    assert _compose_part_summary_instead_of_retry(
-        SEARCH_PROMISE, rag, _msgs(LIVE_B3),
-    ) == ""
-
-
 def test_inject_fires_part_summary_header_on_b3_not_b4():
     chunks = [
         Chunk(
@@ -267,14 +247,6 @@ def test_short_circuit_skips_provider_when_summary_is_in_rag():
     ) == ""
     assert _should_short_circuit_part_summary(
         rag, _msgs(LIVE_B4), has_predispatch=False,
-    ) == ""
-
-
-def test_short_circuit_kill_switch_restores_provider_hop(monkeypatch):
-    monkeypatch.setenv("COMPOSE_PART_SUMMARY", "0")
-    rag = _sys(S2)
-    assert _should_short_circuit_part_summary(
-        rag, _msgs(LIVE_B3), has_predispatch=False,
     ) == ""
 
 
@@ -410,7 +382,6 @@ def _install_b3_corpus(monkeypatch, *, extra_summary: bool):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
     monkeypatch.delenv("MASTER_CORPUS_SOURCE_PROJECT_ID", raising=False)
-    monkeypatch.delenv("COMPOSE_PART_SUMMARY", raising=False)
     monkeypatch.delenv("RAG_LAYERED", raising=False)
     return ret
 

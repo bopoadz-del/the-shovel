@@ -6617,11 +6617,6 @@ def _strip_conflicting_whole_works_tfc_claims(text: str, elected_days: str) -> s
     return cleaned.strip()
 
 
-def _graft_asked_contract_particular_enabled() -> bool:
-    raw = (os.getenv("GRAFT_ASKED_CONTRACT_PARTICULAR", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-
 def _graft_asked_contract_particular(
     text: str,
     rag_sys_msg: dict[str, Any] | None,
@@ -6634,13 +6629,11 @@ def _graft_asked_contract_particular(
     DeepSeek answered a neighboring field (delay damages for an including-VAT
     ACA ask) or reported the particular absent after retrieving permit
     trackers / CoC 1.3–1.8. Compose nothing — only fire when the excerpt
-    already states the asked value. Kill-switch: GRAFT_ASKED_CONTRACT_PARTICULAR=0.
-    ``project_id`` lets A2 last-chance-scan the loaded CD volume when
+    already states the asked value.
+    ``project_id`` lets a last-chance scan read the loaded CD volume when
     top-k is a delay-damages chunk #0 (live 9ad62cc).
     """
     try:
-        if not _graft_asked_contract_particular_enabled():
-            return text
         from app.core.rag.retriever import (
             including_vat_excerpts_from_loaded_cd_volume,
             extract_aca_including_vat,
@@ -7060,10 +7053,10 @@ def _graft_composed_delay_damages_over_period(
 ) -> str:
     """Delay damages over a period: rate × ACA × days × named milestones when synthesis hung.
 
-    Live a8498b3 returned ``0% of SAR 0.00`` after ``delay_damages_daily``
-    ran with empty args. Both operands were already on the Contract Data
-    sheet. Compose the period product; do not invent a rate or a base.
-    Kill-switch: COMPOSE_DELAY_DAMAGES_PERIOD=0.
+    When ``delay_damages_daily`` ran with empty args and returned a
+    ``0% of SAR 0.00`` note although both operands were already on the
+    Contract Data sheet, compose the period product from them; never invent
+    a rate or a base.
     """
     try:
         from app.lib.construction_formulas_commercial import (
@@ -7251,7 +7244,7 @@ def _graft_rate_only_item(
 ) -> str:
     """Rate Only BOQ item ask: state Rate Only when the retrieved row already says so.
 
-    Live Master Corpus greeted and never named D529.3. Compose nothing —
+    When the model greeted and never named the asked item, compose nothing —
     only fire when an excerpt already says Rate Only on the asked item.
     A fabricated money total is replaced.
     """
@@ -7433,12 +7426,11 @@ def _graft_priced_boq_item(
     rag_sys_msg: dict[str, Any] | None,
     messages: list[dict[str, Any]] | None,
 ) -> str:
-    """WAVE 2 B4/B5: write qty + amount when synthesis hung empty.
+    """Priced BOQ item ask: write qty + amount when synthesis hung empty.
 
-    Live Master Corpus on 2ceef76 (#545) echoed the D599.5 ask, cited
-    nothing, and waited ~212s. #542 already elected the priced row over
-    storm-water Rate Only — compose those figures from the excerpt.
-    Kill-switch: COMPOSE_PRICED_BOQ_ROW=0. A Rate Only item is not this path.
+    When the model echoed the ask, cited nothing and waited, compose the
+    priced row's figures from the excerpt (a priced row is elected over a
+    storm-water Rate Only sibling). A Rate Only item is not this path.
     """
     try:
         from app.core.rag.retriever import (
@@ -7446,11 +7438,8 @@ def _graft_priced_boq_item(
             compose_priced_boq_row,
             extract_asked_cesmm_codes,
             format_priced_boq_line,
-            priced_boq_compose_enabled,
             query_asks_for_boq_item_amount,
         )
-        if not priced_boq_compose_enabled():
-            return text
         user = _latest_operator_ask(messages)
         if not query_asks_for_boq_item_amount(user):
             return text
@@ -7545,10 +7534,7 @@ def _compose_priced_boq_instead_of_retry(
         from app.core.rag.retriever import (
             answer_states_priced_boq,
             compose_priced_boq_row,
-            priced_boq_compose_enabled,
         )
-        if not priced_boq_compose_enabled():
-            return ""
         user = _latest_operator_ask(messages)
         rag = (rag_sys_msg or {}).get("content", "") if rag_sys_msg else ""
         parsed = compose_priced_boq_row(user, rag)
@@ -7598,18 +7584,14 @@ def _should_short_circuit_delay_damages_daily(
     BOQ refuse ("I don't have a rate on file… upload your priced BOQ")
     when priced CESMM soup shared the pool. Rate × ACA was already in
     the excerpts / loaded CD volume — compose it instead of waiting on
-    the provider. Predispatch deliverables keep the LLM path. Kill-switch:
-    COMPOSE_DELAY_DAMAGES_DAILY=0.
+    the provider. Predispatch deliverables keep the LLM path.
     """
     if has_predispatch:
         return ""
     try:
         from app.lib.construction_formulas_commercial import (
-            compose_delay_damages_daily_enabled,
             query_asks_delay_damages_daily_amount,
         )
-        if not compose_delay_damages_daily_enabled():
-            return ""
         user = _latest_operator_ask(messages)
         if not query_asks_delay_damages_daily_amount(user):
             return ""
@@ -7624,13 +7606,6 @@ def _should_short_circuit_delay_damages_daily(
     except Exception:  # noqa: BLE001 — retry skip must never break a turn
         _LOG.exception("e1 daily short-circuit failed; continuing LLM path")
         return ""
-
-
-def _boq_scope_wbs_compose_enabled() -> bool:
-    """ON by default — leftover F1 skips the LLM hop once generate_wbs is BOQ-derived."""
-    return (os.getenv("F1_BOQ_WBS_COMPOSE", "1") or "").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
 
 
 def _calc_input_question(pre: dict[str, Any] | None) -> str:
@@ -7648,8 +7623,6 @@ def _compose_boq_scope_wbs_answer(
     user_message: str,
 ) -> str:
     """Formatted BOQ-derived WBS, or '' when this is not leftover F1."""
-    if not _boq_scope_wbs_compose_enabled():
-        return ""
     if not pre or pre.get("name") != "generate_wbs":
         return ""
     if not _message_wants_boq_scope_wbs_ask(user_message or ""):
@@ -7667,9 +7640,7 @@ def _graft_boq_scope_wbs_if_wrong_contract(
     text: str,
     messages: list[dict[str, Any]] | None,
 ) -> str:
-    """Replace a leftover-F1 refuse / AB-2022 cite with the predispatched WBS."""
-    if not _boq_scope_wbs_compose_enabled():
-        return text
+    """Replace a wrong-contract refuse / contract-id cite with the predispatched WBS."""
     user = _latest_operator_ask(messages)
     if not _message_wants_boq_scope_wbs_ask(user):
         return text
@@ -7730,22 +7701,17 @@ def _graft_combined_part_summary_total(
 ) -> str:
     """Combined BOQ page totals: sum printed page totals when the model added 1,000,000.
 
-    Live 4ab5561: d/3/1 + d/3/2 + d/3/3 printed 34,645,529 + 1,852,848
-    + 17,496,857 = 53,995,234 and the bubble said 54,995,234. Compose
-    the printed figures; do not invent a page. Kill-switch:
-    COMPOSE_PART_SUMMARY=0. One-page B3 stays on
-    ``_graft_part_summary_total``.
+    When the model mis-added the named pages' printed totals, compose the
+    sum from the printed figures; do not invent a page. A one-page total
+    stays on ``_graft_part_summary_total``.
     """
     try:
         from app.core.rag.retriever import (
             answer_states_part_summary,
             compose_combined_part_summary_total,
             format_combined_part_summary_line,
-            part_summary_compose_enabled,
             query_asks_combined_part_summary,
         )
-        if not part_summary_compose_enabled():
-            return text
         user = _latest_operator_ask(messages)
         if not query_asks_combined_part_summary(user):
             return text
@@ -7788,12 +7754,12 @@ def _graft_named_community_tfc_span(
     project_id: str | None = None,
     extra_project_ids: list[str] | None = None,
 ) -> str:
-    """Set3 F1: longest/shortest Time for Completion in a named community.
+    """Longest/shortest Time for Completion among a named community's milestones.
 
-    Live 4ab5561 answered Milestones 1–5 only and said none were
-    Northern Community. The continuation table states 547 / 397
-    (delta 150). Compose from excerpts; last-chance scan the loaded
-    CD volume when top-k stopped at Milestone 5. Do not invent days.
+    When the model answered only the first milestones and missed the ones
+    naming the community, compose the longest/shortest/delta from the
+    milestone rows in the excerpts; last-chance scan the loaded CD volume
+    when top-k stopped early. Do not invent days.
     """
     try:
         from app.core.rag.retriever import (
@@ -7863,21 +7829,17 @@ def _graft_part_summary_total(
 ) -> str:
     """BOQ page Part Summary ask: write the page Part Summary when synthesis hung.
 
-    Live 0d9fd23 mobile H3 echoed empty / said the priced-BOQ Part
-    Summary was not found. The d/3/1 total was already in the
-    demolition-bill excerpts (B1/B2 line items on the same page PASS).
-    Kill-switch: COMPOSE_PART_SUMMARY=0. B4/B5 CESMM rows are not this.
+    When the model echoed empty or said the priced-BOQ Part Summary was
+    not found although the page total was already in the excerpts, compose
+    the printed page total. CESMM item-code rows are not this.
     """
     try:
         from app.core.rag.retriever import (
             answer_states_part_summary,
             compose_part_summary_total,
             format_part_summary_line,
-            part_summary_compose_enabled,
             query_asks_for_part_summary_total,
         )
-        if not part_summary_compose_enabled():
-            return text
         user = _latest_operator_ask(messages)
         if not query_asks_for_part_summary_total(user):
             return text
@@ -7940,11 +7902,8 @@ def _compose_part_summary_instead_of_retry(
         from app.core.rag.retriever import (
             answer_states_part_summary,
             compose_part_summary_total,
-            part_summary_compose_enabled,
             query_asks_for_part_summary_total,
         )
-        if not part_summary_compose_enabled():
-            return ""
         user = _latest_operator_ask(messages)
         if not query_asks_for_part_summary_total(user):
             return ""
