@@ -3086,7 +3086,7 @@ _STANDARD_KEYS = ("standard", "code", "basis_standard", "reference", "source")
 
 
 def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any]:
-    """K-T2: ``provenance`` / ``standard`` / ``certified`` for any calc envelope.
+    """``provenance`` / ``standard`` / ``certified`` for any calc envelope.
 
     provenance is ``kernel`` for a registered formula_registry kernel,
     ``reference_table`` for a kernel whose module is a reference-table module
