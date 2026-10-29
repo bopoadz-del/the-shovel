@@ -780,6 +780,36 @@ async def _with_doc_search(
         return prompt, []
 
 
+def _sources_from_snippets(snippets: list, answer: str, message: str, project_id) -> list:
+    """The JSON chat's sources, built by the same function the stream's
+    ``end`` event uses (``_build_sources_from_audit``) from the snippets this
+    turn retrieved. Empty when nothing was retrieved; never raises."""
+    if not snippets:
+        return []
+    try:
+        from app.agents.runtime import _build_sources_from_audit
+
+        chunks = []
+        for s in snippets:
+            if not isinstance(s, dict) or not s.get("document_id"):
+                continue
+            chunks.append({
+                "doc_id": s.get("document_id"),
+                "chunk_index": s.get("chunk_index"),
+                "chunk_id": s.get("chunk_id"),
+                "page": s.get("page"),
+                "score": float(s.get("score") or 0.0),
+                "text": s.get("snippet") or "",
+                "source_name": s.get("filename") or "",
+                "layer": s.get("layer") or "own",
+            })
+        audit = {"chunks": chunks, "user_message_preview": message, "project_id": project_id}
+        return _build_sources_from_audit(audit, answer or "")
+    except Exception:  # noqa: BLE001 -- sources never break the answer
+        logger.exception("chat: building sources failed")
+        return []
+
+
 @router.post("/chat")
 async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
     """Simple chat endpoint."""
@@ -843,6 +873,9 @@ async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
             "text": answer,
             "model": inner.get("model") or request.model,
             "provider": inner.get("provider"),
+            "sources": _sources_from_snippets(
+                doc_snippets, answer, request.message, request.project_id,
+            ),
         }
 
     except HTTPException:
