@@ -3092,7 +3092,7 @@ def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any
     ``reference_table`` for a kernel whose module is a reference-table module
     (indicative data, not a derivation), else ``improvised``. Only a kernel
     answer is labelled ``certified``. ``standard`` is the standard the result
-    states, else the one the registry spec declares, else an explicit
+    states (first of ``_STANDARD_KEYS``), else an explicit
     ``"none declared"`` -- every envelope carries the key.
     """
     from app.lib import formula_registry as _fr
@@ -3112,8 +3112,6 @@ def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any
             if isinstance(val, str) and val.strip():
                 standard = val.strip()
                 break
-    if not standard and spec is not None:
-        standard = str(getattr(spec, "standard", "") or "").strip()
     return {
         "provenance": provenance,
         "standard": standard or "none declared",

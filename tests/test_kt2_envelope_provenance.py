@@ -52,3 +52,28 @@ def test_reference_table_module_is_not_certified(module, expect):
     out = cf.envelope_provenance(spec.name, {}, fake)
     assert out["provenance"] == expect
     assert out["certified"] is (expect == "kernel")
+
+
+# G6 H2 -- :3101 fn=None falls back to the registry spec's own fn.
+@pytest.mark.parametrize("name,expect", [
+    ("bim_clash_tolerance", "reference_table"),
+    ("concrete_volume", "kernel"),
+])
+def test_without_fn_the_specs_own_module_decides(name, expect):
+    assert cf.envelope_provenance(name, {})["provenance"] == expect
+
+
+# :3112 a blank or whitespace-only standard is not a standard.
+@pytest.mark.parametrize("val", ["", "   "])
+def test_blank_standard_is_skipped_for_the_next_key(val):
+    out = cf.envelope_provenance("concrete_volume", {"standard": val, "code": "ACI 318-19"})
+    assert out["standard"] == "ACI 318-19"
+
+
+# :3113 first key in _STANDARD_KEYS wins.
+@pytest.mark.parametrize("result,expect", [
+    ({"standard": "BS EN 1992-1-1", "code": "ACI 318-19"}, "BS EN 1992-1-1"),
+    ({"code": "ACI 318-19", "source": "Vendor sheet"}, "ACI 318-19"),
+])
+def test_first_standard_key_wins(result, expect):
+    assert cf.envelope_provenance("concrete_volume", result)["standard"] == expect
