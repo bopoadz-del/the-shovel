@@ -424,7 +424,6 @@ def _install_b5_sibling_corpus(monkeypatch):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
     monkeypatch.delenv("MASTER_CORPUS_SOURCE_PROJECT_ID", raising=False)
-    monkeypatch.delenv("COMPOSE_PRICED_BOQ_ROW", raising=False)
     monkeypatch.delenv("RAG_LAYERED", raising=False)
     return ret
 

@@ -366,7 +366,6 @@ def format_chunks_as_system_message(
         compose_priced_boq_row,
         extract_asked_cesmm_codes,
         extract_contract_doc_ids,
-        priced_boq_compose_enabled,
         query_applies_a_delay_duration,
         query_asks_delay_damages_daily_amount,
         query_asks_for_aca_including_vat,
@@ -401,10 +400,7 @@ def format_chunks_as_system_message(
         compose_priced_boq_row(
             query, "\n".join(c.text or "" for c in chunks),
         )
-        if (
-            _boq_codes
-            and priced_boq_compose_enabled()
-        )
+        if _boq_codes
         else None
     )
     if _priced_row:

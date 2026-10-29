@@ -7434,11 +7434,8 @@ def _graft_priced_boq_item(
             compose_priced_boq_row,
             extract_asked_cesmm_codes,
             format_priced_boq_line,
-            priced_boq_compose_enabled,
             query_asks_for_boq_item_amount,
         )
-        if not priced_boq_compose_enabled():
-            return text
         user = _latest_operator_ask(messages)
         if not query_asks_for_boq_item_amount(user):
             return text
@@ -7533,10 +7530,7 @@ def _compose_priced_boq_instead_of_retry(
         from app.core.rag.retriever import (
             answer_states_priced_boq,
             compose_priced_boq_row,
-            priced_boq_compose_enabled,
         )
-        if not priced_boq_compose_enabled():
-            return ""
         user = _latest_operator_ask(messages)
         rag = (rag_sys_msg or {}).get("content", "") if rag_sys_msg else ""
         parsed = compose_priced_boq_row(user, rag)

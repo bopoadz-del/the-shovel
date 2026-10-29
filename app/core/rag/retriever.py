@@ -699,13 +699,12 @@ class _ContractScope:
                         )
                         for _n, text in scoped
                     )
-                    if priced_boq_compose_enabled():
-                        self._priced_item_in_pool = any(
-                            chunk_states_priced_item(
-                                text, self._rate_only_codes, query=self.query,
-                            )
-                            for _n, text in scoped
+                    self._priced_item_in_pool = any(
+                        chunk_states_priced_item(
+                            text, self._rate_only_codes, query=self.query,
                         )
+                        for _n, text in scoped
+                    )
             if query_asks_for_part_summary_total(self.query):
                 self._part_summary_refs = extract_asked_boq_page_refs(
                     self.query,
@@ -7669,7 +7668,7 @@ def answer_states_rate_only(text: str) -> bool:
 # currency token between @/= and the figure. B4 is often bare
 # ``340904 m2 31.00 10568024``. Compose from the isolated window
 # only. Do not invent: qty × rate must already equal the printed
-# amount. Kill-switch: COMPOSE_PRICED_BOQ_ROW=0 restores the hang.
+# amount.
 _BOQ_CURRENCY_ATOM = (
     r"(?:SAR|SR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR|EGP|CNY|INR|JPY|riyal[s]?)"
 )
@@ -7713,10 +7712,6 @@ def _priced_boq_triples(blob: str):
     yield from _PRICED_BOQ_TRIPLE_RE.finditer(blob)
     yield from _PRICED_BOQ_TRIPLE_UNIT_FIRST_RE.finditer(blob)
 
-
-def priced_boq_compose_enabled() -> bool:
-    """ON by default. ``COMPOSE_PRICED_BOQ_ROW=0`` restores the B4/B5 empty hang."""
-    return _env_flag_on("COMPOSE_PRICED_BOQ_ROW")
 
 
 def _plain_boq_number(value: float) -> str:
@@ -7799,8 +7794,6 @@ def compose_priced_boq_row(query: str, excerpt: str) -> Optional[Dict[str, Any]]
     Rate-Only-only ask and an Excluded-only culvert are not this.
     Does not invent: qty × rate must already equal the printed amount.
     """
-    if not priced_boq_compose_enabled():
-        return None
     codes = extract_asked_cesmm_codes(query)
     if not codes or not excerpt:
         return None
@@ -8423,8 +8416,6 @@ def _apply_priced_boq_boost(
     scored: List[Tuple[float, Chunk]],
 ) -> None:
     """In-place: lift the asked priced CESMM row over Rate Only / Excluded."""
-    if not priced_boq_compose_enabled():
-        return
     if not query_asks_for_boq_item_amount(query):
         return
     codes = extract_asked_cesmm_codes(query)
