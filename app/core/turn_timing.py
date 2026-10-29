@@ -28,10 +28,42 @@ def _on() -> bool:
     return (os.getenv("AGENT_TIMING_LOG") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def mark_arrival() -> None:
-    """Start this turn's clock (call first thing in the request handler)."""
+# The stages a turn spends before its first token, in the order they run.
+# ``llm_first_token`` is the model request up to its first token: the time
+# from the last completed stage before it to the first token.
+PRE_FIRST_TOKEN_STAGES = ("auth", "route", "hat_classification", "retrieval", "llm_first_token")
+
+
+def mark_arrival(at: Optional[float] = None) -> None:
+    """Start this turn's clock (call first thing in the request handler).
+
+    ``at`` is an earlier ``time.monotonic()`` reading -- the moment the
+    request reached the endpoint's dependencies, before authentication."""
     now = time.monotonic()
-    _STATE.set({"t0": now, "last": now, "first_token": False})
+    t0 = now if at is None else min(float(at), now)
+    _STATE.set({"t0": t0, "last": now, "first_token": False, "stages": {}})
+
+
+def record(name: str, dur: float) -> None:
+    """Add ``dur`` seconds to stage ``name`` for this turn (no log line)."""
+    st = _STATE.get()
+    if st is None:
+        return
+    stages = st.setdefault("stages", {})
+    stages[name] = stages.get(name, 0.0) + max(0.0, float(dur))
+
+
+def snapshot() -> dict:
+    """This turn's pre-first-token stage timings in seconds: every stage in
+    ``PRE_FIRST_TOKEN_STAGES`` (0.0 when it did not run) plus any other stage
+    timed so far, and ``since_arrival``."""
+    st = _STATE.get() or {}
+    stages = dict(st.get("stages") or {})
+    out = {k: round(stages.pop(k, 0.0), 4) for k in PRE_FIRST_TOKEN_STAGES}
+    out.update({k: round(v, 4) for k, v in stages.items()})
+    at = since_arrival()
+    out["since_arrival"] = round(at, 4) if at is not None else 0.0
+    return out
 
 
 def arrived_at() -> Optional[float]:
@@ -74,7 +106,9 @@ def set_writer(writer) -> None:
 
 
 def log_stage(name: str, dur: float) -> None:
-    """One TIMING line; like every TIMING line it carries the process's rss."""
+    """One TIMING line; like every TIMING line it carries the process's rss.
+    The duration is also recorded for :func:`snapshot`."""
+    record(name, dur)
     if not _on():
         return
     at = since_arrival()
@@ -111,6 +145,33 @@ def timed(name: str):
     return deco
 
 
+def recorded(name: str):
+    """Decorator: add every call's duration to stage ``name`` for
+    :func:`snapshot`, without a TIMING line of its own (sync or async)."""
+    import inspect
+
+    def deco(fn):
+        if inspect.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def awrapper(*args, **kwargs):
+                t = time.monotonic()
+                try:
+                    return await fn(*args, **kwargs)
+                finally:
+                    record(name, time.monotonic() - t)
+            return awrapper
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            t = time.monotonic()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                record(name, time.monotonic() - t)
+        return wrapper
+    return deco
+
+
 def mark(name: str) -> None:
     """Log the time since the previous stage or mark as stage ``name``."""
     st = _STATE.get()
@@ -127,4 +188,5 @@ def first_token() -> None:
     if st is None or st["first_token"]:
         return
     st["first_token"] = True
+    record("llm_first_token", time.monotonic() - st["last"])
     log_stage("first_token", 0.0)

@@ -26,6 +26,7 @@ from app.agents.catalog import (
     resolve_hat_with_base,
 )
 from app.agents.models import AgentManifest
+from app.core.turn_timing import recorded as _recorded
 
 # -- Env-flag gating ------------------------------------------------------
 # Set FORK_HATS_ENABLED=1 to activate discipline-hat routing.
@@ -77,6 +78,7 @@ class HatActivationAdapter:
         """Return True if hat routing is active."""
         return hats_enabled()
 
+    @_recorded("hat_classification")
     def select_hat_for_message(self, message: str) -> Optional[AgentManifest]:
         """
         Select the best hat for a user message and merge with base.
