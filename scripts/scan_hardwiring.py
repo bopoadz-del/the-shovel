@@ -197,6 +197,43 @@ def _symbol_findings(rel: str, tree: ast.AST) -> list[str]:
             out.append(f"{rel}::knob::{node.value}")
     if rel.startswith(BLOCK_TABLE_ROOTS):
         out.extend(_block_table_findings(rel, tree))
+    if rel in FORMULA_LITERAL_FILES:
+        out.extend(_formula_literal_findings(rel, tree))
+    return out
+
+
+#: K-T5 -- formula modules that must carry no project literal: a currency
+#: amount (``SAR 39,098,392.98``) in any string/docstring, or a module-level
+#: numeric constant named as a project/example figure (``_TOY_*``,
+#: ``DOCUMENTED_*``, ``*_AMOUNT``, ``*_RATE_PERCENT``). Never baselined.
+FORMULA_LITERAL_FILES = (
+    "app/lib/construction_formulas_commercial.py",
+    "app/lib/construction_formulas_quantities.py",
+)
+_CURRENCY_AMOUNT_RE = re.compile(
+    r"\b(?:SAR|AED|USD|EUR|GBP|QAR|KWD|OMR|BHD)\s?\d{1,3}(?:,\d{3})+(?:\.\d+)?"
+)
+_PROJECT_CONST_RE = re.compile(
+    r"^_?(?:TOY_\w+|DOCUMENTED_\w+|\w+_AMOUNT|\w+_RATE_PERCENT)$"
+)
+
+
+def _formula_literal_findings(rel: str, tree: ast.AST) -> list[str]:
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for m in _CURRENCY_AMOUNT_RE.finditer(node.value):
+                out.append(f"{rel}::project-literal::{m.group(0)}")
+    for node in getattr(tree, "body", []):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            val = node.value
+            if not (isinstance(val, ast.Constant) and isinstance(val.value, (int, float))
+                    and not isinstance(val.value, bool)):
+                continue
+            for t in targets:
+                if isinstance(t, ast.Name) and _PROJECT_CONST_RE.match(t.id):
+                    out.append(f"{rel}::project-literal::{t.id}")
     return out
 
 

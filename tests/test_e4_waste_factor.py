@@ -34,7 +34,6 @@ from app.agents.runtime import (
 from app.containers.construction import ConstructionContainer
 from app.lib import construction_formulas as _cf
 from app.lib.construction_formulas_quantities import (
-    DOCUMENTED_CONCRETE_WASTE_FACTOR,
     answer_states_volume,
     compose_concrete_volume_from_ask,
     format_concrete_volume_line,
@@ -136,9 +135,10 @@ def test_named_concrete_volume_applies_documented_waste():
     assert r["calculation"] == "concrete_volume"
     assert _net(r) == pytest.approx(900.0)
     assert _volume(r) == pytest.approx(945.0)
-    assert r["result"]["waste_factor"] == pytest.approx(
-        DOCUMENTED_CONCRETE_WASTE_FACTOR
-    )
+    # K-T5: the factor is what the envelope says it applied, and the
+    # with-waste volume is net x (1 + that factor) -- structure, not a pin.
+    wf = r["result"]["waste_factor"]
+    assert _volume(r) == pytest.approx(_net(r) * (1 + wf))
 
 
 @pytest.mark.asyncio

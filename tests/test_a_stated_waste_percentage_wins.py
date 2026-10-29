@@ -84,17 +84,33 @@ def test_a_percentage_far_from_the_word_waste_is_not_claimed():
 
 # ── the default still works where it was designed to ───────────────────────
 
-def test_silence_still_gets_the_documented_five_percent():
-    out = _resolved("Concrete volume for a raft 30x20x1.5 m including your "
-                    "documented waste factor.")
-    assert out["waste_factor"] == pytest.approx(q.DOCUMENTED_CONCRETE_WASTE_FACTOR)
+@pytest.mark.parametrize("text", [
+    "Concrete volume for a raft 30x20x1.5 m including your documented waste factor.",
+    "Slab 12 x 8 x 0.25 m, apply the documented waste factor please.",
+])
+def test_documented_waste_with_no_figure_binds_no_pinned_figure(text):
+    """K-T5: no figure pinned in code; the caller's input governs."""
+    out = _resolved(text)
+    assert "waste_factor" not in out
+    supplied = _resolved(text, {"waste_factor": 0.03})
+    assert supplied["waste_factor"] == pytest.approx(0.03)
 
 
-def test_an_ask_with_no_waste_words_at_all_still_gets_the_default():
-    out = _resolved("Concrete volume for a raft 30 x 20 x 1.5 m.")
-    assert out["waste_factor"] == pytest.approx(0.05)
+@pytest.mark.parametrize("text,wf", [
+    ("Raft 30x20x1.5 m, documented waste factor 5%.", 0.05),
+    ("Slab 12 x 8 x 0.25 m, documented waste factor 8%.", 0.08),
+])
+def test_documented_waste_with_a_figure_uses_that_figure(text, wf):
+    out = _resolved(text)
+    assert out["waste_factor"] == pytest.approx(wf)
+    assert q.documented_concrete_waste_factor(text) == pytest.approx(wf)
 
 
-def test_a_nonsense_percentage_falls_back_rather_than_poisoning_the_quantity():
-    # 900% waste is a parse artefact, not an instruction.
-    assert q.waste_factor_from_text("add 900% waste") is None
+@pytest.mark.parametrize("text", [
+    "Concrete volume for a raft 30 x 20 x 1.5 m.",
+    "Slab volume 12 x 8 x 0.25 m.",
+])
+def test_an_ask_with_no_waste_words_binds_no_factor(text):
+    """The resolver injects nothing; the caller's input / kernel signature governs."""
+    out = _resolved(text)
+    assert "waste_factor" not in out
