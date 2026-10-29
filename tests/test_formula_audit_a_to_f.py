@@ -698,30 +698,56 @@ def test_audit_cost_per_area():
 
 # ── 30–32 crane ────────────────────────────────────────────────────────────
 
-def test_audit_crane_cost_estimate():
-    """Documented hire table + crew: 50 t → 18,000 dry;
-    operator 3,500; 2 riggers 5,600 → 27,100 / crane·month.
-    Hand: 2 cranes × 12 months = 650,400;
-          mob = 2 × 18,000 × 0.5 = 18,000; demob = 13,500;
-          grand = 681,900.
-    Rates are unsourced GCC fallbacks — arithmetic of the documented table.
+@pytest.mark.parametrize("rates,cur,per,total,mob,demob,grand", [
+    ((18000, 3500, 5600), "SAR", 27100, 650400, 18000, 13500, 681900),
+    ((10000, 2000, 3000), "USD", 15000, 360000, 10000, 7500, 377500),
+])
+def test_audit_crane_cost_estimate(rates, cur, per, total, mob, demob, grand):
+    """Caller-supplied project rates (no built-in table, no currency).
+    Hand: per = dry + op + riggers; total = per x 2 cranes x 12 months;
+          mob = 2 x dry x 0.5; demob = 0.75 x mob.
     """
+    dry_r, op_r, rig_r = rates
+    base = {"num_cranes": 2, "crane_capacity_tons": 50, "duration_months": 12,
+            "dry_hire_rate_per_month": dry_r, "currency": cur}
     r = _ok("crane_cost_estimate",
-            {"num_cranes": 2, "crane_capacity_tons": 50, "duration_months": 12})
-    assert r["dry_hire_sar_month"] == 18000
-    assert r["per_crane_monthly_sar"] == pytest.approx(27100, abs=0.5)
-    assert r["total_project_cost_sar"] == pytest.approx(650400, abs=1)
-    assert r["mobilization_sar"] == pytest.approx(18000, abs=1)
-    assert r["demobilization_sar"] == pytest.approx(13500, abs=1)
-    assert r["grand_total_sar"] == pytest.approx(681900, abs=1)
+            {**base, "operator_rate_per_month": op_r, "riggers_rate_per_month": rig_r})
+    assert r["dry_hire_per_month"] == dry_r
+    assert r["per_crane_monthly"] == pytest.approx(per, abs=0.5)
+    assert r["total_project_cost"] == pytest.approx(total, abs=1)
+    assert r["mobilization"] == pytest.approx(mob, abs=1)
+    assert r["demobilization"] == pytest.approx(demob, abs=1)
+    assert r["grand_total"] == pytest.approx(grand, abs=1)
+    assert r["currency"] == cur
+    assert not any(k.endswith("_sar") or "_sar_" in k for k in r)
 
     dry = _ok("crane_cost_estimate",
-              {"num_cranes": 2, "crane_capacity_tons": 50, "duration_months": 12,
-               "include_operator": False, "include_riggers": False})
-    assert dry["per_crane_monthly_sar"] == pytest.approx(18000, abs=0.5)
+              {**base, "include_operator": False, "include_riggers": False})
+    assert dry["per_crane_monthly"] == pytest.approx(dry_r, abs=0.5)
 
-    _err("crane_cost_estimate",
-         {"num_cranes": -1, "crane_capacity_tons": 50, "duration_months": 12})
+    _err("crane_cost_estimate", {**base, "num_cranes": -1})
+
+
+@pytest.mark.parametrize("params", [
+    {"num_cranes": 2, "crane_capacity_tons": 50, "duration_months": 12},
+    {"num_cranes": 1, "crane_capacity_tons": 300, "duration_months": 3},
+])
+def test_crane_cost_without_a_rate_asks_for_it(params):
+    """No silent built-in rate: the dry hire rate is a required input."""
+    out = run_calculation("crane_cost_estimate", params)
+    assert out["status"] == "error"
+    assert "dry_hire_rate_per_month" in str(out)
+
+
+@pytest.mark.parametrize("missing", ["operator_rate_per_month", "riggers_rate_per_month"])
+def test_crane_cost_included_crew_without_a_rate_asks_for_it(missing):
+    params = {"num_cranes": 2, "crane_capacity_tons": 50, "duration_months": 12,
+              "dry_hire_rate_per_month": 18000,
+              "operator_rate_per_month": 3500, "riggers_rate_per_month": 5600}
+    params.pop(missing)
+    out = run_calculation("crane_cost_estimate", params)
+    assert out["status"] == "error"
+    assert missing in str(out)
 
 
 def test_audit_crane_lift_capacity():
@@ -743,26 +769,41 @@ def test_audit_crane_lift_capacity():
          {"chart_capacity_t": 50, "deductions_t": 50, "load_t": 10})
 
 
-def test_audit_crane_planning():
+@pytest.mark.parametrize("rate,cur", [(18000, "SAR"), (9500, "AED")])
+def test_audit_crane_planning(rate, cur):
     """Documented: lifts/h = 60/cycle; daily t = cap×util × lifts/h × h × shifts.
     Hand: 60/20=3 lifts/h; 50×0.65=32.5 t/lift; 3×9.5×2=57 lifts/d
           daily = 32.5×57 = 1,852.5 t; monthly = 1,852.5×26 = 48,165 t
           demand 1,000 → 1 crane. Demand 48,166 → 2 cranes.
+    Cost only from the caller's rate.
     """
     r = _ok("crane_planning",
-            {"total_lift_demand_tons": 1000, "crane_capacity_tons": 50})
+            {"total_lift_demand_tons": 1000, "crane_capacity_tons": 50,
+             "dry_hire_rate_per_month": rate, "currency": cur})
     assert r["lifts_per_hour_per_crane"] == pytest.approx(3.0, abs=0.05)
     assert r["daily_tonnage_per_crane"] == pytest.approx(1852.5, abs=0.1)
     assert r["cranes_required"] == 1
-    assert r["monthly_rate_sar"] == 18000
+    assert r["monthly_rate"] == rate
+    assert r["total_monthly_cost"] == rate
+    assert r["currency"] == cur
 
     two = _ok("crane_planning",
-              {"total_lift_demand_tons": 48166, "crane_capacity_tons": 50})
+              {"total_lift_demand_tons": 48166, "crane_capacity_tons": 50,
+               "dry_hire_rate_per_month": rate})
     assert two["cranes_required"] == 2
+    assert two["total_monthly_cost"] == 2 * rate
 
     _err("crane_planning",
          {"total_lift_demand_tons": 1000, "crane_capacity_tons": 50,
           "cycle_time_minutes": 0})
+
+
+@pytest.mark.parametrize("cap", [50, 300])
+def test_crane_planning_without_a_rate_gives_count_and_no_invented_cost(cap):
+    r = _ok("crane_planning", {"total_lift_demand_tons": 1000, "crane_capacity_tons": cap})
+    assert r["cranes_required"] >= 1
+    assert r["monthly_rate"] is None and r["total_monthly_cost"] is None
+    assert any("rate" in n for n in r["notes"])
 
 
 # ── 33–35 planning / earthwork / FIDIC ─────────────────────────────────────
