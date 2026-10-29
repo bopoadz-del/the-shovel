@@ -147,6 +147,25 @@ def tests_for(path: str, fn_name: str, repo: Path, test_roots: Sequence[str], sr
     return list(dict.fromkeys(hits))
 
 
+def is_test_file(path: str) -> bool:
+    """Test modules are the killers, never the mutated."""
+    name = Path(path).name
+    return name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+
+
+#: The only green outcome. Survived, uncovered and timeout are all red.
+GREEN_OUTCOMES = frozenset({"killed"})
+
+
+def is_red(outcome: str) -> bool:
+    return outcome not in GREEN_OUTCOMES
+
+
+def exit_code(results: Sequence[MutantResult], lint: Sequence[str]) -> int:
+    """Non-zero on any red mutant result OR any lint finding."""
+    return 1 if (any(is_red(r.outcome) for r in results) or lint) else 0
+
+
 @dataclass
 class MutantResult:
     path: str
@@ -174,7 +193,7 @@ def mutation_gate(repo: Path, base: str, src_roots: Sequence[str], test_roots: S
     results: list[MutantResult] = []
     for path, lines in sorted(changed_lines(base, repo, src_roots).items()):
         file = repo / path
-        if not file.is_file() or any(Path(path).name.startswith("test_") for _ in [0]):
+        if not file.is_file() or is_test_file(path):
             continue
         original = file.read_text("utf-8")
         tree = ast.parse(original)
@@ -266,7 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     repo = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
     results = mutation_gate(repo, a.base, a.src, a.tests, a.workdir, a.pytest_arg)
     lint = lint_two_inputs(repo, a.base, a.tests)
-    red = [r for r in results if r.outcome != "killed"]
+    red = [r for r in results if is_red(r.outcome)]
     lines = ["## CI-M mutation gate", "", f"Mutants run: {len(results)}; killed: {len(results) - len(red)}; red: {len(red)}", ""]
     lines += [f"- {r.outcome.upper()}: `{r.path}::{r.function}` mutant `{r.mutant}`" for r in red]
     lines += ["", "## Two-input test lint", "", f"New single-input value tests: {len(lint)}"]
@@ -275,7 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(text)
     if a.summary:
         Path(a.summary).write_text(text, "utf-8")
-    return 1 if (red or lint) else 0
+    return exit_code(results, lint)
 
 
 if __name__ == "__main__":
