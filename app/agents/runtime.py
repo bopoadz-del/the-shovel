@@ -7611,13 +7611,6 @@ def _should_short_circuit_delay_damages_daily(
         return ""
 
 
-def _boq_scope_wbs_compose_enabled() -> bool:
-    """ON by default — leftover F1 skips the LLM hop once generate_wbs is BOQ-derived."""
-    return (os.getenv("F1_BOQ_WBS_COMPOSE", "1") or "").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
-
-
 def _calc_input_question(pre: dict[str, Any] | None) -> str:
     """The pre-dispatched calculator's question for inputs it would not run, or ''."""
     if not pre or pre.get("name") != "construction_calc":
@@ -7633,8 +7626,6 @@ def _compose_boq_scope_wbs_answer(
     user_message: str,
 ) -> str:
     """Formatted BOQ-derived WBS, or '' when this is not leftover F1."""
-    if not _boq_scope_wbs_compose_enabled():
-        return ""
     if not pre or pre.get("name") != "generate_wbs":
         return ""
     if not _message_wants_boq_scope_wbs_ask(user_message or ""):
@@ -7653,8 +7644,6 @@ def _graft_boq_scope_wbs_if_wrong_contract(
     messages: list[dict[str, Any]] | None,
 ) -> str:
     """Replace a leftover-F1 refuse / AB-2022 cite with the predispatched WBS."""
-    if not _boq_scope_wbs_compose_enabled():
-        return text
     user = _latest_operator_ask(messages)
     if not _message_wants_boq_scope_wbs_ask(user):
         return text

@@ -11,8 +11,7 @@ AB-2022-202 Conditions of Contract narrative (hard flag
 marks PASS when the refuse merely mentions demolition.
 
 These tests pin the election, the glass, and the judge (no live LLM).
-B4/B5/E1/G4 stay off this path. Kill-switch ``F1_BOQ_WBS_COMPOSE=0``
-restores the LLM hop after a BOQ-derived predispatch.
+B4/B5/E1/G4 stay off this path.
 """
 from __future__ import annotations
 
