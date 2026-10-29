@@ -366,29 +366,28 @@ class ChatBlock(TypedBlock):
             stream=stream,
         )
         if stream:
+            # Ask the provider for a final usage chunk so this egress reports to
+            # the meter like every other one (the SSE usage chunk).
+            payload.setdefault("stream_options", {"include_usage": True})
+
             async def _stream_generator():
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    # Empty-key guard: passing an empty Bearer header makes
-                    # httpx raise "Illegal header value b'Bearer '" before the
-                    # request even leaves the client. Omit the header entirely
-                    # when api_key is empty (mirrors the agent runtime).
-                    cloud_headers = {"Content-Type": "application/json"}
-                    if api_key:
-                        cloud_headers["Authorization"] = f"Bearer {api_key}"
-                    async with client.stream(
-                        "POST",
-                        url,
-                        headers=cloud_headers,
-                        json=payload,
-                    ) as response:
-                        if response.status_code != 200:
-                            err = await response.aread()
-                            yield json.dumps({
-                                "type": "error",
-                                "message": f"{provider_name} error {response.status_code}: {err[:200]}",
-                            })
-                            return
-                        async for line in response.aiter_lines():
+                import contextlib
+
+                from app.core import llm_client
+                # Empty-key guard: an empty Bearer header makes httpx raise
+                # before the request leaves the client. Omit it when api_key is
+                # empty (mirrors the agent runtime).
+                cloud_headers = {"Content-Type": "application/json"}
+                if api_key:
+                    cloud_headers["Authorization"] = f"Bearer {api_key}"
+                try:
+                    # The single streaming provider egress (records usage at the
+                    # egress); aclosing closes it deterministically on stop.
+                    async with contextlib.aclosing(llm_client.provider_stream(
+                        url, payload, cloud_headers, timeout=60.0,
+                        provider=provider_name, model=model, agent_name="chat_block",
+                    )) as _stream:
+                        async for line in _stream:
                             if not line.startswith("data: "):
                                 continue
                             data = line[6:]
@@ -401,6 +400,12 @@ class ChatBlock(TypedBlock):
                                     yield content
                             except Exception:
                                 continue
+                except llm_client.ProviderStreamError as e:
+                    yield json.dumps({
+                        "type": "error",
+                        "message": f"{provider_name} error {e.status}: {e.text[:200]}",
+                    })
+                    return
 
             return {
                 "status": "success",
@@ -415,25 +420,24 @@ class ChatBlock(TypedBlock):
             cloud_headers = {"Content-Type": "application/json"}
             if api_key:
                 cloud_headers["Authorization"] = f"Bearer {api_key}"
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    url,
-                    headers=cloud_headers,
-                    json=payload,
-                )
-                if response.status_code != 200:
-                    return {
-                        "status": "error",
-                        "error": f"{provider_name} API error (HTTP {response.status_code}): {response.text[:200]}",
-                    }
-                data = response.json()
+            from app.core import llm_client
+            # The single non-streaming provider egress (records usage on 200).
+            response, data = await llm_client.provider_post(
+                url, payload, cloud_headers, timeout=60.0,
+                provider=provider_name, model=model, agent_name="chat_block",
+            )
+            if response.status_code != 200 or not data:
                 return {
-                    "status": "success",
-                    "text": data["choices"][0]["message"]["content"],
-                    "provider": provider_name,
-                    "model": model,
-                    "tokens": data.get("usage", {}),
+                    "status": "error",
+                    "error": f"{provider_name} API error (HTTP {response.status_code}): {response.text[:200]}",
                 }
+            return {
+                "status": "success",
+                "text": data["choices"][0]["message"]["content"],
+                "provider": provider_name,
+                "model": model,
+                "tokens": data.get("usage", {}),
+            }
         except httpx.TimeoutException:
             return {"status": "error", "error": f"{provider_name} request timed out"}
         except Exception as e:

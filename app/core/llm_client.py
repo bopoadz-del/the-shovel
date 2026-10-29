@@ -18,6 +18,201 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+async def record_provider_usage(
+    provider: str,
+    model: str,
+    usage: Optional[Dict[str, Any]],
+    *,
+    user_id: Optional[str] = None,
+    agent_name: str = "",
+) -> None:
+    """The ONE place a non-agent provider round-trip reports to the model-call
+    meter. Every provider HTTP egress outside ``app/agents/core/llm.py`` (which
+    records at its own two sites) funnels its response usage through here so the
+    meter counts calls by construction — a new caller that uses the shared
+    egress below is metered without touching this file. Best-effort: a meter or
+    DB error never sinks the call. A round-trip with no usage block is still
+    recorded as a call with tokens unknown (``usage_tracker.record`` stores the
+    token columns as NULL, so unknown is distinguishable from a real zero)."""
+    try:
+        from app.core import usage_tracker
+        from app.core.offload import off_loop
+        # A DB write — off the event loop (the agent path measured ~1 s stalls).
+        await off_loop(
+            usage_tracker.record,
+            user_id=user_id,
+            agent_name=agent_name or "",
+            provider=provider or "",
+            model=model or "",
+            usage=usage,
+        )
+    except Exception:  # noqa: BLE001 -- the meter never breaks a provider call
+        logger.debug("record_provider_usage swallowed an error", exc_info=True)
+
+
+class ProviderStreamError(Exception):
+    """A streaming provider call failed before/while streaming. Carries the
+    HTTP status (0 for a transport error) and a short body so the caller can
+    map it to its own stream-error type."""
+
+    def __init__(self, status: int, text: str = ""):
+        self.status = status
+        self.text = text or ""
+        super().__init__(f"provider stream HTTP {status}: {self.text[:200]}")
+
+
+async def provider_post(
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    *,
+    timeout: Optional[float] = None,
+    provider: str = "",
+    model: str = "",
+    user_id: Optional[str] = None,
+    agent_name: str = "",
+):
+    """THE single non-streaming provider HTTP egress. POSTs, and on a 200
+    parses the body and records usage via :func:`record_provider_usage`.
+    Returns ``(response, parsed_json_or_None)``; the caller keeps its own
+    status/retry handling. Every non-streaming ``client.post`` to a provider in
+    the app lives here (enforced by tests/test_provider_egress_is_single.py)."""
+    client_obj = await asyncio.to_thread(httpx.AsyncClient, timeout=timeout)
+    async with client_obj as client:
+        r = await client.post(url, json=payload, headers=headers)
+    data: Optional[Dict[str, Any]] = None
+    if r.status_code < 400:
+        try:
+            data = r.json()
+        except Exception:  # noqa: BLE001
+            logger.debug("provider_post: success with a non-JSON body", exc_info=True)
+            data = None
+        await record_provider_usage(
+            provider, model, (data or {}).get("usage"),
+            user_id=user_id, agent_name=agent_name,
+        )
+    return r, data
+
+
+async def provider_stream(
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    *,
+    timeout: Optional[float] = None,
+    provider: str = "",
+    model: str = "",
+    user_id: Optional[str] = None,
+    agent_name: str = "",
+):
+    """THE single streaming provider HTTP egress. Opens the SSE stream; raises
+    ``ProviderStreamError`` BEFORE the first yield on a non-200 or a transport
+    error; yields each raw ``data:`` payload string (``[DONE]`` skipped); and
+    after the stream records usage from the final ``usage`` chunk. Each caller
+    keeps its own delta/finish-reason parsing. Every ``client.stream`` to a
+    provider in the app lives here (enforced by the egress test)."""
+    # Ask for a final usage chunk here so every streaming caller is metered the
+    # same way without having to remember to set it (the SSE usage chunk).
+    if isinstance(payload, dict):
+        payload.setdefault("stream_options", {"include_usage": True})
+    usage: Optional[Dict[str, Any]] = None
+    started = False
+    recorded = False
+
+    async def _record_once(u):
+        nonlocal recorded
+        if started and not recorded:
+            recorded = True
+            await record_provider_usage(
+                provider, model, u, user_id=user_id, agent_name=agent_name,
+            )
+
+    client_obj = await asyncio.to_thread(httpx.AsyncClient, timeout=timeout)
+    try:
+        async with client_obj as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as r:
+                if r.status_code != 200:
+                    # Read the body for the message — a streaming response's
+                    # .text is not populated until read, and some clients don't
+                    # expose .text at all.
+                    body = await r.aread()
+                    text = body.decode("utf-8", "ignore") if isinstance(body, (bytes, bytearray)) else str(body)
+                    raise ProviderStreamError(r.status_code, text)
+                started = True
+                async for line in r.aiter_lines():
+                    # Capture usage for the meter, but yield the RAW line so each
+                    # caller keeps its own "data:" prefix and [DONE] handling.
+                    # Record the moment we have usage OR reach [DONE], BEFORE
+                    # yielding it — the caller breaks on [DONE] and abandons us,
+                    # so a deferred finally would run too late.
+                    if line and line.startswith("data:"):
+                        _d = line[5:].strip()
+                        if _d == "[DONE]":
+                            await _record_once(usage)
+                        elif _d:
+                            try:
+                                evt = _json.loads(_d)
+                                if isinstance(evt, dict) and evt.get("usage"):
+                                    usage = evt["usage"]
+                                    await _record_once(usage)
+                            except Exception:  # noqa: BLE001 — best-effort usage
+                                logger.debug("provider_stream: usage parse skipped", exc_info=True)
+                    yield line
+    except ProviderStreamError:
+        raise
+    except Exception as e:  # noqa: BLE001 — transport/parse before/within the stream
+        raise ProviderStreamError(0, str(e))
+    finally:
+        # Backstop: a stream that started but sent no usage chunk still counts
+        # the call (tokens unknown). The guard makes this a no-op when the
+        # inline record above already fired (ORDERS_1920Z #2b). Runs on normal
+        # end AND on the caller's break (GeneratorExit/aclose).
+        await _record_once(usage)
+
+
+async def simple_complete(
+    prompt: str,
+    *,
+    temperature: float = 0.0,
+    model: Optional[str] = None,
+    timeout: Optional[float] = None,
+    user_id: Optional[str] = None,
+    agent_name: str = "",
+) -> str:
+    """Single-attempt, tool-less completion through the active provider — the
+    shared HTTP egress for block reasoners (project_reasoner, formula_executor).
+
+    POSTs one user message, RECORDS usage via :func:`record_provider_usage`, and
+    returns the assistant text. Honours the provider's fixed temperature. Raises
+    ``RuntimeError`` on an unset key or a non-2xx so callers surface a
+    non-secret error (unchanged from the inline egresses this replaces). No
+    fallback ladder — callers that want one use :func:`complete`."""
+    from app.agents.runtime import _llm_config, _llm_http_timeout
+    cfg = _llm_config()
+    key = os.getenv(cfg["env_key"]) if cfg.get("env_key") else ""
+    if cfg.get("env_key") and not key:
+        raise RuntimeError(f"{cfg['env_key']} not configured")
+    mdl = model or cfg["default_model"]
+    temp = cfg.get("fixed_temperature", temperature)
+    payload: Dict[str, Any] = {
+        "model": mdl,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temp,
+    }
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    r, data = await provider_post(
+        cfg["url"], payload, headers,
+        timeout=timeout or _llm_http_timeout(),
+        provider=cfg.get("provider", ""), model=mdl,
+        user_id=user_id, agent_name=agent_name,
+    )
+    if r.status_code != 200 or not data:
+        raise RuntimeError(f"{cfg['provider']} API error (HTTP {r.status_code})")
+    return (data["choices"][0]["message"].get("content") or "")
+
+
 async def complete(
     messages: List[Dict[str, str]],
     *,
@@ -25,6 +220,8 @@ async def complete(
     max_tokens: int = 800,
     model: Optional[str] = None,
     timeout: Optional[float] = None,
+    user_id: Optional[str] = None,
+    agent_name: str = "",
 ) -> str:
     """Return the assistant message text for a tool-less completion.
 
@@ -73,22 +270,21 @@ async def complete(
         if a_key:
             headers["Authorization"] = f"Bearer {a_key}"
         try:
-            # Building an AsyncClient loads the SSL context synchronously
-            # (~0.3 s measured); per attempt that froze the single worker's
-            # event loop for every other user. Build it in a worker thread.
-            client_obj = await asyncio.to_thread(httpx.AsyncClient, timeout=timeout)
-            async with client_obj as client:
-                r = await client.post(a_cfg["url"], json=payload, headers=headers)
-                if r.status_code >= 400:
-                    exc = httpx.HTTPStatusError(
-                        f"{a_cfg['provider']} HTTP {r.status_code}", request=r.request, response=r
-                    )
-                    if _http_status_is_retryable(r.status_code) and not is_last:
-                        last_exc = exc
-                        continue
-                    raise exc
-                data = r.json()
-            return (data["choices"][0]["message"].get("content") or "").strip()
+            # The single non-streaming provider egress (records usage on 200).
+            r, data = await provider_post(
+                a_cfg["url"], payload, headers, timeout=timeout,
+                provider=a_cfg.get("provider", ""), model=a_model,
+                user_id=user_id, agent_name=agent_name,
+            )
+            if r.status_code >= 400:
+                exc = httpx.HTTPStatusError(
+                    f"{a_cfg['provider']} HTTP {r.status_code}", request=r.request, response=r
+                )
+                if _http_status_is_retryable(r.status_code) and not is_last:
+                    last_exc = exc
+                    continue
+                raise exc
+            return ((data or {})["choices"][0]["message"].get("content") or "").strip()
         except httpx.HTTPStatusError:
             raise
         except Exception as e:  # network / timeout / parse

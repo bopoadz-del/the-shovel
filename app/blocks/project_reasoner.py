@@ -145,31 +145,16 @@ class ProjectReasonerBlock(UniversalBlock):
 
         Routes via app.agents.runtime._llm_config — Kimi primary, Groq fallback.
         """
-        from app.agents.runtime import _llm_config  # local import: avoid cycle at module load
-        cfg = _llm_config()
-        api_key = os.getenv(cfg["env_key"])
-        if not api_key:
-            raise RuntimeError(f"{cfg['env_key']} not configured")
-        # The active provider's default model unless a real one is pinned.
-        model = self.config.get("model") or cfg["default_model"]
-        # Honor a reasoning provider's fixed temperature (Kimi k2.6 rejects any
-        # temperature but 1 with HTTP 400).
-        from app.agents.runtime import _llm_http_timeout
-        temperature = cfg.get("fixed_temperature", 0.2)
-        async with httpx.AsyncClient(timeout=_llm_http_timeout()) as client:
-            resp = await client.post(
-                cfg["url"],
-                headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"},
-                json={"model": model,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": temperature},
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"{cfg['provider']} API error (HTTP {resp.status_code})"
-                )
-            return resp.json()["choices"][0]["message"]["content"]
+        # Single provider HTTP egress (records to the model-call meter by
+        # construction — see llm_client.record_provider_usage). fixed_temperature
+        # and the unset-key RuntimeError are handled inside simple_complete.
+        from app.core import llm_client
+        return await llm_client.simple_complete(
+            prompt,
+            temperature=0.2,
+            model=self.config.get("model"),
+            agent_name="project_reasoner",
+        )
 
     async def _fallback_answer(self, request: str, excerpts: list) -> tuple:
         """Direct answer used when the planner can't produce a JSON plan.

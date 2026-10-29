@@ -145,34 +145,17 @@ class FormulaExecutorV2Block(UniversalBlock):
         by test doubles. Raises RuntimeError when no key is set so callers get a
         clear, non-secret error.
         """
-        from app.agents.runtime import _llm_config  # local import: avoid cycle at module load
-        cfg = _llm_config()
-        api_key = os.getenv(cfg["env_key"])
-        if not api_key:
-            raise RuntimeError(f"{cfg['env_key']} not configured")
-        # The active provider's default model unless a real one is pinned.
-        model = self.config.get("model") or cfg["default_model"]
-        # Honor a reasoning provider's fixed temperature (Kimi k2.6 rejects any
-        # temperature but 1 with HTTP 400). Codegen wants determinism, but a
-        # 400 gets us nothing — the provider constraint wins.
-        from app.agents.runtime import _llm_http_timeout
-        temperature = cfg.get("fixed_temperature", 0.0)
-        async with httpx.AsyncClient(timeout=_llm_http_timeout()) as client:
-            resp = await client.post(
-                cfg["url"],
-                headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": temperature,
-                },
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"{cfg['provider']} API error (HTTP {resp.status_code})"
-                )
-            return resp.json()["choices"][0]["message"]["content"]
+        # Single provider HTTP egress (records to the model-call meter by
+        # construction — see llm_client.record_provider_usage). Codegen wants
+        # determinism (temperature 0.0); a provider's fixed_temperature still
+        # wins inside simple_complete, which also raises on an unset key.
+        from app.core import llm_client
+        return await llm_client.simple_complete(
+            prompt,
+            temperature=0.0,
+            model=self.config.get("model"),
+            agent_name="formula_executor_v2",
+        )
 
     async def process(self, input_data: Any, params: Dict = None) -> Dict:
         params = params or {}
