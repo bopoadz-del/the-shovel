@@ -32,7 +32,7 @@ docker run -p 8000:8000 -e PORT=8000 cerebrum:cloud
 A prebuilt image is also published on each push to main:
 
 ```bash
-docker pull ghcr.io/bopoadz-del/cerebrum-blocks:latest
+docker pull ghcr.io/<owner>/<repo>:latest   # docker-publish.yml pushes to ghcr.io/${{ github.repository }}
 ```
 
 ### Google Cloud Platform
