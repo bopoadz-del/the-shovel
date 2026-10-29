@@ -7240,7 +7240,7 @@ def _graft_rate_only_item(
 ) -> str:
     """Rate Only BOQ item ask: state Rate Only when the retrieved row already says so.
 
-    Live Master Corpus greeted and never named D529.3. Compose nothing —
+    When the model greeted and never named the asked item, compose nothing —
     only fire when an excerpt already says Rate Only on the asked item.
     A fabricated money total is replaced.
     """
@@ -7422,12 +7422,11 @@ def _graft_priced_boq_item(
     rag_sys_msg: dict[str, Any] | None,
     messages: list[dict[str, Any]] | None,
 ) -> str:
-    """WAVE 2 B4/B5: write qty + amount when synthesis hung empty.
+    """Priced BOQ item ask: write qty + amount when synthesis hung empty.
 
-    Live Master Corpus on 2ceef76 (#545) echoed the D599.5 ask, cited
-    nothing, and waited ~212s. #542 already elected the priced row over
-    storm-water Rate Only — compose those figures from the excerpt.
-    Kill-switch: COMPOSE_PRICED_BOQ_ROW=0. A Rate Only item is not this path.
+    When the model echoed the ask, cited nothing and waited, compose the
+    priced row's figures from the excerpt (a priced row is elected over a
+    storm-water Rate Only sibling). A Rate Only item is not this path.
     """
     try:
         from app.core.rag.retriever import (
@@ -7643,7 +7642,7 @@ def _graft_boq_scope_wbs_if_wrong_contract(
     text: str,
     messages: list[dict[str, Any]] | None,
 ) -> str:
-    """Replace a leftover-F1 refuse / AB-2022 cite with the predispatched WBS."""
+    """Replace a wrong-contract refuse / contract-id cite with the predispatched WBS."""
     user = _latest_operator_ask(messages)
     if not _message_wants_boq_scope_wbs_ask(user):
         return text
@@ -7704,10 +7703,9 @@ def _graft_combined_part_summary_total(
 ) -> str:
     """Combined BOQ page totals: sum printed page totals when the model added 1,000,000.
 
-    Live 4ab5561: d/3/1 + d/3/2 + d/3/3 printed 34,645,529 + 1,852,848
-    + 17,496,857 = 53,995,234 and the bubble said 54,995,234. Compose
-    the printed figures; do not invent a page. A one-page total stays on
-    ``_graft_part_summary_total``.
+    When the model mis-added the named pages' printed totals, compose the
+    sum from the printed figures; do not invent a page. A one-page total
+    stays on ``_graft_part_summary_total``.
     """
     try:
         from app.core.rag.retriever import (
@@ -7758,12 +7756,12 @@ def _graft_named_community_tfc_span(
     project_id: str | None = None,
     extra_project_ids: list[str] | None = None,
 ) -> str:
-    """Set3 F1: longest/shortest Time for Completion in a named community.
+    """Longest/shortest Time for Completion among a named community's milestones.
 
-    Live 4ab5561 answered Milestones 1–5 only and said none were
-    Northern Community. The continuation table states 547 / 397
-    (delta 150). Compose from excerpts; last-chance scan the loaded
-    CD volume when top-k stopped at Milestone 5. Do not invent days.
+    When the model answered only the first milestones and missed the ones
+    naming the community, compose the longest/shortest/delta from the
+    milestone rows in the excerpts; last-chance scan the loaded CD volume
+    when top-k stopped early. Do not invent days.
     """
     try:
         from app.core.rag.retriever import (
@@ -7833,10 +7831,9 @@ def _graft_part_summary_total(
 ) -> str:
     """BOQ page Part Summary ask: write the page Part Summary when synthesis hung.
 
-    Live 0d9fd23 mobile H3 echoed empty / said the priced-BOQ Part
-    Summary was not found. The d/3/1 total was already in the
-    demolition-bill excerpts (B1/B2 line items on the same page PASS).
-    B4/B5 CESMM rows are not this.
+    When the model echoed empty or said the priced-BOQ Part Summary was
+    not found although the page total was already in the excerpts, compose
+    the printed page total. CESMM item-code rows are not this.
     """
     try:
         from app.core.rag.retriever import (
