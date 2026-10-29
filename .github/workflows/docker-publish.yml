@@ -12,7 +12,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/cerebrum-blocks
+  IMAGE_NAME: ${{ github.repository_owner }}/the-shovel
 
 # Newer push to the same ref supersedes the running build (the newest
 # image is the one that matters for a given branch/PR anyway).
