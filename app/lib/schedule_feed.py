@@ -57,3 +57,34 @@ async def extract_schedule_feed(document_ids: List[str]) -> Tuple[List[Dict[str,
             milestones.append({"name": m.get("name"), "target_date": m.get("target_date")})
     lead_times = [{"equipment": k, "lead_time_days": v} for k, v in lead_map.items()]
     return lead_times, milestones
+
+
+def extract_documents_text(document_ids: List[str], *, max_chars: int = 20000) -> str:
+    """Concatenate the extracted TEXT of the given documents so the schedule
+    engine can STRUCTURE it into activities exactly as it structures a brief
+    (S-1 rework-1, ORDERS_28OCT_1030Z #3) — not a synthesized placeholder
+    brief. Documents that fail to extract are skipped. Capped so one long
+    document cannot dominate the structuring input.
+    """
+    from app.core import projects as projects_store
+    from app.core.doc_index import extract_document_text
+
+    parts: List[str] = []
+    budget = max_chars
+    for did in document_ids or []:
+        if budget <= 0:
+            break
+        doc = projects_store.get_document(did)
+        if not doc or not doc.get("file_path"):
+            continue
+        try:
+            text = extract_document_text(doc["file_path"], doc.get("original_name") or "")
+        except Exception:  # noqa: BLE001 — a document that will not extract is skipped
+            continue
+        text = (text or "").strip()
+        if not text:
+            continue
+        chunk = text[:budget]
+        parts.append(chunk)
+        budget -= len(chunk)
+    return "\n\n".join(parts).strip()

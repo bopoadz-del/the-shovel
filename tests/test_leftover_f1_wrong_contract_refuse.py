@@ -326,18 +326,6 @@ def test_newer_year_boq_wins_over_ab2022_bill(monkeypatch):
         },
     ]
 
-    def fake_title(pid, phrase, limit=8):
-        needle = (phrase or "").lower()
-        return [
-            doc for doc in docs
-            if needle and needle in (
-                f"{doc['original_name']} {doc['file_path']}".lower()
-            )
-        ][:limit]
-
-    def fake_terms(pid, terms, min_terms=2, require_letter=False, limit=8):
-        return list(docs)[:limit]
-
     class _Store:
         def doc_chunk_texts(self, project_id, doc_ids):
             return {did: list(texts.get(did) or []) for did in (doc_ids or [])}
@@ -355,10 +343,7 @@ def test_newer_year_boq_wins_over_ab2022_bill(monkeypatch):
     coc.source_name = DD22_COC_NAME
 
     monkeypatch.setattr(
-        "app.core.projects.documents_matching_title_phrase", fake_title,
-    )
-    monkeypatch.setattr(
-        "app.core.projects.documents_matching_filename_terms", fake_terms,
+        "app.core.projects.list_documents", lambda *a, **k: list(docs),
     )
     monkeypatch.setattr(bs, "_resolve_rag_project_id", lambda pid: pid)
     monkeypatch.setattr(

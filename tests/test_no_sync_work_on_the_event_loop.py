@@ -13,6 +13,8 @@ import threading
 
 import pytest
 
+from tests import _wbs_fakes
+
 
 class _Probe:
     def __init__(self, result):
@@ -178,5 +180,6 @@ def test_the_schedule_cpm_pass_runs_off_the_loop(monkeypatch):
     monkeypatch.setattr(container_cls, "_attach_cpm_to_activities", probe)
     from app.containers.construction import ConstructionContainer
 
+    _wbs_fakes.install(monkeypatch)
     loop_ident, _ = _drive(lambda: ConstructionContainer().generate_wbs({}, {"brief": "A two-storey office block."}))
     assert threads and loop_ident not in threads

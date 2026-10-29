@@ -40,6 +40,18 @@ from app.lib.wbs_duration_overrides import (
 LIVE_PREFIX = "Answer only from the client project documents. "
 F2_ASK = "Use 45 days for the tree-removal activity and re-run."
 LIVE_F2 = LIVE_PREFIX + F2_ASK
+
+# PR#3 (ORDERS_28OCT_0345Z/0415Z): generate_wbs derives from real structured
+# input, not a template, so the standalone override test runs over a BOQ
+# demolition/site-clearance scope. That scope carries a "General site
+# clearance" row, onto which the tree-removal override's D4 alias maps exactly
+# as it did on the template — the override subject is unchanged.
+_F2_BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
+_F2_BOQ_ITEMS = [
+    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 20, "unit": "m"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr"},
+]
 # Typical Master Corpus lookup prose that used to steal the folded turn.
 FOLDED_CORPUS = (
     "REFERENCE CONTEXT\n"
@@ -246,15 +258,15 @@ async def test_predispatch_still_fires_when_the_user_bubble_was_rag_folded(
 
 @pytest.mark.asyncio
 async def test_generate_wbs_standalone_f2_applies_45_days_to_site_clearance():
-    """Building template already has 'Site clearance'; D4 alias maps
-    tree-removal onto it. Do not invent a new activity row."""
+    """The BOQ scope carries 'General site clearance'; the D4 alias maps
+    tree-removal onto it (and the direct 'Removal of trees' row). Do not invent
+    a new activity row."""
     container = ConstructionContainer()
     result = await container.generate_wbs(
-        {},
+        {"brief": _F2_BOQ_ASK, "boq_items": _F2_BOQ_ITEMS},
         {
             "target_count": 40,
             "user_message": LIVE_F2,
-            "brief": LIVE_F2,
         },
     )
     assert result.get("status") == "success"

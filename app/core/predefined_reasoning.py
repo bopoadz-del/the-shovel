@@ -280,28 +280,20 @@ def message_wants_wbs_outline(message: str) -> bool:
 
 
 # Live BOQ-scope WBS ask after #521: the hierarchy rendered, but generate_wbs still
-# elected the building template. A demolition / site-clearance + BOQ WBS ask
-# must consume retrieved measured rows instead. Contract Data particulars,
-# spec-precedence and delay-damages asks stay off this path.
-_DEMO_SITE_CLEAR_ASK_RE = re.compile(
-    r"(?i)\b(?:demolition|site\s+clearance|site\s+clearing)\b",
-)
-
-
+# A WBS over a project's measured BOQ scope must consume the retrieved rows.
+# Contract Data particulars, spec-precedence and delay-damages asks stay off
+# this path.
 def message_wants_boq_scope_wbs(message: str) -> bool:
-    """True for a high-level WBS over demolition / site-clearance BOQ scope.
+    """True for a high-level WBS over a project's measured BOQ scope, ANY trade.
 
-    Requires the WBS outline phrasing, the demolition/site-clearance scope,
-    and a bill-of-quantities ask. Kill-switch ``BOQ_SCOPE_WBS=0`` disables
-    the election so generate_wbs keeps the template scaffold.
+    Gate on STRUCTURE, not keywords (N8, ORDERS_28OCT_0815Z): the ask must be a
+    WBS-outline ask AND a bill-of-quantities ask. There is no demolition/
+    site-clearance keyword requirement and no ``BOQ_SCOPE_WBS`` kill-switch —
+    any measured BOQ scope elects the WBS path. generate_wbs derives the WBS
+    from the rows; there is no template scaffold to fall back to.
     """
-    from app.lib.boq_schedule import boq_scope_wbs_enabled
-    if not boq_scope_wbs_enabled():
-        return False
     msg = message or ""
     if not message_wants_wbs_outline(msg):
-        return False
-    if not _DEMO_SITE_CLEAR_ASK_RE.search(msg):
         return False
     from app.core.rag.retriever import query_asks_for_boq_scope
     return query_asks_for_boq_scope(msg)

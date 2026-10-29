@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 import app.routers.chat as chat_mod
 from tests._dev_key import DEV_KEY
+from tests import _wbs_fakes
 
 H = {"Authorization": "Bearer " + DEV_KEY}
 
@@ -35,6 +36,7 @@ def _events_from_generator(action, message, project_id, monkeypatch, doc_ids=Non
 
 
 def test_predefined_stream_produce_has_offer(monkeypatch):
+    _wbs_fakes.install(monkeypatch)
     evs = _events_from_generator("generate_wbs", "produce the schedule", "proj1", monkeypatch)
     start = next(e for e in evs if e["type"] == "start")
     end = next(e for e in evs if e["type"] == "end")

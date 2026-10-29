@@ -1,10 +1,16 @@
-"""Tests for ConstructionContainer.generate_wbs — the deterministic WBS
-generator that backs the heavy-reasoning agent's "create a 200 activity
-schedule" path.
+"""Tests for ConstructionContainer.generate_wbs.
 
-The method is template-based (no LLM), so the assertions are deterministic
-on activity count, CPM well-formedness, and project-type detection. Keeps
-the heavy-reasoning routing path testable without burning provider tokens.
+PR#3 (ORDERS_28OCT_0345Z/0415Z): generate_wbs no longer emits a per-type
+template scaffold. The activity set is derived only from real structured
+input — a project's measured BOQ demolition/site-clearance scope, or a
+document's long-lead procurement feed. A prose brief with no structured scope
+is refused as no-scope (status="error", activities=[]), which the export
+routes translate to HTTP 422.
+
+These exercise the generation mechanics (activity shape, CPM well-formedness,
+dispatch) against the BOQ scope — real input-traceable rows that survive
+Stage 2 — and pin the no-scope / label-only behaviour for the prose-brief path.
+Re-pointed from the template path, with the template-scaling tests removed.
 """
 
 from __future__ import annotations
@@ -13,31 +19,42 @@ import pytest
 
 from app.containers.construction import ConstructionContainer
 
+# A WBS-outline + BOQ ask elects the BOQ scope path; boq_items are the measured
+# rows (one package + activity per row). Each row carries a STATED productivity
+# rate so its duration is kernel-derived (the shipped norm table is empty until
+# sourced — ruling 1045Z — so a row with no rate would be UNKNOWN; these tests
+# exercise CPM well-formedness, which needs real durations).
+BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
+BOQ_ITEMS = [
+    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2", "productivity_rate": "5 m2 per gang-day"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 20, "unit": "m", "productivity_rate": "10 m per gang-day"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr", "productivity_rate": "15 nr per gang-day"},
+    {"item_key": "D599.5", "description": "Breaking out existing carriageway", "quantity": 40, "unit": "item", "productivity_rate": "20 item per gang-day"},
+]
+
 
 @pytest.fixture
 def container():
     return ConstructionContainer()
 
 
-@pytest.mark.asyncio
-async def test_generate_wbs_default_data_center_target_200(container):
-    """Canonical user case: data-center brief, target_count=200.
-
-    Plan accepted ~225 activities (template scaling overshoots slightly to
-    keep each zone's scaffold intact). Lock in the count >= target.
-    """
-    result = await container.generate_wbs(
-        input_data={"brief": "Build a 50MW hyperscale data center."},
-        params={"target_count": 200, "project_type": "data_center"},
+async def _boq_wbs(container, **params):
+    return await container.generate_wbs(
+        input_data={"brief": BOQ_ASK, "boq_items": BOQ_ITEMS},
+        params={"target_count": 60, **params},
     )
 
+
+@pytest.mark.asyncio
+async def test_generate_wbs_boq_scope_produces_a_cost_loadable_wbs(container):
+    """Re-pointed from the template path: the BOQ scope yields one input-
+    traceable activity per measured row — no template, no scaling to a target."""
+    result = await _boq_wbs(container)
     assert result["status"] == "success"
-    assert result["project_type"] == "data_center"
-    assert result["target_count"] == 200
-    # Template scaling rounds up to keep zones whole, never down.
-    assert result["actual_count"] >= 200
+    assert result["scaffold"]["derived_from_boq"] is True
+    # One activity per retrieved BOQ row; nothing invented, nothing scaled.
+    assert result["actual_count"] == len(BOQ_ITEMS)
     assert len(result["activities"]) == result["actual_count"]
-    # WBS tree, summary, and assumptions are part of the contract.
     assert isinstance(result.get("wbs_tree"), dict) and result["wbs_tree"]
     assert isinstance(result.get("summary"), dict)
     assert isinstance(result.get("assumptions"), list) and result["assumptions"]
@@ -46,10 +63,7 @@ async def test_generate_wbs_default_data_center_target_200(container):
 @pytest.mark.asyncio
 async def test_generate_wbs_activity_shape(container):
     """Every activity carries the fields the agent / UI / CPM consumers need."""
-    result = await container.generate_wbs(
-        input_data={},
-        params={"target_count": 60, "project_type": "building"},
-    )
+    result = await _boq_wbs(container)
     activities = result["activities"]
     assert activities, "must return at least one activity"
 
@@ -73,22 +87,41 @@ async def test_generate_wbs_activity_shape(container):
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_clamps_low_and_high_targets(container):
-    """target_count is clamped to [20, 1000] regardless of input."""
-    low = await container.generate_wbs(input_data={}, params={"target_count": 5})
-    high = await container.generate_wbs(input_data={}, params={"target_count": 5000})
+async def test_generate_wbs_prose_brief_derives_with_egress_else_no_scope(container, monkeypatch):
+    """1030Z re-point: with the LLM egress configured, a prose brief is
+    STRUCTURED into a derived schedule (not a template, not a refusal). Only a
+    brief the egress derives no scope from is the no-scope error."""
+    from app.core import llm_client
 
-    # Effective clamp is reflected in target_count field too.
-    assert low["target_count"] == 20
-    assert high["target_count"] == 1000
-    # Actual count still scales to satisfy the clamped target.
-    assert low["actual_count"] >= 20
-    assert high["actual_count"] >= 1000
+    async def fake(system, user, **k):
+        if "excavate" in (user or "").lower():
+            return {"activities": [
+                {"name": "Excavate", "source_span": "excavate the pad", "duration_days": 5, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    derived = await container.generate_wbs(
+        input_data={"brief": "First excavate the pad."},
+        params={"target_count": 40},
+    )
+    assert derived["status"] == "success"
+    assert [a["name"] for a in derived["activities"]] == ["Excavate"]
+    assert derived["scaffold"]["source"] == "brief"
+
+    no_scope = await container.generate_wbs(
+        input_data={"brief": "Build a 50MW hyperscale data center."},
+        params={"target_count": 200, "project_type": "data_center"},
+    )
+    assert no_scope["status"] == "error"
+    assert no_scope["activities"] == []
+    assert "no schedulable scope" in no_scope["error"].lower()
 
 
 @pytest.mark.asyncio
 async def test_generate_wbs_infers_project_type_from_brief(container):
-    """When no project_type is passed, the brief is used to infer it."""
+    """When no project_type is passed, the brief is used to infer it. The label
+    is carried even on the no-scope path (project_type is a label only now)."""
     result = await container.generate_wbs(
         input_data={"brief": "Construct a 200MW solar PV plant in Kenya."},
         params={"target_count": 50},
@@ -103,26 +136,25 @@ async def test_generate_wbs_infers_project_type_from_brief(container):
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_unknown_project_type_defaults_to_building(container):
-    """An unknown project_type falls back to the GENERIC building template,
-    not data_center (F39: generic briefs were getting hyperscale WBS items),
-    and not an error."""
+async def test_generate_wbs_stated_project_type_passes_through_unremapped(container):
+    """Re-written from 'unknown type defaults to building': there is no template
+    to fall back to, so a stated project_type is an honest label that passes
+    through unchanged — never silently remapped — and with no structured scope
+    the call is no-scope, never a substituted template."""
     result = await container.generate_wbs(
         input_data={},
         params={"target_count": 30, "project_type": "spacecraft"},
     )
-    assert result["status"] == "success"
-    assert result["project_type"] == "building"
+    assert result["project_type"] == "spacecraft"
+    assert result["status"] == "error"
+    assert result["activities"] == []
 
 
 @pytest.mark.asyncio
 async def test_generate_wbs_cpm_well_formed(container):
     """CPM output: every activity's predecessors must reference existing
     activity codes (no dangling refs), and EF >= ES for every row."""
-    result = await container.generate_wbs(
-        input_data={},
-        params={"target_count": 80, "project_type": "infrastructure"},
-    )
+    result = await _boq_wbs(container)
     activities = result["activities"]
     code_set = {a["code"] for a in activities}
 
@@ -137,11 +169,12 @@ async def test_generate_wbs_cpm_well_formed(container):
 @pytest.mark.asyncio
 async def test_generate_wbs_routes_via_route_dispatch(container):
     """The heavy-reasoning agent invokes generate_wbs via container.route().
-    Pin that dispatch path so a registry typo can't silently break it."""
+    Pin that dispatch path (over the BOQ scope so it succeeds) so a registry
+    typo can't silently break it."""
     result = await container.route(
         action="generate_wbs",
-        input_data={"brief": "Office tower 30 floors."},
-        params={"target_count": 40, "project_type": "building"},
+        input_data={"brief": BOQ_ASK, "boq_items": BOQ_ITEMS},
+        params={"target_count": 40},
     )
     assert result["status"] == "success"
-    assert result["actual_count"] >= 40
+    assert result["actual_count"] == len(BOQ_ITEMS)

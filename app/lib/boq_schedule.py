@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -480,8 +479,6 @@ def schedule_basis(manhours_per_unit: Dict[str, float],
 # demolition / site-clearance, and build a high-level tree. They do not
 # invent item codes or descriptions. Kill-switch: BOQ_SCOPE_WBS=0.
 
-_BOQ_SCOPE_WBS_PHASE = "Demolition and Site Clearance"
-
 _PIPE_BOQ_ROW_RE = re.compile(
     r"\|\s*(?P<code>[A-Za-z]\s*\d{2,4}(?:\.\d+)?)\s*"
     r"\|\s*(?P<desc>[^|\n]+?)\s*\|",
@@ -503,35 +500,6 @@ _TRAILING_MEASURED_RE = re.compile(
     r"(?:ha|m2|m²|m3|m³|nr|nos|no\.?|m|lm|sum|item|kg|t)\b.*$",
     re.IGNORECASE,
 )
-_DEMO_SITE_CLEAR_ITEM_RE = re.compile(
-    r"(?i)\b(?:demolit|site\s+clear|clearance|clearing|grubbing|"
-    r"tree\s+remov|remov(?:al|e)\s+of\s+(?:trees?|fence|culvert|pavement|"
-    r"carriageway)|breaking\s+out|chain\s+link|carriageway|sidewalk|"
-    r"road\s+markings?)\b",
-)
-_CESMM_D_CODE_RE = re.compile(r"(?i)^D\d{2,4}(?:\.\d+)?$")
-_DEMO_BOQ_NAME_RE = re.compile(
-    r"(?i)demolit|site\s*clear|clearance|clearing",
-)
-_BOQ_SCOPE_TITLE_PHRASES = (
-    "demolition and site clearance",
-    "site clearance",
-    "bill of quantities",
-    "schedule of quantities",
-)
-_BOQ_SCOPE_FILENAME_TERMS = ("demolition", "clearance", "clearing", "boq")
-
-
-def boq_scope_wbs_enabled() -> bool:
-    """ON by default — live leftover F1 BOQ-grounded WBS.
-
-    ``BOQ_SCOPE_WBS=0`` restores the building-template scaffold.
-    """
-    return (os.getenv("BOQ_SCOPE_WBS", "1") or "").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
-
-
 def _compact_cesmm_code(code: str) -> str:
     return re.sub(r"\s+", "", (code or "").strip()).upper()
 
@@ -592,34 +560,39 @@ def parse_boq_measured_rows(text: str) -> List[Dict[str, Any]]:
     return found
 
 
-def item_is_demolition_or_site_clearance(item: Dict[str, Any]) -> bool:
-    """True for CESMM class D or a demolition / site-clearance description."""
-    code = _compact_cesmm_code(str(item.get("item_key") or ""))
-    if _CESMM_D_CODE_RE.match(code):
-        return True
-    desc = str(item.get("description") or item.get("item_key") or "")
-    if _DEMO_SITE_CLEAR_ITEM_RE.search(desc):
-        return True
-    return categorize(desc) == "Demolition"
-
-
-def filter_demolition_site_clearance_items(
+def structured_boq_rows(
     items: Iterable[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Keep retrieved demolition / site-clearance rows only."""
+    """Keep measured BOQ rows by STRUCTURE — any trade (ORDERS_28OCT_0700Z #1a).
+
+    A row qualifies when it carries a label (``description`` or ``item_key``)
+    AND bill-of-quantities STRUCTURE — either a measure (``quantity``/``qty``
+    or ``unit``) OR a bill item code (``item_key`` shaped like a CESMM/section
+    code, e.g. ``D110``, ``E20``). Either is a BOQ line, whatever the trade; a
+    bare prose scrap with neither ("Hall A slab") is not. There is no
+    demolition/site-clearance keyword gate — any measured BOQ scope derives a
+    WBS. De-dupes on CESMM code + normalised description, exactly as the old
+    trade filter did, and never invents rows.
+    """
     out: List[Dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     seen_codes: set[str] = set()
     for item in items or []:
         if not isinstance(item, dict):
             continue
-        if not item_is_demolition_or_site_clearance(item):
+        item_key = str(item.get("item_key") or "").strip()
+        label = str(item.get("description") or item_key).strip()
+        has_measure = (
+            item.get("quantity") is not None
+            or item.get("qty") is not None
+            or str(item.get("unit") or "").strip() != ""
+        )
+        # A bill item code (letters then a digit) is itself BOQ structure.
+        has_code = bool(re.match(r"(?i)^[A-Z]{1,4}\d", item_key))
+        if not label or not (has_measure or has_code):
             continue
         code = _compact_cesmm_code(str(item.get("item_key") or ""))
-        key = (
-            code,
-            _norm_desc(item.get("description") or item.get("item_key")),
-        )
+        key = (code, _norm_desc(item.get("description") or item.get("item_key")))
         if not key[1] or key in seen:
             continue
         if code and code in seen_codes:
@@ -644,10 +617,11 @@ def _chunk_looks_like_measured_boq(text: str, filename: str) -> bool:
         return True
     if blob.count("|") >= 4 and _CESMM_PROSE_ROW_RE.search(blob):
         return True
-    # OCR / prose bills: no pipes and no recognised filename, but the
-    # excerpt already carries CESMM D / demolition measured rows.
+    # OCR / prose bills: no pipes and no recognised filename, but the excerpt
+    # already carries measured BOQ rows (any trade — a bill code or a measure,
+    # not a demolition keyword gate).
     rows = parse_boq_measured_rows(blob)
-    return any(item_is_demolition_or_site_clearance(r) for r in rows)
+    return bool(structured_boq_rows(rows))
 
 
 def _resolve_rag_project_id(project_id: str) -> str:
@@ -680,12 +654,13 @@ _WBS_REFUSE_RE = re.compile(
     r"can\s*'?\s*t\s+generate|i\s+(?:cannot|can\s*'?\s*t|could\s+not))\b"
 )
 _WBS_HIERARCHY_RE = re.compile(r"(?m)^(?:### )?\d+(?:\.\d+)*\s+\S")
-_WBS_CESMM_D_RE = re.compile(r"(?i)\bD\d{2,4}(?:\.\d+)?\b")
+# Any CESMM / priced-bill item code (class letter + 2–4 digits), ANY trade —
+# D110 demolition, E200 concrete, R10 roads. Not demolition-specific.
+_WBS_BILL_CODE_RE = re.compile(r"(?i)(?<![A-Za-z0-9])[A-Z]\d{2,4}(?:\.\d+)?(?![A-Za-z0-9])")
 _WBS_TEMPLATE_RE = re.compile(
     r"(?i)template\s+scaffold|site\s+preparation|superstructure|"
     r"project_type\s+inferred:\s*building"
 )
-_WBS_DEMOLITION_SCOPE_RE = re.compile(r"(?i)\b(?:demolit|site\s+clear)\w*")
 
 
 def _source_contract_recency(name: str) -> Optional[Tuple[int, int]]:
@@ -766,11 +741,12 @@ def boq_wbs_answer_fails_wrong_contract(answer: str) -> bool:
 
 
 def boq_wbs_answer_is_grounded(answer: str) -> bool:
-    """True for a demolition / site-clearance WBS from BOQ rows, not a refuse.
+    """True for a BOQ-scope WBS answer from bill rows (ANY trade), not a refuse.
 
-    Requires the demolition/site-clearance scope AND either a numbered
-    hierarchy or CESMM D-codes. A mere mention of demolition is not enough.
-    Template scaffold and contract-number cites fail.
+    Trade-neutral (rework 2): a grounded answer carries a numbered hierarchy or
+    CESMM/bill item codes of any class — a concrete, roads or demolition bill
+    alike. A template scaffold, a contract-number cite, or a refuse with no
+    bill codes is not grounded. There is no demolition/site-clearance word gate.
     """
     blob = answer or ""
     if not blob.strip():
@@ -779,40 +755,47 @@ def boq_wbs_answer_is_grounded(answer: str) -> bool:
         return False
     if _WBS_TEMPLATE_RE.search(blob):
         return False
-    if _WBS_REFUSE_RE.search(blob) and not _WBS_CESMM_D_RE.search(blob):
+    if _WBS_REFUSE_RE.search(blob) and not _WBS_BILL_CODE_RE.search(blob):
         return False
-    if not _WBS_DEMOLITION_SCOPE_RE.search(blob):
-        return False
-    return bool(_WBS_HIERARCHY_RE.search(blob) or _WBS_CESMM_D_RE.search(blob))
+    return bool(_WBS_HIERARCHY_RE.search(blob) or _WBS_BILL_CODE_RE.search(blob))
+
+
+# A bill of quantities is a spreadsheet, CSV, or PDF. These extensions seed the
+# CANDIDATE set; nothing is gated on the file NAME (rework-2 #3, ORDERS_1200Z).
+_BOQ_CANDIDATE_EXTS = (".xlsx", ".xls", ".csv", ".pdf")
 
 
 def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
-    """Bills of quantities already in the project document pool.
+    """Candidate bill documents in the project pool — EVERY spreadsheet / CSV /
+    PDF, with NO filename or title-term seeding (ORDERS_1200Z #3).
 
-    Filename / title listing, not cosine top-k. Live leftover F1 after
-    #524 still hit the building template because ``retrieve_with_filter``
-    never returned the demolition BOQ from a 2700-doc corpus.
+    The document NAME never decides membership: a bill named e.g.
+    ``foundations.xlsx`` is a candidate purely by its extension, and the
+    measured-row gate downstream (``_chunk_looks_like_measured_boq`` /
+    ``structured_boq_rows``) alone decides whether its rows elect. This replaces
+    the old ``_BOQ_SCOPE_FILENAME_TERMS`` / title-phrase seeding, which dropped
+    a bill whose name carried no bill word.
     """
     try:
-        from app.core.projects import (
-            documents_matching_filename_terms,
-            documents_matching_title_phrase,
-        )
-        from app.core.rag.retriever import document_is_a_bill_of_quantities
+        from app.core.projects import list_documents
     except Exception as exc:  # noqa: BLE001
         logger.warning("BOQ-scope WBS document listing unavailable: %s", exc)
         return []
 
     found: List[Dict[str, str]] = []
     seen: set[str] = set()
-
-    def _add(doc: Dict[str, str]) -> None:
+    try:
+        docs = list_documents(project_id) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("BOQ-scope WBS list_documents failed: %s", exc)
+        return []
+    for doc in docs:
         doc_id = str((doc or {}).get("id") or "").strip()
         if not doc_id or doc_id in seen:
-            return
+            continue
         name = str(doc.get("original_name") or doc.get("file_path") or "")
-        if not document_is_a_bill_of_quantities(name):
-            return
+        if not name.lower().endswith(_BOQ_CANDIDATE_EXTS):
+            continue
         seen.add(doc_id)
         found.append({
             "id": doc_id,
@@ -820,40 +803,8 @@ def _list_boq_scope_documents(project_id: str) -> List[Dict[str, str]]:
             "file_path": str(doc.get("file_path") or ""),
         })
 
-    for phrase in _BOQ_SCOPE_TITLE_PHRASES:
-        try:
-            for doc in documents_matching_title_phrase(project_id, phrase, limit=8):
-                _add(doc)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("BOQ-scope title listing failed: %s", exc)
-    try:
-        for doc in documents_matching_filename_terms(
-            project_id,
-            list(_BOQ_SCOPE_FILENAME_TERMS),
-            min_terms=2,
-            require_letter=False,
-            limit=8,
-        ):
-            _add(doc)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("BOQ-scope filename listing failed: %s", exc)
-
-    def _demo_name(doc: Dict[str, str]) -> bool:
-        blob = f"{doc.get('original_name') or ''} {doc.get('file_path') or ''}"
-        return bool(_DEMO_BOQ_NAME_RE.search(blob))
-
-    demo = [d for d in found if _demo_name(d)]
-    # Prefer the demolition / site-clearance bill. A generic priced bill
-    # is used only when no scoped bill is in the pool — we still only
-    # keep rows the demolition filter accepts.
-    # Unnamed Master Corpus leftover F1: when both years' demolition
-    # bills are in the pool, the later package owns the ask. Arrival
-    # order used to hand generate_wbs the earlier year's bill (or only
-    # its Conditions of Contract prose) and synthesis then refused.
-    pool = demo or found
-    pool = _prefer_newer_contract_year_docs(pool)
-    chosen = pool[:4]
-    return chosen
+    # When two contract years are present the later package owns the ask.
+    return _prefer_newer_contract_year_docs(found)
 
 
 def _items_from_chunk_text(
@@ -864,8 +815,15 @@ def _items_from_chunk_text(
 ) -> List[Dict[str, Any]]:
     if require_measured_gate and not _chunk_looks_like_measured_boq(text, filename):
         return []
+    rows = parse_boq_measured_rows(text)
+    if require_measured_gate:
+        # The gate admits only MEASURED/structured rows — a bill code or a
+        # measure (ORDERS_1200Z e). A codeless, measureless line (e.g. an
+        # indexer "BOQ line item — …" description) is NOT a measured row and is
+        # refused here; with the gate off it would be admitted.
+        rows = structured_boq_rows(rows)
     out: List[Dict[str, Any]] = []
-    for row in parse_boq_measured_rows(text):
+    for row in rows:
         item = dict(row)
         if filename:
             item["source"] = filename
@@ -900,7 +858,7 @@ def _items_from_named_boq_docs(project_id: str) -> List[Dict[str, Any]]:
             for text in texts or []:
                 collected.extend(
                     _items_from_chunk_text(
-                        text or "", filename, require_measured_gate=False,
+                        text or "", filename, require_measured_gate=True,
                     )
                 )
         if collected:
@@ -923,14 +881,14 @@ def _items_from_named_boq_docs(project_id: str) -> List[Dict[str, Any]]:
             _items_from_chunk_text(
                 getattr(chunk, "text", "") or "",
                 filename,
-                require_measured_gate=False,
+                require_measured_gate=True,
             )
         )
     return collected
 
 
 def retrieve_boq_scope_items(query: str, project_id: str) -> List[Dict[str, Any]]:
-    """Retrieve measured BOQ rows for a demolition / site-clearance WBS ask.
+    """Retrieve measured BOQ rows for a BOQ-scope WBS ask (any trade).
 
     Prefers chunks from BOQ-named documents already in the project pool
     (filename listing). Semantic ``retrieve_with_filter`` is a fallback
@@ -967,25 +925,111 @@ def retrieve_boq_scope_items(query: str, project_id: str) -> List[Dict[str, Any]
         )
     # Elect the later-year bill BEFORE CESMM-code dedupe. Filtering first
     # would keep an earlier-year D110 and drop the later-year twin.
-    return filter_demolition_site_clearance_items(
+    return structured_boq_rows(
         _prefer_newer_contract_year_items(collected),
     )
+
+
+def boq_row_trade_category(item: Dict[str, Any]) -> str:
+    """The construction category (trade) of a BOQ row, from its own description
+    via the shared pricing categorizer — ANY trade, no demolition gate."""
+    desc = str((item or {}).get("description") or (item or {}).get("item_key") or "")
+    return categorize(desc)
+
+
+def boq_scope_phase(scoped: Iterable[Dict[str, Any]]) -> str:
+    """Phase heading DERIVED from the elected rows' own trades: one trade names
+    itself (``Concrete``); two or three trades are named together
+    (``Concrete + Reinforcement``); only beyond three trades does it collapse to
+    ``Mixed scope`` (rework 2 #6). Two different bills give two different
+    headings — never a hardwired demolition name."""
+    cats: List[str] = []
+    for item in scoped or []:
+        c = boq_row_trade_category(item)
+        # Uncategorised rows do not name a trade in the heading (ORDERS_1200Z c).
+        if c and c != "Other/Uncategorized" and c not in cats:
+            cats.append(c)
+    if not cats:
+        return "Scope"
+    if len(cats) <= 3:
+        return " + ".join(cats)
+    return "Mixed scope"
+
+
+def _kernel_duration_days(quantity: float, rate: str) -> Tuple[Optional[int], Optional[str]]:
+    """Working days for ``quantity`` at a per-gang-day production ``rate`` via
+    the construction kernel (productivity_manpower_duration).
+
+    Returns ``(days, error)`` — the same contract as the brief path's estimator.
+    ``days`` is None when the kernel produced no usable figure; ``error`` is a
+    short tag NAMING the failure (logged at WARNING) only when the kernel RAISED,
+    so a kernel BREAK is surfaced distinctly from a plain missing-input UNKNOWN."""
+    try:
+        from app.agents.hats.planning.formulas.construction_formulas_planning import (
+            productivity_manpower_duration,
+        )
+        res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "productivity kernel raised estimating duration (quantity=%r rate=%r): %s",
+            quantity, rate, exc, exc_info=True,
+        )
+        return None, f"productivity kernel error: {type(exc).__name__}"
+    if not isinstance(res, dict):
+        return None, None
+    for k in ("duration_days", "duration", "days", "remaining_days"):
+        v = res.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return int(math.ceil(v)), None
+    return None, None
+
+
+def boq_row_duration(item: Dict[str, Any]) -> Tuple[Optional[int], str]:
+    """Duration for one BOQ row under the 0845Z/0900Z rule — the SAME mechanism
+    as the brief path (kernel + S-1b norm table): a stated quantity + stated
+    rate -> kernel; a quantity + a generic sourced productivity norm for the
+    row's trade -> kernel (labelled); else UNKNOWN (None). Never a placeholder
+    day."""
+    qty = _qty(item)
+    rate = (item or {}).get("productivity_rate")
+    if qty > 0 and isinstance(rate, str) and rate.strip():
+        d, kerr = _kernel_duration_days(qty, rate)
+        if d is not None:
+            return d, f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
+        if kerr:
+            # Kernel BREAK (not a missing input): surface it distinctly.
+            return None, f"kernel-error — {kerr}"
+    if qty > 0:
+        from app.lib.productivity_norms import norm_rate_for
+        desc = str((item or {}).get("description") or (item or {}).get("item_key") or "")
+        norm = norm_rate_for(desc, (item or {}).get("unit"))
+        if norm is not None:
+            d, kerr = _kernel_duration_days(qty, norm["rate"])
+            if d is not None:
+                return d, (
+                    "estimated — kernel productivity_manpower_duration, "
+                    f"norm {norm['rate']} ({norm['source']})"
+                )
+            if kerr:
+                return None, f"kernel-error — {kerr}"
+    return None, "unknown"
 
 
 def wbs_tree_from_boq_items(
     items: Iterable[Dict[str, Any]],
     *,
-    phase: str = _BOQ_SCOPE_WBS_PHASE,
+    phase: Optional[str] = None,
 ) -> Dict[str, str]:
     """High-level tree: one phase, one package per retrieved BOQ row.
 
-    Package names keep the CESMM code when the row had one. No template
+    The phase heading is DERIVED from the elected rows' trades (any trade);
+    package names keep the CESMM code when the row had one. No template
     packages are added.
     """
-    scoped = filter_demolition_site_clearance_items(items)
+    scoped = structured_boq_rows(items)
     if not scoped:
         return {}
-    tree: Dict[str, str] = {"1": phase}
+    tree: Dict[str, str] = {"1": phase or boq_scope_phase(scoped)}
     for idx, item in enumerate(scoped, start=1):
         code = _compact_cesmm_code(str(item.get("item_key") or ""))
         desc = _clean_boq_description(
@@ -997,20 +1041,66 @@ def wbs_tree_from_boq_items(
     return tree
 
 
+def _phase_label_for_category(category: str) -> str:
+    """Human phase heading for a trade category. Uncategorised activities group
+    under a neutral heading rather than naming a trade they do not resolve to."""
+    if category and category != "Other/Uncategorized":
+        return category
+    return "General scope"
+
+
+def wbs_tree_from_activities(
+    activities: Iterable[Dict[str, Any]],
+) -> Dict[str, str]:
+    """High-level WBS tree DERIVED from structured (brief / typed) activities.
+
+    Each activity is classified by its own NAME through the shared pricing
+    categorizer (the same classifier the BOQ path uses); activities are grouped
+    into one phase per trade (first-seen order) with one package per activity.
+    The tree is input-derived — two different briefs yield two different trees —
+    and carries no template packages. Each activity's ``wbs`` / ``wbs_code`` /
+    ``wbs_phase`` is stamped with its hierarchical package code so the chat
+    outline and the xlsx export agree (same contract as the BOQ path)."""
+    phases: List[Tuple[str, List[Dict[str, Any]]]] = []
+    position: Dict[str, int] = {}
+    for act in activities or []:
+        if not isinstance(act, dict):
+            continue
+        name = str(act.get("name") or "").strip()
+        if not name:
+            continue
+        label = _phase_label_for_category(categorize(name))
+        if label not in position:
+            position[label] = len(phases)
+            phases.append((label, []))
+        phases[position[label]][1].append(act)
+    tree: Dict[str, str] = {}
+    for p, (label, acts) in enumerate(phases, start=1):
+        tree[str(p)] = label
+        for q, act in enumerate(acts, start=1):
+            code = f"{p}.{q}"
+            tree[code] = str(act.get("name") or "")[:120]
+            act["wbs"] = code
+            act["wbs_code"] = code
+            act["wbs_phase"] = _slug(label)
+    return tree
+
+
 def activities_from_boq_scope_outline(
     items: Iterable[Dict[str, Any]],
     *,
-    phase: str = _BOQ_SCOPE_WBS_PHASE,
+    phase: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """One lightweight activity per retrieved row so CPM / cost-load can run.
-
-    Durations are placeholders (1 day). This is a high-level scope WBS, not
-    a productivity-derived programme — callers must say so.
+    """One activity per retrieved row so CPM / cost-load can run. Every
+    attribute is DERIVED from the row: phase + resources from its trade, the
+    duration from its quantity via the kernel (stated rate, else a generic
+    sourced norm; else UNKNOWN). No demolition default, no placeholder day.
     """
-    scoped = filter_demolition_site_clearance_items(items)
+    scoped = structured_boq_rows(items)
     activities: List[Dict[str, Any]] = []
     prev: Optional[str] = None
-    phase_slug = _slug(phase)
+    heading = phase or boq_scope_phase(scoped)
+    phase_slug = _slug(heading)
     for idx, item in enumerate(scoped, start=1):
         act_id = f"1.{idx}"
         code = _compact_cesmm_code(str(item.get("item_key") or ""))
@@ -1018,13 +1108,17 @@ def activities_from_boq_scope_outline(
             str(item.get("description") or item.get("item_key") or "Item")
         )
         name = f"{code} {desc}".strip() if code else desc
+        category = boq_row_trade_category(item)
+        trade = _TRADE_OF.get(category, "general")
+        days, basis = boq_row_duration(item)
         activities.append({
             "id": act_id,
             "code": act_id,
             "name": name[:120] or f"Item {idx}",
-            "duration_days": 1,
+            "duration_days": days,
+            "duration_basis": basis,
             "predecessors": [prev] if prev else [],
-            "resources": ["demolition"],
+            "resources": [trade],
             "wbs": act_id,
             "wbs_code": act_id,
             "wbs_phase": phase_slug,
@@ -1032,7 +1126,7 @@ def activities_from_boq_scope_outline(
                 "item_key": item.get("item_key") or code or None,
                 "description": desc,
                 "source": item.get("source"),
-                "category": "Demolition",
+                "category": category,
             },
         })
         prev = act_id

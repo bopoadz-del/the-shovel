@@ -395,7 +395,13 @@ def test_per_answer_xlsx_finds_predefined_assistant_message(client, tmp_path, mo
     msgs = agent_memory.get_messages(cid)
     assistant = [m for m in msgs if m.get("role") == "assistant"]
     assert assistant, "predefined turn must persist the assistant answer"
-    assert "Schedule built" in (assistant[-1].get("content") or "")
+    # PR#3 (ORDERS_28OCT_0345Z/0415Z): "produce the schedule" is a prose brief
+    # with no structured scope, so the content is the honest no-scope answer
+    # rather than "Schedule built". The H2 subject is unchanged — the predefined
+    # generate_wbs turn PERSISTS a non-empty assistant message, so per-answer
+    # Excel download is 200, not the "No assistant messages" 404. Stage 2
+    # restores a real schedule (and the "Schedule built" content) from a brief.
+    assert (assistant[-1].get("content") or "").strip()
 
     r = client.post(
         f"/v1/projects/{pid}/conversations/{cid}/export?format=xlsx&message_index=-1",

@@ -218,6 +218,14 @@ class ScheduleFromBriefRequest(BaseModel):
         None,
         description="Activity-name substring → working days (e.g. {\"slab\": 6}).",
     )
+    boq_items: Optional[list] = Field(
+        None,
+        description="Measured BOQ rows (any trade) to derive the WBS scope "
+                    "from — the input-derived path (PR#3). Without a structured "
+                    "scope (BOQ here, a structured brief, or a staged "
+                    "conversation WBS) a prose brief with no derivable scope "
+                    "yields no schedulable scope (422).",
+    )
     conversation_id: Optional[str] = Field(
         None,
         description="When set, export the conversation's staged WBS instead of regenerating.",
@@ -892,6 +900,24 @@ async def export_schedule_from_brief(
     if req.conversation_id:
         _require_conversation_in_project(project_id, req.conversation_id, auth)
     name = req.project_name or proj.get("name") or "Project"
+    # Computed 400 naming the missing input (S-1, ORDERS_28OCT_0815Z): a schedule
+    # is derived from real input, never a template, so a request that carries
+    # none — no brief text, no BOQ rows, no staged conversation WBS — is a bad
+    # request. The message lists what is absent for THIS request, not fixed text.
+    absent = []
+    if not (req.brief or "").strip():
+        absent.append("a brief describing the work")
+    if not req.boq_items:
+        absent.append("a BOQ (boq_items)")
+    if not req.conversation_id:
+        absent.append("a conversation_id with a staged WBS")
+    if len(absent) == 3:  # none of the three schedulable inputs is present
+        raise HTTPException(
+            400,
+            "No schedulable input supplied: provide "
+            + ", or ".join(absent)
+            + ". None of these was in this request.",
+        )
     from app.core.conversation_wbs import (
         load_conversation_wbs,
         refuse_scaffold_for_boq_wbs_ask,
@@ -932,6 +958,7 @@ async def export_schedule_from_brief(
         "start_date": req.start_date,
         "user_message": req.brief,
         "duration_overrides": req.duration_overrides,
+        "boq_items": req.boq_items or [],
         "project_id": project_id,
     })
     refusal = refuse_scaffold_for_boq_wbs_ask(req.brief or "", req.brief or "", wbs)
@@ -971,15 +998,28 @@ async def export_schedule_from_document(
     for document_id in req.document_ids:
         _require_document_in_project(project_id, document_id)
     name = req.project_name or proj.get("name") or "Project"
-    from app.lib.schedule_feed import extract_schedule_feed
+    from app.lib.schedule_feed import extract_documents_text, extract_schedule_feed
     lead_times, target_milestones = await extract_schedule_feed(req.document_ids)
 
     from app.containers.construction import ConstructionContainer
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
     from app.lib.pm_excel import generate_cost_loaded_schedule
 
+    # Brief AND the attached documents' TEXT are BOTH structured into
+    # activities (rework-2 #4), merged under source tags so the single egress
+    # structures each. There is no synthesized "Schedule from N documents"
+    # placeholder — only real input text reaches the structurer. The long-lead
+    # procurement feed is injected on top regardless.
+    doc_text = extract_documents_text(req.document_ids)
+    structuring_parts = []
+    if (req.brief or "").strip():
+        structuring_parts.append("[brief]\n" + req.brief.strip())
+    if doc_text:
+        structuring_parts.append("[documents]\n" + doc_text)
+    structuring_brief = "\n\n".join(structuring_parts)
+
     wbs = await ConstructionContainer().generate_wbs({}, {
-        "brief": req.brief or f"Schedule from {len(req.document_ids)} source document(s)",
+        "brief": structuring_brief,
         "target_count": req.target_count,
         "project_type": req.project_type,
         "start_date": req.start_date,

@@ -21,6 +21,7 @@ from app.agents.runtime import _forced_specific_tool
 from app.containers.construction import ConstructionContainer
 from app.core.action_router import best_action, message_wants_look_ahead
 from tests.conftest import is_construction_kit_enabled, requires_construction_kit
+from tests import _wbs_fakes
 
 CONTAINER = next(
     obj for obj in vars(schedule_mod).values()
@@ -193,7 +194,8 @@ def test_generate_a_wbs_still_routes_to_generate_wbs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_wbs_still_builds_a_genuine_wbs():
+async def test_generate_wbs_still_builds_a_genuine_wbs(monkeypatch):
+    _wbs_fakes.install(monkeypatch)
     result = await ConstructionContainer().generate_wbs(
         {},
         {

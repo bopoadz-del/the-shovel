@@ -28,7 +28,17 @@ from tests._dev_key import DEV_KEY
 H = {"Authorization": "Bearer " + DEV_KEY}
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-BRIEF = "Generate a high-level WBS for a 10-storey office tower."
+# PR#3 (schedule derives from input): a prose brief no longer yields a template
+# WBS, so this is re-pointed to the BOQ demolition/site-clearance scope, which
+# produces real input-traceable activities. The SUBJECT is unchanged — the
+# activity WBS codes must equal the wbs_tree keys (hierarchical), not phase
+# slugs — and this survives Stage 2 (the input is structured, not a template).
+BOQ_ASK = "Generate a high-level WBS for the demolition and site clearance bill of quantities scope."
+BOQ_ITEMS = [
+    {"item_key": "D110", "description": "General site clearance", "quantity": 10, "unit": "m2"},
+    {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 20, "unit": "m"},
+    {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 30, "unit": "nr"},
+]
 
 
 @pytest.fixture
@@ -73,13 +83,14 @@ async def test_generate_wbs_chat_codes_are_hierarchical_not_slugs():
     """The glass prints wbs_tree keys (1.1, 1.2, 2.1). Activities must carry
     the same codes so an export can write them instead of site_preparation."""
     wbs = await ConstructionContainer().generate_wbs(
-        {"brief": BRIEF},
-        {"target_count": 40, "project_type": "building", "start_date": "2026-03-01"},
+        {"brief": BOQ_ASK, "boq_items": BOQ_ITEMS},
+        {"target_count": 40, "start_date": "2026-03-01"},
     )
     tree = wbs["wbs_tree"]
-    assert "1.1" in tree and "1.2" in tree and "2.1" in tree
+    # BOQ scope is one phase ("1") with one package per retrieved row.
+    assert "1.1" in tree and "1.2" in tree and "1.3" in tree
     outline = format_wbs_outline(tree)
-    assert "1.1 " in outline and "2.1 " in outline
+    assert "1.1 " in outline
     assert "site_preparation" not in outline
 
     acts = wbs["activities"]
@@ -111,14 +122,14 @@ async def test_schedule_from_brief_xlsx_codes_match_staged_chat_wbs(
     pid = _pid(client)
     cid = f"ws-{pid}-1770000001000"
     wbs = await ConstructionContainer().generate_wbs(
-        {"brief": BRIEF},
-        {"target_count": 40, "project_type": "building", "start_date": "2026-03-01"},
+        {"brief": BOQ_ASK, "boq_items": BOQ_ITEMS},
+        {"target_count": 40, "start_date": "2026-03-01"},
     )
     snap = stage_conversation_wbs(cid, wbs)
     assert snap is not None
     staged_ids = [str(a["id"]) for a in snap["activities"]]
     staged_tree = {str(k) for k in (snap.get("wbs_tree") or {})}
-    assert "1.1" in staged_tree and "2.1" in staged_tree
+    assert "1.1" in staged_tree and "1.2" in staged_tree
 
     r = client.post(
         f"/v1/projects/{pid}/export/schedule-from-brief",
@@ -144,7 +155,7 @@ async def test_schedule_from_brief_xlsx_codes_match_staged_chat_wbs(
         f"xlsx WBS codes {sorted(set(xlsx_wbs))[:12]} are not in the "
         f"staged wbs_tree {sorted(staged_tree)[:12]}"
     )
-    assert {"1.1", "1.2", "2.1"} <= set(xlsx_wbs)
+    assert {"1.1", "1.2", "1.3"} <= set(xlsx_wbs)
     assert not any(w.isdigit() and int(w) >= 10 for w in xlsx_wbs), (
         f"regenerated sequential codes leaked into the workbook: {xlsx_wbs[:8]}"
     )

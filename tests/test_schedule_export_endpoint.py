@@ -30,11 +30,19 @@ def _pid(client):
 
 
 def test_schedule_from_brief_returns_valid_workbook(client):
+    # PR#3: schedule-from-brief derives from structured scope, not a template.
+    # Pass the measured BOQ demolition/site-clearance scope (a prose brief with
+    # no scope is 422 — see test_schedule_from_brief_no_scope_is_422).
     pid = _pid(client)
     r = client.post(
         f"/v1/projects/{pid}/export/schedule-from-brief",
-        json={"brief": "hyperscale data center", "target_count": 40,
-              "project_type": "data_center", "start_date": "2026-01-05"},
+        json={"brief": "high-level WBS for the demolition and site clearance bill of quantities scope",
+              "target_count": 40, "start_date": "2026-01-05",
+              "boq_items": [
+                  {"item_key": "D110", "description": "General site clearance", "quantity": 1, "unit": "item"},
+                  {"item_key": "D290.1", "description": "Removal of trees in existing sidewalks", "quantity": 12, "unit": "nr"},
+                  {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 340, "unit": "m"},
+              ]},
         headers=H,
     )
     assert r.status_code == 200, r.text
@@ -51,11 +59,48 @@ def test_schedule_from_brief_returns_valid_workbook(client):
     assert "PROJECT COMPLETION" in ms_txt and "2026-" in ms_txt
 
 
+def test_two_different_boqs_give_two_different_workbooks(client):
+    """Route-level two-input pin (S-1 rework-1 #4): two different BOQ inputs
+    produce two different, input-derived workbooks — the route does not emit a
+    fixed template."""
+    pid = _pid(client)
+
+    def _names(boq):
+        r = client.post(
+            f"/v1/projects/{pid}/export/schedule-from-brief",
+            json={"brief": "WBS from the project BOQ scope", "boq_items": boq,
+                  "target_count": 40, "start_date": "2026-01-05"},
+            headers=H,
+        )
+        assert r.status_code == 200, r.text
+        wb = openpyxl.load_workbook(io.BytesIO(r.content))
+        ws = wb["L2 Schedule"]
+        return "\n".join(
+            str(c.value) for row in ws.iter_rows() for c in row if c.value is not None
+        )
+
+    concrete = _names([
+        {"item_key": "E10", "description": "Reinforced concrete to foundations", "quantity": 340, "unit": "m3"},
+        {"item_key": "E20", "description": "Mass concrete fill", "quantity": 55, "unit": "m3"},
+    ])
+    paving = _names([
+        {"item_key": "R10", "description": "Asphalt wearing course to carriageway", "quantity": 1200, "unit": "m2"},
+    ])
+    assert "concrete" in concrete.lower()
+    assert "asphalt" in paving.lower() or "carriageway" in paving.lower()
+    assert concrete != paving  # different inputs -> different schedules
+
+
 def test_no_day_rate_means_no_cost_column(client):
     pid = _pid(client)
     r = client.post(
         f"/v1/projects/{pid}/export/schedule-from-brief",
-        json={"brief": "data center", "target_count": 30, "project_type": "data_center"},
+        json={"brief": "high-level WBS for the demolition and site clearance bill of quantities scope",
+              "target_count": 30,
+              "boq_items": [
+                  {"item_key": "D110", "description": "General site clearance", "quantity": 1, "unit": "item"},
+                  {"item_key": "D549.2", "description": "Removal of existing chain link fence", "quantity": 340, "unit": "m"},
+              ]},
         headers=H,
     )
     assert r.status_code == 200, r.text
@@ -63,6 +108,87 @@ def test_no_day_rate_means_no_cost_column(client):
     summ = "\n".join(str(c.value) for row in wb["Summary"].iter_rows()
                      for c in row if c.value is not None)
     assert "Total Cost" not in summ and "Total Man-days" in summ
+
+
+def test_schedule_from_brief_derives_with_egress_else_422(client, monkeypatch):
+    # 1030Z re-point: with the egress configured a prose brief is structured
+    # into a derived schedule (200); 422 only for a brief with no derivable
+    # scope.
+    from app.core import llm_client
+
+    async def fake(system, user, **k):
+        if "excavate" in (user or "").lower():
+            return {"activities": [
+                {"name": "Excavate", "source_span": "excavate the site", "duration_days": 5, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    pid = _pid(client)
+    ok = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-brief",
+        json={"brief": "First excavate the site.", "target_count": 40},
+        headers=H,
+    )
+    assert ok.status_code == 200, ok.text
+
+    no_scope = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-brief",
+        json={"brief": "hyperscale data center", "target_count": 40},
+        headers=H,
+    )
+    assert no_scope.status_code == 422, no_scope.text
+
+
+def test_schedule_from_brief_no_input_is_computed_400(client):
+    # No brief, no BOQ, no conversation -> computed 400 naming the missing input.
+    pid = _pid(client)
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-brief",
+        json={"brief": "", "target_count": 40},
+        headers=H,
+    )
+    assert r.status_code == 400, r.text
+    body = r.text.lower()
+    assert "brief" in body and "boq" in body and "conversation" in body
+
+
+def test_schedule_from_document_structures_the_document_text(client, tmp_path, monkeypatch):
+    """rework-2 #4: the document TEXT itself is STRUCTURED into activities (not
+    only lead times) — the structurer receives the doc text, so an activity the
+    document names appears in the schedule. Reverting the doc_text merge would
+    starve the structurer and this activity would vanish."""
+    from docx import Document
+    from app.core import projects as store
+    from app.core import llm_client
+
+    async def fake(system, user, **k):
+        if "excavate the basement" in (user or "").lower():
+            return {"activities": [
+                {"name": "Excavate basement", "source_span": "excavate the basement",
+                 "duration_days": 8, "predecessors": []},
+            ]}
+        return {"activities": []}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    pid = _pid(client)
+    doc_path = tmp_path / "scope.docx"
+    d = Document()
+    d.add_paragraph("Scope of works.")
+    d.add_paragraph("First excavate the basement, then pour the raft.")
+    d.save(str(doc_path))
+    did = store.add_document(pid, "scope.docx", doc_path.name, str(doc_path))["id"]
+
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-document",
+        json={"document_ids": [did], "target_count": 40, "start_date": "2026-01-05"},
+        headers=H,
+    )
+    assert r.status_code == 200, r.text
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    txt = "\n".join(str(c.value) for row in wb["L2 Schedule"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "Excavate basement" in txt
 
 
 def test_schedule_from_document_injects_extracted_lead_times(client, tmp_path):
@@ -98,3 +224,56 @@ def test_schedule_from_document_injects_extracted_lead_times(client, tmp_path):
     l2 = "\n".join(str(c.value) for row in wb["L2 Schedule"].iter_rows()
                    for c in row if c.value is not None)
     assert "long-lead" in l2.lower(), "procurement activities must appear in the L2 schedule"
+
+
+def test_schedule_from_brief_and_two_documents_are_both_structured(client, tmp_path, monkeypatch):
+    """ORDERS_1200Z b: a brief AND two documents in one request are BOTH
+    structured and merged under [brief]/[documents] source tags; each source's
+    activities appear in the schedule. Dropping the brief, dropping the doc
+    text, or stripping the tags must fail."""
+    from docx import Document
+    from app.core import projects as store
+    from app.core import llm_client
+
+    seen = {}
+
+    async def fake(system, user, **k):
+        seen["user"] = user or ""
+        low = (user or "").lower()
+        acts = []
+        if "excavate the basement" in low:
+            acts.append({"name": "Excavate basement", "source_span": "excavate the basement", "duration_days": 5, "predecessors": []})
+        if "pour the raft" in low:
+            acts.append({"name": "Pour raft", "source_span": "pour the raft", "duration_days": 6, "predecessors": []})
+        if "erect the steel frame" in low:
+            acts.append({"name": "Erect steel", "source_span": "erect the steel frame", "duration_days": 7, "predecessors": []})
+        return {"activities": acts}
+    monkeypatch.setattr(llm_client, "complete_json", fake)
+
+    pid = _pid(client)
+
+    def _doc(nm, line):
+        p = tmp_path / nm
+        d = Document()
+        d.add_paragraph(line)
+        d.save(str(p))
+        return store.add_document(pid, nm, p.name, str(p))["id"]
+
+    d1 = _doc("scopeA.docx", "First excavate the basement on site.")
+    d2 = _doc("scopeB.docx", "Then pour the raft foundation.")
+
+    r = client.post(
+        f"/v1/projects/{pid}/export/schedule-from-document",
+        json={"document_ids": [d1, d2],
+              "brief": "The programme must erect the steel frame.",
+              "target_count": 40, "start_date": "2026-01-05"},
+        headers=H,
+    )
+    assert r.status_code == 200, r.text
+    assert "[brief]" in seen["user"] and "[documents]" in seen["user"]
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    txt = "\n".join(str(c.value) for row in wb["L2 Schedule"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "Excavate basement" in txt    # document 1
+    assert "Pour raft" in txt            # document 2
+    assert "Erect steel" in txt          # the brief

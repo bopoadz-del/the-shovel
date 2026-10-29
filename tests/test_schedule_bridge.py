@@ -6,7 +6,7 @@ from __future__ import annotations
 from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded, bridge_activity
 from app.lib.pm_excel import generate_cost_loaded_schedule
 
-# Shape as emitted by ConstructionContainer.generate_wbs / _build_wbs_activities.
+# Shape as emitted by ConstructionContainer.generate_wbs.
 WBS = [
     {"id": "1.1.1", "name": "Mobilization", "duration_days": 5, "predecessors": [],
      "resources": ["labor"], "wbs_phase": "Enabling"},

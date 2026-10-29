@@ -85,7 +85,13 @@ class TestHistogramStepBridging:
 @requires_construction_kit
 class TestHistogramFromBrief:
     @pytest.mark.asyncio
-    async def test_brief_yields_periodised_histogram(self):
+    async def test_prose_brief_yields_no_histogram_without_scope(self):
+        """PR#3 (ORDERS_28OCT_0345Z/0415Z): the manpower histogram time-phased a
+        WBS the generator built from the brief via the template scaffold, which
+        is removed. A prose brief with no structured scope now yields no WBS, so
+        the workflow honestly reports it could not build a histogram — no
+        fabricated periods. Stage 2 (LLM extraction) restores brief->WBS and
+        this becomes a periodised-histogram test again."""
         from app.core.predefined_reasoning import run_workflow
         from app.schemas.project_session import ProjectSession
 
@@ -102,13 +108,9 @@ class TestHistogramFromBrief:
             session,
         )
         assert out["handled"] is True
-        answer = out["answer"]
-        # Provenance is non-negotiable: estimates must say so.
-        assert "norms-derived" in answer
-        assert "planning estimates" in answer
-        # Periodised rows with headcounts.
-        assert "workers" in answer
-        assert "Peak manpower" in answer
+        assert "could not build" in out["answer"]
+        # No histogram was fabricated from a scopeless prose brief.
+        assert not session.data.get("manpower")
 
     @pytest.mark.asyncio
     async def test_xer_contract_untouched(self):
