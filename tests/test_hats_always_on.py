@@ -61,8 +61,10 @@ class TestHatsAlwaysOn:
         src = (Path(__file__).resolve().parents[1] / rel).read_text()
         assert 'environ.get("FORK_HATS_ENABLED"' not in src
 
-    def test_catalog_loads_regardless_of_flag(self):
-        """Catalog should load even when hats are disabled -- it's import-time."""
+    @pytest.mark.parametrize("flag", ["0", "1"])
+    def test_catalog_loads_regardless_of_flag(self, monkeypatch, flag):
+        """Catalog loads the same whatever the removed flag says."""
+        monkeypatch.setenv("FORK_HATS_ENABLED", flag)
         from app.agents.catalog import get_agent_catalog, get_base, list_hats
 
         catalog = get_agent_catalog()
@@ -74,8 +76,10 @@ class TestHatsAlwaysOn:
         hats = list_hats()
         assert len(hats) == 8, f"Expected 8 hats, found {len(hats)}"
 
-    def test_manifests_validate_regardless_of_flag(self):
-        """Manifests should validate even when hats are disabled."""
+    @pytest.mark.parametrize("flag", ["0", "1"])
+    def test_manifests_validate_regardless_of_flag(self, monkeypatch, flag):
+        """Manifests validate the same whatever the removed flag says."""
+        monkeypatch.setenv("FORK_HATS_ENABLED", flag)
         from app.agents.catalog import get_agent_catalog
         catalog = get_agent_catalog()
         for mid, manifest in catalog.items():
