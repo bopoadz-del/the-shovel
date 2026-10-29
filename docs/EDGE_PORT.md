@@ -69,7 +69,7 @@ Currently `Dockerfile` builds for `linux/amd64` only (PR #23 dropped arm64 becau
 
 - Add an arm64 build job that runs on a **native arm64 runner** (GitHub's arm64 large runners, or self-hosted on the Orin itself)
 - Base image switches to `nvcr.io/nvidia/l4t-pytorch:r36.2.0-pth2.2-py3` (JetPack-compatible)
-- Tag separately: `ghcr.io/bopoadz-del/cerebrum-blocks:edge-arm64`
+- Tag separately: `ghcr.io/<owner>/<repo>:edge-arm64` (image name derived from `${{ github.repository }}`, as in docker-publish.yml)
 
 Not a parallel `platforms:` entry in the existing job — a separate workflow file or job. Keeps the amd64 build fast.
 
