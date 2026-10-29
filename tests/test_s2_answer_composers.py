@@ -354,3 +354,30 @@ def test_boq_scope_wbs_two_inputs_two_outputs():
     a = format_wbs_outline(tree_a)
     b = format_wbs_outline(tree_b)
     assert a and b and a != b
+
+
+def test_honest_contract_refusal_is_input_gated():
+    # honest_contract_refusal is NON-COMPOSITIONAL: its correct output is the
+    # honest "not required / absent" refusal, which is legitimately the SAME for
+    # two different contract-absent asks. So instead of a (meaningless) a != b,
+    # the two-input property is that it is input-GATED (fires on a contract ask
+    # whose CD row states the particular; does NOT fire on a compositional ask)
+    # and CONSISTENT (same honest line for the same CD row).
+    from app.core.rag.retriever import (
+        chunk_states_pcg_contract_data,
+        format_pcg_honest_line,
+        query_asks_for_parent_company_guarantee,
+    )
+    from tests.test_g3_g6_honest_refusal import G3_ALT, PCG_NOT_REQUIRED
+
+    # Fires on a PCG ask backed by the Contract Data row:
+    assert query_asks_for_parent_company_guarantee(G3_ALT)
+    assert chunk_states_pcg_contract_data(PCG_NOT_REQUIRED)
+    # Does NOT fire on a compositional (calc) ask:
+    assert not query_asks_for_parent_company_guarantee(
+        "What is the concrete volume for a 30 x 20 x 1.5 m raft?"
+    )
+    # Consistent honest refusal for the same CD row (not a canned constant,
+    # a derived honest line that is the same when the input is the same):
+    line = format_pcg_honest_line(PCG_NOT_REQUIRED)
+    assert line and format_pcg_honest_line(PCG_NOT_REQUIRED) == line
