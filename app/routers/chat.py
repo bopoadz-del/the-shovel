@@ -52,6 +52,30 @@ class ChatRequest(BaseModel):
     model: str = "deepseek-chat"
     stream: bool = False
     project_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+def _check_chat_conversation(request: "ChatRequest", auth: dict) -> None:
+    """Same access rule as the agent path, before any turn is written."""
+    if request.conversation_id:
+        from app.routers.agents import _enforce_conversation_access
+        _enforce_conversation_access(request.conversation_id, auth)
+
+
+def _persist_chat_turn(request: "ChatRequest", user_id, answer: str) -> None:
+    """Store this turn under ``conversation_id`` so export can read it.
+    No id → nothing stored. Never raises (a store hiccup must not drop the answer)."""
+    if not request.conversation_id:
+        return
+    try:
+        from app.core import agent_memory
+        agent_memory.get_or_create_conversation(
+            request.conversation_id, "chat", request.project_id, owner_id=user_id,
+        )
+        agent_memory.append_message(request.conversation_id, "user", request.message)
+        agent_memory.append_message(request.conversation_id, "assistant", answer or "")
+    except Exception:  # noqa: BLE001
+        logger.exception("chat: could not persist conversation turn")
 
 
 
@@ -785,6 +809,7 @@ async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
     """Simple chat endpoint."""
     if "chat" not in BLOCK_REGISTRY:
         raise HTTPException(500, "Chat block not available")
+    await _off_loop(_check_chat_conversation, request, auth)
 
     try:
         if "chat" not in block_instances:
@@ -839,6 +864,7 @@ async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
             )
         except Exception:
             logger.exception("chat: cost-grounding gate failed; passing answer through")
+        await _off_loop(_persist_chat_turn, request, auth.get("user_id"), answer)
         return {
             "text": answer,
             "model": inner.get("model") or request.model,
@@ -871,6 +897,7 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
     turn_timing.mark_arrival()
     if "chat" not in BLOCK_REGISTRY:
         raise HTTPException(500, "Chat block not available")
+    await _off_loop(_check_chat_conversation, request, auth)
 
     async def event_stream():
         rid = get_request_id()
@@ -886,6 +913,7 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
 
             # Get stream generator
             stream_gen = result.get("result", {}).get("stream")
+            streamed: list[str] = []
             if stream_gen:
                 async for token in stream_gen:
                     # Support both raw strings and JSON-encoded error objects
@@ -900,6 +928,7 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
                             _report_sse_llm_failure(token, path="/chat/stream")
                         yield f"data: {token}\n\n"
                         return
+                    streamed.append(str(token))
                     yield f"data: {json.dumps({'type': 'token', 'content': token, 'request_id': rid})}\n\n"
             else:
                 # Fallback: simulate streaming
@@ -907,8 +936,10 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
                 words = text.split()
                 for word in words:
                     yield f"data: {json.dumps({'type': 'token', 'content': word + ' ', 'request_id': rid})}\n\n"
+                    streamed.append(word + ' ')
                     await asyncio.sleep(0.05)
 
+            await _off_loop(_persist_chat_turn, request, auth.get("user_id"), "".join(streamed).strip())
             yield f"data: {json.dumps({'type': 'end', 'complete': True, 'tools': [], 'request_id': rid})}\n\n"
 
         except Exception as e:
