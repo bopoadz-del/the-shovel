@@ -10,8 +10,12 @@ import asyncio
 
 from app.lib import construction_formulas as cf
 
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 NAME = "electrical_installation_sequence"
-PARAPHRASE = {"floor_area_m2": 21528, "text": "electrical sequence for a 21528 floor"}
+PARAPHRASE = {"floor_area_m2": 21528, "text": "electrical sequence for a 21528 floor", **ELECTRICAL_STAGE_RATES}
 ASK = "Electrical installation sequence for a 21,528 sq ft office floor."
 
 

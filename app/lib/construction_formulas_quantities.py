@@ -462,7 +462,7 @@ _FW_PRESENTATION = {
     "slope_fos_simple": {"unit": "unitless", "value_keys": ("factor_of_safety",)},
     "mobilization_cost_estimate": {
         "unit": "SAR",
-        "value_keys": ("grand_total_sar", "value"),
+        "value_keys": ("grand_total", "value"),
     },
     # #628 unitless/SAR twin: live probe computed seismic but the envelope
     # had no unit the stream could copy (tool-but-no-unit).

@@ -5565,7 +5565,7 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
                         "description": (
                             "Keyword arguments for the chosen calculation (e.g. "
                             "cost_buildup_rebar needs quantity_kg and optionally "
-                            "material_price_sar_t / labour_rate_sar_hr / ...). "
+                            "material_price_per_t / labour_rate_per_hr / ...). "
                             "Canonical names or aliases (w/span, length/width/"
                             "thickness, water_depth_m/floors). A comma-separated "
                             "assignment string is also accepted. On a bad call "
@@ -5963,15 +5963,14 @@ _DOC_COST_RE = re.compile(
     r"(?:SAR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR|Dhs?|dirhams?)\b)"
 )
 _COST_SELLING_UNITS = (
-    ("selling_price_sar_m3", "SAR/m3"),
-    ("selling_price_sar_t", "SAR/t"),
-    ("selling_price_sar_m2", "SAR/m2"),
+    ("selling_price_per_m3", "/m3"),
+    ("selling_price_per_t", "/t"),
+    ("selling_price_per_m2", "/m2"),
 )
 _COST_TOTAL_KEYS = (
-    "total_project_value_sar",
-    "total_for_area_sar",
+    "total_project_value",
+    "total_for_area",
     "total_cost",
-    "grand_total_sar",
     "grand_total",
 )
 _NOT_A_COST_CALC = frozenset({
@@ -6078,11 +6077,12 @@ def _format_deterministic_cost_calc(payload: dict[str, Any]) -> str:
     if isinstance(note, str) and re.search(r"(?i)\b(?:selling|total)\b", note):
         return note.strip()
     selling = None
-    unit = "SAR"
+    cur = str(result.get("currency") or "").strip()
+    unit = cur
     for key, label in _COST_SELLING_UNITS:
         if result.get(key) is not None:
             selling = float(result[key])
-            unit = label
+            unit = f"{cur}{label}" if cur else f"per {label.lstrip('/')}"
             break
     total = next(
         (result[k] for k in _COST_TOTAL_KEYS if result.get(k) is not None),
