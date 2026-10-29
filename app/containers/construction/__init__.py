@@ -2185,10 +2185,41 @@ class ConstructionContainer(
             return {"status": "error", "error": "smart_orchestrator block unavailable"}
         return await block.process(input_data, params)
     async def formula_execute(self, input_data: Any, params: Dict) -> Dict:
-        """Delegate to FormulaExecutorV2Block: LLM code-gen formula execution."""
+        """Kernel first, then labelled improvisation.
+
+        When a registered kernel formula covers the ask, it runs through
+        ``construction_calc`` (the certified path) and the model writes no
+        code. Otherwise FormulaExecutorV2Block generates code and labels
+        it ``provenance: improvised`` / ``certified: False`` itself. A kernel
+        check that cannot run refuses (fails closed).
+        """
+        from app.blocks.formula_executor_v2 import KernelCheckUnavailable, kernel_covering
+
+        data = input_data if isinstance(input_data, dict) else {}
+        p = params or {}
+        task = str(
+            data.get("task") or data.get("formula_description") or data.get("text")
+            or data.get("input") or p.get("task") or p.get("text")
+            or (input_data if isinstance(input_data, str) else "")
+        )
+        try:
+            kernel = kernel_covering(task)
+        except KernelCheckUnavailable as exc:
+            return {"status": "error", "error": f"codegen refused: {exc}",
+                    "provenance": "refused", "certified": False, "task": task,
+                    "routed_from": "formula_execute"}
+        if kernel:
+            out = await self.construction_calc(
+                data, {**p, "calculation": kernel, "text": task},
+            )
+            if isinstance(out, dict):
+                out.setdefault("kernel", kernel)
+                out["routed_from"] = "formula_execute"
+            return out
         block = self._resolve_block("formula_executor_v2")
         if block is None:
             return {"status": "error", "error": "formula_executor_v2 block unavailable"}
+        # The block labels its own output (improvised / refused / kernel).
         return await block.process(input_data, params)
 
     async def construction_calc(self, input_data: Any, params: Dict) -> Dict:

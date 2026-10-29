@@ -135,7 +135,8 @@ EXPECTED_DELEGATIONS = {
     "bim_extract": "bim_extractor",
     "boq_process": "boq_processor",
     "drawing_qto": "drawing_qto",
-    "formula_execute": "formula_executor_v2",
+    # formula_execute is no longer a pass-through: it runs the kernel first
+    # (tests/test_kt0b_kernel_first.py covers it).
     "learn": "learning_engine",
     "orchestrate": "smart_orchestrator",
     "primavera_parse": "primavera_parser",
