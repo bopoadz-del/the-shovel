@@ -114,3 +114,8 @@ def test_an_ask_with_no_waste_words_binds_no_factor(text):
     """The resolver injects nothing; the caller's input / kernel signature governs."""
     out = _resolved(text)
     assert "waste_factor" not in out
+
+
+def test_a_nonsense_percentage_falls_back_rather_than_poisoning_the_quantity():
+    # 900% waste is a parse artefact, not an instruction.
+    assert q.waste_factor_from_text("add 900% waste") is None
