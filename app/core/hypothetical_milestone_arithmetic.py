@@ -1,16 +1,15 @@
 """User-supplied milestone durations are arithmetic, not a Contract Data veto.
 
-Live theshovel.ai ~27d6940: a tester asked, with Milestone 1/3/5 durations and a
-common start, which milestone drives completion and by how much over Milestone 1.
-The assistant rejected the premise from Contract Data access-date rows.
+When a user gives milestone durations and a common start and asks which
+milestone drives completion and by how much over another, that is arithmetic
+on the supplied numbers; the assistant must not reject the premise from
+Contract Data access-date rows.
 
 Owner rule: the numbers in the question are the operands. Access-date
-particulars must not override them. Kill-switch
-``HYPOTHETICAL_MILESTONE_ARITHMETIC=0`` restores the rejection.
+particulars must not override them.
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -37,12 +36,6 @@ _PREMISE_REJECTION_RE = re.compile(
 )
 
 
-def hypothetical_milestone_arithmetic_enabled() -> bool:
-    """ON by default. ``HYPOTHETICAL_MILESTONE_ARITHMETIC=0`` restores the FAIL."""
-    raw = (os.getenv("HYPOTHETICAL_MILESTONE_ARITHMETIC", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-
 def parse_supplied_milestone_durations(query: str) -> dict[int, int]:
     """Milestone number → days, taken only from assignments in ``query``."""
     out: dict[int, int] = {}
@@ -67,8 +60,6 @@ def parse_baseline_milestone(query: str, supplied: dict[int, int]) -> int | None
 
 def query_is_hypothetical_milestone_arithmetic(query: str) -> bool:
     """True when the user supplied ≥2 M#=Nd pairs and asked which is longest."""
-    if not hypothetical_milestone_arithmetic_enabled():
-        return False
     blob = query or ""
     if not _COMPARE_ASK_RE.search(blob):
         return False

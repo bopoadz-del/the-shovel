@@ -15,8 +15,6 @@ import logging
 
 import math
 
-import os
-
 import re
 
 # Formulas (and the helpers only they use) live in their owner's package;
@@ -24,7 +22,6 @@ import re
 from app.agents.base.formulas.construction_formulas_quantities import (  # noqa: F401 -- moved
     _concrete_quantity,
     concrete_volume,
-    documented_waste_enabled,
     logger,
 )
 from app.agents.hats.quantities.formulas.construction_formulas_quantities import (  # noqa: F401 -- moved
@@ -41,11 +38,6 @@ from app.agents.hats.quantities.formulas.construction_formulas_quantities import
 #   L x W x T m net, documented waste 5% (x 1.05) on top.
 # Leftover L6 aliased unnamed L×W×D to excavation_volume (bank only, no
 # waste). A concrete/raft ask must pin concrete_volume and this factor.
-# Kill switch: APPLY_DOCUMENTED_WASTE=0 restores the FAIL (net 900).
-# Compose kill-switch: COMPOSE_CONCRETE_VOLUME=0 restores the leftover-E4
-# hang (validate preamble ships, no 945). The calculator still returns 945;
-# only the postprocess graft that writes the volume when the model stalls
-# is disabled.
 DOCUMENTED_CONCRETE_WASTE_FACTOR = 0.05
 
 _CONCRETE_VOLUME_ASK_RE = re.compile(
@@ -123,11 +115,6 @@ def waste_factor_from_text(text: str) -> float | None:
         return None
     return pct / 100.0
 
-def compose_concrete_volume_enabled() -> bool:
-    """ON by default. ``COMPOSE_CONCRETE_VOLUME=0`` restores the validate hang."""
-    raw = (os.getenv("COMPOSE_CONCRETE_VOLUME", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
 def _format_volume_figure(value: float) -> str:
     number = float(value)
     if number == int(number):
@@ -168,12 +155,9 @@ def format_concrete_volume_line(inner: dict) -> str:
 def compose_concrete_volume_from_ask(text: str) -> dict | None:
     """Run the documented-waste concrete calculator from the operator ask.
 
-    Numbers live in the question (E4: 30×20×1.5). Leftover L6 earthwork is
-    not a concrete/raft ask and returns None. Kill-switch
-    ``COMPOSE_CONCRETE_VOLUME=0`` returns None (hang / no graft).
+    Numbers live in the question (e.g. an L×W×T raft). An earthwork L×W×D
+    ask is not a concrete/raft ask and returns None.
     """
-    if not compose_concrete_volume_enabled():
-        return None
     if not looks_like_concrete_volume_ask(text):
         return None
     if not parse_lwt_metres(text):
@@ -201,9 +185,7 @@ def compose_concrete_volume_from_ask(text: str) -> dict | None:
     }
 
 def documented_concrete_waste_factor() -> float:
-    """Project-documented concrete waste (5%), or 0.0 when the kill-switch is off."""
-    if not documented_waste_enabled():
-        return 0.0
+    """Project-documented concrete waste (5%)."""
     return DOCUMENTED_CONCRETE_WASTE_FACTOR
 
 def looks_like_concrete_volume_ask(text: str) -> bool:
@@ -347,19 +329,16 @@ def resolve_concrete_volume_calc(
                 out["thickness_m"] = value
                 break
 
-    if documented_waste_enabled():
-        requested = out.get("waste_factor")
-        stated = waste_factor_from_text(blob)
-        if stated is not None:
-            # The operator named a figure. It wins over the documented
-            # default AND over the documented-waste phrase -- a live waste-factor ask was
-            # answered on 5% after being asked for 7%, with nothing in the
-            # answer saying which rate had been used.
-            out["waste_factor"] = stated
-        elif requested in (None, "", 0, 0.0) or _DOCUMENTED_WASTE_ASK_RE.search(blob):
-            out["waste_factor"] = DOCUMENTED_CONCRETE_WASTE_FACTOR
-    else:
-        out["waste_factor"] = 0.0
+    requested = out.get("waste_factor")
+    stated = waste_factor_from_text(blob)
+    if stated is not None:
+        # The operator named a figure. It wins over the documented
+        # default AND over the documented-waste phrase -- a live waste-factor ask was
+        # answered on 5% after being asked for 7%, with nothing in the
+        # answer saying which rate had been used.
+        out["waste_factor"] = stated
+    elif requested in (None, "", 0, 0.0) or _DOCUMENTED_WASTE_ASK_RE.search(blob):
+        out["waste_factor"] = DOCUMENTED_CONCRETE_WASTE_FACTOR
 
     # A follow-up that says "that total" often re-calls this calculator with
     # the per-element size and no count. ``quantity`` used to be dropped on

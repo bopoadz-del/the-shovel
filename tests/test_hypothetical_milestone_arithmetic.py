@@ -248,13 +248,3 @@ def test_the_instruction_heading_never_surfaces_in_an_answer():
     out = _strip_answer_routing_preamble(echoed)
     assert HEADING not in out
     assert "235" in out
-
-
-def test_kill_switch_restores_the_fail(monkeypatch):
-    monkeypatch.setenv("HYPOTHETICAL_MILESTONE_ARITHMETIC", "0")
-    assert not query_is_hypothetical_milestone_arithmetic(SYNTH_ASK)
-    assert compose_hypothetical_milestone_arithmetic(SYNTH_ASK) is None
-    assert HEADING not in _context(SYNTH_ASK, CONFLICTING_CD)
-    assert _graft_hypothetical_milestone_arithmetic(
-        REJECTION, _msgs(SYNTH_ASK),
-    ) == REJECTION

@@ -1424,10 +1424,6 @@ _WASTE_PCT_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*%\s*waste")
 
 _CONTINGENCY_PCT_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*%\s*contingenc")
 
-def compose_user_priced_takeoff_enabled() -> bool:
-    raw = (os.getenv("COMPOSE_USER_PRICED_TAKEOFF", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
 def query_asks_user_priced_takeoff(query: str) -> bool:
     """True for concrete take-off + an operator-instructed unit rate."""
     q = query or ""
@@ -1467,10 +1463,8 @@ def compose_user_priced_takeoff_from_ask(text: str) -> dict | None:
     """Volume × user rate × stated waste/contingency, or None.
 
     Operands come from the question only. A missing unit rate is not
-    filled in. Kill-switch ``COMPOSE_USER_PRICED_TAKEOFF=0`` returns None.
+    filled in.
     """
-    if not compose_user_priced_takeoff_enabled():
-        return None
     if not query_asks_user_priced_takeoff(text):
         return None
     dims = _parse_lwt_metres(text)
@@ -1523,12 +1517,9 @@ def compose_stated_total_follow_up(current: str, prior: str) -> dict | None:
     The current ask has the waste and the rate. The count and the
     per-element size are in ``prior`` ("N elements, each L m by …").
     One cap (7.5 m³) is the miss. No rate in the follow-up → None.
-    Kill-switch ``COMPOSE_USER_PRICED_TAKEOFF=0`` returns None.
     The waste is the percentage this ask states. Silence is 0 here —
     the documented 5% default is not applied on top of a stated total.
     """
-    if not compose_user_priced_takeoff_enabled():
-        return None
     from app.lib.construction_formulas_quantities import (
         element_count_from_text,
         follow_up_refers_to_stated_total,
