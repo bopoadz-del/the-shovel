@@ -512,8 +512,10 @@ def test_unknown_calc_nudge_is_a_single_self_coding_handoff():
         },
     }
     nudge = runtime_module._nudge_for_failed_tool(rec, agent)
-    assert "self-coding" in nudge.lower()
-    assert "EXACTLY ONCE" in nudge
+    # S-7: an uncovered calc now yields a labelled-improvisation nudge, not a
+    # self-coding handoff.
+    assert "improvised" in nudge.lower() and "no kernel covers" in nudge.lower()
+    assert "self-coding" not in nudge.lower()
     sc_agent = _make_agent("self-coding")
     generic = runtime_module._nudge_for_failed_tool(rec, sc_agent)
     assert generic == runtime_module._TOOL_ERROR_NUDGE

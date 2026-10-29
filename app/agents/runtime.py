@@ -771,14 +771,20 @@ _CALC_MISSING_INPUT_NUDGE = (
     "with that figure. Otherwise do not choose a value: ask the user exactly "
     "this: {question}"
 )
-# construction_calc "Unknown calculation" means the formula is not in the
-# registry. Retrying another calculator name loops; self-coding writes
-# Python once and returns. Only injected when the agent can delegate.
-_UNKNOWN_CALC_SELF_CODING_NUDGE = (
-    "That calculation is not a registered formula. Delegate to agent "
-    "'self-coding' EXACTLY ONCE with the original question so it can "
-    "write and run Python. Do not retry construction_calc with another "
-    "name. Do not invent the number in prose."
+# construction_calc "Unknown calculation" means NO registered formula (kernel)
+# covers it. S-7 (ORDERS_28OCT_0815Z) improvisation harness: retrying another
+# calculator name loops and self-coding is not a kernel either, so the agent
+# IMPROVISES from first principles WITH an explicit label — the figure is then
+# grounding-gated (never a silent invention) and the uncovered ask is logged as
+# a new-domain candidate the Store reads later.
+_UNCOVERED_CALC_IMPROVISE_NUDGE = (
+    "No registered formula (kernel) covers that calculation. Do not retry "
+    "construction_calc with another name and do not invent a number in prose. "
+    "Improvise the answer from first principles and LABEL it: begin with "
+    "'No kernel covers this; improvised -' and give your basis as 'sources: ...' "
+    "(the standards, assumptions, or operator inputs you used). Any figure you "
+    "state is checked against the operator's own numbers; give only figures "
+    "those inputs support."
 )
 _SELF_CODING_PHRASES = (
     "self-coding", "self coding", "write python", "generate python",
@@ -12021,8 +12027,14 @@ def _should_handoff_unmatched_calc(text: str) -> bool:
     return _looks_like_self_contained_calculation(text) or _asks_self_coding(text)
 
 
-def _nudge_for_failed_tool(tool_result: dict[str, Any], agent: "Agent") -> str:
-    """Prefer a one-shot self-coding handoff over retrying unknown formulas."""
+def _nudge_for_failed_tool(
+    tool_result: dict[str, Any],
+    agent: "Agent",
+    project_id: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+) -> str:
+    """Nudge the agent after a failed tool. For an uncovered calculation (no
+    kernel) the agent is told to improvise WITH a label (S-7), not self-code."""
     inner = tool_result.get("result") if isinstance(tool_result, dict) else None
     err = ""
     if isinstance(inner, dict):
@@ -12036,7 +12048,16 @@ def _nudge_for_failed_tool(tool_result: dict[str, Any], agent: "Agent") -> str:
         and agent.name != "self-coding"
         and "unknown calculation" in err.lower()
     ):
-        return _UNKNOWN_CALC_SELF_CODING_NUDGE
+        # S-7: no kernel covers it — log the uncovered domain (tenant-scoped,
+        # read by the Store) and have the agent improvise WITH a label.
+        try:
+            from app.lib.new_domain_candidates import log_new_domain_candidate
+            log_new_domain_candidate(
+                project_id, _latest_user_text(messages), agent=getattr(agent, "name", None)
+            )
+        except Exception:  # noqa: BLE001 — the ledger must never block the answer
+            _LOG.debug("new_domain_candidate log skipped", exc_info=True)
+        return _UNCOVERED_CALC_IMPROVISE_NUDGE
     name = str((tool_result or {}).get("name") or "").lower()
     if name in ("image", "ocr", "ocr_v2"):
         return (
@@ -12343,6 +12364,14 @@ def _apply_hat_kernels(body: str, hats_cfg: Any, path: Path) -> tuple[str, list[
     sections = ["\n\n## Discipline kernels\n"]
     for m in manifests:
         sections.append(f"### {m.name} ({m.id})\n{m.system_prompt_guidance}\n")
+    # S-7 improvisation harness — applies to every hatted agent.
+    sections.append(
+        "### Improvisation harness\n"
+        "A calculation not covered by any kernel is not invented silently: "
+        "improvise from first principles and LABEL it ('No kernel covers this; "
+        "improvised - sources: ...'). Stated figures are grounding-checked "
+        "against the operator's own inputs.\n"
+    )
     return body + "".join(sections), [m.id for m in manifests]
 
 

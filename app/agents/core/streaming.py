@@ -1347,7 +1347,7 @@ async def _chat_stream_impl(
                     error_nudges += 1
                     pending_nudges.append({"role": "user",
                                      "content": _nudge_for_failed_tool(
-                                         tool_result, self)
+                                         tool_result, self, project_id=project_id, messages=messages)
                                      + (await _off_loop(_file_tool_hint, messages, project_id,
                                                        self.allowed_blocks))})
         messages.extend(pending_nudges)
