@@ -2185,11 +2185,39 @@ class ConstructionContainer(
             return {"status": "error", "error": "smart_orchestrator block unavailable"}
         return await block.process(input_data, params)
     async def formula_execute(self, input_data: Any, params: Dict) -> Dict:
-        """Delegate to FormulaExecutorV2Block: LLM code-gen formula execution."""
+        """Kernel first, then labelled improvisation.
+
+        When a registered kernel formula covers the ask, it runs through
+        ``construction_calc`` (the certified path) and the model writes no
+        code. Otherwise FormulaExecutorV2Block generates code, and its
+        output is labelled ``provenance: improvised`` / ``certified: False``.
+        """
+        from app.blocks.formula_executor_v2 import kernel_covering
+
+        data = input_data if isinstance(input_data, dict) else {}
+        p = params or {}
+        task = str(
+            data.get("task") or data.get("formula_description") or data.get("text")
+            or data.get("input") or p.get("task") or p.get("text")
+            or (input_data if isinstance(input_data, str) else "")
+        )
+        kernel = kernel_covering(task)
+        if kernel:
+            out = await self.construction_calc(
+                data, {**p, "calculation": kernel, "text": task},
+            )
+            if isinstance(out, dict):
+                out.setdefault("kernel", kernel)
+                out["routed_from"] = "formula_execute"
+            return out
         block = self._resolve_block("formula_executor_v2")
         if block is None:
             return {"status": "error", "error": "formula_executor_v2 block unavailable"}
-        return await block.process(input_data, params)
+        out = await block.process(input_data, params)
+        if isinstance(out, dict) and out.get("status") == "success":
+            out.setdefault("provenance", "improvised")
+            out.setdefault("certified", False)
+        return out
 
     async def construction_calc(self, input_data: Any, params: Dict) -> Dict:
         """Run the deterministic formula registry.

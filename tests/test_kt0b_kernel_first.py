@@ -56,3 +56,41 @@ def test_nudge_offers_construction_calc_first():
     from app.agents.runtime import _EMPTY_ROUTER_NUDGE as n
     assert n.index("construction_calc") < n.index("formula_executor_v2")
     assert "improvised" in n
+
+
+# ── the construction container's formula_execute action ──────────────────
+
+def _container(block):
+    from app.containers.construction import ConstructionContainer
+
+    c = ConstructionContainer()
+    c._resolve_block = lambda name: block if name == "formula_executor_v2" else None
+    return c
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,kernel", [
+    ("Calculate concrete volume for a 10x8m slab, 200mm thick", "concrete_volume"),
+    ("excavation volume 20 x 10 x 3 m", "excavation_volume"),
+])
+async def test_container_runs_the_kernel_not_codegen(task, kernel):
+    block = _Mock(["result = 1"])
+    out = await _container(block).formula_execute({"task": task}, {})
+    assert block.llm_calls == 0, "codegen ran for an ask a kernel covers"
+    assert out["kernel"] == kernel
+    assert out["routed_from"] == "formula_execute"
+    assert out.get("calculation") == kernel
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,variables,code,want", [
+    ("rectangle area", {"length_m": 10, "width_m": 8}, "result = length_m * width_m", 80),
+    ("multiply length by width", {"length_m": 3, "width_m": 4}, "result = length_m * width_m", 12),
+])
+async def test_container_codegen_is_labelled_improvised(task, variables, code, want):
+    block = _Mock([code])
+    out = await _container(block).formula_execute({"task": task, "variables": variables}, {})
+    assert block.llm_calls == 1
+    assert out["result"] == want
+    assert out["provenance"] == "improvised"
+    assert out["certified"] is False
