@@ -268,7 +268,6 @@ def test_a_several_page_question_still_gets_every_named_pages_total(monkeypatch)
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
     monkeypatch.delenv("MASTER_CORPUS_SOURCE_PROJECT_ID", raising=False)
-    monkeypatch.delenv("COMPOSE_PART_SUMMARY", raising=False)
     monkeypatch.delenv("RAG_LAYERED", raising=False)
 
     ask = "What is the combined Part Summary total of pages d/3/1, d/3/2 and d/3/3?"
@@ -331,7 +330,6 @@ def test_retrieval_returns_the_asked_page_and_not_the_other_footers(monkeypatch)
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
     monkeypatch.delenv("MASTER_CORPUS_SOURCE_PROJECT_ID", raising=False)
-    monkeypatch.delenv("COMPOSE_PART_SUMMARY", raising=False)
     monkeypatch.delenv("RAG_LAYERED", raising=False)
 
     chunks, _ = ret.retrieve_with_filter(ASK, "p_master", k=5)

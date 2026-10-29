@@ -366,7 +366,6 @@ def format_chunks_as_system_message(
         compose_priced_boq_row,
         extract_asked_cesmm_codes,
         extract_contract_doc_ids,
-        part_summary_compose_enabled,
         priced_boq_compose_enabled,
         query_applies_a_delay_duration,
         query_asks_delay_damages_daily_amount,
@@ -436,7 +435,6 @@ def format_chunks_as_system_message(
         if (
             query
             and query_asks_for_part_summary_total(query)
-            and part_summary_compose_enabled()
         )
         else None
     )

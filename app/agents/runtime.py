@@ -7706,8 +7706,7 @@ def _graft_combined_part_summary_total(
 
     Live 4ab5561: d/3/1 + d/3/2 + d/3/3 printed 34,645,529 + 1,852,848
     + 17,496,857 = 53,995,234 and the bubble said 54,995,234. Compose
-    the printed figures; do not invent a page. Kill-switch:
-    COMPOSE_PART_SUMMARY=0. One-page B3 stays on
+    the printed figures; do not invent a page. A one-page total stays on
     ``_graft_part_summary_total``.
     """
     try:
@@ -7715,11 +7714,8 @@ def _graft_combined_part_summary_total(
             answer_states_part_summary,
             compose_combined_part_summary_total,
             format_combined_part_summary_line,
-            part_summary_compose_enabled,
             query_asks_combined_part_summary,
         )
-        if not part_summary_compose_enabled():
-            return text
         user = _latest_operator_ask(messages)
         if not query_asks_combined_part_summary(user):
             return text
@@ -7840,18 +7836,15 @@ def _graft_part_summary_total(
     Live 0d9fd23 mobile H3 echoed empty / said the priced-BOQ Part
     Summary was not found. The d/3/1 total was already in the
     demolition-bill excerpts (B1/B2 line items on the same page PASS).
-    Kill-switch: COMPOSE_PART_SUMMARY=0. B4/B5 CESMM rows are not this.
+    B4/B5 CESMM rows are not this.
     """
     try:
         from app.core.rag.retriever import (
             answer_states_part_summary,
             compose_part_summary_total,
             format_part_summary_line,
-            part_summary_compose_enabled,
             query_asks_for_part_summary_total,
         )
-        if not part_summary_compose_enabled():
-            return text
         user = _latest_operator_ask(messages)
         if not query_asks_for_part_summary_total(user):
             return text
@@ -7914,11 +7907,8 @@ def _compose_part_summary_instead_of_retry(
         from app.core.rag.retriever import (
             answer_states_part_summary,
             compose_part_summary_total,
-            part_summary_compose_enabled,
             query_asks_for_part_summary_total,
         )
-        if not part_summary_compose_enabled():
-            return ""
         user = _latest_operator_ask(messages)
         if not query_asks_for_part_summary_total(user):
             return ""
