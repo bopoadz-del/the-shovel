@@ -10,8 +10,7 @@ Live Master Corpus (tip a65cebb):
 
 This path is compose-only. It must not invent a rate or an amount, must
 not steal A5 (rate-string lookup), and must not duplicate the A5 rate
-rescue (#503). Kill-switch ``COMPOSE_DELAY_DAMAGES_DAILY=0`` restores
-the FAIL (sources quoted, no SAR/day).
+rescue (#503).
 """
 from __future__ import annotations
 
@@ -182,12 +181,6 @@ def test_compose_does_not_invent_when_an_operand_is_missing():
     assert compose_delay_damages_daily_from_excerpts(LIVE_E1, RATE_ROW) is None
     assert compose_delay_damages_daily_from_excerpts(LIVE_E1, NET_ACA_ROW) is None
     assert compose_delay_damages_daily_from_excerpts(LIVE_A5, RATE_ROW + NET_ACA_ROW) is None
-
-
-def test_kill_switch_restores_the_no_compose_fail(monkeypatch):
-    monkeypatch.setenv("COMPOSE_DELAY_DAMAGES_DAILY", "0")
-    excerpts = "\n\n".join((RATE_ROW, NET_ACA_ROW))
-    assert compose_delay_damages_daily_from_excerpts(LIVE_E1, excerpts) is None
 
 
 def test_graft_replaces_a_cannot_calculate_refusal():
@@ -938,15 +931,6 @@ def test_e1_short_circuit_states_daily_figure_and_skips_priced_boq():
         rag, msgs, has_predispatch=True,
     ) == ""
     assert _should_short_circuit_priced_boq(
-        rag, msgs, has_predispatch=False,
-    ) == ""
-
-
-def test_e1_short_circuit_kill_switch_restores_provider_hop(monkeypatch):
-    monkeypatch.setenv("COMPOSE_DELAY_DAMAGES_DAILY", "0")
-    rag = _sys(RATE_ROW, NET_ACA_ROW)
-    msgs = [{"role": "user", "content": LIVE_E1}]
-    assert _should_short_circuit_delay_damages_daily(
         rag, msgs, has_predispatch=False,
     ) == ""
 

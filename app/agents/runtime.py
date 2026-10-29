@@ -7056,10 +7056,10 @@ def _graft_composed_delay_damages_over_period(
 ) -> str:
     """Delay damages over a period: rate × ACA × days × named milestones when synthesis hung.
 
-    Live a8498b3 returned ``0% of SAR 0.00`` after ``delay_damages_daily``
-    ran with empty args. Both operands were already on the Contract Data
-    sheet. Compose the period product; do not invent a rate or a base.
-    Kill-switch: COMPOSE_DELAY_DAMAGES_PERIOD=0.
+    When ``delay_damages_daily`` ran with empty args and returned a
+    ``0% of SAR 0.00`` note although both operands were already on the
+    Contract Data sheet, compose the period product from them; never invent
+    a rate or a base.
     """
     try:
         from app.lib.construction_formulas_commercial import (
@@ -7594,18 +7594,14 @@ def _should_short_circuit_delay_damages_daily(
     BOQ refuse ("I don't have a rate on file… upload your priced BOQ")
     when priced CESMM soup shared the pool. Rate × ACA was already in
     the excerpts / loaded CD volume — compose it instead of waiting on
-    the provider. Predispatch deliverables keep the LLM path. Kill-switch:
-    COMPOSE_DELAY_DAMAGES_DAILY=0.
+    the provider. Predispatch deliverables keep the LLM path.
     """
     if has_predispatch:
         return ""
     try:
         from app.lib.construction_formulas_commercial import (
-            compose_delay_damages_daily_enabled,
             query_asks_delay_damages_daily_amount,
         )
-        if not compose_delay_damages_daily_enabled():
-            return ""
         user = _latest_operator_ask(messages)
         if not query_asks_delay_damages_daily_amount(user):
             return ""

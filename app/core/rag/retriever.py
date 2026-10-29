@@ -6868,18 +6868,15 @@ def percentage_of_aca_excerpts_from_loaded_cd_volume(
     Advance-payment amount ask: top-k had neither operand and the model shipped the
     fetch truncation notice. When those rows exist later in the same
     volume, return them so compose can state SAR — do not invent a
-    figure. Kill-switch: COMPOSE_PERCENTAGE_OF_ACA=0.
+    figure.
     """
     try:
         from app.lib.construction_formulas_commercial import (
-            compose_percentage_of_aca_enabled,
             extract_named_percentage_particular,
             query_asks_percentage_particular_in_money,
         )
     except Exception:  # noqa: BLE001 — never break a turn over an import
         logger.debug("percentage-of-ACA import failed", exc_info=True)
-        return ""
-    if not compose_percentage_of_aca_enabled():
         return ""
     if not query_asks_percentage_particular_in_money(query):
         return ""
@@ -6910,20 +6907,16 @@ def milestone_period_excerpts_from_loaded_cd_volume(
     """Join Milestone N | a milestone rate rows + excl-VAT ACA from the loaded volume.
 
     Per-milestone delay damages ask: top-k packed whole-of-Works 0.1% under "per Milestone".
-    Scan for the real milestone rate rows. Kill-switch:
-    COMPOSE_DELAY_DAMAGES_PERIOD=0.
+    Scan for the real milestone rate rows.
     """
     try:
         from app.lib.construction_formulas_commercial import (
-            compose_delay_damages_period_enabled,
             parse_asked_milestones,
             parse_milestone_delay_rate_percent,
             query_asks_delay_damages_over_a_period,
         )
     except Exception:  # noqa: BLE001 — never break a turn over an import
         logger.debug("milestone-period import failed", exc_info=True)
-        return ""
-    if not compose_delay_damages_period_enabled():
         return ""
     if not query_asks_delay_damages_over_a_period(query):
         return ""
