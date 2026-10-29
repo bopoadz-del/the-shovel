@@ -40,6 +40,9 @@ def _label_without_unit(key: str, unit: str) -> str:
         words.pop()
         while len(words) > 1 and flat.endswith(words[-1].lower()):
             words.pop()
+    # "selling price per m3" less its unit leaves a dangling "per".
+    if len(words) > 1 and words[-1].lower() == "per" and len(words) < len(input_phrase(key, "").split()):
+        words.pop()
     return " ".join(words)
 
 
@@ -52,7 +55,7 @@ def headline(envelope: Dict[str, Any]) -> str:
     primary = result.get("primary_result")
     if main and isinstance(result.get(main), (int, float)) and not isinstance(result.get(main), bool):
         # The formula declares the output its answer leads with.
-        unit = currency_unit(main, dict(spec0.outputs).get(main, ""))
+        unit = currency_unit(main, dict(spec0.outputs).get(main, ""), result.get("currency"))
         primary = {"value": result[main], "unit": unit, "label": _label_without_unit(main, unit)}
     if not isinstance(primary, dict) or primary.get("value") in (None, ""):
         # No primary figure named: the formula's first declared output the
@@ -69,7 +72,7 @@ def headline(envelope: Dict[str, Any]) -> str:
         key = next((k for k in figures if k not in inputs), figures[0] if figures else None)
         if key is None:
             return ""
-        unit = currency_unit(key, declared[key])
+        unit = currency_unit(key, declared[key], result.get("currency"))
         primary = {"value": result[key], "unit": unit, "label": _label_without_unit(key, unit)}
     label = str(primary.get("label") or "").strip() or "result"
     unit = str(primary.get("unit") or "").strip()
@@ -175,15 +178,16 @@ def _outputs(envelope: Dict[str, Any], inputs: Optional[Dict[str, Any]]):
         # results of their own.
         outputs = {k: v for k, v in outputs.items() if k not in _PRIMARY_MIRROR}
     labels = {k: p.label for k, p in params.items() if p.label}
-    units = {k: currency_unit(k, u) for k, u in (dict(spec.outputs) if spec else {}).items()}
+    units = {k: currency_unit(k, u, result.get("currency")) for k, u in (dict(spec.outputs) if spec else {}).items()}
     return outputs, labels, units
 
 
-def currency_unit(key: str, unit: str) -> str:
+def currency_unit(key: str, unit: str, currency: Any = None) -> str:
     """A declared money unit in the currency the output's own key names:
-    "currency/m3" on selling_price_sar_m3 reads "SAR/m3". The code comes from
-    the platform's currency table, never a fixed string; a key that names no
-    currency keeps "currency"."""
+    "currency/m3" on a key like selling_sar_m3 reads "SAR/m3". The code comes from
+    the platform's currency table, never a fixed string. A key that names no
+    currency takes the result's own ``currency`` output when that is a known
+    code; otherwise it keeps "currency"."""
     text = str(unit or "")
     if not text.lower().startswith("currency"):
         return text
@@ -191,7 +195,12 @@ def currency_unit(key: str, unit: str) -> str:
 
     codes = {c.lower(): c for c in _CURRENCY_CODES}
     named = [codes[part] for part in re.split(r"[^a-z]+", str(key).lower()) if part in codes]
-    return (named[0] + text[len("currency"):]) if len(set(named)) == 1 else text
+    if len(set(named)) == 1:
+        return named[0] + text[len("currency"):]
+    given = codes.get(str(currency or "").strip().lower())
+    if not named and given:
+        return given + text[len("currency"):]
+    return text
 
 
 def _items(value: Any) -> List[str]:

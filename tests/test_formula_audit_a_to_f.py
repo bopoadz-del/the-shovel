@@ -15,6 +15,9 @@ import math
 import pytest
 
 from app.lib.construction_formulas import available_calculations, run_calculation
+from tests.example_project_rates import (
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, REBAR_RATES,
+)
 
 # Alphabetical #1–44 of available_calculations() at audit time. The two
 # point-load deflection calculators joined the slice with SET5 E3.
@@ -641,10 +644,10 @@ def test_audit_cost_buildup_concrete():
           sell = 222.459×1.18/0.85 = 308.83 SAR/m³
           ×100 m³ = 30,883.
     """
-    r = _ok("cost_buildup_concrete", {"quantity_m3": 100})
-    assert r["material_cost_sar_m3"] == pytest.approx(160.93, abs=0.01)
-    assert r["selling_price_sar_m3"] == pytest.approx(308.83, abs=0.1)
-    assert r["total_project_value_sar"] == pytest.approx(30883, abs=2)
+    r = _ok("cost_buildup_concrete", {"quantity_m3": 100, **CONCRETE_RATES})
+    assert r["material_cost_per_m3"] == pytest.approx(160.93, abs=0.01)
+    assert r["selling_price_per_m3"] == pytest.approx(308.83, abs=0.1)
+    assert r["total_project_value"] == pytest.approx(30883, abs=2)
 
     _err("cost_buildup_concrete", {"quantity_m3": -1})
 
@@ -657,12 +660,12 @@ def test_audit_cost_buildup_formwork():
           sell = 72.0533 × 1.18 / 0.85 = 100.027 SAR/m²
           ×500 m² = 50,013.5 → 50,013.
     """
-    r = _ok("cost_buildup_formwork", {"area_m2": 500})
-    assert r["shuttering_sar_m2"] == pytest.approx(55 / 6, abs=0.01)
-    assert r["scaffolding_sar_m2"] == pytest.approx(21.50, abs=0.01)
-    assert r["labour_sar_m2"] == pytest.approx(36.90, abs=0.01)
-    assert r["selling_price_sar_m2"] == pytest.approx(100.03, abs=0.02)
-    assert r["total_for_area_sar"] == pytest.approx(50013, abs=2)
+    r = _ok("cost_buildup_formwork", {"area_m2": 500, **FORMWORK_RATES})
+    assert r["shuttering_per_m2"] == pytest.approx(55 / 6, abs=0.01)
+    assert r["scaffolding_per_m2"] == pytest.approx(21.50, abs=0.01)
+    assert r["labour_per_m2"] == pytest.approx(36.90, abs=0.01)
+    assert r["selling_price_per_m2"] == pytest.approx(100.03, abs=0.02)
+    assert r["total_for_area"] == pytest.approx(50013, abs=2)
 
     _err("cost_buildup_formwork", {"area_m2": -1})
 
@@ -673,13 +676,13 @@ def test_audit_cost_buildup_rebar():
     labour 90×4.1=369; crane 2×134.6=269.2; direct 3498.2
     sell = 3498.2 × 1.18 / 0.85 = 4856 SAR/t.
     """
-    r = _ok("cost_buildup_rebar", {"quantity_kg": 1000})
-    assert r["material_sar_t"] == pytest.approx(2860, abs=1)
-    assert r["selling_price_sar_t"] == pytest.approx(4856, abs=2)
+    r = _ok("cost_buildup_rebar", {"quantity_kg": 1000, **REBAR_RATES})
+    assert r["material_per_t"] == pytest.approx(2860, abs=1)
+    assert r["selling_price_per_t"] == pytest.approx(4856, abs=2)
 
     real = _ok("cost_buildup_rebar",
-               {"quantity_kg": 1000, "material_price_sar_t": 3000})
-    assert real["material_sar_t"] == pytest.approx(3300, abs=1)
+               {**REBAR_RATES, "quantity_kg": 1000, "material_price_per_t": 3000})
+    assert real["material_per_t"] == pytest.approx(3300, abs=1)
 
     _err("cost_buildup_rebar", {"quantity_kg": 0})
 
@@ -824,7 +827,7 @@ def test_audit_delay_damages_daily():
     assert r["daily_amount"] == pytest.approx(1_754_504.46, abs=0.005)
 
     zero = _ok("delay_damages_daily",
-               {"rate_percent": 0, "contract_amount": 1_000_000})
+               {"rate_percent": 0, "contract_amount": 1_000_000, "currency": "SAR"})
     assert zero["daily_amount"] == pytest.approx(0.0, abs=1e-9)
 
     _err("delay_damages_daily",
@@ -906,14 +909,14 @@ def test_audit_electrical_installation_sequence():
     Rates are unsourced rules of thumb — arithmetic of the documented table.
     """
     r = _ok("electrical_installation_sequence",
-            {"floor_area_m2": 1000, "num_floors": 3})
+            {"floor_area_m2": 1000, "num_floors": 3, **ELECTRICAL_STAGE_RATES})
     assert r["total_area_m2"] == pytest.approx(3000, abs=1e-9)
     assert r["stages"]["1st_fix_conduit_boxes"] == 60
     assert r["stages"]["commissioning"] == 100
     assert r["total_days"] == 360
 
     one = _ok("electrical_installation_sequence",
-              {"floor_area_m2": 50, "num_floors": 1})
+              {"floor_area_m2": 50, "num_floors": 1, **ELECTRICAL_STAGE_RATES})
     assert one["stages"]["1st_fix_conduit_boxes"] == 1
     assert one["total_days"] == 1 + 1 + 1 + 1 + 1 + 1 + 2  # 50/30 → 2
 

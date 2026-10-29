@@ -7,6 +7,10 @@ indicative fallbacks only).
 """
 from __future__ import annotations
 
+from tests.example_project_rates import (
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES,
+    REBAR_RATES, SUPERVISION_RATIOS,
+)
 import pytest
 
 from app.lib import construction_formulas as cf
@@ -45,28 +49,28 @@ def test_fineness_modulus():
 
 def test_cost_buildup_concrete_arithmetic():
     # material = 0.4*190 + 1.839*29 + 0.16*10 + 12*1.5 + 5*2.4 = 160.93
-    r = cf.cost_buildup_concrete(quantity_m3=100)
-    assert r["material_cost_sar_m3"] == pytest.approx(160.93, abs=0.01)
+    r = cf.cost_buildup_concrete(quantity_m3=100, **CONCRETE_RATES)
+    assert r["material_cost_per_m3"] == pytest.approx(160.93, abs=0.01)
     # waste on material only: 160.931*1.03 + 39.2+8+3+2.5+4 = 222.459
     # *1.18 indirect / 0.85 markup = 308.83 SAR/m3; ×100 = 30883
-    assert r["selling_price_sar_m3"] == pytest.approx(308.83, abs=0.1)
-    assert r["total_project_value_sar"] == pytest.approx(30883, abs=2)
+    assert r["selling_price_per_m3"] == pytest.approx(308.83, abs=0.1)
+    assert r["total_project_value"] == pytest.approx(30883, abs=2)
 
 
 def test_cost_buildup_rebar_arithmetic():
-    r = cf.cost_buildup_rebar(quantity_kg=1000)
+    r = cf.cost_buildup_rebar(quantity_kg=1000, **REBAR_RATES)
     # material = 1t * 2600 * 1.10 = 2860
-    assert r["material_sar_t"] == 2860
+    assert r["material_per_t"] == 2860
     # (2860 + 90*4.1 + 2*134.6) * 1.18 / 0.85 = 4856
-    assert r["selling_price_sar_t"] == pytest.approx(4856, abs=2)
+    assert r["selling_price_per_t"] == pytest.approx(4856, abs=2)
 
 
 def test_rates_are_parameters_not_hardcoded():
     # The RAG-grounding contract: a real rate passed in flows through the maths.
-    base = cf.cost_buildup_rebar(quantity_kg=1000)
-    with_real_rate = cf.cost_buildup_rebar(quantity_kg=1000, material_price_sar_t=3000)
-    assert with_real_rate["material_sar_t"] == 3300  # 1t * 3000 * 1.10
-    assert with_real_rate["material_sar_t"] != base["material_sar_t"]
+    base = cf.cost_buildup_rebar(quantity_kg=1000, **REBAR_RATES)
+    with_real_rate = cf.cost_buildup_rebar(quantity_kg=1000, **{**REBAR_RATES, "material_price_per_t": 3000})
+    assert with_real_rate["material_per_t"] == 3300  # 1t * 3000 * 1.10
+    assert with_real_rate["material_per_t"] != base["material_per_t"]
 
 
 def test_modulus_of_rupture_runs_and_is_sane():
@@ -100,21 +104,21 @@ _SMOKE_INPUTS = {
     "concrete_mix_slip_form": dict(),
     "tolerance_check": dict(measured=10.2, specified=10.0, tolerance_plus=0.5),
     "concrete_thermal_cracking_check": dict(core_temp_c=60, surface_temp_c=40),
-    "cost_buildup_concrete": dict(quantity_m3=100),
-    "cost_buildup_formwork": dict(area_m2=500),
-    "cost_buildup_rebar": dict(quantity_kg=1000),
+    "cost_buildup_concrete": dict(quantity_m3=100, **CONCRETE_RATES),
+    "cost_buildup_formwork": dict(area_m2=500, **FORMWORK_RATES),
+    "cost_buildup_rebar": dict(quantity_kg=1000, **REBAR_RATES),
     "crane_cost_estimate": dict(num_cranes=2, crane_capacity_tons=50, duration_months=12),
     "crane_planning": dict(total_lift_demand_tons=1000, crane_capacity_tons=50),
     "dewatering_uplift_check": dict(water_depth=23, raft_thickness=2, floor_count=5),
     "dewatering_well_point_spacing": dict(soil_permeability_m_s=2e-3, required_drawdown_m=12),
     "diaphragm_wall_panel_volume": dict(panel_length=6, wall_thickness=0.8, excavation_depth=20),
-    "electrical_installation_sequence": dict(floor_area_m2=1000, num_floors=3),
+    "electrical_installation_sequence": dict(floor_area_m2=1000, num_floors=3, **ELECTRICAL_STAGE_RATES),
     "fineness_modulus": dict(sieve_retained_percentages=[10, 25, 45, 70, 90, 98]),
     "formwork_striking_time": dict(),
     "foundation_bearing_pressure": dict(foundation_width_m=3, foundation_length_m=3,
                                         column_load_kn=2000, soil_bearing_capacity_kn_m2=300),
     "grout_pressure_calc": dict(tendon_duct_diameter_mm=80),
-    "mobilization_cost_estimate": dict(num_personnel=100, duration_months=18),
+    "mobilization_cost_estimate": dict(num_personnel=100, duration_months=18, **MOBILIZATION_RATES),
     "modulus_of_elasticity_concrete": dict(fck_n_mm2=40),
     "modulus_of_rupture": dict(fck_n_mm2=40),
     "plumbing_flow_programme": dict(floor_area_m2=1000, num_floors=3),
@@ -122,7 +126,7 @@ _SMOKE_INPUTS = {
     "precast_beam_erection_check": dict(beam_weight_t=20, beam_length_m=15,
                                         crane_capacity_t=50, lift_radius_m=12),
     "shear_stress_check": dict(v_kn=200, b_mm=300, d_mm=550),
-    "supervision_ratio": dict(concrete_m3=5000, area_m2=10000),
+    "supervision_ratio": dict(concrete_m3=5000, area_m2=10000, **SUPERVISION_RATIOS),
     "thermal_shrinkage_equivalence": dict(),
     "unit_weight_concrete": dict(),
     "wind_load_on_formwork": dict(wind_velocity_m_s=30, formwork_area_m2=50,

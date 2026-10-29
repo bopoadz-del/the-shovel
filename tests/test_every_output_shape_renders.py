@@ -11,6 +11,10 @@ from app.agents.driver import render
 from app.lib import construction_formulas as cf
 
 
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 def _env(result, calculation="electrical_installation_sequence"):
     return {"status": "success", "calculation": calculation, "result": result}
 
@@ -30,16 +34,16 @@ def test_a_list_of_records_renders_as_one_table_with_the_same_columns():
 
 
 def test_an_input_taken_from_its_default_is_disclosed():
-    env = cf.run_calculation("electrical_installation_sequence", {"floor_area_m2": 2000})
+    env = cf.run_calculation("electrical_installation_sequence", {"floor_area_m2": 2000, **ELECTRICAL_STAGE_RATES})
     rows = env["result"]["defaults_used"]
     assert rows and all(set(row) >= {"parameter", "value", "label"} for row in rows)
-    assert "Assumed, not given:" in render.render_calculation(env, {"floor_area_m2": 2000})
+    assert "Assumed, not given:" in render.render_calculation(env, {"floor_area_m2": 2000, **ELECTRICAL_STAGE_RATES})
 
 
 def test_an_input_is_called_a_default_only_when_it_was_not_given():
     """A pair, so neither half can pass by the field simply being absent."""
-    missing = cf.run_calculation("electrical_installation_sequence", {"floor_area_m2": 2000})
-    given = cf.run_calculation("electrical_installation_sequence", {"floor_area_m2": 2000, "num_floors": 3})
+    missing = cf.run_calculation("electrical_installation_sequence", {"floor_area_m2": 2000, **ELECTRICAL_STAGE_RATES})
+    given = cf.run_calculation("electrical_installation_sequence", {"floor_area_m2": 2000, "num_floors": 3, **ELECTRICAL_STAGE_RATES})
     assert "num_floors" in {row["parameter"] for row in missing["result"]["defaults_used"]}
     assert "num_floors" not in {row["parameter"] for row in given["result"].get("defaults_used", [])}
 
