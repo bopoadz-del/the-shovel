@@ -6612,11 +6612,6 @@ def _strip_conflicting_whole_works_tfc_claims(text: str, elected_days: str) -> s
     return cleaned.strip()
 
 
-def _graft_asked_contract_particular_enabled() -> bool:
-    raw = (os.getenv("GRAFT_ASKED_CONTRACT_PARTICULAR", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-
 def _graft_asked_contract_particular(
     text: str,
     rag_sys_msg: dict[str, Any] | None,
@@ -6629,13 +6624,11 @@ def _graft_asked_contract_particular(
     DeepSeek answered a neighboring field (delay damages for an including-VAT
     ACA ask) or reported the particular absent after retrieving permit
     trackers / CoC 1.3–1.8. Compose nothing — only fire when the excerpt
-    already states the asked value. Kill-switch: GRAFT_ASKED_CONTRACT_PARTICULAR=0.
-    ``project_id`` lets A2 last-chance-scan the loaded CD volume when
+    already states the asked value.
+    ``project_id`` lets a last-chance scan read the loaded CD volume when
     top-k is a delay-damages chunk #0 (live 9ad62cc).
     """
     try:
-        if not _graft_asked_contract_particular_enabled():
-            return text
         from app.core.rag.retriever import (
             including_vat_excerpts_from_loaded_cd_volume,
             extract_aca_including_vat,

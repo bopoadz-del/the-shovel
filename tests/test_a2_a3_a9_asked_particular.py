@@ -535,13 +535,6 @@ def test_graft_does_not_invent_when_excerpt_lacks_the_particular():
     )
 
 
-def test_graft_kill_switch(monkeypatch):
-    monkeypatch.setenv("GRAFT_ASKED_CONTRACT_PARTICULAR", "0")
-    rag = _sys(SCANNED_ACA_INCL)
-    msgs = [{"role": "user", "content": LIVE_A2}]
-    assert _graft_asked_contract_particular(DELAY_DAMAGES_COMPOSE, rag, msgs) == (
-        DELAY_DAMAGES_COMPOSE
-    )
 
 
 def test_postprocess_a2_delay_damages_becomes_including_vat():
