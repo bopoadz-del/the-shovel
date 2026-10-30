@@ -5973,6 +5973,7 @@ _COST_TOTAL_KEYS = (
     "total_for_area_sar",
     "total_cost",
     "grand_total_sar",
+    "grand_total",
 )
 _NOT_A_COST_CALC = frozenset({
     "delay_damages_daily",
@@ -10784,7 +10785,7 @@ _DEFAULT_UI_AGENT = "project-assistant"
 
 
 def hats_activation_enabled() -> bool:
-    """True when FORK_HATS_ENABLED is live. Default off."""
+    """Always True: the hat router is always on (K-T0a)."""
     from app.agents.activation import hats_enabled
     return hats_enabled()
 

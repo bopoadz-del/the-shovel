@@ -111,6 +111,18 @@ async def test_cache_hit_is_labelled_improvised(variables, want):
     assert out["provenance"] == "improvised"
     assert out["certified"] is False
     assert block.llm_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{"task": "   "}, "  \n "])
+async def test_an_empty_task_is_refused_before_any_model_call(payload):
+    block = _Mock(["result = 1"])
+    out = await block.process(payload)
+    assert out["status"] == "error"
+    assert "No task description provided" in out["error"]
+    assert block.llm_calls == 0
+
+
 # ── the construction container's formula_execute action ──────────────────
 
 def _container(block):
@@ -186,3 +198,26 @@ async def test_container_refuses_when_the_kernel_check_cannot_run(monkeypatch, b
         assert block.llm_calls == 0
     else:
         assert out["provenance"] == "improvised" and out["result"] == 6
+
+
+# :2213 the ask reaches construction_calc as params["text"]; :2199 params=None is an empty dict.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,kernel", [
+    ("Calculate concrete volume for a 10x8m slab, 200mm thick", "concrete_volume"),
+    ("excavation volume 20 x 10 x 3 m", "excavation_volume"),
+])
+async def test_container_hands_the_ask_to_the_kernel_as_text(task, kernel):
+    import app.containers.construction as construction
+
+    seen = {}
+    c = _container(_Mock(["result = 1"]))
+
+    async def _calc(data, params):
+        seen.update(params)
+        return {"status": "success"}
+
+    c.construction_calc = _calc
+    out = await construction.ConstructionContainer.formula_execute(c, {"task": task}, None)
+    assert seen["text"] == task
+    assert seen["calculation"] == kernel
+    assert out["routed_from"] == "formula_execute"

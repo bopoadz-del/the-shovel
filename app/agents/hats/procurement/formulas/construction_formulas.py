@@ -20,8 +20,10 @@ from typing import Any, Dict
         'hours_per_shift': Param('h', 1, 24, label='hours per shift'),
         'cycle_time_minutes': Param('min', 1, 600, label='lift cycle time'),
         'working_days': Param('days', 1, 31, label='working days per month'),
+        'dry_hire_rate_per_month': Param('currency/month', 0, 1e9, label='dry hire rate per crane per month'),
+        'currency': Param('-', label='currency of the rate'),
     },
-    outputs={'total_lift_demand_tons': '-', 'crane_capacity_tons': '-', 'utilization_pct': '%', 'shifts_per_day': '-', 'hours_per_shift': '-', 'cycle_time_minutes': '-', 'lifts_per_hour_per_crane': '-', 'daily_tonnage_per_crane': '-', 'cranes_required': '-', 'monthly_rate_sar': 'currency', 'total_monthly_cost_sar': 'currency'},
+    outputs={'total_lift_demand_tons': '-', 'crane_capacity_tons': '-', 'utilization_pct': '%', 'shifts_per_day': '-', 'hours_per_shift': '-', 'cycle_time_minutes': '-', 'lifts_per_hour_per_crane': '-', 'daily_tonnage_per_crane': '-', 'cranes_required': '-', 'monthly_rate': 'currency/month', 'total_monthly_cost': 'currency/month', 'currency': '-'},
 )
 def crane_planning(
     total_lift_demand_tons: float,
@@ -31,6 +33,8 @@ def crane_planning(
     hours_per_shift: float = 9.5,
     cycle_time_minutes: float = 20.0,
     working_days: int = 26,
+    dry_hire_rate_per_month: Any = None,
+    currency: str = "",
 ) -> Dict[str, Any]:
     """
     Determine number of cranes needed to service construction lifting demand.
@@ -40,12 +44,9 @@ def crane_planning(
         daily_capacity_per_crane = capacity x (util/100) x lifts_per_hour x hours x shifts
         num_cranes = ceil(total_demand / (daily_capacity x working_days))
 
-    Typical crane rental rates (GCC, dry hire without operator):
-        25-30 MT:  8,000-12,000 SAR/month
-        50 MT:     15,000-20,000 SAR/month
-        100 MT:    25,000-35,000 SAR/month
-        200 MT:    60,000-80,000 SAR/month
-        300+ MT:   100,000+ SAR/month
+    Cost: only from the caller's ``dry_hire_rate_per_month`` (the project's
+    rate). No rate table is built in; without a rate the crane count is
+    returned and the cost lines are omitted with a note.
 
     Args:
         total_lift_demand_tons: Total tonnage to be lifted over the period
@@ -75,16 +76,18 @@ def crane_planning(
 
     num_cranes = math.ceil(total_lift_demand_tons / total_capacity_per_crane) if total_capacity_per_crane > 0 else 0
 
-    # Monthly rental rate estimate (SAR/month, dry hire)
-    rate_table = {
-        25: 8000, 30: 10000, 50: 18000, 100: 30000,
-        200: 70000, 300: 120000, 500: 200000,
-    }
-    # Interpolate or find closest
-    closest_cap = min(rate_table.keys(), key=lambda c: abs(c - crane_capacity_tons))
-    monthly_rate = rate_table.get(closest_cap, 30000)
-
-    total_monthly_cost = num_cranes * monthly_rate
+    monthly_rate = None if dry_hire_rate_per_month in (None, "") else float(dry_hire_rate_per_month)
+    total_monthly_cost = None if monthly_rate is None else num_cranes * monthly_rate
+    cur = f" {currency}" if currency else ""
+    notes = [
+        f"Each {crane_capacity_tons}T crane handles {daily_tonnage_per_crane:.1f} tons/day",
+        f"At {utilization_pct}% utilization, {lifts_per_hour:.1f} lifts/hr, {cycle_time_minutes}min cycle",
+    ]
+    if monthly_rate is None:
+        notes.append(f"Require {num_cranes} crane(s); cost needs the project's dry hire rate per month")
+    else:
+        notes.append(f"Require {num_cranes} crane(s) @ {monthly_rate:,.0f}{cur}/month each")
+        notes.append(f"Total crane cost: {total_monthly_cost:,.0f}{cur}/month")
 
     return {
         "total_lift_demand_tons": total_lift_demand_tons,
@@ -96,12 +99,8 @@ def crane_planning(
         "lifts_per_hour_per_crane": round(lifts_per_hour, 1),
         "daily_tonnage_per_crane": round(daily_tonnage_per_crane, 1),
         "cranes_required": num_cranes,
-        "monthly_rate_sar": monthly_rate,
-        "total_monthly_cost_sar": total_monthly_cost,
-        "notes": [
-            f"Each {crane_capacity_tons}T crane handles {daily_tonnage_per_crane:.1f} tons/day",
-            f"At {utilization_pct}% utilization, {lifts_per_hour:.1f} lifts/hr, {cycle_time_minutes}min cycle",
-            f"Require {num_cranes} crane(s) @ {monthly_rate:,} SAR/month each",
-            f"Total crane cost: {total_monthly_cost:,} SAR/month",
-        ],
+        "monthly_rate": monthly_rate,
+        "total_monthly_cost": total_monthly_cost,
+        "currency": currency,
+        "notes": notes,
     }
