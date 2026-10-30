@@ -14,6 +14,8 @@ rescue (#503).
 """
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 
@@ -339,7 +341,7 @@ TOY_ACA = 10_000_000.00
 TOY_DAILY = 10_000.00
 TOY_ACA_ROW = (
     "CONTRACT DATA particulars — filled-in amount / duration / percentage.\n"
-    "1.1.1 Accepted Contract Amount | SAR 10,000,000.00"
+    "1.1.1 Accepted Contract Amount | for example SAR 10,000,000.00"
 )
 # Stained excl-VAT: the 8.8 worked example names the net base so
 # first-in-excl-bucket used to elect 10M over the filled 1.1.1 row.
@@ -357,16 +359,27 @@ LIVE_E1_TOY_ANSWER = (
 )
 
 
-def test_ten_million_is_a_toy_aca_unless_it_is_a_filled_excl_row():
-    assert aca_amount_is_toy_example(TOY_ACA, "Accepted Contract Amount")
+@pytest.mark.parametrize("amount", [TOY_ACA, NET_ACA, 8_640_000.00])
+def test_toy_is_structural_never_a_figure(amount):
+    """K-T5: the same structure gives the same verdict for ANY amount."""
+    fig = f"SAR {amount:,.2f}"
+    # a worked-example cue -> placeholder
     assert aca_amount_is_toy_example(
-        TOY_ACA,
-        "For example, if the Accepted Contract Amount is SAR 10,000,000.00",
-    )
+        amount, f"For example, if the Accepted Contract Amount is {fig}")
+    assert aca_amount_is_toy_example(
+        amount,
+        f"For example, if the Accepted Contract Amount excluding VAT is {fig}")
+    # no cue -> a stated figure
+    assert not aca_amount_is_toy_example(amount, "Accepted Contract Amount")
     assert not aca_amount_is_toy_example(
-        TOY_ACA,
-        "1.1.1 Accepted Contract Amount excluding VAT | SAR 10,000,000.00",
-    )
+        amount, f"1.1.1 Accepted Contract Amount excluding VAT | {fig}")
+    assert not aca_amount_is_toy_example(
+        amount, f"4.2.1: | | Accepted Contract Amount: {fig}")
+    assert not aca_amount_is_toy_example(
+        amount, f"Accepted Contract Amount excluding VAT {fig}")
+
+
+def test_filled_rows_are_not_toys():
     assert not aca_amount_is_toy_example(NET_ACA, NET_ACA_ROW)
     assert not aca_amount_is_toy_example(8_640_000.00, DEMO_ACA_ROW)
 
@@ -436,11 +449,6 @@ def test_insert_template_cue_does_not_stain_the_filled_excl_vat_aca():
     assert not aca_amount_is_toy_example(
         NET_ACA,
         "1.1.1 insert Accepted Contract Amount excluding VAT | "
-        f"SAR {NET_ACA:,.2f}",
-    )
-    assert not aca_amount_is_toy_example(
-        NET_ACA,
-        "For example, if the Accepted Contract Amount excluding VAT is "
         f"SAR {NET_ACA:,.2f}",
     )
     assert chunk_has_real_accepted_contract_amount(INSERT_STAINED_NET_ACA)
@@ -947,3 +955,15 @@ def test_e1_short_circuit_does_not_steal_b5():
     assert _should_short_circuit_delay_damages_daily(
         rag, [{"role": "user", "content": b5}], has_predispatch=False,
     ) == ""
+
+
+@pytest.mark.parametrize("rate", [0.015, 0.2, 0.05])
+def test_coc_lookalike_is_structural_never_a_rate_value(rate):
+    """K-T5: the same window gives the same verdict whatever the rate."""
+    from app.lib.construction_formulas_commercial import (
+        delay_damages_rate_is_coc_lookalike as look,
+    )
+    assert look(rate, f"Sub-Clause 8.7 Delay Damages: {rate}% of the Accepted Contract Amount per day")
+    assert look(rate, f"delay damages at {rate}% of the Accepted Contract Amount per day")
+    assert not look(rate, f"Contract Data 8.8: {rate}% of the Contract Price per calendar day")
+    assert not look(rate, f"Delay damages {rate}% per day")

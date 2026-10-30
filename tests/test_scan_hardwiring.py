@@ -7,6 +7,7 @@ Two things, mirroring how scan_exception_pass is tested:
 """
 from __future__ import annotations
 
+import pytest
 import importlib.util
 from pathlib import Path
 
@@ -287,3 +288,31 @@ def test_live_document_ids_in_product_text_are_flagged(tmp_path: Path):
         "DOCUMENT-ID app/prefix.py: 7e57ab1e",
         "DOCUMENT-ID app/seed.py: c0ffee12",
     ]
+
+
+@pytest.mark.parametrize("planted,expect", [
+    ('_TOY_ACA_AMOUNT = 10_000_000.0\n', "project-literal::_TOY_ACA_AMOUNT"),
+    ('def f():\n    """live ask: 0.015% x SAR 39,098,392.98"""\n', "project-literal::SAR 39,098,392.98"),
+    ('DOCUMENTED_CONCRETE_WASTE_FACTOR = 0.05\n', "project-literal::DOCUMENTED_CONCRETE_WASTE_FACTOR"),
+    ('X = "AED 1,234,567.00"\n', "project-literal::AED 1,234,567.00"),
+    ('X = "SAR 1,500"\n', "project-literal::SAR 1,500"),
+    ('X = "USD 12,750.25"\n', "project-literal::USD 12,750.25"),
+])
+def test_kt5_formula_project_literals_are_flagged(tmp_path: Path, planted, expect):
+    """K-T5: the formula modules carry no project literal (any figure, any name)."""
+    lib = tmp_path / "app" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "construction_formulas_commercial.py").write_text(planted)
+    assert any(expect in f for f in _load().scan(tmp_path))
+
+
+@pytest.mark.parametrize("clean", [
+    'RATE = 0.1\n',
+    'def f():\n    """multiply rate by the stated amount"""\n',
+])
+def test_kt5_clean_formula_module_passes(tmp_path: Path, clean):
+    lib = tmp_path / "app" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "construction_formulas_commercial.py").write_text(clean)
+    (lib / "other.py").write_text('_TOY_ACA_AMOUNT = 1.0\n')  # outside the K-T5 paths
+    assert not [f for f in _load().scan(tmp_path) if "project-literal" in f]

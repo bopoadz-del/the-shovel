@@ -25,7 +25,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.runtime import _graft_composed_delay_damages_daily
-from app.lib import construction_formulas_commercial as cc
+import app.lib.construction_formulas_commercial as cc
 
 PARTIAL = 39_098_392.98
 CONTRACT_PRICE = 1_754_504_456.25
