@@ -13,6 +13,8 @@ import pytest
 
 from app.routers import chat as chat_mod
 
+_RID = "unit-chain-rid"
+
 
 def _types(frames):
     out = []
@@ -64,10 +66,10 @@ def _chain(stream, identity, timings):
 
     inner = redact_frames(guarantee_terminal(
         with_hat_signals(with_answer_exit(stream), "warranty schedule"),
-        request_id="rid-x"), identity)
+        request_id=_RID), identity)
     if timings:
         inner = chat_mod._with_stage_timings(inner)
-    return close_on_escape(turn_progress.opened(inner), request_id="rid-x")
+    return close_on_escape(turn_progress.opened(inner), request_id=_RID)
 
 
 def _run(stream, identity, timings):
@@ -173,3 +175,38 @@ def test_close_on_escape_passes_a_clean_stream_through(frames):
         for f in frames:
             yield f
     assert _collect(close_on_escape(src(), request_id="r")) == frames
+
+
+async def _redactor_that_breaks(frames, _identity):
+    """Stands in for ``redact_frames`` (a layer OUTSIDE the terminal guard)
+    and raises on the first frame it is handed."""
+    async for _raw in frames:
+        raise RuntimeError("redaction broke mid-stream")
+        yield _raw
+
+
+@pytest.mark.parametrize("path", ["/chat/stream", "/v1/chat/stream"])
+@pytest.mark.parametrize("rid", ["g6-rid-alpha1", "g6-rid-bravo2"])
+def test_the_escape_error_carries_the_real_request_id_on_both_routes(monkeypatch, path, rid):
+    """The id set by the app's own middleware (X-Request-ID ->
+    request_id_ctx -> get_request_id) reaches the error frame that
+    close_on_escape writes, on both streaming routes."""
+    import uuid
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from tests._fixture_values import PW_06
+
+    monkeypatch.setattr(chat_mod, "redact_frames", _redactor_that_breaks)
+    with TestClient(app) as c:
+        email = f"rid-{uuid.uuid4().hex[:8]}@x.com"
+        c.post("/v1/users/register", json={"email": email, "password": PW_06})
+        token = c.post("/v1/users/login", json={"email": email, "password": PW_06}).json()["token"]
+        r = c.post(path, headers={"Authorization": f"Bearer {token}", "X-Request-ID": rid},
+                   json={"message": "Explain a construction programme.", "history": []})
+    assert r.status_code == 200
+    events = [json.loads(line[5:]) for line in r.text.splitlines() if line.startswith("data:")]
+    kinds = [e.get("type") for e in events]
+    assert kinds[-2:] == ["error", "end"], kinds
+    assert events[-2]["request_id"] == rid
