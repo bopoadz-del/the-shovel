@@ -33,21 +33,25 @@ from app.lib.construction_formulas_commercial import productivity_rate
 # direct = 165.75893 + 39.2 + 8 + 3 + 2.5 + 4 = 222.45893
 # selling = 222.45893 * 1.18 / 0.85 = 308.82534 → 308.83 SAR/m3
 # total = 308.83 * 100 = 30883 SAR
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 _SELLING_SAR_M3 = 308.83
 _TOTAL_SAR_100 = 30883.0
 
 
 def test_cost_buildup_concrete_waste_is_on_material_only():
     """Plant, labour, power and the indirect line are not wasted."""
-    r = run_calculation("cost_buildup_concrete", {"quantity_m3": 100})
+    r = run_calculation("cost_buildup_concrete", {"quantity_m3": 100, **CONCRETE_RATES})
     assert r["status"] == "success", r
     inner = r["result"]
-    assert inner["material_cost_sar_m3"] == pytest.approx(160.93, abs=0.01)
-    assert inner["selling_price_sar_m3"] == pytest.approx(_SELLING_SAR_M3, abs=0.01)
-    assert inner["total_project_value_sar"] == pytest.approx(_TOTAL_SAR_100, abs=0.01)
+    assert inner["material_cost_per_m3"] == pytest.approx(160.93, abs=0.01)
+    assert inner["selling_price_per_m3"] == pytest.approx(_SELLING_SAR_M3, abs=0.01)
+    assert inner["total_project_value"] == pytest.approx(_TOTAL_SAR_100, abs=0.01)
     # The displayed unit rate times the quantity is the project total.
-    assert inner["total_project_value_sar"] == pytest.approx(
-        inner["selling_price_sar_m3"] * 100, abs=0.01,
+    assert inner["total_project_value"] == pytest.approx(
+        inner["selling_price_per_m3"] * 100, abs=0.01,
     )
     note = str(inner.get("note") or "")
     assert "308.83" in note

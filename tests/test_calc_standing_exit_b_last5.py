@@ -34,6 +34,10 @@ from tests.test_construction_calc_tool import _agent, _call, _run
 # ── beam_shear_simple (LIVE: cause error) ──────────────────────────────────
 
 # V = wL/2. Hand: 20×6/2 = 60 kN.
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 _SHEAR_REQUIRED = (
     ("udl_w_kn_m", "kN/m"),
     ("span_m", "m"),
@@ -148,32 +152,32 @@ _REBAR_SELL = 4856
 
 def test_cost_buildup_rebar_waste_percent_10_is_fraction_not_1000pct():
     """Live sent waste_pct=10 (percent) and scored selling 40590 as wrong_number."""
-    inner = _ok("cost_buildup_rebar", {"quantity_kg": 1000, "waste_pct": 10})
-    assert inner["material_sar_t"] == pytest.approx(2860, abs=1)
-    assert inner["selling_price_sar_t"] == pytest.approx(_REBAR_SELL, abs=2)
-    via_alias = _ok("cost_buildup_rebar", {"qty": 1000, "waste": 10})
-    assert via_alias["selling_price_sar_t"] == pytest.approx(_REBAR_SELL, abs=2)
+    inner = _ok("cost_buildup_rebar", {"quantity_kg": 1000, "waste_pct": 10, **REBAR_RATES})
+    assert inner["material_per_t"] == pytest.approx(2860, abs=1)
+    assert inner["selling_price_per_t"] == pytest.approx(_REBAR_SELL, abs=2)
+    via_alias = _ok("cost_buildup_rebar", {"qty": 1000, "waste": 10, **REBAR_RATES})
+    assert via_alias["selling_price_per_t"] == pytest.approx(_REBAR_SELL, abs=2)
 
 
 def test_cost_buildup_rebar_price_alias_and_tonne_quantity():
-    inner = _ok("cost_buildup_rebar", {"qty": 1000, "price": 2600})
-    assert inner["selling_price_sar_t"] == pytest.approx(_REBAR_SELL, abs=2)
-    tonne = _ok("cost_buildup_rebar", {"quantity_t": 1})
-    assert tonne["selling_price_sar_t"] == pytest.approx(_REBAR_SELL, abs=2)
-    assert tonne["total_project_value_sar"] == pytest.approx(_REBAR_SELL, abs=2)
+    inner = _ok("cost_buildup_rebar", {**REBAR_RATES, "qty": 1000, "price": 2600})
+    assert inner["selling_price_per_t"] == pytest.approx(_REBAR_SELL, abs=2)
+    tonne = _ok("cost_buildup_rebar", {"quantity_t": 1, **REBAR_RATES})
+    assert tonne["selling_price_per_t"] == pytest.approx(_REBAR_SELL, abs=2)
+    assert tonne["total_project_value"] == pytest.approx(_REBAR_SELL, abs=2)
 
 
 def test_cost_buildup_rebar_extract_from_ask():
     inner = _ok("cost_buildup_rebar", {
-        "text": "cost buildup rebar 1000 kg at 2600 SAR/t",
+        "text": "cost buildup rebar 1000 kg at 2600 SAR/t", "labour_rate_per_hr": 4.1, "crane_rate_per_hr": 134.6,
     })
-    assert inner["material_sar_t"] == pytest.approx(2860, abs=1)
-    assert inner["selling_price_sar_t"] == pytest.approx(_REBAR_SELL, abs=2)
+    assert inner["material_per_t"] == pytest.approx(2860, abs=1)
+    assert inner["selling_price_per_t"] == pytest.approx(_REBAR_SELL, abs=2)
     env = _tool("cost_buildup_rebar", {
-        "text": "rebar cost build-up for 1 tonne @ 2600 SAR/t",
+        "text": "rebar cost build-up for 1 tonne @ 2600 SAR/t", "labour_rate_per_hr": 4.1, "crane_rate_per_hr": 134.6,
     })
     assert env.get("ok") is True, env
-    assert env["result"]["result"]["selling_price_sar_t"] == pytest.approx(
+    assert env["result"]["result"]["selling_price_per_t"] == pytest.approx(
         _REBAR_SELL, abs=2,
     )
 
@@ -270,4 +274,4 @@ def test_last5_bind_does_not_leak_envelope_on_rebar():
     for key in ("text", "formula", "input", "project_id", "noise"):
         assert key not in bound, bound
     assert bound["quantity_kg"] == 1000
-    assert bound["material_price_sar_t"] == 2600
+    assert bound["material_price_per_t"] == 2600

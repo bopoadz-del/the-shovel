@@ -15,6 +15,7 @@ Two live classes on theshovel.ai build 0b1d13a (synthetic fixtures only).
 """
 from __future__ import annotations
 
+from tests.example_project_rates import CONCRETE_RATES, REBAR_RATES  # noqa: F401
 import json
 
 import pytest
@@ -180,15 +181,15 @@ def _assert_calc_not_doc_total(out: str, env: dict) -> None:
     result = env["result"]
     selling = next(
         result[k] for k in (
-            "selling_price_sar_m3",
-            "selling_price_sar_t",
-            "selling_price_sar_m2",
+            "selling_price_per_m3",
+            "selling_price_per_t",
+            "selling_price_per_m2",
         )
         if result.get(k) is not None
     )
-    total = result.get("total_project_value_sar")
+    total = result.get("total_project_value")
     if total is None:
-        total = result.get("total_for_area_sar")
+        total = result.get("total_for_area")
     blob = _money_blob(out)
     sell = f"{float(selling):.2f}".rstrip("0").rstrip(".")
     assert sell in blob
@@ -206,9 +207,9 @@ def _doc_rag() -> dict:
 
 @pytest.mark.parametrize("ask", CONCRETE_ASKS)
 def test_concrete_default_rates_state_the_calculator_not_a_document_total(ask):
-    env, tool = _calc_tool("cost_buildup_concrete", {"quantity_m3": 100})
-    selling = env["result"]["selling_price_sar_m3"]
-    total = env["result"]["total_project_value_sar"]
+    env, tool = _calc_tool("cost_buildup_concrete", {"quantity_m3": 100, **CONCRETE_RATES})
+    selling = env["result"]["selling_price_per_m3"]
+    total = env["result"]["total_project_value"]
     reply = (
         f"The selling price is {selling:.2f} SAR/m3 and the total for "
         f"100 m3 is {total:,.0f} SAR.\n"
@@ -224,7 +225,7 @@ def test_concrete_default_rates_state_the_calculator_not_a_document_total(ask):
 def test_concrete_default_rates_refusal_does_not_replace_the_tool_result():
     """The tool ran. The no-rate refusal must not be the answer."""
     ask = CONCRETE_ASKS[1]
-    env, tool = _calc_tool("cost_buildup_concrete", {"quantity_m3": 100})
+    env, tool = _calc_tool("cost_buildup_concrete", {"quantity_m3": 100, **CONCRETE_RATES})
     out = _postprocess_answer(
         _CG_REFUSAL, _doc_rag(),
         [{"role": "user", "content": ask}, tool],
@@ -235,9 +236,9 @@ def test_concrete_default_rates_refusal_does_not_replace_the_tool_result():
 def test_cost_gate_does_not_refuse_a_successful_concrete_cost_calc():
     """Guard path: an ungrounded document total must not wipe the tool."""
     ask = CONCRETE_ASKS[2]
-    env, tool = _calc_tool("cost_buildup_concrete", {"quantity_m3": 100})
-    selling = env["result"]["selling_price_sar_m3"]
-    total = env["result"]["total_project_value_sar"]
+    env, tool = _calc_tool("cost_buildup_concrete", {"quantity_m3": 100, **CONCRETE_RATES})
+    selling = env["result"]["selling_price_per_m3"]
+    total = env["result"]["total_project_value"]
     reply = (
         f"Selling price {selling:.2f} SAR/m3, total {total:,.0f} SAR. "
         "The schedule total is SAR 800,000."
@@ -251,9 +252,9 @@ def test_cost_gate_does_not_refuse_a_successful_concrete_cost_calc():
 
 def test_rebar_default_rates_sibling_keeps_the_calculator():
     """Same shape for another deterministic cost calculator."""
-    env, tool = _calc_tool("cost_buildup_rebar", {"quantity_kg": 1000})
-    selling = env["result"]["selling_price_sar_t"]
-    total = env["result"]["total_project_value_sar"]
+    env, tool = _calc_tool("cost_buildup_rebar", {"quantity_kg": 1000, **REBAR_RATES})
+    selling = env["result"]["selling_price_per_t"]
+    total = env["result"]["total_project_value"]
     injected = (
         f"Selling price {selling:.0f} SAR/t and total {total:,.0f} SAR.\n"
         f"The project documents also record {DOC_TOTAL}."
