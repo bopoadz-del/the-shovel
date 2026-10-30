@@ -12,13 +12,15 @@ import uuid
 
 import pytest
 
-from app.core import turn_timing
+import app.core.turn_timing as turn_timing
 from tests._fixture_values import PW_06
 
 STAGES = turn_timing.PRE_FIRST_TOKEN_STAGES
 
 
 class _FakeAgent:
+    name = "pinned-one"
+
     def __init__(self, retrieval_s: float, model_s: float):
         self.retrieval_s, self.model_s = retrieval_s, model_s
 
@@ -33,13 +35,13 @@ class _FakeAgent:
         yield {"type": "end", "complete": True, "sources": []}
 
 
-def _events(monkeypatch, prompt, retrieval_s, model_s):
+def _events(monkeypatch, prompt, retrieval_s, model_s, **extra):
     from fastapi.testclient import TestClient
 
     import app.agents as agents
     import app.agents.runtime as runtime
     from app.main import app
-    from app.routers import chat
+    import app.routers.chat as chat
 
     agent = _FakeAgent(retrieval_s, model_s)
 
@@ -54,7 +56,7 @@ def _events(monkeypatch, prompt, retrieval_s, model_s):
         c.post("/v1/users/register", json={"email": email, "password": PW_06})
         token = c.post("/v1/users/login", json={"email": email, "password": PW_06}).json()["token"]
         r = c.post("/v1/chat/stream", headers={"Authorization": f"Bearer {token}"},
-                   json={"message": prompt, "history": []})
+                   json={"message": prompt, "history": [], **extra})
     out = []
     for line in r.text.splitlines():
         if line.startswith("data:"):
@@ -95,3 +97,207 @@ def test_snapshot_accumulates_each_stage(names):
     assert set(STAGES) <= set(snap)
     assert all(snap[k] >= 0 for k in STAGES)
     assert snap["hat_classification"] == 0.0
+
+
+# --- the stage clock itself (app.core.turn_timing) --------------------------
+import contextvars  # noqa: E402
+import time  # noqa: E402
+
+
+def _fresh(fn, *a):
+    """Run ``fn`` in a context with no turn started."""
+    return contextvars.Context().run(fn, *a)
+
+
+@pytest.mark.parametrize("ago", [0.5, 2.0])
+def test_mark_arrival_counts_from_the_earlier_reading(ago):
+    def go():
+        turn_timing.mark_arrival(at=time.monotonic() - ago)
+        return turn_timing.since_arrival(), turn_timing.snapshot()["since_arrival"]
+    live, snap = _fresh(go)
+    assert live >= ago and snap >= ago
+
+
+@pytest.mark.parametrize("ahead", [5.0, 60.0])
+def test_mark_arrival_never_starts_in_the_future(ahead):
+    def go():
+        turn_timing.mark_arrival(at=time.monotonic() + ahead)
+        return turn_timing.since_arrival()
+    assert 0 <= _fresh(go) < 1
+
+
+@pytest.mark.parametrize("durs,want", [((0.25,), 0.25), ((0.25, 0.5, -1.0), 0.75)])
+def test_record_adds_up_and_ignores_negative(durs, want):
+    def go():
+        turn_timing.mark_arrival()
+        for d in durs:
+            turn_timing.record("retrieval", d)
+        return turn_timing.snapshot()
+    snap = _fresh(go)
+    assert snap["retrieval"] == want
+    assert snap["route"] == 0.0
+
+
+@pytest.mark.parametrize("name", ["retrieval", "custom_stage"])
+def test_no_turn_means_nothing_recorded(name):
+    def go():
+        turn_timing.record(name, 1.0)
+        turn_timing.first_token()
+        turn_timing.mark(name)
+        return turn_timing.snapshot(), turn_timing.since_arrival(), turn_timing.arrived_at()
+    snap, since, at = _fresh(go)
+    assert snap.get(name, 0.0) == 0.0 and snap["since_arrival"] == 0.0
+    assert since is None and at is None
+
+
+@pytest.mark.parametrize("extra", ["queue", "postprocess"])
+def test_snapshot_keeps_other_stages_beside_the_fixed_ones(extra):
+    def go():
+        turn_timing.mark_arrival()
+        turn_timing.record(extra, 0.125)
+        return turn_timing.snapshot()
+    snap = _fresh(go)
+    assert snap[extra] == 0.125
+    assert set(STAGES) <= set(snap)
+
+
+@pytest.mark.parametrize("on,calls", [("1", 1), ("0", 0)])
+def test_log_stage_writes_only_when_timing_log_is_on(monkeypatch, on, calls):
+    seen = []
+    monkeypatch.setenv("AGENT_TIMING_LOG", on)
+    monkeypatch.setattr(turn_timing, "_WRITER", lambda fmt, *a: seen.append(a))
+
+    def go():
+        turn_timing.mark_arrival()
+        turn_timing.log_stage("retrieval", 0.5)
+        return turn_timing.snapshot()["retrieval"]
+    assert _fresh(go) == 0.5
+    assert len(seen) == calls
+    if calls:
+        assert seen[0][0] == "retrieval"
+
+
+@pytest.mark.parametrize("on", ["true", "yes"])
+def test_log_stage_without_a_writer_logs_a_warning(monkeypatch, caplog, on):
+    monkeypatch.setenv("AGENT_TIMING_LOG", on)
+    monkeypatch.setattr(turn_timing, "_WRITER", None)
+
+    def go():
+        turn_timing.mark_arrival()
+        turn_timing.log_stage("route", 0.25)
+    with caplog.at_level("WARNING", logger="app.agents.runtime"):
+        _fresh(go)
+    assert any("stage=route" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("value", [3, "x"])
+def test_recorded_times_sync_calls_and_keeps_their_result(value):
+    @turn_timing.recorded("hat_classification")
+    def f(v):
+        time.sleep(0.01)
+        return v
+
+    def go():
+        turn_timing.mark_arrival()
+        return f(value), turn_timing.snapshot()["hat_classification"]
+    out, t = _fresh(go)
+    assert out == value and t > 0
+    assert f.__name__ == "f"
+
+
+@pytest.mark.parametrize("value", [7, "y"])
+def test_recorded_times_async_calls_and_keeps_their_result(value):
+    @turn_timing.recorded("retrieval")
+    async def g(v):
+        await asyncio.sleep(0.01)
+        return v
+
+    def go():
+        turn_timing.mark_arrival()
+        return asyncio.run(g(value)), turn_timing.snapshot()["retrieval"]
+    out, t = _fresh(go)
+    assert out == value and t > 0
+    assert g.__name__ == "g"
+
+
+@pytest.mark.parametrize("value", [1, "z"])
+def test_timed_times_calls_as_a_stage_and_keeps_their_result(value):
+    @turn_timing.timed("route")
+    def h(v):
+        time.sleep(0.01)
+        return v
+
+    def go():
+        turn_timing.mark_arrival()
+        return h(value), turn_timing.snapshot()["route"]
+    out, t = _fresh(go)
+    assert out == value and t > 0
+    assert h.__name__ == "h"
+
+
+@pytest.mark.parametrize("wait", [0.02, 0.05])
+def test_first_token_is_recorded_once(wait):
+    def go():
+        turn_timing.mark_arrival()
+        time.sleep(wait)
+        turn_timing.first_token()
+        once = turn_timing.snapshot()["llm_first_token"]
+        time.sleep(wait)
+        turn_timing.first_token()
+        return once, turn_timing.snapshot()["llm_first_token"]
+    once, twice = _fresh(go)
+    assert once >= wait
+    assert twice == once
+
+
+# --- app.routers.chat wiring -------------------------------------------------
+@pytest.mark.parametrize("prompt", ["Curing time for C40?", "Delay damages clause?"])
+def test_a_pinned_agent_skips_the_auto_router(monkeypatch, prompt):
+    import app.core.privileges as privileges
+
+    monkeypatch.setattr(privileges, "caller_may_use_agent", lambda agent, role: True)
+    events = _events(monkeypatch, prompt, 0.0, 0.0, agent="pinned-one")
+    route = next(e for e in events if e.get("type") == "route")
+    assert route["reason"] == "user_pinned"
+    assert route["final"] == "pinned-one"
+
+
+@pytest.mark.parametrize("prompt", ["Curing time for C40?", "Delay damages clause?"])
+def test_stream_without_the_chat_block_is_500(monkeypatch, prompt):
+    from fastapi.testclient import TestClient
+
+    import app.routers.chat as chat
+    from app.main import app
+
+    monkeypatch.delitem(chat.BLOCK_REGISTRY, "chat", raising=False)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        email = f"s9a-{uuid.uuid4().hex[:8]}@x.com"
+        c.post("/v1/users/register", json={"email": email, "password": PW_06})
+        token = c.post("/v1/users/login", json={"email": email, "password": PW_06}).json()["token"]
+        r = c.post("/v1/chat/stream", headers={"Authorization": f"Bearer {token}"}, json={"message": prompt})
+    assert r.status_code == 500
+    assert "Chat block not available" in r.text
+
+
+@pytest.mark.parametrize("kind", ["start", "end"])
+def test_stage_timings_ride_only_on_start_and_end(kind):
+    import app.routers.chat as chat
+
+    frames = [f"data: {json.dumps({'type': kind})}\n\n",
+              f"data: {json.dumps({'type': 'token', 'content': 'a'})}\n\n",
+              "data: not-json\n\n", ": keepalive\n\n"]
+
+    async def src():
+        for f in frames:
+            yield f
+
+    async def collect():
+        return [x async for x in chat._with_stage_timings(src())]
+
+    def go():
+        turn_timing.mark_arrival()
+        return asyncio.run(collect())
+    out = _fresh(go)
+    first = json.loads(out[0][6:])
+    assert first["type"] == kind and set(STAGES) <= set(first["timings"])
+    assert out[1:] == frames[1:]

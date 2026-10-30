@@ -1173,11 +1173,11 @@ async def chat_stream_v1(
         _release_turn = await turn_gate.acquire()
     _identity = await _turn_identity(project_id)
     return StreamingResponse(
-        turn_gate.hold_until_done(turn_progress.opened(redact_frames(
-        _with_stage_timings(guarantee_terminal(
+        turn_gate.hold_until_done(turn_progress.opened(_with_stage_timings(redact_frames(
+        guarantee_terminal(
             with_hat_signals(with_answer_exit(event_stream()), prompt),
             request_id=get_request_id(),
-        )), _identity)), _release_turn),
+        ), _identity))), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
