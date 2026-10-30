@@ -404,7 +404,7 @@ SIGNED_FIGURE = FIGURE_SIGN + r"\d[\d,]*(?:\.\d+)?"
 _VALUE_UNIT_RE = re.compile(
     rf"^\s*({SIGNED_NUMBER})\s*((?:1\s*/|[A-Za-z%°µμ‰'\"]).*?)?\s*[.,;]?\s*$")
 _UNIT_VALUE_RE = re.compile(
-    rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*((?:per\s+|/\s*)[A-Za-z][\w ]*?)?\s*$")
+    rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*([A-Za-z/][\w /\-]*?)?\s*$")
 
 
 def _unit_head(text: str) -> str:
@@ -421,6 +421,8 @@ def _unit_head(text: str) -> str:
 
 
 def value_and_unit(value: Any) -> Optional[Tuple[float, str]]:
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate
+
     """``"20 ft"`` -> (20.0, "ft"); ``{"value": 20, "unit": "ft"}`` likewise;
     ``"AED 5,000"`` -> (5000.0, "AED"). None for anything without a written unit."""
     if isinstance(value, dict) and "value" in value and value.get("unit"):
@@ -432,10 +434,12 @@ def value_and_unit(value: Any) -> Optional[Tuple[float, str]]:
     if not isinstance(value, str):
         return None
     m = _UNIT_VALUE_RE.match(value)
-    if m:
-        # "SAR 1,200 per day": the currency, then what it is per.
-        unit = f"{m.group(1)} {m.group(3)}" if m.group(3) else m.group(1)
-        return float(m.group(2).replace(",", "")), unit
+    # "SAR 1,200 per day" / "Per Day" / "perday" / "daily": the currency,
+    # then what it is per, in the one spelling normalise_rate gives. A tail
+    # that is not a rate is not this form.
+    rate = normalise_rate(m.group(3)) if m and m.group(3) else ""
+    if m and (not m.group(3) or rate.startswith("/")):
+        return float(m.group(2).replace(",", "")), m.group(1) + rate
     m = _VALUE_UNIT_RE.match(value)
     if not m or not m.group(2):
         return None

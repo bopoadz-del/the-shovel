@@ -81,7 +81,7 @@ import app.lib.formula_registry as fr
 
 
 @pytest.mark.parametrize("value,expected", [
-    ("SAR 1,200 per day", (1200.0, "SAR per day")),
+    ("SAR 1,200 per day", (1200.0, "SAR/day")),
     ("AED 5,000", (5000.0, "AED")),
     ({"value": 20, "unit": "ft"}, (20.0, "ft")),
     ({"value": 3.5, "unit": "m"}, (3.5, "m")),
@@ -124,8 +124,8 @@ def test_a_multi_word_per_unit_reaches_the_calculator_whole(amount, days, total)
 
 
 @pytest.mark.parametrize("value,unit", [
-    ("SAR 1,200 per working day", "SAR per working day"),
-    ("AED 7,000 per working week", "AED per working week"),
+    ("SAR 1,200 per working day", "SAR/working day"),
+    ("AED 7,000 per working week", "AED/working week"),
 ])
 def test_value_and_unit_keeps_a_multi_word_per_unit(value, unit):
     assert fr.value_and_unit(value)[1] == unit
@@ -153,4 +153,90 @@ def test_convert_figure_refuses_a_unit_it_cannot_read_even_with_currency(written
 ])
 def test_trailing_space_after_a_per_unit_reads_as_without(padded, plain):
     assert fr.value_and_unit(padded) == fr.value_and_unit(plain)
-    assert fr.value_and_unit(padded)[1] == plain.split(" ", 2)[0] + " " + plain.split(" ", 2)[2]
+    assert fr.value_and_unit(padded)[1] == plain.split(" ", 2)[0] + "/" + plain.split(" ", 3)[3]
+
+
+# ---- One rule for how "per" is written (owner order, 30 Oct 16:39 Paris) ----
+# Case, separator (space, hyphen, slash or none) and the one-word rate all
+# normalise through planning.normalise_rate. G6's U3 (capitals) and U11
+# (no space) now PARSE: the owner changed U11 from "refuse" to "normalise".
+from app.agents.base.formulas import construction_formulas_planning as planning
+
+
+@pytest.mark.parametrize("amount", [
+    "SAR 5,000 per Day",            # U3
+    "SAR 5,000 PER DAY",
+    "SAR 5,000 perday",             # U11
+    "SAR 5,000 per-day",
+    "SAR 5,000 per/day",
+    "SAR 5,000 daily",
+    "SAR 5,000 Daily",
+    "5,000 Per Day",
+    "5,000 perday",
+    "5,000 per-day",
+    "5,000 daily",
+    "SAR 5,000 Perday",
+    "SAR 5,000 PERDAY",
+])
+def test_every_spelling_of_per_day_totals_the_same(amount):
+    env = _call({"amount_per_day": amount, "days": 60})
+    assert env["ok"] is True, env
+    assert env["result"]["result"]["total_amount"] == 300000.0, env
+
+
+@pytest.mark.parametrize("amount,total", [
+    ("SAR 7,000 perweek", 60000.0),     # U11
+    ("SAR 7,000 Per Week", 60000.0),
+    ("SAR 7,000 weekly", 60000.0),
+    ("SAR 7,000 Weekly", 60000.0),
+    ("7,000 per-week", 60000.0),
+])
+def test_every_spelling_of_per_week_converts(amount, total):
+    env = _call({"amount_per_day": amount, "days": 60})
+    assert env["ok"] is True, env
+    assert env["result"]["result"]["total_amount"] == total, env
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("SAR 5,000 per Day", (5000.0, "SAR/Day")),                    # U3
+    ("AED 7,000 per Working Week", (7000.0, "AED/Working Week")),  # U3
+    ("SAR 5,000 perday", (5000.0, "SAR/day")),                     # U11
+    ("SAR 1,200 perweek", (1200.0, "SAR/week")),                   # U11
+    ("SAR 1,200 per/day", (1200.0, "SAR/day")),
+    ("SAR 1,200 daily", (1200.0, "SAR/day")),
+])
+def test_value_and_unit_reads_any_spelling_of_per(value, expected):
+    assert fr.value_and_unit(value) == expected
+
+
+@pytest.mark.parametrize("value", ["SAR 5,000 approx", "SAR 5,000 lump sum"])
+def test_a_currency_tail_that_is_not_a_rate_is_not_read(value):
+    assert fr.value_and_unit(value) is None
+
+
+@pytest.mark.parametrize("written,normal", [
+    ("per day", "/day"), ("Per Day", "/Day"), ("perday", "/day"),
+    ("per-day", "/day"), ("per/day", "/day"), ("daily", "/day"),
+    ("hourly", "/hour"), ("monthly", "/month"), ("SAR perWeek", "SAR/Week"),
+    ("kN per m", "kN/m"),
+    ("  per day  ", "/day"), (" SAR daily ", "SAR/day"),
+    ("Hourly", "/hour"), ("SAR Perweek", "SAR/week"),
+])
+def test_normalise_rate_gives_one_spelling(written, normal):
+    assert planning.normalise_rate(written) == normal
+
+
+@pytest.mark.parametrize("word", ["percent", "perch", "Percent", "permit", "superday", "upperweek", "perc", "permph"])
+def test_normalise_rate_leaves_a_word_that_is_not_per_a_unit(word):
+    # "percent", "perch", "permit": the rest is not a unit. "superday":
+    # "per" inside a word is not a "per".
+    assert planning.normalise_rate(word) == word
+
+
+@pytest.mark.parametrize("token,dimension", [
+    ("SAR Per Day", "currency/time"), ("currency perweek", "currency/time"),
+    ("SAR daily", "currency/time"), ("AED per Working Week", "currency/working time"),
+    ("percent", "fraction"),
+])
+def test_parse_unit_reads_any_spelling_of_per(token, dimension):
+    assert planning.unit_dimension(token) == dimension
