@@ -16,40 +16,122 @@ drift handled by Alembic / model edits.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.core.db import SessionLocal, engine
-from app.core.models import Document, Project, RagChunk
+from app.core.models import (
+    EMBEDDING_DIM,
+    Document,
+    Project,
+    make_rag_chunk_class,
+    rag_chunk_class_for,
+)
+from app.core.rag.vector_store import ensure_table
+from app.main import app
+
+
+def _chunk_cls():
+    """This test's OWN chunk table: the per-test namespace conftest assigns.
+
+    These tests used to seed the shared legacy ``chunks`` table, which the
+    app's boot warm-up thread also creates. Two writers raced on one
+    check-then-create and CI failed with ``table chunks already exists``.
+    A table no other test names cannot be raced by another test, and the
+    endpoint counts exactly this table (rag_chunk_table_name(namespace)).
+    """
+    ns = os.environ["RAG_VECTOR_NAMESPACE"]
+    return rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+
+
+def _zero_vec():
+    import numpy as np
+    return np.zeros(_chunk_cls().embedding_identity["dim"], dtype=np.float32)
 
 
 def _ensure_schema():
-    """Make sure both `documents` (via projects init) and `chunks`
-    (RagChunk) tables exist. Mirrors the bootstrap path the live app
-    uses on first request — calls projects.init_db then ensures the
-    RagChunk table via the same checkfirst=True pattern
-    vector_store.py uses."""
+    """Make sure `documents` (via projects init) and this test's own
+    namespaced chunk table exist. The table is created with ensure_table,
+    the app's race-safe create, so losing a concurrent CREATE is a success."""
     from app.core.projects import init_db as init_projects_db
     from app.core.users import SYSTEM_USER_ID, ensure_user_exists
 
     init_projects_db()
     ensure_user_exists(SYSTEM_USER_ID, role="admin")
-    RagChunk.__table__.create(bind=engine, checkfirst=True)
+    ensure_table(_chunk_cls().__table__, bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _own_chunk_table():
+    """Isolate the chunk table: own table, dropped after.
+
+    TestClient's startup warms models on a worker thread that builds this
+    namespace's chunk class while the test builds it too. That race (CI's
+    UnmappedClassError / ``table ... already exists``) is fixed in the app by
+    ``models.RAG_CHUNK_SCHEMA_LOCK`` and ``ensure_table``, so the test no
+    longer forces a blocking warm-up (the old WARM_MODELS_BLOCKING setenv was
+    removed after a differential showed it dead with the lock in place).
+
+    Teardown drops the table this test built and disposes the pool. The
+    mapper stays registered: SQLAlchemy has no per-mapper unregister, and
+    ``Base.registry.dispose()`` would unmap every model in the process.
+    """
+    yield from _own_chunk_table_lifecycle()
+
+
+def _own_chunk_table_lifecycle():
+    """The body of ``_own_chunk_table``, kept plain so a test can drive it."""
+    yield
+    cls = rag_chunk_class_for(os.environ.get("RAG_VECTOR_NAMESPACE", ""))
+    if cls is not None:
+        cls.__table__.drop(bind=engine, checkfirst=True)
+    engine.dispose()
+
+
+@pytest.mark.parametrize("ns", ["tdrop0a1b2c3d4e", "tdrop9f8e7d6c5b"])
+def test_teardown_leaves_no_table_and_a_fresh_pool(ns):
+    """After a test, the table it built is gone and the pool holds nothing.
+
+    Without the teardown, every test would leave its namespaced table in the
+    shared suite DB and its pooled connections open on the shared engine.
+    """
+    from sqlalchemy import inspect
+    from sqlalchemy import text as sql_text
+
+    def _tables():
+        with engine.connect() as conn:
+            return inspect(conn).get_table_names()
+
+    mp = pytest.MonkeyPatch()
+    mp.setenv("RAG_VECTOR_NAMESPACE", ns)
+    try:
+        cls = rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+        ensure_table(cls.__table__, bind=engine)
+        with engine.connect() as conn:
+            conn.execute(sql_text("SELECT 1"))
+        assert engine.pool.checkedin() >= 1
+        assert cls.__tablename__ in _tables()
+
+        life = _own_chunk_table_lifecycle()
+        next(life)
+        # Set-up done, test body not yet run: nothing may be torn down yet.
+        assert cls.__tablename__ in _tables()
+        assert rag_chunk_class_for(ns) is cls
+        with pytest.raises(StopIteration):
+            next(life)
+
+        assert engine.pool.checkedin() == 0
+        assert cls.__tablename__ not in _tables()
+    finally:
+        mp.undo()
 
 
 @pytest.fixture(autouse=True)
 def _stub_admin(monkeypatch):
     """Force require_api_key to return an admin identity so we can test
     the endpoint's business logic without exercising JWT/users flow."""
-    # The endpoint counts the RAG store the retriever actually reads —
-    # rag_chunk_table_name(RAG_VECTOR_NAMESPACE), which defaults to the
-    # namespaced `chunks_v2`. This fixture seeds the legacy `chunks` table
-    # (RagChunk), so pin the namespace to "" (→ `chunks`) to keep the seed
-    # and the count on the same table. Production runs namespace="v2" and the
-    # same code path counts `chunks_v2`; the drive_archive count post-deploy
-    # is the real-world proof.
-    monkeypatch.setenv("RAG_VECTOR_NAMESPACE", "")
     from app.routers import admin as admin_mod
     from app.dependencies import require_api_key as real_require_api_key
 
@@ -88,6 +170,7 @@ def _seed_corpus():
 
     _ensure_schema()
 
+    RagChunk = _chunk_cls()
     with SessionLocal() as session:
         # Wipe pre-existing test rows for these ids — keeps the test idempotent
         # against repeated runs in the same SQLite DB.
@@ -149,8 +232,8 @@ def _seed_corpus():
 
         # chunks rows for each project. 5 chunks per document (chunk_index
         # 0..4) keeps uq_chunks_project_doc_index happy.
-        import numpy as np
-        zero_vec = np.zeros(256, dtype=np.float32)
+        zero_vec = _zero_vec()
+        RagChunk = _chunk_cls()
         for pid, n_chunks, doc_ids in (
             ("big_corpus", 200, big_doc_ids),
             ("small_project", 10, small_doc_ids),
@@ -259,8 +342,8 @@ def test_master_corpus_alias_inherits_source_counts(client, _stub_admin):
     _ensure_schema()
 
     import uuid
-    import numpy as np
 
+    RagChunk = _chunk_cls()
     with SessionLocal() as session:
         # Clean slate for the ids this test owns.
         for pid in ("projects_folder", "master_corpus"):
@@ -290,7 +373,7 @@ def test_master_corpus_alias_inherits_source_counts(client, _stub_admin):
                 uploaded_at="2026-06-21T00:00:00Z",
             ))
         session.flush()
-        zero_vec = np.zeros(256, dtype=np.float32)
+        zero_vec = _zero_vec()
         for i in range(21):
             session.add(RagChunk(
                 chunk_id=f"projects_folder-{i}-{uuid.uuid4().hex[:6]}",
