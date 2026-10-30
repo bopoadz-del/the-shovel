@@ -111,3 +111,13 @@ async def test_cache_hit_is_labelled_improvised(variables, want):
     assert out["provenance"] == "improvised"
     assert out["certified"] is False
     assert block.llm_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{"task": "   "}, "  \n "])
+async def test_an_empty_task_is_refused_before_any_model_call(payload):
+    block = _Mock(["result = 1"])
+    out = await block.process(payload)
+    assert out["status"] == "error"
+    assert "No task description provided" in out["error"]
+    assert block.llm_calls == 0
