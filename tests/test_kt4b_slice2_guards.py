@@ -217,3 +217,38 @@ def test_outputs_carry_the_result_currency_and_drop_primary_mirrors(cur):
     assert units["selling_price_per_t"] == f"{cur}/t"
     assert "quantity_kg" not in outputs
     assert not {"value", "unit", "label"} & set(outputs)
+
+
+# --- G6 BOX survivors (a2900e2) ---------------------------------------------
+# quantities :230 the total is the ROUNDED selling price x tonnes, not the raw build-up.
+@pytest.mark.parametrize("kg,price,want", [(2500, 1000.4, 2500), (4000, 2000.3, 8000)])
+def test_rebar_total_uses_the_rounded_selling_price(kg, price, want):
+    out = cost_buildup_rebar(quantity_kg=kg, material_price_per_t=price, labour_rate_per_hr=0,
+                             crane_rate_per_hr=0, waste_pct=0, indirect_pct=0, markup_pct=0)
+    assert out["total_project_value"] == want
+
+
+# quantities :359 a missing IT rate is asked for.
+@pytest.mark.parametrize("blank", [None, ""])
+def test_mobilisation_missing_it_rate_is_asked_for(blank):
+    out = mobilization_cost_estimate(num_personnel=5, duration_months=2,
+                                     **dict(ALL, it_rate_per_person_month=blank))
+    assert out["needs_input"] == ["it_rate_per_person_month"]
+
+
+# quantities :394 the transport line carries the remote-area factor.
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_mobilisation_transport_line_scales_with_remote_area_factor(factor):
+    out = mobilization_cost_estimate(num_personnel=10, duration_months=2,
+                                     remote_area_factor=factor, **ALL)
+    assert out["breakdown"]["transport"] == round(50 * 10 * 2 * factor, 0)
+
+
+# app/lib :1477 the rebar price per tonne is read from the ask.
+@pytest.mark.parametrize("text,want", [("rebar 12 t at 2800 SAR/t", 2800.0), ("5 tonnes, 3150 /tonne", 3150.0)])
+def test_rebar_price_per_tonne_is_read_from_the_ask(text, want):
+    from app.lib.construction_formulas import _extract_rebar_cost_from_ask
+
+    out = {}
+    _extract_rebar_cost_from_ask(text, out)
+    assert out["material_price_per_t"] == want

@@ -13,7 +13,8 @@ import pytest
 
 from app.lib import construction_formulas as cf
 
-HIRE = {"crane_capacity_tons": 50, "duration_months": 6}
+HIRE = {"crane_capacity_tons": 50, "duration_months": 6, "dry_hire_rate_per_month": 18000,
+        "operator_rate_per_month": 3500, "riggers_rate_per_month": 5600}
 
 
 def _run(ask, name, params):
@@ -49,7 +50,7 @@ def test_a_switch_keeps_zero_as_off():
     out = _run("2 cranes, 50 t, 6 months, operator only", "crane_cost_estimate",
                {"num_cranes": 2, "include_riggers": 0, **HIRE})
     assert out["status"] == "success", out
-    assert out["result"]["riggers_sar_month"] == 0
+    assert out["result"]["riggers_per_month"] == 0
 
 
 def test_a_call_with_no_user_words_is_unchanged():

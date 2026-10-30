@@ -15,33 +15,36 @@ from typing import Any, Dict
         'num_cranes': Param('count', 1, 100, label='number of cranes'),
         'crane_capacity_tons': Param('t', 0, 10000, label='crane capacity'),
         'duration_months': Param('month', 1, 240, label='duration'),
+        'dry_hire_rate_per_month': Param('currency/month', 0, 1e9, label='dry hire rate per crane per month'),
         'include_operator': Param('-', label='include operator'),
         'include_riggers': Param('-', label='include riggers'),
+        'operator_rate_per_month': Param('currency/month', 0, 1e9, label='operator cost per crane per month'),
+        'riggers_rate_per_month': Param('currency/month', 0, 1e9, label='rigging crew cost per crane per month'),
         'remote_area_factor': Param('ratio', 1, 3, label='remote area factor'),
+        'currency': Param('-', label='currency of the rates'),
     },
-    outputs={'num_cranes': '-', 'crane_capacity_tons': '-', 'duration_months': '-', 'dry_hire_sar_month': '-', 'operator_sar_month': '-', 'riggers_sar_month': '-', 'remote_area_factor': '-', 'per_crane_monthly_sar': 'currency', 'total_project_cost_sar': 'currency', 'mobilization_sar': 'currency', 'demobilization_sar': 'currency', 'grand_total_sar': 'currency'},
+    outputs={'num_cranes': '-', 'crane_capacity_tons': '-', 'duration_months': '-', 'dry_hire_per_month': 'currency/month', 'operator_per_month': 'currency/month', 'riggers_per_month': 'currency/month', 'remote_area_factor': '-', 'per_crane_monthly': 'currency/month', 'total_project_cost': 'currency', 'mobilization': 'currency', 'demobilization': 'currency', 'grand_total': 'currency', 'currency': '-'},
 )
 def crane_cost_estimate(
     num_cranes: int,
     crane_capacity_tons: float,
     duration_months: int,
+    dry_hire_rate_per_month: float,
     include_operator: bool = True,
     include_riggers: bool = True,
+    operator_rate_per_month: Any = None,
+    riggers_rate_per_month: Any = None,
     remote_area_factor: float = 1.0,
-) -> Dict[str, float]:
+    currency: str = "",
+) -> Dict[str, Any]:
     """
-    Estimate total crane project cost including operator and riggers.
+    Crane hire cost over a period. Every rate is the PROJECT's rate, supplied
+    by the caller (priced BOQ / quotation / a cited, dated rate item) -- no
+    rate or currency is built in. Output keys are currency-neutral; the
+    ``currency`` input is echoed back.
 
-    Args:
-        num_cranes: Number of cranes
-        crane_capacity_tons: Capacity per crane
-        duration_months: Project duration in months
-        include_operator: Add operator cost (default True)
-        include_riggers: Add rigger cost (default True)
-        remote_area_factor: Multiplier for remote sites (default 1.0, oil/gas = 1.3-1.5)
-
-    Returns:
-        Dict with breakdown
+    Mobilisation is 50% of one month's dry hire per crane, demobilisation
+    75% of mobilisation (method ratios, not prices).
     """
     if num_cranes < 0 or duration_months < 0:
         raise ValueError("num_cranes and duration_months must be >= 0")
@@ -49,33 +52,38 @@ def crane_cost_estimate(
         raise ValueError("crane_capacity_tons must be > 0")
     if remote_area_factor < 0:
         raise ValueError("remote_area_factor must be >= 0")
-    rate_table = {25: 8000, 30: 10000, 50: 18000, 100: 30000, 200: 70000, 300: 120000}
-    closest = min(rate_table.keys(), key=lambda c: abs(c - crane_capacity_tons))
-    dry_hire_monthly = rate_table.get(closest, 30000)
-
-    # Operator: ~3,500 SAR/month per crane
-    operator_monthly = 3500 if include_operator else 0
-    # Riggers (2 per crane): ~2,800 SAR/month each
-    riggers_monthly = 5600 if include_riggers else 0
+    if dry_hire_rate_per_month < 0:
+        raise ValueError("dry_hire_rate_per_month must be >= 0")
+    missing = []
+    if include_operator and operator_rate_per_month in (None, ""):
+        missing.append("operator_rate_per_month")
+    if include_riggers and riggers_rate_per_month in (None, ""):
+        missing.append("riggers_rate_per_month")
+    if missing:
+        return {"error": "crew included but its rate was not given", "needs_input": missing}
+    dry_hire_monthly = float(dry_hire_rate_per_month)
+    operator_monthly = float(operator_rate_per_month) if include_operator else 0.0
+    riggers_monthly = float(riggers_rate_per_month) if include_riggers else 0.0
 
     per_crane_monthly = (dry_hire_monthly + operator_monthly + riggers_monthly) * remote_area_factor
     total_project_cost = per_crane_monthly * num_cranes * duration_months
-    mobilization = num_cranes * dry_hire_monthly * 0.5  # ~50% of monthly rate per crane
+    mobilization = num_cranes * dry_hire_monthly * 0.5
     demobilization = mobilization * 0.75
 
     return {
         "num_cranes": num_cranes,
         "crane_capacity_tons": crane_capacity_tons,
         "duration_months": duration_months,
-        "dry_hire_sar_month": dry_hire_monthly,
-        "operator_sar_month": operator_monthly,
-        "riggers_sar_month": riggers_monthly,
+        "dry_hire_per_month": dry_hire_monthly,
+        "operator_per_month": operator_monthly,
+        "riggers_per_month": riggers_monthly,
         "remote_area_factor": remote_area_factor,
-        "per_crane_monthly_sar": round(per_crane_monthly, 0),
-        "total_project_cost_sar": round(total_project_cost, 0),
-        "mobilization_sar": round(mobilization, 0),
-        "demobilization_sar": round(demobilization, 0),
-        "grand_total_sar": round(total_project_cost + mobilization + demobilization, 0),
+        "per_crane_monthly": round(per_crane_monthly, 0),
+        "total_project_cost": round(total_project_cost, 0),
+        "mobilization": round(mobilization, 0),
+        "demobilization": round(demobilization, 0),
+        "grand_total": round(total_project_cost + mobilization + demobilization, 0),
+        "currency": currency,
     }
 
 @formula(
