@@ -125,6 +125,8 @@ def upload_limits():
         "max_document_bytes": _limits.max_document_bytes(),
         "max_upload_bytes": _limits.max_upload_bytes(),
         "allowed_extensions": sorted(_limits.ALLOWED_UPLOAD_EXTENSIONS),
+        "project_document_extensions": sorted(_limits.PROJECT_DOCUMENT_EXTENSIONS),
+        "unsupported_type_status": _limits.UNSUPPORTED_TYPE_STATUS,
     }
 
 
