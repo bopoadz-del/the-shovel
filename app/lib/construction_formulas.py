@@ -1893,6 +1893,12 @@ def _normalize_ask(raw: str) -> str:
     return _CURRENCY_BEFORE_RE.sub("", text)
 
 
+def _figure_before_label(pat: str, raw: str, overlaps: Any) -> Optional[Any]:
+    """The first open figure written directly before ``pat`` (its unit)."""
+    rx = re.compile(rf"(?<![\w.,])({_TEXT_NUM_RE})\s*(){pat}(?![A-Za-z0-9/])", re.IGNORECASE)
+    return _first_open(rx, raw, overlaps)
+
+
 def extract_calculation_params_from_text(
     fn: Any,
     text: str,
@@ -1931,7 +1937,6 @@ def extract_calculation_params_from_text(
             continue
         pat = r"[\s_]+".join(re.escape(part) for part in label.split("_") if part)
         compact = label.replace("_", "")
-        match = None
         if len(compact) == 1:
             rx = re.compile(
                 rf"(?<![A-Za-z0-9]){pat}(?:\s*[=:]\s*|\s+(?:is|of|equals|=)\s+)({_TEXT_NUM_RE})"
@@ -1950,7 +1955,10 @@ def extract_calculation_params_from_text(
                 rf"(?:\s*({_TEXT_UNIT_RE}))?",
                 re.IGNORECASE,
             )
-            match = _first_open(rx, raw, _overlaps)
+            # A label written straight after a figure is that figure's unit
+            # ("60 days at 5,000 per day"): it labels the figure before it,
+            # never the next one. Bare symbols (one letter) are not units here.
+            match = _figure_before_label(pat, raw, _overlaps) or _first_open(rx, raw, _overlaps)
             if match is None and len(compact) <= 4:
                 glued = re.compile(
                     rf"(?<![A-Za-z0-9]){pat}({_TEXT_NUM_RE})(?![A-Za-z0-9])"
