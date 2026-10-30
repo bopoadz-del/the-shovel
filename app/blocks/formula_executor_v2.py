@@ -101,6 +101,34 @@ def _run_sandboxed_with_timeout(
     )
 
 
+
+class KernelCheckUnavailable(RuntimeError):
+    """The kernel registry could not be consulted, so codegen is refused."""
+
+
+def kernel_covering(task: str) -> Optional[str]:
+    """Registry kernel name the ask names (name or display phrase), else None.
+
+    Fails CLOSED. An import failure raises ``KernelCheckUnavailable``, and so
+    does a name the text resolves to that the registry does not hold. In
+    both cases nobody can prove that no kernel covers the ask, so the caller
+    refuses codegen instead of improvising. Only a clean "no kernel named"
+    returns None, and that falls through to codegen labelled ``improvised``.
+    """
+    try:
+        from app.lib.construction_formulas import calculator_name_from_text
+        from app.lib import formula_registry
+        name = calculator_name_from_text(task)
+        spec = formula_registry.get(name) if name else None
+    except ImportError as exc:
+        raise KernelCheckUnavailable(f"kernel registry unavailable: {exc}") from exc
+    if not name:
+        return None
+    if spec is None:
+        raise KernelCheckUnavailable(f"calculator {name} is not in the kernel registry")
+    return name
+
+
 class FormulaExecutorV2Block(UniversalBlock):
     name = "formula_executor_v2"
     version = "2.0.0"
@@ -133,7 +161,7 @@ class FormulaExecutorV2Block(UniversalBlock):
             ],
         },
         "quick_actions": [
-            {"icon": "", "label": "Calculate", "prompt": "Calculate concrete volume for a 10x8m slab, 200mm thick"},
+            {"icon": "", "label": "Calculate", "prompt": "Area of a 10 x 8 m room minus a 2 x 1 m void"},
         ],
     }
 
@@ -171,6 +199,28 @@ class FormulaExecutorV2Block(UniversalBlock):
         if not task.strip():
             return _error("No task description provided")
 
+        # Kernel first: when a registered kernel formula covers the ask, the
+        # model must not write its own -- refuse codegen and name the kernel.
+        try:
+            kernel = kernel_covering(task)
+        except KernelCheckUnavailable as exc:
+            return {
+                "status": "error",
+                "error": f"codegen refused: {exc}",
+                "provenance": "refused",
+                "certified": False,
+                "task": task,
+            }
+        if kernel:
+            return {
+                "status": "error",
+                "error": f"kernel {kernel} covers this; use construction_calc",
+                "kernel": kernel,
+                "use_action": "construction_calc",
+                "provenance": "kernel",
+                "task": task,
+            }
+
         timeout_seconds = int(self.config.get("timeout_seconds", 10))
         session = data.get("session") or params.get("session")
         key = _cache_key(task, variables)
@@ -184,6 +234,8 @@ class FormulaExecutorV2Block(UniversalBlock):
             if sandbox.success:
                 return {
                     "status": "success",
+                    "provenance": "improvised",
+                    "certified": False,
                     "generated_code": cached_code,
                     "result": sandbox.result,
                     "stdout": sandbox.stdout,
@@ -242,6 +294,8 @@ class FormulaExecutorV2Block(UniversalBlock):
                     session.code_cache[key] = code
                 return {
                     "status": "success",
+                    "provenance": "improvised",
+                    "certified": False,
                     "generated_code": code,
                     "result": sandbox.result,
                     "stdout": sandbox.stdout,

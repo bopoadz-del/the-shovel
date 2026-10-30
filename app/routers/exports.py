@@ -574,6 +574,27 @@ def _render_pdf(activities: List[Dict[str, Any]], project_name: str,
     return path
 
 
+def _schedule_link_fields_missing(activities: List[Any]) -> List[str]:
+    """When any activity names predecessors, every activity must carry the
+    ``code`` they link by (``id`` is accepted as the same field) and a
+    ``duration_days``. Returns one "activity N: field, field" per gap; empty
+    when nothing links or nothing is missing."""
+    # ScheduleExportRequest already rejects a non-object activity (422).
+    rows = list(activities)
+    if not any(a.get("predecessors") for a in rows):
+        return []
+    gaps = []
+    for i, a in enumerate(rows, start=1):
+        fields = []
+        if a.get("code") in (None, "") and a.get("id") in (None, ""):
+            fields.append("code")
+        if a.get("duration_days") is None and a.get("duration") is None:
+            fields.append("duration_days")
+        if fields:
+            gaps.append(f"activity {i} ({a.get('name') or 'unnamed'}): missing {', '.join(fields)}")
+    return gaps
+
+
 @router.post("/v1/projects/{project_id}/export/schedule")
 async def export_schedule(
     project_id: str,
@@ -590,6 +611,9 @@ async def export_schedule(
     proj = _check_owner(project_id, auth["user_id"])
     if not req.activities:
         raise HTTPException(400, "activities is required and must be non-empty")
+    missing = _schedule_link_fields_missing(req.activities)
+    if missing:
+        raise HTTPException(400, "Activities linked by predecessors need " + "; ".join(missing))
     name = req.project_name or proj.get("name") or "Schedule"
 
     fmt = (format or "xlsx").lower()
