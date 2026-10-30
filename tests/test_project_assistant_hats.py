@@ -6,6 +6,8 @@ the floor scorer reads ``hat_signals`` on the chat stream (event + end).
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 from typing import Any, AsyncIterator, Dict, List
 from unittest.mock import AsyncMock, patch
 from tests._fixture_values import STUB_TOKEN_01
@@ -66,11 +68,15 @@ def _stream_with_mock(monkeypatch, message: str):
         return _collect(agent.chat_stream(user_message=message)), mock
 
 
-def test_hat_scores_sse_absent_when_flag_off(monkeypatch):
-    monkeypatch.delenv("FORK_HATS_ENABLED", raising=False)
-    assert hats_activation_enabled() is False
-    assert hat_scores_sse(PLANNING_ASK) is None
-    assert hat_turn_system_note(PLANNING_ASK) is None
+@pytest.mark.parametrize("value", [None, "0"])
+def test_hat_router_on_without_the_removed_flag(monkeypatch, value):
+    """K-T0a: FORK_HATS_ENABLED is removed; unset or 0 still routes."""
+    if value is None:
+        monkeypatch.delenv("FORK_HATS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("FORK_HATS_ENABLED", value)
+    assert hats_activation_enabled() is True
+    assert hat_scores_sse(PLANNING_ASK) is not None
 
 
 def test_hat_scores_sse_when_flag_on(monkeypatch):
@@ -171,28 +177,6 @@ def test_contracts_question_produces_nonempty_hat_signals(monkeypatch):
     assert any(
         row.get("id") == "fork.hat.contracts" and float(row.get("score") or 0) > 0
         for row in (end.get("hat_signals") or [])
-    )
-
-
-def test_project_assistant_stream_no_hat_signals_when_flag_off(monkeypatch):
-    monkeypatch.delenv("FORK_HATS_ENABLED", raising=False)
-    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_01)
-    agent = _pa()
-    mock = AsyncMock(return_value={
-        "status": "success",
-        "choice": {"message": {"content": "ok", "tool_calls": []}},
-    })
-    with patch.object(agent, "_call_llm", mock):
-        events = _collect(agent.chat_stream(user_message=PLANNING_ASK))
-    assert all(e["type"] not in ("hat_signals", "hat_scores", "hats") for e in events)
-    assert not _hat_activation_recorded(events)
-    end = next(e for e in events if e["type"] == "end")
-    assert "hat_signals" not in end
-    sent = mock.await_args.args[0]
-    assert not any(
-        "Active discipline hat this turn" in (m.get("content") or "")
-        for m in sent
     )
 
 

@@ -211,8 +211,8 @@ seven) plus the agent picker. **Update 2026-08-15 (make-it-work audit):
 gap is zero (every action dispatches via the alias layer), the enabled-mode
 test suite is green (`tests/test_hats_are_dormant.py` hard-asserts the gap
 with the flag on), so there was nothing left to gate. The activation
-adapter is live; the off-by-default pin in code stays (deployments opt in
-via env).
+adapter is live. **K-T0a (2026-10-29): `FORK_HATS_ENABLED` is removed; the
+hat router is always on in code -- no deployment opts in or out.**
 
 What the hats DO have is real: the formula bindings all resolve
 (`validate_manifest_bindings`, CI-guarded), and the manifests are schema-valid.

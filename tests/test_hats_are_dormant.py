@@ -76,17 +76,11 @@ def test_the_manifests_are_actually_being_read():
     assert len(total) >= 25, f"only {len(total)} plain action names parsed: {sorted(total)}"
 
 
-def test_the_hats_are_off_by_default():
-    """The premise everything else rests on. If the flag ever defaults to on,
-    the conditional invariant below silently becomes unconditional -- and it
-    would be enforced by a test nobody re-read."""
+def test_the_hats_are_always_on():
+    """K-T0a: the router is always on, so the fence below is always enforced."""
     from app.agents import activation
 
-    assert activation.HATS_ENABLED is False, (
-        "FORK_HATS_ENABLED is set in this environment. That is not a test "
-        "failure to work around: see test_enabling_the_hats_requires_every_"
-        "declared_action_to_exist below, and docs/KNOWN_INCOMPLETE.md."
-    )
+    assert activation.hats_enabled() is True
 
 
 def test_enabling_the_hats_requires_every_declared_action_to_exist():
@@ -106,18 +100,8 @@ def test_enabling_the_hats_requires_every_declared_action_to_exist():
         if gap:
             missing[manifest] = gap
 
-    flag_on = (os.environ.get("FORK_HATS_ENABLED", "").strip()
-               in ("1", "true", "True", "TRUE", "yes"))
-    if not flag_on:
-        pytest.skip(
-            "hats are dormant (FORK_HATS_ENABLED unset). "
-            f"{sum(len(v) for v in missing.values())} declared actions are "
-            "currently undispatchable -- see docs/KNOWN_INCOMPLETE.md. This test "
-            "becomes a hard failure the moment the flag is set."
-        )
-
     assert not missing, (
-        "FORK_HATS_ENABLED is on, but these hats declare actions that no "
+        "The hat router is always on, but these hats declare actions that no "
         "block, container route or synthetic tool can dispatch. Agents would "
         "be given permission to call things that do not exist:\n"
         + "\n".join(f"  {m}: {', '.join(a)}" for m, a in sorted(missing.items()))
