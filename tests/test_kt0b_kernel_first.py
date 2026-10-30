@@ -121,3 +121,104 @@ async def test_an_empty_task_is_refused_before_any_model_call(payload):
     assert out["status"] == "error"
     assert "No task description provided" in out["error"]
     assert block.llm_calls == 0
+
+
+# ── the construction container's formula_execute action ──────────────────
+
+def _container(block):
+    from app.containers.construction import ConstructionContainer
+
+    c = ConstructionContainer()
+    c._resolve_block = lambda name: block if name == "formula_executor_v2" else None
+    return c
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,kernel", [
+    ("Calculate concrete volume for a 10x8m slab, 200mm thick", "concrete_volume"),
+    ("excavation volume 20 x 10 x 3 m", "excavation_volume"),
+])
+async def test_container_runs_the_kernel_not_codegen(task, kernel):
+    block = _Mock(["result = 1"])
+    out = await _container(block).formula_execute({"task": task}, {})
+    assert block.llm_calls == 0, "codegen ran for an ask a kernel covers"
+    assert out["kernel"] == kernel
+    assert out["routed_from"] == "formula_execute"
+    assert out.get("calculation") == kernel
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,variables,code,want", [
+    ("rectangle area", {"length_m": 10, "width_m": 8}, "result = length_m * width_m", 80),
+    ("multiply length by width", {"length_m": 3, "width_m": 4}, "result = length_m * width_m", 12),
+])
+async def test_container_codegen_is_labelled_improvised(task, variables, code, want):
+    block = _Mock([code])
+    out = await _container(block).formula_execute({"task": task, "variables": variables}, {})
+    assert block.llm_calls == 1
+    assert out["result"] == want
+    assert out["provenance"] == "improvised"
+    assert out["certified"] is False
+
+
+# N4-N6: every place the container reads the ask from.
+CONCRETE = "Calculate concrete volume for a 10x8m slab, 200mm thick"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_data,params", [
+    ({"formula_description": CONCRETE}, {}),          # N4
+    ({"text": CONCRETE}, {}),                         # N4
+    ({"input": CONCRETE}, {}),                        # N4
+    ({}, {"task": CONCRETE}),                         # N5
+    ({}, {"text": CONCRETE}),                         # N5
+    (CONCRETE, {}),                                   # N6
+])
+async def test_container_reads_the_ask_from_every_field(input_data, params):
+    block = _Mock(["result = 1"])
+    out = await _container(block).formula_execute(input_data, params)
+    assert block.llm_calls == 0
+    assert out["kernel"] == "concrete_volume"
+    assert out["routed_from"] == "formula_execute"  # the container ran it, not the block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [True, False])
+async def test_container_refuses_when_the_kernel_check_cannot_run(monkeypatch, broken):
+    import sys
+    if broken:
+        monkeypatch.setitem(sys.modules, "app.lib.construction_formulas", None)
+    block = _Mock(["result = length_m * width_m"])
+    out = await _container(block).formula_execute(
+        {"task": "rectangle area", "variables": {"length_m": 2, "width_m": 3}}, {},
+    )
+    if broken:
+        assert out["provenance"] == "refused" and out["status"] == "error"
+        assert out["routed_from"] == "formula_execute"
+        assert out["certified"] is False
+        assert block.llm_calls == 0
+    else:
+        assert out["provenance"] == "improvised" and out["result"] == 6
+
+
+# :2213 the ask reaches construction_calc as params["text"]; :2199 params=None is an empty dict.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,kernel", [
+    ("Calculate concrete volume for a 10x8m slab, 200mm thick", "concrete_volume"),
+    ("excavation volume 20 x 10 x 3 m", "excavation_volume"),
+])
+async def test_container_hands_the_ask_to_the_kernel_as_text(task, kernel):
+    import app.containers.construction as construction
+
+    seen = {}
+    c = _container(_Mock(["result = 1"]))
+
+    async def _calc(data, params):
+        seen.update(params)
+        return {"status": "success"}
+
+    c.construction_calc = _calc
+    out = await construction.ConstructionContainer.formula_execute(c, {"task": task}, None)
+    assert seen["text"] == task
+    assert seen["calculation"] == kernel
+    assert out["routed_from"] == "formula_execute"
