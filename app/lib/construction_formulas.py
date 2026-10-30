@@ -2120,6 +2120,42 @@ def extract_calculation_params_from_text(
         found[bare_dests[0]] = bare_nums[0]
     return found
 
+def _ask_figure_counts(values: Any) -> Dict[float, int]:
+    counts: Dict[float, int] = {}
+    for val in values:
+        num = _operand_value(val)
+        if isinstance(num, (int, float)):
+            key = round(float(num), 9)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _unspent_ask_figures(params: Dict[str, Any], extracted: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """The ask-text figures that may fill ``params``' empty inputs.
+
+    One written figure fills one input. A figure the call already placed on
+    an input is spent: the extractor reading it again by another label
+    ("a daily rate of 5,000" -> rate_percent next to the call's
+    amount_per_day 5000) would bind one figure twice. A figure written as
+    often as it is placed is spent; a converted figure (not written as such)
+    and a text value are never counted.
+    """
+    written = _ask_figure_counts(re.findall(_TEXT_NUM_RE, str(text or "")))
+    placed = _ask_figure_counts(v for v in params.values() if not isinstance(v, bool))
+    out: Dict[str, Any] = {}
+    for key, val in extracted.items():
+        if params.get(key) not in (None, ""):
+            continue
+        num = _operand_value(val)
+        if isinstance(num, (int, float)):
+            fig = round(float(num), 9)
+            if placed.get(fig, 0) >= written.get(fig, 0) > 0:
+                continue
+            placed[fig] = placed.get(fig, 0) + 1
+        out[key] = val
+    return out
+
+
 def _missing_required(fn: Any, bound: Dict[str, Any], name: Optional[str] = None) -> List[str]:
     missing: List[str] = []
     groups = _REQUIRED_GROUPS.get(str(name or "").strip().lower())
@@ -2914,9 +2950,8 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         ) if x not in (None, "")
     )
     if text_blob:
-        for key, val in extract_calculation_params_from_text(fn, text_blob).items():
-            if params.get(key) in (None, ""):
-                params[key] = val
+        params.update(_unspent_ask_figures(
+            params, extract_calculation_params_from_text(fn, text_blob), text_blob))
     # Re-run the symbol alias AFTER both text extractors. The ask sentence rides
     # along in ``text`` / ``query`` and both extractors above pull "E = 200",
     # "I = 2.0e-4" (and a shortened ``c``) back out of it as bare keys — after
