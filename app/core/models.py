@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import threading
 import uuid
 from typing import Optional, Type
 
@@ -90,6 +91,17 @@ class EmbeddingVector(make_embedding_vector(EMBEDDING_DIM)):
 # cache, and blows up. Passing in isolation and failing in a full run is the
 # signature of exactly this.
 _RAG_CHUNK_CLASS_CACHE: dict[str, type] = {}
+
+#: Serialises building and mapping a namespaced chunk class.
+#: The background ``_warm_models`` thread and the first request both reach
+#: ``make_rag_chunk_class`` for the same namespace at boot; unserialised, one
+#: walked ``Base.registry.mappers`` while the other was half-way through
+#: mapping (UnmappedClassError), or both missed the cache and the second
+#: ``type(...)`` hit "Table ... is already defined". Its only caller of
+#: ``_mapped_rag_chunk_class_for_table`` holds it, and nothing under it
+#: re-enters, so a plain Lock. The CREATE TABLE race is handled by
+#: ``vector_store.ensure_table`` (tolerates a concurrent creator, any process).
+RAG_CHUNK_SCHEMA_LOCK = threading.Lock()
 
 
 #: RAG namespaces are interpolated into raw SQL table identifiers, which cannot
@@ -177,82 +189,83 @@ def make_rag_chunk_class(
     if namespace == "":
         return RagChunk
 
-    cached = rag_chunk_class_for(namespace)
-    if cached is not None:
-        cached_dim = cached.embedding_identity["dim"]
-        if cached_dim != dim:
-            # One namespace = one table = one embedding width. Returning the
-            # cached class would hand back a vector(N) column for a caller that
-            # asked for vector(M) -- a silent width mismatch, the false-agreement
-            # class of bug this file keeps stamping out. Refuse instead.
-            raise ValueError(
-                f"namespace {namespace!r} is already mapped at dim "
-                f"{cached_dim}; cannot remap it to dim {dim}. A namespace has "
-                f"one table ({rag_chunk_table_name(namespace)}) and therefore "
-                f"one embedding width. Use a different namespace, or change "
-                f"RAG_VECTOR_NAMESPACE together with the embedder."
-            )
-        return cached
+    with RAG_CHUNK_SCHEMA_LOCK:
+        cached = rag_chunk_class_for(namespace)
+        if cached is not None:
+            cached_dim = cached.embedding_identity["dim"]
+            if cached_dim != dim:
+                # One namespace = one table = one embedding width. Returning the
+                # cached class would hand back a vector(N) column for a caller that
+                # asked for vector(M) -- a silent width mismatch, the false-agreement
+                # class of bug this file keeps stamping out. Refuse instead.
+                raise ValueError(
+                    f"namespace {namespace!r} is already mapped at dim "
+                    f"{cached_dim}; cannot remap it to dim {dim}. A namespace has "
+                    f"one table ({rag_chunk_table_name(namespace)}) and therefore "
+                    f"one embedding width. Use a different namespace, or change "
+                    f"RAG_VECTOR_NAMESPACE together with the embedder."
+                )
+            return cached
 
-    table_name = rag_chunk_table_name(namespace)
-    # Idempotent SINGLE registration (rework-2 #1): if this table is already on
-    # Base.metadata — because the module-level cache was cleared/reset while the
-    # shared MetaData persisted, or two shards/imports reached here in either
-    # order — reuse the mapped class already bound to it. A second
-    # ``type(class_name, (Base,), {"__tablename__": table_name})`` would raise
-    # "Table '<table>' is already defined for this MetaData instance". One
-    # table has one mapper, registered once, order-independent, no skip/retry.
-    existing = _mapped_rag_chunk_class_for_table(table_name)
-    if existing is not None:
-        _RAG_CHUNK_CLASS_CACHE[namespace] = existing
-        return existing
-    vector_type = make_embedding_vector(dim)
-    class_name = f"RagChunk_{namespace or 'legacy'}_{dim}"
+        table_name = rag_chunk_table_name(namespace)
+        # Idempotent SINGLE registration (rework-2 #1): if this table is already on
+        # Base.metadata — because the module-level cache was cleared/reset while the
+        # shared MetaData persisted, or two shards/imports reached here in either
+        # order — reuse the mapped class already bound to it. A second
+        # ``type(class_name, (Base,), {"__tablename__": table_name})`` would raise
+        # "Table '<table>' is already defined for this MetaData instance". One
+        # table has one mapper, registered once, order-independent, no skip/retry.
+        existing = _mapped_rag_chunk_class_for_table(table_name)
+        if existing is not None:
+            _RAG_CHUNK_CLASS_CACHE[namespace] = existing
+            return existing
+        vector_type = make_embedding_vector(dim)
+        class_name = f"RagChunk_{namespace or 'legacy'}_{dim}"
 
-    def _repr(self):
-        return f"<{class_name}(chunk_id={self.chunk_id!r})>"
+        def _repr(self):
+            return f"<{class_name}(chunk_id={self.chunk_id!r})>"
 
-    attrs = {
-        "__tablename__": table_name,
-        "__table_args__": (
-            UniqueConstraint(
-                "project_id", "doc_id", "chunk_index",
-                name=f"uq_{table_name}_project_doc_index",
+        attrs = {
+            "__tablename__": table_name,
+            "__table_args__": (
+                UniqueConstraint(
+                    "project_id", "doc_id", "chunk_index",
+                    name=f"uq_{table_name}_project_doc_index",
+                ),
+                Index(f"idx_{table_name}_project", "project_id"),
+                Index(f"idx_{table_name}_doc", "project_id", "doc_id"),
+                Index(f"idx_{table_name}_klayer", "knowledge_layer"),
             ),
-            Index(f"idx_{table_name}_project", "project_id"),
-            Index(f"idx_{table_name}_doc", "project_id", "doc_id"),
-            Index(f"idx_{table_name}_klayer", "knowledge_layer"),
-        ),
-        "__repr__": _repr,
-        "chunk_id": mapped_column(String, primary_key=True),
-        "project_id": mapped_column(String, nullable=False),
-        "doc_id": mapped_column(String, nullable=False),
-        "chunk_index": mapped_column(Integer, nullable=False),
-        "text": mapped_column(Text, nullable=False),
-        "embedding": mapped_column(vector_type, nullable=False),
-        "created_at": mapped_column(String, nullable=False),
-        # Layered RAG (docs/rag-deployment-plan.md) — persisted L1/L2A/L2B/L3
-        # layer; distinct from the Chunk dataclass STEP 0 isolation tag.
-        # Nullable so pre-migration rows and RAG_LAYERED=off read as unlayered.
-        "knowledge_layer": mapped_column(String, nullable=True),
-        "authority": mapped_column(String, nullable=True),
-        # 1-based page of the source PDF where the chunk's text starts
-        # (Alembic 0021). NULL for non-PDF sources and older rows.
-        "page": mapped_column(Integer, nullable=True),
-        # Embedding identity — stamped on every row and verified at startup.
-        "embedding_model": mapped_column(String, nullable=False, default=model_name),
-        "embedding_dim": mapped_column(Integer, nullable=False, default=dim),
-        "embedding_normalized": mapped_column(Boolean, nullable=False, default=normalized),
-        "embedding_identity": {
-            "model": model_name,
-            "dim": dim,
-            "normalized": normalized,
-        },
-    }
+            "__repr__": _repr,
+            "chunk_id": mapped_column(String, primary_key=True),
+            "project_id": mapped_column(String, nullable=False),
+            "doc_id": mapped_column(String, nullable=False),
+            "chunk_index": mapped_column(Integer, nullable=False),
+            "text": mapped_column(Text, nullable=False),
+            "embedding": mapped_column(vector_type, nullable=False),
+            "created_at": mapped_column(String, nullable=False),
+            # Layered RAG (docs/rag-deployment-plan.md) — persisted L1/L2A/L2B/L3
+            # layer; distinct from the Chunk dataclass STEP 0 isolation tag.
+            # Nullable so pre-migration rows and RAG_LAYERED=off read as unlayered.
+            "knowledge_layer": mapped_column(String, nullable=True),
+            "authority": mapped_column(String, nullable=True),
+            # 1-based page of the source PDF where the chunk's text starts
+            # (Alembic 0021). NULL for non-PDF sources and older rows.
+            "page": mapped_column(Integer, nullable=True),
+            # Embedding identity — stamped on every row and verified at startup.
+            "embedding_model": mapped_column(String, nullable=False, default=model_name),
+            "embedding_dim": mapped_column(Integer, nullable=False, default=dim),
+            "embedding_normalized": mapped_column(Boolean, nullable=False, default=normalized),
+            "embedding_identity": {
+                "model": model_name,
+                "dim": dim,
+                "normalized": normalized,
+            },
+        }
 
-    DynamicRagChunk = type(class_name, (Base,), attrs)
-    _RAG_CHUNK_CLASS_CACHE[namespace] = DynamicRagChunk
-    return DynamicRagChunk
+        DynamicRagChunk = type(class_name, (Base,), attrs)
+        _RAG_CHUNK_CLASS_CACHE[namespace] = DynamicRagChunk
+        return DynamicRagChunk
 
 
 class Base(DeclarativeBase):

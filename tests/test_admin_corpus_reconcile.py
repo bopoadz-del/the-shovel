@@ -83,6 +83,74 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def _own_chunk_table():
+    """Isolate the chunk table: own table, dropped after.
+
+    TestClient's startup warms models on a worker thread, and that warm-up
+    builds this namespace's chunk class and table. Built concurrently with
+    _chunk_cls() here, the test walked Base.registry.mappers while the other
+    thread was half-way through mapping the class -- CI's
+    ``UnmappedClassError: RagChunk_t..._256 is not mapped``. The app now
+    serialises that build on ``models.RAG_CHUNK_SCHEMA_LOCK``, so no blocking
+    warm-up is forced here (the WARM_MODELS_BLOCKING setenv was removed
+    after a differential showed it dead with the lock in place).
+
+    The namespace is already per-test (conftest), so the table is this
+    test's own; teardown drops it and disposes the pool. The mapper stays
+    registered: SQLAlchemy has no per-mapper unregister, and
+    ``Base.registry.dispose()`` would unmap every model in the process.
+    """
+    yield from _own_chunk_table_lifecycle()
+
+
+def _own_chunk_table_lifecycle():
+    """The body of ``_own_chunk_table``, kept plain so a test can drive it."""
+    yield
+    cls = rag_chunk_class_for(_active_namespace())
+    if cls is not None:
+        cls.__table__.drop(bind=engine, checkfirst=True)
+    engine.dispose()
+
+
+@pytest.mark.parametrize("ns", ["tdrop0a1b2c3d4e", "tdrop9f8e7d6c5b"])
+def test_teardown_leaves_no_table_and_a_fresh_pool(ns):
+    """After a test, the table it built is gone and the pool holds nothing.
+
+    Without the teardown, every test would leave its namespaced table in the
+    shared suite DB and its pooled connections open on the shared engine.
+    """
+    from sqlalchemy import inspect
+    from sqlalchemy import text as sql_text
+
+    def _tables():
+        with engine.connect() as conn:
+            return inspect(conn).get_table_names()
+
+    mp = pytest.MonkeyPatch()
+    mp.setenv("RAG_VECTOR_NAMESPACE", ns)
+    try:
+        cls = rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+        ensure_table(cls.__table__, bind=engine)
+        with engine.connect() as conn:
+            conn.execute(sql_text("SELECT 1"))
+        assert engine.pool.checkedin() >= 1
+        assert cls.__tablename__ in _tables()
+
+        life = _own_chunk_table_lifecycle()
+        next(life)
+        # Set-up done, test body not yet run: nothing may be torn down yet.
+        assert cls.__tablename__ in _tables()
+        assert rag_chunk_class_for(ns) is cls
+        with pytest.raises(StopIteration):
+            next(life)
+
+        assert engine.pool.checkedin() == 0
+        assert cls.__tablename__ not in _tables()
+    finally:
+        mp.undo()
+
+
+@pytest.fixture(autouse=True)
 def _admin_override():
     app.dependency_overrides[require_api_key] = lambda: {
         "user_id": "test-admin", "role": "admin",
