@@ -80,6 +80,8 @@ def test_large_day_counts_are_accepted_through_the_tool(amount, days, total):
 @pytest.mark.parametrize("given,extracted,text", [
     ({"a": 0.1 + 0.2}, {"b": 0.3}, "0.3"),       # a float sum is the figure written
     ({"a": 1.1 + 2.2}, {"b": 3.3}, "3.3"),
+    ({"a": 0.3}, {"b": 0.1 + 0.2}, "0.3"),       # and so is an extracted float sum
+    ({"a": 3.3}, {"b": 1.1 + 2.2}, "3.3"),
 ])
 def test_a_float_sum_spends_the_figure_it_equals(given, extracted, text):
     assert cf._unspent_ask_figures(given, extracted, text) == {}
