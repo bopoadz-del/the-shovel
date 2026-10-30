@@ -7,8 +7,8 @@ import importlib.util
 
 import pytest
 
-from app.lib import construction_formulas_commercial as c
-from app.lib import construction_formulas_quantities as q
+import app.lib.construction_formulas_commercial as c
+import app.lib.construction_formulas_quantities as q
 
 ACA = "of the Accepted Contract Amount per day"
 

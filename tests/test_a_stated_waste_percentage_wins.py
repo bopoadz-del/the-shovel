@@ -20,7 +20,7 @@ The documented default is a fallback for silence, never an override.
 """
 import pytest
 
-from app.lib import construction_formulas_quantities as q
+import app.lib.construction_formulas_quantities as q
 
 ASK = "Add 7% waste to that total and price it at SAR 420 per cubic metre."
 
