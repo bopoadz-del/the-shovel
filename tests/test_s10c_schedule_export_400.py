@@ -79,3 +79,11 @@ def test_the_route_is_served_by_export_schedule(path, method):
 
     hits = [r for r in app.routes if getattr(r, "path", "") == path and method in getattr(r, "methods", ())]
     assert hits and hits[0].endpoint is exports.export_schedule
+
+
+@pytest.mark.parametrize("fmt", ["xlsx", "docx"])
+def test_export_schedule_refuses_an_empty_activity_list(client, fmt):
+    c, h, pid = client
+    r = c.post(f"/v1/projects/{pid}/export/schedule?format={fmt}", headers=h, json={"activities": []})
+    assert r.status_code == 400, r.text
+    assert "activities is required" in r.text
