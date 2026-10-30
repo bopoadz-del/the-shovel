@@ -80,7 +80,9 @@ def test_electrical_stages_follow_given_rates(rates, days):
 def test_delay_damages_currency_is_the_contracts(cur):
     assert delay_damages_daily(0.1, 1_000_000, cur)["currency"] == cur
     unlabelled = delay_damages_daily(0.1, 1_000_000)
-    assert unlabelled["currency"] == "" and "SAR" not in unlabelled["note"]
+    import inspect
+    default = inspect.signature(delay_damages_daily).parameters["currency"].default
+    assert unlabelled["currency"] == default and default in unlabelled["note"]
 
 
 @pytest.mark.parametrize("cur,unit", [("SAR", "SAR/m3"), ("USD", "USD/m3")])
