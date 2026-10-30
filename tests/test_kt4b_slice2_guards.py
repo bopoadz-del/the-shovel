@@ -276,3 +276,37 @@ def test_mobilisation_it_line_scales_with_remote_area_factor(factor):
 def test_a_zero_rebar_quantity_is_refused(q):
     with pytest.raises(ValueError):
         cost_buildup_rebar(quantity_kg=q, **REBAR)
+
+
+# render :75 with no declared main output, the headline's unit is the result's currency.
+@pytest.mark.parametrize("cur", ["USD", "EUR"])
+def test_fallback_headline_carries_the_result_currency(cur):
+    res = delay_damages_daily(rate_percent=0.1, contract_amount=50_000_000, currency=cur)
+    res.pop("primary_result", None)
+    line = headline({"calculation": "delay_damages_daily", "result": res})
+    assert line == f"Headline: Daily amount is 50,000 {cur}."
+
+
+# planning :72 document controllers come from the staff-per-controller ratio, not the HSE one.
+@pytest.mark.parametrize("q,ratio,hse_r,dc_r,docs", [(2000, 250, 4, 10, 1), (3000, 250, 4, 3, 4)])
+def test_document_controllers_use_their_own_ratio(q, ratio, hse_r, dc_r, docs):
+    out = supervision_ratio(area_m2=q, area_m2_per_supervisor=ratio,
+                            supervisors_per_hse_officer=hse_r, staff_per_document_controller=dc_r)
+    assert out["document_controllers"] == docs
+    assert out["total_supervision_staff"] == out["total_supervisors"] + out["hse_officers"] + docs
+
+
+# runtime _format_deterministic_cost_calc: no successful cost result -> no line.
+@pytest.mark.parametrize("payload", [{"status": "error", "error": "x"}, "not a payload"])
+def test_cost_line_is_empty_without_a_cost_result(payload):
+    assert _format_deterministic_cost_calc(payload) == ""
+
+
+# app/lib _extract_rebar_cost_from_ask: the quantity is read from the ask (kg or tonnes).
+@pytest.mark.parametrize("text,want", [("rebar 12 t at 2800 SAR/t", 12000.0), ("rebar 800 kg, 3150 /tonne", 800.0)])
+def test_rebar_quantity_is_read_from_the_ask(text, want):
+    from app.lib.construction_formulas import _extract_rebar_cost_from_ask
+
+    out = {}
+    _extract_rebar_cost_from_ask(text, out)
+    assert out["quantity_kg"] == want

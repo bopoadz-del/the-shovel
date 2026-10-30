@@ -388,9 +388,58 @@ def test_removed_identifier_leaves_clean_wording(template, expected):
 # ── Item 4: defaults are stated consistently ────────────────────────────────
 
 
+# A formula that takes a ``currency`` input but assumes none gets each of
+# these as its stated signature default, so the default-currency wording is
+# exercised on the real formula (several codes: two inputs or more).
+DEFAULT_CODES = ("SAR", "AED", "USD", "EUR")
+DEFAULTED_SPECS: dict = {}
+
+
+def _with_currency_default(spec, code):
+    """``spec`` whose ``currency`` input defaults to ``code`` (same formula)."""
+    import dataclasses
+    import functools
+
+    sig = inspect.signature(spec.fn)
+
+    @functools.wraps(spec.fn)
+    def fn(*args, **kwargs):
+        if kwargs.get("currency") in (None, ""):
+            kwargs["currency"] = code
+        return spec.fn(*args, **kwargs)
+
+    fn.__signature__ = sig.replace(parameters=[
+        p.replace(default=code) if k == "currency" else p for k, p in sig.parameters.items()])
+    return dataclasses.replace(spec, fn=fn)
+
+
+def _install(name, code):
+    """Context: the registry serves the ``code``-defaulted spec for ``name``."""
+    import contextlib
+
+    from app.lib import formula_registry
+
+    @contextlib.contextmanager
+    def cm():
+        spec = DEFAULTED_SPECS.get((name, code))
+        if spec is None:
+            yield
+            return
+        from app.lib.construction_formulas import CALCULATORS
+
+        old, old_fn = formula_registry._REGISTRY[name], CALCULATORS[name]
+        formula_registry._REGISTRY[name], CALCULATORS[name] = spec, spec.fn
+        try:
+            yield
+        finally:
+            formula_registry._REGISTRY[name], CALCULATORS[name] = old, old_fn
+    return cm()
+
+
 def _currency_formulas() -> list[tuple[str, str, str, dict, dict]]:
     """``(name, display, code, inputs, envelope)`` for each supplied run of a
-    formula whose signature defaults a currency code."""
+    formula whose signature defaults a currency code -- as registered, or
+    with a stated default on a ``currency`` input that has none."""
     from app.lib.source_labels import _CURRENCY_CODES
 
     rows = []
@@ -398,16 +447,23 @@ def _currency_formulas() -> list[tuple[str, str, str, dict, dict]]:
         sig = inspect.signature(spec.fn)
         codes = [p.default for p in sig.parameters.values()
                  if isinstance(p.default, str) and p.default.upper() in _CURRENCY_CODES]
-        if not codes:
-            continue
-        required = [k for k, p in sig.parameters.items()
-                    if not isinstance(p.default, str) and _scalar(p)]
-        inputs = {k: (0.1 if (spec.inputs or {}).get(k) == "%" else 50_000_000.0)
-                  for k in required}
-        env = run_calculation(spec.name, dict(inputs))
-        if env.get("status") != "success" or _first_figure(env["result"]) is None:
-            continue
-        rows.append((spec.name, spec.display_name, codes[0], inputs, env))
+        variants = [(spec, codes[0], False)] if codes else []
+        cur = sig.parameters.get("currency")
+        if not codes and cur is not None and cur.default == "":
+            for code in DEFAULT_CODES:
+                DEFAULTED_SPECS[(spec.name, code)] = _with_currency_default(spec, code)
+                variants.append((DEFAULTED_SPECS[(spec.name, code)], code, True))
+        for vspec, code, _wrapped in variants:
+            vsig = inspect.signature(vspec.fn)
+            required = [k for k, p in vsig.parameters.items()
+                        if not isinstance(p.default, str) and _scalar(p)]
+            inputs = {k: (0.1 if (spec.inputs or {}).get(k) == "%" else 50_000_000.0)
+                      for k in required}
+            with _install(spec.name, code):
+                env = run_calculation(spec.name, dict(inputs))
+            if env.get("status") != "success" or _first_figure(env["result"]) is None:
+                continue
+            rows.append((spec.name, spec.display_name, code, inputs, env))
     return rows
 
 
@@ -416,6 +472,9 @@ CURRENCY = _currency_formulas()
 
 def test_currency_default_cases_are_generated():
     assert CURRENCY
+    assert {code for _n, _d, code, _i, _e in CURRENCY} >= set(DEFAULT_CODES)
+    for _n, _d, code, _i, env in CURRENCY:
+        assert env["result"]["currency"] == code
 
 
 @pytest.mark.parametrize("name,display,code,inputs,env", CURRENCY, ids=[r[0] for r in CURRENCY])
@@ -425,7 +484,8 @@ def test_shown_currency_default_is_stated(name, display, code, inputs, env):
     assert re.search(CURRENCY_TOKEN, ask) is None
     figure = _first_figure(env["result"])
     answer = f"The {display.lower()} is {code} {_shown(figure)}."
-    out = gate(answer, None, _calc_turn(name, inputs, env, ask))
+    with _install(name, code):
+        out = gate(answer, None, _calc_turn(name, inputs, env, ask))
     assert f"The currency used, {code}, is the platform calculator's default" in out, out
 
 
@@ -435,7 +495,8 @@ def test_unshown_currency_default_is_not_stated(name, display, code, inputs, env
         f"{k.replace('_', ' ')} {v:g}" for k, v in inputs.items()) + "."
     figure = _first_figure(env["result"])
     answer = f"The {display.lower()} is {_shown(figure)}."
-    out = gate(answer, None, _calc_turn(name, inputs, env, ask))
+    with _install(name, code):
+        out = gate(answer, None, _calc_turn(name, inputs, env, ask))
     assert code not in out
 
 
