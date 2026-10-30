@@ -579,9 +579,8 @@ def _schedule_link_fields_missing(activities: List[Any]) -> List[str]:
     ``code`` they link by (``id`` is accepted as the same field) and a
     ``duration_days``. Returns one "activity N: field, field" per gap; empty
     when nothing links or nothing is missing."""
-    rows = [a for a in activities if isinstance(a, dict)]
-    if len(rows) != len(activities):
-        return ["each activity must be an object"]
+    # ScheduleExportRequest already rejects a non-object activity (422).
+    rows = list(activities)
     if not any(a.get("predecessors") for a in rows):
         return []
     gaps = []

@@ -7,6 +7,8 @@ import uuid
 
 import pytest
 
+import app.routers.exports as exports
+
 from tests._fixture_values import PW_06
 
 
@@ -41,9 +43,30 @@ def test_missing_fields_is_400_naming_them(client, fmt):
     assert "code" in r.text and "duration_days" in r.text
 
 
-@pytest.mark.parametrize("fmt", ["xlsx", "docx", "pdf"])
+# PDF needs reportlab, which the CI image does not ship (it answers 503);
+# the 200 path is pinned on the two formats every image renders.
+@pytest.mark.parametrize("fmt", ["xlsx", "docx"])
 def test_complete_activities_export(client, fmt):
     c, h, pid = client
     r = c.post(f"/v1/projects/{pid}/export/schedule?format={fmt}", headers=h,
                json={"activities": COMPLETE})
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("acts,want", [
+    ([{"name": "Dig", "predecessors": []}, {"name": "Pour", "predecessors": ["A1"]}],
+     ["activity 1 (Dig): missing code, duration_days", "activity 2 (Pour): missing code, duration_days"]),
+    ([{"id": "A1", "duration": 3, "predecessors": []}, {"code": "A2", "predecessors": ["A1"]}],
+     ["activity 2 (unnamed): missing duration_days"]),
+])
+def test_link_gaps_are_named_per_activity(acts, want):
+    assert exports._schedule_link_fields_missing(acts) == want
+
+
+@pytest.mark.parametrize("acts", [
+    [{"name": "Dig"}, {"name": "Pour"}],
+    [{"name": "Dig", "predecessors": []}, {"name": "Pour", "predecessors": None}],
+])
+def test_nothing_linked_needs_nothing(acts):
+    assert exports._schedule_link_fields_missing(acts) == []
+
