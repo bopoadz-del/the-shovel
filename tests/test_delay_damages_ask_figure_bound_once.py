@@ -105,3 +105,35 @@ def test_extractor_reads_a_figure_by_the_unit_after_it(text, bound):
 def test_a_label_inside_a_compound_unit_does_not_take_the_figure(text, key):
     got = cf.extract_calculation_params_from_text(cf.CALCULATORS["delay_damages_daily"], text)
     assert got.get(key) not in (18.0, 6.0)
+
+
+@pytest.mark.parametrize("ask,amount,days,total", [
+    ("60days at 5,000 per day", 5000, 60, 300_000.0),        # unit glued to the figure
+    ("45days at 1,200 per day", 1200, 45, 54_000.0),
+])
+def test_days_glued_to_the_figure_bind_that_figure(ask, amount, days, total):
+    res = _chat_call(ask, {"amount_per_day": amount})["result"]["result"]
+    assert res["days"] == days and res["total_amount"] == total
+
+
+@pytest.mark.parametrize("ask,amount", [
+    ("2,5 days at 1,000 per day", 1000),     # a decimal comma: "5" is not the day count
+    ("7,5 days at 200 per day", 200),
+])
+def test_the_tail_digits_of_a_figure_are_not_a_day_count(ask, amount):
+    res = _chat_call(ask, {"amount_per_day": amount})["result"]["result"]
+    assert "days" not in res and "total_amount" not in res
+
+
+@pytest.mark.parametrize("ask,amount,days,total", [
+    ("60 days at 5,000 per day", 5000, 60, 300_000.0),
+    ("Delay damages: 45 days at 1,200 per day", 1200, 45, 54_000.0),
+])
+def test_an_input_sent_empty_is_filled_from_the_ask(ask, amount, days, total):
+    res = _chat_call(ask, {"amount_per_day": amount, "days": ""})["result"]["result"]
+    assert res["days"] == days and res["total_amount"] == total
+
+
+@pytest.mark.parametrize("text", ["60 days at 5,000 per day", "45 days at 1,200 per day"])
+def test_an_ask_with_no_calculator_extracts_nothing(text):
+    assert cf.extract_calculation_params_from_text(None, text) == {}

@@ -1895,7 +1895,7 @@ def _normalize_ask(raw: str) -> str:
 
 def _figure_before_label(pat: str, raw: str, overlaps: Any) -> Optional[Any]:
     """The first open figure written directly before ``pat`` (its unit)."""
-    rx = re.compile(rf"(?<![\d.,])({_TEXT_NUM_RE})\s*(){pat}(?![A-Za-z0-9/])", re.IGNORECASE)
+    rx = re.compile(rf"(?<![\w.,])({_TEXT_NUM_RE})\s*(){pat}(?![A-Za-z0-9/])", re.IGNORECASE)
     return _first_open(rx, raw, overlaps)
 
 
@@ -1937,10 +1937,6 @@ def extract_calculation_params_from_text(
             continue
         pat = r"[\s_]+".join(re.escape(part) for part in label.split("_") if part)
         compact = label.replace("_", "")
-        # A label written straight after a figure is that figure's unit
-        # ("60 days at 5,000 per day"): it labels the figure before it, never
-        # the next one. Bare symbols (one letter) are not units here.
-        match = _figure_before_label(pat, raw, _overlaps) if len(compact) > 1 else None
         if len(compact) == 1:
             rx = re.compile(
                 rf"(?<![A-Za-z0-9]){pat}(?:\s*[=:]\s*|\s+(?:is|of|equals|=)\s+)({_TEXT_NUM_RE})"
@@ -1953,13 +1949,16 @@ def extract_calculation_params_from_text(
                 re.IGNORECASE,
             )
             match = _first_open(rx, raw, _overlaps) or _first_open(glued, raw, _overlaps)
-        elif match is None:
+        else:
             rx = re.compile(
                 rf"(?<![A-Za-z0-9]){pat}(?:\s*[=:]\s*|\s+(?:is|of|equals|at)\s+|\s+)({_TEXT_NUM_RE})"
                 rf"(?:\s*({_TEXT_UNIT_RE}))?",
                 re.IGNORECASE,
             )
-            match = _first_open(rx, raw, _overlaps)
+            # A label written straight after a figure is that figure's unit
+            # ("60 days at 5,000 per day"): it labels the figure before it,
+            # never the next one. Bare symbols (one letter) are not units here.
+            match = _figure_before_label(pat, raw, _overlaps) or _first_open(rx, raw, _overlaps)
             if match is None and len(compact) <= 4:
                 glued = re.compile(
                     rf"(?<![A-Za-z0-9]){pat}({_TEXT_NUM_RE})(?![A-Za-z0-9])"
@@ -2134,8 +2133,7 @@ def _ask_figure_counts(values: Any) -> Dict[float, int]:
     for val in values:
         num = _operand_value(val)
         if isinstance(num, (int, float)):
-            key = round(float(num), 9)
-            counts[key] = counts.get(key, 0) + 1
+            counts[float(num)] = counts.get(float(num), 0) + 1
     return counts
 
 
@@ -2149,15 +2147,17 @@ def _unspent_ask_figures(params: Dict[str, Any], extracted: Dict[str, Any], text
     often as it is placed is spent; a converted figure (not written as such)
     and a text value are never counted.
     """
-    written = _ask_figure_counts(re.findall(_TEXT_NUM_RE, str(text or "")))
-    placed = _ask_figure_counts(v for v in params.values() if not isinstance(v, bool))
+    written = _ask_figure_counts(re.findall(_TEXT_NUM_RE, text))
+    placed = _ask_figure_counts(params.values())
     out: Dict[str, Any] = {}
     for key, val in extracted.items():
-        if params.get(key) not in (None, ""):
+        # run_calculation drops empty ("" / None) inputs before this point,
+        # so a key still present is a given value and is never overwritten.
+        if key in params:
             continue
         num = _operand_value(val)
         if isinstance(num, (int, float)):
-            fig = round(float(num), 9)
+            fig = float(num)
             if placed.get(fig, 0) >= written.get(fig, 0) > 0:
                 continue
             placed[fig] = placed.get(fig, 0) + 1
