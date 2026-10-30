@@ -98,12 +98,52 @@ def _own_chunk_table(monkeypatch):
     registered: SQLAlchemy has no per-mapper unregister, and
     ``Base.registry.dispose()`` would unmap every model in the process.
     """
+    yield from _own_chunk_table_lifecycle(monkeypatch)
+
+
+def _own_chunk_table_lifecycle(monkeypatch):
+    """The body of ``_own_chunk_table``, kept plain so a test can drive it."""
     monkeypatch.setenv("WARM_MODELS_BLOCKING", "true")
     yield
     cls = rag_chunk_class_for(_active_namespace())
     if cls is not None:
         cls.__table__.drop(bind=engine, checkfirst=True)
     engine.dispose()
+
+
+@pytest.mark.parametrize("ns", ["tdrop0a1b2c3d4e", "tdrop9f8e7d6c5b"])
+def test_teardown_leaves_no_table_and_a_fresh_pool(ns):
+    """After a test, the table it built is gone and the pool holds nothing.
+
+    Without the teardown, every test would leave its namespaced table in the
+    shared suite DB and its pooled connections open on the shared engine.
+    """
+    from sqlalchemy import inspect
+    from sqlalchemy import text as sql_text
+
+    def _tables():
+        with engine.connect() as conn:
+            return inspect(conn).get_table_names()
+
+    mp = pytest.MonkeyPatch()
+    mp.setenv("RAG_VECTOR_NAMESPACE", ns)
+    try:
+        cls = rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+        ensure_table(cls.__table__, bind=engine)
+        with engine.connect() as conn:
+            conn.execute(sql_text("SELECT 1"))
+        assert engine.pool.checkedin() >= 1
+        assert cls.__tablename__ in _tables()
+
+        life = _own_chunk_table_lifecycle(mp)
+        next(life)
+        with pytest.raises(StopIteration):
+            next(life)
+
+        assert engine.pool.checkedin() == 0
+        assert cls.__tablename__ not in _tables()
+    finally:
+        mp.undo()
 
 
 @pytest.fixture(autouse=True)
