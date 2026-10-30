@@ -784,13 +784,11 @@ def _sources_from_snippets(snippets: list, answer: str, message: str, project_id
     """The JSON chat's sources, built by the same function the stream's
     ``end`` event uses (``_build_sources_from_audit``) from the snippets this
     turn retrieved. Empty when nothing was retrieved; never raises."""
-    if not snippets:
-        return []
     try:
         from app.agents.runtime import _build_sources_from_audit
 
         chunks = []
-        for s in snippets:
+        for s in snippets or []:
             if not isinstance(s, dict) or not s.get("document_id"):
                 continue
             chunks.append({
