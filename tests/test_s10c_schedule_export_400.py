@@ -70,3 +70,12 @@ def test_link_gaps_are_named_per_activity(acts, want):
 def test_nothing_linked_needs_nothing(acts):
     assert exports._schedule_link_fields_missing(acts) == []
 
+
+
+@pytest.mark.parametrize("path", ["/v1/projects/{project_id}/export/schedule"])
+@pytest.mark.parametrize("method", ["POST"])
+def test_the_route_is_served_by_export_schedule(path, method):
+    from app.main import app
+
+    hits = [r for r in app.routes if getattr(r, "path", "") == path and method in getattr(r, "methods", ())]
+    assert hits and hits[0].endpoint is exports.export_schedule
