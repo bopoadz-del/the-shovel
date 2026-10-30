@@ -77,7 +77,7 @@ def test_the_live_asks_give_an_amount_and_a_currency(ask, params, total, shown):
 
 
 # The two functions the fix touches, read directly.
-from app.lib import formula_registry as fr
+import app.lib.formula_registry as fr
 
 
 @pytest.mark.parametrize("value,expected", [
