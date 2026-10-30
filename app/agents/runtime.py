@@ -2229,8 +2229,9 @@ def _tool_result_errored(tool_result: Any) -> bool:
 _EMPTY_ROUTER_NUDGE = (
     "The router matched NO action. If the request is a computation (volume, "
     "quantity, capacity, EVM, any arithmetic), you MUST now call the "
-    "construction tool (action=construction_calc) or formula_executor_v2 and "
-    "report that tool's result -- do not compute the number yourself. If no "
+    "construction tool (action=construction_calc) FIRST; use formula_executor_v2 "
+    "only when no kernel formula covers the request, and label that answer "
+    "improvised. Report the tool's result -- do not compute the number yourself. If no "
     "tool fits the request, say you have no tool for it. Never write "
     "'Routed to:' naming a tool you have not actually called in this turn."
 )

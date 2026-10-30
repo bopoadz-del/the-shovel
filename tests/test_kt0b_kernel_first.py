@@ -1,0 +1,123 @@
+"""Kernel first: formula_executor_v2 never writes its own formula when a kernel covers the ask."""
+from __future__ import annotations
+
+import pytest
+
+from app.blocks.formula_executor_v2 import FormulaExecutorV2Block, kernel_covering
+
+
+class _Mock(FormulaExecutorV2Block):
+    def __init__(self, scripted, **kw):
+        super().__init__(**kw)
+        self._scripted = list(scripted)
+        self.llm_calls = 0
+
+    async def _call_llm(self, prompt: str) -> str:
+        self.llm_calls += 1
+        return self._scripted.pop(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,kernel", [
+    ("Calculate concrete volume for a 10x8m slab, 200mm thick", "concrete_volume"),
+    ("beam deflection cantilever point load 5 kN at 3 m", "beam_deflection_cantilever_point_load"),
+])
+async def test_kernel_covered_ask_is_refused_without_codegen(task, kernel):
+    block = _Mock(["result = 1"])
+    out = await block.process({"task": task, "variables": {"a": 1}})
+    assert out["status"] == "error"
+    assert out["kernel"] == kernel
+    assert out["use_action"] == "construction_calc"
+    assert kernel in out["error"]
+    assert out["provenance"] == "kernel"
+    assert block.llm_calls == 0, "the model wrote a formula a kernel covers"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task,variables,code,want", [
+    ("rectangle area", {"length_m": 10, "width_m": 8}, "result = length_m * width_m", 80),
+    ("multiply length by width", {"length_m": 3, "width_m": 4}, "result = length_m * width_m", 12),
+])
+async def test_uncovered_ask_codegens_and_is_labelled_improvised(task, variables, code, want):
+    block = _Mock([code])
+    out = await block.process({"task": task, "variables": variables})
+    assert out["status"] == "success"
+    assert out["result"] == want
+    assert out["provenance"] == "improvised"
+    assert out["certified"] is False
+    assert block.llm_calls == 1
+
+
+@pytest.mark.parametrize("task", ["", "compute area of the rectangle"])
+def test_kernel_covering_misses_return_none(task):
+    assert kernel_covering(task) is None
+
+
+def test_nudge_offers_construction_calc_first():
+    from app.agents.runtime import _EMPTY_ROUTER_NUDGE as n
+    assert n.index("construction_calc") < n.index("formula_executor_v2")
+    assert "improvised" in n
+
+
+# Fail CLOSED: a registry miss (K2) or an import failure (K3) refuses codegen.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named,refused", [
+    ("not_a_registered_kernel", True),   # text names a calculator the registry lacks
+    (None, False),                       # text names nothing -> improvised codegen
+])
+async def test_registry_miss_refuses_codegen(monkeypatch, named, refused):
+    import app.lib.construction_formulas as cf
+    monkeypatch.setattr(cf, "calculator_name_from_text", lambda _t: named)
+    block = _Mock(["result = 2"])
+    out = await block.process({"task": "some sum", "variables": {"a": 1}})
+    if refused:
+        assert out["status"] == "error" and out["provenance"] == "refused"
+        assert out["certified"] is False
+        assert "not_a_registered_kernel" in out["error"]
+        assert block.llm_calls == 0
+    else:
+        assert out["status"] == "success" and out["provenance"] == "improvised"
+        assert block.llm_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [True, False])
+async def test_import_failure_refuses_codegen(monkeypatch, broken):
+    import sys
+    if broken:
+        monkeypatch.setitem(sys.modules, "app.lib.construction_formulas", None)
+    block = _Mock(["result = length_m * width_m"])
+    out = await block.process({"task": "rectangle area", "variables": {"length_m": 2, "width_m": 3}})
+    if broken:
+        assert out["status"] == "error" and out["provenance"] == "refused"
+        assert "unavailable" in out["error"]
+        assert block.llm_calls == 0
+    else:
+        assert out["status"] == "success" and out["result"] == 6
+        assert block.llm_calls == 1
+
+
+# C1: a cache hit re-runs improvised code and is labelled so.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variables,want", [({"a": 2}, 4), ({"a": 5}, 10)])
+async def test_cache_hit_is_labelled_improvised(variables, want):
+    from types import SimpleNamespace
+    from app.blocks.formula_executor_v2 import _cache_key
+    task = "double the value"
+    session = SimpleNamespace(code_cache={_cache_key(task, variables): "result = a * 2"})
+    block = _Mock([])
+    out = await block.process({"task": task, "variables": variables, "session": session})
+    assert out["cache_hit"] is True and out["result"] == want
+    assert out["provenance"] == "improvised"
+    assert out["certified"] is False
+    assert block.llm_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{"task": "   "}, "  \n "])
+async def test_an_empty_task_is_refused_before_any_model_call(payload):
+    block = _Mock(["result = 1"])
+    out = await block.process(payload)
+    assert out["status"] == "error"
+    assert "No task description provided" in out["error"]
+    assert block.llm_calls == 0
