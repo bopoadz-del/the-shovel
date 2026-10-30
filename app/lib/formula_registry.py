@@ -425,10 +425,9 @@ def _unit_head(text: str) -> str:
 
 
 def value_and_unit(value: Any) -> Optional[Tuple[float, str]]:
-    from app.agents.base.formulas.construction_formulas_planning import normalise_rate
-
     """``"20 ft"`` -> (20.0, "ft"); ``{"value": 20, "unit": "ft"}`` likewise;
     ``"AED 5,000"`` -> (5000.0, "AED"). None for anything without a written unit."""
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate
     if isinstance(value, dict) and "value" in value and value.get("unit"):
         number = _number(value["value"])
         if number is None and isinstance(value["value"], str):
