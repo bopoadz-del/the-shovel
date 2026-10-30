@@ -214,8 +214,6 @@ def parse_unit(token: Any) -> Optional[Unit]:
     converter does not know it. A ratio ("kN/m", "currency/t", "h/m2") is
     resolved from its parts; force over area is a pressure."""
     raw = normalise_rate(token)
-    if not raw or raw in ("-",):
-        return None
     key = unit_key(_ALIASES.get(unit_key(raw), raw))
     whole = _atom(raw, in_ratio=False)
     if whole is not None or "/" not in key:
