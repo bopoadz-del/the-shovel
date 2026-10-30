@@ -10784,7 +10784,7 @@ _DEFAULT_UI_AGENT = "project-assistant"
 
 
 def hats_activation_enabled() -> bool:
-    """True when FORK_HATS_ENABLED is live. Default off."""
+    """Always True: the hat router is always on (K-T0a)."""
     from app.agents.activation import hats_enabled
     return hats_enabled()
 
