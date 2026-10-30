@@ -253,12 +253,16 @@ def parameters(spec: FormulaSpec) -> Dict[str, ParamSpec]:
         param = sig.parameters.get(key)
         if param is None:
             continue
-        required = param.default is inspect.Parameter.empty
+        no_default = param.default is inspect.Parameter.empty
+        # A declared required / optional wins over the signature: an input
+        # can carry a default for the function's own sake and still be a
+        # figure the user must give.
+        required = no_default if declared.required is None else bool(declared.required)
         out[key] = ParamSpec(
             name=key, kind=annotation_kind(param.annotation, param.default),
             unit=declared.unit, lo=declared.lo, hi=declared.hi,
             label=declared.label, grade=declared.grade, required=required,
-            default=None if required else param.default,
+            default=None if no_default else param.default,
         )
     return out
 
