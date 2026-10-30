@@ -300,3 +300,33 @@ async def guarantee_terminal(
             "platform fault, not a refusal — please retry." % last_type
         ):
             yield out
+
+
+#: The ``error`` text when a layer OUTSIDE the terminal guard fails.
+ESCAPE_MESSAGE = "The assistant is temporarily unavailable. Please try again."
+
+
+async def close_on_escape(frames: AsyncIterator[str], *, request_id: str = "") -> AsyncIterator[str]:
+    """The outermost net: a layer wrapped around ``guarantee_terminal``
+    (identity redaction, stage timings, the ``accepted`` status) that raises
+    mid-stream still ends the turn with ``error`` and ``end``.
+
+    Live f44ddef (warranty_maintenance_schedule long ask): HTTP 200, then the
+    connection closed at 9.6 s with no ``end`` and no ``error`` ("Response
+    ended prematurely"). ``guarantee_terminal`` cannot see an exception raised
+    by a layer that wraps it; such an exception reached the server, which
+    drops the connection. The frames added here are fixed text, so nothing
+    the redactor would have removed can pass through them. ``CancelledError``
+    (a client that went away) is not caught, as in ``guarantee_terminal``.
+    """
+    saw_terminal = False
+    try:
+        async for raw in frames:
+            if event_type(raw) in TERMINAL_TYPES:
+                saw_terminal = True
+            yield raw
+    except Exception:  # noqa: BLE001 - the last net must not have holes
+        _LOG.exception("sse: a layer outside the terminal guard failed (request_id=%s)", request_id)
+        if not saw_terminal:
+            yield frame({"type": "error", "message": ESCAPE_MESSAGE, "request_id": request_id})
+            yield frame({"type": "end", "iterations": 0, "sources": [], "tools": []})
