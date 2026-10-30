@@ -131,3 +131,13 @@ def test_a_fractional_total_is_rounded_to_cents(amount, days, total):
     out = delay_damages_daily(amount_per_day=amount, days=days)
     assert out["total_amount"] == total
     assert out["per"] == "calendar day"
+
+
+# A flat daily amount under 1 is a real amount: accepted and totalled.
+@pytest.mark.parametrize("amount,days,total", [(0.5, 2, 1.0), (0.25, 4, 1.0)])
+def test_a_daily_amount_under_one_is_accepted_through_the_tool(amount, days, total):
+    env = _call({"amount_per_day": amount, "days": days})
+    assert env["ok"] is True, env
+    res = env["result"]["result"]
+    assert res["daily_amount"] == amount
+    assert res["total_amount"] == total
