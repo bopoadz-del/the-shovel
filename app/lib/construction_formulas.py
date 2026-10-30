@@ -723,9 +723,11 @@ _REQUIRED_GROUPS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
         ("ev", "bcwp"),
         ("ac", "acwp"),
     ),
+    # A flat daily amount stands in for both the rate and the contract
+    # amount it would apply to.
     "delay_damages_daily": (
-        ("rate_percent",),
-        ("contract_amount",),
+        ("rate_percent", "amount_per_day"),
+        ("contract_amount", "amount_per_day"),
     ),
     "beam_shear_simple": (
         ("udl_w_kn_m", "central_point_load_kn"),
