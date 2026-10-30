@@ -49,7 +49,7 @@ def record(name: str, dur: float) -> None:
     st = _STATE.get()
     if st is None:
         return
-    stages = st.setdefault("stages", {})
+    stages = st["stages"]
     stages[name] = stages.get(name, 0.0) + max(0.0, float(dur))
 
 
