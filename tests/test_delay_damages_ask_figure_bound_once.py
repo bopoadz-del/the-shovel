@@ -103,3 +103,14 @@ def test_an_input_the_call_gives_is_never_refilled(given, extracted, text, kept)
 def test_an_input_sent_empty_is_filled_from_the_ask(ask, amount, days, total):
     res = _chat_call(ask, {"amount_per_day": amount, "days": ""})["result"]["result"]
     assert res["days"] == days and res["total_amount"] == total
+
+
+@pytest.mark.parametrize("ask,daily,days,total", [
+    ("delay 30 days, days: 30, amount per day: 100", 100.0, 30.0, 3_000.0),
+    ("penalty: 20, days: 20, amount per day: 50", 50.0, 20.0, 1_000.0),
+])
+def test_a_figure_on_a_key_the_calculator_does_not_take_is_not_spent(ask, daily, days, total):
+    env = _chat_call(ask, {})
+    assert env["ok"] is True, env
+    res = env["result"]["result"]
+    assert (res["daily_amount"], res["days"], res["total_amount"]) == (daily, days, total)
