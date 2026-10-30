@@ -502,3 +502,17 @@ def test_snapshot_rounds_recorded_stages(dur, want):
     tt.mark_arrival()
     tt.record("retrieval", dur)
     assert tt.snapshot()["retrieval"] == want
+
+
+# snapshot(): "route" is 0.0 from the prefill when it was not recorded, and
+# its real time when it was.
+@pytest.mark.parametrize("route_dur,want", [(None, 0.0), (0.75, 0.75)])
+def test_route_is_prefilled_until_recorded(route_dur, want):
+    from app.core import turn_timing as tt
+    tt.mark_arrival()
+    tt.record("retrieval", 0.5)
+    if route_dur is not None:
+        tt.record("route", route_dur)
+    snap = tt.snapshot()
+    assert snap["route"] == want
+    assert list(snap)[:5] == list(tt.PRE_FIRST_TOKEN_STAGES)
