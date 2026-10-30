@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -978,12 +979,46 @@ async def chat_v1(request: ChatRequest, auth: dict = Depends(require_user)):
     return await chat(request, auth)
 
 
+def _stamp_before_auth(request: Request) -> None:
+    """Dependency resolved before ``require_user``: when the request reached
+    the endpoint, so authentication is timed as its own stage."""
+    request.state.received_at = time.monotonic()
+
+
+def _with_stage_timings(frames):
+    """Add this turn's pre-first-token stage timings to its ``start`` and
+    ``end`` events, and write them to the server log once at ``end``."""
+    from app.core import turn_timing
+
+    async def gen():
+        async for raw in frames:
+            if isinstance(raw, str) and raw.startswith("data: "):
+                try:
+                    ev = json.loads(raw[6:])
+                except ValueError:
+                    ev = None
+                if isinstance(ev, dict) and ev.get("type") in ("start", "end"):
+                    ev["timings"] = turn_timing.snapshot()
+                    if ev["type"] == "end":
+                        logger.info("chat.stream stage timings %s", json.dumps(ev["timings"]))
+                    raw = f"data: {json.dumps(ev, default=str)}\n\n"
+            yield raw
+    return gen()
+
+
 @router.post("/v1/chat/stream")
-async def chat_stream_v1(request: Request, auth: dict = Depends(require_user)):
+async def chat_stream_v1(
+    request: Request,
+    _received: None = Depends(_stamp_before_auth),
+    auth: dict = Depends(require_user),
+):
     """Streaming chat endpoint (v1 API) with flexible JSON body."""
     from app.agents import driver
     from app.core import turn_timing
-    turn_timing.mark_arrival()
+    received = getattr(request.state, "received_at", None)
+    turn_timing.mark_arrival(at=received)
+    if received is not None:
+        turn_timing.record("auth", time.monotonic() - received)
     if driver.mode() == "request":
         from app.core import users as _users
         from app.core.offload import off_loop as _driver_off_loop
@@ -1097,11 +1132,12 @@ async def chat_stream_v1(request: Request, auth: dict = Depends(require_user)):
         # 1) Predefined reasoning for a known workflow (flagged; dynamic UNDERSTAND).
         if _predefined_enabled():
             try:
-                if _message_vetoes_predefined(prompt):
-                    intent = {"action": None}
-                else:
-                    intent = await understand_intent(
-                        prompt, has_documents=bool(document_ids))
+                with turn_timing.stage("route"):
+                    if _message_vetoes_predefined(prompt):
+                        intent = {"action": None}
+                    else:
+                        intent = await understand_intent(
+                            prompt, has_documents=bool(document_ids))
             except Exception:  # noqa: BLE001
                 intent = {"action": None}
             if intent.get("action") in _predefined_workflows():
@@ -1144,7 +1180,8 @@ async def chat_stream_v1(request: Request, auth: dict = Depends(require_user)):
         if safe_pid == projects_store.MASTER_CORPUS_PROJECT_ID:
             resolved_pid = projects_store.MASTER_CORPUS_SOURCE_PROJECT_ID
         try:
-            agent, routing = await select_agent_for_message(prompt, agent)
+            with turn_timing.stage("route"):
+                agent, routing = await select_agent_for_message(prompt, agent)
             yield f"data: {json.dumps({'type': 'route', **routing})}\n\n"
             async for evt in agent.chat_stream(
                 prompt, history=history, project_id=resolved_pid,
@@ -1167,11 +1204,11 @@ async def chat_stream_v1(request: Request, auth: dict = Depends(require_user)):
         _release_turn = await turn_gate.acquire()
     _identity = await _turn_identity(project_id)
     return StreamingResponse(
-        turn_gate.hold_until_done(turn_progress.opened(redact_frames(
+        turn_gate.hold_until_done(turn_progress.opened(_with_stage_timings(redact_frames(
         guarantee_terminal(
             with_hat_signals(with_answer_exit(event_stream()), prompt),
             request_id=get_request_id(),
-        ), _identity)), _release_turn),
+        ), _identity))), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
