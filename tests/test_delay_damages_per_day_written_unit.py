@@ -145,3 +145,12 @@ def test_a_per_unit_on_a_non_currency_input_is_refused(unit, written):
 def test_convert_figure_refuses_a_unit_it_cannot_read_even_with_currency(written):
     out = fr.convert_figure(_spec("currency/day"), 5000.0, written)
     assert out["rejection"]["reason"] == "unknown_unit", out
+
+
+@pytest.mark.parametrize("padded,plain", [
+    ("SAR 1,200 per day  ", "SAR 1,200 per day"),
+    ("AED 7,000 per working week \t", "AED 7,000 per working week"),
+])
+def test_trailing_space_after_a_per_unit_reads_as_without(padded, plain):
+    assert fr.value_and_unit(padded) == fr.value_and_unit(plain)
+    assert fr.value_and_unit(padded)[1] == plain.split(" ", 2)[0] + " " + plain.split(" ", 2)[2]

@@ -515,7 +515,7 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
         # implied, as it is for a bare figure on a currency input. Only a
         # unit that then reads as the declared kind is taken; it begins with
         # currency, so only a currency-per input can match it.
-        implied = parse_unit(f"currency {unit.strip()}")
+        implied = parse_unit(f"currency {unit}")
         if implied is not None and implied.dimension == declared.dimension:
             return convert_figure(spec, number, implied.written, context)
         return {"rejection": _unit_rejection(spec, shown, "unknown_unit", given_unit=unit)}
