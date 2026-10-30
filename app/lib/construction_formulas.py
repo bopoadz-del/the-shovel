@@ -1895,7 +1895,7 @@ def _normalize_ask(raw: str) -> str:
 
 def _figure_before_label(pat: str, raw: str, overlaps: Any) -> Optional[Any]:
     """The first open figure written directly before ``pat`` (its unit)."""
-    rx = re.compile(rf"(?<![\w.,])({_TEXT_NUM_RE})\s*(){pat}(?![A-Za-z0-9/])", re.IGNORECASE)
+    rx = re.compile(rf"(?<![\w.,])({_TEXT_NUM_RE})\s*{pat}(?![A-Za-z0-9/])", re.IGNORECASE)
     return _first_open(rx, raw, overlaps)
 
 
