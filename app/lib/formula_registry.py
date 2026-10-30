@@ -403,7 +403,8 @@ SIGNED_FIGURE = FIGURE_SIGN + r"\d[\d,]*(?:\.\d+)?"
 
 _VALUE_UNIT_RE = re.compile(
     rf"^\s*({SIGNED_NUMBER})\s*((?:1\s*/|[A-Za-z%°µμ‰'\"]).*?)?\s*[.,;]?\s*$")
-_UNIT_VALUE_RE = re.compile(rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*$")
+_UNIT_VALUE_RE = re.compile(
+    rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*([A-Za-z/][\w /\-]*?)?\s*$")
 
 
 def _unit_head(text: str) -> str:
@@ -420,6 +421,8 @@ def _unit_head(text: str) -> str:
 
 
 def value_and_unit(value: Any) -> Optional[Tuple[float, str]]:
+    from app.agents.base.formulas.construction_formulas_planning import normalise_rate
+
     """``"20 ft"`` -> (20.0, "ft"); ``{"value": 20, "unit": "ft"}`` likewise;
     ``"AED 5,000"`` -> (5000.0, "AED"). None for anything without a written unit."""
     if isinstance(value, dict) and "value" in value and value.get("unit"):
@@ -431,8 +434,12 @@ def value_and_unit(value: Any) -> Optional[Tuple[float, str]]:
     if not isinstance(value, str):
         return None
     m = _UNIT_VALUE_RE.match(value)
-    if m:
-        return float(m.group(2).replace(",", "")), m.group(1)
+    # "SAR 1,200 per day" / "Per Day" / "perday" / "daily": the currency,
+    # then what it is per, in the one spelling normalise_rate gives. A tail
+    # that is not a rate is not this form.
+    rate = normalise_rate(m.group(3)) if m and m.group(3) else ""
+    if m and (not m.group(3) or rate.startswith("/")):
+        return float(m.group(2).replace(",", "")), m.group(1) + rate
     m = _VALUE_UNIT_RE.match(value)
     if not m or not m.group(2):
         return None
@@ -508,6 +515,13 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
     if written is None:
         if declared.dimension == "currency" or unit.strip().lower() == spec.unit.strip().lower():
             return {"value": number}
+        # "5,000 per day" for a currency-per-time input: the currency is
+        # implied, as it is for a bare figure on a currency input. Only a
+        # unit that then reads as the declared kind is taken; it begins with
+        # currency, so only a currency-per input can match it.
+        implied = parse_unit(f"currency {unit}")
+        if implied is not None and implied.dimension == declared.dimension:
+            return convert_figure(spec, number, implied.written, context)
         return {"rejection": _unit_rejection(spec, shown, "unknown_unit", given_unit=unit)}
     if written.dimension == "currency" and declared.dimension == "currency":
         return {"value": number}

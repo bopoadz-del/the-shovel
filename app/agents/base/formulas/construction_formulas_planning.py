@@ -154,6 +154,32 @@ for _family, _table in _FAMILIES.items():
         _INDEX[_key] = (_family, float(_scale), tuple(_needs), _raw)
 
 
+# A rate written as one word ("daily") is "per" its unit.
+_RATE_WORDS = {
+    "hourly": "hour", "daily": "day", "weekly": "week",
+    "monthly": "month", "yearly": "year", "annually": "year",
+}
+_RATE_WORD_RE = re.compile(r"\b(" + "|".join(_RATE_WORDS) + r")\b", re.IGNORECASE)
+# "per" as a word, then any separator: "per day", "Per Day", "per-day", "per/day".
+_PER_WORD_RE = re.compile(r"\s*\bper\b[\s\-/]*", re.IGNORECASE)
+# "per" run into a known unit with no separator: "perday", "perWeek".
+_PER_JOINED_RE = re.compile(r"\bper([A-Za-z][\w\-]*)", re.IGNORECASE)
+
+
+def normalise_rate(text: Any) -> str:
+    """One spelling for "X per Y": every way of writing the "per" becomes
+    "/". Case, separators (space, hyphen, slash or none) and the one-word
+    rates ("daily") all normalise; "SAR 5,000 Per Day", "perday", "per-day",
+    "per/day" and "daily" all read as "/day". "per" run into a word is split
+    off only when the rest is a unit the table knows ("perch" and "percent"
+    stay as written)."""
+    s = str(text or "").strip()
+    s = _RATE_WORD_RE.sub(lambda m: " per " + _RATE_WORDS[m.group(1).lower()], s)
+    s = _PER_JOINED_RE.sub(
+        lambda m: "per " + m.group(1) if unit_key(m.group(1)) in _INDEX else m.group(0), s)
+    return _PER_WORD_RE.sub("/", s)
+
+
 @dataclass(frozen=True)
 class Unit:
     """A unit resolved to its dimension and its factor onto the dimension's base."""
@@ -187,9 +213,7 @@ def parse_unit(token: Any) -> Optional[Unit]:
     """``token`` resolved to a dimension and factor, or None when the
     converter does not know it. A ratio ("kN/m", "currency/t", "h/m2") is
     resolved from its parts; force over area is a pressure."""
-    raw = re.sub(r"\s+per\s+", "/", str(token or "").strip(), flags=re.IGNORECASE)
-    if not raw or raw in ("-",):
-        return None
+    raw = normalise_rate(token)
     key = unit_key(_ALIASES.get(unit_key(raw), raw))
     whole = _atom(raw, in_ratio=False)
     if whole is not None or "/" not in key:
