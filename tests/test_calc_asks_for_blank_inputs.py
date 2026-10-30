@@ -195,3 +195,20 @@ def test_a_declared_required_input_is_listed_once(monkeypatch, bound, expected):
 def test_declared_required_reads_the_name_trimmed(monkeypatch, name):
     _declare_required(monkeypatch, "delay_damages_daily", "days")
     assert cf._declared_required(name) == ["days"]
+
+
+@pytest.mark.parametrize("name,ghost", [
+    ("delay_damages_daily", "not_a_signature_input"),
+    ("backfill_volume", "another_ghost_input"),
+])
+def test_a_declared_input_the_function_does_not_take_is_skipped(name, ghost):
+    import dataclasses
+
+    import app.lib.formula_registry as fr
+
+    spec = fr.get(name)
+    params = dict(spec.params)
+    params[ghost] = fr.Param(required=True)
+    rows = fr.parameters(dataclasses.replace(spec, params=params))
+    assert ghost not in rows
+    assert set(rows) == set(fr.parameters(spec))
