@@ -8,12 +8,12 @@ from app.agents.hats.planning.formulas.construction_formulas import (
     electrical_installation_sequence, supervision_ratio,
 )
 from app.agents.hats.quantities.formulas.construction_formulas import (
-    cost_buildup_concrete, cost_buildup_rebar, mobilization_cost_estimate,
+    cost_buildup_concrete, cost_buildup_formwork, cost_buildup_rebar, mobilization_cost_estimate,
 )
 from app.agents.hats.contracts.formulas.construction_formulas_commercial import (
     delay_damages_daily,
 )
-from app.agents.driver.render import _label_without_unit, currency_unit
+from app.agents.driver.render import _label_without_unit, _outputs, currency_unit, headline
 from app.agents.runtime import _format_deterministic_cost_calc
 from app.lib.construction_formulas import describe_calculation_params
 
@@ -152,3 +152,68 @@ def test_cost_answer_uses_the_result_currency_only(cur, want):
 def test_declared_money_unit_wins_over_name_suffix(name, fn, key, unit):
     rows = {r["name"]: r["unit"] for r in describe_calculation_params(fn, name)}
     assert rows[key] == unit
+
+
+# --- each changed function's own first guard ---------------------------------
+REBAR = dict(material_price_per_t=1000, labour_rate_per_hr=10, crane_rate_per_hr=100)
+FORM = dict(shuttering_supply_per_m2=40, scaffolding_per_m2_day=1, labour_rate_per_hr=10, crane_rate_per_hr=100)
+
+
+@pytest.mark.parametrize("call", [
+    lambda q: cost_buildup_concrete(quantity_m3=q, **CONC),
+    lambda q: cost_buildup_rebar(quantity_kg=q, **REBAR),
+    lambda q: cost_buildup_formwork(area_m2=q, **FORM),
+    lambda q: electrical_installation_sequence(q, 1, stage_output_rates={"rough_in": 100}),
+])
+@pytest.mark.parametrize("q", [-5, -0.5])
+def test_a_negative_quantity_is_refused(call, q):
+    with pytest.raises(ValueError):
+        call(q)
+
+
+@pytest.mark.parametrize("floors", [0, -1])
+def test_electrical_needs_at_least_one_floor(floors):
+    with pytest.raises(ValueError):
+        electrical_installation_sequence(100, floors, stage_output_rates={"rough_in": 100})
+
+
+@pytest.mark.parametrize("pct,base", [(-0.1, 1000), (0.1, -1000)])
+def test_delay_damages_refuses_negative_operands(pct, base):
+    out = delay_damages_daily(rate_percent=pct, contract_amount=base)
+    assert out == {"error": "rate_percent and contract_amount must be >= 0."}
+
+
+@pytest.mark.parametrize("key,unit,want", [("selling_price_sar", "SAR/m3", "selling price"),
+                                           ("bid_value_usd", "USD", "bid value")])
+def test_a_trailing_currency_word_is_dropped_from_the_label(key, unit, want):
+    assert _label_without_unit(key, unit) == want
+
+
+@pytest.mark.parametrize("unit", ["m3", "days"])
+def test_a_non_money_unit_is_left_alone(unit):
+    assert currency_unit("selling_sar", unit, "USD") == unit
+
+
+def _rebar_env(cur):
+    res = cost_buildup_rebar(quantity_kg=2000, currency=cur, **REBAR)
+    return {"calculation": "cost_buildup_rebar", "result": res}, res
+
+
+@pytest.mark.parametrize("cur", ["USD", "EUR"])
+def test_headline_leads_with_the_declared_main_output_in_its_currency(cur):
+    env, res = _rebar_env(cur)
+    line = headline(env)
+    assert "selling price" in line.lower()
+    assert f"{cur}/t" in line
+    assert f"{res['selling_price_per_t']:,.0f}".split(",")[0] in line
+
+
+@pytest.mark.parametrize("cur", ["USD", "EUR"])
+def test_outputs_carry_the_result_currency_and_drop_primary_mirrors(cur):
+    env, _ = _rebar_env(cur)
+    env["result"] = dict(env["result"], primary_result={"value": 1, "unit": "x", "label": "y"},
+                         value=1, unit="x", label="y")
+    outputs, labels, units = _outputs(env, {"quantity_kg": 2000})
+    assert units["selling_price_per_t"] == f"{cur}/t"
+    assert "quantity_kg" not in outputs
+    assert not {"value", "unit", "label"} & set(outputs)

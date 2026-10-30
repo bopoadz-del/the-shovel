@@ -15,8 +15,9 @@ from app.agents.hats.contracts.formulas.construction_formulas_commercial import 
 )
 
 
-def test_rebar_without_rates_asks_for_them():
-    out = run_calculation("cost_buildup_rebar", {"quantity_kg": 10000})
+@pytest.mark.parametrize("kg", [10000, 250])
+def test_rebar_without_rates_asks_for_them(kg):
+    out = run_calculation("cost_buildup_rebar", {"quantity_kg": kg})
     assert out["status"] == "error"
     assert set(out["missing"]) == {"material_price_per_t", "labour_rate_per_hr", "crane_rate_per_hr"}
 

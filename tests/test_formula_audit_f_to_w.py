@@ -439,15 +439,18 @@ class TestSupervisionRatio:
         assert r["document_controllers"] == 1
         assert r["total_supervision_staff"] == 4
 
-    def test_zero_quantities_need_no_ratio_and_staff_nobody(self):
-        r = _ok("supervision_ratio", concrete_m3=0, area_m2=0)
+    @pytest.mark.parametrize("qty", [dict(concrete_m3=0, area_m2=0), dict(structural_steel_t=0, piping_dia_inch=0)])
+    def test_zero_quantities_need_no_ratio_and_staff_nobody(self, qty):
+        r = _ok("supervision_ratio", **qty)
         assert r["total_supervisors"] == 0
         assert r["total_supervision_staff"] == 0
 
-    def test_a_quantity_without_its_ratio_asks_for_it(self):
-        env = run_calculation("supervision_ratio", {"concrete_m3": 5000})
+    @pytest.mark.parametrize("qty,ratio", [("concrete_m3", "concrete_m3_per_supervisor"),
+                                           ("area_m2", "area_m2_per_supervisor")])
+    def test_a_quantity_without_its_ratio_asks_for_it(self, qty, ratio):
+        env = run_calculation("supervision_ratio", {qty: 5000})
         assert env["status"] == "error"
-        assert "concrete_m3_per_supervisor" in env["missing"]
+        assert ratio in env["missing"]
 
 
 class TestThermalShrinkageEquivalence:
@@ -1340,10 +1343,12 @@ class TestFwMobilizationFlake:
     """A plain mobilisation ask reaches the calculator; with no project
     rates it asks for them (no built-in prices), never a made-up figure."""
 
-    def test_no_figure_uk_spelling_asks_for_the_project_rates(self):
+    @pytest.mark.parametrize("ask", ["What is the site mobilisation cost?",
+                                     "What is the site mobilization cost?"])
+    def test_no_figure_uk_spelling_asks_for_the_project_rates(self, ask):
         env = run_calculation(
             "unit_cost_total",
-            {"text": "What is the site mobilisation cost?"},
+            {"text": ask},
         )
         assert env["calculation"] == "mobilization_cost_estimate"
         assert env["status"] == "error" and env.get("needs_input")
