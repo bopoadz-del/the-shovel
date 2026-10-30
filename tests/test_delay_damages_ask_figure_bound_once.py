@@ -63,3 +63,15 @@ def test_the_schema_the_model_sees_offers_amount_per_day(hat):
 ])
 def test_ask_figures_already_spent_are_not_bound_again(given, extracted, text, kept):
     assert cf._unspent_ask_figures(given, extracted, text) == kept
+
+
+@pytest.mark.parametrize("amount,days,total", [(5000, 500, 2_500_000.0), (2, 1e9, 2e9)])
+def test_large_day_counts_are_accepted_through_the_tool(amount, days, total):
+    from tests.test_construction_calc_tool import _agent, _run
+
+    tc = {"id": "c1", "function": {"name": "construction_calc", "arguments": json.dumps(
+        {"calculation": "delay_damages_daily", "params": {"amount_per_day": amount, "days": days}})}}
+    env = _run(_agent(["construction"])._run_tool_call(tc))
+    assert env["ok"] is True, env
+    res = env["result"]["result"]
+    assert res["days"] == days and res["total_amount"] == total
