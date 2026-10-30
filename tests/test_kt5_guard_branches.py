@@ -143,3 +143,10 @@ def test_no_text_has_no_accepted_contract_amount(text):
 @pytest.mark.parametrize("amount", ["SAR 500.00", "USD 999.99"])
 def test_a_sub_thousand_clause_111_row_is_not_the_base(amount):
     assert c.text_states_clause_111_aca(f"1.1.1: | | Accepted Contract Amount: {amount} |") is False
+
+
+# M06 -- _sentence_of_amount starts AFTER the preceding '.' or ';' boundary.
+@pytest.mark.parametrize("sep,lead", [(".", "Example only"), (";", "Retention ten percent")])
+def test_sentence_of_amount_starts_after_the_boundary(sep, lead):
+    ctx = f"{lead}{sep} The Accepted Contract Amount is SAR 12,345,678.00. Next clause."
+    assert c._sentence_of_amount(12345678.00, ctx) == " The Accepted Contract Amount is SAR 12,345,678.00"
