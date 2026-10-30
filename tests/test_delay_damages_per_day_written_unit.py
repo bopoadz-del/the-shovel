@@ -240,3 +240,15 @@ def test_normalise_rate_leaves_a_word_that_is_not_per_a_unit(word):
 ])
 def test_parse_unit_reads_any_spelling_of_per(token, dimension):
     assert planning.unit_dimension(token) == dimension
+
+
+@pytest.mark.parametrize("token,dimension,scale", [
+    ("kg/cm2", "pressure", 98.0665),
+    ("t/m2", "pressure", 9.80665),
+    ("lb/ft2", "pressure", 0.04788025898033584),
+])
+def test_a_whole_unit_wins_over_splitting_it_as_a_ratio(token, dimension, scale):
+    import app.agents.base.formulas.construction_formulas_planning as planning
+
+    unit = planning.parse_unit(token)
+    assert (unit.dimension, unit.scale) == (dimension, scale)
