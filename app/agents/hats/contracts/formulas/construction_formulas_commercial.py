@@ -20,7 +20,7 @@ from app.lib.formula_registry import Param, formula
 def delay_damages_daily(
     rate_percent: float = 0.0,
     contract_amount: float = 0.0,
-    currency: str = "SAR",
+    currency: str = "",
 ) -> dict:
     """Daily delay damages = rate% × Accepted Contract Amount / Contract Price.
 
@@ -44,8 +44,9 @@ def delay_damages_daily(
                 "(unbound delay-damages / empty rates)."
             )
         }
+    # The contract's own currency, when given; none is assumed.
+    cur = str(currency or "").strip().upper()
     daily = round(base * (pct / 100.0), 2)
-    cur = (currency or "SAR").strip().upper() or "SAR"
     return {
         "daily_amount": daily,
         "rate_percent": pct,
@@ -54,7 +55,7 @@ def delay_damages_daily(
         "per": "calendar day",
         "standard": "FIDIC Sub-Clause 8.8 (rate × Accepted Contract Amount)",
         "note": (
-            f"{pct:g}% of {cur} {base:,.2f} = {cur} {daily:,.2f} "
-            f"per calendar day."
+            f"{pct:g}% of {(cur + ' ') if cur else ''}{base:,.2f} = "
+            f"{(cur + ' ') if cur else ''}{daily:,.2f} per calendar day."
         ),
     }

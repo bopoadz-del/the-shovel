@@ -10,6 +10,10 @@ import json
 from app.agents.runtime import Agent
 
 
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 def _agent(blocks=None):
     return Agent(name="t", description="t", system_prompt="t",
                  allowed_blocks=blocks or [])
@@ -47,10 +51,10 @@ def test_enum_is_populated_from_registry():
 
 def test_dispatch_cost_buildup_passes_real_rate_through():
     agent = _agent(["construction"])
-    r = _call(agent, "cost_buildup_rebar", {"quantity_kg": 1000, "material_price_sar_t": 3000})
+    r = _call(agent, "cost_buildup_rebar", {**REBAR_RATES, "quantity_kg": 1000, "material_price_per_t": 3000})
     assert r["ok"] is True
     assert r["result"]["status"] == "success"
-    assert r["result"]["result"]["material_sar_t"] == 3300  # 1t * 3000 * 1.10
+    assert r["result"]["result"]["material_per_t"] == 3300  # 1t * 3000 * 1.10
     assert "priced-BOQ" in r["result"]["note"]  # grounding reminder present
 
 

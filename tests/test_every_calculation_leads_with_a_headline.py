@@ -12,6 +12,10 @@ from app.agents.driver import render
 from app.lib import construction_formulas as cf
 
 
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 def _render(name, **p):
     return render.render_calculation(cf.run_calculation(name, p), p)
 
@@ -38,12 +42,12 @@ def test_a_declared_main_output_is_the_headline():
     mobilisation. A formula now declares the output its answer leads with,
     and its rate outputs carry their real units."""
     cases = {
-        "cost_buildup_concrete": ({"quantity_m3": 100}, "Headline: Selling price is 308.83 SAR/m3."),
+        "cost_buildup_concrete": ({"quantity_m3": 100, **CONCRETE_RATES}, "Headline: Selling price is 308.83 SAR/m3."),
         # LANE3: the formula takes quantity_kg (20 t), not quantity_t.
-        "cost_buildup_rebar": ({"quantity_kg": 20000}, "Headline: Selling price is 4,856 SAR/t."),
+        "cost_buildup_rebar": ({"quantity_kg": 20000, **REBAR_RATES}, "Headline: Selling price is 4,856 SAR/t."),
         # LANE3: formwork had no headline test.
-        "cost_buildup_formwork": ({"area_m2": 500}, "Headline: Selling price is 100.03 SAR/m2."),
-        "mobilization_cost_estimate": ({"num_personnel": 50, "duration_months": 6}, "Headline: Grand total is 2,627,775 SAR."),
+        "cost_buildup_formwork": ({"area_m2": 500, **FORMWORK_RATES}, "Headline: Selling price is 100.03 SAR/m2."),
+        "mobilization_cost_estimate": ({"num_personnel": 50, "duration_months": 6, **MOBILIZATION_RATES}, "Headline: Grand total is 2,627,775 SAR."),
     }
     for name, (params, expected) in cases.items():
         assert render.headline(cf.run_calculation(name, params)) == expected, name
@@ -62,6 +66,10 @@ def test_a_money_unit_takes_the_currency_its_key_names():
     code comes from the key and the platform's currency table, never a fixed
     string; a key that names no currency keeps 'currency'."""
     assert render.currency_unit("selling_price_sar_m3", "currency/m3") == "SAR/m3"
+    # A neutral key takes the result's own currency; none given stays generic.
+    assert render.currency_unit("selling_price_per_m3", "currency/m3", "SAR") == "SAR/m3"
+    assert render.currency_unit("selling_price_per_m3", "currency/m3", "USD") == "USD/m3"
+    assert render.currency_unit("selling_price_per_m3", "currency/m3") == "currency/m3"
     assert render.currency_unit("grand_total_usd", "currency") == "USD"
     assert render.currency_unit("total_cost", "currency") == "currency"
     assert render.currency_unit("rate_sar_usd", "currency") == "currency", "two currencies named: not guessed"

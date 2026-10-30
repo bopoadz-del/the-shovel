@@ -36,6 +36,10 @@ from tests.test_construction_calc_tool import _agent, _call
 # ── beam_shear_simple (unbound zeros were live tool_error / wrong_number) ──
 
 # V = wL/2 + P/2. Hand: 20×6/2 = 60 kN. With P=40: 60+20 = 80 kN.
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
+
 _SHEAR_REQUIRED = (
     ("udl_w_kn_m", "kN/m"),
     ("span_m", "m"),
@@ -286,9 +290,9 @@ def test_live_probe_excavation_keeps_bank_600_and_bulked_750():
 
 def test_json_string_params_nest_binds():
     inner = _ok("cost_buildup_concrete", {
-        "params": json.dumps({"quantity_m3": 100}),
+        "params": json.dumps({"quantity_m3": 100, **CONCRETE_RATES}),
     })
-    assert inner["total_project_value_sar"] == pytest.approx(30883, abs=2)
+    assert inner["total_project_value"] == pytest.approx(30883, abs=2)
 
 
 def test_bolt_shear_capacity_model_aliases():
@@ -371,10 +375,10 @@ def test_concrete_volume_t_and_lwt_aliases():
 
 
 def test_cost_buildup_concrete_qty_and_volume_aliases():
-    inner = _ok("cost_buildup_concrete", {"qty": 100})
-    assert inner["total_project_value_sar"] == pytest.approx(30883, abs=2)
-    via_vol = _ok("cost_buildup_concrete", {"volume": 100})
-    assert via_vol["total_project_value_sar"] == pytest.approx(30883, abs=2)
+    inner = _ok("cost_buildup_concrete", {"qty": 100, **CONCRETE_RATES})
+    assert inner["total_project_value"] == pytest.approx(30883, abs=2)
+    via_vol = _ok("cost_buildup_concrete", {"volume": 100, **CONCRETE_RATES})
+    assert via_vol["total_project_value"] == pytest.approx(30883, abs=2)
 
 
 def test_cost_per_area_cost_and_area_m2_aliases():
@@ -398,11 +402,11 @@ def test_diaphragm_wall_panel_volume_short_aliases():
 
 def test_electrical_installation_sequence_area_aliases():
     inner = _ok("electrical_installation_sequence", {
-        "area": 1000, "floors": 3,
+        "area": 1000, "floors": 3, **ELECTRICAL_STAGE_RATES,
     })
     assert inner["total_days"] == 360
     via_gfa = _ok("electrical_installation_sequence", {
-        "gfa": 1000, "num_floors": 3,
+        "gfa": 1000, "num_floors": 3, **ELECTRICAL_STAGE_RATES,
     })
     assert via_gfa["total_days"] == 360
 
