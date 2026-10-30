@@ -75,3 +75,33 @@ def test_large_day_counts_are_accepted_through_the_tool(amount, days, total):
     assert env["ok"] is True, env
     res = env["result"]["result"]
     assert res["days"] == days and res["total_amount"] == total
+
+
+@pytest.mark.parametrize("ask,amount,days,total", [
+    ("60 days at 5,000 per day", 5000, 60, 300_000.0),
+    ("Delay damages: 45 days at 1,200 per day", 1200, 45, 54_000.0),
+])
+def test_days_written_as_the_unit_of_a_figure_bind_that_figure(ask, amount, days, total):
+    env = _chat_call(ask, {"amount_per_day": amount})
+    assert env["ok"] is True, env
+    res = env["result"]["result"]
+    assert res["days"] == days and res["total_amount"] == total
+    assert res["currency"] == "SAR"
+
+
+@pytest.mark.parametrize("text,bound", [
+    ("60 days at 5,000 per day", {"days": 60.0}),
+    ("days of delay 12", {"days": 12.0}),           # label first, figure after: unchanged
+])
+def test_extractor_reads_a_figure_by_the_unit_after_it(text, bound):
+    got = cf.extract_calculation_params_from_text(cf.CALCULATORS["delay_damages_daily"], text)
+    assert {k: v for k, v in got.items() if k == "days"} == bound
+
+
+@pytest.mark.parametrize("text,key", [
+    ("18 currency/day", "currency"),     # a label inside a compound unit is not the unit
+    ("6 days/week", "days"),
+])
+def test_a_label_inside_a_compound_unit_does_not_take_the_figure(text, key):
+    got = cf.extract_calculation_params_from_text(cf.CALCULATORS["delay_damages_daily"], text)
+    assert got.get(key) not in (18.0, 6.0)

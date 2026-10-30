@@ -1893,6 +1893,12 @@ def _normalize_ask(raw: str) -> str:
     return _CURRENCY_BEFORE_RE.sub("", text)
 
 
+def _figure_before_label(pat: str, raw: str, overlaps: Any) -> Optional[Any]:
+    """The first open figure written directly before ``pat`` (its unit)."""
+    rx = re.compile(rf"(?<![\d.,])({_TEXT_NUM_RE})\s*(){pat}(?![A-Za-z0-9/])", re.IGNORECASE)
+    return _first_open(rx, raw, overlaps)
+
+
 def extract_calculation_params_from_text(
     fn: Any,
     text: str,
@@ -1931,7 +1937,10 @@ def extract_calculation_params_from_text(
             continue
         pat = r"[\s_]+".join(re.escape(part) for part in label.split("_") if part)
         compact = label.replace("_", "")
-        match = None
+        # A label written straight after a figure is that figure's unit
+        # ("60 days at 5,000 per day"): it labels the figure before it, never
+        # the next one. Bare symbols (one letter) are not units here.
+        match = _figure_before_label(pat, raw, _overlaps) if len(compact) > 1 else None
         if len(compact) == 1:
             rx = re.compile(
                 rf"(?<![A-Za-z0-9]){pat}(?:\s*[=:]\s*|\s+(?:is|of|equals|=)\s+)({_TEXT_NUM_RE})"
@@ -1944,7 +1953,7 @@ def extract_calculation_params_from_text(
                 re.IGNORECASE,
             )
             match = _first_open(rx, raw, _overlaps) or _first_open(glued, raw, _overlaps)
-        else:
+        elif match is None:
             rx = re.compile(
                 rf"(?<![A-Za-z0-9]){pat}(?:\s*[=:]\s*|\s+(?:is|of|equals|at)\s+|\s+)({_TEXT_NUM_RE})"
                 rf"(?:\s*({_TEXT_UNIT_RE}))?",
@@ -2950,8 +2959,11 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         ) if x not in (None, "")
     )
     if text_blob:
+        # Only an input this calculator accepts spends a figure: a stray key
+        # another extractor read ("damages: 45") is dropped later, unbound.
+        inputs = {k: v for k, v in params.items() if _accepts_param(fn, k)}
         params.update(_unspent_ask_figures(
-            params, extract_calculation_params_from_text(fn, text_blob), text_blob))
+            inputs, extract_calculation_params_from_text(fn, text_blob), text_blob))
     # Re-run the symbol alias AFTER both text extractors. The ask sentence rides
     # along in ``text`` / ``query`` and both extractors above pull "E = 200",
     # "I = 2.0e-4" (and a shortened ``c``) back out of it as bare keys — after
