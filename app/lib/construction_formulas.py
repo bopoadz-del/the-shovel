@@ -2863,7 +2863,7 @@ def _is_blank(value: Any) -> bool:
 def _blank_calc_kwargs(params: Dict[str, Any]) -> Tuple[str, ...]:
     """The calculator kwargs, top level or nested as _flatten_calc_kwargs
     reads them, that the caller sent as null or blank, in the caller's order."""
-    nested = [coerce_calc_params(params.get(k)) or {} for k in _FLATTEN_NEST_KEYS]
+    nested = [coerce_calc_params(params.get(k)) for k in _FLATTEN_NEST_KEYS]
     return tuple(dict.fromkeys(str(key) for group in (params, *nested)
                                for key, val in group.items() if _is_blank(val)))
 
