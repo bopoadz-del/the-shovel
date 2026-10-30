@@ -104,3 +104,31 @@ def test_a_digit_inside_a_unit_is_not_a_figure(ask, value):
 @pytest.mark.parametrize("text", ["60 days at 5,000 per day", "45 days at 1,200 per day"])
 def test_an_ask_with_no_calculator_extracts_nothing(text):
     assert cf.extract_calculation_params_from_text(None, text) == {}
+
+
+@pytest.mark.parametrize("ask,amount", [
+    ("v.5 days at 1,000 per day", 1000),     # ".5" after a letter: the 5 is no figure of its own
+    ("x.7 days at 200 per day", 200),
+])
+def test_digits_after_a_point_are_not_a_figure_on_their_own(ask, amount):
+    res = _chat_call(ask, {"amount_per_day": amount})["result"]["result"]
+    tail = float(ask.split(".")[1].split()[0])
+    assert res.get("days") != tail and res.get("total_amount") != tail * amount
+
+
+@pytest.mark.parametrize("ask,amount,figure", [
+    ("60 days3", 5000, 60.0),                # "days3" is not the unit "days"
+    ("45 days2", 1200, 45.0),
+])
+def test_a_label_running_into_a_digit_is_not_the_unit(ask, amount, figure):
+    res = _chat_call(ask, {"amount_per_day": amount})["result"]["result"]
+    assert res.get("days") != figure and res.get("total_amount") != figure * amount
+
+
+@pytest.mark.parametrize("ask,amount,days,total", [
+    ("60 DAYS at 5,000/day", 5000, 60, 300_000.0),     # the unit is read in any case
+    ("45 Days at 1,200/day", 1200, 45, 54_000.0),
+])
+def test_the_unit_after_a_figure_binds_in_any_case(ask, amount, days, total):
+    res = _chat_call(ask, {"amount_per_day": amount})["result"]["result"]
+    assert res["days"] == days and res["total_amount"] == total
