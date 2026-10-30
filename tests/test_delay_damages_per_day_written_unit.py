@@ -74,3 +74,38 @@ def test_the_live_asks_give_an_amount_and_a_currency(ask, params, total, shown):
     assert res["total_amount"] == total
     assert shown in res["note"]
     assert "rate_percent" not in {k for k, v in res.items() if v}
+
+
+# The two functions the fix touches, read directly.
+from app.lib import formula_registry as fr
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("SAR 1,200 per day", (1200.0, "SAR per day")),
+    ("AED 5,000", (5000.0, "AED")),
+    ({"value": 20, "unit": "ft"}, (20.0, "ft")),
+    ({"value": 3.5, "unit": "m"}, (3.5, "m")),
+])
+def test_value_and_unit_reads_a_trailing_per_unit(value, expected):
+    assert fr.value_and_unit(value) == expected
+
+
+def _spec(unit, hi=None):
+    return fr.ParamSpec(name="x", kind="number", unit=unit, lo=0, hi=hi,
+                        label="x", grade="", required=True)
+
+
+@pytest.mark.parametrize("unit,number,written,expected", [
+    ("currency/day", 5000.0, "per day", 5000.0),
+    ("currency/day", 7000.0, "per week", 1000.0),
+    ("count", 4.0, "bars", 4.0),
+    ("count", 9.0, "pieces", 9.0),
+])
+def test_convert_figure_takes_an_implied_currency_and_leaves_counts(unit, number, written, expected):
+    out = fr.convert_figure(_spec(unit), number, written)
+    assert out["value"] == pytest.approx(expected), out
+
+
+@pytest.mark.parametrize("written", ["per m3", "per kg"])
+def test_convert_figure_refuses_a_per_unit_of_another_kind(written):
+    assert fr.convert_figure(_spec("currency/day"), 5000.0, written)["rejection"]["reason"] == "unknown_unit"
