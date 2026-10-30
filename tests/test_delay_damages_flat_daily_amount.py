@@ -100,3 +100,34 @@ def test_the_headline_is_the_total_when_days_are_given(params, key, value):
     from app.lib.construction_formulas import calculation_headline
 
     assert calculation_headline("delay_damages_daily", delay_damages_daily(**params)) == (key, value)
+
+
+# The registry declares both new inputs with their own units ...
+@pytest.mark.parametrize("name,unit", [("days", "day"), ("amount_per_day", "currency/day")])
+def test_new_inputs_are_declared_with_their_units(name, unit):
+    from app.lib.formula_registry import get
+
+    assert get("delay_damages_daily").inputs[name] == unit
+
+
+# ... and the declared range of days is enforced on the tool path.
+@pytest.mark.parametrize("days,ok", [(30, True), (2e9, False)])
+def test_days_beyond_the_declared_range_are_refused(days, ok):
+    env = _call({"amount_per_day": 100, "days": days})
+    assert env["ok"] is ok, env
+    if not ok:
+        assert "days" in json.dumps(env)
+
+
+@pytest.mark.parametrize("amount,daily", [(1234.567, 1234.57), (99.994, 99.99)])
+def test_a_fractional_daily_amount_is_rounded_to_cents(amount, daily):
+    out = delay_damages_daily(amount_per_day=amount)
+    assert out["daily_amount"] == daily
+    assert out["per"] == "calendar day"
+
+
+@pytest.mark.parametrize("amount,days,total", [(33.33, 3, 99.99), (1000.5, 1.5, 1500.75)])
+def test_a_fractional_total_is_rounded_to_cents(amount, days, total):
+    out = delay_damages_daily(amount_per_day=amount, days=days)
+    assert out["total_amount"] == total
+    assert out["per"] == "calendar day"
