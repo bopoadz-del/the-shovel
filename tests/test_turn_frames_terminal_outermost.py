@@ -9,6 +9,8 @@ either escaped the guard. These tests drive the real ``_turn_frames`` chain.
 import asyncio
 import json
 
+import pytest
+
 from app.routers import chat as chat_mod
 
 
@@ -80,43 +82,43 @@ def _run(stream, identity, timings):
     return asyncio.run(collect())
 
 
-def test_a_redactor_failure_mid_stream_still_ends_with_error_and_end():
-    for timings in (True, False):
-        for fail_after in (0, 2):
-            got = _run(_producer(5), _BrokenRedactor(fail_after), timings)
-            assert not any(g.startswith("ESCAPED") for g in got), got
-            kinds = _types(got)
-            assert kinds[0] == "status", kinds
-            assert "error" in kinds and kinds[-1] == "end", kinds
+@pytest.mark.parametrize("timings,fail_after", [(True, 0), (True, 2), (False, 0), (False, 2)])
+def test_a_redactor_failure_mid_stream_still_ends_with_error_and_end(timings, fail_after):
+    got = _run(_producer(5), _BrokenRedactor(fail_after), timings)
+    assert not any(g.startswith("ESCAPED") for g in got), got
+    kinds = _types(got)
+    assert kinds[0] == "status", kinds
+    assert kinds[-2:] == ["error", "end"], kinds
 
 
-def test_a_stage_timings_failure_still_ends_with_error_and_end(monkeypatch):
+@pytest.mark.parametrize("n", [1, 4])
+def test_a_stage_timings_failure_still_ends_with_error_and_end(monkeypatch, n):
     from app.core import turn_timing
 
     def boom():
         raise ValueError("snapshot broke")
     monkeypatch.setattr(turn_timing, "snapshot", boom)
-    got = _run(_producer(1), None, True)
+    got = _run(_producer(n), None, True)
     assert not any(g.startswith("ESCAPED") for g in got), got
     kinds = _types(got)
     assert kinds[-2:] == ["error", "end"], kinds
 
 
-def test_a_healthy_turn_passes_through_unchanged_with_one_end():
-    for n in (1, 7):
-        got = _run(_producer(n), None, True)
-        kinds = [k for k in _types(got) if k != "hat_signals"]
-        assert kinds == ["status", "start"] + ["token"] * n + ["end"], kinds
-        end = json.loads(got[-1][6:])
-        assert end.get("complete") is True and "timings" in end
-    got = _run(_producer(2), None, False)
-    assert "timings" not in json.loads(got[-1][6:])
+@pytest.mark.parametrize("n,timings", [(1, True), (7, False)])
+def test_a_healthy_turn_passes_through_unchanged_with_one_end(n, timings):
+    got = _run(_producer(n), None, timings)
+    kinds = [k for k in _types(got) if k != "hat_signals"]
+    assert kinds == ["status", "start"] + ["token"] * n + ["end"], kinds
+    end = json.loads(got[-1][6:])
+    assert end.get("complete") is True
+    assert ("timings" in end) == timings
 
 
-def test_both_streaming_routes_put_the_escape_net_outermost():
-    from pathlib import Path
-    src = (Path(chat_mod.__file__)).read_text(encoding="utf-8")
-    assert src.count("turn_gate.hold_until_done(close_on_escape(turn_progress.opened(") == 2
+@pytest.mark.parametrize("route", ["chat_stream", "chat_stream_v1"])
+def test_both_streaming_routes_put_the_escape_net_outermost(route):
+    import inspect
+    src = inspect.getsource(getattr(chat_mod, route))
+    assert src.count("turn_gate.hold_until_done(close_on_escape(turn_progress.opened(") == 1
 
 
 async def _then_raise(frames, exc):
@@ -137,35 +139,37 @@ def _collect(gen):
     return asyncio.run(go())
 
 
-def test_close_on_escape_adds_nothing_after_a_terminal_was_sent():
+@pytest.mark.parametrize("last", ['data: {"type": "end"}\n\n', 'data: {"type": "error", "message": "x"}\n\n'])
+def test_close_on_escape_adds_nothing_after_a_terminal_was_sent(last):
     from app.routers.chat_watchdog import close_on_escape
-    for last in ('data: {"type": "end"}\n\n', 'data: {"type": "error", "message": "x"}\n\n'):
-        frames = ['data: {"type": "start"}\n\n', last]
-        got = _collect(close_on_escape(_then_raise(frames, RuntimeError("late")), request_id="r1"))
-        assert got == frames
+    frames = ['data: {"type": "start"}\n\n', last]
+    got = _collect(close_on_escape(_then_raise(frames, RuntimeError("late")), request_id="r1"))
+    assert got == frames
 
 
-def test_close_on_escape_names_the_request_and_ends_after_a_non_terminal():
+@pytest.mark.parametrize("rid,n", [("r1", 1), ("r2", 3)])
+def test_close_on_escape_names_the_request_and_ends_after_a_non_terminal(rid, n):
     from app.routers.chat_watchdog import ESCAPE_MESSAGE, close_on_escape
-    for rid, n in (("r1", 1), ("r2", 3)):
-        frames = ['data: {"type": "token", "content": "a"}\n\n'] * n
-        got = _collect(close_on_escape(_then_raise(frames, ValueError("v")), request_id=rid))
-        assert got[:n] == frames and len(got) == n + 2
-        err, end = json.loads(got[n][6:]), json.loads(got[n + 1][6:])
-        assert err == {"type": "error", "message": ESCAPE_MESSAGE, "request_id": rid}
-        assert end == {"type": "end", "iterations": 0, "sources": [], "tools": []}
+    frames = ['data: {"type": "token", "content": "a"}\n\n'] * n
+    got = _collect(close_on_escape(_then_raise(frames, ValueError("v")), request_id=rid))
+    assert got[:n] == frames and len(got) == n + 2
+    err, end = json.loads(got[n][6:]), json.loads(got[n + 1][6:])
+    assert err == {"type": "error", "message": ESCAPE_MESSAGE, "request_id": rid}
+    assert end == {"type": "end", "iterations": 0, "sources": [], "tools": []}
 
 
-def test_close_on_escape_lets_a_cancelled_client_go():
+@pytest.mark.parametrize("n", [0, 2])
+def test_close_on_escape_lets_a_cancelled_client_go(n):
     from app.routers.chat_watchdog import close_on_escape
-    got = _collect(close_on_escape(_then_raise(['data: {"type": "start"}\n\n'], asyncio.CancelledError()), request_id="r"))
-    assert got[-1] == "ESCAPED:CancelledError" and len(got) == 2
+    frames = ['data: {"type": "start"}\n\n'] * n
+    got = _collect(close_on_escape(_then_raise(frames, asyncio.CancelledError()), request_id="r"))
+    assert got == frames + ["ESCAPED:CancelledError"]
 
 
-def test_close_on_escape_passes_a_clean_stream_through():
+@pytest.mark.parametrize("frames", [[], ['data: {"type": "start"}\n\n', ": keepalive\n\n"]])
+def test_close_on_escape_passes_a_clean_stream_through(frames):
     from app.routers.chat_watchdog import close_on_escape
-    for frames in ([], ['data: {"type": "start"}\n\n', ": keepalive\n\n"]):
-        async def src(frames=frames):
-            for f in frames:
-                yield f
-        assert _collect(close_on_escape(src(), request_id="r")) == frames
+    async def src(frames=frames):
+        for f in frames:
+            yield f
+    assert _collect(close_on_escape(src(), request_id="r")) == frames
