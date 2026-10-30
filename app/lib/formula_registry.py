@@ -513,10 +513,10 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
             return {"value": number}
         # "5,000 per day" for a currency-per-time input: the currency is
         # implied, as it is for a bare figure on a currency input. Only a
-        # unit that then reads as the declared kind is taken.
+        # unit that then reads as the declared kind is taken; it begins with
+        # currency, so only a currency-per input can match it.
         implied = parse_unit(f"currency {unit.strip()}")
-        if declared.dimension.startswith("currency/") and implied is not None \
-                and implied.dimension == declared.dimension:
+        if implied is not None and implied.dimension == declared.dimension:
             return convert_figure(spec, number, implied.written, context)
         return {"rejection": _unit_rejection(spec, shown, "unknown_unit", given_unit=unit)}
     if written.dimension == "currency" and declared.dimension == "currency":

@@ -109,3 +109,25 @@ def test_convert_figure_takes_an_implied_currency_and_leaves_counts(unit, number
 @pytest.mark.parametrize("written", ["per m3", "per kg"])
 def test_convert_figure_refuses_a_per_unit_of_another_kind(written):
     assert fr.convert_figure(_spec("currency/day"), 5000.0, written)["rejection"]["reason"] == "unknown_unit"
+
+
+@pytest.mark.parametrize("amount,days,total", [
+    ("SAR 5,000 per calendar day", 60, 300000.0),
+    ("SAR 7,000 per calendar week", 60, 60000.0),
+])
+def test_a_multi_word_per_unit_is_read_whole(amount, days, total):
+    assert fr.value_and_unit(amount)[1] == "SAR " + amount.split(" ", 2)[2]
+    env = _chat(f"Delay damages at {amount} for {days} days",
+                {"amount_per_day": amount, "days": days})
+    assert env["ok"] is True, env
+    assert env["result"]["result"]["total_amount"] == pytest.approx(total)
+
+
+@pytest.mark.parametrize("unit,written", [
+    ("m3/h", "per h"),
+    ("kg/m3", "per m3"),
+])
+def test_a_per_unit_on_a_non_currency_input_is_refused(unit, written):
+    # The currency is implied only where the input is itself money per something.
+    out = fr.convert_figure(_spec(unit), 5.0, written)
+    assert out["rejection"]["reason"] == "unknown_unit", out

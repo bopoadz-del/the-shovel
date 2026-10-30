@@ -82,7 +82,9 @@ _FAMILIES: Dict[str, Dict[str, Any]] = {
         "s": 1 / 3600, "sec": 1 / 3600, "second": 1 / 3600, "seconds": 1 / 3600,
         "min": 1 / 60, "mins": 1 / 60, "minute": 1 / 60, "minutes": 1 / 60,
         "d": 24.0, "day": 24.0, "days": 24.0,
+        "calendar day": 24.0, "calendar days": 24.0,
         "wk": 168.0, "week": 168.0, "weeks": 168.0,
+        "calendar week": 168.0, "calendar weeks": 168.0,
     },
     # A month has no fixed number of days, so months convert only to years.
     "calendar period": {
