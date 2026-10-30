@@ -58,3 +58,37 @@ def test_total_note_carries_the_given_currency(currency, suffix):
     assert out["total_monthly_cost"] == n * 1000.0
     assert out["notes"][-1] == f"Total crane cost: {n * 1000:,.0f}{suffix}/month"
     assert out["notes"][-2] == f"Require {n} crane(s) @ 1,000{suffix}/month each"
+
+
+# :60 an empty or absent riggers rate, riggers included, is a needs_input return.
+@pytest.mark.parametrize("rg_rate", ["", None])
+def test_missing_riggers_rate_returns_needs_input(rg_rate):
+    out = crane_cost_estimate(**dict(BASE, dry_hire_rate_per_month=100.0, include_operator=False,
+                                     include_riggers=True, riggers_rate_per_month=rg_rate))
+    assert out["needs_input"] == ["riggers_rate_per_month"]
+
+
+@pytest.mark.parametrize("rg_rate,want", [(10.0, 2 * 3 * 110.0), (30.0, 2 * 3 * 130.0)])
+def test_a_given_riggers_rate_is_charged(rg_rate, want):
+    out = crane_cost_estimate(**dict(BASE, dry_hire_rate_per_month=100.0, include_operator=False,
+                                     include_riggers=True, riggers_rate_per_month=rg_rate))
+    assert out["total_project_cost"] == pytest.approx(want)
+
+
+# quantities :49-50 negative counts / durations are refused.
+@pytest.mark.parametrize("field", ["num_cranes", "duration_months"])
+def test_negative_count_or_duration_is_refused(field):
+    kw = dict(BASE, dry_hire_rate_per_month=100.0, include_operator=False, include_riggers=False)
+    kw[field] = -1
+    with pytest.raises(ValueError, match="num_cranes and duration_months"):
+        crane_cost_estimate(**kw)
+
+
+# procurement :63-64 a negative lift demand is refused; zero gives no cranes.
+@pytest.mark.parametrize("demand,raises", [(-5.0, True), (0.0, False)])
+def test_negative_lift_demand_is_refused(demand, raises):
+    if raises:
+        with pytest.raises(ValueError, match="total_lift_demand_tons"):
+            crane_planning(total_lift_demand_tons=demand, crane_capacity_tons=50)
+    else:
+        assert crane_planning(total_lift_demand_tons=demand, crane_capacity_tons=50)["cranes_required"] == 0
