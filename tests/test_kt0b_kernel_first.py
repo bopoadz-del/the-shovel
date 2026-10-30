@@ -195,6 +195,7 @@ async def test_container_refuses_when_the_kernel_check_cannot_run(monkeypatch, b
     if broken:
         assert out["provenance"] == "refused" and out["status"] == "error"
         assert out["routed_from"] == "formula_execute"
+        assert out["certified"] is False
         assert block.llm_calls == 0
     else:
         assert out["provenance"] == "improvised" and out["result"] == 6
