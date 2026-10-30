@@ -75,41 +75,6 @@ def _make_tool_phase_budget(clock) -> "_ToolPhaseBudget":
     return _ToolPhaseBudget(max_probes, time_ms, clock)
 
 
-def _stream_stable_prefix(raw_so_far, raw_emitted, emitted_len, safe_margin, min_flush, scrub):
-    """Pick the next client-safe segment to stream from a growing answer.
-
-    Emits the part of ``scrub(raw_so_far)`` that sits at least ``safe_margin``
-    characters behind the live edge -- or up to a trailing newline, which
-    always completes a line. ``scrub`` is applied to the WHOLE prefix, never a
-    slice, which is the one thing that stops a withheld party name leaking as a
-    partial across two token events: because nothing within ``safe_margin`` of
-    the edge is emitted, and a withheld name is no longer than that margin, the
-    emitted prefix can never change as more deltas arrive (it is stable).
-
-    Setting ``safe_margin`` to 0 re-introduces the leak (a name forming at the
-    edge would be emitted before it is complete, so the scrub cannot catch it)
-    -- that is the mutant ``test_stream_prefix_margin_prevents_name_straddle``
-    kills.
-
-    Returns ``(segment, new_raw_emitted, new_emitted_len)`` or ``None`` when
-    there is nothing stable to flush yet.
-    """
-    stable_end = len(raw_so_far) - safe_margin
-    nl = raw_so_far.rfind("\n")
-    if nl + 1 > stable_end:
-        stable_end = nl + 1
-    if stable_end <= raw_emitted:
-        return None
-    # Don't ship tiny slivers unless a newline makes the cut free.
-    if (stable_end - raw_emitted) < min_flush and nl < raw_emitted:
-        return None
-    scrubbed = scrub(raw_so_far[:stable_end])
-    seg = scrubbed[emitted_len:]
-    if not seg:
-        return None
-    return seg, stable_end, len(scrubbed)
-
-
 def _safe_stream_margin(excerpts: str) -> int:
     """Characters to hold back behind the streaming edge so no withheld party
     name can straddle an emit boundary.
@@ -856,14 +821,6 @@ async def _chat_stream_impl(
                 (_rag_sys_msg or {}).get("content", "") if _rag_sys_msg else ""
             )
             _MIN_FLUSH_CHARS = 24
-
-            def _scrub_for_stream(_text: str) -> str:
-                return _strip_answer_routing_preamble(
-                    _withhold_names_in_streamed_segment(
-                        _sanitize_inline_paths(_sanitize_citation_labels(_text)),
-                        _rag_sys_msg,
-                    )
-                )
             try:
                 async for _delta in self._stream_synthesis(
                     messages, api_key, project_id=project_id, user_id=user_id,
@@ -884,25 +841,52 @@ async def _chat_stream_impl(
                         pending = ""
                         continue
                     # Keep the un-emitted tail in sync every delta so a
-                    # filtered (non-yielded) segment still leaves `pending`
+                    # held (non-yielded) iteration still leaves `pending`
                     # correct for the post-loop flush.
                     pending = raw_so_far[raw_emitted:]
-                    # Stream the STABLE scrubbed prefix (held _safe_margin
-                    # behind the live edge, or up to a newline). Scrubbing the
-                    # whole prefix -- not a slice -- keeps a withheld party name
-                    # from leaking as a partial across two token events, and
-                    # streams a no-newline paragraph that the old newline-only
-                    # cadence left unshown until the end (ORDERS_30OCT_1535Z 6a).
-                    _flush = _stream_stable_prefix(
-                        raw_so_far, raw_emitted, emitted_len,
-                        _safe_margin, _MIN_FLUSH_CHARS, _scrub_for_stream,
+                    # Stream the STABLE prefix: everything that sits at least
+                    # `_safe_margin` behind the live edge (or up to a trailing
+                    # newline, which always completes a line). `_safe_margin`
+                    # is the longest withheld party-name string this turn, so
+                    # no name can straddle the boundary. This streams a
+                    # no-newline paragraph that the old newline-only cadence
+                    # left unshown until the end (ORDERS_30OCT_1535Z item 6a).
+                    _stable_end = len(raw_so_far) - _safe_margin
+                    _nl_at = raw_so_far.rfind("\n")
+                    if _nl_at + 1 > _stable_end:
+                        _stable_end = _nl_at + 1
+                    if _stable_end <= raw_emitted:
+                        continue
+                    if (_stable_end - raw_emitted) < _MIN_FLUSH_CHARS and _nl_at < raw_emitted:
+                        continue
+                    # A streamed answer that is (so far) a search-promise must
+                    # never reach the client -- #454. Gate on the WHOLE
+                    # accumulated answer, not the stable prefix: the promise
+                    # verb ("search"/"check") sits in the held-back tail, so a
+                    # prefix-only check would miss it and flush the preamble
+                    # ("I don't have ... Let me "). The old newline cadence held
+                    # the promise by never flushing prose; this holds it until
+                    # the post-loop promise-hold forces the no-tools retry.
+                    _scrub_all = _strip_answer_routing_preamble(
+                        _withhold_names_in_streamed_segment(
+                            _sanitize_inline_paths(_sanitize_citation_labels(raw_so_far)),
+                            _rag_sys_msg,
+                        )
                     )
-                    if _flush is not None:
-                        seg, _re, _el = _flush
-                        if not (await _off_loop(_looks_like_internal_tool_json, seg)):
-                            raw_emitted, emitted_len = _re, _el
-                            pending = raw_so_far[raw_emitted:]
-                            yield {"type": "token", "content": seg}
+                    if await _off_loop(_final_text_needs_forced_retry, _scrub_all, user_message=user_message):
+                        continue
+                    # Scrub the WHOLE stable prefix (never a slice) so a
+                    # withheld name is seen entire; `seg` is the cumulative
+                    # scrubbed text and we emit only its new suffix.
+                    seg = _sanitize_inline_paths(_sanitize_citation_labels(raw_so_far[:_stable_end]))
+                    seg = _withhold_names_in_streamed_segment(seg, _rag_sys_msg)
+                    seg = _strip_answer_routing_preamble(seg)
+                    _new_out = seg[emitted_len:]
+                    if _new_out and not (await _off_loop(_looks_like_internal_tool_json, _new_out)):
+                        raw_emitted = _stable_end
+                        emitted_len = len(seg)
+                        pending = raw_so_far[raw_emitted:]
+                        yield {"type": "token", "content": _new_out}
             except _SynthStreamError as _se:
                 if streamed_any:
                     # Tokens already left the provider. Do not restart

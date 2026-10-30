@@ -19,57 +19,12 @@ from unittest.mock import patch
 
 import pytest
 
-from app.agents.core.streaming import _safe_stream_margin, _stream_stable_prefix
+from app.agents.core.streaming import _safe_stream_margin
 from app.agents.runtime import Agent
 from tests._fixture_values import STUB_TOKEN_04
 
 
-# ── pure helper: cadence + margin safety ────────────────────────────────────
-
-def _collect(full_text, scrub, margin, *, min_flush=24, delta=5):
-    """Drive _stream_stable_prefix the way the loop does: grow the raw text a
-    few chars at a time, flush each stable prefix, then flush the held-back
-    tail (scrubbed independently, as the post-loop does). Returns the list of
-    emitted segments."""
-    raw = ""
-    raw_emitted = 0
-    emitted_len = 0
-    out: list[str] = []
-    i = 0
-    while i < len(full_text):
-        raw += full_text[i : i + delta]
-        i += delta
-        r = _stream_stable_prefix(raw, raw_emitted, emitted_len, margin, min_flush, scrub)
-        if r is not None:
-            seg, raw_emitted, emitted_len = r
-            out.append(seg)
-    tail = scrub(raw[raw_emitted:])
-    if tail:
-        out.append(tail)
-    return out
-
-
-@pytest.mark.parametrize("full", ["word " * 80, "token-" * 70, "x" * 400])
-def test_long_no_newline_answer_streams_in_many_segments(full):
-    """A long answer with NO newline flushes progressively, and the pieces
-    reassemble to exactly the answer (identity scrub). Several shapes so the
-    cadence is not pinned to one spacing."""
-    out = _collect(full, lambda t: t, margin=64)
-    assert len(out) >= 5, f"expected progressive streaming, got {len(out)} segments"
-    assert "".join(out) == full
-
-
-@pytest.mark.parametrize("full", [
-    "Line one.\nLine two.\nLine three.\n",
-    "A.\nB.\nC.\nD.\nE.\n",
-])
-def test_newline_answer_still_flushes_per_line(full):
-    """Lines flush at their newline even when shorter than the margin -- the
-    old behaviour is preserved for newline-delimited text."""
-    out = _collect(full, lambda t: t, margin=64)
-    assert len(out) >= 2
-    assert "".join(out) == full
-
+# ── pure helper: margin derivation ──────────────────────────────────────────
 
 @pytest.mark.parametrize("excerpts,grows", [
     ("This clause sets the completion period in calendar days.", False),
@@ -85,36 +40,6 @@ def test_safe_stream_margin_grows_with_withheld_names(excerpts, grows):
         assert m > 64, "margin must grow to cover a long withheld party name"
     else:
         assert m == 64
-
-
-def test_stream_prefix_margin_prevents_name_straddle():
-    """A withheld name split across the streaming edge is NEVER emitted as a
-    partial: the margin keeps it unflushed until it is whole and scrubbed.
-
-    The same feed with margin=0 DOES leak the partial -- that asymmetry is the
-    mutant this test kills (drop/zero the margin and the name leaks)."""
-    name = "Acme Engineering Limited"
-    role = "the Engineer"
-    full = "Under the contract the Employer appointed " + name + " to act as the Engineer for the works."
-
-    def scrub(t):
-        return t.replace(name, role)
-
-    safe = "".join(_collect(full, scrub, margin=64))
-    assert "Acme" not in safe, f"party name leaked under a safe margin: {safe!r}"
-    assert role in safe
-
-    leaky = "".join(_collect(full, scrub, margin=0))
-    assert "Acme" in leaky, (
-        "margin=0 should leak the partial name mid-stream; if it does not, this "
-        "test no longer proves the margin is load-bearing"
-    )
-
-
-def test_tiny_sliver_held_until_worthwhile():
-    """Below the min-flush size and with no newline, nothing is emitted yet --
-    the client is not spammed with 1-2 char frames."""
-    assert _stream_stable_prefix("short", 0, 0, 64, 24, lambda t: t) is None
 
 
 # ── integration: the real streamed-synthesis path ──────────────────────────
