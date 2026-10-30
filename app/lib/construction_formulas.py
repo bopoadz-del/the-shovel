@@ -2174,11 +2174,23 @@ def _missing_required(fn: Any, bound: Dict[str, Any], name: Optional[str] = None
         for group in groups:
             if not any(k in bound and bound[k] not in (None, "") for k in group):
                 missing.append(group[0])
-        return missing
-    for row in describe_calculation_params(fn, name=name):
-        if row["required"] and row["name"] not in bound:
-            missing.append(row["name"])
-    return missing
+    else:
+        for row in describe_calculation_params(fn, name=name):
+            if row["required"] and row["name"] not in bound:
+                missing.append(row["name"])
+    return missing + [key for key in _declared_required(name)
+                      if _is_blank(bound.get(key)) and key not in missing]
+
+
+def _declared_required(name: Optional[str]) -> List[str]:
+    """Inputs the formula's registry entry declares required even though the
+    signature gives them a default: they are asked for, never defaulted."""
+    from app.lib import formula_registry
+
+    spec = formula_registry.get(str(name or "").strip()) if name else None
+    if spec is None:
+        return []
+    return [key for key, row in formula_registry.parameters(spec).items() if row.required]
 
 
 # Words that do not identify a formula. A display name's remaining words
@@ -2858,15 +2870,17 @@ def _blank_calc_kwargs(params: Dict[str, Any]) -> Tuple[str, ...]:
 
 def _named_but_blank(name: str, blank: Tuple[str, ...], params: Dict[str, Any],
                      missing: List[str]) -> List[str]:
-    """The numeric inputs the caller sent as null or blank that nothing has
-    filled since (the ask's own words may have): each is asked for, so no
-    default stands in for a figure the user was meant to give."""
+    """The inputs, figure or text, the caller sent as null or blank that
+    nothing has filled since (the ask's own words may have) and that would
+    otherwise run on a real default: each is asked for, so no default stands
+    in for a value the user was meant to give. An input whose own default is
+    None or "" loses nothing when left blank, so it is not asked for."""
     from app.lib import formula_registry
 
     spec = formula_registry.get(name)
     declared = formula_registry.parameters(spec) if spec is not None else {}
     return [key for key in blank
-            if key in declared and declared[key].kind in formula_registry.NUMERIC_KINDS
+            if key in declared and not _is_blank(declared[key].default)
             and _is_blank(params.get(key)) and key not in missing]
 
 
