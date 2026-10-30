@@ -34,11 +34,10 @@ from app.agents.hats.quantities.formulas.construction_formulas_quantities import
     resource_line_cost,
 )
 
-# A raft-volume ask that says to include the documented waste factor:
-#   L x W x T m net, documented waste 5% (x 1.05) on top.
-# Leftover L6 aliased unnamed L×W×D to excavation_volume (bank only, no
-# waste). A concrete/raft ask must pin concrete_volume and this factor.
-DOCUMENTED_CONCRETE_WASTE_FACTOR = 0.05
+# A raft-volume ask that says to include the documented waste factor binds
+# concrete_volume (leftover L6 aliased unnamed L×W×D to excavation_volume).
+# K-T5: the waste factor is a project value. It comes from the ask/retrieved
+# text or the caller's input -- never a figure pinned in code.
 
 _CONCRETE_VOLUME_ASK_RE = re.compile(
     r"\b(concrete|raft|slab|footing|pile[\s-]?cap|waste[\s-]?factor)\b",
@@ -184,9 +183,9 @@ def compose_concrete_volume_from_ask(text: str) -> dict | None:
         "envelope": result,
     }
 
-def documented_concrete_waste_factor() -> float:
-    """Project-documented concrete waste (5%)."""
-    return DOCUMENTED_CONCRETE_WASTE_FACTOR
+def documented_concrete_waste_factor(text: str = "") -> float | None:
+    """The concrete waste factor the project text states, else None (K-T5)."""
+    return waste_factor_from_text(text or "")
 
 def looks_like_concrete_volume_ask(text: str) -> bool:
     """True when the ask is a concrete/raft/slab volume, not leftover-L6 earthwork."""
@@ -337,8 +336,10 @@ def resolve_concrete_volume_calc(
         # answered on 5% after being asked for 7%, with nothing in the
         # answer saying which rate had been used.
         out["waste_factor"] = stated
-    elif requested in (None, "", 0, 0.0) or _DOCUMENTED_WASTE_ASK_RE.search(blob):
-        out["waste_factor"] = DOCUMENTED_CONCRETE_WASTE_FACTOR
+    elif requested in (None, "", 0, 0.0) and _DOCUMENTED_WASTE_ASK_RE.search(blob):
+        # K-T5: the ask wants the project's documented waste but no figure
+        # was stated or supplied. It is a required input -- do not invent one.
+        out.pop("waste_factor", None)
 
     # A follow-up that says "that total" often re-calls this calculator with
     # the per-element size and no count. ``quantity`` used to be dropped on
