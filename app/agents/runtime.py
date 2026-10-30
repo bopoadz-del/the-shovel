@@ -5973,6 +5973,7 @@ _COST_TOTAL_KEYS = (
     "total_for_area_sar",
     "total_cost",
     "grand_total_sar",
+    "grand_total",
 )
 _NOT_A_COST_CALC = frozenset({
     "delay_damages_daily",
