@@ -26,6 +26,7 @@ from app.agents.catalog import (
     resolve_hat_with_base,
 )
 from app.agents.models import AgentManifest
+from app.core.turn_timing import recorded as _recorded
 
 # -- Always on (K-T0a) -----------------------------------------------------
 # The hat router is part of the product, not an opt-in: FORK_HATS_ENABLED is
@@ -72,6 +73,7 @@ class HatActivationAdapter:
         """Return True if hat routing is active."""
         return hats_enabled()
 
+    @_recorded("hat_classification")
     def select_hat_for_message(self, message: str) -> Optional[AgentManifest]:
         """
         Select the best hat for a user message and merge with base.
