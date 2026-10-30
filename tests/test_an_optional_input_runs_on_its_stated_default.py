@@ -13,7 +13,12 @@ in only when the user asks for that document's or project's figures.
 from app.agents.driver import tools as driver_tools
 from app.lib import construction_formulas as cf
 from app.lib import formula_registry
+import pytest
 
+
+from tests.example_project_rates import (  # noqa: F401
+    CONCRETE_RATES, ELECTRICAL_STAGE_RATES, FORMWORK_RATES, MOBILIZATION_RATES, REBAR_RATES,
+)
 
 def _description():
     driver_tools._SCHEMA_CACHE.clear()
@@ -44,11 +49,19 @@ def test_every_listed_calculator_marks_its_optional_inputs():
             assert ("optional" in piece) == (not p.required), (spec.name, key, piece)
 
 
-def test_the_concrete_build_up_on_its_defaults_is_the_hand_figure():
+@pytest.mark.parametrize("given", [False, True])
+def test_the_concrete_build_up_asks_for_prices_it_has_no_standard_for(given):
+    """No built-in price table: a 'standard rates' ask gets the question for
+    the project's prices; with them given, the hand figure."""
     token = cf.set_current_ask("Build up a selling rate for 100 m3 of concrete using your standard rates.")
     try:
-        out = cf.run_calculation("cost_buildup_concrete", {"quantity_m3": 100})
+        params = {"quantity_m3": 100, **(CONCRETE_RATES if given else {})}
+        out = cf.run_calculation("cost_buildup_concrete", params)
     finally:
         cf._CURRENT_ASK.reset(token)
-    assert out["status"] == "success"
-    assert out["result"]["selling_price_sar_m3"] == 308.83
+    if given:
+        assert out["status"] == "success"
+        assert out["result"]["selling_price_per_m3"] == 308.83
+    else:
+        assert out["status"] == "error"
+        assert "cement_price_per_t" in out["missing"]

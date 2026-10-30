@@ -85,7 +85,6 @@ from app.agents.hats.qaqc.formulas.construction_formulas import (  # noqa: F401 
     modulus_of_rupture,
 )
 from app.agents.hats.quantities.formulas.construction_formulas import (  # noqa: F401 -- moved
-    NOTE_REMOTE_AREA,
     cost_buildup_concrete,
     cost_buildup_formwork,
     cost_buildup_rebar,
@@ -420,7 +419,7 @@ _PARAM_UNITS: Dict[str, str] = {
     "available_hours": "h",
     "remaining_qty": "qty",
     "remaining_days": "days",
-    "material_price_sar_t": "SAR/t",
+    "material_price_per_t": "SAR/t",
 }
 
 _CALC_REQUIRED_HELP: Dict[str, str] = {
@@ -549,10 +548,10 @@ _BIND_SEMANTIC_ALIASES: Dict[str, Tuple[str, ...]] = {
     "ton": ("quantity_kg",),
     "mass": ("quantity_kg", "total_mass_kg"),
     "rebar_kg": ("quantity_kg",),
-    "material_price": ("material_price_sar_t",),
-    "steel_price": ("material_price_sar_t",),
-    "rebar_price": ("material_price_sar_t",),
-    "unit_rate": ("material_price_sar_t", "day_rate"),
+    "material_price": ("material_price_per_t",),
+    "steel_price": ("material_price_per_t",),
+    "rebar_price": ("material_price_per_t",),
+    "unit_rate": ("material_price_per_t", "day_rate"),
     "waste": ("waste_pct",),
     "waste_percent": ("waste_pct",),
     "bidders": ("tenderers",),
@@ -582,7 +581,7 @@ _BIND_SEMANTIC_ALIASES: Dict[str, Tuple[str, ...]] = {
     "ipc": ("gross_valuation",),
     "amount": ("gross_valuation", "total_cost", "claimed_amount"),
     "cost": ("total_cost",),
-    "price": ("material_price_sar_t", "total_cost"),
+    "price": ("material_price_per_t", "total_cost"),
     "total": ("total_cost",),
     "area_m2": ("area", "floor_area_m2", "area_m2"),
     "gfa": ("floor_area_m2",),
@@ -641,7 +640,7 @@ _BIND_SEMANTIC_ALIASES: Dict[str, Tuple[str, ...]] = {
     "width": ("width_mm", "formwork_width_m", "width_m"),
     "v": ("wind_velocity_m_s", "wind_speed_m_s"),
     "p": ("central_point_load_kn", "axial_load_kn", "point_load_kn"),
-    "rate": ("rate_percent", "material_price_sar_t"),
+    "rate": ("rate_percent", "material_price_per_t"),
     "delay_rate": ("rate_percent",),
     "aca": ("contract_amount",),
     "accepted_contract_amount": ("contract_amount",),
@@ -1095,7 +1094,12 @@ def describe_calculation_params(
         if key.startswith("_"):
             continue
         required = param.default is param.empty or key in required_names
-        unit = _unit_from_name(key) or declared.get(key, "")
+        # A declared money unit ("currency/t") wins over a name suffix
+        # ("_per_t" alone would read as tonnes).
+        if str(declared.get(key, "")).startswith("currency"):
+            unit = declared[key]
+        else:
+            unit = _unit_from_name(key) or declared.get(key, "")
         row: Dict[str, Any] = {
             "name": key,
             "required": required,
@@ -1464,13 +1468,13 @@ def _extract_rebar_cost_from_ask(text: str, out: Dict[str, Any]) -> None:
             )
             if match:
                 out["quantity_kg"] = _ask_float(match.group(1)) * 1000.0
-    if not _ask_present(out, "material_price_sar_t"):
+    if not _ask_present(out, "material_price_per_t"):
         match = re.search(
             rf"{_ASK_NUM}\s*(?:SAR|USD|AED)?\s*/\s*t(?:onne)?s?\b",
             text, re.IGNORECASE,
         )
         if match:
-            out["material_price_sar_t"] = _ask_float(match.group(1))
+            out["material_price_per_t"] = _ask_float(match.group(1))
 
 _TENDER_ROW_RE = re.compile(
     r"(Bidder\s+[A-Za-z0-9]+|[A-Za-z][\w.\-]{1,30})\s*[—\-:]\s*"

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 
+from tests.example_project_rates import MOBILIZATION_RATES, SUPERVISION_RATIOS
 import pytest
 
 from app.lib.construction_formulas import available_calculations, run_calculation
@@ -240,7 +241,7 @@ class TestMobilizationCostEstimate:
     recurring = monthly×months; fixed = (setups + IT + warehouse)×factor once.
 
     Warehouse must not be pre-multiplied then multiplied again.
-    camp_sar is camp setup + camp recurring only (not the whole recurring pot).
+    camp is camp setup + camp recurring only (not the whole recurring pot).
     Rates are unsourced GCC fallbacks — arithmetic only is audited here.
     """
 
@@ -250,16 +251,16 @@ class TestMobilizationCostEstimate:
         # IT = 100×85×18 = 153,000.
         # fixed base = 450k+60k+280k+40k+153k+35k = 1,018,000; ×1.35 = 1,374,300.
         # grand = 8,553,600 + 1,374,300 = 9,927,900.
-        # camp_sar = (60,000 + 2,800×100×18)×1.35 = 6,885,000.
-        r = _ok("mobilization_cost_estimate", num_personnel=100, duration_months=18)
-        assert r["recurring_monthly_sar"] == pytest.approx(475_200, abs=1)
-        assert r["total_recurring_sar"] == pytest.approx(8_553_600, abs=1)
-        assert r["total_fixed_sar"] == pytest.approx(1_374_300, abs=1)
-        assert r["grand_total_sar"] == pytest.approx(9_927_900, abs=1)
-        assert r["breakdown"]["camp_sar"] == pytest.approx(6_885_000, abs=1)
-        assert r["breakdown"]["warehouse_equipment_sar"] == pytest.approx(47_250, abs=1)
+        # camp = (60,000 + 2,800×100×18)×1.35 = 6,885,000.
+        r = _ok("mobilization_cost_estimate", num_personnel=100, duration_months=18, **MOBILIZATION_RATES)
+        assert r["recurring_monthly"] == pytest.approx(475_200, abs=1)
+        assert r["total_recurring"] == pytest.approx(8_553_600, abs=1)
+        assert r["total_fixed"] == pytest.approx(1_374_300, abs=1)
+        assert r["grand_total"] == pytest.approx(9_927_900, abs=1)
+        assert r["breakdown"]["camp"] == pytest.approx(6_885_000, abs=1)
+        assert r["breakdown"]["warehouse_equipment"] == pytest.approx(47_250, abs=1)
         # Breakdown camp line must not exceed the grand total.
-        assert r["breakdown"]["camp_sar"] < r["grand_total_sar"]
+        assert r["breakdown"]["camp"] < r["grand_total"]
         assert r["unit"] == "SAR"
         assert r["value"] == pytest.approx(9_927_900, abs=1)
         assert "SAR" in str(r.get("note") or "")
@@ -272,10 +273,12 @@ class TestMobilizationCostEstimate:
         r = _ok(
             "mobilization_cost_estimate",
             num_personnel=100, duration_months=18,
-            camp_type="hotel", remote_area_factor=1.0,
+            **{**MOBILIZATION_RATES, "camp_rate_per_person_month": 4500,
+               "remote_area_factor": 1.0},
+            camp_type="hotel",
         )
-        assert r["recurring_monthly_sar"] == pytest.approx(522_000, abs=1)
-        assert r["grand_total_sar"] == pytest.approx(10_414_000, abs=1)
+        assert r["recurring_monthly"] == pytest.approx(522_000, abs=1)
+        assert r["grand_total"] == pytest.approx(10_414_000, abs=1)
         assert r["unit"] == "SAR"
         assert r["value"] == pytest.approx(10_414_000, abs=1)
 
@@ -428,20 +431,26 @@ class TestSupervisionRatio:
 
     def test_5000m3_and_10000m2(self):
         # ceil(5000/35000)=1 civil; ceil(10000/20000)=1 general; HSE=2; DC=1.
-        r = _ok("supervision_ratio", concrete_m3=5000, area_m2=10000)
+        r = _ok("supervision_ratio", concrete_m3=5000, area_m2=10000, **SUPERVISION_RATIOS)
         assert r["civil_supervisors"] == 1
         assert r["general_supervisors"] == 1
         assert r["total_supervisors"] == 2
-        assert r["hse_officers"] == 2
+        assert r["hse_officers"] == 1  # ceil(2/8): no built-in floor
         assert r["document_controllers"] == 1
-        assert r["total_supervision_staff"] == 5
+        assert r["total_supervision_staff"] == 4
 
-    def test_zero_quantities_still_floor_hse_and_dc(self):
-        r = _ok("supervision_ratio", concrete_m3=0, area_m2=0)
+    @pytest.mark.parametrize("qty", [dict(concrete_m3=0, area_m2=0), dict(structural_steel_t=0, piping_dia_inch=0)])
+    def test_zero_quantities_need_no_ratio_and_staff_nobody(self, qty):
+        r = _ok("supervision_ratio", **qty)
         assert r["total_supervisors"] == 0
-        assert r["hse_officers"] == 2
-        assert r["document_controllers"] == 1
-        assert r["total_supervision_staff"] == 3
+        assert r["total_supervision_staff"] == 0
+
+    @pytest.mark.parametrize("qty,ratio", [("concrete_m3", "concrete_m3_per_supervisor"),
+                                           ("area_m2", "area_m2_per_supervisor")])
+    def test_a_quantity_without_its_ratio_asks_for_it(self, qty, ratio):
+        env = run_calculation("supervision_ratio", {qty: 5000})
+        assert env["status"] == "error"
+        assert ratio in env["missing"]
 
 
 class TestThermalShrinkageEquivalence:
@@ -1331,21 +1340,19 @@ class TestFwLeftoverUnitPresentation:
 
 
 class TestFwMobilizationFlake:
-    """Live leftover: 1/2 flake — sometimes no number. Both plain-engineer
-    asks must get construction_calc + a SAR headline."""
+    """A plain mobilisation ask reaches the calculator; with no project
+    rates it asks for them (no built-in prices), never a made-up figure."""
 
-    def test_no_figure_uk_spelling_still_returns_sar_number(self):
+    @pytest.mark.parametrize("ask", ["What is the site mobilisation cost?",
+                                     "What is the site mobilization cost?"])
+    def test_no_figure_uk_spelling_asks_for_the_project_rates(self, ask):
         env = run_calculation(
             "unit_cost_total",
-            {"text": "What is the site mobilisation cost?"},
+            {"text": ask},
         )
-        assert env["status"] == "success", env
         assert env["calculation"] == "mobilization_cost_estimate"
-        r = env["result"]
-        assert r["unit"] == "SAR"
-        assert r["value"] == pytest.approx(9_927_900, abs=1)
-        assert r["grand_total_sar"] == pytest.approx(9_927_900, abs=1)
-        assert "SAR" in str(r.get("note") or "")
+        assert env["status"] == "error" and env.get("needs_input")
+        assert "office_rate_per_person_month" in env["missing"]
 
     def test_staff_and_months_are_read_from_the_ask(self):
         name, params = resolve_fw_calc(
@@ -1357,19 +1364,22 @@ class TestFwMobilizationFlake:
         assert params["duration_months"] == 18
         env = run_calculation(
             "mobilization_cost_estimate",
-            {"text": "Estimate the mobilization cost for 100 staff over 18 months"},
+            {"text": "Estimate the mobilization cost for 100 staff over 18 months",
+             **MOBILIZATION_RATES},
         )
         assert env["status"] == "success", env
-        assert env["result"]["unit"] == "SAR"
         assert env["result"]["value"] == pytest.approx(9_927_900, abs=1)
 
-    def test_named_call_without_params_still_returns_sar(self):
-        env = run_calculation("mobilization_cost_estimate", {})
-        assert env["status"] == "success", env
+    @pytest.mark.parametrize("rates", [None, "given"])
+    def test_named_call_needs_rates_then_runs(self, rates):
+        params = {"num_personnel": 10, "duration_months": 2, **MOBILIZATION_RATES} if rates else {}
+        env = run_calculation("mobilization_cost_estimate", params)
         assert env["calculation"] == "mobilization_cost_estimate"
-        assert env["result"]["unit"] == "SAR"
-        assert isinstance(env["result"]["value"], (int, float))
-        assert env["result"]["value"] > 0
+        if rates:
+            assert env["status"] == "success", env
+            assert env["result"]["value"] > 0
+        else:
+            assert env["status"] == "error"
 
 
 @pytest.mark.asyncio
