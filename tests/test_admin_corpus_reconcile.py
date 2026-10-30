@@ -83,6 +83,30 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def _own_chunk_table(monkeypatch):
+    """Isolate the chunk table: no background writer, own table, dropped after.
+
+    TestClient's startup warms models on a worker thread, and that warm-up
+    builds this namespace's chunk class and table. Built concurrently with
+    _chunk_cls() here, the test walked Base.registry.mappers while the other
+    thread was half-way through mapping the class -- CI's
+    ``UnmappedClassError: RagChunk_t..._256 is not mapped``.
+    WARM_MODELS_BLOCKING finishes the warm-up before the test body runs.
+
+    The namespace is already per-test (conftest), so the table is this
+    test's own; teardown drops it and disposes the pool. The mapper stays
+    registered: SQLAlchemy has no per-mapper unregister, and
+    ``Base.registry.dispose()`` would unmap every model in the process.
+    """
+    monkeypatch.setenv("WARM_MODELS_BLOCKING", "true")
+    yield
+    cls = rag_chunk_class_for(_active_namespace())
+    if cls is not None:
+        cls.__table__.drop(bind=engine, checkfirst=True)
+    engine.dispose()
+
+
+@pytest.fixture(autouse=True)
 def _admin_override():
     app.dependency_overrides[require_api_key] = lambda: {
         "user_id": "test-admin", "role": "admin",
