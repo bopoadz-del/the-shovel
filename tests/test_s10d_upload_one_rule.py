@@ -83,3 +83,22 @@ def test_unaccepted_format_is_415_either_way(client, with_project):
 def test_html_one_rule(client, name, with_project):
     pid = client.post("/v1/projects", json={"name": "s10d-h"}, headers=H).json()["id"] if with_project else None
     assert _upload(client, name, pid).status_code == 200
+
+
+# upload.py :86 the session refusal names the type and points at the published limits.
+@pytest.mark.parametrize("name,ext", [("thing.exe", ".exe"), ("thing.zzz", ".zzz")])
+def test_session_refusal_names_the_type_and_the_limits_route(client, name, ext):
+    r = _upload(client, name)
+    assert r.status_code == 415
+    assert r.json()["detail"] == f"File type '{ext}' is not accepted (see GET /v1/upload-limits)."
+
+
+# projects.py :1063 a stored document says no analysis was run.
+@pytest.mark.parametrize("name", ["spec.txt", "notes.md"])
+def test_add_document_says_no_analysis_was_run(client, name):
+    pid = client.post("/v1/projects", json={"name": "s10d-msg"}, headers=H).json()["id"]
+    r = client.post(f"/v1/projects/{pid}/documents", files={"file": (name, b"text body", "text/plain")}, headers=H)
+    assert r.status_code == 201, r.text
+    msg = r.json()["message"]
+    assert msg.startswith(f"Added '{name}'")
+    assert msg.endswith("No analysis was run; ask in chat to analyze it.")
