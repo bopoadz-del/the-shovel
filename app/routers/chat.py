@@ -23,7 +23,7 @@ from app.core.dynamic_reasoning import understand_intent
 from app.dependencies import require_user
 from app.dependencies import block_instances
 from app.infra.monitoring import capture_llm_transport_failure, get_request_id
-from app.routers.chat_watchdog import guarantee_terminal
+from app.routers.chat_watchdog import close_on_escape, guarantee_terminal
 from app.routers.exit_frames import with_answer_exit
 from app.routers.hat_frames import with_hat_signals
 
@@ -990,11 +990,11 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
         _release_turn = await turn_gate.acquire()
     _identity = await _turn_identity(request.project_id)
     return StreamingResponse(
-        turn_gate.hold_until_done(turn_progress.opened(redact_frames(
+        turn_gate.hold_until_done(close_on_escape(turn_progress.opened(redact_frames(
         guarantee_terminal(
             with_hat_signals(with_answer_exit(event_stream()), request.message),
             request_id=get_request_id(),
-        ), _identity)), _release_turn),
+        ), _identity)), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1235,11 +1235,11 @@ async def chat_stream_v1(
         _release_turn = await turn_gate.acquire()
     _identity = await _turn_identity(project_id)
     return StreamingResponse(
-        turn_gate.hold_until_done(turn_progress.opened(_with_stage_timings(redact_frames(
+        turn_gate.hold_until_done(close_on_escape(turn_progress.opened(_with_stage_timings(redact_frames(
         guarantee_terminal(
             with_hat_signals(with_answer_exit(event_stream()), prompt),
             request_id=get_request_id(),
-        ), _identity))), _release_turn),
+        ), _identity))), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
