@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.agents.core.streaming import _stream_stable_prefix
+from app.agents.core.streaming import _safe_stream_margin, _stream_stable_prefix
 from app.agents.runtime import Agent
 from tests._fixture_values import STUB_TOKEN_04
 
@@ -49,22 +49,42 @@ def _collect(full_text, scrub, margin, *, min_flush=24, delta=5):
     return out
 
 
-def test_long_no_newline_answer_streams_in_many_segments():
-    """A 400-char answer with NO newline flushes progressively, and the pieces
-    reassemble to exactly the answer (identity scrub)."""
-    full = "word " * 80  # 400 chars, no newline
+@pytest.mark.parametrize("full", ["word " * 80, "token-" * 70, "x" * 400])
+def test_long_no_newline_answer_streams_in_many_segments(full):
+    """A long answer with NO newline flushes progressively, and the pieces
+    reassemble to exactly the answer (identity scrub). Several shapes so the
+    cadence is not pinned to one spacing."""
     out = _collect(full, lambda t: t, margin=64)
     assert len(out) >= 5, f"expected progressive streaming, got {len(out)} segments"
     assert "".join(out) == full
 
 
-def test_newline_answer_still_flushes_per_line():
+@pytest.mark.parametrize("full", [
+    "Line one.\nLine two.\nLine three.\n",
+    "A.\nB.\nC.\nD.\nE.\n",
+])
+def test_newline_answer_still_flushes_per_line(full):
     """Lines flush at their newline even when shorter than the margin -- the
     old behaviour is preserved for newline-delimited text."""
-    full = "Line one.\nLine two.\nLine three.\n"
     out = _collect(full, lambda t: t, margin=64)
     assert len(out) >= 2
     assert "".join(out) == full
+
+
+@pytest.mark.parametrize("excerpts,grows", [
+    ("This clause sets the completion period in calendar days.", False),
+    ("Engineer: Acme International Construction and Engineering Company Limited", True),
+])
+def test_safe_stream_margin_grows_with_withheld_names(excerpts, grows):
+    """The hold-back margin is the floor (64) when the excerpts name no party,
+    and MUST grow past it when they name a long one -- a fixed-constant mutant
+    (ignore the excerpts) dies here."""
+    m = _safe_stream_margin(excerpts)
+    assert m >= 64
+    if grows:
+        assert m > 64, "margin must grow to cover a long withheld party name"
+    else:
+        assert m == 64
 
 
 def test_stream_prefix_margin_prevents_name_straddle():
@@ -163,13 +183,15 @@ def _run_turn(agent):
     return asyncio.run(go())
 
 
-def test_live_path_streams_a_no_newline_paragraph_progressively(deepseek_streaming):
+@pytest.mark.parametrize("deltas", [
+    [f"point{i} " for i in range(60)],
+    [f"seg{i}__" for i in range(70)],
+])
+def test_live_path_streams_a_no_newline_paragraph_progressively(deepseek_streaming, deltas):
     """The whole point of 6a: a long answer with NO newline, delivered as many
     small provider deltas, reaches the client as many token events spread
-    through the turn -- not one burst at the end."""
+    through the turn -- not one burst at the end. Two delta shapes."""
     call_llm = _tool_then_final()
-    # 60 small deltas, no newline anywhere: ~ a single long paragraph.
-    deltas = [f"point{i} " for i in range(60)]
     with patch.object(Agent, "_call_llm", call_llm), \
          patch.object(Agent, "_run_tool_call", _tool_ok), \
          patch.object(Agent, "_stream_synthesis", _mk_stream(deltas)):
@@ -181,6 +203,6 @@ def test_live_path_streams_a_no_newline_paragraph_progressively(deepseek_streami
         f"a no-newline paragraph should stream in >=5 token events, got {len(token_events)}"
     )
     text = "".join(e.get("content", "") for e in token_events)
-    assert "point0" in text and "point59" in text
+    assert deltas[0].strip() in text and deltas[-1].strip() in text
     assert "NON-STREAMED" not in text
     assert events[-1]["type"] == "end"

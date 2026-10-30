@@ -110,6 +110,30 @@ def _stream_stable_prefix(raw_so_far, raw_emitted, emitted_len, safe_margin, min
     return seg, stable_end, len(scrubbed)
 
 
+def _safe_stream_margin(excerpts: str) -> int:
+    """Characters to hold back behind the streaming edge so no withheld party
+    name can straddle an emit boundary.
+
+    It is the longest withheld variant/acronym derivable from THESE excerpts
+    (+4 for the trailing word boundary), floored at 64 (which also covers a
+    citation-label span). A name longer than the margin could leak a partial,
+    so the margin must grow with the excerpts, never be a fixed constant. On
+    any error, hold back MORE (128), never less.
+    """
+    safe = 64
+    try:
+        from app.core import party_names as _pn
+        for _nm, _ in _pn.extract_party_names(excerpts or ""):
+            for _v in _pn._variants(_nm):
+                safe = max(safe, len(_v) + 4)
+            _ac = _pn._acronym(_nm)
+            if _ac:
+                safe = max(safe, len(_ac) + 4)
+    except Exception:  # noqa: BLE001 — on any doubt hold back MORE, never less
+        return 128
+    return safe
+
+
 async def _chat_stream_impl(
     self,
     user_message: str,
@@ -818,24 +842,15 @@ async def _chat_stream_impl(
             raw_emitted = 0        # chars of the raw cumulative already turned into output
             emitted_len = 0        # chars of SCRUBBED text already sent to the client
             # Hold back >= the longest withheld party-name string for THIS
-            # turn's excerpts, so no name can straddle an emit boundary. That
-            # is the invariant runtime._withhold_names_in_streamed_segment
-            # documents ("a name does not straddle two of them"); the old code
-            # kept it by flushing ONLY at newlines, which left a no-newline
-            # paragraph entirely unstreamed. We keep it with a margin instead,
-            # so a paragraph streams. Floor 64 also covers citation-label spans.
-            _safe_margin = 64
-            try:
-                from app.core import party_names as _pn
-                _ex = (_rag_sys_msg or {}).get("content", "") if _rag_sys_msg else ""
-                for _nm, _ in _pn.extract_party_names(_ex):
-                    for _v in _pn._variants(_nm):
-                        _safe_margin = max(_safe_margin, len(_v) + 4)
-                    _ac = _pn._acronym(_nm)
-                    if _ac:
-                        _safe_margin = max(_safe_margin, len(_ac) + 4)
-            except Exception:  # noqa: BLE001 — on any doubt hold back MORE, never less
-                _safe_margin = 128
+            # turn's excerpts, so no name can straddle an emit boundary -- the
+            # invariant runtime._withhold_names_in_streamed_segment documents
+            # ("a name does not straddle two of them"). The old code kept it by
+            # flushing ONLY at newlines, which left a no-newline paragraph
+            # unstreamed; we keep it with a margin instead so a paragraph
+            # streams. Derivation + its mutants live in _safe_stream_margin.
+            _safe_margin = _safe_stream_margin(
+                (_rag_sys_msg or {}).get("content", "") if _rag_sys_msg else ""
+            )
             _MIN_FLUSH_CHARS = 24
 
             def _scrub_for_stream(_text: str) -> str:
