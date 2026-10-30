@@ -3077,4 +3077,43 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     }
     if conversions:
         envelope["conversions"] = conversions
+    envelope.update(envelope_provenance(name, result, fn))
     return envelope
+
+
+#: Result keys a formula uses to state the code / standard it applies.
+_STANDARD_KEYS = ("standard", "code", "basis_standard", "reference", "source")
+
+
+def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any]:
+    """``provenance`` / ``standard`` / ``certified`` for any calc envelope.
+
+    provenance is ``kernel`` for a registered formula_registry kernel,
+    ``reference_table`` for a kernel whose module is a reference-table module
+    (indicative data, not a derivation), else ``improvised``. Only a kernel
+    answer is labelled ``certified``. ``standard`` is the standard the result
+    states (first of ``_STANDARD_KEYS``), else an explicit
+    ``"none declared"`` -- every envelope carries the key.
+    """
+    from app.lib import formula_registry as _fr
+
+    spec = _fr.get(str(name or ""))
+    module = getattr(fn if fn is not None else getattr(spec, "fn", None), "__module__", "")
+    if spec is None:
+        provenance = "improvised"
+    elif "reference_table" in module:
+        provenance = "reference_table"
+    else:
+        provenance = "kernel"
+    standard = ""
+    if isinstance(result, dict):
+        for key in _STANDARD_KEYS:
+            val = result.get(key)
+            if isinstance(val, str) and val.strip():
+                standard = val.strip()
+                break
+    return {
+        "provenance": provenance,
+        "standard": standard or "none declared",
+        "certified": provenance == "kernel",
+    }
