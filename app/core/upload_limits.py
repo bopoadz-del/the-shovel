@@ -31,13 +31,33 @@ import os
 # ones registered blocks can actually parse (.dwg is accepted so take-off and
 # BIM can answer with app.core.cad_formats.DWG_NOT_SUPPORTED -- export DXF or
 # PDF -- instead of the upload 400'ing with a bare "type not allowed").
-ALLOWED_UPLOAD_EXTENSIONS = frozenset({
+_SESSION_ONLY_EXTENSIONS = frozenset({
     ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff",
     ".txt", ".md", ".csv", ".json", ".xml",
     ".mp3", ".mp4", ".wav", ".webm",
     ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
     ".dxf", ".dwg", ".ifc", ".xer", ".mpp", ".rvt",
 })
+
+
+def _ingestible_extensions() -> frozenset:
+    """Every format a project document may be (the one ingest rule)."""
+    from app.core.ingest_status import TEXT_BEARING_EXTS
+    return frozenset(TEXT_BEARING_EXTS)
+
+
+#: What ``/upload`` accepts without a project, and what ``/v1/upload-limits``
+#: publishes: the session formats plus every ingestible text format, so a
+#: format a project takes (HTML, mail, RTF) is never refused for a session.
+#: Derived, not typed: adding a text extractor widens both lists at once.
+ALLOWED_UPLOAD_EXTENSIONS = _SESSION_ONLY_EXTENSIONS | _ingestible_extensions()
+
+#: The project-document subset (``POST /v1/projects/{id}/documents`` and
+#: ``/upload`` with ``project_id``).
+PROJECT_DOCUMENT_EXTENSIONS = _ingestible_extensions()
+
+#: One status for "this format is not accepted here", with or without a project.
+UNSUPPORTED_TYPE_STATUS = 415
 
 # 50 MB. Deliberately NOT 10 MB: this platform's real inputs are drawing sets
 # and BIM models. The pilot corpus contains a 345 MB PDF, so operators loading

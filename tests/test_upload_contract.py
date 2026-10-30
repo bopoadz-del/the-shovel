@@ -186,9 +186,11 @@ def test_a_project_document_is_accepted_by_both_routes_alike(client):
     from app.core.ingest_status import TEXT_BEARING_EXTS
 
     pid = client.post("/v1/projects", json={"name": "Both routes"}, headers=H).json()["id"]
-    only_in_project_rule = sorted(set(TEXT_BEARING_EXTS) - set(upload_limits.ALLOWED_UPLOAD_EXTENSIONS))
-    assert only_in_project_rule, "nothing to compare: the two lists became equal"
-    for ext in only_in_project_rule:
+    # S-10d: the sandbox list now contains every project format, so compare
+    # the WHOLE project rule across both routes (was: only the difference).
+    project_rule = sorted(TEXT_BEARING_EXTS)
+    assert project_rule
+    for ext in project_rule:
         name = f"doc{ext}"
         via_project = client.post(
             f"/v1/projects/{pid}/documents", files={"file": (name, b"text body", "text/plain")}, headers=H,
