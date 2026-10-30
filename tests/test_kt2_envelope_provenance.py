@@ -77,3 +77,27 @@ def test_blank_standard_is_skipped_for_the_next_key(val):
 ])
 def test_first_standard_key_wins(result, expect):
     assert cf.envelope_provenance("concrete_volume", result)["standard"] == expect
+
+
+@pytest.mark.parametrize("key", ["standard", "code", "basis_standard", "reference", "source"])
+def test_each_standard_key_is_read_on_its_own(key):
+    out = cf.envelope_provenance("no_such_calc", {key: f"{key}-ref"})
+    assert out["standard"] == f"{key}-ref"
+
+
+@pytest.mark.parametrize("result", [["standard", "BS 8110"], "standard: BS 8110"])
+def test_a_non_dict_result_states_no_standard(result):
+    assert cf.envelope_provenance("no_such_calc", result)["standard"] == "none declared"
+
+
+@pytest.mark.parametrize("result,want", [
+    ({"standard": 5, "code": "BS 8110"}, "BS 8110"),
+    ({"standard": ["ACI"], "reference": "ACI 318"}, "ACI 318"),
+])
+def test_a_non_text_standard_is_skipped(result, want):
+    assert cf.envelope_provenance("no_such_calc", result)["standard"] == want
+
+
+@pytest.mark.parametrize("raw,want", [("  ACI 318 ", "ACI 318"), ("\tBS EN 206\n", "BS EN 206")])
+def test_the_standard_is_trimmed(raw, want):
+    assert cf.envelope_provenance("no_such_calc", {"standard": raw})["standard"] == want

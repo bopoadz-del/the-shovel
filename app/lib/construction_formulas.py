@@ -3098,7 +3098,7 @@ def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any
     from app.lib import formula_registry as _fr
 
     spec = _fr.get(str(name or ""))
-    module = getattr(fn if fn is not None else getattr(spec, "fn", None), "__module__", "") or ""
+    module = getattr(fn if fn is not None else getattr(spec, "fn", None), "__module__", "")
     if spec is None:
         provenance = "improvised"
     elif "reference_table" in module:
