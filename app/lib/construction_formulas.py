@@ -2844,6 +2844,32 @@ def _defaults_taken(fn: Any, params: Dict[str, Any], name: str) -> List[Dict[str
     return rows
 
 
+def _is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _blank_calc_kwargs(params: Dict[str, Any]) -> Tuple[str, ...]:
+    """The calculator kwargs, top level or nested as _flatten_calc_kwargs
+    reads them, that the caller sent as null or blank, in the caller's order."""
+    nested = [coerce_calc_params(params.get(k)) or {} for k in _FLATTEN_NEST_KEYS]
+    return tuple(dict.fromkeys(str(key) for group in (params, *nested)
+                               for key, val in group.items() if _is_blank(val)))
+
+
+def _named_but_blank(name: str, blank: Tuple[str, ...], params: Dict[str, Any],
+                     missing: List[str]) -> List[str]:
+    """The numeric inputs the caller sent as null or blank that nothing has
+    filled since (the ask's own words may have): each is asked for, so no
+    default stands in for a figure the user was meant to give."""
+    from app.lib import formula_registry
+
+    spec = formula_registry.get(name)
+    declared = formula_registry.parameters(spec) if spec is not None else {}
+    return [key for key in blank
+            if key in declared and declared[key].kind in formula_registry.NUMERIC_KINDS
+            and _is_blank(params.get(key)) and key not in missing]
+
+
 def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run one whitelisted deterministic calculator by name with keyword params.
 
@@ -2868,6 +2894,10 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     # must reach the calculator. Flatten before E4 so a nested concrete ask
     # still pins.
     call_unit = _call_unit(params)
+    # Inputs the caller named but could not fill (null or blank): a value it
+    # meant to give and did not have. Flatten drops them; they are asked
+    # for below, never defaulted.
+    caller_blank = _blank_calc_kwargs(params)
     params = _flatten_calc_kwargs(params)
     if positional is None:
         positional = _pop_positional(params)
@@ -3009,6 +3039,7 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     refused = {row["parameter"] for row in unit_rejected}
     rejected = unit_rejected + [row for row in rejected if row["parameter"] not in refused]
     missing = _missing_required(fn, params, name=str(name))
+    missing += _named_but_blank(str(name), caller_blank, params, missing)
     if rejected and not unknown:
         return _input_rejection_envelope(str(name), rejected, missing)
     if unknown:
