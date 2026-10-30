@@ -83,27 +83,28 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def _own_chunk_table(monkeypatch):
-    """Isolate the chunk table: no background writer, own table, dropped after.
+def _own_chunk_table():
+    """Isolate the chunk table: own table, dropped after.
 
     TestClient's startup warms models on a worker thread, and that warm-up
     builds this namespace's chunk class and table. Built concurrently with
     _chunk_cls() here, the test walked Base.registry.mappers while the other
     thread was half-way through mapping the class -- CI's
-    ``UnmappedClassError: RagChunk_t..._256 is not mapped``.
-    WARM_MODELS_BLOCKING finishes the warm-up before the test body runs.
+    ``UnmappedClassError: RagChunk_t..._256 is not mapped``. The app now
+    serialises that build on ``models.RAG_CHUNK_SCHEMA_LOCK``, so no blocking
+    warm-up is forced here (the WARM_MODELS_BLOCKING setenv was removed
+    after a differential showed it dead with the lock in place).
 
     The namespace is already per-test (conftest), so the table is this
     test's own; teardown drops it and disposes the pool. The mapper stays
     registered: SQLAlchemy has no per-mapper unregister, and
     ``Base.registry.dispose()`` would unmap every model in the process.
     """
-    yield from _own_chunk_table_lifecycle(monkeypatch)
+    yield from _own_chunk_table_lifecycle()
 
 
-def _own_chunk_table_lifecycle(monkeypatch):
+def _own_chunk_table_lifecycle():
     """The body of ``_own_chunk_table``, kept plain so a test can drive it."""
-    monkeypatch.setenv("WARM_MODELS_BLOCKING", "true")
     yield
     cls = rag_chunk_class_for(_active_namespace())
     if cls is not None:
@@ -135,8 +136,11 @@ def test_teardown_leaves_no_table_and_a_fresh_pool(ns):
         assert engine.pool.checkedin() >= 1
         assert cls.__tablename__ in _tables()
 
-        life = _own_chunk_table_lifecycle(mp)
+        life = _own_chunk_table_lifecycle()
         next(life)
+        # Set-up done, test body not yet run: nothing may be torn down yet.
+        assert cls.__tablename__ in _tables()
+        assert rag_chunk_class_for(ns) is cls
         with pytest.raises(StopIteration):
             next(life)
 

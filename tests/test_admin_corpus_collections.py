@@ -64,25 +64,25 @@ def _ensure_schema():
 
 
 @pytest.fixture(autouse=True)
-def _own_chunk_table(monkeypatch):
-    """Isolate the chunk table: no background writer, own table, dropped after.
+def _own_chunk_table():
+    """Isolate the chunk table: own table, dropped after.
 
-    WARM_MODELS_BLOCKING makes TestClient's startup finish its model warm-up
-    (which builds the namespace's chunk class and table on a worker thread)
-    BEFORE the test body runs, so the test never builds the same class or
-    table concurrently with that thread -- the race behind CI's
-    UnmappedClassError and ``table ... already exists``.
+    TestClient's startup warms models on a worker thread that builds this
+    namespace's chunk class while the test builds it too. That race (CI's
+    UnmappedClassError / ``table ... already exists``) is fixed in the app by
+    ``models.RAG_CHUNK_SCHEMA_LOCK`` and ``ensure_table``, so the test no
+    longer forces a blocking warm-up (the old WARM_MODELS_BLOCKING setenv was
+    removed after a differential showed it dead with the lock in place).
 
     Teardown drops the table this test built and disposes the pool. The
     mapper stays registered: SQLAlchemy has no per-mapper unregister, and
     ``Base.registry.dispose()`` would unmap every model in the process.
     """
-    yield from _own_chunk_table_lifecycle(monkeypatch)
+    yield from _own_chunk_table_lifecycle()
 
 
-def _own_chunk_table_lifecycle(monkeypatch):
+def _own_chunk_table_lifecycle():
     """The body of ``_own_chunk_table``, kept plain so a test can drive it."""
-    monkeypatch.setenv("WARM_MODELS_BLOCKING", "true")
     yield
     cls = rag_chunk_class_for(os.environ.get("RAG_VECTOR_NAMESPACE", ""))
     if cls is not None:
@@ -114,8 +114,11 @@ def test_teardown_leaves_no_table_and_a_fresh_pool(ns):
         assert engine.pool.checkedin() >= 1
         assert cls.__tablename__ in _tables()
 
-        life = _own_chunk_table_lifecycle(mp)
+        life = _own_chunk_table_lifecycle()
         next(life)
+        # Set-up done, test body not yet run: nothing may be torn down yet.
+        assert cls.__tablename__ in _tables()
+        assert rag_chunk_class_for(ns) is cls
         with pytest.raises(StopIteration):
             next(life)
 
