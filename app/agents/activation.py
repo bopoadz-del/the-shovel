@@ -27,20 +27,15 @@ from app.agents.catalog import (
 )
 from app.agents.models import AgentManifest
 
-# -- Env-flag gating ------------------------------------------------------
-# Set FORK_HATS_ENABLED=1 to activate discipline-hat routing.
-# Unset or 0 = adapter returns None, existing runtime.py behavior unchanged.
-# Read at call time so tests (and a live toggle) do not need a process restart.
-_TRUE_FLAG = ("1", "true", "yes", "on")
+# -- Always on (K-T0a) -----------------------------------------------------
+# The hat router is part of the product, not an opt-in: FORK_HATS_ENABLED is
+# removed. The declared-action gap is zero (tests/test_hats_are_dormant.py
+# hard-asserts it), so nothing is left to gate.
 
 
 def hats_enabled() -> bool:
-    """True when FORK_HATS_ENABLED is live. Default off."""
-    return (os.environ.get("FORK_HATS_ENABLED") or "").strip().lower() in _TRUE_FLAG
-
-
-_ENV_FLAG = os.environ.get("FORK_HATS_ENABLED", "").strip()
-HATS_ENABLED = _ENV_FLAG in ("1", "true", "True", "TRUE", "yes")
+    """The hat router is always on. Kept as a function for its callers."""
+    return True
 
 # Default score threshold for hat activation (configurable)
 DEFAULT_SCORE_THRESHOLD = float(os.environ.get("FORK_HAT_SCORE_THRESHOLD", "0.5"))
@@ -57,8 +52,8 @@ class HatActivationAdapter:
     Adapter that scores incoming messages against all discipline hats
     and returns the best-matching merged manifest (hat + base).
 
-    When hats are disabled (FORK_HATS_ENABLED not set), all methods
-    return None / empty -- existing runtime.py code continues unchanged.
+    The router is always on (K-T0a); a message below the score threshold
+    still gets None / empty.
     """
 
     def __init__(
