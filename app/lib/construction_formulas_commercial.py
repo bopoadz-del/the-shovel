@@ -85,28 +85,29 @@ _WHOLE_WORKS_RE = re.compile(r"(?i)\bwhole\s+of\s+the\s+works\b")
 
 _SUBCLAUSE_87_RE = re.compile(r"(?i)\b(?:sub[- ]?clause\s+)?8\.7\b")
 
-# Live daily-amount ask after #535: CoC 8.7/8.8 windows state 0.015% of the
-# excl-VAT ACA (a much smaller SAR/day product). Contract Data 8.8 is 0.1%
-# of the Contract Price (the figure the ask wants). First-match compose elected
-# 0.015% whenever that window led the excerpts; the lookalike is now
-# always rejected.
-_LOOKALIKE_RATE_PERCENT = 0.015
-
+# K-T5: a Conditions-of-Contract restatement of a delay-damages rate (a
+# percentage "of the Accepted Contract Amount" in a sub-clause 8.7 window) is
+# a lookalike of the Contract Data particular. Detected by structure, never
+# by the rate's value.
 _PREFERRED_WHOLE_WORKS_RATE = 0.1
 
-# Live daily-amount ask on c5c6dfa: Contract Data 8.8 chunks 9–11 carried a
-# FIDIC worked-example ACA of SAR 10,000,000. Compose elected it
-# (0.1% → SAR 10,000/day) instead of the filled excl-VAT row
-# (a billion-scale amount). The worked example is always rejected.
-_TOY_ACA_AMOUNT = 10_000_000.0
-
-_TOY_DAILY_AMOUNT = 10_000.0
-
-_CLAUSE_111_RE = re.compile(r"(?i)\b1\.1\.1\b")
+# K-T5: a worked example / placeholder amount is recognised by its cue
+# ("for example", "worked example", "if the Accepted Contract Amount ...")
+# around ANY amount -- never by matching a specific figure.
+# A numbered definition row for the Accepted Contract Amount label
+# ("<n.n.n>: | | Accepted Contract Amount: ...") -- any clause number.
+_CLAUSE_111_RE = re.compile(
+    r"(?i)\b\d+(?:\.\d+){1,3}\b\s*:?[\s|]*accepted\s+contract\s+amount",
+)
 
 _TOY_EXAMPLE_CUE_RE = re.compile(
     r"(?i)\b(?:for\s+example|worked\s+example|daily\s+amount|"
     r"if\s+the\s+accepted\s+contract\s+amount)\b",
+)
+
+# "<rate>% of the Accepted Contract Amount": the CoC restatement form.
+_PCT_OF_ACA_RE = re.compile(
+    r"(?i)%\s*(?:\([^)]*\)\s*)?of\s+(?:the\s+)?accepted\s+contract\s+amount",
 )
 
 def delay_damages_rate_is_coc_lookalike(rate: float, ctx: str = "") -> bool:
@@ -118,16 +119,15 @@ def delay_damages_rate_is_coc_lookalike(rate: float, ctx: str = "") -> bool:
     Contract Data row that itself says 0.015% of the Contract Price is
     not a lookalike.
     """
-    if abs(float(rate) - _LOOKALIKE_RATE_PERCENT) > 1e-9:
-        return False
+    del rate  # K-T5: structure decides, never the rate's value
     ctx = ctx or ""
     if _CONTRACT_PRICE_RE.search(ctx) and _CONTRACT_DATA_CTX_RE.search(ctx):
         return False
     if _SUBCLAUSE_87_RE.search(ctx):
         return True
-    if _ACA_LABEL_RE.search(ctx) and not _CONTRACT_PRICE_RE.search(ctx):
+    if _PCT_OF_ACA_RE.search(ctx) and not _CONTRACT_PRICE_RE.search(ctx):
         return True
-    return True
+    return False
 
 _MILESTONE_OR_SECTION_ASK_RE = re.compile(r"(?i)\b(?:milestone|section)s?\b")
 
@@ -175,29 +175,35 @@ def delay_damages_rate_preference_score(
         score += 2
     return score
 
+_SENTENCE_END_RE = re.compile(r"[.;](?=\s)|\n\s*\n")
+
+def _sentence_of_amount(amount: float, ctx: str) -> str:
+    """The sentence of ``ctx`` that states ``amount`` (all of ``ctx`` if absent).
+
+    A cue in a neighbouring sentence or chunk must not stain this figure.
+    """
+    for m in _MONEY_RE.finditer(ctx):
+        try:
+            got = float(m.group(2).replace(",", ""))
+        except ValueError:
+            continue
+        if abs(got - float(amount)) > 0.02:
+            continue
+        start = 0
+        for e in _SENTENCE_END_RE.finditer(ctx, 0, m.start()):
+            start = e.end()
+        end_m = _SENTENCE_END_RE.search(ctx, m.end())
+        return ctx[start: end_m.start() if end_m else len(ctx)]
+    return ctx
+
 def aca_amount_is_toy_example(amount: float, ctx: str = "") -> bool:
     """True for a FIDIC worked-example / placeholder ACA, not a filled row.
 
-    Live daily-amount ask: unlabeled ``SAR 10,000,000`` in an 8.8 window and its
-    0.1% daily product ``SAR 10,000``. A filled 1.1.1 excluding-VAT
-    particular of exactly 10M is not a toy. Non-10M/10k figures are
-    never the worked example — Contract Data template cues
-    (``insert``, ``for example``) must not stain the filled excl-VAT
-    ACA (a billion-scale amount, e.g. SAR 1,234,567,890.00).
+    K-T5: structural. A worked-example cue in the amount's window marks
+    the placeholder; without one the figure is stated. No figure is special. Works for any
+    amount and any currency.
     """
-    amt = float(amount)
-    is_10m = abs(amt - _TOY_ACA_AMOUNT) <= 0.005
-    is_10k = abs(amt - _TOY_DAILY_AMOUNT) <= 0.005
-    if not (is_10m or is_10k):
-        return False
-    ctx = ctx or ""
-    if is_10m and _CLAUSE_111_RE.search(ctx) and _EXCL_VAT_RE.search(ctx):
-        # A neighboring filled 1.1.1 row must not un-toy the 8.8
-        # worked example when excerpts are concatenated.
-        if _TOY_EXAMPLE_CUE_RE.search(ctx):
-            return True
-        return False
-    return True
+    return bool(_TOY_EXAMPLE_CUE_RE.search(_sentence_of_amount(amount, ctx or "")))
 
 def chunk_has_real_accepted_contract_amount(text: str) -> bool:
     """True when ``text`` states a non-toy ACA money figure."""
@@ -371,20 +377,18 @@ def parse_accepted_contract_amount(text: str) -> tuple[float, str] | None:
 
     Prefers an excluding-VAT figure when both incl/excl are present
     (FIDIC Contract Price / the rate's base is the net amount). When
-    a FIDIC worked-example ACA (live: SAR 10,000,000) sits next to a
+    a FIDIC worked-example ACA (a cue-marked placeholder amount) sits next to a
     filled excl-VAT row, the toy is dropped — the product must not
     invent a figure and must not elect the example. A percentage-of-
     ACA cap row is skipped.
     """
     t = text or ""
-    if not t:
-        return None
     buckets: dict[str, list[tuple[float, str]]] = {
         "excl": [], "neutral": [], "incl": [],
     }
     for amount, currency, kind, toy in _iter_aca_candidates(t):
         # The worked example is never elected, even when it is the only
-        # candidate: SAR 10,000/day from a toy is a fabricated answer.
+        # candidate: a daily product of a toy is a fabricated answer.
         if not toy:
             buckets[kind].append((amount, currency))
     picked = buckets["excl"] or buckets["neutral"] or buckets["incl"]
@@ -479,7 +483,7 @@ def _figure_is_clause_111(text: str, amount: float) -> bool:
     """True when ``amount`` is this text's clause 1.1.1 net Accepted Contract Amount.
 
     Live Contract Data states the clause as a table row —
-    ``1.1.1: | | Accepted Contract Amount: SAR 1,234,567,890.00(One Billion …) |``
+    ``1.1.1: | | Accepted Contract Amount: <currency> <amount> (<words>) |``
     — with NO VAT qualifier; the including-VAT figure is a separate
     particular in the same chunk. Demanding the literal "excluding VAT"
     scored the real base 0 and left a partial ACA to compose (live milestone
@@ -525,7 +529,7 @@ def text_states_clause_111_aca(text: str) -> bool:
     joins loaded Contract Data chunks (retriever.py) uses this to keep the
     1.1.1 base ahead of partial ACA rows before it caps the excerpt, so an
     unmarked bundle still composes off the filled clause and not a partial
-    (live milestone delay-damages ask: 0.015% x SAR 39,098,392.98).
+    (live milestone delay-damages ask: a per-Milestone rate x a partial amount).
     """
     blob = _collapse_ws(text)
     for m in _MONEY_RE.finditer(blob):
@@ -547,10 +551,10 @@ def _contract_price_beside_the_rate(
     Clause 1.1.1 excluding VAT in the document that states the rate
     wins. The same clause retrieved under another doc id still beats a
     partial Accepted Contract Amount that only shares the rate's chunk
-    (live milestone delay-damages ask: SAR 39,098,392.98 on the leading chunk, clause 1.1.1
+    (live milestone delay-damages ask: a partial amount on the leading chunk, clause 1.1.1
     later). A non-1.1.1 amount from another document is not the price.
     The rate document's own clause 1.1.1 beats another document's
-    clause 1.1.1 (a purchase order of SAR 55,000,000.00 ahead of the
+    clause 1.1.1 (a purchase order of another amount ahead of the
     rate document).
     """
     grouped: dict[str, list[str]] = {}
@@ -619,7 +623,7 @@ def elected_delay_damages_clause(text: str, ask: str) -> str:
 def drop_whole_of_works_delay_claims(text: str) -> str:
     """Drop sentences that call delay damages the whole of the Works.
 
-    A decimal point inside ``SAR 1,200.00`` is not the end of the
+    A decimal point inside an amount like ``1,200.00`` is not the end of the
     sentence. The lead is one claim, and the claim goes.
     """
     raw = text or ""

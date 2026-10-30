@@ -21,7 +21,7 @@ Synthetic contract text and synthetic amounts throughout.
 """
 import pytest
 
-from app.lib import construction_formulas_commercial as cc
+import app.lib.construction_formulas_commercial as cc
 
 MILESTONE_ASK = ("What are the delay damages in SAR per calendar day for a single "
                  "Milestone, calculated on the Accepted Contract Amount?")
