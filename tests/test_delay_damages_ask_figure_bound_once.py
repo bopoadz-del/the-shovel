@@ -58,6 +58,8 @@ def test_the_schema_the_model_sees_offers_amount_per_day(hat):
     ({"a": None}, {"b": 3.0}, "3", {"b": 3.0}),              # an empty input spends nothing
     ({"a": True}, {"b": 1.0}, "1", {"b": 1.0}),              # a flag is not a figure
     ({}, {"code": "aci"}, "ACI 318", {"code": "aci"}),       # text values pass through
+    ({"a": 5, "text": "a 5"}, {"b": 5.0}, "a 5", {}),        # the ask riding in params is no figure
+    ({"text": "see the spec"}, {"b": 2.0}, "b 2", {"b": 2.0}),
 ])
 def test_ask_figures_already_spent_are_not_bound_again(given, extracted, text, kept):
     assert cf._unspent_ask_figures(given, extracted, text) == kept
