@@ -81,10 +81,13 @@ async def upload_v1(
             raise HTTPException(status_code=415, detail=compressed.COMPRESSED_UPLOAD_DETAIL)
         with_project = bool(project_id and project_id.strip())
         if not with_project and ext not in ALLOWED_UPLOAD_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"File type '{ext}' not allowed")
+            raise HTTPException(
+                status_code=upload_limits.UNSUPPORTED_TYPE_STATUS,
+                detail=f"File type '{ext}' is not accepted (see GET /v1/upload-limits).",
+            )
         if with_project and not is_ingestible(original_name):
             raise HTTPException(
-                status_code=415,
+                status_code=upload_limits.UNSUPPORTED_TYPE_STATUS,
                 detail=(
                     f"File type '{ext}' is not ingestible into a project: the "
                     f"knowledge base takes text formats only "
