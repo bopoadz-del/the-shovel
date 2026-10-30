@@ -403,7 +403,8 @@ SIGNED_FIGURE = FIGURE_SIGN + r"\d[\d,]*(?:\.\d+)?"
 
 _VALUE_UNIT_RE = re.compile(
     rf"^\s*({SIGNED_NUMBER})\s*((?:1\s*/|[A-Za-z%°µμ‰'\"]).*?)?\s*[.,;]?\s*$")
-_UNIT_VALUE_RE = re.compile(rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*$")
+_UNIT_VALUE_RE = re.compile(
+    rf"^\s*([A-Z]{{3}})\s*({SIGNED_NUMBER})\s*((?:per\s+|/\s*)[A-Za-z][\w ]*?)?\s*$")
 
 
 def _unit_head(text: str) -> str:
@@ -432,7 +433,9 @@ def value_and_unit(value: Any) -> Optional[Tuple[float, str]]:
         return None
     m = _UNIT_VALUE_RE.match(value)
     if m:
-        return float(m.group(2).replace(",", "")), m.group(1)
+        # "SAR 1,200 per day": the currency, then what it is per.
+        unit = f"{m.group(1)} {m.group(3).strip()}" if m.group(3) else m.group(1)
+        return float(m.group(2).replace(",", "")), unit
     m = _VALUE_UNIT_RE.match(value)
     if not m or not m.group(2):
         return None
@@ -508,6 +511,13 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
     if written is None:
         if declared.dimension == "currency" or unit.strip().lower() == spec.unit.strip().lower():
             return {"value": number}
+        # "5,000 per day" for a currency-per-time input: the currency is
+        # implied, as it is for a bare figure on a currency input. Only a
+        # unit that then reads as the declared kind is taken.
+        implied = parse_unit(f"currency {unit.strip()}")
+        if declared.dimension.startswith("currency/") and implied is not None \
+                and implied.dimension == declared.dimension:
+            return convert_figure(spec, number, implied.written, context)
         return {"rejection": _unit_rejection(spec, shown, "unknown_unit", given_unit=unit)}
     if written.dimension == "currency" and declared.dimension == "currency":
         return {"value": number}
