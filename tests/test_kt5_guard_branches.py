@@ -117,3 +117,21 @@ def test_documented_waste_factor_reads_the_stated_figure(text, expected):
 ])
 def test_text_without_a_whole_works_claim_is_returned_untouched(text):
     assert c.drop_whole_of_works_delay_claims(text) == text
+
+
+@pytest.mark.parametrize("ctx", [
+    "Contract Data, Sub-Clause 8.7: 0.015% of the Contract Price per day",
+    "Particulars 8.7 delay damages: 0.1% of the Contract Price",
+])
+def test_a_contract_data_row_on_the_contract_price_is_not_a_lookalike(ctx):
+    assert c.delay_damages_rate_is_coc_lookalike(0.015, ctx) is False
+
+
+@pytest.mark.parametrize("text", [None, ""])
+def test_no_text_has_no_accepted_contract_amount(text):
+    assert c.parse_accepted_contract_amount(text) is None
+
+
+@pytest.mark.parametrize("amount", ["SAR 500.00", "USD 999.99"])
+def test_a_sub_thousand_clause_111_row_is_not_the_base(amount):
+    assert c.text_states_clause_111_aca(f"1.1.1: | | Accepted Contract Amount: {amount} |") is False

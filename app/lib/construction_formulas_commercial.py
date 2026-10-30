@@ -383,8 +383,6 @@ def parse_accepted_contract_amount(text: str) -> tuple[float, str] | None:
     ACA cap row is skipped.
     """
     t = text or ""
-    if not t:
-        return None
     buckets: dict[str, list[tuple[float, str]]] = {
         "excl": [], "neutral": [], "incl": [],
     }
