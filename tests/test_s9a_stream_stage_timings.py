@@ -404,15 +404,79 @@ def test_retrieval_is_always_reported(ran, want):
     assert snap["retrieval"] == want
 
 
-# turn_timing.py:50 -- with no turn, record() stores nothing and says so;
-# within a turn it returns the stage's running total.
-@pytest.mark.parametrize("durs,want", [((), None), ((0.25, 0.5), 0.75)])
-def test_record_returns_the_running_total_only_within_a_turn(durs, want):
+# turn_timing.py:34 -- auth and llm_first_token are fixed stages too: each is
+# reported (0.0 when not timed), in the order the turn runs them.
+@pytest.mark.parametrize("stage", ["auth", "llm_first_token"])
+@pytest.mark.parametrize("ran,want", [(None, 0.0), (0.25, 0.25)])
+def test_auth_and_first_token_are_always_reported(stage, ran, want):
     def go():
-        if durs:
-            turn_timing.mark_arrival()
-            for d in durs:
-                got = turn_timing.record("route", d)
-            return got
-        return turn_timing.record("route", 1.0)
-    assert _fresh(go) == want
+        turn_timing.mark_arrival()
+        if ran is not None:
+            turn_timing.record(stage, ran)
+        return turn_timing.snapshot()
+    snap = _fresh(go)
+    assert snap[stage] == want
+    assert list(snap)[:5] == ["auth", "route", "hat_classification", "retrieval", "llm_first_token"]
+
+
+# turn_timing.py:50 -- with no turn, record() is a no-op: it stores nothing
+# (snapshot() shows no time) and does not even read the duration given.
+@pytest.mark.parametrize("dur", [object(), "not a number"])
+def test_no_turn_record_is_a_no_op(dur):
+    def go():
+        turn_timing.record("route", dur)
+        return turn_timing.snapshot()
+    snap = _fresh(go)
+    assert snap["route"] == 0.0 and snap["since_arrival"] == 0.0
+
+
+# chat.py _with_stage_timings: a frame that is not text passes through untouched.
+@pytest.mark.parametrize("frame", [b"data: {\"type\": \"start\"}\n\n", {"type": "start"}])
+def test_non_text_frames_pass_through_the_timings_wrapper(frame):
+    from app.routers.chat import _with_stage_timings
+
+    async def frames():
+        yield frame
+        yield 'data: {"type": "end"}\n\n'
+
+    async def collect():
+        return [f async for f in _with_stage_timings(frames())]
+    out = asyncio.run(collect())
+    assert out[0] is frame
+    assert json.loads(out[1][6:])["timings"]["auth"] == 0.0
+
+
+# chat.py chat_stream_v1: with no arrival stamp the turn still streams, the
+# clock starts at the handler and auth is not timed.
+@pytest.mark.parametrize("prompt", ["Curing time for C40?", "Summarise the delay damages clause."])
+def test_a_turn_without_an_arrival_stamp_still_reports_timings(monkeypatch, prompt):
+    import app.routers.chat as chat
+    from app.main import app
+
+    app.dependency_overrides[chat._stamp_before_auth] = lambda: None
+    try:
+        events = _events(monkeypatch, prompt, 0.0, 0.0)
+    finally:
+        app.dependency_overrides.pop(chat._stamp_before_auth, None)
+    end = [e for e in events if e.get("type") == "end"][-1]["timings"]
+    assert end["auth"] == 0.0
+    assert end["since_arrival"] >= 0.0
+
+
+@pytest.mark.parametrize("at", [100.0, 250.5])
+def test_arrival_stamp_is_read_back(at, monkeypatch):
+    from app.core import turn_timing as tt
+    monkeypatch.setattr(tt.time, "monotonic", lambda: 1000.0)
+    tt.mark_arrival(at=at)
+    assert tt.arrived_at() == at
+
+
+@pytest.mark.parametrize("gap", [0.5, 2.0])
+def test_mark_records_the_gap_since_the_last_stage(gap, monkeypatch):
+    from app.core import turn_timing as tt
+    clock = [10.0]
+    monkeypatch.setattr(tt.time, "monotonic", lambda: clock[0])
+    tt.mark_arrival()
+    clock[0] += gap
+    tt.mark("route")
+    assert tt.snapshot()["route"] == gap

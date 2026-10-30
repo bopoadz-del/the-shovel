@@ -44,17 +44,14 @@ def mark_arrival(at: Optional[float] = None) -> None:
     _STATE.set({"t0": t0, "last": now, "first_token": False, "stages": {}})
 
 
-def record(name: str, dur: float) -> Optional[float]:
+def record(name: str, dur: float) -> None:
     """Add ``dur`` seconds to stage ``name`` for this turn (no log line).
-
-    Returns the stage's running total, or None when no turn has started
-    (then nothing is stored anywhere)."""
+    With no turn started, nothing is stored."""
     st = _STATE.get()
     if st is None:
-        return None
+        return
     stages = st["stages"]
     stages[name] = stages.get(name, 0.0) + max(0.0, float(dur))
-    return stages[name]
 
 
 def snapshot() -> dict:
@@ -63,7 +60,7 @@ def snapshot() -> dict:
     timed so far, and ``since_arrival``."""
     st = _STATE.get() or {}
     stages = dict(st.get("stages") or {})
-    out = {k: round(stages.pop(k, 0.0), 4) for k in PRE_FIRST_TOKEN_STAGES}
+    out = {k: round(stages.get(k, 0.0), 4) for k in PRE_FIRST_TOKEN_STAGES}
     out.update({k: round(v, 4) for k, v in stages.items()})
     at = since_arrival()
     out["since_arrival"] = round(at, 4) if at is not None else 0.0
