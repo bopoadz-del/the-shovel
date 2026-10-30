@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from app.lib import construction_formulas as cf
+import app.lib.construction_formulas as cf
 
 
 def _chat_call(ask, params):
