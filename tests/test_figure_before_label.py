@@ -99,3 +99,8 @@ def test_a_digit_inside_a_unit_is_not_a_figure(ask, value):
         env = cf.run_calculation("lane5_fig_before_label_crew", {"text": ask})
     assert env.get("status") == "success", env
     assert env["result"]["value"] == pytest.approx(value)
+
+
+@pytest.mark.parametrize("text", ["60 days at 5,000 per day", "45 days at 1,200 per day"])
+def test_an_ask_with_no_calculator_extracts_nothing(text):
+    assert cf.extract_calculation_params_from_text(None, text) == {}
