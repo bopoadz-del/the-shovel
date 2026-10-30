@@ -126,9 +126,13 @@ def _safe_stream_margin(excerpts: str) -> int:
         for _nm, _ in _pn.extract_party_names(excerpts or ""):
             for _v in _pn._variants(_nm):
                 safe = max(safe, len(_v) + 4)
+            # Acronym folded into the max() rather than guarded by an `if`:
+            # an acronym is always far shorter than the 64 floor, so the guard
+            # could never change the result -- an equivalent branch, and one
+            # the CI-M drop_rule mutant (remove the first `if`) could never be
+            # killed against. Expressed as a value, it stays correct-by-flow.
             _ac = _pn._acronym(_nm)
-            if _ac:
-                safe = max(safe, len(_ac) + 4)
+            safe = max(safe, (len(_ac) + 4) if _ac else safe)
     except Exception:  # noqa: BLE001 — on any doubt hold back MORE, never less
         return 128
     return safe

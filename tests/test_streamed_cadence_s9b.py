@@ -206,3 +206,33 @@ def test_live_path_streams_a_no_newline_paragraph_progressively(deepseek_streami
     assert deltas[0].strip() in text and deltas[-1].strip() in text
     assert "NON-STREAMED" not in text
     assert events[-1]["type"] == "end"
+
+
+@pytest.mark.parametrize("msg", [
+    "Export this conversation as a Word document.",
+    "Save the answers 1-5 of this conversation as a docx.",
+])
+def test_answer_report_ask_takes_the_export_shortcut_not_the_llm(deepseek_streaming, msg):
+    """_chat_stream_impl's FIRST `if` is the answer-report early-return. An
+    export-shaped ask must return the compiled report WITHOUT calling the LLM;
+    remove that guard (CI-M drop_rule) and the turn falls through to the model,
+    so call_llm fires and the sentinel never appears -- this kills it."""
+    call_llm = _tool_then_final()
+
+    def fake_report(user_message, project_id, conversation_id, history, agent_name, owner_id=None):
+        return "ANSWER-REPORT-SENTINEL", [{"name": "answers.docx"}]
+
+    async def go():
+        return [ev async for ev in _pa_agent().chat_stream(
+            user_message=msg, history=[], project_id=None,
+            conversation_id=None, user_id=None,
+        )]
+
+    with patch.object(Agent, "_call_llm", call_llm), \
+         patch("app.agents.runtime._fulfill_answer_report", fake_report):
+        events = asyncio.run(go())
+
+    text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
+    assert "ANSWER-REPORT-SENTINEL" in text, "answer-report early-return did not fire"
+    assert call_llm.state["n"] == 0, "an answer-report ask must not reach the LLM"
+    assert events[-1]["type"] == "end"
