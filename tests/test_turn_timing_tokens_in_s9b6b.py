@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core import turn_timing
+import app.core.turn_timing as turn_timing
 
 
 @pytest.fixture(autouse=True)
