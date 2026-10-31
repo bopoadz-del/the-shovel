@@ -1127,13 +1127,6 @@ async def _chat_stream_impl(
         # iterations grow the prompt with tool results, so capture iter 0 only.
         if iteration == 0:
             _turn_timing.mark_value("prompt_tokens_in", _approx_prompt_tokens(messages))
-        # 6d: stamp the real LLM dispatch for THIS endpoint's generation path
-        # (project-assistant -> core chat_stream). first_token() then measures
-        # dispatch -> first token. The 6b stamp sits on the DRIVER agent
-        # (driver/loop.py), a different path, so this one read ~0 on live.
-        # Stamped every iteration: the dispatch just before the first token
-        # (the final, no-tool synthesis call) is the one first_token() reads.
-        _turn_timing.mark_llm_dispatch()
         resp = await self._call_llm(
             messages, api_key, project_id=project_id, user_id=user_id,
             exclude_tools=excluded_tools or None,
