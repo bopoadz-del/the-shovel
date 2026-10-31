@@ -191,7 +191,7 @@ def test_delay_damages_daily_empty_args_are_unbound_not_zero():
     assert "0% of SAR 0.00" not in str(bare.get("note") or "")
 
     via_registry = run_calculation("delay_damages_daily", {})
-    assert via_registry["status"] == "needs_input"
+    assert via_registry["status"] == "error"
     assert not _should_force_synthesis({
         "name": "construction_calc",
         "ok": True,

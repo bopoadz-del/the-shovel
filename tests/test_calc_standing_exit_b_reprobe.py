@@ -133,12 +133,9 @@ def test_mix_design_sand_sg_is_not_dune_sand_pct_error():
         "text": "w/c=0.48 dune sand 2.67",
     })
     assert via_text["cement_kg_m3"] == pytest.approx(320.0, abs=0.5)
-    # An inapplicable param ("omit it or pass 0") is a genuine rejection, not a
-    # missing-input ask -> status stays "error", not needs_input (item 7 moved
-    # only the missing/blank/garbled ask-path).
-    from app.lib.construction_formulas import run_calculation as _rc
-    still = _rc("concrete_mix_design_sg", {"w_c_ratio": 0.48, "dune_sand_pct": 0.3})
-    assert still["status"] == "error"
+    still = _err("concrete_mix_design_sg", {
+        "w_c_ratio": 0.48, "dune_sand_pct": 0.3,
+    })
     assert "dune_sand_pct" in still["error"]
 
 

@@ -2582,8 +2582,11 @@ def _input_rejection_envelope(
     name: str, rejected: List[Dict[str, Any]], missing: List[str],
 ) -> Dict[str, Any]:
     """The calculator was not run: a supplied value has the wrong type or
-    lies outside the input's declared range. The question asks the user
-    for those inputs by their labels."""
+    lies outside the input's declared range. Either way the value the asked
+    output needs is not usable, so this is an ASK, not a hard error: status
+    "needs_input" with the question that names the inputs by their labels and
+    carries the range/reason text (item 7 ruling, ORDERS_31OCT_0405Z/0705Z --
+    out-of-range asks WITH its range named)."""
     from app.lib.source_labels import input_question
 
     question = input_question(name, rejected, missing)

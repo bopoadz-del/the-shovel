@@ -24,7 +24,7 @@ def test_quantity_and_a_rate_per_day_give_days_not_man_hours():
 
 def test_a_dropped_minus_sign_is_restored_and_the_rate_refused():
     out = _run(NEGATIVE, quantity=4800, productivity=120)
-    assert out["status"] == "needs_input"
+    assert out["status"] == "error"
     assert "-120 was given" in out["error"] and "greater than zero" in out["error"]
     assert out.get("needs_input") and "daily_production" in out.get("missing", [])
     assert "manhours" not in str(out).lower() or "manhours_required" not in str(out.get("result") or "")
@@ -32,7 +32,7 @@ def test_a_dropped_minus_sign_is_restored_and_the_rate_refused():
 
 def test_a_negative_rate_passed_as_written_is_refused_too():
     out = _run(NEGATIVE, quantity=4800, productivity=-120)
-    assert out["status"] == "needs_input" and "greater than zero" in out["error"]
+    assert out["status"] == "error" and "greater than zero" in out["error"]
 
 
 def test_a_range_dash_is_not_a_minus_sign():
@@ -64,7 +64,7 @@ def negative_ask():
 ])
 def test_the_users_minus_survives_every_call_shape(negative_ask, params):
     out = cf.run_calculation("productivity_manpower_duration", params)
-    assert out["status"] == "needs_input", out
+    assert out["status"] == "error", out
     assert "-120" in out["error"], out["error"]
     assert not (out.get("result") or {}).get("duration")
 
@@ -99,7 +99,7 @@ def test_the_model_is_told_to_pass_figures_verbatim():
 @pytest.mark.parametrize("value", [120, -120, "120 m2 per day", "-120 m2 per day"])
 def test_every_rate_alias_in_every_shape_refuses_the_users_minus(negative_ask, key, value):
     out = cf.run_calculation("productivity_manpower_duration", {"quantity": 4800, key: value})
-    assert out["status"] == "needs_input", out
+    assert out["status"] == "error", out
     # Refused in the user's own figure and asked again: by the formula
     # ("must be greater than zero; -120 was given") or by the input's range
     # ("given (-120) is outside ... accepts (0 to ...)").

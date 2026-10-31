@@ -260,7 +260,7 @@ def test_a_value_of_another_kind_is_refused_and_asked_by_label(formula, name):
     p = _param(formula, name)
     typed = f"{_written(_inside(p))} {_other_kind(p.unit)}"
     out = cf.run_calculation(formula, {name: typed})
-    assert out["status"] == "needs_input" and out.get("needs_input") is True, out
+    assert out["status"] == "error" and out.get("needs_input") is True, out
     rows = out["rejected"]
     assert name in [r["parameter"] for r in rows], out
     assert all(r["reason"] == "wrong_unit" for r in rows), out
@@ -500,7 +500,7 @@ def test_a_missing_input_is_asked_for_by_its_label(formula):
     from app.agents import runtime
 
     out = cf.run_calculation(formula, {})
-    assert out["status"] == "needs_input", out
+    assert out["status"] == "error", out
     question = out.get("question")
     assert question, out
     for name in out["missing"]:

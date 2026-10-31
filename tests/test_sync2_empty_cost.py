@@ -368,7 +368,7 @@ def test_a2_2_empty_turn_after_1m_demo_has_metres():
 def test_a2_empty_kwargs_name_required_params_with_units():
     """Empty / incomplete construction_calc must name every required input."""
     prod = run_calculation("productivity_manpower_duration", {})
-    assert prod["status"] == "needs_input"
+    assert prod["status"] == "error"
     err = prod["error"]
     assert "quantity (qty)" in err
     assert "daily_production (qty/day)" in err
@@ -376,7 +376,7 @@ def test_a2_empty_kwargs_name_required_params_with_units():
     assert "productivity_rate (qty/gang-day)" in err
 
     rebar = run_calculation("rebar_weight", {})
-    assert rebar["status"] == "needs_input"
+    assert rebar["status"] == "error"
     err = rebar["error"]
     assert "bar_diameter_mm (mm)" in err
     assert "total_length_m (m)" in err

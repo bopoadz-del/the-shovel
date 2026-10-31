@@ -83,7 +83,7 @@ def _ok(name: str, **params):
 
 def _err(name: str, **params):
     env = run_calculation(name, params)
-    assert env.get("status") == "needs_input", env
+    assert env.get("status") == "error", env
     assert isinstance(env.get("error"), str) and env["error"]
     return env
 

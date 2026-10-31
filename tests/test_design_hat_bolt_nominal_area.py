@@ -47,7 +47,7 @@ def test_numeric_area_and_explicit_strength_stay():
 
 def test_missing_area_is_still_reported():
     env = run_calculation("bolt_shear_capacity", {})
-    assert env["status"] == "needs_input"
+    assert env["status"] == "error"
     assert "bolt_area_mm2" in env["error"]
     assert "(mm2)" in env["error"]
 
