@@ -1,0 +1,94 @@
+.why-panel {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.22));
+}
+.why-panel__title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted, #6b7280);
+  margin: 0 0 8px;
+}
+.why-panel__empty {
+  font-size: 0.82rem;
+  color: var(--text-muted, #6b7280);
+  margin: 0;
+}
+.why-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.why-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.why-row__icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-muted, #6b7280);
+}
+.why-row__body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.why-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.why-row__figure {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text, inherit);
+}
+.why-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.why-badge--ok { background: rgba(22, 163, 74, 0.14); color: #15803d; }
+.why-badge--info { background: rgba(37, 99, 235, 0.14); color: #1d4ed8; }
+.why-badge--warn { background: rgba(217, 119, 6, 0.16); color: #b45309; }
+.why-row__formula {
+  font-size: 0.82rem;
+  color: var(--text, inherit);
+  margin-top: 1px;
+}
+.why-row__inputs,
+.why-row__defaults {
+  list-style: none;
+  margin: 3px 0 0;
+  padding: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted, #6b7280);
+}
+.why-row__defaults { font-style: italic; }
+.why-row__k { text-transform: capitalize; }
+.why-row__standard {
+  font-size: 0.78rem;
+  color: var(--text-muted, #6b7280);
+  margin-top: 2px;
+}
+.why-row__where {
+  font-size: 0.8rem;
+  color: var(--text-muted, #6b7280);
+  margin-top: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .why-badge--ok { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+  .why-badge--info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+  .why-badge--warn { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+}
