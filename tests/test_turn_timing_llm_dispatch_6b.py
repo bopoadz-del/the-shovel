@@ -57,3 +57,32 @@ def test_without_a_dispatch_stamp_it_falls_back_to_last_stage(gap):
     lft = tt.snapshot()["llm_first_token"]
     assert lft >= gap * 0.8, (lft, gap)
     assert lft <= gap + 0.5, (lft, gap)
+
+
+def test_mark_llm_dispatch_without_a_turn_is_a_safe_no_op():
+    # No turn started -> st is None. The `if st is None: return` guard must hold;
+    # dropping it (drop_rule mutant) subscripts None and raises -> killed.
+    tt._STATE.set(None)
+    tt.mark_llm_dispatch()        # must not raise
+    tt.mark_llm_dispatch(123.0)   # must not raise
+
+
+def test_first_token_without_a_turn_is_a_safe_no_op():
+    # Same guard on first_token: `if st is None or st["first_token"]: return`.
+    tt._STATE.set(None)
+    tt.first_token()              # must not raise
+
+
+@pytest.mark.parametrize("gap", [0.03, 0.10])
+def test_first_token_is_idempotent(gap):
+    # The second first_token() is a no-op. record() ACCUMULATES, so a dropped
+    # idempotency guard (drop_rule) would add llm_first_token again and change
+    # the snapshot -> this assertion reddens the mutant.
+    tt.mark_arrival()
+    tt.mark_llm_dispatch()
+    time.sleep(gap)
+    tt.first_token()
+    once = tt.snapshot()["llm_first_token"]
+    time.sleep(gap)
+    tt.first_token()              # idempotent: no second record
+    assert tt.snapshot()["llm_first_token"] == once
