@@ -44,7 +44,7 @@ def concrete_cylinders(failure_load_kn: float, cylinder_diameter_mm: float = 150
     description='Drying shrinkage strain of concrete at a given age.',
     inputs={
         'time_days': Param('days', 0, 36500, label='age'),
-        'ultimate_shrinkage_microstrain': Param('microstrain', 0, 3000, label='ultimate shrinkage'),
+        'ultimate_shrinkage_microstrain': Param('ratio', 0, 3000, label='ultimate shrinkage'),
         'time_constant_days': Param('days', 1, 3650, label='shrinkage time constant'),
     },
     outputs={'shrinkage_microstrain': '-', 'shrinkage_strain': '-', 'fraction_of_ultimate': '-'},

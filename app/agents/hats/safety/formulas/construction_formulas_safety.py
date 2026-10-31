@@ -62,7 +62,7 @@ def scaffold_load_capacity(
         'worker_mass_kg': Param('kg', 20, 300, label='worker mass'),
         'free_fall_m': Param('m', 0, 10, label='free-fall distance'),
         'deceleration_distance_m': Param('m', 0, 10, label='deceleration distance'),
-        'g': Param('m/s2', 9.7, 9.9, label='gravitational acceleration'),
+        'g': Param('-', 9.7, 9.9, label='gravitational acceleration'),
     },
     outputs={'max_arrest_force_kn': 'kN', 'within_osha_limit': '-', 'osha_limit_kn': 'kN'},
 )
