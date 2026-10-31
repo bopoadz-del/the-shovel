@@ -31,7 +31,7 @@ def _ok(name, params):
 
 def _err(name, params):
     env = run_calculation(name, params)
-    assert env.get("status") == "error", (name, params, env)
+    assert env.get("status") == "needs_input", (name, params, env)
     return env
 
 

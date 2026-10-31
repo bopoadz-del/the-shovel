@@ -14,7 +14,7 @@ def test_a_lift_rate_is_asked_about_not_used_as_tonnes():
     out = cf.run_calculation("crane_planning", {
         "text": "We have 240 lifts to make. Each crane does 10 lifts/h over an 8 h day. How many cranes?",
         "total_lift_demand_tons": 240, "crane_capacity_tons": 10})
-    assert out["status"] == "error" and "lifts/h" in out["error"]
+    assert out["status"] == "needs_input" and "lifts/h" in out["error"]
     assert "?" in out["error"]
 
 

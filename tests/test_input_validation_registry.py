@@ -120,7 +120,7 @@ def test_an_out_of_range_value_is_refused_and_asked_by_label(formula, name, side
     p = _param(formula, name)
     bad = _outside(p, side)
     out = _run_alone(formula, {name: bad})
-    assert out["status"] == "error", out
+    assert out["status"] == "needs_input", out
     assert out.get("needs_input") is True, out
     rejected = out["rejected"]
     assert rejected and all(r["reason"] == "out_of_range" and r["value"] == bad

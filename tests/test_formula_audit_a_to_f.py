@@ -78,7 +78,7 @@ def _ok(name: str, params: dict) -> dict:
 
 def _err(name: str, params: dict) -> dict:
     env = run_calculation(name, params)
-    assert env["status"] == "error", env
+    assert env["status"] == "needs_input", env
     assert isinstance(env.get("error"), str) and env["error"].strip()
     return env
 
@@ -738,7 +738,7 @@ def test_audit_crane_cost_estimate(rates, cur, per, total, mob, demob, grand):
 def test_crane_cost_without_a_rate_asks_for_it(params):
     """No silent built-in rate: the dry hire rate is a required input."""
     out = run_calculation("crane_cost_estimate", params)
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert "dry_hire_rate_per_month" in str(out)
 
 
@@ -749,7 +749,7 @@ def test_crane_cost_included_crew_without_a_rate_asks_for_it(missing):
               "operator_rate_per_month": 3500, "riggers_rate_per_month": 5600}
     params.pop(missing)
     out = run_calculation("crane_cost_estimate", params)
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert missing in str(out)
 
 

@@ -28,7 +28,7 @@ def _run(ask, name, params):
 def test_a_phantom_required_zero_is_asked_for_not_refused_as_given():
     out = _run("Crane hire for 6 months, 50 t crawler crane, how much will it cost?",
                "crane_cost_estimate", {"num_cranes": 0, **HIRE})
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert "num_cranes" in (out.get("missing") or []), out
     assert "given (0)" not in out["error"]
 
@@ -43,7 +43,7 @@ def test_a_phantom_optional_zero_takes_the_declared_default():
 @pytest.mark.parametrize("ask", ["Crane hire, 0 cranes, 6 months, 50 t", "zero cranes, 50 t, 6 months"])
 def test_a_zero_the_user_wrote_is_kept_and_judged(ask):
     out = _run(ask, "crane_cost_estimate", {"num_cranes": 0, **HIRE})
-    assert out["status"] == "error" and "given (0)" in out["error"], out
+    assert out["status"] == "needs_input" and "given (0)" in out["error"], out
 
 
 def test_a_switch_keeps_zero_as_off():
@@ -55,7 +55,7 @@ def test_a_switch_keeps_zero_as_off():
 
 def test_a_call_with_no_user_words_is_unchanged():
     out = cf.run_calculation("crane_cost_estimate", {"num_cranes": 0, **HIRE})
-    assert out["status"] == "error" and "given (0)" in out["error"], out
+    assert out["status"] == "needs_input" and "given (0)" in out["error"], out
 
 
 # LANE4 (#994 parked): the check was per ask, so any "no", "none", "without"
@@ -77,7 +77,7 @@ def test_a_zero_word_for_another_input_does_not_vouch_for_the_crane_count(ask):
                                  "number of cranes: zero, 50 t, 6 months"])
 def test_a_zero_written_beside_the_input_is_kept(ask):
     out = _run(ask, "crane_cost_estimate", {"num_cranes": 0, **HIRE})
-    assert out["status"] == "error" and "given (0)" in out["error"], out
+    assert out["status"] == "needs_input" and "given (0)" in out["error"], out
 
 
 def test_the_input_words_come_from_its_declared_label():

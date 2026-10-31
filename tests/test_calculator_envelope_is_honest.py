@@ -27,7 +27,7 @@ import app.lib.construction_formulas as cf
 def test_rejected_inputs_do_not_report_success():
     """The regression: RED before the fix, which returned status success."""
     out = cf.run_calculation("score_risk", {"probability": 10, "impact": 10})
-    assert out["status"] == "error", (
+    assert out["status"] == "needs_input", (
         "a calculator that refused its inputs must not report success; got "
         f"{out}"
     )

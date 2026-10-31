@@ -171,8 +171,8 @@ def test_grout_diameter_outside_the_declared_range_is_rejected():
     too_wide = run_calculation("grout_pressure_calc", {"tendon_duct_diameter_mm": 400})
     too_narrow = run_calculation("grout_pressure_calc", {"tendon_duct_diameter_mm": 15})
     ok = run_calculation("grout_pressure_calc", {"tendon_duct_diameter_mm": 60})
-    assert too_wide["status"] == "error"
-    assert too_narrow["status"] == "error"
+    assert too_wide["status"] == "needs_input"
+    assert too_narrow["status"] == "needs_input"
     assert "400" in str(too_wide.get("error") or too_wide.get("question") or "")
     assert "15" in str(too_narrow.get("error") or too_narrow.get("question") or "")
     assert ok["status"] == "success"

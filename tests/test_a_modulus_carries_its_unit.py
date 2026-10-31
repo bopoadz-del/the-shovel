@@ -82,7 +82,7 @@ def test_the_two_forms_are_different_numbers():
 def test_zero_strength_is_asked_for_in_both_forms():
     for params in ({"fck_n_mm2": 0}, {"fck_n_mm2": 0, "code": "aci"}):
         out = cf.run_calculation(CALC, params)
-        assert out["status"] == "error" and out["needs_input"] is True, out
+        assert out["status"] == "needs_input" and out["needs_input"] is True, out
         assert "characteristic concrete strength" in out["question"]
 
 

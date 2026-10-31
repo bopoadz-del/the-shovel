@@ -30,7 +30,7 @@ def _ok(name, params):
 
 def _err(name, params):
     env = run_calculation(name, params)
-    assert env.get("status") == "error", (name, params, env)
+    assert env.get("status") == "needs_input", (name, params, env)
     return env
 
 
@@ -339,7 +339,7 @@ def test_dir7_empty_construction_calc_names_required_params_and_units(calc):
     env = _dir7_tool(calc, {})
     assert env.get("ok") is False, env
     result = env["result"]
-    assert result["status"] == "error", result
+    assert result["status"] == "needs_input", result
     err = result["error"]
     assert "TypeError" not in err
     assert "missing required" in err

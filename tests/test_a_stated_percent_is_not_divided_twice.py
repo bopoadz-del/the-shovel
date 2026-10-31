@@ -16,7 +16,7 @@ DIMS = {"length_m": 10, "width_m": 8, "depth_m": 3}
 
 def test_a_fraction_of_a_stated_percent_is_refused_by_range_not_shrunk():
     out = cf.run_calculation("excavation_volume", {"text": ASK, **DIMS, "bulking_factor": 1.5})
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert "150%" in out["error"] and "0% to 100%" in out["error"]
 
 

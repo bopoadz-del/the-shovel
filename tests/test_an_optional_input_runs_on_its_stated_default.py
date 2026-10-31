@@ -63,5 +63,5 @@ def test_the_concrete_build_up_asks_for_prices_it_has_no_standard_for(given):
         assert out["status"] == "success"
         assert out["result"]["selling_price_per_m3"] == 308.83
     else:
-        assert out["status"] == "error"
+        assert out["status"] == "needs_input"
         assert "cement_price_per_t" in out["missing"]

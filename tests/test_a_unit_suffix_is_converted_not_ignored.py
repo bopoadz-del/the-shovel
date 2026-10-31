@@ -69,7 +69,7 @@ def test_an_unmapped_unit_fails_loudly_rather_than_silently():
     # No calculator takes a _cm parameter, so this must not quietly become a
     # span: a named error is the right outcome.
     out = cf.run_calculation(SLAB, {"span_cm": 480})
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert "span_mm" in out["error"]
 
 
