@@ -12,6 +12,7 @@ import pytest
 
 import app.agents.base.tools as _base_tools  # noqa: F401 -- selects tools.py mutants for CI-M
 import app.lib.construction_formulas as cf
+from app.agents.answer_exit import _error_texts
 from app.agents.runtime import _tool_result_errored
 from tests.test_construction_calc_tool import _agent, _run
 
@@ -105,6 +106,19 @@ def test_construction_calc_tool_ok_tracks_needs_input(args, user_message, ok, st
     assert env["name"] == "construction_calc", env
     assert env.get("ok") is ok, env               # mutant "ok True for needs_input" RED
     assert env["result"]["status"] == status, env
+
+
+# ── answer_exit treats a needs_input tool result as a FAILED tool round, so the
+#    model's mechanics reply is replaced by the tool's question (not narrated as
+#    an answer). Imports _error_texts directly so CI-M selects answer_exit's
+#    mutants. Two inputs: an ask carries its text; a success carries none. ──
+@pytest.mark.parametrize("payload,has_text", [
+    ({"status": "needs_input", "error": "The days of delay needs a number."}, True),
+    ({"status": "error", "error": "boom"}, True),
+    ({"status": "success", "error": "ignored"}, False),
+])
+def test_error_texts_treats_needs_input_as_failed(payload, has_text):
+    assert bool(_error_texts(payload)) is has_text   # mutant dropping needs_input RED
 
 
 @pytest.mark.parametrize("user_message", [

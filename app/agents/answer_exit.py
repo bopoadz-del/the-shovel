@@ -166,7 +166,7 @@ def _error_texts(payload: Any) -> list[str]:
     """Error strings an error envelope carries, at any depth."""
     found: list[str] = []
     if isinstance(payload, dict):
-        failed = payload.get("status") == "error" or payload.get("ok") is False
+        failed = payload.get("status") in ("error", "needs_input") or payload.get("ok") is False
         err = payload.get("error")
         if isinstance(err, str) and err.strip() and (failed or "status" not in payload):
             found.append(err.strip())
