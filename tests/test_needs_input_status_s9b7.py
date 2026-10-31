@@ -38,8 +38,9 @@ def test_rejection_reason_decides_status(reason, status):
     assert env.get("needs_input") is True, env
 
 
-def test_missing_required_always_asks():
-    env = cf._input_rejection_envelope("delay_damages_daily", [], ["days"])
+@pytest.mark.parametrize("missing", [["days"], ["amount_per_day", "days"]])
+def test_missing_required_always_asks(missing):
+    env = cf._input_rejection_envelope("delay_damages_daily", [], missing)
     assert env["status"] == "needs_input"
     assert env.get("needs_input") is True
 
