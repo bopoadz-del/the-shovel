@@ -69,6 +69,20 @@ def test_given_invalid_value_errors_absent_asks(name, params, status):
         assert "greater than zero" in (env.get("error") or ""), env
 
 
+# ── an unknown arg that is a unit/suffix variant of a missing required field
+#    (span_cm vs span_mm) is a value GIVEN under an unmappable unit -> status
+#    error; a junk kwarg unrelated to any missing field leaves the omission an
+#    ask. ORDERS_31OCT_0945Z. Mutant "unit-suffix shadow routed to needs_input"
+#    RED. ──
+@pytest.mark.parametrize("name,params,status", [
+    ("slab_thickness_min", {"span_cm": 480}, "error"),          # span given as _cm
+    ("backfill_volume", {"wrong_arg": 1}, "needs_input"),       # junk + genuine omission
+])
+def test_unit_suffixed_unknown_errors_junk_asks(name, params, status):
+    env = cf.run_calculation(name, params)
+    assert env.get("status") == status, env
+
+
 # ── the ask cases: unparseable / blank both -> needs_input naming the field ──
 @pytest.mark.parametrize("days", ["days3", ""])
 def test_unusable_required_numeric_asks(days):

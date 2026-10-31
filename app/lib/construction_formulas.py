@@ -3100,6 +3100,15 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             )
             env["unknown"] = list(unknown)
             env["calculation"] = name
+            # An unknown argument that is a unit/suffix variant of a missing
+            # required field (span_cm vs span_mm) means the caller GAVE that
+            # input under a unit the calculator cannot map -- a given-invalid
+            # value, status "error", not an absent-input ask (item 7,
+            # ORDERS_31OCT_0945Z). A junk kwarg unrelated to any missing field
+            # (wrong_arg) leaves the genuine omission as the ask.
+            missing_stems = {str(m).rsplit("_", 1)[0] for m in missing}
+            if any(str(u).rsplit("_", 1)[0] in missing_stems for u in unknown):
+                env["status"] = "error"
             return env
         return _unknown_arg_envelope(str(name), fn, unknown)
     if missing:
