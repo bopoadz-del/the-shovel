@@ -195,16 +195,26 @@ def test_the_event_loop_keeps_running_while_a_pdf_is_parsed(blank_pdf, monkeypat
                 last = now
 
         hb = asyncio.create_task(heartbeat())
+        started = time.perf_counter()
         await asyncio.sleep(0.05)
         await bp.BOQProcessorBlock().process({"file_path": path}, {})
         done = True
         await hb
-        return max(gaps)
+        return max(gaps), len(gaps), time.perf_counter() - started
 
-    worst = asyncio.run(scenario())
+    worst, ticks, total = asyncio.run(scenario())
+    # Item 12: ADD a whole-run monitor alongside the original bound (the bound
+    # is NOT loosened -- ORDERS_31OCT_0247Z). A 0.02 s heartbeat over a ~1.1 s
+    # scenario (4 x 0.25 s parse) expects ~55 ticks; a real freeze blocks the
+    # heartbeat for the parse, so it ticks only a handful of times -- this
+    # catches a stall wherever it lands, independent of the single worst gap.
+    expected_ticks = total / 0.02
+    assert ticks >= 0.5 * expected_ticks, (
+        f"event loop ticked {ticks} of ~{expected_ticks:.0f} beats in {total:.2f}s "
+        f"-- it was frozen while a PDF was parsed"
+    )
     # The parse itself is 4 x 0.25 s, so blocking shows as a gap near that
-    # whole second; scheduler noise on a loaded machine reached exactly 0.20 s
-    # (virgin-mode run, 23 Sep). The bound sits between the two, not on the noise.
+    # whole second; the bound sits between that and scheduler noise.
     assert worst < 0.4, f"event loop frozen for {worst:.2f}s while a PDF was parsed"
 
 

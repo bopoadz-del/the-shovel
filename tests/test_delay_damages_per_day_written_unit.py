@@ -226,7 +226,15 @@ def test_normalise_rate_gives_one_spelling(written, normal):
     assert planning.normalise_rate(written) == normal
 
 
-@pytest.mark.parametrize("word", ["percent", "perch", "Percent", "permit", "superday", "upperweek", "perc", "permph"])
+@pytest.mark.parametrize("written,normal", [
+    ("SAR 100 annually", "SAR 100/year"), ("SAR 100 yearly", "SAR 100/year"),
+])
+def test_normalise_rate_reads_a_yearly_word_as_per_year(written, normal):
+    assert planning.normalise_rate(written) == normal
+
+
+@pytest.mark.parametrize("word", ["percent", "perch", "Percent", "permit", "superday", "upperweek", "perc", "permph",
+                                  "biweekly", "semimonthly", "dailyrate"])
 def test_normalise_rate_leaves_a_word_that_is_not_per_a_unit(word):
     # "percent", "perch", "permit": the rest is not a unit. "superday":
     # "per" inside a word is not a "per".
