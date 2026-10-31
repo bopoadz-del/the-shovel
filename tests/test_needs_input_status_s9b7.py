@@ -50,6 +50,25 @@ def test_missing_required_always_asks(missing):
     assert env.get("needs_input") is True
 
 
+# ── a value the caller GAVE but the calculator rejected as out of domain keeps
+#    status "error" (with the ask flag); an ABSENT input asks (needs_input).
+#    ORDERS_31OCT_0945Z. Mutant "given-invalid routed to needs_input" RED. ──
+@pytest.mark.parametrize("name,params,status", [
+    # given-but-invalid rate (calculator raises "must be greater than zero")
+    # -> status error WITH the ask flag (the 3139 given-invalid branch).
+    ("productivity_manpower_duration",
+     {"quantity": 4800, "productivity_rate": "-120 m2 per gang-day"}, "error"),
+    # absent input -> ask (same partial-result branch, no value rejected).
+    ("supervision_ratio", {"concrete_m3": 5000}, "needs_input"),
+])
+def test_given_invalid_value_errors_absent_asks(name, params, status):
+    env = cf.run_calculation(name, params)
+    assert env.get("status") == status, env
+    if status == "error":
+        assert env.get("needs_input") is True, env        # still flags the ask
+        assert "greater than zero" in (env.get("error") or ""), env
+
+
 # ── the ask cases: unparseable / blank both -> needs_input naming the field ──
 @pytest.mark.parametrize("days", ["days3", ""])
 def test_unusable_required_numeric_asks(days):

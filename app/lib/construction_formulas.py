@@ -3166,6 +3166,15 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             reason = str(result.get("error") or "").strip()
             if reason and reason not in str(env.get("error") or ""):
                 env["error"] = f"{reason} {env.get('error') or ''}".strip()
+            # A value the caller GAVE but the calculator rejected as out of its
+            # domain (negative where only positive is physical) keeps status
+            # "error" -- with the needs_input flag, the field, and the reason --
+            # not "needs_input" (item 7 FINAL ruling, ORDERS_31OCT_0945Z: a given
+            # invalid value is an error; only an ABSENT input asks). The value
+            # rejection carries a ``required`` list beside its needs_input; a
+            # plain omission does not. Keys off that structure, not the text.
+            if result.get("required"):
+                env["status"] = "error"
             return env
         err = result["error"]
         if name in _CALC_REQUIRED_HELP and "needs" in err.lower():
