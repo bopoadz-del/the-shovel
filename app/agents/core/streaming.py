@@ -119,7 +119,7 @@ async def _chat_stream_impl(
     from app.agents.answer_exit import end_on_a_sentence
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         MAX_TOOL_ITERATIONS, _CONTEXT_LEAK_RETRY_NUDGE, _EMPTY_RESPONSE_FALLBACK,
-        _EMPTY_ROUTER_NUDGE, _LOG, _SEARCH_PREAMBLE_RETRY_NUDGE,
+        _EMPTY_ROUTER_NUDGE, _LOG, _SEARCH_PREAMBLE_RETRY_NUDGE, _approx_prompt_tokens,
         _LENGTH_CUT_NOTICE, _STREAM_DELIVERY_MARGIN_SECONDS, _SYNTH_CUTOFF_NOTICE, _SynthLengthCut,
         _SynthStreamError,
         _TOOL_ERROR_NUDGE_CAP, _TOOL_FORMAT_FALLBACK, _TOOL_FORMAT_RETRY_NUDGE,
@@ -1122,6 +1122,11 @@ async def _chat_stream_impl(
                 return
         _call_t0 = time.monotonic()
         _set_phase(f"llm-call iter={iteration}")
+        # 6b: record the prompt size that gates first-token latency. The iter-0
+        # call is the one the user waits on for the first token; later
+        # iterations grow the prompt with tool results, so capture iter 0 only.
+        if iteration == 0:
+            _turn_timing.mark_value("prompt_tokens_in", _approx_prompt_tokens(messages))
         resp = await self._call_llm(
             messages, api_key, project_id=project_id, user_id=user_id,
             exclude_tools=excluded_tools or None,

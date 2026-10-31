@@ -54,14 +54,25 @@ def record(name: str, dur: float) -> None:
     stages[name] = stages.get(name, 0.0) + max(0.0, float(dur))
 
 
+def mark_value(name: str, value: float) -> None:
+    """Record a non-duration scalar for this turn (e.g. ``prompt_tokens_in``),
+    surfaced by :func:`snapshot`. Overwrites rather than accumulates -- it is a
+    reading, not a running total. With no turn started, nothing is stored."""
+    st = _STATE.get()
+    if st is None:
+        return
+    st.setdefault("values", {})[name] = value
+
+
 def snapshot() -> dict:
     """This turn's pre-first-token stage timings in seconds: every stage in
     ``PRE_FIRST_TOKEN_STAGES`` (0.0 when it did not run) plus any other stage
-    timed so far, and ``since_arrival``."""
+    timed so far, any scalar from :func:`mark_value`, and ``since_arrival``."""
     st = _STATE.get() or {}
     stages = st.get("stages") or {}
     out = dict.fromkeys(PRE_FIRST_TOKEN_STAGES, 0.0)
     out.update({k: round(v, 4) for k, v in stages.items()})
+    out.update(st.get("values") or {})
     at = since_arrival()
     out["since_arrival"] = round(at, 4) if at is not None else 0.0
     return out
