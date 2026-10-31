@@ -110,20 +110,20 @@ def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
     for spec in specs:
         inputs = "; ".join(_input_line(k, p) for k, p in formula_registry.parameters(spec).items())
         lines.append(f"- {spec.name}: {spec.display_name}. {spec.description} Inputs: {inputs or 'none'}.")
-    # Every other registered calculator stays callable before its hat is
-    # chosen: a calculator the turn needs is never out of reach, so the model
-    # never works its figure by hand or reaches for a different tool.
+    # 6b (ORDERS_31OCT_1355Z, path B + compression): every other registered
+    # calculator STAYS callable before its hat is chosen -- the enum below lists
+    # all of them, so a calculator the turn needs is never out of reach and the
+    # model never hand-works a figure or refuses (LANE3). But its prefix line is
+    # compressed to name + display only; the per-input labels (~5k tokens on the
+    # no-hat turn) are omitted. The model calls it by name and the calculator
+    # asks for any input it still needs, or select_hat brings its full entry in.
+    # The base / selected-hat formulas above keep their full input lines.
     listed = {s.name for s in specs}
     others = [s for s in formula_registry.all_specs() if s.name not in listed]
     if others:
-        lines.append("Other calculators (in another hat; call them the same way):")
+        lines.append("Other calculators (callable now; select_hat for their inputs):")
         for spec in others:
-            # Optional inputs are marked here too: an input the model cannot
-            # see is optional reads as one it must find or ask for (LANE3:
-            # "using your standard rates" refused, or priced from a document).
-            inputs = "; ".join(f"{k} = {p.label or k.replace('_', ' ')}" + ("" if p.required else " (optional)")
-                               for k, p in formula_registry.parameters(spec).items())
-            lines.append(f"- {spec.name}: {spec.display_name} ({spec.owner}). Inputs: {inputs or 'none'}.")
+            lines.append(f"- {spec.name}: {spec.display_name}")
     specs = specs + others
     return {
         "type": "function",
