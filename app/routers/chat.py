@@ -833,6 +833,165 @@ def _sources_from_snippets(snippets: list, answer: str, message: str, project_id
         return []
 
 
+async def _predispatch_concurrent_stream(
+    *, prompt, history, project_id, user_id, conversation_id,
+    attached_docs, document_ids, body, session_id, rid,
+):
+    """6c pre-dispatch concurrency (ORDERS_31OCT_1605Z).
+
+    The two pre-LLM routing hops run CONCURRENTLY with a SPECULATIVE main
+    project-assistant stream, all started at once:
+      * routing = understand_intent's predefined check + select_agent_for_message
+        (run in one task; select is skipped only when a predefined workflow
+        already matched);
+      * the project-assistant stream (the common pass-through answer) is started
+        speculatively and its events BUFFERED -- never shown -- until routing
+        resolves.
+    Pass-through (no predefined workflow AND select_agent keeps the requested
+    agent) flushes the buffered stream and keeps streaming, so the first token
+    never waited for routing. A redirect (a predefined workflow, or select_agent
+    -> another agent) cancels the speculative stream BEFORE any client token and
+    dispatches the routed path; the discarded call's tokens are accepted. The
+    speculative and committed calls share the SAME resolved_pid context (the
+    1605Z guard: no second context build).
+    """
+    from app.agents.runtime import get_agent, select_agent_for_message
+    from app.core import projects as projects_store
+    from app.core import turn_timing
+    # understand_intent is the chat module global (line ~22) so test monkeypatches
+    # of chat.understand_intent take effect; do NOT shadow it with a local import.
+
+    agent = get_agent("project-assistant")
+    if agent is None:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
+        return
+
+    # Tenant gate, computed ONCE so the speculative and committed calls share
+    # the exact same context.
+    safe_pid = project_id
+    if project_id and project_id != projects_store.MASTER_CORPUS_PROJECT_ID:
+        try:
+            if projects_store.get_project_accessible(project_id, user_id) is None:
+                safe_pid = None
+        except Exception:  # noqa: BLE001
+            safe_pid = None
+    resolved_pid = (projects_store.MASTER_CORPUS_SOURCE_PROJECT_ID
+                    if safe_pid == projects_store.MASTER_CORPUS_PROJECT_ID else safe_pid)
+
+    async def _intent_hop():
+        if not _predefined_enabled():
+            return {"action": None}
+        try:
+            with turn_timing.stage("route"):
+                return ({"action": None} if _message_vetoes_predefined(prompt)
+                        else await understand_intent(prompt, has_documents=bool(document_ids)))
+        except Exception:  # noqa: BLE001
+            return {"action": None}
+
+    async def _select_hop():
+        try:
+            with turn_timing.stage("route"):
+                return await select_agent_for_message(prompt, agent)
+        except Exception:  # noqa: BLE001 -- fail open to the requested agent
+            return agent, {"requested": agent.name, "final": agent.name,
+                           "action": None, "confidence": 0.0, "reason": "route_error"}
+
+    async def _route():
+        """Both routing hops run CONCURRENTLY (1605Z item 1). When the predefined
+        check wins, the select result is simply unused (it ran in parallel)."""
+        intent, (final_agent, routing) = await asyncio.gather(_intent_hop(), _select_hop())
+        return intent, final_agent, routing
+
+    _SPEC_DONE = object()
+    spec_q: "asyncio.Queue" = asyncio.Queue()
+
+    async def _spec():
+        try:
+            async for evt in agent.chat_stream(
+                prompt, history=history, project_id=resolved_pid,
+                conversation_id=conversation_id, user_id=user_id,
+                attached_documents=attached_docs,
+            ):
+                await spec_q.put(evt)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await spec_q.put({"type": "__spec_error__", "message": str(exc)})
+        finally:
+            await spec_q.put(_SPEC_DONE)
+
+    route_task = asyncio.create_task(_route())
+    spec_task = asyncio.create_task(_spec())
+    try:
+        intent, final_agent, routing = await route_task
+    except Exception:  # noqa: BLE001 -- routing crashed: commit the speculative call (fail-open)
+        intent, final_agent, routing = ({"action": None}, agent,
+                                        {"requested": agent.name, "final": agent.name,
+                                         "action": None, "confidence": 0.0, "reason": "route_crash"})
+
+    redirect = (intent.get("action") in _predefined_workflows()
+                or bool(routing and routing.get("final") != routing.get("requested")))
+
+    if redirect:
+        # Cancel the speculative stream BEFORE emitting any client token from it.
+        spec_task.cancel()
+        try:
+            await spec_task
+        except BaseException:  # noqa: BLE001 -- cancellation / cleanup, nothing shown
+            pass
+        if intent.get("action") in _predefined_workflows():
+            merged = dict(intent.get("params") or {})
+            for k in ("target_count", "project_type", "start_date", "day_rate"):
+                if body.get(k) is not None:
+                    merged[k] = body.get(k)
+            if not merged.get("duration_overrides"):
+                from app.lib.wbs_duration_overrides import collect_overrides
+                merged["duration_overrides"] = collect_overrides(prompt, history=history) or None
+            async for evt in _stream_from_predefined(
+                action=intent["action"], user_message=prompt,
+                project_id=project_id, user_id=user_id, session_id=session_id,
+                document_ids=document_ids, params=merged,
+                deliverable=intent.get("deliverable"), emit_start=False,
+                conversation_id=conversation_id,
+            ):
+                yield evt
+            return
+        # select_agent redirected to another agent (e.g. heavy-reasoning).
+        yield f"data: {json.dumps({'type': 'route', **routing})}\n\n"
+        try:
+            async for evt in final_agent.chat_stream(
+                prompt, history=history, project_id=resolved_pid,
+                conversation_id=conversation_id, user_id=user_id,
+                attached_documents=attached_docs,
+            ):
+                if evt.get("type") == "token":
+                    turn_timing.first_token()
+                yield f"data: {json.dumps(evt, default=str)}\n\n"
+                await asyncio.sleep(0)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("orchestrator agent stream failed: %s", e)
+            _report_sse_llm_failure(str(e), path="/v1/chat/stream")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
+        return
+
+    # PASS-THROUGH: the speculative stream is already running -- commit it.
+    if routing:
+        yield f"data: {json.dumps({'type': 'route', **routing})}\n\n"
+    while True:
+        evt = await spec_q.get()
+        if evt is _SPEC_DONE:
+            break
+        if isinstance(evt, dict) and evt.get("type") == "__spec_error__":
+            logger.warning("orchestrator agent stream failed: %s", evt.get("message"))
+            _report_sse_llm_failure(str(evt.get("message")), path="/v1/chat/stream")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
+            continue
+        if evt.get("type") == "token":
+            turn_timing.first_token()
+        yield f"data: {json.dumps(evt, default=str)}\n\n"
+        await asyncio.sleep(0)
+
+
 @router.post("/chat")
 async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
     """Simple chat endpoint."""
@@ -1160,73 +1319,19 @@ async def chat_stream_v1(
                 yield evt
             return
 
-        # 1) Predefined reasoning for a known workflow (flagged; dynamic UNDERSTAND).
-        if _predefined_enabled():
-            try:
-                with turn_timing.stage("route"):
-                    if _message_vetoes_predefined(prompt):
-                        intent = {"action": None}
-                    else:
-                        intent = await understand_intent(
-                            prompt, has_documents=bool(document_ids))
-            except Exception:  # noqa: BLE001
-                intent = {"action": None}
-            if intent.get("action") in _predefined_workflows():
-                logger.info("chat -> dynamic-predefined: workflow=%s mode=%s",
-                            intent.get("workflow"), intent.get("mode"))
-                merged = dict(intent.get("params") or {})
-                for k in ("target_count", "project_type", "start_date", "day_rate"):
-                    if body.get(k) is not None:
-                        merged[k] = body.get(k)
-                if not merged.get("duration_overrides"):
-                    from app.lib.wbs_duration_overrides import collect_overrides
-                    merged["duration_overrides"] = collect_overrides(
-                        prompt, history=history,
-                    ) or None
-                async for evt in _stream_from_predefined(
-                    action=intent["action"], user_message=prompt,
-                    project_id=project_id, user_id=user_id, session_id=session_id,
-                    document_ids=document_ids, params=merged,
-                    deliverable=intent.get("deliverable"), emit_start=False,
-                    conversation_id=conversation_id,
-                ):
-                    yield evt
-                return
-
-        # 2) Otherwise: dispatch to the project-assistant agent (which self-routes
-        #    generative turns to heavy-reasoning). Preserves current Q&A behavior.
-        agent = get_agent("project-assistant")
-        if agent is None:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
-            return
-        # Tenant gate: drop an unowned project_id (master-corpus alias is public-read).
-        safe_pid = project_id
-        if project_id and project_id != projects_store.MASTER_CORPUS_PROJECT_ID:
-            try:
-                if projects_store.get_project_accessible(project_id, user_id) is None:
-                    safe_pid = None
-            except Exception:  # noqa: BLE001
-                safe_pid = None
-        resolved_pid = safe_pid
-        if safe_pid == projects_store.MASTER_CORPUS_PROJECT_ID:
-            resolved_pid = projects_store.MASTER_CORPUS_SOURCE_PROJECT_ID
-        try:
-            with turn_timing.stage("route"):
-                agent, routing = await select_agent_for_message(prompt, agent)
-            yield f"data: {json.dumps({'type': 'route', **routing})}\n\n"
-            async for evt in agent.chat_stream(
-                prompt, history=history, project_id=resolved_pid,
-                conversation_id=conversation_id, user_id=user_id,
-                attached_documents=attached_docs,
-            ):
-                if evt.get("type") == "token":
-                    turn_timing.first_token()
-                yield f"data: {json.dumps(evt, default=str)}\n\n"
-                await asyncio.sleep(0)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("orchestrator agent stream failed: %s", e)
-            _report_sse_llm_failure(str(e), path="/v1/chat/stream")
-            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
+        # 1) Predefined reasoning and 2) project-assistant dispatch now run
+        #    through _predispatch_concurrent_stream (6c): the two routing hops and
+        #    the speculative project-assistant stream run concurrently, so the
+        #    first token no longer waits for routing on the common pass-through
+        #    ask. A redirect (predefined workflow / another agent) cancels the
+        #    speculative stream before any client token and runs the routed path.
+        async for evt in _predispatch_concurrent_stream(
+            prompt=prompt, history=history, project_id=project_id, user_id=user_id,
+            conversation_id=conversation_id, attached_docs=attached_docs,
+            document_ids=document_ids, body=body, session_id=session_id, rid=rid,
+        ):
+            yield evt
+        return
 
     # Same guard on the v1 path -- B6 was measured here. And the same hat
     # wrapper: the predefined-dispatch zero was measured here too.
