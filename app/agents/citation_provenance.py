@@ -610,6 +610,12 @@ class _CalculatorCredit:
     #: (currency code, default line) for a currency the formula stamped
     #: because the user gave none. Stated only when the answer shows it.
     currency_defaults: list[tuple[str, str]] = field(default_factory=list)
+    #: envelope_provenance badge for this run: provenance (kernel /
+    #: reference_table / improvised), the standard it states, and whether the
+    #: figure is certified. Threaded onto the figure entry so the "Why this
+    #: answer" panel can show WHERE the number came from, not just that a
+    #: calculator produced it.
+    envelope: dict[str, Any] = field(default_factory=dict)
 
 
 def _parse_dict(raw: str) -> dict | None:
@@ -728,6 +734,12 @@ def _calculator_credits(ev: Evidence) -> list[_CalculatorCredit]:
             stated_calculator_inputs,
         )
 
+        try:
+            from app.lib.construction_formulas import envelope_provenance
+            envelope = envelope_provenance(calculation, result)
+        except Exception:  # noqa: BLE001 -- a missing badge must not drop the credit
+            envelope = {}
+
         raw_inputs = _governing_inputs(rec.inputs)
         credits.append(_CalculatorCredit(
             tool=rec.tool or "construction_calc",
@@ -741,6 +753,7 @@ def _calculator_credits(ev: Evidence) -> list[_CalculatorCredit]:
             currency_defaults=calculator_currency_defaults(
                 calculation, result, user_text, passed=raw_inputs,
             ),
+            envelope=envelope,
         ))
     return credits
 
@@ -1418,8 +1431,20 @@ def figure_provenance(
         calc_entries: list[tuple[set[float], dict[str, Any]]] = []
         for credit in _calculator_credits(ev):
             nums = set(credit.result_numbers) | set(_nums(json.dumps(credit.inputs, default=str)))
-            calc_entries.append((nums, {"source": pt.SOURCE_CALCULATOR,
-                                        "formula": credit.calculation, "inputs": credit.inputs}))
+            meta: dict[str, Any] = {"source": pt.SOURCE_CALCULATOR,
+                                    "formula": credit.calculation, "inputs": credit.inputs}
+            # Thread the envelope_provenance badge + the default lines onto the
+            # entry so "Why this answer" can state WHERE the figure came from
+            # (kernel / reference_table / improvised, the standard, certified)
+            # and which inputs the formula had to default. S-12a.
+            if credit.envelope:
+                meta["provenance"] = credit.envelope.get("provenance")
+                meta["standard"] = credit.envelope.get("standard")
+                meta["certified"] = credit.envelope.get("certified")
+            defaults = list(credit.default_lines) + [line for _code, line in credit.currency_defaults]
+            if defaults:
+                meta["defaults"] = defaults
+            calc_entries.append((nums, meta))
         # A platform workflow's own result is a source too: the figures its
         # answer carries (an EVM's CV and EAC, a cash flow's month rows) were
         # produced by the run, not by the model.
