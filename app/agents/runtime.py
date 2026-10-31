@@ -2220,7 +2220,7 @@ def _tool_result_errored(tool_result: Any) -> bool:
     for _ in range(4):
         if not isinstance(node, dict):
             return False
-        if node.get("status") == "error":
+        if node.get("status") in ("error", "needs_input"):
             return True
         node = node.get("result")
     return False

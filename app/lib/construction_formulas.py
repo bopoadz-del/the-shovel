@@ -2463,13 +2463,20 @@ def _bind_error_envelope(
     msg = f"Bad parameters for {name}: {detail}. Expected: {expected_clause}."
     if extra:
         msg = f"{msg} ({extra})"
-    return _with_input_question({
-        "status": "error",
+    # A required input the asked output needs but did not get -- blank, or
+    # omitted when it is needed -- is an ASK, not a hard error: one status,
+    # "needs_input", naming the field (item 7 ruling, ORDERS_31OCT_0405Z). A
+    # bind failure with nothing to ask for (no missing field) stays "error".
+    env: Dict[str, Any] = {
+        "status": "needs_input" if missing else "error",
         "error": msg,
         "signature": f"{name}{_inspect.signature(fn)}",
         "expected_params": expected,
         "missing": missing,
-    }, name, missing)
+    }
+    if missing:
+        env["needs_input"] = True
+    return _with_input_question(env, name, missing)
 
 def _accepts_param(fn: Any, param_name: str) -> bool:
     try:
@@ -2581,7 +2588,7 @@ def _input_rejection_envelope(
 
     question = input_question(name, rejected, missing)
     return {
-        "status": "error",
+        "status": "needs_input",
         "needs_input": True,
         "calculation": name,
         "error": question,
