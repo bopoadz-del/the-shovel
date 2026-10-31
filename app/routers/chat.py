@@ -917,8 +917,11 @@ async def _predispatch_concurrent_stream(
                 attached_documents=attached_docs,
             ):
                 await spec_q.put(evt)
-        except asyncio.CancelledError:
-            raise
+        # No explicit CancelledError handler: it is a BaseException (Py3.8+), so
+        # the `except Exception` below never catches it -- a cancel (redirect
+        # path) propagates and cancels this task on its own, and `finally` still
+        # drains the sentinel. (An explicit re-raise here is redundant and, being
+        # the only `raise`, is an equivalent CI-M swallow_exception mutant.)
         except Exception as exc:  # noqa: BLE001
             await spec_q.put({"type": "__spec_error__", "message": str(exc)})
         finally:
