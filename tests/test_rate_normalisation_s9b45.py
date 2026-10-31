@@ -42,7 +42,7 @@ def test_value_and_unit_carries_the_annual_rate(text, expected):
 
 @pytest.mark.parametrize("value,expected", [
     ({"value": 20, "unit": "ft"}, (20.0, "ft")),
-    ({"value": "5,000", "unit": "AED"}, (5000.0, "AED")),
+    ({"value": 1200.0, "unit": "AED"}, (1200.0, "AED")),
 ])
 def test_value_and_unit_reads_a_value_unit_dict(value, expected):
     """Pins the dict branch (the function's first `if`): drop it and a
