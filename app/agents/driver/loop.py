@@ -228,6 +228,12 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                  user_id: Optional[str] = None, api_key: Optional[str] = None,
                  **_ignored: Any) -> AsyncIterator[Dict[str, Any]]:
     t0 = time.monotonic()
+    # 6b: anchor llm_first_token to the generation-turn start (the model-call
+    # wait), not to turn_timing's `last` stage marker, which intervening
+    # retrieval / pre-dispatch / hat stages reset to ~the first token (the live
+    # ~1 ms artifact). Shares the turn's contextvar dict with the request.
+    from app.core import turn_timing as _turn_timing
+    _turn_timing.mark_llm_dispatch(t0)
     disciplines = [h["discipline"] for h in context.hats()]
     hat: Optional[str] = None
     # The profile lookup reads the database: in a thread, never on the event
