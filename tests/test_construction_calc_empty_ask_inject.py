@@ -92,7 +92,7 @@ def test_action_only_partial_ask_names_missing_param_and_unit(
     env = _empty_call(ask)
     assert env.get("ok") is False, env
     result = env["result"]
-    assert result["status"] == "error", result
+    assert result["status"] == "needs_input", result
     err = result["error"]
     assert "missing required" in err
     assert missing_name in err
@@ -105,6 +105,8 @@ def test_empty_ask_empty_args_does_not_invent_numbers():
     env = _empty_call("", {"action": "construction_calc"})
     assert env.get("ok") is False, env
     result = env["result"]
+    # Empty turn + no calculation name resolves to no calc at all -> "Unknown
+    # calculation", a genuine error (there is no field to ask for), not an ask.
     assert result.get("status") == "error", result
     blob = json.dumps(result, default=str)
     assert "288.5" not in blob
@@ -117,7 +119,7 @@ def test_empty_ask_empty_args_does_not_invent_numbers():
     })
     assert named.get("ok") is False, named
     nres = named["result"]
-    assert nres["status"] == "error"
+    assert nres["status"] == "needs_input"
     assert "missing required" in nres["error"]
     assert "steel_area_mm2" in nres["error"]
     assert "steel_area_mm2 (mm2)" in nres["error"]

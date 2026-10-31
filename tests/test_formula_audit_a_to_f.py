@@ -76,9 +76,12 @@ def _ok(name: str, params: dict) -> dict:
     return env["result"]
 
 
-def _err(name: str, params: dict) -> dict:
+def _err(name: str, params: dict, expect: str = "error") -> dict:
+    # expect="needs_input" for a missing-required / unreadable-value ASK;
+    # default "error" for a value-domain / calculator-raised rejection
+    # (item 7, ORDERS_31OCT_0825Z).
     env = run_calculation(name, params)
-    assert env["status"] == "error", env
+    assert env["status"] == expect, env
     assert isinstance(env.get("error"), str) and env["error"].strip()
     return env
 
@@ -301,7 +304,7 @@ def test_audit_calculate_evm():
     assert r["status"]["cost"] == "OVER BUDGET"
     assert r["status"]["schedule"] == "BEHIND"
 
-    _err("calculate_evm", {"pv": 100_000, "ev": 90_000})  # AC missing
+    _err("calculate_evm", {"pv": 100_000, "ev": 90_000}, expect="needs_input")  # AC missing (ask)
     _err("calculate_evm", {"pv": -1, "ev": 90_000, "ac": 95_000})
 
 
@@ -521,7 +524,7 @@ def test_audit_concrete_maturity_strength():
     _err("concrete_maturity_strength", {
         "temperature_history_c": [],
         "time_intervals_hours": [],
-    })
+    }, expect="needs_input")  # empty series -> ask
 
 
 # ── 20–22 mix design ───────────────────────────────────────────────────────
@@ -684,7 +687,7 @@ def test_audit_cost_buildup_rebar():
                {**REBAR_RATES, "quantity_kg": 1000, "material_price_per_t": 3000})
     assert real["material_per_t"] == pytest.approx(3300, abs=1)
 
-    _err("cost_buildup_rebar", {"quantity_kg": 0})
+    _err("cost_buildup_rebar", {"quantity_kg": 0}, expect="needs_input")
 
 
 def test_audit_cost_per_area():
@@ -738,7 +741,7 @@ def test_audit_crane_cost_estimate(rates, cur, per, total, mob, demob, grand):
 def test_crane_cost_without_a_rate_asks_for_it(params):
     """No silent built-in rate: the dry hire rate is a required input."""
     out = run_calculation("crane_cost_estimate", params)
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert "dry_hire_rate_per_month" in str(out)
 
 
@@ -749,7 +752,7 @@ def test_crane_cost_included_crew_without_a_rate_asks_for_it(missing):
               "operator_rate_per_month": 3500, "riggers_rate_per_month": 5600}
     params.pop(missing)
     out = run_calculation("crane_cost_estimate", params)
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert missing in str(out)
 
 
@@ -962,7 +965,7 @@ def test_audit_electrical_installation_sequence():
     assert one["total_days"] == 1 + 1 + 1 + 1 + 1 + 1 + 2  # 50/30 → 2
 
     _err("electrical_installation_sequence",
-         {"floor_area_m2": 0, "num_floors": 3})
+         {"floor_area_m2": 0, "num_floors": 3}, expect="needs_input")
 
 
 def test_audit_evaluate_tender():

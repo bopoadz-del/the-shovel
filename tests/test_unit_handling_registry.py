@@ -500,7 +500,7 @@ def test_a_missing_input_is_asked_for_by_its_label(formula):
     from app.agents import runtime
 
     out = cf.run_calculation(formula, {})
-    assert out["status"] == "error", out
+    assert out["status"] == "needs_input", out
     question = out.get("question")
     assert question, out
     for name in out["missing"]:

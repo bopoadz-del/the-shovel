@@ -30,8 +30,11 @@ def _ok(name, params):
 
 
 def _err(name, params):
+    # A missing-required / unreadable-value bind is a unified ASK (item 7,
+    # ORDERS_31OCT_0825Z): status "needs_input". A value-domain or unknown-arg
+    # rejection keeps status "error" and its caller asserts that inline.
     env = run_calculation(name, params)
-    assert env.get("status") == "error", (name, params, env)
+    assert env.get("status") == "needs_input", (name, params, env)
     return env
 
 
@@ -136,7 +139,10 @@ def test_calculate_evm_flatten_does_not_pass_envelope_as_kwargs():
     bound = bind_calculation_params(CALCULATORS["calculate_evm"], leaked)
     for key in ("text", "formula", "input", "project_id", "noise"):
         assert key not in bound, bound
-    rejected = _err("calculate_evm", leaked)
+    # 'noise' is an unknown argument with no missing required input -> a
+    # value-domain / unknown-arg rejection, status "error" (not an ask).
+    rejected = run_calculation("calculate_evm", leaked)
+    assert rejected.get("status") == "error", rejected
     assert "noise" in rejected["error"]
     clean = {key: val for key, val in leaked.items() if key != "input"}
     _assert_evm(_ok("calculate_evm", clean))

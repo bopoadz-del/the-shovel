@@ -2463,13 +2463,20 @@ def _bind_error_envelope(
     msg = f"Bad parameters for {name}: {detail}. Expected: {expected_clause}."
     if extra:
         msg = f"{msg} ({extra})"
-    return _with_input_question({
-        "status": "error",
+    # A required input the asked output needs but did not get -- blank, or
+    # omitted when it is needed -- is an ASK, not a hard error: one status,
+    # "needs_input", naming the field (item 7 ruling, ORDERS_31OCT_0405Z). A
+    # bind failure with nothing to ask for (no missing field) stays "error".
+    env: Dict[str, Any] = {
+        "status": "needs_input" if missing else "error",
         "error": msg,
         "signature": f"{name}{_inspect.signature(fn)}",
         "expected_params": expected,
         "missing": missing,
-    }, name, missing)
+    }
+    if missing:
+        env["needs_input"] = True
+    return _with_input_question(env, name, missing)
 
 def _accepts_param(fn: Any, param_name: str) -> bool:
     try:
@@ -2571,17 +2578,41 @@ def _with_input_question(env: Dict[str, Any], name: str, missing: List[str]) -> 
     return env
 
 
+#: check_inputs rejection reasons for a value that could not be READ as its kind
+#: -- blank, non-numeric ("days3"), a fraction where a whole is wanted, a
+#: non-boolean. Item 7 (ORDERS_31OCT_0405Z/0825Z) unifies these, and a missing
+#: required input, into ONE status: "needs_input" naming the field. OUT-OF-RANGE
+#: is NOT in this set: its pre-existing tested contract (status "error" + the
+#: needs_input flag + the scale that fits) is preserved verbatim -- 0825Z does
+#: not overturn a tested contract. A wrong/unknown unit likewise keeps status
+#: "error". Every rejection still carries needs_input=True and the question, as
+#: before, so the turn re-asks. The split keys off the reason taxonomy, never a
+#: field name or value.
+_COERCION_ASK_REASONS = frozenset({"empty", "not_a_number", "not_whole", "not_yes_no"})
+
+
 def _input_rejection_envelope(
     name: str, rejected: List[Dict[str, Any]], missing: List[str],
 ) -> Dict[str, Any]:
-    """The calculator was not run: a supplied value has the wrong type or
-    lies outside the input's declared range. The question asks the user
-    for those inputs by their labels."""
+    """The calculator was not run. A missing required input, or a value that
+    could not be read as its kind, is a unified ASK: status "needs_input". A
+    value that read but lies out of range -- or a wrong unit -- keeps status
+    "error" with the needs_input flag and the question (its scale/reason text),
+    exactly as before. Either way the question names the inputs by their labels."""
     from app.lib.source_labels import input_question
 
     question = input_question(name, rejected, missing)
+    # A value-domain reject (out-of-range, wrong unit) anywhere in the batch
+    # keeps status "error" -- even when a sibling required input is also missing
+    # -- because the wrong value must be corrected, per the pre-existing tested
+    # contract. Status flips to needs_input only when there is NO such reject and
+    # the batch is missing-required and/or unreadable-value coercion.
+    non_ask_reject = any(
+        r.get("reason") not in _COERCION_ASK_REASONS for r in rejected
+    )
+    ask_status = (not non_ask_reject) and (bool(missing) or bool(rejected))
     return {
-        "status": "error",
+        "status": "needs_input" if ask_status else "error",
         "needs_input": True,
         "calculation": name,
         "error": question,
@@ -3069,6 +3100,15 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             )
             env["unknown"] = list(unknown)
             env["calculation"] = name
+            # An unknown argument that is a unit/suffix variant of a missing
+            # required field (span_cm vs span_mm) means the caller GAVE that
+            # input under a unit the calculator cannot map -- a given-invalid
+            # value, status "error", not an absent-input ask (item 7,
+            # ORDERS_31OCT_0945Z). A junk kwarg unrelated to any missing field
+            # (wrong_arg) leaves the genuine omission as the ask.
+            missing_stems = {str(m).rsplit("_", 1)[0] for m in missing}
+            if any(str(u).rsplit("_", 1)[0] in missing_stems for u in unknown):
+                env["status"] = "error"
             return env
         return _unknown_arg_envelope(str(name), fn, unknown)
     if missing:
@@ -3135,6 +3175,15 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             reason = str(result.get("error") or "").strip()
             if reason and reason not in str(env.get("error") or ""):
                 env["error"] = f"{reason} {env.get('error') or ''}".strip()
+            # A value the caller GAVE but the calculator rejected as out of its
+            # domain (negative where only positive is physical) keeps status
+            # "error" -- with the needs_input flag, the field, and the reason --
+            # not "needs_input" (item 7 FINAL ruling, ORDERS_31OCT_0945Z: a given
+            # invalid value is an error; only an ABSENT input asks). The value
+            # rejection carries a ``required`` list beside its needs_input; a
+            # plain omission does not. Keys off that structure, not the text.
+            if result.get("required"):
+                env["status"] = "error"
             return env
         err = result["error"]
         if name in _CALC_REQUIRED_HELP and "needs" in err.lower():
