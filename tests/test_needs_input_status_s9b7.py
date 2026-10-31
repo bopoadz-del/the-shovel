@@ -12,6 +12,32 @@ import app.lib.construction_formulas as cf
 from app.agents.runtime import _tool_result_errored
 
 
+# ── reason split: an unreadable value ASKS, a wrong (in-range-failing) value
+#    ERRORS. Pins _input_rejection_envelope directly (the ruling's two mutants:
+#    "value-domain routed to needs_input" RED, "blank routed to error" RED). ──
+@pytest.mark.parametrize("reason,status", [
+    ("empty", "needs_input"),        # blank -> ask (mutant "blank->error" RED)
+    ("not_a_number", "needs_input"),  # garbled -> ask
+    ("not_whole", "needs_input"),     # fraction where a whole is wanted -> ask
+    ("out_of_range", "error"),        # a wrong value -> error (mutant "->needs_input" RED)
+])
+def test_rejection_reason_decides_status(reason, status):
+    env = cf._input_rejection_envelope(
+        "delay_damages_daily",
+        [{"parameter": "days", "label": "days", "reason": reason,
+          "lo": 1, "hi": 365, "value": "x"}],
+        [],
+    )
+    assert env["status"] == status, env
+    assert env.get("needs_input") is (True if status == "needs_input" else None)
+
+
+def test_missing_required_always_asks():
+    env = cf._input_rejection_envelope("delay_damages_daily", [], ["days"])
+    assert env["status"] == "needs_input"
+    assert env.get("needs_input") is True
+
+
 # ── the ask cases: unparseable / blank both -> needs_input naming the field ──
 @pytest.mark.parametrize("days", ["days3", ""])
 def test_unusable_required_numeric_asks(days):

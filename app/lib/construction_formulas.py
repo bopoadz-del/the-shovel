@@ -2578,27 +2578,45 @@ def _with_input_question(env: Dict[str, Any], name: str, missing: List[str]) -> 
     return env
 
 
+#: A rejection whose reason is that the value could not be READ as the required
+#: kind -- blank, non-numeric ("days3"), a fraction where a whole is wanted, a
+#: non-boolean. The input is unusable/absent, so this is an ASK: status
+#: "needs_input" naming the field. A value that DID read but is WRONG -- out of
+#: the registry range, a wrong unit -- is a value-domain error: status stays
+#: "error" naming the reason and the range (item 7 ruling, ORDERS_31OCT_0805Z;
+#: bar item 2 amended: out-of-range keeps "error" + its range text). The split
+#: keys off the reason taxonomy, never a field name or value.
+_ASK_REJECTION_REASONS = frozenset({"empty", "not_a_number", "not_whole", "not_yes_no"})
+
+
 def _input_rejection_envelope(
     name: str, rejected: List[Dict[str, Any]], missing: List[str],
 ) -> Dict[str, Any]:
-    """The calculator was not run: a supplied value has the wrong type or
-    lies outside the input's declared range. Either way the value the asked
-    output needs is not usable, so this is an ASK, not a hard error: status
-    "needs_input" with the question that names the inputs by their labels and
-    carries the range/reason text (item 7 ruling, ORDERS_31OCT_0405Z/0705Z --
-    out-of-range asks WITH its range named)."""
+    """The calculator was not run. A missing required input, or a supplied
+    value that could not be read as its kind, is an ASK (status "needs_input").
+    A value that read but lies outside its declared range, or a wrong unit, is
+    a value-domain error (status "error") -- the question still names the reason
+    and the range so the next call can correct it."""
     from app.lib.source_labels import input_question
 
     question = input_question(name, rejected, missing)
-    return {
-        "status": "needs_input",
-        "needs_input": True,
+    # Missing-required, or every rejected value is an unreadable one -> ASK.
+    # Any out-of-range / wrong-unit reject in the batch -> value-domain error.
+    asking = bool(missing) or (
+        bool(rejected)
+        and all(r.get("reason") in _ASK_REJECTION_REASONS for r in rejected)
+    )
+    env: Dict[str, Any] = {
+        "status": "needs_input" if asking else "error",
         "calculation": name,
         "error": question,
         "question": question,
         "rejected": rejected,
         "missing": list(missing),
     }
+    if asking:
+        env["needs_input"] = True
+    return env
 
 
 def _bare_figure(value: Any) -> Optional[float]:
