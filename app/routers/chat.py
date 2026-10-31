@@ -934,11 +934,10 @@ async def _predispatch_concurrent_stream(
 
     if redirect:
         # Cancel the speculative stream BEFORE emitting any client token from it.
+        # gather(return_exceptions=True) awaits the cancellation and absorbs the
+        # CancelledError without a silent except/pass (S110 ratchet).
         spec_task.cancel()
-        try:
-            await spec_task
-        except BaseException:  # noqa: BLE001 -- cancellation / cleanup, nothing shown
-            pass
+        await asyncio.gather(spec_task, return_exceptions=True)
         if intent.get("action") in _predefined_workflows():
             merged = dict(intent.get("params") or {})
             for k in ("target_count", "project_type", "start_date", "day_rate"):
