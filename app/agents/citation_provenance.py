@@ -1421,8 +1421,10 @@ def figure_provenance(
     from app.agents import provenance_trail as pt
 
     try:
-        if not text or not text.strip():
-            return text, []
+        # Empty/whitespace text yields no figure mentions, so the normal flow
+        # already returns no record; a non-branching guard keeps None-safety
+        # without an early-return `if` (which would be an equivalent mutant).
+        text = text or ""
         ev = build_evidence(rag_sys_msg, messages, tool_passages=tool_passages)
         user_vals: set[float] = set()
         for rec in ev.records:

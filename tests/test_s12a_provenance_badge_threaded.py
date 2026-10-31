@@ -82,3 +82,15 @@ def test_the_entry_carries_the_badge_threaded_through(calculation, params, tmpl)
     assert isinstance(entry.get("standard"), str) and entry["standard"].strip()
     assert entry.get("certified") == badge["certified"]
     assert entry["certified"] is (entry["provenance"] == "kernel")
+
+
+@pytest.mark.parametrize("calculation, params, _tmpl", _CASES)
+def test_only_a_tool_run_record_becomes_a_credit(calculation, params, _tmpl):
+    # A calc envelope that arrives as a USER message (not a tool result) is not
+    # a calculator credit -- only tool_run records are. Dropping the
+    # `if rec.kind != "tool_run"` guard (drop_rule) would credit it, so this
+    # reddens the mutant.
+    env = run_calculation(calculation, dict(params))
+    user_carries_envelope = [{"role": "user", "content": json.dumps(env)}]
+    ev = build_evidence(None, user_carries_envelope, tool_passages=False)
+    assert _calculator_credits(ev) == [], "a non-tool_run record was credited"
