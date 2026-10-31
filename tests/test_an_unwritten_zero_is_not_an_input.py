@@ -28,7 +28,7 @@ def _run(ask, name, params):
 def test_a_phantom_required_zero_is_asked_for_not_refused_as_given():
     out = _run("Crane hire for 6 months, 50 t crawler crane, how much will it cost?",
                "crane_cost_estimate", {"num_cranes": 0, **HIRE})
-    assert out["status"] == "error"
+    assert out["status"] == "needs_input"
     assert "num_cranes" in (out.get("missing") or []), out
     assert "given (0)" not in out["error"]
 

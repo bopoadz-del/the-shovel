@@ -42,7 +42,7 @@ def test_a_millimetre_parameter_takes_metres_converted():
 
 def test_a_volume_with_no_dimensions_asks_instead_of_returning_zero():
     out = cf.run_calculation("concrete_volume", {})
-    assert out["status"] == "error" and "missing required" in out["error"]
+    assert out["status"] == "needs_input" and "missing required" in out["error"]
 
 
 def test_a_deflection_question_binds_every_input():
