@@ -12,14 +12,18 @@ import app.lib.construction_formulas as cf
 from app.agents.runtime import _tool_result_errored
 
 
-# ── reason split: an unreadable value ASKS, a wrong (in-range-failing) value
-#    ERRORS. Pins _input_rejection_envelope directly (the ruling's two mutants:
-#    "value-domain routed to needs_input" RED, "blank routed to error" RED). ──
+# ── status split (ORDERS_31OCT_0825Z FINAL): a blank/unreadable value unifies
+#    to status "needs_input"; an out-of-range value keeps its pre-existing
+#    contract (status "error" + the needs_input flag + scale), and a wrong unit
+#    stays "error" too. Every rejection still flags the ask. Pins
+#    _input_rejection_envelope directly -- mutant "coercion/blank routed to
+#    error" RED; mutant "out-of-range status flipped to needs_input" RED. ──
 @pytest.mark.parametrize("reason,status", [
-    ("empty", "needs_input"),        # blank -> ask (mutant "blank->error" RED)
-    ("not_a_number", "needs_input"),  # garbled -> ask
-    ("not_whole", "needs_input"),     # fraction where a whole is wanted -> ask
-    ("out_of_range", "error"),        # a wrong value -> error (mutant "->needs_input" RED)
+    ("empty", "needs_input"),         # blank -> unified ask (mutant "ask->error" RED)
+    ("not_a_number", "needs_input"),  # garbled -> unified ask
+    ("not_whole", "needs_input"),     # fraction where a whole is wanted -> unified ask
+    ("out_of_range", "error"),        # out-of-range keeps status error (mutant "->needs_input" RED)
+    ("unit", "error"),                # a wrong unit stays error
 ])
 def test_rejection_reason_decides_status(reason, status):
     env = cf._input_rejection_envelope(
@@ -29,7 +33,9 @@ def test_rejection_reason_decides_status(reason, status):
         [],
     )
     assert env["status"] == status, env
-    assert env.get("needs_input") is (True if status == "needs_input" else None)
+    # Every rejection still invites re-supply -- the flag is unchanged from
+    # before item 7; only the status token moved for the coercion/blank class.
+    assert env.get("needs_input") is True, env
 
 
 def test_missing_required_always_asks():

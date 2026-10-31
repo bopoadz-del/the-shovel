@@ -2578,45 +2578,48 @@ def _with_input_question(env: Dict[str, Any], name: str, missing: List[str]) -> 
     return env
 
 
-#: A rejection whose reason is that the value could not be READ as the required
-#: kind -- blank, non-numeric ("days3"), a fraction where a whole is wanted, a
-#: non-boolean. The input is unusable/absent, so this is an ASK: status
-#: "needs_input" naming the field. A value that DID read but is WRONG -- out of
-#: the registry range, a wrong unit -- is a value-domain error: status stays
-#: "error" naming the reason and the range (item 7 ruling, ORDERS_31OCT_0805Z;
-#: bar item 2 amended: out-of-range keeps "error" + its range text). The split
-#: keys off the reason taxonomy, never a field name or value.
-_ASK_REJECTION_REASONS = frozenset({"empty", "not_a_number", "not_whole", "not_yes_no"})
+#: check_inputs rejection reasons for a value that could not be READ as its kind
+#: -- blank, non-numeric ("days3"), a fraction where a whole is wanted, a
+#: non-boolean. Item 7 (ORDERS_31OCT_0405Z/0825Z) unifies these, and a missing
+#: required input, into ONE status: "needs_input" naming the field. OUT-OF-RANGE
+#: is NOT in this set: its pre-existing tested contract (status "error" + the
+#: needs_input flag + the scale that fits) is preserved verbatim -- 0825Z does
+#: not overturn a tested contract. A wrong/unknown unit likewise keeps status
+#: "error". Every rejection still carries needs_input=True and the question, as
+#: before, so the turn re-asks. The split keys off the reason taxonomy, never a
+#: field name or value.
+_COERCION_ASK_REASONS = frozenset({"empty", "not_a_number", "not_whole", "not_yes_no"})
 
 
 def _input_rejection_envelope(
     name: str, rejected: List[Dict[str, Any]], missing: List[str],
 ) -> Dict[str, Any]:
-    """The calculator was not run. A missing required input, or a supplied
-    value that could not be read as its kind, is an ASK (status "needs_input").
-    A value that read but lies outside its declared range, or a wrong unit, is
-    a value-domain error (status "error") -- the question still names the reason
-    and the range so the next call can correct it."""
+    """The calculator was not run. A missing required input, or a value that
+    could not be read as its kind, is a unified ASK: status "needs_input". A
+    value that read but lies out of range -- or a wrong unit -- keeps status
+    "error" with the needs_input flag and the question (its scale/reason text),
+    exactly as before. Either way the question names the inputs by their labels."""
     from app.lib.source_labels import input_question
 
     question = input_question(name, rejected, missing)
-    # Missing-required, or every rejected value is an unreadable one -> ASK.
-    # Any out-of-range / wrong-unit reject in the batch -> value-domain error.
-    asking = bool(missing) or (
-        bool(rejected)
-        and all(r.get("reason") in _ASK_REJECTION_REASONS for r in rejected)
+    # A value-domain reject (out-of-range, wrong unit) anywhere in the batch
+    # keeps status "error" -- even when a sibling required input is also missing
+    # -- because the wrong value must be corrected, per the pre-existing tested
+    # contract. Status flips to needs_input only when there is NO such reject and
+    # the batch is missing-required and/or unreadable-value coercion.
+    non_ask_reject = any(
+        r.get("reason") not in _COERCION_ASK_REASONS for r in rejected
     )
-    env: Dict[str, Any] = {
-        "status": "needs_input" if asking else "error",
+    ask_status = (not non_ask_reject) and (bool(missing) or bool(rejected))
+    return {
+        "status": "needs_input" if ask_status else "error",
+        "needs_input": True,
         "calculation": name,
         "error": question,
         "question": question,
         "rejected": rejected,
         "missing": list(missing),
     }
-    if asking:
-        env["needs_input"] = True
-    return env
 
 
 def _bare_figure(value: Any) -> Optional[float]:
