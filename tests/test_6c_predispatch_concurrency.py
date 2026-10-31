@@ -28,18 +28,23 @@ import app.core.projects as _projects
 
 
 class _FakeAgent:
-    def __init__(self, name, tokens, delay=0.0):
+    def __init__(self, name, tokens, delay=0.0, raise_after=None):
         self.name = name
         self._tokens = tokens
         self._delay = delay
+        self._raise_after = raise_after   # emit this many tokens, then raise
         self.started = False
         self.completed = False
+        self.seen_pid = "<unset>"          # the project_id the helper passed in
 
     async def chat_stream(self, prompt, **kw):
         self.started = True
+        self.seen_pid = kw.get("project_id", "<unset>")
         try:
             await asyncio.sleep(self._delay)
-            for t in self._tokens:
+            for i, t in enumerate(self._tokens):
+                if self._raise_after is not None and i >= self._raise_after:
+                    raise RuntimeError("speculative provider blew up")
                 yield {"type": "token", "content": t}
             yield {"type": "end", "content": "", "sources": [], "tools": []}
             self.completed = True
@@ -147,22 +152,105 @@ def _aval(value):
     return _f
 
 
-@pytest.mark.parametrize("missing", [None, None])
-def test_missing_agent_yields_an_error_frame_not_a_crash(monkeypatch, missing):
-    # get_agent returns None -> the helper emits an error frame and returns.
-    # Dropping the `if agent is None` guard (drop_rule) would call None.chat_stream
-    # and raise -> this reddens it.
-    monkeypatch.setattr(agents, "get_agent", lambda name: missing)
+@pytest.mark.parametrize("prompt", ["hi", "hello there"])
+def test_missing_agent_short_circuits_before_routing(monkeypatch, prompt):
+    # get_agent returns None -> the helper emits ONE error frame and returns
+    # WITHOUT running the routing hops or any stream. Dropping the `if agent is
+    # None` guard (drop_rule) lets it fall through to _route (select runs) and a
+    # None.chat_stream crash, so the guard-dropped output carries a route frame
+    # and select was called. Asserting the sole error frame + select untouched
+    # reddens the mutant.
+    called = {"select": False}
+
+    async def _select(_p, _a):
+        called["select"] = True
+        return object(), {"requested": "project-assistant", "final": "project-assistant"}
+
+    monkeypatch.setattr(agents, "get_agent", lambda name: None)
     monkeypatch.setattr(chat, "understand_intent", _aval({"action": None}), raising=False)
-    monkeypatch.setattr(runtime, "select_agent_for_message",
-                        _aval((object(), {"requested": "project-assistant", "final": "project-assistant"})),
-                        raising=False)
-    monkeypatch.setattr(chat, "_predefined_enabled", lambda: False)
+    monkeypatch.setattr(runtime, "select_agent_for_message", _select, raising=False)
+    monkeypatch.setattr(chat, "_predefined_enabled", lambda: True)
     monkeypatch.setattr(chat, "_predefined_workflows", lambda: set())
     monkeypatch.setattr(chat, "_message_vetoes_predefined", lambda _p: False)
     monkeypatch.setattr(_projects, "get_project_accessible", lambda *a, **k: {"id": "p"})
     frames = asyncio.run(_collect(chat._predispatch_concurrent_stream(
-        prompt="hi", history=[], project_id="p", user_id="u", conversation_id="c",
+        prompt=prompt, history=[], project_id="p", user_id="u", conversation_id="c",
+        attached_docs=[], document_ids=[], body={}, session_id="s", rid="r")))
+    raws = [f for _, f in frames]
+    assert len(raws) == 1, raws                       # ONLY the error frame
+    assert '"type": "error"' in raws[0] and "temporarily unavailable" in raws[0]
+    assert '"type": "route"' not in raws[0]
+    assert called["select"] is False, "routing ran despite a missing agent"
+
+
+@pytest.mark.parametrize("prompt", ["what is a provisional sum?", "define retention"])
+def test_a_denied_project_resolves_the_stream_to_no_project(monkeypatch, prompt):
+    # The tenant gate: when get_project_accessible RAISES, safe_pid falls to None
+    # so the speculative/committed call runs with project_id=None (no leak into a
+    # project the caller cannot see). The swallow_exception mutant turns that
+    # `except -> safe_pid=None` into a no-op, leaving the raw pid -> the agent
+    # would see 'proj-secret'. Asserting the agent saw None reddens it.
+    pa = _FakeAgent("project-assistant", ["ok"], delay=0.0)
+
+    def _boom(*a, **k):
+        raise RuntimeError("tenant lookup failed")
+
+    _wire(monkeypatch, pa_agent=pa, intent_result={"action": None},
+          select_result=(pa, {"requested": "project-assistant", "final": "project-assistant"}))
+    monkeypatch.setattr(_projects, "get_project_accessible", _boom)
+    asyncio.run(_collect(chat._predispatch_concurrent_stream(
+        prompt=prompt, history=[], project_id="proj-secret", user_id="u",
+        conversation_id="c", attached_docs=[], document_ids=[], body={},
+        session_id="s", rid="r")))
+    assert pa.seen_pid is None, pa.seen_pid
+
+
+@pytest.mark.parametrize("prompt", ["produce the schedule", "generate the wbs"])
+def test_predefined_disabled_skips_the_intent_llm_entirely(monkeypatch, prompt):
+    # With the predefined flag OFF, _intent_hop returns {action: None} WITHOUT
+    # consulting understand_intent, so the turn stays pass-through even if the
+    # (unused) intent model would have named a workflow. Dropping the
+    # `if not _predefined_enabled(): return` guard (drop_rule) calls
+    # understand_intent, gets 'generate_wbs' (a predefined workflow) and
+    # redirects -> the spy fires and the answer is no longer the pass-through
+    # one. Asserting the spy never fired AND the pass-through token shows reddens
+    # the mutant.
+    pa = _FakeAgent("project-assistant", ["PASS-THRU"], delay=0.0)
+    consulted = {"intent": False}
+
+    async def _intent_spy(_p, has_documents=False):
+        consulted["intent"] = True
+        return {"action": "generate_wbs", "params": {}}
+
+    monkeypatch.setattr(agents, "get_agent", lambda name: pa)
+    monkeypatch.setattr(chat, "understand_intent", _intent_spy, raising=False)
+    monkeypatch.setattr(runtime, "select_agent_for_message",
+                        _aval((pa, {"requested": "project-assistant", "final": "project-assistant"})),
+                        raising=False)
+    monkeypatch.setattr(chat, "_predefined_enabled", lambda: False)          # OFF
+    monkeypatch.setattr(chat, "_predefined_workflows", lambda: {"generate_wbs"})
+    monkeypatch.setattr(chat, "_message_vetoes_predefined", lambda _p: False)
+    monkeypatch.setattr(_projects, "get_project_accessible", lambda *a, **k: {"id": "p"})
+    frames = asyncio.run(_collect(chat._predispatch_concurrent_stream(
+        prompt=prompt, history=[], project_id="p", user_id="u", conversation_id="c",
         attached_docs=[], document_ids=[], body={}, session_id="s", rid="r")))
     raw = "".join(f for _, f in frames)
-    assert '"type": "error"' in raw and "temporarily unavailable" in raw
+    assert consulted["intent"] is False, "intent LLM was consulted while predefined was OFF"
+    assert "PASS-THRU" in raw, "turn did not stay on the pass-through stream"
+
+
+@pytest.mark.parametrize("prompt", ["what is a provisional sum?", "define float"])
+def test_a_speculative_stream_that_raises_surfaces_an_error_frame(monkeypatch, prompt):
+    # Pass-through, but the committed speculative stream RAISES after its first
+    # token. _spec's `except Exception -> __spec_error__` must turn that into a
+    # client error frame. The swallow_exception mutant drops that put, so the
+    # client would see the one good token and a silent close with no error.
+    # Asserting the error frame reddens the mutant.
+    pa = _FakeAgent("project-assistant", ["partial", "never"], delay=0.0, raise_after=1)
+    _wire(monkeypatch, pa_agent=pa, intent_result={"action": None},
+          select_result=(pa, {"requested": "project-assistant", "final": "project-assistant"}))
+    frames = asyncio.run(_collect(chat._predispatch_concurrent_stream(
+        prompt=prompt, history=[], project_id="p", user_id="u", conversation_id="c",
+        attached_docs=[], document_ids=[], body={}, session_id="s", rid="r")))
+    raw = "".join(f for _, f in frames)
+    assert "temporarily unavailable" in raw, "speculative failure did not surface an error frame"
