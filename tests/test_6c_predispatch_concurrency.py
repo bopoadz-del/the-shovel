@@ -23,6 +23,7 @@ import pytest
 
 import app.routers.chat as chat
 import app.agents.runtime as runtime
+import app.agents as agents
 import app.core.projects as _projects
 
 
@@ -63,7 +64,7 @@ def _wire(monkeypatch, *, pa_agent, intent_result, select_result,
 
     monkeypatch.setattr(chat, "understand_intent", _intent, raising=False)
     monkeypatch.setattr(runtime, "select_agent_for_message", _select, raising=False)
-    monkeypatch.setattr(runtime, "get_agent", lambda name: pa_agent)
+    monkeypatch.setattr(agents, "get_agent", lambda name: pa_agent)
     monkeypatch.setattr(chat, "_predefined_enabled", lambda: True)
     monkeypatch.setattr(chat, "_predefined_workflows", lambda: set(predefined or ()))
     monkeypatch.setattr(chat, "_message_vetoes_predefined", lambda _p: False)
@@ -110,7 +111,7 @@ def test_redirect_cancels_the_speculative_stream_with_zero_client_tokens(monkeyp
     monkeypatch.setattr(chat, "understand_intent", _aval({"action": None}), raising=False)
     monkeypatch.setattr(runtime, "select_agent_for_message",
                         _aval((routed, {"requested": "project-assistant", "final": final})), raising=False)
-    monkeypatch.setattr(runtime, "get_agent", lambda name: pa)
+    monkeypatch.setattr(agents, "get_agent", lambda name: pa)
     monkeypatch.setattr(chat, "_predefined_enabled", lambda: True)
     monkeypatch.setattr(chat, "_predefined_workflows", lambda: set())
     monkeypatch.setattr(chat, "_message_vetoes_predefined", lambda _p: False)
@@ -151,7 +152,7 @@ def test_missing_agent_yields_an_error_frame_not_a_crash(monkeypatch, missing):
     # get_agent returns None -> the helper emits an error frame and returns.
     # Dropping the `if agent is None` guard (drop_rule) would call None.chat_stream
     # and raise -> this reddens it.
-    monkeypatch.setattr(runtime, "get_agent", lambda name: missing)
+    monkeypatch.setattr(agents, "get_agent", lambda name: missing)
     monkeypatch.setattr(chat, "understand_intent", _aval({"action": None}), raising=False)
     monkeypatch.setattr(runtime, "select_agent_for_message",
                         _aval((object(), {"requested": "project-assistant", "final": "project-assistant"})),

@@ -855,7 +855,11 @@ async def _predispatch_concurrent_stream(
     speculative and committed calls share the SAME resolved_pid context (the
     1605Z guard: no second context build).
     """
-    from app.agents.runtime import get_agent, select_agent_for_message
+    # get_agent is resolved through app.agents (as the other dispatch paths at
+    # lines ~518/~1269 do) so monkeypatches of app.agents.get_agent reach it;
+    # select_agent_for_message is the runtime symbol the callers patch.
+    from app.agents import get_agent
+    from app.agents.runtime import select_agent_for_message
     from app.core import projects as projects_store
     from app.core import turn_timing
     # understand_intent is the chat module global (line ~22) so test monkeypatches
