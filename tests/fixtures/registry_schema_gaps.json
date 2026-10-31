@@ -1,4 +1,5 @@
 [
  "formula:fall_arrest_force.g:unit",
+ "formula:productivity_manpower_duration.daily_production:unit",
  "tool:commissioning_checklist:params"
 ]

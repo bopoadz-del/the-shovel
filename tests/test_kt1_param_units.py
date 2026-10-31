@@ -27,13 +27,17 @@ FILLED_UNITS = [
     ("concrete_maturity_strength", "gain_b", "ratio"),
     ("concrete_shrinkage", "ultimate_shrinkage_microstrain", "ratio"),
     ("crane_planning", "shifts_per_day", "count"),
-    ("critical_path_float", "early_start", "days"),
-    ("critical_path_float", "early_finish", "days"),
-    ("critical_path_float", "late_start", "days"),
-    ("critical_path_float", "late_finish", "days"),
+    # critical_path_float dates are day-numbers on a shared timeline (finish >=
+    # start); a plain count, never independently unit-converted.
+    ("critical_path_float", "early_start", "count"),
+    ("critical_path_float", "early_finish", "count"),
+    ("critical_path_float", "late_start", "count"),
+    ("critical_path_float", "late_finish", "count"),
     ("electrical_installation_sequence", "num_floors", "count"),
     ("plumbing_flow_programme", "num_floors", "count"),
-    ("productivity_manpower_duration", "daily_production", "count/day"),
+    # daily_production stays "-" (an honest gap): it is a dimension-polymorphic
+    # production rate (quantity / rate), the measure supplied by context, so no
+    # fixed unit is truthful. It keeps its baseline entry.
     ("productivity_manpower_duration", "manpower", "count"),
     ("productivity_manpower_duration", "quantity", "count"),
     ("productivity_manpower_duration", "quantity_executed", "count"),

@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
     display_name='Total float and criticality',
     description='Total float of an activity from its early and late dates, and whether it is critical.',
     inputs={
-        'early_start': Param('days', 0, 100000, label='early start'),
-        'early_finish': Param('days', 0, 100000, label='early finish'),
-        'late_start': Param('days', 0, 100000, label='late start'),
-        'late_finish': Param('days', 0, 100000, label='late finish'),
+        'early_start': Param('count', 0, 100000, label='early start'),
+        'early_finish': Param('count', 0, 100000, label='early finish'),
+        'late_start': Param('count', 0, 100000, label='late start'),
+        'late_finish': Param('count', 0, 100000, label='late finish'),
     },
     outputs={'total_float': '-', 'is_critical': '-', 'consistency_check_lf_minus_ef': '-'},
 )
@@ -234,7 +234,7 @@ def _must_be_positive(field: str, value: float, required: list) -> dict:
         'working_hours': Param('h', 0, 1e8, label='working hours'),
         'remaining_manhours': Param('man-hour', 0, 1e10, label='remaining man-hours'),
         'available_hours': Param('h', 0, 1e8, label='available hours'),
-        'daily_production': Param('count/day', 0, 1e9, label='daily production'),
+        'daily_production': Param('-', 0, 1e9, label='daily production'),
         'remaining_qty': Param('count', 0, 1e12, label='remaining quantity'),
         'remaining_days': Param('days', 0, 36500, label='remaining duration'),
         'productivity_rate': Param(label='production rate'),
