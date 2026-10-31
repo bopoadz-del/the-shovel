@@ -15,7 +15,7 @@ _LOD_CLASH_MM = {100: None, 200: 50.0, 300: 25.0, 350: 12.0, 400: 6.0, 500: 3.0}
     display_name='BIM clash tolerance',
     description="Clash tolerance for a model's level of development.",
     inputs={
-        'lod': Param('-', 100, 500, label='level of development'),
+        'lod': Param('count', 100, 500, label='level of development'),
     },
     outputs={'lod': '-', 'clash_tolerance_mm': 'mm'},
 )

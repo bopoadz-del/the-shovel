@@ -20,7 +20,7 @@ _OSHA_MAF_KN = 8.0  # OSHA 1926.502 maximum arresting force (body harness)
     inputs={
         'platform_area_m2': Param('m2', 0, 10000, label='platform area'),
         'duty': Param('-', label='scaffold duty'),
-        'safety_factor': Param('-', 1, 10, label='safety factor'),
+        'safety_factor': Param('ratio', 1, 10, label='safety factor'),
     },
     outputs={'duty': '-', 'duty_load_kpa': 'kPa', 'intended_load_kn': 'kN', 'required_capacity_kn': 'kN', 'safety_factor': '-'},
 )
@@ -62,7 +62,7 @@ def scaffold_load_capacity(
         'worker_mass_kg': Param('kg', 20, 300, label='worker mass'),
         'free_fall_m': Param('m', 0, 10, label='free-fall distance'),
         'deceleration_distance_m': Param('m', 0, 10, label='deceleration distance'),
-        'g': Param('-', 9.7, 9.9, label='gravitational acceleration'),
+        'g': Param('m/s2', 9.7, 9.9, label='gravitational acceleration'),
     },
     outputs={'max_arrest_force_kn': 'kN', 'within_osha_limit': '-', 'osha_limit_kn': 'kN'},
 )

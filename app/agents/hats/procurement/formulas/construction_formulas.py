@@ -16,7 +16,7 @@ from typing import Any, Dict
         'total_lift_demand_tons': Param('t', 0, 1e8, label='total lift demand'),
         'crane_capacity_tons': Param('t', 0, 10000, label='crane capacity'),
         'utilization_pct': Param('%', 0, 100, label='crane utilisation'),
-        'shifts_per_day': Param('-', 1, 24, label='shifts per day'),
+        'shifts_per_day': Param('count', 1, 24, label='shifts per day'),
         'hours_per_shift': Param('h', 1, 24, label='hours per shift'),
         'cycle_time_minutes': Param('min', 1, 600, label='lift cycle time'),
         'working_days': Param('days', 1, 31, label='working days per month'),

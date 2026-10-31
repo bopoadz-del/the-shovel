@@ -16,7 +16,7 @@ from typing import Dict, Optional
         'formwork_area_m2': Param('m2', 0, 1e6, label='formwork area'),
         'formwork_height_m': Param('m', 0, 200, label='formwork height'),
         'formwork_width_m': Param('m', 0, 1000, label='formwork width'),
-        'shape_factor': Param('-', 0, 3, label='shape factor'),
+        'shape_factor': Param('ratio', 0, 3, label='shape factor'),
     },
     outputs={'wind_pressure_kpa': 'kPa', 'wind_force_kn': 'kN', 'overturning_moment_kn_m': 'kN.m', 'bending_stress_n_m2': 'N/m2'},
 )

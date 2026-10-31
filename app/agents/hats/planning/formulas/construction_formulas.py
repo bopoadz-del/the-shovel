@@ -15,7 +15,7 @@ from typing import Any, Dict
     inputs={
         'concrete_m3': Param('m3', 0, 1e8, label='concrete volume'),
         'structural_steel_t': Param('t', 0, 1e6, label='structural steel'),
-        'piping_dia_inch': Param('-', 0, 1e9, label='piping'),
+        'piping_dia_inch': Param('in', 0, 1e9, label='piping'),
         'electrical_cable_km': Param('km', 0, 100000, label='electrical cable'),
         'area_m2': Param('m2', 0, 1e8, label='gross area'),
         'concrete_m3_per_supervisor': Param('m3', 1, 1e8, label='concrete per civil supervisor'),
@@ -84,7 +84,7 @@ def supervision_ratio(
     description='Electrical installation programme: stage durations from first fix to handover, at the project\'s own stage rates.',
     inputs={
         'floor_area_m2': Param('m2', 0, 1e8, label='floor area'),
-        'num_floors': Param('-', 1, 300, label='number of floors'),
+        'num_floors': Param('count', 1, 300, label='number of floors'),
         'stage_output_rates': Param('m2/day', label='stage output rates, m2 per day by stage'),
     },
     outputs={'total_area_m2': 'm2', 'stages': '-', 'total_days': 'days'},
@@ -110,7 +110,7 @@ def electrical_installation_sequence(
     description='Plumbing installation programme: stage durations from submittal to handover.',
     inputs={
         'floor_area_m2': Param('m2', 0, 1e8, label='floor area'),
-        'num_floors': Param('-', 1, 300, label='number of floors'),
+        'num_floors': Param('count', 1, 300, label='number of floors'),
     },
     outputs={'stages': '-', 'cumulative_days': 'days', 'total_days': 'days'},
 )
