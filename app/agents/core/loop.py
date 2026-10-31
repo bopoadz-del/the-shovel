@@ -1001,6 +1001,11 @@ async def chat_stream(
     # and close -- no content, the conversation id only.
     _marks: dict[str, float] = {"received": _time.monotonic()}
     _steps: dict[str, int] = {"tool_calls": 0, "tool_results": 0, "tool_calls_before_first_token": 0}
+    # Anchor llm_first_token to the generation-turn start (here, after routing),
+    # not to turn_timing's `last` stage marker, which intervening retrieval /
+    # pre-dispatch / hat stages reset to ~the first token (the ~1 ms artifact).
+    from app.core import turn_timing as _turn_timing
+    _turn_timing.mark_llm_dispatch(_marks["received"])
     try:
         async for event in _inner():
             _marks.setdefault("first_event", _time.monotonic())

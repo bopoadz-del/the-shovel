@@ -41,7 +41,8 @@ def mark_arrival(at: Optional[float] = None) -> None:
     request reached the endpoint's dependencies, before authentication."""
     now = time.monotonic()
     t0 = now if at is None else min(float(at), now)
-    _STATE.set({"t0": t0, "last": now, "first_token": False, "stages": {}})
+    _STATE.set({"t0": t0, "last": now, "first_token": False, "stages": {},
+                "llm_dispatch_at": None})
 
 
 def record(name: str, dur: float) -> None:
@@ -194,11 +195,36 @@ def mark(name: str) -> None:
     log_stage(name, dur)
 
 
+def mark_llm_dispatch(at: Optional[float] = None) -> None:
+    """Stamp the moment the answer-generation turn is dispatched to the model.
+
+    ``llm_first_token`` is measured from here, NOT from ``last``: ``last`` is
+    reset by every intervening ``stage()``/``mark()`` (retrieval, pre-dispatch,
+    hat), so a turn that opens a stage between dispatch and the first token had
+    ``llm_first_token`` collapse to the gap-to-that-stage (~1 ms on live) rather
+    than the real model-call wait, which landed invisibly in ``route``. With an
+    explicit dispatch stamp the metric is the honest dispatch -> first-token
+    wait regardless of what stages run in between. Called once per turn at the
+    generation-turn start (``app/agents/core/loop.py``); a later re-stamp wins,
+    so the final generation hop before the first token is what is measured.
+    With no turn started, nothing is stored."""
+    st = _STATE.get()
+    if st is None:
+        return
+    st["llm_dispatch_at"] = time.monotonic() if at is None else float(at)
+
+
 def first_token() -> None:
-    """Log the first token of this turn's answer (once)."""
+    """Log the first token of this turn's answer (once).
+
+    Measured from the explicit LLM-dispatch stamp when present (the real
+    model-call wait), else from the last completed stage as a fallback."""
     st = _STATE.get()
     if st is None or st["first_token"]:
         return
     st["first_token"] = True
-    record("llm_first_token", time.monotonic() - st["last"])
+    base = st.get("llm_dispatch_at")
+    if base is None:
+        base = st["last"]
+    record("llm_first_token", time.monotonic() - base)
     log_stage("first_token", 0.0)
