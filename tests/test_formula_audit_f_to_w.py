@@ -81,9 +81,12 @@ def _ok(name: str, **params):
     return env["result"]
 
 
-def _err(name: str, **params):
+def _err(name: str, *, expect: str = "error", **params):
+    # expect="needs_input" for a missing-required / unreadable-value ASK;
+    # default "error" for a value-domain / calculator-raised rejection
+    # (item 7, ORDERS_31OCT_0825Z).
     env = run_calculation(name, params)
-    assert env.get("status") == "error", env
+    assert env.get("status") == expect, env
     assert isinstance(env.get("error"), str) and env["error"]
     return env
 
@@ -449,7 +452,7 @@ class TestSupervisionRatio:
                                            ("area_m2", "area_m2_per_supervisor")])
     def test_a_quantity_without_its_ratio_asks_for_it(self, qty, ratio):
         env = run_calculation("supervision_ratio", {qty: 5000})
-        assert env["status"] == "error"
+        assert env["status"] == "needs_input"
         assert ratio in env["missing"]
 
 
@@ -835,7 +838,7 @@ class TestFinenessModulus:
         assert "unitless" in str(r.get("note") or "").lower()
 
     def test_empty_list_is_asked_for(self):
-        e = _err("fineness_modulus", sieve_retained_percentages=[])
+        e = _err("fineness_modulus", expect="needs_input", sieve_retained_percentages=[])
         assert e["needs_input"] is True
         assert "at least one number" in e["question"]
 
@@ -1351,7 +1354,7 @@ class TestFwMobilizationFlake:
             {"text": ask},
         )
         assert env["calculation"] == "mobilization_cost_estimate"
-        assert env["status"] == "error" and env.get("needs_input")
+        assert env["status"] == "needs_input" and env.get("needs_input")
         assert "office_rate_per_person_month" in env["missing"]
 
     def test_staff_and_months_are_read_from_the_ask(self):
@@ -1379,7 +1382,7 @@ class TestFwMobilizationFlake:
             assert env["status"] == "success", env
             assert env["result"]["value"] > 0
         else:
-            assert env["status"] == "error"
+            assert env["status"] == "needs_input"
 
 
 @pytest.mark.asyncio
