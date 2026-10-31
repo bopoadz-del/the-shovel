@@ -82,3 +82,36 @@ def test_cache_hit_tokens_reads_both_provider_shapes(usage, expected):
     assert _cache_hit_tokens(usage) == expected
     assert _cache_hit_tokens({}) == 0
     assert _cache_hit_tokens(None) == 0
+
+
+@pytest.mark.parametrize("provider", ["groq", "openai"])
+def test_stream_synthesis_refuses_an_unverified_provider(monkeypatch, provider):
+    # _stream_synthesis is verified only for the OpenAI-SSE providers
+    # (openrouter/deepseek); any other provider must raise _SynthStreamError so
+    # the caller falls back to the non-streaming path. Dropping that guard
+    # (drop_rule) or swallowing its raise (swallow_exception) lets an unverified
+    # provider through -- this reddens both.
+    monkeypatch.setattr(runtime, "_llm_config",
+                        lambda: {"provider": provider, "url": "https://x/v1/chat", "model": "m"})
+    reached = {"egress": False}
+
+    async def _ps(*a, **k):
+        reached["egress"] = True
+        if False:  # make it an async generator
+            yield
+        raise RuntimeError("egress must not be reached for an unverified provider")
+
+    monkeypatch.setattr(llm_client, "provider_stream", _ps)
+    load_agents()
+    agent = get_agent("project-assistant")
+
+    async def _drain():
+        async for _ in agent._stream_synthesis([{"role": "user", "content": "q"}], api_key="k"):
+            pass
+
+    try:
+        asyncio.run(_drain())
+    except Exception:
+        pass  # the point is whether the egress was reached, not the error type
+    # The guard must reject the unverified provider BEFORE the provider egress.
+    assert reached["egress"] is False, "unverified provider reached provider_stream"
