@@ -58,15 +58,22 @@ def project_profile(project_id: Optional[str], user_id: Optional[str]) -> str:
 
 def system_message(project_id: Optional[str], user_id: Optional[str], hat: Optional[str]) -> Dict[str, Any]:
     hat_lines = "\n".join(f"- {h['discipline']}: {h['description']}" for h in hats())
+    # 6b static-prefix-first (ORDERS_31OCT_1525Z): the STATIC lead -- intro,
+    # standing rules, the hat catalogue and the chosen hat's guidance -- is
+    # identical across projects and turns, so it goes first and forms the longest
+    # possible shared prefix for the provider's prefix cache. The per-project
+    # profile (the only per-project-varying part) goes LAST, so it never shortens
+    # that shared prefix. Order within the system message does not change what the
+    # model is told, only where the cacheable boundary falls.
     parts = [
         "You are The Fork, a construction project assistant.",
         "Standing rules\n" + standing_rules(),
         "Hats you can wear (choose with select_hat)\n" + hat_lines,
-        project_profile(project_id, user_id),
     ]
     guidance = hat_guidance(hat) if hat else None
     if guidance:
         parts.append(f"You are wearing the {hat} hat.\n{guidance}")
+    parts.append(project_profile(project_id, user_id))
     return {"role": "system", "content": "\n\n".join(parts)}
 
 
