@@ -133,9 +133,13 @@ def test_mix_design_sand_sg_is_not_dune_sand_pct_error():
         "text": "w/c=0.48 dune sand 2.67",
     })
     assert via_text["cement_kg_m3"] == pytest.approx(320.0, abs=0.5)
-    still = _err("concrete_mix_design_sg", {
+    # dune_sand_pct is inapplicable to the absolute-volume mix -> a genuine
+    # calculator-raised rejection ("omit it or pass 0"), status "error", not an
+    # ask (item 7, ORDERS_31OCT_0825Z: inapplicable parameter -> error).
+    still = run_calculation("concrete_mix_design_sg", {
         "w_c_ratio": 0.48, "dune_sand_pct": 0.3,
     })
+    assert still.get("status") == "error", still
     assert "dune_sand_pct" in still["error"]
 
 

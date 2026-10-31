@@ -6,10 +6,14 @@ need it (daily-only) returns success. General coercion rule, no per-value branch
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
+import app.agents.base.tools as _base_tools  # noqa: F401 -- selects tools.py mutants for CI-M
 import app.lib.construction_formulas as cf
 from app.agents.runtime import _tool_result_errored
+from tests.test_construction_calc_tool import _agent, _run
 
 
 # ── status split (ORDERS_31OCT_0825Z FINAL): a blank/unreadable value unifies
@@ -76,3 +80,40 @@ def test_usable_or_unneeded_runs(params):
 ])
 def test_tool_result_errored_flags_nested_needs_input(node, errored):
     assert _tool_result_errored(node) is errored
+
+
+# ── the construction_calc TOOL envelope: an ask (needs_input) is not ok, a
+#    delivered answer is. Exercises handle_construction_calc directly (this
+#    module imports app.agents.base.tools, so CI-M selects it for that function's
+#    mutants). Two inputs: an ask vs a run. ──
+def _calc_tool(user_message, args):
+    agent = _agent(["construction"])
+    tc = {"id": "c1", "function": {
+        "name": "construction_calc", "arguments": json.dumps(args)}}
+    return _run(agent._run_tool_call(tc, user_message=user_message))
+
+
+@pytest.mark.parametrize("args,user_message,ok,status", [
+    ({"action": "construction_calc", "calculation": "delay_damages_daily"},
+     "delay_damages_daily", False, "needs_input"),                  # ask -> not ok
+    ({"action": "construction_calc", "calculation": "delay_damages_daily",
+      "amount_per_day": "5000", "days": "60"},
+     "delay_damages_daily 5000 per day for 60 days", True, "success"),  # run -> ok
+])
+def test_construction_calc_tool_ok_tracks_needs_input(args, user_message, ok, status):
+    env = _calc_tool(user_message, args)
+    assert env["name"] == "construction_calc", env
+    assert env.get("ok") is ok, env               # mutant "ok True for needs_input" RED
+    assert env["result"]["status"] == status, env
+
+
+@pytest.mark.parametrize("user_message", [
+    "interim payment certificate", "prepare the IPC",
+])
+def test_construction_calc_tool_ipc_ask_dispatches_payment_certificate(user_message):
+    # No calculation + an IPC ask hits the first `if` in handle_construction_calc,
+    # which dispatches the payment certificate (name "payment_certificate").
+    # Drop that `if` (CI-M drop_rule) and the ask falls through to the plain
+    # calculator path -> name "construction_calc": this asserts it RED.
+    env = _calc_tool(user_message, {"action": "construction_calc"})
+    assert env["name"] == "payment_certificate", env

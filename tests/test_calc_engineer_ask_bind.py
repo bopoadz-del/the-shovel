@@ -33,8 +33,10 @@ def _ok(name, params):
 
 
 def _err(name, params):
+    # A partial / missing-required ask is a unified ASK (item 7,
+    # ORDERS_31OCT_0825Z): status "needs_input" naming the fields.
     env = run_calculation(name, params)
-    assert env.get("status") == "error", (name, params, env)
+    assert env.get("status") == "needs_input", (name, params, env)
     return env
 
 

@@ -343,6 +343,8 @@ async def handle_construction_calc(call: ToolCall) -> dict:
     result = await off_loop_in("calc", _cf.run_calculation, calc_name, calc_params)
     return {
         "name": "construction_calc",
-        "ok": isinstance(result, dict) and result.get("status") != "error",
+        # An ask (status "needs_input") is not a delivered answer, so the tool
+        # round is not ok -- same as an "error" (item 7, ORDERS_31OCT_0405Z).
+        "ok": isinstance(result, dict) and result.get("status") not in ("error", "needs_input"),
         "result": result,
     }

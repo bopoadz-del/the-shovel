@@ -29,8 +29,11 @@ def _ok(name, params):
 
 
 def _err(name, params):
+    # A missing-required / unreadable-value bind is a unified ASK (item 7,
+    # ORDERS_31OCT_0825Z): status "needs_input". An unknown-arg rejection with
+    # no missing input keeps status "error" and its caller asserts that inline.
     env = run_calculation(name, params)
-    assert env.get("status") == "error", (name, params, env)
+    assert env.get("status") == "needs_input", (name, params, env)
     return env
 
 
@@ -339,7 +342,7 @@ def test_dir7_empty_construction_calc_names_required_params_and_units(calc):
     env = _dir7_tool(calc, {})
     assert env.get("ok") is False, env
     result = env["result"]
-    assert result["status"] == "error", result
+    assert result["status"] == "needs_input", result
     err = result["error"]
     assert "TypeError" not in err
     assert "missing required" in err
@@ -399,7 +402,10 @@ def test_dir7_flatten_strips_envelope_keys_not_passed_as_kwargs(calc):
         )
     # ``noise`` is not an envelope key and not a parameter. It used to be
     # dropped; the tool must now say so, so the model can retry.
-    rejected = _err(calc, leaked)
+    # 'noise' is an unknown argument with no missing required input -> a
+    # value-domain / unknown-arg rejection, status "error" (not an ask).
+    rejected = run_calculation(calc, leaked)
+    assert rejected.get("status") == "error", rejected
     assert "noise" in rejected["error"]
     clean = {**kwargs, **_DIR7_ENVELOPE}
     inner = _ok(calc, clean)
