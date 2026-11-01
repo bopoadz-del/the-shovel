@@ -34,7 +34,7 @@ def test_project_rate_operands_are_stamped_project_data(rate, aca):
         input_sources={"rate_percent": "project_data", "contract_amount": "project_data"},
     )
     _out, prov = figure_provenance(
-        f"The delay damages are {daily} per day.", None, messages, enforce=False)
+        f"The delay damages are SAR {daily} per day.", None, messages, enforce=False)
     rows = _calc_inputs(prov)
     assert rows["rate_percent"]["source"] == "project_data", rows
     assert rows["contract_amount"]["source"] == "project_data", rows
@@ -54,6 +54,6 @@ def test_user_text_operand_is_unchanged_without_a_stamp(value):
     rt._record_calculator_tool_turn(
         messages, "delay_damages_daily", {"daily_amount": value}, env)
     _out, prov = figure_provenance(
-        f"The delay damages are {value} per day.", None, messages, enforce=False)
+        f"The delay damages are SAR {value} per day.", None, messages, enforce=False)
     rows = _calc_inputs(prov)
     assert rows["daily_amount"]["source"] == "user_text", rows
