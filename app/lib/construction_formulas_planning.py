@@ -78,13 +78,21 @@ def parse_productivity_cost_ask(
         if raw_cost:
             cost = float(raw_cost.replace(",", ""))
     curr_m = _CURRENCY_RE.search(raw)
-    currency = (curr_m.group(1) if curr_m else "SAR").upper()
+    # Currency flows from the ask; none named -> no currency (K-T5 ruling ii),
+    # never an invented SAR default.
+    currency = (curr_m.group(1) if curr_m else "").upper()
     return qty, daily, cost, currency
 
-def format_productivity_cost_line(inner: dict, currency: str = "SAR") -> str:
+def format_productivity_cost_line(inner: dict, currency: str = "") -> str:
     """User-facing duration + cost line from a productivity result dict."""
     if not isinstance(inner, dict):
         return ""
+
+    def _money(x: float) -> str:
+        # Currency is a label, not an operand (K-T5 ruling ii): when none was
+        # given the figure stands on its own, never an invented symbol.
+        return f"{currency} {x:,.2f}" if currency else f"{x:,.2f}"
+
     duration = inner.get("duration")
     cost = inner.get("total_cost")
     if duration is None:
@@ -108,9 +116,9 @@ def format_productivity_cost_line(inner: dict, currency: str = "SAR") -> str:
         except (TypeError, ValueError):
             cost_f = None
         if cost_f is not None:
-            crew_bit = f" × {currency} {float(crew):,.2f}" if crew not in (None, "") else ""
+            crew_bit = f" × {_money(float(crew))}" if crew not in (None, "") else ""
             bits.append(
-                f"Cost = {dur_f:.2f}{crew_bit} = {currency} {cost_f:,.2f}"
+                f"Cost = {dur_f:.2f}{crew_bit} = {_money(cost_f)}"
             )
     return ". ".join(bits) + "."
 
