@@ -5446,11 +5446,11 @@ def _graft_composed_user_priced_takeoff(
             answer_states_money_amount,
             compose_user_priced_takeoff_from_ask,
             format_user_priced_takeoff_line,
+            query_asks_user_priced_takeoff,
         )
         user = _latest_operator_ask(messages)
-        # compose_user_priced_takeoff_from_ask re-checks query_asks internally
-        # (commercial.py:1472), so a leading query guard here is an equivalent
-        # mutant -- removed (same pattern as the K-T5a+b _graft guard).
+        if not query_asks_user_priced_takeoff(user):
+            return text
         composed = compose_user_priced_takeoff_from_ask(user)
         if not composed:
             return text
@@ -5468,9 +5468,6 @@ def _graft_composed_user_priced_takeoff(
             "base_cost": composed["base_cost"],
             "total_cost": composed["total_cost"],
             "note": line,
-            # S-12a: the unit rate is read from the project's rates, not the
-            # operator's words -- stamp its origin so provenance never guesses.
-            "_input_sources": {"unit_rate": "project_data"},
         })
         if isinstance(messages, list) and not any(
             isinstance(m, dict)
@@ -6996,10 +6993,6 @@ def _graft_composed_delay_damages_daily(
             "contract_amount": composed["contract_amount"],
             "currency": composed["currency"],
             "note": composed.get("note") or line,
-            # S-12a: the rate and the Accepted Contract Amount come from the
-            # project's contract data, not the operator -- stamp their origin.
-            "_input_sources": {"rate_percent": "project_data",
-                               "contract_amount": "project_data"},
         })
         if isinstance(messages, list) and not any(
             isinstance(m, dict)
@@ -7114,10 +7107,6 @@ def _graft_composed_delay_damages_over_period(
             "contract_amount": composed["contract_amount"],
             "currency": composed["currency"],
             "note": composed.get("note") or line,
-            # S-12a: the rates and the Accepted Contract Amount come from the
-            # project's contract data, not the operator -- stamp their origin.
-            "_input_sources": {"rates": "project_data",
-                               "contract_amount": "project_data"},
         })
         if isinstance(messages, list) and not any(
             isinstance(m, dict)
