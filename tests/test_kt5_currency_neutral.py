@@ -88,11 +88,32 @@ def test_convert_written_units_unknown_formula_is_a_noop(name, values):
     assert fr.convert_written_units(name, values) == (dict(values), [], [])
 
 
-@pytest.mark.parametrize("messages", [None, []])
+@pytest.mark.parametrize("messages", [None, [{"role": "user", "content": ""}]])
 def test_graft_returns_text_unchanged_without_an_operator_ask(messages):
-    # No operator ask -> the graft is a no-op; the guard also protects the
-    # downstream payload lookup from a None/[]-message turn.
+    # No operator ask -> the graft is a no-op; proof the removed `if not user`
+    # early-return was redundant, and the guard against looks_like_* choking on
+    # a falsy user (ORDERS_0707Z condition 1).
     assert rt._graft_complete_calc_answer("unchanged answer", messages) == "unchanged answer"
+
+
+_FORMULA_TEMPLATE = "Duration = Quantity / Daily Production"
+
+
+@pytest.mark.parametrize("ask, shown", [
+    ("How much will the remaining 3,400 m2 of plastering cost if productivity "
+     "stays at 42 m2 per gang-day and a gang costs SAR 1,950 per day?", "157,8"),
+    ("How much will the remaining 1,000 m2 of plastering cost if productivity "
+     "stays at 50 m2 per gang-day and a gang costs SAR 2,000 per day?", "40,000"),
+])
+def test_graft_recovers_the_productivity_cost_over_a_formula_template(ask, shown):
+    # The productivity-cost guard (now the first guard after the redundant
+    # early-return was removed): a cost ask over a formula-only answer is
+    # recomposed from the ask, carrying the SAR the ask states (ORDERS_0707Z
+    # condition 2).
+    grafted = rt._graft_complete_calc_answer(
+        _FORMULA_TEMPLATE, [{"role": "user", "content": ask}])
+    assert grafted != _FORMULA_TEMPLATE, grafted
+    assert shown in grafted and "SAR" in grafted, grafted
 
 
 # ── CI-M coverage for the commercial format functions the currency edit
