@@ -6986,30 +6986,21 @@ def _graft_composed_delay_damages_daily(
         if not composed:
             return text
         line = format_delay_damages_daily_line(composed)
-        # S-12a PR-2: record a CREDITED calculator turn (not a flat display
-        # payload) so the rate and the Accepted Contract Amount -- both read
-        # from the project's contract data, not the operator -- carry source
-        # "project_data" in provenance. _record_calculator_tool_turn dedupes.
-        if isinstance(messages, list):
-            env = {
-                "calculation": "delay_damages_daily",
-                "status": "success",
-                "result": {
-                    "daily_amount": composed["daily_amount"],
-                    "rate_percent": composed["rate_percent"],
-                    "contract_amount": composed["contract_amount"],
-                    "currency": composed["currency"],
-                    "note": composed.get("note") or line,
-                },
-            }
-            _record_calculator_tool_turn(
-                messages, "delay_damages_daily",
-                {"rate_percent": composed["rate_percent"],
-                 "contract_amount": composed["contract_amount"]},
-                env,
-                input_sources={"rate_percent": "project_data",
-                               "contract_amount": "project_data"},
-            )
+        payload = json.dumps({
+            "calculation": "delay_damages_daily",
+            "daily_amount": composed["daily_amount"],
+            "rate_percent": composed["rate_percent"],
+            "contract_amount": composed["contract_amount"],
+            "currency": composed["currency"],
+            "note": composed.get("note") or line,
+        })
+        if isinstance(messages, list) and not any(
+            isinstance(m, dict)
+            and m.get("role") == "tool"
+            and "delay_damages_daily" in str(m.get("content") or "")
+            for m in messages
+        ):
+            messages.append({"role": "tool", "content": payload})
         # A Milestone or section answer that already states the right
         # daily figure must not keep a "whole of the Works" lead. That
         # label is the other rate.
@@ -8457,8 +8448,8 @@ def _record_calculator_tool_turn(
     if _calculator_success_recorded(messages, name):
         return
     if input_sources:
-        # S-12a PR-2: the credited envelope carries the per-input origin stamped
-        # at compose time, so provenance can show project_data (not "unresolved").
+        # S-12a: the credited envelope carries the per-input origin stamped at
+        # compose time, so provenance can show project_data (not "unresolved").
         envelope = {**envelope, "_input_sources": dict(input_sources)}
     tid = "supplied-input-construction_calc"
     args = {
@@ -8483,6 +8474,64 @@ def _record_calculator_tool_turn(
         "tool_call_id": tid,
         "content": json.dumps(envelope, default=str),
     })
+
+
+def credit_composed_rate_turns(messages: list[dict[str, Any]] | None) -> None:
+    """S-12a PR-2: mirror a composed delay_damages_daily DISPLAY payload as a
+    CREDITED calculator turn so its project-sourced operands carry provenance.
+
+    The graft appends ``{"calculation": "delay_damages_daily", "rate_percent":
+    ..., "contract_amount": ...}`` as a flat tool message to ground the figure
+    for the cost gate; that shape is not a run_calculation envelope, so the
+    credit path never reads it and the rate + Accepted Contract Amount would be
+    "unresolved". Here we record an EQUIVALENT credited turn stamping both as
+    project_data. The display payload is left in place untouched, so what the
+    user sees is byte-identical. One combined guard (no return ladder) keeps
+    every mutant killable; _record_calculator_tool_turn dedupes.
+    """
+    for m in list(messages or []):
+        obj = (
+            _parse_json_obj(m.get("content"))
+            if isinstance(m, dict) and m.get("role") == "tool"
+            else None
+        )
+        if not (
+            isinstance(obj, dict)
+            and obj.get("calculation") == "delay_damages_daily"
+            and not isinstance(obj.get("result"), dict)
+            and obj.get("rate_percent") is not None
+            and obj.get("contract_amount") is not None
+        ):
+            continue
+        env = {
+            "calculation": "delay_damages_daily",
+            "status": "success",
+            "result": {
+                key: obj[key] for key in
+                ("daily_amount", "rate_percent", "contract_amount", "currency", "note")
+                if key in obj
+            },
+        }
+        _record_calculator_tool_turn(
+            messages, "delay_damages_daily",
+            {"rate_percent": obj["rate_percent"],
+             "contract_amount": obj["contract_amount"]},
+            env,
+            input_sources={"rate_percent": "project_data",
+                           "contract_amount": "project_data"},
+        )
+        return
+
+
+def _parse_json_obj(raw: Any) -> dict | None:
+    """A JSON object from a string, or None (never raises)."""
+    if not isinstance(raw, str) or not raw.lstrip().startswith("{"):
+        return None
+    try:
+        obj = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def _graft_supplied_input_calculation(
