@@ -6986,21 +6986,30 @@ def _graft_composed_delay_damages_daily(
         if not composed:
             return text
         line = format_delay_damages_daily_line(composed)
-        payload = json.dumps({
-            "calculation": "delay_damages_daily",
-            "daily_amount": composed["daily_amount"],
-            "rate_percent": composed["rate_percent"],
-            "contract_amount": composed["contract_amount"],
-            "currency": composed["currency"],
-            "note": composed.get("note") or line,
-        })
-        if isinstance(messages, list) and not any(
-            isinstance(m, dict)
-            and m.get("role") == "tool"
-            and "delay_damages_daily" in str(m.get("content") or "")
-            for m in messages
-        ):
-            messages.append({"role": "tool", "content": payload})
+        # S-12a PR-2: record a CREDITED calculator turn (not a flat display
+        # payload) so the rate and the Accepted Contract Amount -- both read
+        # from the project's contract data, not the operator -- carry source
+        # "project_data" in provenance. _record_calculator_tool_turn dedupes.
+        if isinstance(messages, list):
+            env = {
+                "calculation": "delay_damages_daily",
+                "status": "success",
+                "result": {
+                    "daily_amount": composed["daily_amount"],
+                    "rate_percent": composed["rate_percent"],
+                    "contract_amount": composed["contract_amount"],
+                    "currency": composed["currency"],
+                    "note": composed.get("note") or line,
+                },
+            }
+            _record_calculator_tool_turn(
+                messages, "delay_damages_daily",
+                {"rate_percent": composed["rate_percent"],
+                 "contract_amount": composed["contract_amount"]},
+                env,
+                input_sources={"rate_percent": "project_data",
+                               "contract_amount": "project_data"},
+            )
         # A Milestone or section answer that already states the right
         # daily figure must not keep a "whole of the Works" lead. That
         # label is the other rate.
@@ -8443,9 +8452,14 @@ def _record_calculator_tool_turn(
     name: str,
     bound: dict[str, Any],
     envelope: dict[str, Any],
+    input_sources: dict[str, str] | None = None,
 ) -> None:
     if _calculator_success_recorded(messages, name):
         return
+    if input_sources:
+        # S-12a PR-2: the credited envelope carries the per-input origin stamped
+        # at compose time, so provenance can show project_data (not "unresolved").
+        envelope = {**envelope, "_input_sources": dict(input_sources)}
     tid = "supplied-input-construction_calc"
     args = {
         "calculation": name,
