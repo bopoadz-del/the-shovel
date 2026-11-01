@@ -13,6 +13,15 @@ from app.agents.hats.design.formulas.construction_formulas_reference_tables impo
 )
 
 
+@pytest.mark.parametrize("volume", [-1.0, -100.0])
+def test_negative_volume_is_refused(volume):
+    # Kills the `if volume_m3 < 0` drop_rule: without it a negative volume
+    # would compute a (nonsense) negative total instead of refusing.
+    r = carbon_footprint_concrete(volume, grade="c30")
+    assert "error" in r and "volume_m3" in r["error"], r
+    assert "total_kgco2e" not in r
+
+
 @pytest.mark.parametrize("grade, factor", [("c25", 290.0), ("c40", 390.0)])
 def test_known_grade_computes_from_the_table(grade, factor):
     r = carbon_footprint_concrete(10.0, grade=grade)
