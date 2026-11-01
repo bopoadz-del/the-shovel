@@ -20,7 +20,7 @@ _OSHA_MAF_KN = 8.0  # OSHA 1926.502 maximum arresting force (body harness)
     inputs={
         'platform_area_m2': Param('m2', 0, 10000, label='platform area'),
         'duty': Param('-', label='scaffold duty'),
-        'safety_factor': Param('-', 1, 10, label='safety factor'),
+        'safety_factor': Param('ratio', 1, 10, label='safety factor'),
     },
     outputs={'duty': '-', 'duty_load_kpa': 'kPa', 'intended_load_kn': 'kN', 'required_capacity_kn': 'kN', 'safety_factor': '-'},
 )

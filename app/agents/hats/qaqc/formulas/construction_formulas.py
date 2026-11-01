@@ -294,8 +294,8 @@ def grout_pressure_calc(
         'datum_temperature': Param('degC', -30, 10, label='datum temperature'),
         'strength_28d_n_mm2': Param('N/mm2', 1, 150, label='28-day strength', grade='concrete'),
         'reference_temperature_c': Param('degC', -30, 80, label='reference temperature'),
-        'gain_a': Param('-', 0, 50, label='strength-gain constant a'),
-        'gain_b': Param('-', 0, 1, label='strength-gain constant b'),
+        'gain_a': Param('ratio', 0, 50, label='strength-gain constant a'),
+        'gain_b': Param('ratio', 0, 1, label='strength-gain constant b'),
     },
     outputs={'predicted_strength_n_mm2': 'N/mm2', 'percent_of_28d': '%', 'maturity_index_c_hrs': 'degC.h', 'equivalent_age_days': 'days'},
 )
