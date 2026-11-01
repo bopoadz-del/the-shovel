@@ -1484,6 +1484,11 @@ def figure_provenance(
         # already returns no record; a non-branching guard keeps None-safety
         # without an early-return `if` (which would be an equivalent mutant).
         text = text or ""
+        # S-12a PR-2: a composed project-rate calc (delay_damages_daily) is
+        # mirrored as a credited turn so its rate + ACA read project_data, not
+        # "unresolved". Display is untouched; this only adds provenance.
+        from app.agents.runtime import credit_composed_rate_turns
+        credit_composed_rate_turns(messages)
         ev = build_evidence(rag_sys_msg, messages, tool_passages=tool_passages)
         user_vals: set[float] = set()
         for rec in ev.records:
