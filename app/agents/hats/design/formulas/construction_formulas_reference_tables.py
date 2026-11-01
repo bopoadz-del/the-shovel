@@ -32,8 +32,21 @@ def carbon_footprint_concrete(
     if float(volume_m3) < 0:
         return {"error": "volume_m3 must be >= 0."}
     g = (grade or "c30").strip().lower()
-    factor = float(embodied_kgco2e_m3) if embodied_kgco2e_m3 is not None \
-        else _CONCRETE_ECO2_KGM3.get(g, 320.0)
+    if embodied_kgco2e_m3 is not None:
+        factor = float(embodied_kgco2e_m3)
+    elif g in _CONCRETE_ECO2_KGM3:
+        factor = _CONCRETE_ECO2_KGM3[g]
+    else:
+        # No invented default: an unrecognised grade is refused, not silently
+        # costed at the c30 figure. Name the known grades and cite the source.
+        return {
+            "error": (
+                f"Unknown concrete grade {grade!r}. Known grades: "
+                f"{', '.join(sorted(_CONCRETE_ECO2_KGM3))}. Pass "
+                "embodied_kgco2e_m3 from the supplier EPD for another grade."
+            ),
+            "standard": "ICE / EPD embodied-carbon database",
+        }
     total = float(volume_m3) * factor
     return {
         "kind": "reference_table",
