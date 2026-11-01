@@ -44,3 +44,9 @@ def test_productivity_cost_line_omits_an_absent_currency(cost):
     line = planning.format_productivity_cost_line({"duration": 2.0, "total_cost": cost})
     assert f"{cost:,.2f}" in line, line
     assert "SAR" not in line and "  " not in line, line
+
+
+@pytest.mark.parametrize("inner", [None, "not a dict", 5])
+def test_productivity_cost_line_rejects_a_non_dict(inner):
+    # The isinstance guard: a non-dict yields "" (without it, .get would raise).
+    assert planning.format_productivity_cost_line(inner) == ""
