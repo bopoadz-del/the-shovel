@@ -1058,7 +1058,10 @@ def describe_calculation_params(
         if str(declared.get(key, "")).startswith("currency"):
             unit = declared[key]
         else:
-            unit = _unit_from_name(key) or declared.get(key, "")
+            # Declared (parseable) unit is authoritative; the name->unit default
+            # is a last resort consulted only when a param declares no unit
+            # (DECISION_MAIN_0150Z ruling A).
+            unit = declared.get(key, "") or _unit_from_name(key)
         row: Dict[str, Any] = {
             "name": key,
             "required": required,

@@ -113,7 +113,7 @@ _DEWATER_KW = dict(water_depth=23, raft_thickness=2.0, floor_count=5)
 _DEWATER_REQUIRED = (
     ("water_depth", "m"),
     ("raft_thickness", "m"),
-    ("floor_count", "floors"),
+    ("floor_count", "count"),
 )
 
 
