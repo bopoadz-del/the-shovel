@@ -28,8 +28,14 @@ from app.core.models import Document, Project, RagChunk
 
 def _ensure_schema():
     from app.core.projects import init_db as init_projects_db
+    from app.core.rag.vector_store import ensure_table
     init_projects_db()
-    RagChunk.__table__.create(bind=engine, checkfirst=True)
+    # Race-safe create, mirroring test_admin_corpus_collections: the app's
+    # background ensure_table(chunks) at startup can create the table at the
+    # same time, and a plain checkfirst create is check-THEN-create (not atomic),
+    # so it loses the race with "table chunks already exists". ensure_table
+    # tolerates the concurrent creator, which is the outcome we want.
+    ensure_table(RagChunk.__table__, bind=engine)
 
 
 @pytest.fixture(autouse=True)

@@ -21,8 +21,12 @@ def _ensure_schema():
     from app.core.projects import init_db as init_projects_db
     from app.core.models import RagChunk
     from app.core.db import engine
+    from app.core.rag.vector_store import ensure_table
     init_projects_db()
-    RagChunk.__table__.create(bind=engine, checkfirst=True)
+    # Race-safe create (see test_admin_corpus_delete_docs): the app's background
+    # ensure_table(chunks) can create this concurrently; a checkfirst create is
+    # not atomic and loses the race, so use the app's race-tolerant primitive.
+    ensure_table(RagChunk.__table__, bind=engine)
 
 
 @pytest.fixture
