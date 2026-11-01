@@ -156,6 +156,28 @@ PROBES: tuple[Probe, ...] = (
         ),
         why="stop recognising a search promise, so a promise ships as an answer",
     ),
+    Probe(
+        name="carbon_grade_refusal",
+        path="app/agents/hats/design/formulas/construction_formulas_reference_tables.py",
+        old="    elif g in _CONCRETE_ECO2_KGM3:",
+        new="    elif g not in _CONCRETE_ECO2_KGM3:",
+        test=(
+            "tests/test_kt6_carbon_grade.py::"
+            "test_known_grade_computes_from_the_table"
+        ),
+        why="invert the grade-in-table guard; a known grade must still compute, not refuse",
+    ),
+    Probe(
+        name="scaffold_duty_refusal",
+        path="app/agents/hats/safety/formulas/construction_formulas_safety.py",
+        old="    if d not in _SCAFFOLD_DUTY_KPA:",
+        new="    if d in _SCAFFOLD_DUTY_KPA:",
+        test=(
+            "tests/test_kt6_scaffold_cite.py::"
+            "test_standard_cites_both_osha_and_bs_en"
+        ),
+        why="invert the duty guard; a known duty must still compute, not refuse",
+    ),
 )
 
 
