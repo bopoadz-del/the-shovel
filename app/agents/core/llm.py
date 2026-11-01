@@ -225,6 +225,13 @@ async def _call_llm(
             from app.core import llm_client
             while True:
                 # The single non-streaming provider egress (records usage on 200).
+                # 6d-ctx: stamp the dispatch here so llm_first_token measures the
+                # real model wait on the NON-streaming answer path short asks take
+                # (the _stream_synthesis stamp only covers the force_synthesis
+                # branch). mark_llm_dispatch lets a later re-stamp win, so on a
+                # retry/fallback the final egress before the first token is timed.
+                from app.core import turn_timing as _tt
+                _tt.mark_llm_dispatch()
                 r, _resp_data = await llm_client.provider_post(
                     a_cfg["url"], payload, headers, timeout=attempt_timeout,
                     provider=a_cfg.get("provider", ""),
@@ -450,6 +457,10 @@ async def _call_llm(
                 )
                 msg["content"] = _end_cut_answer(msg["content"])
             record_provider_result("primary" if attempt_idx == 0 else "fallback", "ok")
+            # 6d-ctx: surface prompt-cache hits from this non-streaming egress too
+            # (the same reading _stream_synthesis records on the streaming path).
+            from app.core import turn_timing as _tt
+            _tt.mark_value("cache_hit_tokens", _cache_hit_tokens(data.get("usage")))
             return {"status": "success", "choice": choice, "raw": data}
         except Exception as e:  # noqa: BLE001 — response parse / rewrite
             last_error = {"status": "error", "error": f"{a_cfg['provider']} response error: {e}"}
