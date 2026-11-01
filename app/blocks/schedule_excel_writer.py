@@ -31,7 +31,7 @@ class ScheduleExcelWriterBlock(UniversalBlock):
 
         Modes:
           * ``cpm_output``: dict matching ``CPMOutput`` -> writes a CPM/Gantt sheet
-            via ``write_schedule_excel``.
+            via ``app.lib.pm_computations.write_schedule_excel``.
           * ``activities``: list of cost-loaded activity dicts -> writes a full
             cost-loaded L2 schedule via ``generate_cost_loaded_schedule``.
         """
@@ -48,7 +48,7 @@ class ScheduleExcelWriterBlock(UniversalBlock):
 
         try:
             if cpm_output:
-                from app.lib.pm_excel import write_schedule_excel
+                from app.lib.pm_computations import write_schedule_excel
                 from app.schemas.cpm import CPMOutput
 
                 output = CPMOutput(**cpm_output) if isinstance(cpm_output, dict) else cpm_output
