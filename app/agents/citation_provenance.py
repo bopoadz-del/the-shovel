@@ -1411,10 +1411,9 @@ def _input_unit(calculation: str, name: str) -> str:
         spec = formula_registry.get(calculation or "")
         param = spec.inputs.get(name) if spec is not None else None
     except Exception:  # noqa: BLE001 -- a lookup miss must not drop provenance
+        _LOG.debug("input-unit lookup failed for %s.%s", calculation, name, exc_info=True)
         return ""
-    if param is None:
-        return ""
-    unit = str(getattr(param, "unit", param) or "")
+    unit = "" if param is None else str(getattr(param, "unit", param) or "")
     return "" if unit == "-" else unit
 
 
