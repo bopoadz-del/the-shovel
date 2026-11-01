@@ -79,15 +79,14 @@ def test_a_neutral_key_takes_the_given_currency(cur, want):
 
 
 # --- delay_damages_daily --------------------------------------------------
-# No currency given: the formula's stated signature default, as on main.
+# No currency given: the figure carries none -- no symbol is invented and the
+# field is None (K-T5 ruling ii: currency is a label, not an operand).
 @pytest.mark.parametrize("base,daily", [(1000, "1.00"), (5000, "5.00")])
-def test_delay_damages_note_without_currency_uses_the_signature_default(base, daily):
-    import inspect
-
-    code = inspect.signature(delay_damages_daily).parameters["currency"].default
+def test_delay_damages_note_without_currency_carries_no_symbol(base, daily):
     out = delay_damages_daily(rate_percent=0.1, contract_amount=base)
-    assert out["note"].startswith(f"0.1% of {code} {base:,.2f} = {code} {daily} per")
-    assert out["currency"] == code
+    assert out["note"].startswith(f"0.1% of {base:,.2f} = {daily} per")
+    assert out["currency"] is None
+    assert "SAR" not in out["note"] and "  " not in out["note"]
 
 
 # The live tool path (agent tool call -> construction_calc -> run_calculation)
