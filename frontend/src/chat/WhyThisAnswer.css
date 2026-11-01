@@ -110,3 +110,15 @@
   color: var(--text-muted, #6b7280);
   font-size: 0.76rem;
 }
+
+/* A document-sourced input links to its row in the Sources preview pane. */
+.why-row__srclink {
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+  text-decoration: underline;
+}

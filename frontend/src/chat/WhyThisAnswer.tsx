@@ -17,6 +17,7 @@
  */
 import { useState } from 'react'
 import { Calculator, FileText, MessageSquare } from 'lucide-react'
+import type { CitedSource } from './SourcesList'
 import { textLeaksInternalCode } from './userFacingText'
 import './WhyThisAnswer.css'
 
@@ -48,8 +49,27 @@ export interface ProvenanceEntry {
 interface Props {
   /** Latest assistant message's provenance, or undefined while streaming. */
   entries?: ProvenanceEntry[]
+  /** The same cited sources SourcesList shows, so a document-sourced input can
+   *  link to its row in the preview pane. */
+  sources?: CitedSource[]
   /** True while the assistant message is still streaming. */
   streaming?: boolean
+  /** Open a cited document in the preview pane (shared with SourcesList). */
+  onOpenSource?: (source: CitedSource) => void
+}
+
+/** Match a ``document:<chunk_id>`` input source to the cited source it came
+ *  from. The backend stamps ``document:<doc_id>`` or ``document:<doc_id>#<n>``
+ *  (citation_provenance), so the doc id is the part before any ``#``. Returns
+ *  null when nothing matches — the word then renders plainly. */
+export function resolveDocumentSource(
+  source: string | undefined,
+  sources: CitedSource[] | undefined,
+): CitedSource | null {
+  if (!source || !source.startsWith('document:') || !sources) return null
+  const docId = source.slice('document:'.length).split('#')[0]
+  if (!docId) return null
+  return sources.find((s) => s.doc_id === docId) ?? null
 }
 
 const BADGE: Record<string, { label: string; tone: string }> = {
@@ -83,7 +103,15 @@ function humaniseFormula(name?: string): string | null {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
-function CalcRow({ e }: { e: ProvenanceEntry }) {
+function CalcRow({
+  e,
+  sources,
+  onOpenSource,
+}: {
+  e: ProvenanceEntry
+  sources?: CitedSource[]
+  onOpenSource?: (source: CitedSource) => void
+}) {
   const [open, setOpen] = useState(false)
   const badge = (e.provenance && BADGE[e.provenance]) || null
   const formula = humaniseFormula(e.formula)
@@ -111,12 +139,27 @@ function CalcRow({ e }: { e: ProvenanceEntry }) {
             <ul className="why-row__inputs" hidden={!open}>
               {inputs.map((inp, i) => {
                 const word = sourceWord(inp.source)
+                const cited = onOpenSource ? resolveDocumentSource(inp.source, sources) : null
                 return (
                   <li key={i}>
                     <span className="why-row__k">{humanName(inp.name)}</span>:{' '}
                     {String(inp.value)}
                     {inp.unit ? ` ${inp.unit}` : ''}
-                    {word && <span className="why-row__src"> · {word}</span>}
+                    {word &&
+                      (cited ? (
+                        <>
+                          {' · '}
+                          <button
+                            type="button"
+                            className="why-row__srclink"
+                            onClick={() => onOpenSource?.(cited)}
+                          >
+                            {word}
+                          </button>
+                        </>
+                      ) : (
+                        <span className="why-row__src"> · {word}</span>
+                      ))}
                   </li>
                 )
               })}
@@ -155,7 +198,7 @@ function SimpleRow({ e }: { e: ProvenanceEntry }) {
   )
 }
 
-export default function WhyThisAnswer({ entries, streaming }: Props) {
+export default function WhyThisAnswer({ entries, sources, streaming, onOpenSource }: Props) {
   // Only figures the turn could actually attribute; a null-source figure never
   // reaches the client, but guard anyway.
   const rows = (entries ?? []).filter((e) => e && e.source)
@@ -173,7 +216,11 @@ export default function WhyThisAnswer({ entries, streaming }: Props) {
       <h3 className="why-panel__title">Why this answer</h3>
       <ul className="why-panel__list">
         {rows.map((e, i) =>
-          e.source === 'calculator' ? <CalcRow key={i} e={e} /> : <SimpleRow key={i} e={e} />,
+          e.source === 'calculator' ? (
+            <CalcRow key={i} e={e} sources={sources} onOpenSource={onOpenSource} />
+          ) : (
+            <SimpleRow key={i} e={e} />
+          ),
         )}
       </ul>
     </section>

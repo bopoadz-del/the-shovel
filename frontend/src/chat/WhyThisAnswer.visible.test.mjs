@@ -29,7 +29,8 @@ const server = await createServer({
 })
 after(() => server.close())
 
-const { default: WhyThisAnswer } = await server.ssrLoadModule('/src/chat/WhyThisAnswer.tsx')
+const { default: WhyThisAnswer, resolveDocumentSource } =
+  await server.ssrLoadModule('/src/chat/WhyThisAnswer.tsx')
 
 function visibleText(html) {
   return html
@@ -42,8 +43,8 @@ function visibleText(html) {
     .trim()
 }
 
-function render(entries, streaming = false) {
-  return renderToStaticMarkup(React.createElement(WhyThisAnswer, { entries, streaming }))
+function render(entries, opts = {}) {
+  return renderToStaticMarkup(React.createElement(WhyThisAnswer, { entries, ...opts }))
 }
 
 // Two calculator badges -> two distinct visible labels; neither leaks the
@@ -156,6 +157,48 @@ test('a user figure reads "From your message", a document figure names the file'
 })
 
 test('streaming with nothing yet shows the waiting line; empty + done renders nothing', () => {
-  assert.match(visibleText(render([], true)), /appears once the answer completes/i)
-  assert.equal(render([], false), '')
+  assert.match(visibleText(render([], { streaming: true })), /appears once the answer completes/i)
+  assert.equal(render([], { streaming: false }), '')
+})
+
+// S-12b: a document-sourced input resolves to its cited source and renders the
+// word "document" as a link that opens that source; the chunk id is never shown.
+const DOC_ENTRY = {
+  figure: '945 m3',
+  source: 'calculator',
+  formula: 'concrete_volume',
+  inputs: [
+    { name: 'waste_percent', value: 5, unit: '%', source: 'document:spec_a#3' },
+    { name: 'volume_m3', value: 900, unit: 'm3', source: 'user_text' },
+  ],
+  provenance: 'kernel',
+  certified: true,
+}
+const CITED = [{ doc_id: 'spec_a', doc_name: 'Concrete Spec.pdf', page_or_section: 'p. 3', score: 0.9, confidence: 'High' }]
+
+test('resolveDocumentSource matches document:<doc_id>[#chunk] to its cited source', () => {
+  // the stamped source is document:<doc_id> or document:<doc_id>#<n>; both resolve
+  assert.equal(resolveDocumentSource('document:spec_a#3', CITED), CITED[0])
+  assert.equal(resolveDocumentSource('document:spec_a', CITED), CITED[0])
+  // no matching cited source, a non-document source, and missing inputs -> null
+  assert.equal(resolveDocumentSource('document:other', CITED), null)
+  assert.equal(resolveDocumentSource('project_data', CITED), null)
+  assert.equal(resolveDocumentSource('document:spec_a', undefined), null)
+})
+
+test('a matched document input renders as a link (onOpenSource target), chunk id hidden', () => {
+  const html = render([DOC_ENTRY], { sources: CITED, onOpenSource: () => {} })
+  const text = visibleText(html)
+  // the word "document" is rendered as a button (the click calls onOpenSource)
+  assert.match(html, /class="why-row__srclink"[^>]*>\s*document\s*</)
+  assert.match(text, /document/)
+  assert.doesNotMatch(text, /spec_a/) // chunk/doc id never shown
+  assert.doesNotMatch(text, /#3/)
+})
+
+test('an unmatched document input renders the plain word, no link', () => {
+  // same entry, but no cited source matches -> plain span, no srclink button
+  const html = render([DOC_ENTRY], { sources: [], onOpenSource: () => {} })
+  assert.doesNotMatch(html, /why-row__srclink/)
+  assert.match(visibleText(html), /document/)
 })
