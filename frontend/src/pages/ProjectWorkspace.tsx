@@ -17,7 +17,7 @@ import LeftPanel from '../layout/LeftPanel'
 import RightPanel from '../layout/RightPanel'
 import ChatList from '../chat/ChatList'
 import ChatComposer, { type AgentOption } from '../chat/ChatComposer'
-import SourcesList from '../chat/SourcesList'
+import SourcesList, { type CitedSource } from '../chat/SourcesList'
 import WhyThisAnswer, { type ProvenanceEntry } from '../chat/WhyThisAnswer'
 import { sanitizeAssistantContent } from '../chat/toolJsonGuard'
 import {
@@ -1407,6 +1407,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   const latestSources = latestAssistant?.sources ?? []
   const latestProvenance = latestAssistant?.provenance ?? []
   const citedDocIds = latestSources.map((s) => s.doc_id)
+  // One handler opens a cited document in the preview pane — shared by the
+  // Sources list and the per-input "document" links in Why this answer.
+  const openSource = (s: CitedSource) => {
+    if (!s.doc_id) return
+    setPreviewRequest({ docId: s.doc_id, nonce: Date.now() })
+  }
 
   // Sources the answer cited that this project does not own — Master-Corpus
   // fallback hits. Deduplicated by doc_id (one document usually contributes
@@ -1652,14 +1658,13 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                 sources={latestSources}
                 streaming={latestAssistant?.streaming}
                 activeDocId={previewRequest?.docId}
-                onOpenSource={(s) => {
-                  if (!s.doc_id) return
-                  setPreviewRequest({ docId: s.doc_id, nonce: Date.now() })
-                }}
+                onOpenSource={openSource}
               />
               <WhyThisAnswer
                 entries={latestProvenance}
+                sources={latestSources}
                 streaming={latestAssistant?.streaming}
+                onOpenSource={openSource}
               />
             </>
           }

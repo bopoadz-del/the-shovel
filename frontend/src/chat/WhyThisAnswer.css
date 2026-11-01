@@ -92,3 +92,33 @@
   .why-badge--info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
   .why-badge--warn { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
 }
+
+/* S-12b: the inputs sit behind a toggle under the formula; each input names
+   where its value came from in plain words. */
+.why-row__toggle {
+  margin-top: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.why-row__src {
+  color: var(--text-muted, #6b7280);
+  font-size: 0.76rem;
+}
+
+/* A document-sourced input links to its row in the Sources preview pane. */
+.why-row__srclink {
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+  text-decoration: underline;
+}
