@@ -119,6 +119,31 @@ class FormulaSpec:
 _REGISTRY: Dict[str, FormulaSpec] = {}
 
 
+#: Registry-level name -> unit DEFAULTS: a last-resort fallback consulted only
+#: when a parameter carries no declared unit and its name suffix infers none.
+#: Every entry whose parameter the registry now declares is redundant (see
+#: tests/test_kt1b_unit_fallback.py), so this table shrinks toward deletion as
+#: declarations cover the names; it must never override a declared unit.
+NAME_UNIT_DEFAULTS: Dict[str, str] = {
+    "pv": "currency", "ev": "currency", "ac": "currency",
+    "bcws": "currency", "bcwp": "currency", "acwp": "currency", "bac": "currency",
+    "rate_percent": "%", "contract_amount": "currency",
+    "water_depth": "m", "raft_thickness": "m", "floor_count": "floors",
+    "floor_thickness": "m", "time_days": "d", "time_constant_days": "d",
+    "ultimate_shrinkage_microstrain": "µε", "udl_w_kn_m": "kN/m",
+    "central_point_load_kn": "kN", "quantity_m3": "m3", "w_c_ratio": "ratio",
+    "floor_area_m2": "m2", "panel_length": "m", "wall_thickness": "m",
+    "excavation_depth": "m", "total_cost": "currency", "area": "m2",
+    "gross_valuation": "currency", "temperature_history_c": "°C",
+    "time_intervals_hours": "h", "axial_load_kn": "kN", "column_diameter_mm": "mm",
+}
+
+
+def name_unit_default(name: str) -> str:
+    """The last-resort name -> unit default for ``name`` (``""`` if none)."""
+    return NAME_UNIT_DEFAULTS.get(str(name), "")
+
+
 def _declared_param(value: Union[str, Param]) -> Param:
     return value if isinstance(value, Param) else Param(unit=str(value or "-"))
 

@@ -725,39 +725,9 @@ def _required_groups_for(name: Any) -> Tuple[Tuple[str, ...], ...]:
     spec = formula_registry.get(key) or formula_registry.get(key.lower())
     return spec.required_groups if spec else ()
 
-_PARAM_UNIT_OVERRIDE: Dict[str, str] = {
-    "pv": "currency",
-    "ev": "currency",
-    "ac": "currency",
-    "bcws": "currency",
-    "bcwp": "currency",
-    "acwp": "currency",
-    "bac": "currency",
-    "rate_percent": "%",
-    "contract_amount": "currency",
-    "water_depth": "m",
-    "raft_thickness": "m",
-    "floor_count": "floors",
-    "floor_thickness": "m",
-    "time_days": "d",
-    "time_constant_days": "d",
-    "ultimate_shrinkage_microstrain": "µε",
-    "udl_w_kn_m": "kN/m",
-    "central_point_load_kn": "kN",
-    "quantity_m3": "m3",
-    "w_c_ratio": "ratio",
-    "floor_area_m2": "m2",
-    "panel_length": "m",
-    "wall_thickness": "m",
-    "excavation_depth": "m",
-    "total_cost": "currency",
-    "area": "m2",
-    "gross_valuation": "currency",
-    "temperature_history_c": "°C",
-    "time_intervals_hours": "h",
-    "axial_load_kn": "kN",
-    "column_diameter_mm": "mm",
-}
+# The name -> unit fallback moved to the registry (formula_registry
+# .NAME_UNIT_DEFAULTS): a last-resort default consulted only when a parameter
+# carries no declared unit and infers none from its name suffix.
 
 def _snake_key(raw: Any) -> str:
     s = str(raw or "").strip().replace("-", "_").replace("/", "_")
@@ -781,8 +751,10 @@ def _param_stem(name: str) -> str:
     return n.replace("_", "")
 
 def _unit_from_name(name: str) -> str:
-    if name in _PARAM_UNIT_OVERRIDE:
-        return _PARAM_UNIT_OVERRIDE[name]
+    from app.lib import formula_registry
+    override = formula_registry.name_unit_default(name)
+    if override:
+        return override
     n = _snake_key(name)
     for suf, unit in _BIND_UNIT_SUFFIXES:
         if n.endswith(suf):
