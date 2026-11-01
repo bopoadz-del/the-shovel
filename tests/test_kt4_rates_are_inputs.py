@@ -79,10 +79,11 @@ def test_electrical_stages_follow_given_rates(rates, days):
 @pytest.mark.parametrize("cur", ["SAR", "AED"])
 def test_delay_damages_currency_is_the_contracts(cur):
     assert delay_damages_daily(0.1, 1_000_000, cur)["currency"] == cur
+    # No currency given -> none is invented (K-T5 ruling ii): the field is None
+    # and the note carries no symbol and no leading double space.
     unlabelled = delay_damages_daily(0.1, 1_000_000)
-    import inspect
-    default = inspect.signature(delay_damages_daily).parameters["currency"].default
-    assert unlabelled["currency"] == default and default in unlabelled["note"]
+    assert unlabelled["currency"] is None
+    assert "SAR" not in unlabelled["note"] and "  " not in unlabelled["note"]
 
 
 @pytest.mark.parametrize("cur,unit", [("SAR", "SAR/m3"), ("USD", "USD/m3")])

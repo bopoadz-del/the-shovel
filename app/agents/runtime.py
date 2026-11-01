@@ -12623,9 +12623,11 @@ def _graft_complete_calc_answer(
     tonnage, is recomposed. Numbers come from the operator ask and/or the last
     successful construction_calc payload.
     """
+    # A falsy operator ask matches neither graft branch below, so the function
+    # returns ``text`` unchanged regardless -- the explicit early-return was
+    # redundant (an equivalent mutant). The branch guards that follow do the
+    # real work and are exercised by the tests.
     user = _latest_operator_ask(messages)
-    if not user:
-        return text
     try:
         from app.lib.construction_formulas_planning import (
             compose_productivity_cost_from_ask,
@@ -12659,7 +12661,7 @@ def _graft_complete_calc_answer(
             if already and not _looks_like_formula_template(text):
                 return text
             if result.get("total_cost") is not None and result.get("duration") is not None:
-                line = format_productivity_cost_line(result, composed.get("currency") or "SAR")
+                line = format_productivity_cost_line(result, composed.get("currency") or "")
                 if line and re.search(r"\b(?:SAR|AED|USD|GBP|EUR)\b", line, re.I):
                     return line
             return composed["line"]

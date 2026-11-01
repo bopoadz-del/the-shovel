@@ -62,7 +62,7 @@ def test_blank_calc_kwargs_reads_top_level_and_nested(params, blank):
     (("days",), {}, [], ["days"]),
     (("days",), {"days": 60}, [], []),
     (("days",), {}, ["days"], []),
-    (("currency",), {}, [], ["currency"]),
+    (("currency",), {}, [], []),
     (("currency",), {"currency": "AED"}, [], []),
     (("not_a_param",), {}, [], []),
     (("days", "amount_per_day"), {}, [], ["days", "amount_per_day"]),
@@ -82,12 +82,17 @@ def test_is_blank(value, blank):
     {"amount_per_day": 1200, "days": 45, "currency": None},
     {"amount_per_day": 1200, "days": 45, "currency": " "},
 ])
-def test_a_blank_text_input_is_asked_for_not_defaulted(params):
+def test_a_blank_currency_is_computed_without_a_symbol_not_asked(params):
+    # Currency is a label, not an operand (K-T5 ruling ii): a blank currency is
+    # never asked for and never defaulted to a symbol -- the figure computes and
+    # carries no currency. Numeric blanks are still asked for (tests above).
     env = _call(params)
-    assert env["ok"] is False, env
-    text = json.dumps(env["result"])
-    assert "currency" in text and "should I use" in text
-    assert "total_amount" not in text
+    assert env["ok"] is True, env
+    res = env["result"]["result"]
+    assert res["total_amount"] == 54000.0
+    assert res.get("currency") is None
+    assert "SAR" not in json.dumps(res)
+    assert "should I use" not in json.dumps(env["result"])
 
 
 def _declare_required(monkeypatch, name, key):

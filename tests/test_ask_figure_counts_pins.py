@@ -22,7 +22,11 @@ def test_one_figure_written_twice_fills_two_inputs(ask, figure, total):
     assert env.get("status") == "success", env
     res = env["result"]
     assert (res["daily_amount"], res["days"], res["total_amount"]) == (figure, figure, total)
-    assert f"SAR {total:,.2f}" in res["note"]
+    # The ask carried no currency, so the figure stands on its own -- no symbol
+    # is invented (K-T5 ruling ii: currency is a label, never a default).
+    assert f"{total:,.2f}" in res["note"]
+    assert "SAR" not in res["note"]
+    assert res.get("currency") is None
 
 
 @pytest.mark.parametrize("given,extracted,text", [

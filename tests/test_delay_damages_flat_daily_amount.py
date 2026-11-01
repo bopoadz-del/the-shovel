@@ -8,7 +8,6 @@ is unchanged.
 """
 from __future__ import annotations
 
-import inspect
 import json
 
 import pytest
@@ -25,21 +24,18 @@ def _call(params):
     return _run(agent._run_tool_call(tc))
 
 
-def _default_currency():
-    return inspect.signature(delay_damages_daily).parameters["currency"].default
-
-
 @pytest.mark.parametrize("amount,days,total", [(5000, 60, 300_000.0), (1200, 10, 12_000.0)])
 def test_flat_daily_amount_over_days_through_the_tool(amount, days, total):
     env = _call({"amount_per_day": amount, "days": days})
     assert env["ok"] is True, env
     res = env["result"]["result"]
-    cur = _default_currency()
+    # No currency in the ask -> currency is None and the figure stands on its own
+    # (K-T5 ruling ii: a label, never an invented default; no leading space).
     assert res["total_amount"] == total
     assert res["daily_amount"] == amount
     assert res["days"] == days
-    assert res["currency"] == cur
-    assert res["note"] == f"{cur} {amount:,.2f} per calendar day. Over {days} days: {cur} {total:,.2f}."
+    assert res["currency"] is None
+    assert res["note"] == f"{amount:,.2f} per calendar day. Over {days} days: {total:,.2f}."
 
 
 @pytest.mark.parametrize("amount", [750, 4000])
@@ -47,7 +43,8 @@ def test_flat_daily_amount_alone_needs_no_contract_amount(amount):
     out = delay_damages_daily(amount_per_day=amount)
     assert out["daily_amount"] == amount
     assert "total_amount" not in out and "rate_percent" not in out
-    assert out["note"] == f"{_default_currency()} {amount:,.2f} per calendar day."
+    assert out.get("currency") is None
+    assert out["note"] == f"{amount:,.2f} per calendar day."
 
 
 @pytest.mark.parametrize("cur", ["EUR", " aed "])
@@ -72,9 +69,9 @@ def test_percent_of_contract_path_through_the_tool(pct, base, days, daily, total
     env = _call({"rate_percent": pct, "contract_amount": base, "days": days})
     assert env["ok"] is True, env
     res = env["result"]["result"]
-    cur = _default_currency()
     assert res["daily_amount"] == daily and res["total_amount"] == total
-    assert res["note"].startswith(f"{pct:g}% of {cur} {base:,.2f} = {cur} {daily:,.2f} per calendar day.")
+    assert res["currency"] is None
+    assert res["note"].startswith(f"{pct:g}% of {base:,.2f} = {daily:,.2f} per calendar day.")
 
 
 @pytest.mark.parametrize("pct,base", [(0.1, 1_000_000), (0.5, 2_000_000)])

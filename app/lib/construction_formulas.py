@@ -419,7 +419,7 @@ _PARAM_UNITS: Dict[str, str] = {
     "available_hours": "h",
     "remaining_qty": "qty",
     "remaining_days": "days",
-    "material_price_per_t": "SAR/t",
+    "material_price_per_t": "currency/t",
 }
 
 _CALC_REQUIRED_HELP: Dict[str, str] = {
