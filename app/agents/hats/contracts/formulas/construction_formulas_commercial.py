@@ -27,7 +27,7 @@ from app.lib.formula_registry import Param, formula
 def delay_damages_daily(
     rate_percent: float = 0.0,
     contract_amount: float = 0.0,
-    currency: str = "SAR",
+    currency: str = "",
     amount_per_day: float = 0.0,
     days: float = 0.0,
 ) -> dict:
