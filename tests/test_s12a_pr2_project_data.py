@@ -42,18 +42,27 @@ def test_project_rate_operands_are_stamped_project_data(rate, aca):
     assert all(r["source"] != "unresolved" for r in rows.values()), rows
 
 
-@pytest.mark.parametrize("value", [250.0, 480.0])
-def test_user_text_operand_is_unchanged_without_a_stamp(value):
-    # No _input_sources stamp -> a value the operator stated stays user_text
-    # (the credited-turn plumbing does not disturb the user-text path).
-    messages = [{"role": "user", "content": f"Delay damages at {value} per day over the job?"}]
+@pytest.mark.parametrize("rate", [0.1, 0.25])
+def test_an_operator_stated_operand_stays_user_text(rate):
+    # The operator states the rate; the Accepted Contract Amount is stamped
+    # project_data. The figure is the COMPUTED daily amount (not a value the
+    # operator typed) so it credits to the calculator, and the rate operand --
+    # whose value is in the operator's words and carries no stamp -- stays
+    # user_text. One calc exercises user_text AND project_data together.
+    aca = 10_000_000.0
+    daily = round(aca * rate / 100.0, 2)
+    messages = [{"role": "user", "content": f"Delay damages at {rate}% per day?"}]
     env = {
         "calculation": "delay_damages_daily", "status": "success",
-        "result": {"daily_amount": value, "currency": "SAR"},
+        "result": {"daily_amount": daily, "rate_percent": rate,
+                   "contract_amount": aca, "currency": "SAR"},
     }
     rt._record_calculator_tool_turn(
-        messages, "delay_damages_daily", {"daily_amount": value}, env)
+        messages, "delay_damages_daily",
+        {"rate_percent": rate, "contract_amount": aca}, env,
+        input_sources={"contract_amount": "project_data"})
     _out, prov = figure_provenance(
-        f"The delay damages are SAR {value} per day.", None, messages, enforce=False)
+        f"The delay damages are SAR {daily} per day.", None, messages, enforce=False)
     rows = _calc_inputs(prov)
-    assert rows["daily_amount"]["source"] == "user_text", rows
+    assert rows["rate_percent"]["source"] == "user_text", rows
+    assert rows["contract_amount"]["source"] == "project_data", rows
