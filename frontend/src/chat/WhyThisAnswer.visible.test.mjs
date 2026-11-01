@@ -105,9 +105,11 @@ test('each input shows its source in plain words; unresolved is plain; absent sh
   assert.doesNotMatch(text, /cd_chunk_7/)
   assert.match(text, /your words/)
   assert.match(text, /unresolved/)
-  // the no-source input carries no source word (no " · " glued to it)
-  assert.match(text, /rounding: 2/)
-  assert.doesNotMatch(text, /rounding: 2 ·/)
+  // the no-source input (rounding, the last one) carries no source word:
+  // nothing after it gets a " · " label. (visibleText turns </span> into a
+  // space, so the key reads "rounding : 2" — assert on the name, not spacing.)
+  assert.match(text, /rounding/)
+  assert.doesNotMatch(text.slice(text.indexOf('rounding')), /·/)
   // Collapsed by default behind an aria-expanded toggle; the inputs are in the
   // DOM (hidden) so the panel can reveal them on click.
   assert.match(html, /aria-expanded="false"/)
