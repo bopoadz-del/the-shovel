@@ -230,7 +230,7 @@ class PlanExecutor:
         bridged = bridge_wbs_to_cost_loaded(
             acts, crew_per_trade=step.args.get("crew_per_trade", 4), day_rate=day_rate)
         meta = {"project": step.args.get("project_name") or "Project",
-                "currency": step.args.get("currency", "SAR")}
+                "currency": step.args.get("currency") or ""}
         sd = step.args.get("start_date") or wbs.get("start_date")
         if sd:
             meta["start_date"] = sd

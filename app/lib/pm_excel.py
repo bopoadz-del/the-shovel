@@ -86,7 +86,7 @@ def _add_working_days(start, n: int):
 def generate_cost_loaded_schedule(meta: Dict[str, Any], activities: List[Dict[str, Any]]):
     cpm, proj, order = _cpm(activities)
     acts = {str(a["id"]): a for a in activities}
-    ccy = meta.get("currency", "SAR")
+    ccy = meta.get("currency") or ""
     # Cost is only rendered when a real/indicative figure was supplied — a
     # schedule from a brief has no estimate, so we never show a fabricated
     # zero-cost column. Man-days (schedule-derived) carry the S-curve instead.
@@ -133,8 +133,9 @@ def generate_cost_loaded_schedule(meta: Dict[str, Any], activities: List[Dict[st
         md = 0
         for i in order:
             overlap = min(cpm[i]["ef"], w_end) - max(cpm[i]["es"], w_start)
-            if overlap > 0:
-                md += int(acts[i].get("manpower", 0) or 0) * overlap
+            # max(0, overlap): a week the activity does not span adds 0, without
+            # a branch (equivalent, and keeps the mutation surface flat).
+            md += int(acts[i].get("manpower", 0) or 0) * max(0, overlap)
         cl.cell(sr, 1, k + 1)
         cl.cell(sr, 2, f"{w_start + 1}-{min(w_end, proj)}")
         cl.cell(sr, 3, md).font = _INPUT
@@ -303,7 +304,7 @@ def generate_evm_workbook(meta: Dict[str, Any], periods: List[Dict[str, Any]]):
     """EVM workbook: PV/EV/AC inputs per period; CV/SV/CPI/SPI/EAC/ETC/VAC as
     live formulas. BAC drives EAC/VAC."""
     bac = meta.get("bac", 0)
-    ccy = meta.get("currency", "SAR")
+    ccy = meta.get("currency") or ""
     wb = openpyxl.Workbook()
     e = wb.active; e.title = "EVM"
     e["A1"] = f"EARNED VALUE MANAGEMENT — {meta.get('project', '')}"; e["A1"].font = _TITLE

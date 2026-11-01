@@ -255,7 +255,7 @@ def build_schedule_plan(context: Dict[str, Any]) -> ExecutionPlan:
     }, description="build the WBS (+ long-lead procurement)"))
     steps.append(PlanStep(type="cost_load", args={
         "project_name": context.get("project_name") or "Project",
-        "currency": p.get("currency", "SAR"),
+        "currency": p.get("currency") or "",
         "day_rate": p.get("day_rate"),
         "crew_per_trade": p.get("crew_per_trade", 4),
         "start_date": p.get("start_date"),

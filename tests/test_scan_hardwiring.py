@@ -64,16 +64,33 @@ def test_currency_default_in_a_formula_path_is_flagged(tmp_path: Path, body: str
 
 
 @pytest.mark.parametrize("body", [
-    'def line(meta):\n    return meta.get("currency", "SAR")\n',
-    'def line():\n    return {"currency": "SAR"}\n',
+    'x = {"currency": "USD"}\n',
+    'def f(meta):\n    return meta.get("currency", "SAR")\n',
+    'class R:\n    currency: str = "AED"\n',
 ])
-def test_currency_dict_and_get_forms_are_not_flagged_by_kt5c(tmp_path: Path, body: str):
-    """The dict-payload and `.get(..., "SAR")` forms are K-T5d: the K-T5c check
-    matches `or`/`=`/`.upper()` defaults only, not `:` or `,` forms."""
+def test_currency_sited_default_is_flagged(tmp_path: Path, body: str):
+    """K-T5d: a currency-code default in a dict payload, a `.get` fallback, or a
+    `currency`-named signature/assignment default (AST) is a NEW finding."""
     sh = _load()
-    pkg = tmp_path / "app" / "lib"
+    pkg = tmp_path / "app" / "routers"
     pkg.mkdir(parents=True)
-    (pkg / "pay.py").write_text(body, encoding="utf-8")
+    (pkg / "x.py").write_text(body, encoding="utf-8")
+    findings = sh.scan(tmp_path)
+    assert "app/routers/x.py::currency-default::" in "\n".join(findings)
+    assert all(f.startswith("NEW ") for f in findings)
+
+
+@pytest.mark.parametrize("body", [
+    '"""Example input: {"currency": "SAR"} swaps the band."""\n_CODES = ("USD", "SAR")\n',
+    'RATES = {"SAR": "Saudi Riyal", "from": "SAR", "to": "USD"}\n',
+])
+def test_currency_vocab_and_docstring_are_not_flagged(tmp_path: Path, body: str):
+    """AST-based: a docstring example, a currency-code vocab tuple, and a
+    converter dict keyed by a code (not by "currency") are not defaults."""
+    sh = _load()
+    pkg = tmp_path / "app" / "core"
+    pkg.mkdir(parents=True)
+    (pkg / "v.py").write_text(body, encoding="utf-8")
     assert sh.scan(tmp_path) == []
 
 

@@ -160,7 +160,7 @@ class CostBoqExportRequest(BaseModel):
     title: Optional[str] = None
     project_name: Optional[str] = None
     location: Optional[str] = None
-    currency: str = "SAR"
+    currency: str = ""
     date: Optional[str] = None
     categories: Optional[List[Dict[str, Any]]] = None
     document_id: Optional[str] = None
@@ -192,7 +192,7 @@ class CostScheduleExportRequest(BaseModel):
     S-curve). ``day_rate`` opts into an INDICATIVE labor-cost column; without
     it no cost is fabricated. ``start_date`` dates the milestones."""
     project_name: Optional[str] = None
-    currency: str = "SAR"
+    currency: str = ""
     activities: List[Dict[str, Any]] = Field(..., description="cost-loaded OR generate_wbs activities")
     day_rate: Optional[float] = Field(None, description="opt-in indicative labor rate/day; no cost column without it")
     crew_per_trade: int = Field(4, description="heads per assigned trade when deriving manpower")
@@ -207,7 +207,7 @@ class ScheduleFromBriefRequest(BaseModel):
     exports that conversation's staged WBS (same codes as chat). Without it
     the endpoint re-derives from the brief params."""
     project_name: Optional[str] = None
-    currency: str = "SAR"
+    currency: str = ""
     brief: str = ""
     target_count: int = 200
     project_type: Optional[str] = None
@@ -264,7 +264,7 @@ class ScheduleFromBOQRequest(BaseModel):
     category_overrides: Optional[Dict[str, str]] = Field(
         None, description="item_key or description -> corrected work category")
     project_name: Optional[str] = None
-    currency: str = "SAR"
+    currency: str = ""
     start_date: Optional[str] = None
     day_rate: Optional[float] = Field(None, description="opt-in indicative labor rate/day")
     crew_per_trade: int = 4
@@ -276,7 +276,7 @@ class ScheduleFromDocumentRequest(BaseModel):
     long-lead procurement into the WBS, then bridges + renders. Only REAL
     extracted lead times are used (ontology defaults are dropped)."""
     project_name: Optional[str] = None
-    currency: str = "SAR"
+    currency: str = ""
     document_ids: List[str] = Field(..., description="RFP/BOD docs to extract lead times + milestones from")
     brief: str = ""
     target_count: int = 200
@@ -293,7 +293,7 @@ class ScheduleFromDocumentRequest(BaseModel):
 class EvmExportRequest(BaseModel):
     """EVM workbook. Periods: {period, pv, ev, ac}; bac = budget at completion."""
     project_name: Optional[str] = None
-    currency: str = "SAR"
+    currency: str = ""
     bac: float = 0
     periods: List[Dict[str, Any]] = Field(..., description="PV/EV/AC per period")
 
@@ -875,7 +875,7 @@ def _workbook_from_wbs_activities(
     activities: List[Dict[str, Any]],
     name: str,
     *,
-    currency: str = "SAR",
+    currency: str = "",
     start_date: Optional[str] = None,
     day_rate: Optional[float] = None,
     crew_per_trade: int = 4,
