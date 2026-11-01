@@ -68,14 +68,31 @@ def test_input_from_a_retrieved_chunk_cites_that_document(doc_id):
 
 
 @pytest.mark.parametrize("depth", [7.77, 9.99])
-def test_model_supplied_value_not_in_evidence_is_derived(depth):
-    # length/width are the operator's words; depth is a value neither stated nor
-    # in any chunk -> derived. One calc exercises user_text AND derived.
+def test_value_in_no_evidence_is_unresolved_not_derived(depth):
+    # length/width are the operator's words; depth is a value neither stated,
+    # retrieved, nor stamped -> unresolved. Ruling A: an unstamped operand is
+    # never guessed as "derived" (that would invent a fact).
     msgs, result = _calc_turn(
         "Dig a pit 3.4 m by 2.6 m?", "excavation_volume",
         {"length_m": 3.4, "width_m": 2.6, "depth_m": depth})
     bank = result["result"]["bank_volume_m3"]
     _out, prov = figure_provenance(f"The bank volume is {bank} m3.", None, msgs, enforce=False)
     rows = _calc_inputs(prov)
-    assert rows["depth_m"]["source"] == "derived", rows["depth_m"]
+    assert rows["depth_m"]["source"] == "unresolved", rows["depth_m"]
     assert rows["length_m"]["source"] == "user_text"
+
+
+@pytest.mark.parametrize("stamped_name", ["length_m", "width_m"])
+def test_compose_stamped_operand_is_credited_to_its_stamp(stamped_name):
+    # An operand the runtime stamped at compose time (e.g. a project rate) is
+    # credited to that stamp, over any coincidental user-text match.
+    msgs, result = _calc_turn(
+        "Dig a pit 3.4 m by 2.6 m and 1.15 m deep?", "excavation_volume",
+        {"length_m": 3.4, "width_m": 2.6, "depth_m": 1.15})
+    env = json.loads(msgs[-1]["content"])
+    env["_input_sources"] = {stamped_name: "project_data"}
+    msgs[-1]["content"] = json.dumps(env)
+    bank = result["result"]["bank_volume_m3"]
+    _out, prov = figure_provenance(f"The bank volume is {bank} m3.", None, msgs, enforce=False)
+    rows = _calc_inputs(prov)
+    assert rows[stamped_name]["source"] == "project_data", rows[stamped_name]
