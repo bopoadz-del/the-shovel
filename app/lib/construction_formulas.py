@@ -716,29 +716,14 @@ _BIND_SEMANTIC_ALIASES: Dict[str, Tuple[str, ...]] = {
 }
 
 # Signature defaults that must NOT silently succeed (live wrong_number /
-# tool_error). Any one name in a group satisfies the group.
-_REQUIRED_GROUPS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
-    "calculate_evm": (
-        ("pv", "bcws"),
-        ("ev", "bcwp"),
-        ("ac", "acwp"),
-    ),
-    # A flat daily amount stands in for both the rate and the contract
-    # amount it would apply to.
-    "delay_damages_daily": (
-        ("rate_percent", "amount_per_day"),
-        ("contract_amount", "amount_per_day"),
-    ),
-    "beam_shear_simple": (
-        ("udl_w_kn_m", "central_point_load_kn"),
-        ("span_m",),
-    ),
-    # A volume needs a plan dimension of some shape; with none it asks
-    # rather than reporting 0 m3.
-    "concrete_volume": (
-        ("length_m", "diameter_m", "top_width_m"),
-    ),
-}
+# tool_error): at least one name in each group must be supplied. The sets are
+# declared on each formula (``@formula(required_groups=...)``) and read from
+# the registry here, so the requirement lives with the kernel, not a table.
+def _required_groups_for(name: Any) -> Tuple[Tuple[str, ...], ...]:
+    from app.lib import formula_registry
+    key = str(name or "").strip()
+    spec = formula_registry.get(key) or formula_registry.get(key.lower())
+    return spec.required_groups if spec else ()
 
 _PARAM_UNIT_OVERRIDE: Dict[str, str] = {
     "pv": "currency",
@@ -1087,7 +1072,7 @@ def describe_calculation_params(
     declared = _declared_units(fn)  # for parameters whose name carries no unit
     required_names: set[str] = set()
     if name:
-        for group in _REQUIRED_GROUPS.get(str(name).strip().lower(), ()):
+        for group in _required_groups_for(name):
             required_names.update(group)
     rows: List[Dict[str, Any]] = []
     for key, param in sig.parameters.items():
@@ -2169,7 +2154,7 @@ def _unspent_ask_figures(params: Dict[str, Any], extracted: Dict[str, Any], text
 
 def _missing_required(fn: Any, bound: Dict[str, Any], name: Optional[str] = None) -> List[str]:
     missing: List[str] = []
-    groups = _REQUIRED_GROUPS.get(str(name or "").strip().lower())
+    groups = _required_groups_for(name)
     if groups:
         for group in groups:
             if not any(k in bound and bound[k] not in (None, "") for k in group):

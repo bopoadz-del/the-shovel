@@ -22,6 +22,7 @@ from app.lib.formula_registry import Param, formula
     },
     outputs={'total_amount': 'currency', 'daily_amount': 'currency', 'rate_percent': '%',
              'contract_amount': 'currency', 'days': 'day', 'currency': '-', 'per': '-'},
+    required_groups=(('rate_percent', 'amount_per_day'), ('contract_amount', 'amount_per_day')),
 )
 def delay_damages_daily(
     rate_percent: float = 0.0,

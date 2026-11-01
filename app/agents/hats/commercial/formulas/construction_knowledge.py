@@ -66,6 +66,7 @@ def calculate_payment(
         'ac': Param('currency', 0, 1e13, label='actual cost'),
     },
     outputs={'cost': 'currency (CV, CPI, EAC)', 'schedule': 'currency (SV, SPI)', 'cpi_health': '-'},
+    required_groups=(('pv', 'bcws'), ('ev', 'bcwp'), ('ac', 'acwp')),
 )
 def calculate_evm(
     bac: Optional[float] = None,       # Budget at Completion (optional — needed for forecasts)
