@@ -31,6 +31,16 @@ def test_cost_loaded_schedule_accumulates_man_days(project):
     assert any(isinstance(v, (int, float)) and v > 0 for v in man_days), man_days
 
 
+@pytest.mark.parametrize("project", ["C1", "C2"])
+def test_cost_loaded_schedule_renders_cost_baseline_when_costs_given(project):
+    # Kills the `if has_cost:` drop_rule: cost-bearing activities must produce
+    # the COST BASELINE section; dropping the guard would omit it.
+    wb = pm_excel.generate_cost_loaded_schedule({"project": project}, _ACTS)
+    cl = wb["Cost Loading"]
+    col1 = [cl.cell(r, 1).value for r in range(1, cl.max_row + 1)]
+    assert any("COST BASELINE" in str(v) for v in col1 if v), col1
+
+
 @pytest.mark.parametrize("cols", [["description", "rate"], ["item", "price"]])
 def test_boq_no_quantity_column_warns(cols):
     # Kills the `if not quantity_col_resolved` drop_rule: a frame with no
