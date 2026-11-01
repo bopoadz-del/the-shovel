@@ -9,6 +9,7 @@ from app.lib.formula_registry import Param, formula
 
 
 # Scaffold duty rated loads (OSHA 1926.451): light 25 psf, medium 50, heavy 75.
+# cf. BS EN 12811-1 service load classes 1-6 (0.75-6.0 kPa) for the EN equivalent.
 _SCAFFOLD_DUTY_KPA = {"light": 1.2, "medium": 2.4, "heavy": 3.6}
 
 _OSHA_MAF_KN = 8.0  # OSHA 1926.502 maximum arresting force (body harness)
@@ -49,7 +50,7 @@ def scaffold_load_capacity(
         "intended_load_kn": round(intended_kn, 2),
         "required_capacity_kn": round(required_kn, 2),
         "safety_factor": safety_factor,
-        "standard": "OSHA 1926.451 Subpart L (4:1)",
+        "standard": "OSHA 1926.451 Subpart L (4:1); cf. BS EN 12811-1 service load classes 1-6 (0.75-6.0 kPa)",
         "note": (f"Intended = {duty_kpa} kPa * {area} m2 = {intended_kn:.1f} kN; "
                  f"must support {safety_factor}x = {required_kn:.1f} kN."),
     }
