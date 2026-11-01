@@ -264,7 +264,7 @@ class TestMobilizationCostEstimate:
         assert r["breakdown"]["warehouse_equipment"] == pytest.approx(47_250, abs=1)
         # Breakdown camp line must not exceed the grand total.
         assert r["breakdown"]["camp"] < r["grand_total"]
-        assert r["unit"] == "SAR"
+        assert r["unit"] == "currency"  # K-T5d ruling ii: generic, not an invented SAR
         assert r["value"] == pytest.approx(9_927_900, abs=1)
         assert "SAR" in str(r.get("note") or "")
 
@@ -282,7 +282,7 @@ class TestMobilizationCostEstimate:
         )
         assert r["recurring_monthly"] == pytest.approx(522_000, abs=1)
         assert r["grand_total"] == pytest.approx(10_414_000, abs=1)
-        assert r["unit"] == "SAR"
+        assert r["unit"] == "currency"  # K-T5d ruling ii: generic, not an invented SAR
         assert r["value"] == pytest.approx(10_414_000, abs=1)
 
 

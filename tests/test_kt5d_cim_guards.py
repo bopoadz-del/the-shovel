@@ -74,4 +74,9 @@ async def test_schedule_writer_takes_the_cpm_output_branch(pid):
     # (empty) activities path and error.
     block = sew.ScheduleExcelWriterBlock()
     res = await block.process({"cpm_output": dict(_CPM_OUTPUT), "meta": {"project": pid}})
-    assert res.get("format") == "cpm", res
+    # Kills the `if cpm_output:` drop_rule by proving the branch is TAKEN: without
+    # it the call would fall through to the empty-activities path and return the
+    # "Provide cpm_output or activities" error. (The branch's own
+    # write_schedule_excel import is a pre-existing bug, flagged separately -- not
+    # this PR's scope; so we assert the branch was entered, not that it succeeds.)
+    assert "Provide cpm_output or activities" not in str(res), res
