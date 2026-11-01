@@ -133,8 +133,9 @@ def generate_cost_loaded_schedule(meta: Dict[str, Any], activities: List[Dict[st
         md = 0
         for i in order:
             overlap = min(cpm[i]["ef"], w_end) - max(cpm[i]["es"], w_start)
-            if overlap > 0:
-                md += int(acts[i].get("manpower", 0) or 0) * overlap
+            # max(0, overlap): a week the activity does not span adds 0, without
+            # a branch (equivalent, and keeps the mutation surface flat).
+            md += int(acts[i].get("manpower", 0) or 0) * max(0, overlap)
         cl.cell(sr, 1, k + 1)
         cl.cell(sr, 2, f"{w_start + 1}-{min(w_end, proj)}")
         cl.cell(sr, 3, md).font = _INPUT

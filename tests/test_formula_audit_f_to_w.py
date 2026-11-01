@@ -266,7 +266,8 @@ class TestMobilizationCostEstimate:
         assert r["breakdown"]["camp"] < r["grand_total"]
         assert r["unit"] == "currency"  # K-T5d ruling ii: generic, not an invented SAR
         assert r["value"] == pytest.approx(9_927_900, abs=1)
-        assert "SAR" in str(r.get("note") or "")
+        # Note carries the generic unit now, not an invented SAR (K-T5d ruling ii).
+        assert "currency" in str(r.get("note") or "")
 
     def test_hotel_urban_factor_one(self):
         # camp=4500; per-head=350+4500+220+150=5220; ×100×1.0=522,000 / month.

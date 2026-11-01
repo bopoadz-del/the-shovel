@@ -55,6 +55,25 @@ def test_workbook_from_wbs_activities_returns_a_workbook(start_date):
     assert hasattr(wb, "sheetnames") and "L2 Schedule" in wb.sheetnames
 
 
+@pytest.mark.parametrize("start_date, present", [("2026-01-01", True), (None, False)])
+def test_workbook_start_date_flows_into_the_schedule_meta(monkeypatch, start_date, present):
+    # Kills the `if start_date:` drop_rule: a spy on the schedule writer proves
+    # start_date reaches the meta only when given; dropping the guard would
+    # (never) add it, or add None.
+    import app.lib.pm_excel as _pm
+
+    captured: dict = {}
+
+    def _spy(meta, bridged):
+        captured.update(meta)
+        return _pm.openpyxl.Workbook()
+
+    monkeypatch.setattr("app.lib.pm_excel.generate_cost_loaded_schedule", _spy)
+    acts = [{"id": "1", "name": "A", "duration_days": 5, "wbs_phase": "1", "resources": []}]
+    exports._workbook_from_wbs_activities(acts, "Proj", start_date=start_date)
+    assert ("start_date" in captured) is present, captured
+
+
 _CPM_OUTPUT = {
     "results": [{
         "id": "1", "name": "A", "duration": 5, "early_start_day": 0,
