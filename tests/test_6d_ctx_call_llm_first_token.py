@@ -93,14 +93,13 @@ def test_call_llm_stamps_real_first_token_and_surfaces_cache_hits(monkeypatch, g
     assert cache_hits == hits, (cache_hits, hits)
 
 
-@pytest.mark.parametrize("no_user", ["", None])
-def test_internal_calls_without_user_id_are_not_cost_capped(monkeypatch, no_user):
-    """`if user_id:` skips the daily-cap check for internal (user_id-less) calls
-    -- documented behaviour. With an over-cap tracker and the cap set, a call
-    WITHOUT a user_id must still proceed to the model (not return the cap error).
-    Dropping that guard (drop_rule) makes the cap block run unconditionally and
-    cap the user_id-less call -> this reddens. (This guard is pre-existing; the
-    6d-ctx edit pulls _call_llm into CI-M scope.)"""
+@pytest.mark.parametrize("user_id", ["user-a", "user-b"])
+def test_over_cap_user_is_refused_before_the_model_call(monkeypatch, user_id):
+    """`if user_id:` runs the daily-cost cap check; an over-cap user gets the cap
+    error and never reaches the model. drop_rule replaces that whole if-block
+    with `pass` (removes the cap check), so the call proceeds to success -> this
+    reddens. (The guard is pre-existing; the 6d-ctx edit pulls _call_llm into
+    CI-M scope.)"""
     monkeypatch.setenv("USAGE_DAILY_CAP_USD", "1.0")
     import app.core.usage_tracker as usage_tracker
     monkeypatch.setattr(usage_tracker, "is_over_cap", lambda *a, **k: True)
@@ -112,9 +111,10 @@ def test_internal_calls_without_user_id_are_not_cost_capped(monkeypatch, no_user
 
     async def _call():
         return await agent._call_llm([{"role": "user", "content": "q"}], api_key="k",
-                                     with_tools=False, user_id=no_user)
+                                     with_tools=False, user_id=user_id)
 
     resp = asyncio.run(_call())
-    # Guard present: cap check skipped for a user_id-less call -> reaches the
-    # (mocked) provider and succeeds. Guard dropped: capped -> status error.
-    assert resp.get("status") == "success", resp
+    # Guard present: over-cap -> refused with the cap error. drop_rule removes
+    # the cap block -> the call proceeds to the mocked provider and succeeds.
+    assert resp.get("status") == "error", resp
+    assert "cap" in (resp.get("error") or "").lower(), resp
