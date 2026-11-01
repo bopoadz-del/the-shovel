@@ -5,6 +5,8 @@ Full-dotted imports so the gate selects them.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import app.agents.runtime as _runtime  # noqa: F401  (ensure app importable early)
@@ -98,14 +100,13 @@ _CPM_OUTPUT = {
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pid", ["p1", "p2"])
 async def test_schedule_writer_takes_the_cpm_output_branch(pid):
-    # Kills the `if cpm_output:` drop_rule: with a cpm_output the writer returns
-    # the cpm-format result; without the branch it would fall through to the
-    # (empty) activities path and error.
+    # The cpm_output branch writes a real CPM/Gantt workbook via
+    # app.lib.pm_computations.write_schedule_excel. Asserting the workbook is
+    # actually produced exercises the writer end-to-end AND kills the
+    # `if cpm_output:` drop_rule (dropping it falls through to the empty-
+    # activities path and returns "Provide cpm_output or activities").
     block = sew.ScheduleExcelWriterBlock()
     res = await block.process({"cpm_output": dict(_CPM_OUTPUT), "meta": {"project": pid}})
-    # Kills the `if cpm_output:` drop_rule by proving the branch is TAKEN: without
-    # it the call would fall through to the empty-activities path and return the
-    # "Provide cpm_output or activities" error. (The branch's own
-    # write_schedule_excel import is a pre-existing bug, flagged separately -- not
-    # this PR's scope; so we assert the branch was entered, not that it succeeds.)
-    assert "Provide cpm_output or activities" not in str(res), res
+    assert res.get("status") == "success", res
+    assert res.get("format") == "cpm", res
+    assert res.get("file_path") and os.path.exists(res["file_path"]), res
