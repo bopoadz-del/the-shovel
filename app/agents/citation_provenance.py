@@ -616,6 +616,11 @@ class _CalculatorCredit:
     #: answer" panel can show WHERE the number came from, not just that a
     #: calculator produced it.
     envelope: dict[str, Any] = field(default_factory=dict)
+    #: S-12a: per-input origin stamped at compose time
+    #: ({name: "project_data" | "user_text" | "document:<chunk_id>"}). An
+    #: operand not stamped here and not matchable to the user's words or a
+    #: retrieved chunk is "unresolved" -- never a guessed "derived" (ruling A).
+    input_sources: dict[str, str] = field(default_factory=dict)
 
 
 def _parse_dict(raw: str) -> dict | None:
@@ -741,11 +746,14 @@ def _calculator_credits(ev: Evidence) -> list[_CalculatorCredit]:
             envelope = {}
 
         raw_inputs = _governing_inputs(rec.inputs)
+        src_map = payload.get("_input_sources")
+        src_map = src_map if isinstance(src_map, dict) else {}
         credits.append(_CalculatorCredit(
             tool=rec.tool or "construction_calc",
             calculation=calculation,
             notes=notes,
             inputs=stated_calculator_inputs(calculation, raw_inputs, user_text),
+            input_sources={str(k): str(v) for k, v in src_map.items()},
             result_numbers=numbers,
             default_lines=calculator_default_lines(
                 calculation, result, user_text, passed=raw_inputs,
@@ -1404,6 +1412,57 @@ def _entry_for_record(rec: EvidenceRecord, figure: str) -> dict[str, Any]:
     }
 
 
+def _input_unit(calculation: str, name: str) -> str:
+    """The declared registry unit for one formula input ('' when none/'-')."""
+    try:
+        from app.lib import formula_registry
+        spec = formula_registry.get(calculation or "")
+        param = spec.inputs.get(name) if spec is not None else None
+    except Exception:  # noqa: BLE001 -- a lookup miss must not drop provenance
+        _LOG.debug("input-unit lookup failed for %s.%s", calculation, name, exc_info=True)
+        return ""
+    unit = "" if param is None else str(getattr(param, "unit", param) or "")
+    return "" if unit == "-" else unit
+
+
+def _input_rows(
+    calculation: str,
+    inputs: dict[str, Any] | None,
+    user_vals: set[float],
+    retrievals: list[EvidenceRecord],
+    stamped: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """S-12a: each calculator input as {name, value, unit, source}. The unit is
+    the declared registry Param. The source is, in order: the origin STAMPED at
+    compose time (project_data / user_text / document:<chunk_id>); else
+    user_text when the operator stated the value; else document:<chunk_id> when
+    it appears in a retrieved chunk; else "unresolved". An unstamped operand is
+    never guessed as "derived" -- that would invent a fact (ruling A)."""
+    stamped = stamped or {}
+    rows: list[dict[str, Any]] = []
+    scaled_user = _rescaled(user_vals)
+    for name, value in (inputs or {}).items():
+        source = stamped.get(name) or ""
+        if not source:
+            try:
+                fval: float | None = float(value)
+            except (TypeError, ValueError):
+                fval = None
+            if fval is not None and _match(fval, scaled_user):
+                source = "user_text"
+            elif fval is not None:
+                for rec in retrievals:
+                    if _match(fval, _nums(rec.text)):
+                        cid = rec.doc_id or rec.source_name or "chunk"
+                        source = (f"document:{cid}#{rec.chunk_index}"
+                                  if rec.chunk_index is not None else f"document:{cid}")
+                        break
+        rows.append({"name": name, "value": value,
+                     "unit": _input_unit(calculation, name),
+                     "source": source or "unresolved"})
+    return rows
+
+
 def figure_provenance(
     text: str,
     rag_sys_msg: dict[str, Any] | None,
@@ -1430,11 +1489,14 @@ def figure_provenance(
         for rec in ev.records:
             if rec.kind == "user":
                 user_vals = set(_nums(rec.text))  # the latest operator turn wins
+        retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         calc_entries: list[tuple[set[float], dict[str, Any]]] = []
         for credit in _calculator_credits(ev):
             nums = set(credit.result_numbers) | set(_nums(json.dumps(credit.inputs, default=str)))
-            meta: dict[str, Any] = {"source": pt.SOURCE_CALCULATOR,
-                                    "formula": credit.calculation, "inputs": credit.inputs}
+            meta: dict[str, Any] = {
+                "source": pt.SOURCE_CALCULATOR, "formula": credit.calculation,
+                "inputs": _input_rows(credit.calculation, credit.inputs, user_vals,
+                                      retrievals, credit.input_sources)}
             # Thread the envelope_provenance badge + the default lines onto the
             # entry so "Why this answer" can state WHERE the figure came from
             # (kernel / reference_table / improvised, the standard, certified)
@@ -1467,7 +1529,6 @@ def figure_provenance(
         for nums, _meta in calc_entries:
             calc_pool |= nums
         working = _working(_rescaled(calc_pool | user_vals)) if calc_entries else set()
-        retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
 
         entries: list[dict[str, Any]] = []
         bad: list[re.Match] = []
