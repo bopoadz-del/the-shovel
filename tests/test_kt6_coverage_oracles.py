@@ -76,22 +76,29 @@ def test_plumbing_flow_programme_total_days(area, floors, total_days):
 
 # --- interior finishes take-off: geometry invariants ---
 @pytest.mark.parametrize(
-    "fa,pm,rooms,h,dw,dh,dpr,sf,win,screed,paint,skirt,block",
+    "floor_area, perimeter, room_count, height, door_width, door_height, "
+    "doors_each, shared_fraction, window_deduction, "
+    "expected_screed, expected_paint, expected_skirting, expected_block",
     [
         (100, 40, 4, 3.0, 0.9, 2.1, 1, 0.5, 0.0, 100.0, 112.44, 36.4, 56.22),
         (50, 30, 2, 2.7, 0.8, 2.0, 1, 0.5, 5.0, 50.0, 72.8, 28.4, 36.4),
     ],
 )
-def test_interior_finishes_takeoff_quantities(fa, pm, rooms, h, dw, dh, dpr, sf, win,
-                                              screed, paint, skirt, block):
+def test_interior_finishes_takeoff_quantities(
+    floor_area, perimeter, room_count, height, door_width, door_height,
+    doors_each, shared_fraction, window_deduction,
+    expected_screed, expected_paint, expected_skirting, expected_block,
+):
     r = interior_finishes_takeoff(
-        fa, pm, rooms, h, door_width_m=dw, door_height_m=dh, doors_per_room=dpr,
-        shared_wall_fraction=sf, window_deduction_m2=win,
+        floor_area, perimeter, room_count, height,
+        door_width_m=door_width, door_height_m=door_height,
+        doors_per_room=doors_each, shared_wall_fraction=shared_fraction,
+        window_deduction_m2=window_deduction,
     )
-    assert r["floor_screed_m2"] == pytest.approx(screed, abs=0.01)
-    assert r["wall_paint_m2"] == pytest.approx(paint, abs=0.01)
-    assert r["skirting_m"] == pytest.approx(skirt, abs=0.01)
-    assert r["blockwork_m2"] == pytest.approx(block, abs=0.01)
+    assert r["floor_screed_m2"] == pytest.approx(expected_screed, abs=0.01)
+    assert r["wall_paint_m2"] == pytest.approx(expected_paint, abs=0.01)
+    assert r["skirting_m"] == pytest.approx(expected_skirting, abs=0.01)
+    assert r["blockwork_m2"] == pytest.approx(expected_block, abs=0.01)
 
 
 @pytest.mark.parametrize("h", [0.0, -1.0])
