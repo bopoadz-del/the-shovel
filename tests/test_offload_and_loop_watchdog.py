@@ -104,3 +104,39 @@ def test_the_sample_names_other_threads_when_the_loop_is_starved():
     finally:
         stop.set()
     assert out.startswith("[loop] ") and "[busy-worker]" in out
+
+
+def _watchdog_block_alpha(seconds: float) -> None:
+    time.sleep(seconds)  # a synchronous call that freezes the loop
+
+
+def _watchdog_block_beta(seconds: float) -> None:
+    time.sleep(seconds)  # a differently-named synchronous freeze
+
+
+@pytest.mark.parametrize("blocker,block_s", [
+    (_watchdog_block_alpha, 0.30),
+    (_watchdog_block_beta, 0.45),
+])
+def test_worst_stall_always_captures_a_nonempty_loop_stack(blocker, block_s):
+    # Regression: the watchdog once recorded a lag with an EMPTY trace (loop id
+    # unresolved -> sample_stacks returned ""), so the worst stall told us
+    # nothing. The stack must always be captured and must name the blocking
+    # frame, whichever sync call froze the loop.
+    async def run():
+        loop = asyncio.get_running_loop()
+        mon = loop_watchdog.LagMonitor(loop, threshold_ms=100, tick_ms=10, log=False).start()
+        await asyncio.sleep(0.05)
+        blocker(block_s)                 # freeze the loop inside a named function
+        await asyncio.sleep(0)           # let the pending heartbeat be served
+        assert await asyncio.to_thread(mon.stall_recorded.wait, 2.0)
+        mon.stop()
+        return mon.stalls
+
+    stalls = asyncio.run(run())
+    assert stalls, "a stall must be recorded"
+    worst_lag, worst_stack = max(stalls, key=lambda s: s[0])
+    assert worst_lag >= 100.0
+    assert worst_stack, "the worst stall must carry a non-empty stack"
+    assert "[loop]" in worst_stack            # the loop thread was sampled
+    assert blocker.__name__ in worst_stack    # and it names the actual blocker
