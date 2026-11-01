@@ -684,7 +684,7 @@ def _milestone_quote_without_whole_of_works(quote: str, percent: float) -> str:
 
 def format_delay_damages_daily_line(composed: dict) -> str:
     """User-facing one-liner for the composed daily figure."""
-    cur = composed.get("currency") or "SAR"
+    cur = composed.get("currency") or ""
     daily = float(composed["daily_amount"])
     pct = float(composed["rate_percent"])
     base = float(composed["contract_amount"])
@@ -1124,12 +1124,12 @@ def compose_percentage_of_aca_from_excerpts(
         "amount": product,
         "percent": float(parsed["percent"]),
         "contract_amount": round(amount, 2),
-        "currency": (currency or "SAR").upper(),
+        "currency": (currency or "").upper(),
         "label": parsed.get("label") or "particular",
     }
 
 def format_percentage_of_aca_line(composed: dict) -> str:
-    cur = composed.get("currency") or "SAR"
+    cur = composed.get("currency") or ""
     amt = float(composed["amount"])
     pct = float(composed["percent"])
     base = float(composed["contract_amount"])
@@ -1378,11 +1378,11 @@ def compose_delay_damages_over_period_from_excerpts(
         "rates": rates,
         "milestones": milestones,
         "contract_amount": round(amount, 2),
-        "currency": (currency or "SAR").upper(),
+        "currency": (currency or "").upper(),
     }
 
 def format_delay_damages_period_line(composed: dict) -> str:
-    cur = composed.get("currency") or "SAR"
+    cur = composed.get("currency") or ""
     amt = float(composed["amount"])
     days = int(composed["days"])
     base = float(composed["contract_amount"])
@@ -1568,7 +1568,7 @@ def answer_states_stated_total(text: str, composed: dict) -> bool:
 
 def format_stated_total_follow_up_line(composed: dict) -> str:
     """User-facing line for a follow-up that continues from the stated total."""
-    cur = composed.get("currency") or "SAR"
+    cur = composed.get("currency") or ""
     count = int(composed["count"])
     length = float(composed["length"])
     width = float(composed["width"])
@@ -1600,7 +1600,7 @@ def format_stated_total_follow_up_line(composed: dict) -> str:
 
 def format_user_priced_takeoff_line(composed: dict) -> str:
     """User-facing take-off line from ``compose_user_priced_takeoff_from_ask``."""
-    cur = composed.get("currency") or "SAR"
+    cur = composed.get("currency") or ""
     count = int(composed["count"])
     length = float(composed["length"])
     width = float(composed["width"])

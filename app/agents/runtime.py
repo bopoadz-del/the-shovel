@@ -12659,7 +12659,7 @@ def _graft_complete_calc_answer(
             if already and not _looks_like_formula_template(text):
                 return text
             if result.get("total_cost") is not None and result.get("duration") is not None:
-                line = format_productivity_cost_line(result, composed.get("currency") or "SAR")
+                line = format_productivity_cost_line(result, composed.get("currency") or "")
                 if line and re.search(r"\b(?:SAR|AED|USD|GBP|EUR)\b", line, re.I):
                     return line
             return composed["line"]

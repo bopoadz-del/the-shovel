@@ -46,7 +46,7 @@ def delay_damages_daily(
     n_days = float(days)
     if flat < 0 or n_days < 0:
         return {"error": "amount_per_day and days must be >= 0."}
-    cur = (currency or "SAR").strip().upper() or "SAR"
+    cur = (currency or "").strip().upper()
     if flat > 0:
         daily = round(flat, 2)
         out = {
