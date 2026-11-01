@@ -237,6 +237,30 @@ def _formula_literal_findings(rel: str, tree: ast.AST) -> list[str]:
     return out
 
 
+#: K-T5c -- a currency-literal DEFAULT in the formula/runtime paths. Currency is
+#: a label that flows from the composed project data or the parsed ask, never a
+#: code default (ruling ii): ``or "SAR"``, a ``= "SAR"`` default (incl. a
+#: ``currency: str = "SAR"`` signature), or ``"SAR").upper()/.strip()`` invents
+#: one. Scoped to app/lib + app/agents; NEVER baselined -- any match fails. The
+#: dict-form ``"currency": "SAR"`` payloads and ``.get("currency", "SAR")`` in
+#: exports/excel/runtime use ``:`` / ``,`` (not matched here) and are K-T5d.
+_CURRENCY_DEFAULT_ROOTS = ("app/lib/", "app/agents/")
+_CCY = r"(?:SAR|AED|USD|EUR|GBP|QAR|KWD|OMR|BHD)"
+_CURRENCY_DEFAULT_RE = re.compile(
+    r'(?:\bor\s+"' + _CCY + r'"|=\s*"' + _CCY + r'"|"' + _CCY + r'"\)\.(?:upper|strip)\()'
+)
+
+
+def _currency_default_findings(rel: str, text: str) -> list[str]:
+    if not rel.startswith(_CURRENCY_DEFAULT_ROOTS):
+        return []
+    out: list[str] = []
+    for i, line in enumerate(text.splitlines(), 1):
+        for m in _CURRENCY_DEFAULT_RE.finditer(line):
+            out.append(f"{rel}::currency-default::{m.group(0).strip()}@{i}")
+    return out
+
+
 def _assigned_names(node: ast.AST) -> list[str]:
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     out: list[str] = []
@@ -322,6 +346,8 @@ def inventory(root: Path | None = None) -> tuple[dict[str, str], dict[str, int]]
         except SyntaxError:
             continue
         for key in _symbol_findings(rel, tree):
+            symbols[key] = key.split("::", 2)[1]
+        for key in _currency_default_findings(rel, text):
             symbols[key] = key.split("::", 2)[1]
         probes.update(_probe_counts(rel, text))
     return symbols, probes
