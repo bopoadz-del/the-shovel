@@ -47,35 +47,33 @@ def test_planted_hardwiring_is_flagged(tmp_path: Path):
     assert all(f.startswith("NEW ") for f in findings)
 
 
-def test_currency_default_in_a_formula_path_is_flagged(tmp_path: Path):
+@pytest.mark.parametrize("body", [
+    'def rate(currency: str = "SAR"):\n    return currency\n',
+    'def rate(currency=""):\n    return (currency or "AED").upper()\n',
+])
+def test_currency_default_in_a_formula_path_is_flagged(tmp_path: Path, body: str):
     """K-T5c: `or "SAR"`, a `= "SAR"` default and `"SAR").upper()` in a formula
     path are NEW findings (currency is a label, not a code default)."""
     sh = _load()
     pkg = tmp_path / "app" / "lib"
     pkg.mkdir(parents=True)
-    (pkg / "money.py").write_text(
-        'def rate(currency: str = "SAR"):\n'
-        '    code = (currency or "AED").upper()\n'
-        '    return code\n',
-        encoding="utf-8",
-    )
+    (pkg / "money.py").write_text(body, encoding="utf-8")
     findings = sh.scan(tmp_path)
     assert "app/lib/money.py::currency-default::" in "\n".join(findings)
     assert all(f.startswith("NEW ") for f in findings)
 
 
-def test_currency_dict_and_get_forms_are_not_flagged_by_kt5c(tmp_path: Path):
+@pytest.mark.parametrize("body", [
+    'def line(meta):\n    return meta.get("currency", "SAR")\n',
+    'def line():\n    return {"currency": "SAR"}\n',
+])
+def test_currency_dict_and_get_forms_are_not_flagged_by_kt5c(tmp_path: Path, body: str):
     """The dict-payload and `.get(..., "SAR")` forms are K-T5d: the K-T5c check
     matches `or`/`=`/`.upper()` defaults only, not `:` or `,` forms."""
     sh = _load()
     pkg = tmp_path / "app" / "lib"
     pkg.mkdir(parents=True)
-    (pkg / "pay.py").write_text(
-        "def line(meta):\n"
-        '    cur = meta.get("currency", "SAR")\n'
-        '    return {"currency": "SAR", "cur": cur}\n',
-        encoding="utf-8",
-    )
+    (pkg / "pay.py").write_text(body, encoding="utf-8")
     assert sh.scan(tmp_path) == []
 
 
