@@ -87,6 +87,7 @@ def beam_moment_point_load(
         'central_point_load_kn': Param('kN', 0, 1e6, label='central point load'),
     },
     outputs={'max_shear_kn': 'kN'},
+    required_groups=(('udl_w_kn_m', 'central_point_load_kn'), ('span_m',)),
 )
 def beam_shear_simple(
     udl_w_kn_m: float = 0.0,

@@ -110,6 +110,10 @@ class FormulaSpec:
     params: Dict[str, Param] = field(default_factory=dict)
     #: The one output an answer leads with (empty: none declared).
     main_output: str = ""
+    #: Alternative-required input sets: at least one name in each inner group
+    #: must be supplied (e.g. EVM accepts ``pv`` OR ``bcws``). Declared on the
+    #: formula so the requirement lives with the kernel, not a central table.
+    required_groups: Tuple[Tuple[str, ...], ...] = ()
 
 
 _REGISTRY: Dict[str, FormulaSpec] = {}
@@ -128,6 +132,7 @@ def formula(
     outputs: Dict[str, str],
     name: Optional[str] = None,
     main_output: str = "",
+    required_groups: Tuple[Tuple[str, ...], ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Declare a formula. Raises at import on an unknown owner, an empty
     description, an empty display name or a duplicate name -- a formula
@@ -151,7 +156,8 @@ def formula(
         _REGISTRY[key] = FormulaSpec(key, fn, owner, description.strip(),
                                      display_name.strip(),
                                      {k: p.unit for k, p in params.items()},
-                                     dict(outputs), params, main_output)
+                                     dict(outputs), params, main_output,
+                                     tuple(tuple(g) for g in required_groups))
         fn.__formula__ = _REGISTRY[key]  # type: ignore[attr-defined]
         return fn
 

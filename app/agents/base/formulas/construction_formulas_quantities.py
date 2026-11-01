@@ -41,6 +41,7 @@ def _concrete_quantity(quantity: float) -> float | None:
         'quantity': Param('nr', 1, 100000, label='number of elements'),
     },
     outputs={'shape': '-', 'quantity': '-', 'volume_m3': 'm3', 'net_volume_m3': 'm3', 'volume_with_waste_m3': 'm3', 'value': 'currency', 'waste_factor': '-'},
+    required_groups=(('length_m', 'diameter_m', 'top_width_m'),),
 )
 def concrete_volume(
     length_m: float = 0.0,
