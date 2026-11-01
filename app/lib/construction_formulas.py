@@ -1827,6 +1827,10 @@ _CURRENCY_CODES = ("USD", "EUR", "GBP", "SAR", "AED", "QAR", "KWD", "OMR", "BHD"
                    "PKR", "CNY", "JPY", "KRW", "AUD", "NZD", "CAD", "CHF", "SGD", "HKD", "ZAR", "TRY",
                    "MYR", "IDR", "THB", "PHP", "BRL", "MXN", "SEK", "NOK", "DKK", "PLN", "RUB", "NGN", "KES")
 _CURRENCY_BEFORE_RE = re.compile(r"(?<![A-Za-z])(?:(?:" + "|".join(_CURRENCY_CODES) + r")\s*|[$€£¥]\s*)(?=[+-]?\d)")
+# A currency code written anywhere in the ask ("... in AED", "SAR 1,200"): read
+# from the ORIGINAL text, before _normalize_ask strips a currency that sits in
+# front of a figure. Used only to fill a currency label the data otherwise lacks.
+_CURRENCY_CODE_RE = re.compile(r"(?<![A-Za-z])(" + "|".join(_CURRENCY_CODES) + r")(?![A-Za-z])")
 _SPELLED_MAGNITUDE_RE = re.compile(r"(?<![\d.])([+-]?\d[\d,]*(?:\.\d+)?)\s*(thousand|million|billion)\b", re.IGNORECASE)
 _SPELLED_MAGNITUDE = {"thousand": 1e3, "million": 1e6, "billion": 1e9}
 _AREA_WORD_RE = (
@@ -2006,6 +2010,15 @@ def extract_calculation_params_from_text(
             found["code"] = "aci"
         elif euro and not aci:
             found["code"] = "eurocode"
+
+    # Currency named in the free ask text ("... in AED") flows to the currency
+    # label when the data carried none. Read the ORIGINAL text so a currency in
+    # front of a figure, which _normalize_ask strips, is still captured. Never
+    # invents one -- no currency in the ask leaves the label absent (K-T5b).
+    if "currency" in accepted and "currency" not in found:
+        money = _CURRENCY_CODE_RE.search(str(text or ""))
+        if money:
+            found["currency"] = money.group(1).upper()
 
     _bind_grade_labels(fn, grades, found)
 
