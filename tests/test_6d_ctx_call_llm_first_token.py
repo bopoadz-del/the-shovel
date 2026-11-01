@@ -49,7 +49,6 @@ class _Resp:
 
 
 def _wire(monkeypatch, gap: float, hits: int):
-    monkeypatch.delenv("USAGE_DAILY_CAP_USD", raising=False)
     monkeypatch.setattr(runtime, "_llm_config",
                         lambda: {"provider": "deepseek", "url": "https://x/v1/chat",
                                  "model": "m", "env_key": ""})
@@ -81,6 +80,7 @@ async def _run(agent, api_key="k"):
 
 @pytest.mark.parametrize("gap, hits", [(0.20, 512), (0.45, 0)])
 def test_call_llm_stamps_real_first_token_and_surfaces_cache_hits(monkeypatch, gap, hits):
+    monkeypatch.delenv("USAGE_DAILY_CAP_USD", raising=False)
     _wire(monkeypatch, gap, hits)
     load_agents()
     agent = get_agent("project-assistant")
@@ -91,3 +91,30 @@ def test_call_llm_stamps_real_first_token_and_surfaces_cache_hits(monkeypatch, g
     assert lft <= gap + 1.0, (lft, gap)
     # (2) the provider's prefix-cache hit tokens surface verbatim.
     assert cache_hits == hits, (cache_hits, hits)
+
+
+@pytest.mark.parametrize("no_user", ["", None])
+def test_internal_calls_without_user_id_are_not_cost_capped(monkeypatch, no_user):
+    """`if user_id:` skips the daily-cap check for internal (user_id-less) calls
+    -- documented behaviour. With an over-cap tracker and the cap set, a call
+    WITHOUT a user_id must still proceed to the model (not return the cap error).
+    Dropping that guard (drop_rule) makes the cap block run unconditionally and
+    cap the user_id-less call -> this reddens. (This guard is pre-existing; the
+    6d-ctx edit pulls _call_llm into CI-M scope.)"""
+    monkeypatch.setenv("USAGE_DAILY_CAP_USD", "1.0")
+    import app.core.usage_tracker as usage_tracker
+    monkeypatch.setattr(usage_tracker, "is_over_cap", lambda *a, **k: True)
+    monkeypatch.setattr(usage_tracker, "daily_total",
+                        lambda *a, **k: {"cost_usd": 999.0}, raising=False)
+    _wire(monkeypatch, gap=0.0, hits=0)
+    load_agents()
+    agent = get_agent("project-assistant")
+
+    async def _call():
+        return await agent._call_llm([{"role": "user", "content": "q"}], api_key="k",
+                                     with_tools=False, user_id=no_user)
+
+    resp = asyncio.run(_call())
+    # Guard present: cap check skipped for a user_id-less call -> reaches the
+    # (mocked) provider and succeeds. Guard dropped: capped -> status error.
+    assert resp.get("status") == "success", resp
