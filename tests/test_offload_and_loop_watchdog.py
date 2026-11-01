@@ -69,7 +69,11 @@ def test_the_watchdog_logs_a_stall_with_the_blocking_code(monkeypatch, caplog):
         assert loop_watchdog.start() is mon  # once per process
         await asyncio.sleep(0.05)
         time.sleep(0.35)  # a synchronous call on the loop
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)  # let the loop serve the pending heartbeat
+        # Wait on the event the sampler sets, not a fixed sleep: detection is
+        # then observed deterministically instead of racing the sampler thread
+        # under CI load. The 2s is only a safety bound; it returns on detection.
+        assert await asyncio.to_thread(mon.stall_recorded.wait, 2.0)
         mon.stop()
 
     asyncio.run(run())
