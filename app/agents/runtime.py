@@ -8529,7 +8529,9 @@ def _parse_json_obj(raw: Any) -> dict | None:
         return None
     try:
         obj = json.loads(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        _LOG.debug("credit_composed_rate_turns: tool content is not JSON (%s)",
+                   type(exc).__name__)
         return None
     return obj if isinstance(obj, dict) else None
 
