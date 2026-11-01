@@ -77,3 +77,30 @@ def test_describe_marks_group_members_required(name, groups):
 
 def test_the_hand_table_is_gone():
     assert not hasattr(cf, "_REQUIRED_GROUPS")
+
+
+# The required_groups change edits formula() and _register, so CI-M mutates
+# their (pre-existing) registration guards too. These exercise them directly.
+
+@pytest.mark.parametrize("bad_owner", ["not-an-owner", ""])
+def test_formula_rejects_an_unknown_owner(bad_owner):
+    """formula() raises on an owner outside OWNERS -- kills the owner-check
+    drop_rule and the raise->pass swallow_exception on formula()."""
+    with pytest.raises(ValueError):
+        fr.formula(owner=bad_owner, description="d", display_name="D",
+                   inputs={}, outputs={})(lambda: None)
+
+
+@pytest.mark.parametrize("probe", ["kt1b_dupe_probe_a", "kt1b_dupe_probe_b"])
+def test_register_rejects_a_duplicate_name(probe):
+    """Registering a second, different function under a name already taken
+    raises -- kills the duplicate-name drop_rule and swallow_exception on
+    _register. The probe is removed afterwards so the registry is unchanged."""
+    deco = lambda fn: fr.formula(owner="base", description="d", display_name="D",
+                                 inputs={}, outputs={}, name=probe)(fn)
+    try:
+        deco(lambda: 1)
+        with pytest.raises(ValueError):
+            deco(lambda: 2)  # a different function under the same name
+    finally:
+        fr._REGISTRY.pop(probe, None)
