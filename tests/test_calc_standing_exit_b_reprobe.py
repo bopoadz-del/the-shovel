@@ -92,7 +92,7 @@ def test_maturity_bracketed_temps_intervals_without_equals():
 def test_maturity_empty_is_named_missing_not_cause():
     env = _err("concrete_maturity_strength", {})
     _assert_named_missing(env, (
-        ("temperature_history_c", "°C"),
+        ("temperature_history_c", "degC"),
         ("time_intervals_hours", "h"),
     ))
     assert env.get("cause") in (None, "")

@@ -209,7 +209,7 @@ _DEWATER_KW = dict(water_depth=23, raft_thickness=2.0, floor_count=5)
 _DEWATER_REQUIRED = (
     ("water_depth", "m"),
     ("raft_thickness", "m"),
-    ("floor_count", "floors"),
+    ("floor_count", "count"),
 )
 
 
@@ -259,7 +259,7 @@ _SHRINK_T = 365.0
 _SHRINK_F = 35.0
 _SHRINK_ULT = 780.0
 _SHRINK_ORACLE = _SHRINK_T / (_SHRINK_F + _SHRINK_T) * _SHRINK_ULT
-_SHRINK_REQUIRED = (("time_days", "d"),)
+_SHRINK_REQUIRED = (("time_days", "days"),)
 
 
 def test_concrete_shrinkage_formula_is_aci209_hyperbolic():

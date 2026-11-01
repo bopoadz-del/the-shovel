@@ -32,7 +32,7 @@ def unit_cost_total(quantity: float, unit_rate: float) -> dict:
     description='Unit cost per area: a total cost divided by its area.',
     inputs={
         'total_cost': Param('currency', 0, 1e13, label='total cost'),
-        'area': Param('ratio', 0, 1e9, label='area'),
+        'area': Param('m2', 0, 1e9, label='area'),
         'area_unit': Param('-', label='area unit'),
     },
     outputs={'cost_per_area': 'currency', 'area_unit': '-'},
