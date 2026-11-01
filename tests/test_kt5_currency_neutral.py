@@ -21,6 +21,7 @@ import pytest
 
 import app.agents.hats.contracts.formulas.construction_formulas_commercial as cont
 import app.lib.construction_formulas_commercial as cfc
+import app.lib.formula_registry as fr
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _PATHS = [
@@ -51,9 +52,30 @@ def test_delay_damages_echoes_the_given_currency(currency, expected):
 @pytest.mark.parametrize("rate, base", [(5.0, 1_000_000.0), (2.5, 400_000.0)])
 def test_delay_damages_invents_no_currency_when_none_given(rate, base):
     out = cont.delay_damages_daily(rate_percent=rate, contract_amount=base)
-    # No invented "SAR": the field is empty (unspecified), never a code default.
-    assert out.get("currency") == "", out
+    # Currency is a label, not an operand (K-T5 ruling ii): absent -> None, the
+    # figure stands on its own, no "SAR" and no leading space in the line.
+    assert out.get("currency") is None, out
     assert "SAR" not in (out.get("note") or ""), out
+    assert "  " not in (out.get("note") or ""), out
+
+
+@pytest.mark.parametrize("amount, expected", [
+    ("SAR 1,200 per day", "SAR"),
+    ("AED 5,000 per day", "AED"),
+])
+def test_currency_is_derived_from_a_money_amount_unit(amount, expected):
+    # The currency of a money value is the answer's currency -- it flows from
+    # the data, not a code default (kills the convert_written_units guard).
+    out, _conv, _rej = fr.convert_written_units(
+        "delay_damages_daily", {"amount_per_day": amount, "days": 10})
+    assert out.get("currency") == expected, out
+
+
+@pytest.mark.parametrize("amount", ["5,000 per day", "1,200 /day"])
+def test_no_currency_is_invented_when_the_amount_carries_none(amount):
+    out, _conv, _rej = fr.convert_written_units(
+        "delay_damages_daily", {"amount_per_day": amount, "days": 10})
+    assert out.get("currency") in (None, ""), out
 
 
 # ── CI-M coverage for the commercial format functions the currency edit
@@ -116,3 +138,40 @@ def test_user_priced_takeoff_waste_branch(waste_percent):
     line = cfc.format_user_priced_takeoff_line(_takeoff_composed(waste_percent))
     assert f"With {waste_percent:g}% waste:" in line, line  # kills drop_rule
     assert "At the instructed SAR" in line, line
+
+
+# ── CI-M coverage for the two compose functions the currency edit touched.
+#    Each exercises the intent-guard's FALSE path (the composer must decline an
+#    ask of the wrong kind even when the operands are present), which the
+#    mutation gate's drop_rule on that first guard removes, plus the TRUE path
+#    where the currency flows from the Accepted Contract Amount in the data.
+#    Excerpt rows mirror tests/test_set3_empty_turn_particulars_and_period_dd. ─
+
+_CD_LABEL = "CONTRACT DATA particulars.\nCONTRACT DATA\n"
+_CD_PCT = _CD_LABEL + (
+    "14.2.1: | | Advance Payment: 10% of the Accepted Contract Amount | |\n"
+    "1.1.1: | | Accepted Contract Amount: SAR 1,754,504,456.25 excluding VAT |\n"
+)
+_CD_DD = _CD_LABEL + (
+    "8.8.1: | | Delay Damages (if applicable per Milestone): Milestone | Delay Damages\n"
+    "|: | | Milestone 1 | 0.015% of the Contract Price per calendar day\n"
+    "1.1.1: | | Accepted Contract Amount: SAR 1,754,504,456.25 excluding VAT |\n"
+)
+
+
+def test_percentage_compose_declines_a_non_money_ask_but_composes_the_money_one():
+    # Names the Advance Payment but does not ask for it in money -> declined.
+    assert cfc.compose_percentage_of_aca_from_excerpts(
+        "What is the Advance Payment amount under the contract?", _CD_PCT) is None
+    out = cfc.compose_percentage_of_aca_from_excerpts(
+        "Calculate the Advance Payment in SAR.", _CD_PCT)
+    assert out is not None and out.get("currency") == "SAR", out
+
+
+def test_period_delay_compose_declines_a_non_delay_ask_but_composes_the_delay_one():
+    # Names a milestone and a duration but is not a delay-damages ask -> declined.
+    assert cfc.compose_delay_damages_over_period_from_excerpts(
+        "Milestone 1 is 30 days late.", _CD_DD) is None
+    out = cfc.compose_delay_damages_over_period_from_excerpts(
+        "If Milestone 1 is 30 days late, what are the milestone delay damages?", _CD_DD)
+    assert out is not None and out.get("currency") == "SAR", out

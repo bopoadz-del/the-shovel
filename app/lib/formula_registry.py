@@ -617,6 +617,23 @@ def convert_written_units(name: str, values: Dict[str, Any],
         if failed:
             continue
         out[key] = converted if p.kind == "series" and isinstance(value, (list, tuple)) else converted[0]
+    # Currency flows from the data: a money (or money-per-time) value carries
+    # its currency in its unit ("SAR/day", "AED"). When the formula takes a
+    # currency label and none was supplied, adopt the currency of the first
+    # such value. Nothing is invented -- no currency anywhere stays absent.
+    if "currency" in params and not str(values.get("currency") or "").strip():
+        from app.lib.construction_formulas import _CURRENCY_CODES
+        codes = {c.upper() for c in _CURRENCY_CODES}
+        for ckey, cval in values.items():
+            if params.get(ckey) is None:
+                continue
+            parsed = value_and_unit(cval)
+            if parsed is None:
+                continue
+            head = parsed[1].split("/", 1)[0].strip().upper()
+            if head in codes:
+                out["currency"] = head
+                break
     return out, conversions, rejected
 
 

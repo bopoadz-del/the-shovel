@@ -47,13 +47,19 @@ def delay_damages_daily(
     if flat < 0 or n_days < 0:
         return {"error": "amount_per_day and days must be >= 0."}
     cur = (currency or "").strip().upper()
+
+    def _money(x: float) -> str:
+        # Currency is a label, not an operand: when the data carried none, the
+        # figure stands on its own -- never an invented symbol (K-T5, ruling ii).
+        return f"{cur} {x:,.2f}" if cur else f"{x:,.2f}"
+
     if flat > 0:
         daily = round(flat, 2)
         out = {
             "daily_amount": daily,
-            "currency": cur,
+            "currency": cur or None,
             "per": "calendar day",
-            "note": f"{cur} {daily:,.2f} per calendar day.",
+            "note": f"{_money(daily)} per calendar day.",
         }
     else:
         # Empty-args / unbound class: defaults are 0, 0. Emitting
@@ -72,11 +78,11 @@ def delay_damages_daily(
             "daily_amount": daily,
             "rate_percent": pct,
             "contract_amount": round(base, 2),
-            "currency": cur,
+            "currency": cur or None,
             "per": "calendar day",
             "standard": "FIDIC Sub-Clause 8.8 (rate × Accepted Contract Amount)",
             "note": (
-                f"{pct:g}% of {cur} {base:,.2f} = {cur} {daily:,.2f} "
+                f"{pct:g}% of {_money(base)} = {_money(daily)} "
                 f"per calendar day."
             ),
         }
@@ -84,5 +90,5 @@ def delay_damages_daily(
         total = round(daily * n_days, 2)
         out["days"] = n_days
         out["total_amount"] = total
-        out["note"] += f" Over {n_days:g} days: {cur} {total:,.2f}."
+        out["note"] += f" Over {n_days:g} days: {_money(total)}."
     return out

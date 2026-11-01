@@ -91,23 +91,33 @@ def test_delay_damages_note_without_currency_uses_the_signature_default(base, da
 
 
 # The live tool path (agent tool call -> construction_calc -> run_calculation)
-# returns the same currency as a direct call: given, or the signature default.
-@pytest.mark.parametrize("given,want", [(None, "SAR"), ("EUR", "EUR")])
-def test_live_tool_path_keeps_the_delay_damages_currency(given, want):
+# carries the currency the data gave -- never an invented default (K-T5).
+def _live_delay_damages(params):
     import json
 
     from tests.test_construction_calc_tool import _agent, _run
 
-    params = {"rate_percent": 0.1, "contract_amount": 50_000_000}
-    if given:
-        params["currency"] = given
     agent = _agent(["construction"])
     tc = {"id": "c1", "function": {"name": "construction_calc", "arguments": json.dumps(
         {"calculation": "delay_damages_daily", "params": params})}}
-    env = _run(agent._run_tool_call(tc))
-    blob = json.dumps(env)
+    return json.dumps(_run(agent._run_tool_call(tc)))
+
+
+@pytest.mark.parametrize("given,want", [("EUR", "EUR"), (" usd ", "USD")])
+def test_live_tool_path_keeps_the_given_delay_damages_currency(given, want):
+    blob = _live_delay_damages(
+        {"rate_percent": 0.1, "contract_amount": 50_000_000, "currency": given})
     assert f'"currency": "{want}"' in blob, blob
     assert f"0.1% of {want} 50,000,000.00 = {want} 50,000.00" in blob, blob
+
+
+def test_live_tool_path_invents_no_currency_when_none_given():
+    # No currency in the data -> the figure carries none; no SAR, no leading
+    # space, no ask (currency is a label, not an operand -- K-T5 ruling ii).
+    blob = _live_delay_damages({"rate_percent": 0.1, "contract_amount": 50_000_000})
+    assert '"currency": null' in blob, blob
+    assert "SAR" not in blob, blob
+    assert "0.1% of 50,000,000.00 = 50,000.00" in blob, blob
 
 
 @pytest.mark.parametrize("cur", [" usd ", "eur"])

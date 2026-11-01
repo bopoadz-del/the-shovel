@@ -20,20 +20,22 @@ def _call(params):
     return _run(agent._run_tool_call(tc))
 
 
-@pytest.mark.parametrize("amount,days,total", [
-    ("5,000 per day", 60, 300000.0),
-    ("1,200 per day", "45 days", 54000.0),
-    ("5,000 /day", 60, 300000.0),
-    ("SAR 1,200 per day", 45, 54000.0),
-    ("5000 SAR/day", 60, 300000.0),
-    ("SAR 5,000/day", 60, 300000.0),
+@pytest.mark.parametrize("amount,days,total,currency", [
+    ("5,000 per day", 60, 300000.0, None),
+    ("1,200 per day", "45 days", 54000.0, None),
+    ("5,000 /day", 60, 300000.0, None),
+    ("SAR 1,200 per day", 45, 54000.0, "SAR"),
+    ("5000 SAR/day", 60, 300000.0, "SAR"),
+    ("SAR 5,000/day", 60, 300000.0, "SAR"),
 ])
-def test_a_daily_amount_written_per_day_is_totalled(amount, days, total):
+def test_a_daily_amount_written_per_day_is_totalled(amount, days, total, currency):
     env = _call({"amount_per_day": amount, "days": days})
     assert env["ok"] is True, env
     res = env["result"]["result"]
     assert res["total_amount"] == total, env
-    assert res["currency"] == "SAR"
+    # The currency flows from the amount the user wrote: SAR when the amount
+    # carries it, none when it does not -- never an invented default (K-T5 ii).
+    assert res.get("currency") == currency, env
 
 
 @pytest.mark.parametrize("amount,days,total", [
@@ -63,16 +65,20 @@ def _chat(ask, params):
 
 @pytest.mark.parametrize("ask,params,total,shown", [
     ("Delay damages at a flat 5,000 per day for 60 days",
-     {"amount_per_day": "5,000 per day", "days": 60}, 300000.0, "SAR 300,000.00"),
+     {"amount_per_day": "5,000 per day", "days": 60}, 300000.0, "300,000.00"),
     ("45 days at 1,200 per day",
-     {"amount_per_day": "1,200 per day", "days": "45 days"}, 54000.0, "SAR 54,000.00"),
+     {"amount_per_day": "1,200 per day", "days": "45 days"}, 54000.0, "54,000.00"),
 ])
-def test_the_live_asks_give_an_amount_and_a_currency(ask, params, total, shown):
+def test_the_live_asks_give_an_amount_and_total_without_an_invented_currency(ask, params, total, shown):
+    # These asks carry no currency, so the total stands on its own -- no SAR is
+    # invented (K-T5 ruling ii). A currency written in the amount still flows.
     env = _chat(ask, params)
     assert env["ok"] is True, env
     res = env["result"]["result"]
     assert res["total_amount"] == total
     assert shown in res["note"]
+    assert "SAR" not in res["note"]
+    assert res.get("currency") is None
     assert "rate_percent" not in {k for k, v in res.items() if v}
 
 
