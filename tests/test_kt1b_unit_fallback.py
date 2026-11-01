@@ -1,19 +1,16 @@
-"""K-T1b (fallback): the name -> unit override table moved from
-construction_formulas._PARAM_UNIT_OVERRIDE to the registry
-(formula_registry.NAME_UNIT_DEFAULTS) as a LAST-RESORT default, consulted only
-when a parameter declares no unit. describe_calculation_params now prefers the
-declared unit (declared-first) and reaches the name fallback only as a last
-resort -- so the fallback is never consulted for a parameter that declares a
-unit, and it can be deleted once declarations cover every name.
+"""K-T1b (fallback), behaviour-preserving relocation: the name -> unit override
+table moved from construction_formulas._PARAM_UNIT_OVERRIDE to the registry
+(formula_registry.NAME_UNIT_DEFAULTS) + name_unit_default(); _unit_from_name
+delegates to it. This is a PURE MOVE -- _unit_from_name resolves exactly what it
+did before, and the describe_calculation_params consumer is unchanged.
 
-Behaviour-preserving: where a parameter both declares a unit AND has a name
-default, the two AGREE, so preferring the declared unit changes no resolved
-unit (test_declared_unit_agrees_with_the_name_default).
-
-Mutant (fallback consulted first): revert the describe_calculation_params line
-to `_unit_from_name(key) or declared.get(key, "")` and the fallback is consulted
-for parameters that already declare a unit -> test_fallback_not_consulted_...
-reddens (it records the keys _unit_from_name is called with).
+The further step 2330Z asked for -- making the fallback last-resort
+(declared-first) -- is NOT behaviour-preserving yet: several params declare a
+unit that DIFFERS from the name default (temperature_history_c degC vs °C;
+time_days / time_constant_days days vs d; ultimate_shrinkage_microstrain ratio
+vs µε; floor_count count vs floors; cost_per_area.area ratio vs m2), and the
+exit-B tests pin the name-default spelling. That reconciliation is an owner
+decision (DECISION_MAIN) and ships separately; this slice only relocates.
 
 Full-dotted imports so CI-M selects this file for the construction_formulas /
 formula_registry mutants.
@@ -24,54 +21,39 @@ import pytest
 
 import app.lib.construction_formulas as cf
 import app.lib.formula_registry as fr
-from app.lib.formula_registry import all_specs, parameters
-
-
-# Every registered input that both declares a real unit AND has a name default.
-_OVERLAP = sorted({
-    (spec.name, name)
-    for spec in all_specs()
-    for name, p in parameters(spec).items()
-    if name in fr.NAME_UNIT_DEFAULTS and (p.unit or "") not in ("", "-")
-})
-
-
-@pytest.mark.parametrize("formula, name", _OVERLAP or [("_none", "_none")])
-def test_declared_unit_agrees_with_the_name_default(formula, name):
-    if formula == "_none":
-        pytest.skip("no declared param overlaps the name defaults")
-    p = parameters(fr.get(formula))[name]
-    # They agree -> declared-first resolves the SAME unit the fallback would,
-    # so the reorder is behaviour-preserving and the default is redundant here.
-    assert p.unit == fr.name_unit_default(name), (formula, name, p.unit)
-
-
-@pytest.mark.parametrize("formula", ["concrete_volume", "beam_shear_simple", "calculate_evm"])
-def test_fallback_not_consulted_when_a_param_declares_a_unit(monkeypatch, formula):
-    spec = fr.get(formula)
-    assert spec is not None, f"{formula!r} not registered"
-    declared = {n: (p.unit or "") for n, p in parameters(spec).items()}
-    called: list[str] = []
-    real = cf._unit_from_name
-    monkeypatch.setattr(cf, "_unit_from_name",
-                        lambda name, _r=real: (called.append(name), _r(name))[1])
-    cf.describe_calculation_params(spec.fn, name=formula)
-    # The fallback must not be consulted for any parameter that declares a unit
-    # (declared-first). The mutant (fallback-first) consults it for every
-    # non-currency declared param -> this list is non-empty -> reddens.
-    consulted_despite_declared = [k for k in called if declared.get(k, "") not in ("",)]
-    assert consulted_despite_declared == [], (formula, consulted_despite_declared)
 
 
 @pytest.mark.parametrize("name, expected", [
     ("pv", "currency"),
     ("rate_percent", "%"),
     ("column_diameter_mm", "mm"),
+    ("floor_count", "floors"),
     ("not-a-known-name", ""),
 ])
 def test_name_unit_default_lookup(name, expected):
     assert fr.name_unit_default(name) == expected
 
 
+@pytest.mark.parametrize("name, expected", [
+    ("pv", "currency"),            # registry default (override) path
+    ("contract_amount", "currency"),
+    ("unknown_name_zzz", ""),      # no default, no suffix -> ""
+])
+def test_unit_from_name_prefers_the_registry_default(name, expected):
+    # Delegation: a name in NAME_UNIT_DEFAULTS resolves to that default.
+    # drop_rule on the `if override:` guard -> the default is skipped and the
+    # suffix path returns "" for these names -> reddens.
+    assert cf._unit_from_name(name) == expected
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("beam_span_m", "m"),          # suffix path still works (no default entry)
+    ("load_kn", "kN"),
+])
+def test_unit_from_name_falls_through_to_the_suffix(name, expected):
+    assert cf._unit_from_name(name) == expected
+
+
 def test_the_override_table_moved_off_construction_formulas():
     assert not hasattr(cf, "_PARAM_UNIT_OVERRIDE")
+    assert isinstance(fr.NAME_UNIT_DEFAULTS, dict) and fr.NAME_UNIT_DEFAULTS

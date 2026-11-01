@@ -1058,9 +1058,7 @@ def describe_calculation_params(
         if str(declared.get(key, "")).startswith("currency"):
             unit = declared[key]
         else:
-            # Declared unit wins; the name -> unit fallback is a last resort
-            # consulted only when the parameter declares no unit.
-            unit = declared.get(key, "") or _unit_from_name(key)
+            unit = _unit_from_name(key) or declared.get(key, "")
         row: Dict[str, Any] = {
             "name": key,
             "required": required,
