@@ -9447,7 +9447,7 @@ def _build_exports_from_audit(
                 "format": "xlsx",
                 "method": "POST",
                 "endpoint": f"/v1/projects/{project_id}/export/cost-boq",
-                "payload": {"document_id": doc_id, "currency": "SAR"},
+                "payload": {"document_id": doc_id, "currency": ""},
             })
 
     # RFP/BOD/spec docs cited this turn → drive the schedule from THEIR real
@@ -9481,7 +9481,7 @@ def _build_exports_from_audit(
         payload: dict[str, Any] = {
             "brief": res.get("brief") or "",
             "target_count": res.get("target_count") or 200,
-            "currency": "SAR",
+            "currency": "",
         }
         if res.get("project_type"):
             payload["project_type"] = res["project_type"]
@@ -11022,8 +11022,8 @@ def _collect_numerics(result: Any) -> list[dict[str, Any]]:
     if "total_cost" in result and isinstance(result["total_cost"], (int, float)):
         out.append({
             "value": result["total_cost"],
-            "unit": result.get("currency", "USD"),
-            "context": {"metric": "cost_usd", "currency": result.get("currency", "USD")},
+            "unit": result.get("currency") or "",
+            "context": {"metric": "cost_usd", "currency": result.get("currency") or ""},
         })
 
     # formula_executor result envelope

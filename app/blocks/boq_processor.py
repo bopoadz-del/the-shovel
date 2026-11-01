@@ -169,7 +169,7 @@ class BOQProcessorBlock(UniversalBlock):
     requires = []
 
     default_config = {
-        "currency": "USD",
+        "currency": "",
         "include_zero_qty": False,
     }
 
@@ -646,7 +646,7 @@ class BOQProcessorBlock(UniversalBlock):
         resolved = self._resolve_columns(list(df.columns))
 
         include_zero = params.get("include_zero_qty", self.config.get("include_zero_qty", False))
-        currency = params.get("currency", self.config.get("currency", "USD"))
+        currency = params.get("currency") or self.config.get("currency") or ""
 
         line_items: List[Dict] = []
         section_totals: Dict[str, float] = {}

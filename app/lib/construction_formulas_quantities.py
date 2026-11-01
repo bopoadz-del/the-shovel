@@ -462,7 +462,7 @@ _FW_PRESENTATION = {
     "score_risk": {"unit": "unitless", "value_keys": ("score",)},
     "slope_fos_simple": {"unit": "unitless", "value_keys": ("factor_of_safety",)},
     "mobilization_cost_estimate": {
-        "unit": "SAR",
+        "unit": "currency",
         "value_keys": ("grand_total", "value"),
     },
     # #628 unitless/SAR twin: live probe computed seismic but the envelope

@@ -69,7 +69,7 @@ class ScheduleExcelWriterBlock(UniversalBlock):
                 from app.lib.pm_excel import generate_cost_loaded_schedule
 
                 project = meta.get("project", "Project")
-                currency = meta.get("currency", "SAR")
+                currency = meta.get("currency") or ""
                 schedule_meta = {"project": project, "currency": currency}
                 if meta.get("start_date"):
                     schedule_meta["start_date"] = meta["start_date"]

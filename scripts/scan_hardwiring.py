@@ -261,6 +261,57 @@ def _currency_default_findings(rel: str, text: str) -> list[str]:
     return out
 
 
+#: K-T5d -- a currency-literal default written into a dict payload, a `.get`
+#: fallback, or a `currency`-named signature/assignment default, across the
+#: export/workbook/runtime/planning paths. AST-based (never a docstring example
+#: or a currency-vocab tuple/list): only a real code default is a finding.
+_CURRENCY_SITED_ROOTS = (
+    "app/lib/", "app/agents/", "app/routers/", "app/core/", "app/blocks/",
+)
+_CCY_CODES = frozenset(
+    {"SAR", "AED", "USD", "EUR", "GBP", "QAR", "KWD", "OMR", "BHD"}
+)
+
+
+def _is_ccy_const(node: ast.AST | None) -> bool:
+    return (isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and node.value in _CCY_CODES)
+
+
+def _currency_sited_findings(rel: str, tree: ast.AST) -> list[str]:
+    if not rel.startswith(_CURRENCY_SITED_ROOTS):
+        return []
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if (isinstance(k, ast.Constant) and k.value == "currency"
+                        and _is_ccy_const(v)):
+                    out.append(f"{rel}::currency-default::dict@{node.lineno}")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "get" and len(node.args) >= 2
+              and isinstance(node.args[0], ast.Constant)
+              and node.args[0].value == "currency" and _is_ccy_const(node.args[1])):
+            out.append(f"{rel}::currency-default::get@{node.lineno}")
+        elif (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+              and node.target.id.endswith("currency") and _is_ccy_const(node.value)):
+            out.append(f"{rel}::currency-default::{node.target.id}@{node.lineno}")
+        elif isinstance(node, ast.Assign) and _is_ccy_const(node.value):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id.endswith("currency"):
+                    out.append(f"{rel}::currency-default::{t.id}@{node.lineno}")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            a = node.args
+            pos = (a.posonlyargs + a.args)
+            for p, d in zip(pos[len(pos) - len(a.defaults):], a.defaults):
+                if p.arg.endswith("currency") and _is_ccy_const(d):
+                    out.append(f"{rel}::currency-default::{p.arg}@{node.lineno}")
+            for p, d in zip(a.kwonlyargs, a.kw_defaults):
+                if p.arg.endswith("currency") and _is_ccy_const(d):
+                    out.append(f"{rel}::currency-default::{p.arg}@{node.lineno}")
+    return out
+
+
 def _assigned_names(node: ast.AST) -> list[str]:
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     out: list[str] = []
@@ -348,6 +399,8 @@ def inventory(root: Path | None = None) -> tuple[dict[str, str], dict[str, int]]
         for key in _symbol_findings(rel, tree):
             symbols[key] = key.split("::", 2)[1]
         for key in _currency_default_findings(rel, text):
+            symbols[key] = key.split("::", 2)[1]
+        for key in _currency_sited_findings(rel, tree):
             symbols[key] = key.split("::", 2)[1]
         probes.update(_probe_counts(rel, text))
     return symbols, probes

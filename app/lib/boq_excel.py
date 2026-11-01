@@ -46,7 +46,7 @@ def generate_cost_boq(
     ``meta``: {title, project, location, currency, date}
     ``categories``: [{"name": str, "items": [{item_no, description, unit, qty, rate}]}]
     """
-    ccy = meta.get("currency", "SAR")
+    ccy = meta.get("currency") or ""
     wb = openpyxl.Workbook()
 
     # ── BOQ_Detail (default sheet) ──────────────────────────────────────────
