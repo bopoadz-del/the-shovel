@@ -5,23 +5,36 @@
  * backend builds in app.agents.citation_provenance.figure_provenance. Each
  * entry says WHERE a number in the answer came from:
  *   • a calculator run — with its envelope badge (certified kernel / reference
- *     data / estimated), the standard it states, and any inputs it defaulted;
+ *     data / estimated), the standard it states, and the inputs it used, each
+ *     input carrying WHERE its value came from (S-12b);
  *   • the operator's own words;
  *   • a retrieved document chunk.
  *
  * No fetching here, and no internal identifiers reach the screen: the badge
- * renders a fixed vocabulary and the formula name is humanised + guarded.
+ * renders a fixed vocabulary, the formula name is humanised + guarded, and an
+ * input's source is a plain word ("your words" / "project data" / "document" /
+ * "unresolved"). A chunk id is never shown.
  */
+import { useState } from 'react'
 import { Calculator, FileText, MessageSquare } from 'lucide-react'
 import { textLeaksInternalCode } from './userFacingText'
 import './WhyThisAnswer.css'
+
+/** One calculator input and where its value came from (S-12a/S-12b). */
+export interface ProvenanceInput {
+  name: string
+  value: unknown
+  unit?: string
+  /** user_text | project_data | document:<chunk_id> | unresolved | absent. */
+  source?: string
+}
 
 export interface ProvenanceEntry {
   figure: string
   source: string
   /** calculator entries */
   formula?: string
-  inputs?: Record<string, unknown>
+  inputs?: ProvenanceInput[]
   provenance?: 'kernel' | 'reference_table' | 'improvised' | string
   standard?: string
   certified?: boolean
@@ -45,6 +58,22 @@ const BADGE: Record<string, { label: string; tone: string }> = {
   improvised: { label: 'Estimated', tone: 'warn' },
 }
 
+/** A plain word for where one input's value came from. An unknown value is
+ *  shown raw so a backend regression is visible, not hidden; an absent source
+ *  shows nothing. "derived" is never emitted by the backend (ruling A). */
+function sourceWord(source?: string): string {
+  if (!source) return ''
+  if (source === 'user_text') return 'your words'
+  if (source === 'project_data') return 'project data'
+  if (source.startsWith('document:')) return 'document' // chunk id never shown
+  if (source === 'unresolved') return 'unresolved'
+  return source
+}
+
+function humanName(name: string): string {
+  return (name || '').replace(/_/g, ' ').trim()
+}
+
 /** A registry name ("dewatering_uplift_check") shown as words, never if it
  *  still looks like an internal code after humanising. */
 function humaniseFormula(name?: string): string | null {
@@ -55,10 +84,11 @@ function humaniseFormula(name?: string): string | null {
 }
 
 function CalcRow({ e }: { e: ProvenanceEntry }) {
+  const [open, setOpen] = useState(false)
   const badge = (e.provenance && BADGE[e.provenance]) || null
   const formula = humaniseFormula(e.formula)
   const standard = e.standard && e.standard !== 'none declared' ? e.standard : null
-  const inputs = e.inputs ? Object.entries(e.inputs) : []
+  const inputs = Array.isArray(e.inputs) ? e.inputs : []
   return (
     <li className="why-row" data-source="calculator">
       <Calculator className="why-row__icon" aria-hidden />
@@ -69,13 +99,29 @@ function CalcRow({ e }: { e: ProvenanceEntry }) {
         </div>
         {formula && <div className="why-row__formula">{formula}</div>}
         {inputs.length > 0 && (
-          <ul className="why-row__inputs">
-            {inputs.map(([k, v]) => (
-              <li key={k}>
-                <span className="why-row__k">{k.replace(/_/g, ' ')}</span>: {String(v)}
-              </li>
-            ))}
-          </ul>
+          <>
+            <button
+              type="button"
+              className="why-row__toggle"
+              aria-expanded={open}
+              onClick={() => setOpen((o) => !o)}
+            >
+              {open ? 'Hide inputs' : `Inputs (${inputs.length})`}
+            </button>
+            <ul className="why-row__inputs" hidden={!open}>
+              {inputs.map((inp, i) => {
+                const word = sourceWord(inp.source)
+                return (
+                  <li key={i}>
+                    <span className="why-row__k">{humanName(inp.name)}</span>:{' '}
+                    {String(inp.value)}
+                    {inp.unit ? ` ${inp.unit}` : ''}
+                    {word && <span className="why-row__src"> · {word}</span>}
+                  </li>
+                )
+              })}
+            </ul>
+          </>
         )}
         {standard && <div className="why-row__standard">per {standard}</div>}
         {e.defaults && e.defaults.length > 0 && (

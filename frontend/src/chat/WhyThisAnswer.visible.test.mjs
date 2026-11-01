@@ -3,6 +3,9 @@
 // text a person sees. The envelope badge must read as plain words (Certified
 // calculation / Reference data / Estimated) -- the machine provenance value
 // (e.g. reference_table, user_input) must never leak as a word or key=value.
+// S-12b: each calculator input carries a plain WHERE word (your words / project
+// data / document / unresolved); an absent source shows nothing; an unknown
+// source renders raw so a regression is visible.
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { after, test } from 'node:test'
@@ -57,7 +60,10 @@ for (const c of CALC_CASES) {
       figure: '8.75 T/m2',
       source: 'calculator',
       formula: 'dewatering_uplift_check',
-      inputs: { water_depth: 23, raft_thickness: 2 },
+      inputs: [
+        { name: 'water_depth', value: 23, unit: 'm', source: 'user_text' },
+        { name: 'raft_thickness', value: 2, unit: 'm', source: 'project_data' },
+      ],
       provenance: c.provenance,
       standard: c.provenance === 'kernel' ? 'BS EN 1997' : 'none declared',
       certified: c.certified,
@@ -65,22 +71,68 @@ for (const c of CALC_CASES) {
     const text = visibleText(html)
     assert.match(text, /8\.75 T\/m2/)
     assert.match(text, new RegExp(c.label, 'i'))
-    // The formula + inputs are humanised, the standard shows when declared.
     assert.match(text, /Dewatering uplift check/i)
     if (c.provenance === 'kernel') assert.match(text, /per BS EN 1997/)
-    // No internal codes: not the provenance value, not the source, not key=value.
+    // No internal codes: not the provenance value, not the raw source, not key=value.
     assert.doesNotMatch(text, SNAKE)
     assert.doesNotMatch(text, KEY_VALUE)
     assert.doesNotMatch(text, /none declared/)
   })
 }
 
+// S-12b: each input names WHERE its value came from, in plain words.
+test('each input shows its source in plain words; unresolved is plain; absent shows nothing', () => {
+  const html = render([{
+    figure: 'SAR 53,564.80',
+    source: 'calculator',
+    formula: 'delay_damages_daily',
+    inputs: [
+      { name: 'rate_percent', value: 0.137, unit: '%', source: 'project_data' },
+      { name: 'contract_amount', value: 39098392.98, unit: 'SAR', source: 'document:cd_chunk_7' },
+      { name: 'days', value: 60, source: 'user_text' },
+      { name: 'factor', value: 1.0, source: 'unresolved' },
+      { name: 'rounding', value: 2 }, // no source -> no label
+    ],
+    provenance: 'kernel',
+    standard: 'ACA',
+    certified: true,
+  }])
+  const text = visibleText(html)
+  assert.match(text, /rate percent/)
+  assert.match(text, /project data/)
+  assert.match(text, /document/) // the chunk id is never shown
+  assert.doesNotMatch(text, /cd_chunk_7/)
+  assert.match(text, /your words/)
+  assert.match(text, /unresolved/)
+  // the no-source input carries no source word (no " · " glued to it)
+  assert.match(text, /rounding: 2/)
+  assert.doesNotMatch(text, /rounding: 2 ·/)
+  // Collapsed by default behind an aria-expanded toggle; the inputs are in the
+  // DOM (hidden) so the panel can reveal them on click.
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /class="why-row__inputs" hidden/)
+  assert.match(text, /Inputs \(5\)/)
+})
+
+// An unknown/unexpected source renders raw so a backend regression is visible.
+test('an unknown source value renders raw, not hidden', () => {
+  const html = render([{
+    figure: '10',
+    source: 'calculator',
+    formula: 'excavation_volume',
+    inputs: [{ name: 'depth', value: 10, source: 'mystery' }],
+    provenance: 'kernel',
+    certified: true,
+  }])
+  assert.match(visibleText(html), /mystery/)
+})
+
 test('defaulted inputs are listed as the sentences the calculator produced', () => {
   const html = render([{
     figure: '12.0 hours',
     source: 'calculator',
     formula: 'formwork_striking_time',
-    inputs: { concrete_strength_7h: 2 },
+    inputs: [{ name: 'concrete_strength_7h', value: 2, source: 'user_text' }],
     provenance: 'kernel',
     standard: 'BS 8110',
     certified: true,
