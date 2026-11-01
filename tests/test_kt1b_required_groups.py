@@ -21,7 +21,8 @@ from __future__ import annotations
 import pytest
 
 import app.lib.construction_formulas as cf
-from app.lib import formula_registry as fr
+import app.lib.formula_registry as fr  # full dotted path so CI-M selects this
+                                       # file for formula_registry mutants
 
 # Snapshot of the sets as they stood in the pre-migration hand table.
 GROUPS = {
