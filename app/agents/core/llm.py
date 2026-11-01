@@ -461,6 +461,21 @@ async def _call_llm(
     return last_error
 
 
+def _cache_hit_tokens(usage: Any) -> int:
+    """Prompt tokens the provider served from its prefix cache: DeepSeek's
+    ``usage.prompt_cache_hit_tokens`` or the OpenAI/OpenRouter
+    ``usage.prompt_tokens_details.cached_tokens``. 0 when neither is present."""
+    if not isinstance(usage, dict):
+        return 0
+    v = usage.get("prompt_cache_hit_tokens")
+    if isinstance(v, (int, float)):
+        return int(v)
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and isinstance(details.get("cached_tokens"), (int, float)):
+        return int(details["cached_tokens"])
+    return 0
+
+
 async def _stream_synthesis(
     self,
     messages: list[dict[str, Any]],
@@ -537,7 +552,13 @@ async def _stream_synthesis(
     }
     import contextlib
     from app.core import llm_client
+    from app.core import turn_timing as _tt
     try:
+        # 6d: this streaming egress is where the LIVE /v1/chat/stream first
+        # token is produced (streaming.py::_stream_synthesis -> here). Stamp the
+        # dispatch so first_token() measures dispatch -> first token; the 6b
+        # stamp is on the DRIVER agent path, so this one read ~0 on live.
+        _tt.mark_llm_dispatch()
         # The single streaming provider egress (records usage at the egress).
         # aclosing guarantees the generator is closed when we break on [DONE],
         # so its finally/backstop runs deterministically.
@@ -557,6 +578,12 @@ async def _stream_synthesis(
                     evt = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+                # The final chunk carries usage when include_usage is set;
+                # record the prefix-cache hit tokens so the end event can show
+                # whether the ~12k static prefix is actually being cached (6d).
+                _u = evt.get("usage")
+                if isinstance(_u, dict):
+                    _tt.mark_value("cache_hit_tokens", _cache_hit_tokens(_u))
                 choices = evt.get("choices") or []
                 if choices:
                     finish_reason = str(choices[0].get("finish_reason") or finish_reason)

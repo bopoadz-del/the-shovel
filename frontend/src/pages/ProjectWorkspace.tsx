@@ -18,6 +18,7 @@ import RightPanel from '../layout/RightPanel'
 import ChatList from '../chat/ChatList'
 import ChatComposer, { type AgentOption } from '../chat/ChatComposer'
 import SourcesList from '../chat/SourcesList'
+import WhyThisAnswer, { type ProvenanceEntry } from '../chat/WhyThisAnswer'
 import { sanitizeAssistantContent } from '../chat/toolJsonGuard'
 import {
   freshSessionEntropy,
@@ -131,6 +132,10 @@ interface ChatMessage {
     endpoint: string
     payload: Record<string, unknown>
   }>
+  /** Per-figure provenance from the SSE 'end' event: where each number in the
+   *  answer came from (a calculator run with its envelope badge, the operator's
+   *  own words, or a retrieved chunk). Drives the "Why this answer" panel. */
+  provenance?: ProvenanceEntry[]
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -1228,10 +1233,11 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               )
               const rawSources = Array.isArray(evt['sources']) ? (evt['sources'] as ChatMessage['sources']) : []
               const rawExports = Array.isArray(evt['exports']) ? (evt['exports'] as ChatMessage['exports']) : []
+              const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance }
                     : m
                 )
               )
@@ -1399,6 +1405,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     (m) => m.role === 'assistant' && !m.error,
   )
   const latestSources = latestAssistant?.sources ?? []
+  const latestProvenance = latestAssistant?.provenance ?? []
   const citedDocIds = latestSources.map((s) => s.doc_id)
 
   // Sources the answer cited that this project does not own — Master-Corpus
@@ -1640,15 +1647,21 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           previewRequest={previewRequest}
           onPreviewHydrated={handlePreviewHydrated}
           sources={
-            <SourcesList
-              sources={latestSources}
-              streaming={latestAssistant?.streaming}
-              activeDocId={previewRequest?.docId}
-              onOpenSource={(s) => {
-                if (!s.doc_id) return
-                setPreviewRequest({ docId: s.doc_id, nonce: Date.now() })
-              }}
-            />
+            <>
+              <SourcesList
+                sources={latestSources}
+                streaming={latestAssistant?.streaming}
+                activeDocId={previewRequest?.docId}
+                onOpenSource={(s) => {
+                  if (!s.doc_id) return
+                  setPreviewRequest({ docId: s.doc_id, nonce: Date.now() })
+                }}
+              />
+              <WhyThisAnswer
+                entries={latestProvenance}
+                streaming={latestAssistant?.streaming}
+              />
+            </>
           }
           graph={
             <DocumentGraph

@@ -55,6 +55,11 @@ class TriggerType(str, Enum):
     INTENT = "intent"
     ACTION_ID = "action_id"
     FORMULA_ID = "formula_id"
+    #: ``value`` names a lexicon category (see app.agents.signal_lexicons), not a
+    #: single phrase: the trigger fires when ANY term of that class appears, so a
+    #: discipline's vocabulary is recognised as a CLASS instead of a hand-kept
+    #: list of per-phrase keyword triggers (S-10e).
+    LEXICON = "lexicon"
 
 
 class ContextSourceKind(str, Enum):
@@ -201,6 +206,12 @@ class AgentManifest(BaseModel):
                 check = message if trigger.case_sensitive else message_lower
                 val = trigger.value if trigger.case_sensitive else trigger.value.lower()
                 if val in check:
+                    total_score += trigger.score
+            elif trigger.type == TriggerType.LEXICON and trigger.value:
+                # The whole class counts once: the vocabulary is a category, not
+                # a per-phrase literal. Any term of the named lexicon routes.
+                from app.agents.signal_lexicons import lexicon_matches
+                if lexicon_matches(trigger.value, message_lower):
                     total_score += trigger.score
         return total_score
 
