@@ -20,6 +20,7 @@ import pathlib
 import pytest
 
 import app.agents.hats.contracts.formulas.construction_formulas_commercial as cont
+import app.agents.runtime as rt
 import app.lib.construction_formulas_commercial as cfc
 import app.lib.formula_registry as fr
 
@@ -76,6 +77,22 @@ def test_no_currency_is_invented_when_the_amount_carries_none(amount):
     out, _conv, _rej = fr.convert_written_units(
         "delay_damages_daily", {"amount_per_day": amount, "days": 10})
     assert out.get("currency") in (None, ""), out
+
+
+@pytest.mark.parametrize("name, values", [
+    ("no_such_formula", {"x": 1}),
+    ("", {"y": 2.0}),
+])
+def test_convert_written_units_unknown_formula_is_a_noop(name, values):
+    # The unknown-formula guard must hold: without it parameters(None) raises.
+    assert fr.convert_written_units(name, values) == (dict(values), [], [])
+
+
+@pytest.mark.parametrize("messages", [None, []])
+def test_graft_returns_text_unchanged_without_an_operator_ask(messages):
+    # No operator ask -> the graft is a no-op; the guard also protects the
+    # downstream payload lookup from a None/[]-message turn.
+    assert rt._graft_complete_calc_answer("unchanged answer", messages) == "unchanged answer"
 
 
 # ── CI-M coverage for the commercial format functions the currency edit
