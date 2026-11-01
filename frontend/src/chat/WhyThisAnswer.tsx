@@ -103,6 +103,67 @@ function humaniseFormula(name?: string): string | null {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
+/** The inputs list behind its toggle. State is lifted to props so this stays a
+ *  pure, side-effect-free view: given open=true it renders the ul visible and
+ *  the toggle aria-expanded=true, given open=false it renders them collapsed,
+ *  and the two buttons call the handlers passed in. (A pure view is what lets
+ *  the node test drive the toggle and the document link without a browser.) */
+export function CalcInputs({
+  inputs,
+  open,
+  onToggle,
+  sources,
+  onOpenSource,
+}: {
+  inputs: ProvenanceInput[]
+  open: boolean
+  onToggle: () => void
+  sources?: CitedSource[]
+  onOpenSource?: (source: CitedSource) => void
+}) {
+  if (inputs.length === 0) return null
+  return (
+    <>
+      <button
+        type="button"
+        className="why-row__toggle"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        {open ? 'Hide inputs' : `Inputs (${inputs.length})`}
+      </button>
+      <ul className="why-row__inputs" hidden={!open}>
+        {inputs.map((inp, i) => {
+          const word = sourceWord(inp.source)
+          const cited = onOpenSource ? resolveDocumentSource(inp.source, sources) : null
+          return (
+            <li key={i}>
+              <span className="why-row__k">{humanName(inp.name)}</span>:{' '}
+              {String(inp.value)}
+              {inp.unit ? ` ${inp.unit}` : ''}
+              {word &&
+                (cited ? (
+                  <>
+                    {' · '}
+                    <button
+                      type="button"
+                      className="why-row__srclink"
+                      onClick={() => onOpenSource?.(cited)}
+                    >
+                      {word}
+                    </button>
+                  </>
+                ) : (
+                  <span className="why-row__src"> · {word}</span>
+                ))}
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
+
 function CalcRow({
   e,
   sources,
@@ -126,46 +187,13 @@ function CalcRow({
           {badge && <span className={`why-badge why-badge--${badge.tone}`}>{badge.label}</span>}
         </div>
         {formula && <div className="why-row__formula">{formula}</div>}
-        {inputs.length > 0 && (
-          <>
-            <button
-              type="button"
-              className="why-row__toggle"
-              aria-expanded={open}
-              onClick={() => setOpen((o) => !o)}
-            >
-              {open ? 'Hide inputs' : `Inputs (${inputs.length})`}
-            </button>
-            <ul className="why-row__inputs" hidden={!open}>
-              {inputs.map((inp, i) => {
-                const word = sourceWord(inp.source)
-                const cited = onOpenSource ? resolveDocumentSource(inp.source, sources) : null
-                return (
-                  <li key={i}>
-                    <span className="why-row__k">{humanName(inp.name)}</span>:{' '}
-                    {String(inp.value)}
-                    {inp.unit ? ` ${inp.unit}` : ''}
-                    {word &&
-                      (cited ? (
-                        <>
-                          {' · '}
-                          <button
-                            type="button"
-                            className="why-row__srclink"
-                            onClick={() => onOpenSource?.(cited)}
-                          >
-                            {word}
-                          </button>
-                        </>
-                      ) : (
-                        <span className="why-row__src"> · {word}</span>
-                      ))}
-                  </li>
-                )
-              })}
-            </ul>
-          </>
-        )}
+        <CalcInputs
+          inputs={inputs}
+          open={open}
+          onToggle={() => setOpen((o) => !o)}
+          sources={sources}
+          onOpenSource={onOpenSource}
+        />
         {standard && <div className="why-row__standard">per {standard}</div>}
         {e.defaults && e.defaults.length > 0 && (
           <ul className="why-row__defaults">

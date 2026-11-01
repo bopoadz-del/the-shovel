@@ -29,8 +29,29 @@ const server = await createServer({
 })
 after(() => server.close())
 
-const { default: WhyThisAnswer, resolveDocumentSource } =
+const { default: WhyThisAnswer, resolveDocumentSource, CalcInputs } =
   await server.ssrLoadModule('/src/chat/WhyThisAnswer.tsx')
+
+// Walk a React element tree (plain {type, props} objects — no DOM needed) and
+// collect host nodes carrying a given class. CalcInputs is a pure view, so we
+// can call it as a function, render a state, and invoke a button's onClick the
+// way a real click would — without a browser harness this repo does not have.
+function elements(node, out = []) {
+  if (node == null || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const n of node) elements(n, out)
+    return out
+  }
+  out.push(node)
+  if (node.props && node.props.children != null) elements(node.props.children, out)
+  return out
+}
+function byClass(tree, cls) {
+  return elements(tree).filter(
+    (n) => n.props && typeof n.props.className === 'string'
+      && n.props.className.split(' ').includes(cls),
+  )
+}
 
 function visibleText(html) {
   return html
@@ -165,17 +186,6 @@ test('streaming with nothing yet shows the waiting line; empty + done renders no
 
 // S-12b: a document-sourced input resolves to its cited source and renders the
 // word "document" as a link that opens that source; the chunk id is never shown.
-const DOC_ENTRY = {
-  figure: '945 m3',
-  source: 'calculator',
-  formula: 'concrete_volume',
-  inputs: [
-    { name: 'waste_percent', value: 5, unit: '%', source: 'document:spec_a#3' },
-    { name: 'volume_m3', value: 900, unit: 'm3', source: 'user_text' },
-  ],
-  provenance: 'kernel',
-  certified: true,
-}
 const CITED = [{ doc_id: 'spec_a', doc_name: 'Concrete Spec.pdf', page_or_section: 'p. 3', score: 0.9, confidence: 'High' }]
 
 test('resolveDocumentSource matches document:<doc_id>[#chunk] to its cited source', () => {
@@ -188,19 +198,45 @@ test('resolveDocumentSource matches document:<doc_id>[#chunk] to its cited sourc
   assert.equal(resolveDocumentSource('document:spec_a', undefined), null)
 })
 
-test('a matched document input renders as a link (onOpenSource target), chunk id hidden', () => {
-  const html = render([DOC_ENTRY], { sources: CITED, onOpenSource: () => {} })
-  const text = visibleText(html)
-  // the word "document" is rendered as a button (the click calls onOpenSource)
-  assert.match(html, /class="why-row__srclink"[^>]*>\s*document\s*</)
-  assert.match(text, /document/)
-  assert.doesNotMatch(text, /spec_a/) // chunk/doc id never shown
-  assert.doesNotMatch(text, /#3/)
+const DOC_INPUTS = [
+  { name: 'contract_amount', value: 39098392.98, unit: 'SAR', source: 'document:spec_a#3' },
+  { name: 'volume_m3', value: 900, unit: 'm3', source: 'user_text' },
+]
+
+test('the toggle expands and collapses the inputs — aria-expanded + ul visibility follow open', () => {
+  // collapsed (default): toggle aria-expanded=false, inputs ul hidden
+  let tree = CalcInputs({ inputs: DOC_INPUTS, open: false, onToggle: () => {} })
+  assert.equal(byClass(tree, 'why-row__toggle')[0].props['aria-expanded'], false)
+  assert.equal(byClass(tree, 'why-row__inputs')[0].props.hidden, true)
+  // expanded (after a click): aria-expanded=true and the ul is visible
+  tree = CalcInputs({ inputs: DOC_INPUTS, open: true, onToggle: () => {} })
+  assert.equal(byClass(tree, 'why-row__toggle')[0].props['aria-expanded'], true)
+  assert.ok(!byClass(tree, 'why-row__inputs')[0].props.hidden) // visible
+  // clicking the toggle asks the parent to flip state, then it collapses again
+  let toggles = 0
+  tree = CalcInputs({ inputs: DOC_INPUTS, open: false, onToggle: () => { toggles += 1 } })
+  byClass(tree, 'why-row__toggle')[0].props.onClick()
+  assert.equal(toggles, 1)
+})
+
+test('a matched document input renders the word as a link that calls onOpenSource with its cited source', () => {
+  const opened = []
+  const tree = CalcInputs({
+    inputs: DOC_INPUTS, open: true, onToggle: () => {},
+    sources: CITED, onOpenSource: (s) => opened.push(s),
+  })
+  const link = byClass(tree, 'why-row__srclink')[0]
+  assert.ok(link, 'the document input should render as a link')
+  assert.equal(link.props.children, 'document') // the word, chunk id never shown
+  link.props.onClick() // the click
+  assert.deepEqual(opened, [CITED[0]]) // opened the matched cited source
 })
 
 test('an unmatched document input renders the plain word, no link', () => {
-  // same entry, but no cited source matches -> plain span, no srclink button
-  const html = render([DOC_ENTRY], { sources: [], onOpenSource: () => {} })
-  assert.doesNotMatch(html, /why-row__srclink/)
-  assert.match(visibleText(html), /document/)
+  const tree = CalcInputs({
+    inputs: [{ name: 'x', value: 1, source: 'document:not_cited#0' }],
+    open: true, onToggle: () => {}, sources: CITED, onOpenSource: () => {},
+  })
+  assert.equal(byClass(tree, 'why-row__srclink').length, 0)
+  assert.equal(byClass(tree, 'why-row__src')[0].props.children.join(''), ' · document')
 })
