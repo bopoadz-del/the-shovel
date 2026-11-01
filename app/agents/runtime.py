@@ -5446,11 +5446,11 @@ def _graft_composed_user_priced_takeoff(
             answer_states_money_amount,
             compose_user_priced_takeoff_from_ask,
             format_user_priced_takeoff_line,
-            query_asks_user_priced_takeoff,
         )
         user = _latest_operator_ask(messages)
-        if not query_asks_user_priced_takeoff(user):
-            return text
+        # compose_user_priced_takeoff_from_ask re-checks query_asks internally
+        # (commercial.py:1472), so a leading query guard here is an equivalent
+        # mutant -- removed (same pattern as the K-T5a+b _graft guard).
         composed = compose_user_priced_takeoff_from_ask(user)
         if not composed:
             return text
