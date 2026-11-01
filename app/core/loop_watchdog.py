@@ -80,6 +80,10 @@ class LagMonitor:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="loop-watchdog", daemon=True)
         self._last_log = 0.0
+        #: Set each time a stall is recorded. Lets a waiter observe detection
+        #: deterministically (event, not a wall-clock guess) instead of racing
+        #: the sampler thread -- see tests/test_offload_and_loop_watchdog.
+        self.stall_recorded = threading.Event()
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
@@ -117,6 +121,9 @@ class LagMonitor:
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:
                     self._last_log = now
                     _LOG.warning("LOOP_STALL lag=%dms %s", lag_ms, sample)
+                # Recorded and (if logging) logged: signal last so a waiter that
+                # sees the event also sees both.
+                self.stall_recorded.set()
             self._stop.wait(self.tick)
 
 
