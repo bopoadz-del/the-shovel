@@ -25,6 +25,15 @@ on:
         description: "Project to run against (blank = the project with the most indexed documents)"
         required: false
         default: ""
+  # Self-running (ORDERS_02NOV_0514Z): every SUCCESSFUL deploy of main runs the
+  # battery against the freshly-deployed live product -- continuous acceptance
+  # with no human and no classifier in the dispatch loop. A workflow_run event
+  # carries no inputs, so the defaults below (tests/battery/t1.json, blank
+  # project = most-indexed) apply; the job's `if` drops a run from a FAILED
+  # deploy. The manual workflow_dispatch above is kept for ad-hoc re-runs.
+  workflow_run:
+    workflows: ["deploy-aws"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -38,6 +47,16 @@ jobs:
     name: one-user UI battery (live)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Run on a manual dispatch, OR only when the deploy that triggered us
+    # SUCCEEDED (a failed deploy left the old product live; nothing new to accept).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    env:
+      # A workflow_run event carries no inputs; fall back to the committed
+      # defaults so the self-running path needs no arguments.
+      BATTERY_FILE: ${{ inputs.battery_file || 'tests/battery/t1.json' }}
+      PROJECT_NAME: ${{ inputs.project_name || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,8 +82,8 @@ jobs:
 
       - name: Check the battery file exists
         run: |
-          test -f "${{ inputs.battery_file }}" || { echo "::error::battery_file not found: ${{ inputs.battery_file }}"; exit 1; }
-          python -c "import json,sys;print('questions:', len(json.load(open(sys.argv[1]))))" "${{ inputs.battery_file }}"
+          test -f "$BATTERY_FILE" || { echo "::error::battery_file not found: $BATTERY_FILE"; exit 1; }
+          python -c "import json,sys;print('questions:', len(json.load(open(sys.argv[1]))))" "$BATTERY_FILE"
 
       - name: Run the battery
         env:
@@ -73,9 +92,7 @@ jobs:
           FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
           FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
           FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
-          BATTERY_FILE: ${{ inputs.battery_file }}
           RESULT_FILE: battery_result.json
-          PROJECT_NAME: ${{ inputs.project_name }}
           PYTHONPATH: .
         run: python scripts/ui_battery_runner.py
 
