@@ -409,20 +409,18 @@ def build_plan(manifest: dict, action: str | None, klass: str | None,
 # ── auth / transport ─────────────────────────────────────────────────────────
 
 def _auth_header(base: str) -> dict:
-    """Env-only credentials, same contract as fork_cli. The value is used in
-    the header and never echoed anywhere."""
-    tok = os.getenv("FORK_TOKEN") or os.getenv("FORK_API_KEY")
-    if not tok:
-        email, pw = os.getenv("FORK_EMAIL"), os.getenv("FORK_PASSWORD")
-        if not (email and pw):
-            sys.exit("No credentials: set FORK_TOKEN / FORK_API_KEY / "
-                     "FORK_EMAIL+FORK_PASSWORD")
-        r = httpx.post(f"{base}/v1/users/login",
-                       json={"email": email, "password": pw}, timeout=30)
-        r.raise_for_status()
-        tok = r.json()["token"]
-        print("[auth] logged in via FORK_EMAIL", file=sys.stderr)
-    return {"Authorization": f"Bearer {tok}"}
+    """Env-only credentials via the ONE shared verify+fallback resolver in
+    fork_cli (no second auth implementation): it tries FORK_TOKEN / FORK_API_KEY
+    / FORK_EMAIL+FORK_PASSWORD in order and VERIFIES each against the live API,
+    so a stale key falls through to a valid login. The value is never echoed."""
+    from types import SimpleNamespace
+    try:
+        import fork_cli  # same scripts/ dir when run as `python scripts/...`
+    except ImportError:
+        from scripts import fork_cli  # package import (tests / -m)
+    cred = fork_cli.resolve_auth(SimpleNamespace(
+        token=None, api_key=None, email=None, password=None, base=base))
+    return {"Authorization": f"Bearer {cred}"}
 
 
 def stream_prompt(client: httpx.Client, base: str, agent: str, headers: dict,
