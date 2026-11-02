@@ -29,28 +29,40 @@ const server = await createServer({
 })
 after(() => server.close())
 
-const { default: WhyThisAnswer, resolveDocumentSource, CalcInputs } =
+const { default: WhyThisAnswer, resolveDocumentSource } =
   await server.ssrLoadModule('/src/chat/WhyThisAnswer.tsx')
 
-// Walk a React element tree (plain {type, props} objects — no DOM needed) and
-// collect host nodes carrying a given class. CalcInputs is a pure view, so we
-// can call it as a function, render a state, and invoke a button's onClick the
-// way a real click would — without a browser harness this repo does not have.
-function elements(node, out = []) {
-  if (node == null || typeof node !== 'object') return out
-  if (Array.isArray(node)) {
-    for (const n of node) elements(n, out)
-    return out
-  }
-  out.push(node)
-  if (node.props && node.props.children != null) elements(node.props.children, out)
-  return out
+// A real DOM so the toggle and the document link can be CLICKED, not just
+// rendered: jsdom + react-dom/client. The globals are set before
+// react-dom/client loads so its event system binds to this document. (navigator
+// is left as Node's own read-only global; react reads window.navigator.)
+const { JSDOM } = await import('jsdom')
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
+globalThis.window = dom.window
+globalThis.document = dom.window.document
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+for (const k of ['HTMLElement', 'Element', 'Node', 'Text', 'Event', 'MouseEvent',
+  'DocumentFragment', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
+  if (dom.window[k] !== undefined) globalThis[k] = dom.window[k]
 }
-function byClass(tree, cls) {
-  return elements(tree).filter(
-    (n) => n.props && typeof n.props.className === 'string'
-      && n.props.className.split(' ').includes(cls),
-  )
+const { createRoot } = await import('react-dom/client')
+const { act } = await import('react')
+
+async function mount(props) {
+  const container = dom.window.document.createElement('div')
+  dom.window.document.body.appendChild(container)
+  const root = createRoot(container)
+  await act(async () => { root.render(React.createElement(WhyThisAnswer, props)) })
+  return {
+    container,
+    q: (sel) => container.querySelector(sel),
+    async click(el) {
+      await act(async () => {
+        el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    },
+    unmount() { act(() => root.unmount()); container.remove() },
+  }
 }
 
 function visibleText(html) {
@@ -198,45 +210,52 @@ test('resolveDocumentSource matches document:<doc_id>[#chunk] to its cited sourc
   assert.equal(resolveDocumentSource('document:spec_a', undefined), null)
 })
 
-const DOC_INPUTS = [
-  { name: 'contract_amount', value: 39098392.98, unit: 'SAR', source: 'document:spec_a#3' },
-  { name: 'volume_m3', value: 900, unit: 'm3', source: 'user_text' },
-]
+const CALC_ENTRY = {
+  figure: 'SAR 53,564.80',
+  source: 'calculator',
+  formula: 'delay_damages_daily',
+  inputs: [
+    { name: 'rate_percent', value: 0.137, unit: '%', source: 'project_data' },
+    { name: 'contract_amount', value: 39098392.98, unit: 'SAR', source: 'document:spec_a#3' },
+  ],
+  provenance: 'kernel',
+  certified: true,
+}
 
-test('the toggle expands and collapses the inputs — aria-expanded + ul visibility follow open', () => {
-  // collapsed (default): toggle aria-expanded=false, inputs ul hidden
-  let tree = CalcInputs({ inputs: DOC_INPUTS, open: false, onToggle: () => {} })
-  assert.equal(byClass(tree, 'why-row__toggle')[0].props['aria-expanded'], false)
-  assert.equal(byClass(tree, 'why-row__inputs')[0].props.hidden, true)
-  // expanded (after a click): aria-expanded=true and the ul is visible
-  tree = CalcInputs({ inputs: DOC_INPUTS, open: true, onToggle: () => {} })
-  assert.equal(byClass(tree, 'why-row__toggle')[0].props['aria-expanded'], true)
-  assert.ok(!byClass(tree, 'why-row__inputs')[0].props.hidden) // visible
-  // clicking the toggle asks the parent to flip state, then it collapses again
-  let toggles = 0
-  tree = CalcInputs({ inputs: DOC_INPUTS, open: false, onToggle: () => { toggles += 1 } })
-  byClass(tree, 'why-row__toggle')[0].props.onClick()
-  assert.equal(toggles, 1)
+test('clicking the toggle expands then collapses the inputs — aria-expanded + ul visibility follow the click', async () => {
+  const ui = await mount({ entries: [CALC_ENTRY] })
+  const toggle = () => ui.q('.why-row__toggle')
+  const ul = () => ui.q('.why-row__inputs')
+  // collapsed by default
+  assert.equal(toggle().getAttribute('aria-expanded'), 'false')
+  assert.ok(ul().hidden)
+  // a real click expands: aria-expanded flips true and the ul becomes visible
+  await ui.click(toggle())
+  assert.equal(toggle().getAttribute('aria-expanded'), 'true')
+  assert.ok(!ul().hidden)
+  // clicking again collapses
+  await ui.click(toggle())
+  assert.equal(toggle().getAttribute('aria-expanded'), 'false')
+  assert.ok(ul().hidden)
+  ui.unmount()
 })
 
-test('a matched document input renders the word as a link that calls onOpenSource with its cited source', () => {
+test('clicking the document word opens its cited source; an unmatched one is a plain word', async () => {
   const opened = []
-  const tree = CalcInputs({
-    inputs: DOC_INPUTS, open: true, onToggle: () => {},
-    sources: CITED, onOpenSource: (s) => opened.push(s),
-  })
-  const link = byClass(tree, 'why-row__srclink')[0]
-  assert.ok(link, 'the document input should render as a link')
-  assert.equal(link.props.children, 'document') // the word, chunk id never shown
-  link.props.onClick() // the click
+  const ui = await mount({ entries: [CALC_ENTRY], sources: CITED, onOpenSource: (s) => opened.push(s) })
+  await ui.click(ui.q('.why-row__toggle')) // reveal the inputs
+  const link = ui.q('.why-row__srclink')
+  assert.ok(link, 'the document input renders as a link')
+  assert.equal(link.textContent, 'document') // the word; chunk id never shown
+  assert.ok(!ui.container.textContent.includes('spec_a'))
+  await ui.click(link)
   assert.deepEqual(opened, [CITED[0]]) // opened the matched cited source
-})
+  ui.unmount()
 
-test('an unmatched document input renders the plain word, no link', () => {
-  const tree = CalcInputs({
-    inputs: [{ name: 'x', value: 1, source: 'document:not_cited#0' }],
-    open: true, onToggle: () => {}, sources: CITED, onOpenSource: () => {},
-  })
-  assert.equal(byClass(tree, 'why-row__srclink').length, 0)
-  assert.equal(byClass(tree, 'why-row__src')[0].props.children.join(''), ' · document')
+  // no cited source matches -> the plain word, no link
+  const plain = await mount({ entries: [CALC_ENTRY], sources: [], onOpenSource: () => {} })
+  await plain.click(plain.q('.why-row__toggle'))
+  assert.equal(plain.q('.why-row__srclink'), null)
+  assert.ok(plain.container.textContent.includes('document'))
+  plain.unmount()
 })
