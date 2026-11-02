@@ -120,6 +120,28 @@ def set_driver_mode(email: str, on: bool) -> Optional[Dict[str, Any]]:
             session.close()
 
 
+def set_role(user_id: str, role: str) -> Optional[Dict[str, Any]]:
+    """Admin role management: write this user's ``role`` under the same
+    vocabulary the table's CheckConstraint enforces (``ck_users_role``).
+    Idempotent — writing the role a user already has is a clean no-op.
+    Returns the public user, or None if the user is unknown. A value outside
+    the constraint raises ValueError before any write."""
+    if role not in ("user", "admin"):
+        raise ValueError(f"role must be 'user' or 'admin', not {role!r}")
+    _ensure_db()
+    with _lock:
+        session = SessionLocal()
+        try:
+            user = session.query(User).filter(User.id == user_id).one_or_none()
+            if user is None:
+                return None
+            user.role = role
+            session.commit()
+            return _public(_as_dict(user))
+        finally:
+            session.close()
+
+
 def driver_mode_users() -> List[Dict[str, Any]]:
     _ensure_db()
     with SessionLocal() as session:

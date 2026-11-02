@@ -140,3 +140,58 @@ def test_pick_project_honours_an_explicit_name(name, expected_id):
     rows = [{"id": "master_corpus", "name": "General knowledge", "indexed_documents": 500},
             {"id": "p_real", "name": "Riyadh Tower", "indexed_documents": 12}]
     assert _pick_project(rows, name)["id"] == expected_id
+
+
+# ── the seed step's pure decisions (ORDERS_02NOV_1508Z/1545Z) ────────────────
+
+from scripts.ui_battery_runner import (  # noqa: E402  (grouped with their tests)
+    DEFAULT_BATTERY_PROJECT,
+    _fixtures_needed,
+    _seed_decision,
+    _wait_until_indexed,
+)
+
+
+@pytest.mark.parametrize("projects,expected", [
+    # the target already exists -> found, never duplicated (idempotent re-run)
+    ([{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "indexed_documents": 2},
+      {"id": "p2", "name": "Other", "indexed_documents": 9}], "found"),
+    # no project of that name -> the seed creates it
+    ([{"id": "p2", "name": "Other", "indexed_documents": 9}], "create"),
+])
+def test_seed_decision_finds_or_creates_never_duplicates(projects, expected):
+    decision, row = _seed_decision(projects, DEFAULT_BATTERY_PROJECT)
+    assert decision == expected
+    assert (row is not None) == (expected == "found")
+
+
+@pytest.mark.parametrize("row,expected", [
+    ({"id": "p1", "indexed_documents": 0}, True),    # empty -> upload fixtures
+    ({"id": "p1", "indexed_documents": 7}, False),   # already indexed -> skip
+])
+def test_fixtures_needed_only_when_nothing_is_indexed(row, expected):
+    assert _fixtures_needed(row) is expected
+
+
+@pytest.mark.parametrize("snapshots,should_raise", [
+    # indexing lands on the third poll -> returns the row
+    ([0, 0, 3], False),
+    # never indexes -> a CLEAR error, not a silent pass against an empty project
+    ([0, 0, 0], True),
+])
+def test_wait_until_indexed_polls_to_done_or_fails_loud(snapshots, should_raise):
+    calls = {"n": 0}
+
+    def fetch_rows():
+        count = snapshots[min(calls["n"], len(snapshots) - 1)]
+        calls["n"] += 1
+        return [{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "indexed_documents": count}]
+
+    if should_raise:
+        with pytest.raises(RuntimeError) as err:
+            _wait_until_indexed(fetch_rows, DEFAULT_BATTERY_PROJECT, len(snapshots), lambda: None)
+        assert "did not reach an indexed state" in str(err.value)
+        assert "ADMIN" in str(err.value)
+    else:
+        row = _wait_until_indexed(fetch_rows, DEFAULT_BATTERY_PROJECT, len(snapshots), lambda: None)
+        assert row["indexed_documents"] == 3

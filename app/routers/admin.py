@@ -385,6 +385,38 @@ def admin_set_driver_mode(body: Dict[str, Any] = Body(...), auth: dict = Depends
     return {"email": user["email"], "driver_mode": user["driver_mode"]}
 
 
+@router.post("/v1/admin/users/{user_id}/role")
+def admin_set_user_role(user_id: str, body: Dict[str, Any] = Body(...),
+                        auth: dict = Depends(require_api_key)):
+    """Admin role management (ORDERS_02NOV_1545Z): set one user's role to
+    ``user`` or ``admin`` — the same vocabulary the users table's
+    CheckConstraint enforces. Idempotent: writing the role the user already
+    holds is a 200 no-op (``changed: false``). Audit-logged; the only caller
+    gate is the existing ``_require_admin`` — ``privileges.py`` is untouched."""
+    _require_admin(auth)
+    from app.core import audit
+    from app.core import users as _users
+    role = str((body or {}).get("role") or "").strip()
+    if role not in ("user", "admin"):
+        raise HTTPException(422, "role must be 'user' or 'admin'.")
+    current = _users.get_user_by_id(user_id)
+    if current is None:
+        raise HTTPException(404, f"No user with id {user_id!r}.")
+    if current.get("role") == role:
+        return {"user_id": user_id, "role": role, "changed": False}
+    updated = _users.set_role(user_id, role)
+    if updated is None:  # deleted between the read and the write
+        raise HTTPException(404, f"No user with id {user_id!r}.")
+    audit.record(
+        "user.role_changed",
+        user_id=user_id,
+        role=role,
+        previous_role=current.get("role"),
+        actor=str(auth.get("user_id") or auth.get("user") or ""),
+    )
+    return {"user_id": user_id, "role": updated["role"], "changed": True}
+
+
 @router.put("/v1/admin/projects/{project_id}/profile")
 def admin_set_project_profile(project_id: str, profile: Dict[str, Any] = Body(...),
                               auth: dict = Depends(require_api_key)):
