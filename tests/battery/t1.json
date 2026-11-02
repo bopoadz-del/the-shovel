@@ -1,0 +1,22 @@
+[
+ {"question": "What is the Time for Completion under the contract?", "route_expected": "project_rag_llm"},
+ {"question": "What delay-damages (LD) rate and cap does the contract state?", "route_expected": "project_rag_llm"},
+ {"question": "What is the Defects Notification Period?", "route_expected": "project_rag_llm"},
+ {"question": "Who is named as the Engineer and what are their powers?", "route_expected": "project_rag_llm"},
+ {"question": "What performance bond or retention does the contract require?", "route_expected": "project_rag_llm"},
+ {"question": "What are the milestone dates or sectional completion terms?", "route_expected": "project_rag_llm"},
+ {"question": "What does BS EN 1997 require for a dewatering uplift check?", "route_expected": "general_rag_llm"},
+ {"question": "What is the minimum formwork striking time for the specified concrete grade?", "route_expected": "general_rag_llm"},
+ {"question": "What is the HSE lighting (lux) requirement for general site areas?", "route_expected": "general_rag_llm"},
+ {"question": "What curing does the standard require for structural concrete?", "route_expected": "general_rag_llm"},
+ {"question": "Delay damages per day at the contract LD rate times the Accepted Contract Amount?", "route_expected": "llm_calculator"},
+ {"question": "Concrete volume for a raft 30 x 20 x 1.5 m including documented waste?", "route_expected": "llm_calculator"},
+ {"question": "Dig volume for a pit 3.4 x 2.6 x 1.15 m?", "route_expected": "llm_calculator"},
+ {"question": "Scaffold load capacity for the stated configuration?", "route_expected": "llm_calculator"},
+ {"question": "Carbon footprint of the concrete for the specified grade and volume?", "route_expected": "llm_calculator"},
+ {"question": "Issue a payment certificate.", "route_expected": "asks_for_inputs"},
+ {"question": "Calculate the delay damages.", "route_expected": "asks_for_inputs"},
+ {"question": "Produce a priced take-off for the element.", "route_expected": "asks_for_inputs"},
+ {"question": "Summarise the named specification document.", "route_expected": "tool_on_document"},
+ {"question": "Build the WBS / work-breakdown for the project.", "route_expected": "tool_on_document"}
+]

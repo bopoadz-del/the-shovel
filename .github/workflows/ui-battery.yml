@@ -7,17 +7,20 @@ name: ui-battery
 #   FORK_API_KEY  (or FORK_TOKEN, or FORK_EMAIL + FORK_PASSWORD)
 #   FORK_BASE_URL (optional; defaults to the live deployment)
 #
-# The questions come in as the `battery_json` dispatch input (the generic
-# BATTERY_FILE_T1 content — no client figures). Stdout carries ONLY per-question
-# route PASS/FAIL; the full per-question result (answer + provenance) is uploaded
-# as an artifact for the caller to post to Drive as BATTERY_RESULT_<HHMM>Z.
+# The questions are a committed, generic file (`battery_file`, default
+# tests/battery/t1.json — shapes + expected routes, NO client figures/names;
+# the client-content scanner is the arbiter). Expected answers and figures never
+# enter the repo. Stdout carries ONLY per-question route PASS/FAIL; the full
+# per-question result (answer + provenance) is uploaded as an artifact for the
+# caller to post to Drive as BATTERY_RESULT_<HHMM>Z.
 
 on:
   workflow_dispatch:
     inputs:
-      battery_json:
-        description: "Battery questions JSON: [{question, route_expected}, ...] (no figures)"
-        required: true
+      battery_file:
+        description: "Path to the committed questions JSON (shapes + expected routes, no figures)"
+        required: false
+        default: "tests/battery/t1.json"
       project_name:
         description: "Project to run against (blank = the project with the most indexed documents)"
         required: false
@@ -58,12 +61,10 @@ jobs:
           fi
           echo "credentials present"
 
-      - name: Write the battery questions to a file
-        env:
-          BATTERY_JSON: ${{ inputs.battery_json }}
+      - name: Check the battery file exists
         run: |
-          printf '%s' "$BATTERY_JSON" > battery.json
-          python -c "import json;print('questions:', len(json.load(open('battery.json'))))"
+          test -f "${{ inputs.battery_file }}" || { echo "::error::battery_file not found: ${{ inputs.battery_file }}"; exit 1; }
+          python -c "import json,sys;print('questions:', len(json.load(open(sys.argv[1]))))" "${{ inputs.battery_file }}"
 
       - name: Run the battery
         env:
@@ -72,7 +73,7 @@ jobs:
           FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
           FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
           FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
-          BATTERY_FILE: battery.json
+          BATTERY_FILE: ${{ inputs.battery_file }}
           RESULT_FILE: battery_result.json
           PROJECT_NAME: ${{ inputs.project_name }}
           PYTHONPATH: .
