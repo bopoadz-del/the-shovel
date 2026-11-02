@@ -14,6 +14,7 @@ from scripts.ui_battery_runner import (
     ROUTE_GENERAL_RAG,
     ROUTE_PROJECT_RAG,
     ROUTE_TOOL_ON_DOC,
+    ROUTE_UNCLASSIFIED,
     classify_route,
     turn_from_events,
 )
@@ -35,8 +36,9 @@ def _turn(tools=(), sources=(), provenance=(), answer=""):
     (_turn(sources=[{"source_class": "project_corpus"}]), ROUTE_PROJECT_RAG),
     # retrieved general/master corpus -> general RAG
     (_turn(sources=[{"source_class": "master_corpus"}]), ROUTE_GENERAL_RAG),
-    # no tool, no retrieved source -> general LLM knowledge
-    (_turn(answer="Curing keeps concrete moist for 7 days."), ROUTE_GENERAL_RAG),
+    # no tool, no retrieved source, no provenance -> nothing to attribute the
+    # answer to: unclassified (a FAIL), NOT silently passed as general RAG
+    (_turn(answer="Curing keeps concrete moist for 7 days."), ROUTE_UNCLASSIFIED),
     # an input request wins even when a calculator was attempted but came back
     # empty (no credited calc figure in provenance)
     (_turn(tools=["construction_calc"],

@@ -31,6 +31,9 @@ ROUTE_GENERAL_RAG = "general_rag_llm"
 ROUTE_CALCULATOR = "llm_calculator"
 ROUTE_ASKS_INPUTS = "asks_for_inputs"
 ROUTE_TOOL_ON_DOC = "tool_on_document"
+#: No tool, no retrieved source, no provenance -> nothing to attribute the
+#: answer to. Never silently passed as general RAG; it is a battery FAIL.
+ROUTE_UNCLASSIFIED = "unclassified"
 
 #: Tool names whose use means the turn ran a tool over a document/deliverable.
 _DOC_TOOLS = frozenset({
@@ -96,21 +99,25 @@ def classify_route(turn: dict[str, Any]) -> str:
 
     Precedence: an input-request wins (even if a calculator was attempted and
     came back empty); then a calculator run; then a tool over a document; then
-    the retrieved-source class (project corpus vs general). An answer with no
-    tool and no retrieved source falls back to general_rag_llm (general LLM
-    knowledge)."""
+    the retrieved-source class (project corpus vs general). A turn with no tool,
+    no retrieved source AND no provenance has nothing to attribute the answer to
+    -- it is "unclassified" (a FAIL), never silently passed as general RAG, so a
+    silent/empty answer cannot slip through."""
     tools = turn.get("tools") or []
+    sources = turn.get("sources") or []
     if _asks_for_inputs(turn):
         return ROUTE_ASKS_INPUTS
     if _CALC_TOOL in tools:
         return ROUTE_CALCULATOR
     if any(t in _DOC_TOOLS for t in tools):
         return ROUTE_TOOL_ON_DOC
-    classes = _source_classes(turn.get("sources") or [])
+    classes = _source_classes(sources)
     if classes & _PROJECT_CLASSES:
         return ROUTE_PROJECT_RAG
     if classes & _GENERAL_CLASSES:
         return ROUTE_GENERAL_RAG
+    if not sources and not (turn.get("provenance") or []):
+        return ROUTE_UNCLASSIFIED
     return ROUTE_GENERAL_RAG
 
 
