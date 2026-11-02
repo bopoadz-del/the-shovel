@@ -8476,51 +8476,67 @@ def _record_calculator_tool_turn(
     })
 
 
-def credit_composed_rate_turns(messages: list[dict[str, Any]] | None) -> None:
-    """S-12a PR-2: mirror a composed delay_damages_daily DISPLAY payload as a
-    CREDITED calculator turn so its project-sourced operands carry provenance.
+#: S-12a PR-2: the rate-composing grafts each append a FLAT display payload
+#: (``{"calculation": ..., <fields>}`` with no ``result`` dict) to ground a
+#: figure for the cost gate. That shape is not a run_calculation envelope, so
+#: the credit path never reads it and the operands the runtime took from the
+#: project's contract data would show "unresolved". Each row says, for one such
+#: payload: the calculation, the operands that came from project_data, and the
+#: display fields to carry into the mirrored result. Adding a graft here is the
+#: whole wiring — no per-call code.
+_COMPOSED_RATE_CREDITS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("delay_damages_daily", ("rate_percent", "contract_amount"),
+     ("daily_amount", "rate_percent", "contract_amount", "currency", "note")),
+    ("user_priced_takeoff", ("unit_rate",),
+     ("net_volume_m3", "volume_with_waste_m3", "unit_rate", "currency",
+      "waste_percent", "contingency_percent", "base_cost", "total_cost", "note")),
+    # The rate schedule ("rates") is a list of bands, not a scalar operand, so
+    # it is not a creditable input row (provenance inputs are {name,value,unit,
+    # source} scalars — _governing_inputs drops non-scalars); the Accepted
+    # Contract Amount is the project-sourced scalar this figure is credited to.
+    ("delay_damages_over_period", ("contract_amount",),
+     ("amount", "days", "rates", "milestones", "contract_amount", "currency", "note")),
+)
 
-    The graft appends ``{"calculation": "delay_damages_daily", "rate_percent":
-    ..., "contract_amount": ...}`` as a flat tool message to ground the figure
-    for the cost gate; that shape is not a run_calculation envelope, so the
-    credit path never reads it and the rate + Accepted Contract Amount would be
-    "unresolved". Here we record an EQUIVALENT credited turn stamping both as
-    project_data. The display payload is left in place untouched, so what the
-    user sees is byte-identical. One combined guard (no return ladder) keeps
-    every mutant killable; _record_calculator_tool_turn dedupes.
+
+def credit_composed_rate_turns(messages: list[dict[str, Any]] | None) -> None:
+    """S-12a PR-2: mirror each composed-rate DISPLAY payload as a CREDITED
+    calculator turn so its project-sourced operands carry provenance instead of
+    reading "unresolved".
+
+    Table-driven over :data:`_COMPOSED_RATE_CREDITS` (delay_damages_daily,
+    user_priced_takeoff, delay_damages_over_period). For a matching flat payload
+    we record an EQUIVALENT credited turn whose params are exactly that
+    payload's project operands, each stamped project_data. The flat display
+    payload is left in place untouched, so what the user sees is byte-identical;
+    one combined guard per message (no return ladder) keeps every mutant
+    killable, and _record_calculator_tool_turn dedupes by calculation.
     """
+    specs = {calc: (operands, keys) for calc, operands, keys in _COMPOSED_RATE_CREDITS}
     for m in list(messages or []):
         obj = (
             _parse_json_obj(m.get("content"))
             if isinstance(m, dict) and m.get("role") == "tool"
             else None
         )
+        spec = specs.get(obj.get("calculation")) if isinstance(obj, dict) else None
         if not (
-            isinstance(obj, dict)
-            and obj.get("calculation") == "delay_damages_daily"
+            spec is not None
             and not isinstance(obj.get("result"), dict)
-            and obj.get("rate_percent") is not None
-            and obj.get("contract_amount") is not None
+            and all(obj.get(op) is not None for op in spec[0])
         ):
             continue
+        operands, result_keys = spec
         env = {
-            "calculation": "delay_damages_daily",
+            "calculation": obj["calculation"],
             "status": "success",
-            "result": {
-                key: obj[key] for key in
-                ("daily_amount", "rate_percent", "contract_amount", "currency", "note")
-                if key in obj
-            },
+            "result": {key: obj[key] for key in result_keys if key in obj},
         }
         _record_calculator_tool_turn(
-            messages, "delay_damages_daily",
-            {"rate_percent": obj["rate_percent"],
-             "contract_amount": obj["contract_amount"]},
-            env,
-            input_sources={"rate_percent": "project_data",
-                           "contract_amount": "project_data"},
+            messages, obj["calculation"],
+            {op: obj[op] for op in operands}, env,
+            input_sources={op: "project_data" for op in operands},
         )
-        return
 
 
 def _parse_json_obj(raw: Any) -> dict | None:
