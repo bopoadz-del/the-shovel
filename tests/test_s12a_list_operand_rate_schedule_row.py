@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from app.agents.citation_provenance import figure_provenance
+from app.agents.citation_provenance import _governing_inputs, figure_provenance
 
 
 def _flat_payload(rates: list[float], *, contract_amount: float = 1_000_000.0,
@@ -78,3 +78,18 @@ def test_rate_schedule_list_is_one_input_row_with_its_band_count(rates, expected
 
     # the answer text the user reads is byte-identical -- provenance only
     assert out == f"The combined delay damages are USD {payload['amount']:,.2f}."
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # the "params" shape: scalars kept, a list-of-scalars operand kept (so it
+    # can become one row), a bool and a nested dict dropped
+    (json.dumps({"params": {"contract_amount": 1_000_000.0, "rates": [0.1, 0.05],
+                            "flag": True, "meta": {"x": 1}}}),
+     {"contract_amount": 1_000_000.0, "rates": [0.1, 0.05]}),
+    # the "input" shape (no "params" key): the obj["input"] fallback must run,
+    # or every operand is lost -- a different payload with a single scalar
+    (json.dumps({"input": {"unit_rate": 42.0}}),
+     {"unit_rate": 42.0}),
+])
+def test_governing_inputs_keeps_scalars_and_lists_from_either_payload_shape(raw, expected):
+    assert _governing_inputs(raw) == expected
