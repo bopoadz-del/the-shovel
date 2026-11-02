@@ -88,15 +88,29 @@ jobs:
       # The seed's admin principal. The key is REQUIRED (no skip, no silent
       # pass) and is passed to the seed step ONLY — the battery run itself
       # never sees it.
-      - name: Check the master key is configured
-        env:
-          CEREBRUM_MASTER_KEY: ${{ secrets.CEREBRUM_MASTER_KEY }}
+      # Resolve the admin principal at run time from the LIVE the-fork task
+      # definition, where the key already lives (ORDERS_02NOV_1808Z) — no repo
+      # secret to add, no value pasted. The AWS keys are the same ones
+      # deploy-aws.yml already uses. ::add-mask:: before any echo keeps the
+      # value out of logs, artifacts and the bus.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
         run: |
-          if [ -z "$CEREBRUM_MASTER_KEY" ]; then
-            echo "::error::Missing CEREBRUM_MASTER_KEY repository secret — the admin principal the battery seed step needs (Settings -> Secrets and variables -> Actions)."
-            exit 1
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*) val=$(aws secretsmanager get-secret-value --secret-id "$ref" --query SecretString --output text) ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
           fi
-          echo "master key present"
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
 
       # Provision the battery's own target (ORDERS_02NOV_1545Z): promote the
       # battery account to admin via the role endpoint, find-or-create
@@ -109,8 +123,10 @@ jobs:
           FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
           FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
           FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
-          CEREBRUM_MASTER_KEY: ${{ secrets.CEREBRUM_MASTER_KEY }}
           PYTHONPATH: .
+        # CEREBRUM_MASTER_KEY is inherited from $GITHUB_ENV (the resolve step
+        # above); it is intentionally NOT a step-level secret mapping, so an
+        # absent repo secret can't override the resolved value with empty.
         run: python scripts/ui_battery_runner.py seed
 
       - name: Run the battery
