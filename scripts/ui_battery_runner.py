@@ -271,6 +271,14 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
     return results
 
 
+def battery_exit_code(passed: int, total: int) -> int:
+    """0 only when EVERY question passed (and at least one ran); else 1. A
+    battery that scores < total is a FAILED acceptance run -- the workflow must
+    go red, never finish green at a partial score (ORDERS_02NOV_1508Z finding A).
+    An empty battery (total == 0) is a setup error, so also non-zero."""
+    return 0 if total > 0 and passed == total else 1
+
+
 def main() -> int:
     import httpx  # lazy: only the live run needs it
 
@@ -297,7 +305,11 @@ def main() -> int:
         print(f"[{verdict}] {r.get('route_expected')} -> {r.get('route_observed')}  "
               f"{r.get('question')}")
     print(f"route_pass {passed}/{len(results)}; full per-question result in {result_file}")
-    return 0
+    code = battery_exit_code(passed, len(results))
+    if code:
+        print(f"::error::battery acceptance FAILED: {passed}/{len(results)} routes passed "
+              f"(the run is red until 20/20)")
+    return code
 
 
 if __name__ == "__main__":

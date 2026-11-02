@@ -16,9 +16,19 @@ from scripts.ui_battery_runner import (
     ROUTE_TOOL_ON_DOC,
     ROUTE_UNCLASSIFIED,
     _pick_project,
+    battery_exit_code,
     classify_route,
     turn_from_events,
 )
+
+
+@pytest.mark.parametrize("passed,total,expected_code", [
+    (20, 20, 0),   # all routes passed -> exit 0 (green)
+    (4, 20, 1),    # a partial score must be RED, never a silent green
+    (0, 0, 1),     # an empty battery is a setup error -> non-zero
+])
+def test_battery_exit_code_is_zero_only_on_a_full_pass(passed, total, expected_code):
+    assert battery_exit_code(passed, total) == expected_code
 
 
 def _turn(tools=(), sources=(), provenance=(), answer=""):
