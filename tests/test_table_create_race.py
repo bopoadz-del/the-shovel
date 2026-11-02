@@ -144,6 +144,27 @@ def test_ensure_table_tolerates_table_or_index_race(orig_message):
     ensure_table(_Racer(), bind=object())
 
 
+class _PgError(Exception):
+    """A driver error exposing only a SQLSTATE, with NO "already exists" text.
+
+    Isolates the pgcode fast-path: PostgreSQL does include "already exists" in
+    the message, but stripping it here means the test can only pass via the
+    ``if code in {...}`` branch -- so it fails if that branch is ever dropped.
+    """
+
+    def __init__(self, pgcode: str) -> None:
+        super().__init__("duplicate object")  # deliberately lacks "already exists"
+        self.orig = type("orig", (), {"pgcode": pgcode})()
+
+
+@pytest.mark.parametrize("pgcode", ["42P07", "42710"])
+def test_pg_sqlstate_alone_is_tolerated(pgcode):
+    """PostgreSQL duplicate-table (42P07) and duplicate-object (42710, e.g. a
+    named index/constraint) are the lost-race success on the SQLSTATE alone,
+    even when the message carries no "already exists" text."""
+    assert table_already_exists(_PgError(pgcode)) is True
+
+
 def test_ensure_table_still_raises_a_genuine_failure():
     """The tolerance is scoped to "already exists"; a real DDL error -- here a
     disk I/O error -- must still propagate, never be mistaken for a lost race."""
