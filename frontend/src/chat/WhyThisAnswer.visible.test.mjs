@@ -41,6 +41,10 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http:
 globalThis.window = dom.window
 globalThis.document = dom.window.document
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+// react-dom/client reads a global `navigator` at import time; Node 20 (CI) has
+// no such global, so provide jsdom's before importing it. (Node >=21 already
+// defines navigator, so only set it when missing.)
+if (globalThis.navigator === undefined) globalThis.navigator = dom.window.navigator
 for (const k of ['HTMLElement', 'Element', 'Node', 'Text', 'Event', 'MouseEvent',
   'DocumentFragment', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
   if (dom.window[k] !== undefined) globalThis[k] = dom.window[k]
