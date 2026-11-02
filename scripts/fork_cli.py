@@ -48,27 +48,60 @@ if hasattr(sys.stderr, "reconfigure"):
 
 # ── auth ─────────────────────────────────────────────────────────────────────
 
+def _accepts(base: str, cred: str) -> bool:
+    """True when the live API ACCEPTS this credential for the user-scoped calls
+    the clients make (GET /v1/projects). A 401/403 means fall through to the
+    next credential; a transport error is treated as not-accepted."""
+    try:
+        r = httpx.get(f"{base}/v1/projects",
+                      headers={"Authorization": f"Bearer {cred}"}, timeout=15)
+    except httpx.HTTPError as exc:
+        print(f"[auth] probe transport error, treating as not-accepted: "
+              f"{type(exc).__name__}", file=sys.stderr)
+        return False
+    return r.status_code not in (401, 403)
+
+
+def _login(base: str, email: str, password: str) -> str | None:
+    """A session token from /v1/users/login, or None when the login is rejected."""
+    r = httpx.post(f"{base}/v1/users/login",
+                   json={"email": email, "password": password}, timeout=30)
+    if r.status_code in (401, 403):
+        return None
+    r.raise_for_status()
+    return r.json().get("token")
+
+
 def resolve_auth(args) -> str:
-    """Return a Bearer credential: explicit token > api key > email login."""
-    if args.token or os.getenv("FORK_TOKEN"):
-        return args.token or os.getenv("FORK_TOKEN")
-    if args.api_key or os.getenv("FORK_API_KEY"):
-        return args.api_key or os.getenv("FORK_API_KEY")
+    """A Bearer credential the live API ACCEPTS, tried in precedence order and
+    VERIFIED with one probe each (GET /v1/projects); a credential the API
+    rejects (401/403) falls through to the next. A stale FORK_API_KEY therefore
+    no longer wedges the clients when a valid FORK_EMAIL+FORK_PASSWORD is also
+    set. Only the credential LABELS tried are ever named -- never the values."""
+    base = args.base
+    tried: list[str] = []
+    token = args.token or os.getenv("FORK_TOKEN")
+    if token:
+        tried.append("FORK_TOKEN")
+        if _accepts(base, token):
+            return token
+    api_key = args.api_key or os.getenv("FORK_API_KEY")
+    if api_key:
+        tried.append("FORK_API_KEY")
+        if _accepts(base, api_key):
+            return api_key
     email = args.email or os.getenv("FORK_EMAIL")
     password = args.password or os.getenv("FORK_PASSWORD")
     if email and password:
-        r = httpx.post(
-            f"{args.base}/v1/users/login",
-            json={"email": email, "password": password},
-            timeout=30,
-        )
-        r.raise_for_status()
-        tok = r.json()["token"]
-        print(f"[auth] logged in as {email}", file=sys.stderr)
-        return tok
+        tried.append("FORK_EMAIL+FORK_PASSWORD")
+        cred = _login(base, email, password)
+        if cred and _accepts(base, cred):
+            print(f"[auth] logged in as {email}", file=sys.stderr)
+            return cred
     sys.exit(
-        "No credentials. Use --token / --api-key / --email+--password "
-        "(or FORK_TOKEN / FORK_API_KEY / FORK_EMAIL+FORK_PASSWORD env vars)."
+        f"::error::No accepted credential (tried: {', '.join(tried) or 'none'}). "
+        "Set a valid FORK_TOKEN / FORK_API_KEY / FORK_EMAIL+FORK_PASSWORD "
+        "(values are never shown)."
     )
 
 
