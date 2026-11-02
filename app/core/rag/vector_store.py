@@ -805,17 +805,27 @@ def _ensure_trigram_index(eng, table_name: str) -> None:
 
 
 def table_already_exists(exc: BaseException) -> bool:
-    """True when a CREATE TABLE lost a race rather than genuinely failing.
+    """True when a CREATE lost a race rather than genuinely failing.
 
-    SQLite says "table X already exists" (OperationalError); PostgreSQL says
-    "relation X already exists" with SQLSTATE 42P07 (ProgrammingError). Both
-    mean the table we wanted is now there, which is the outcome we asked for.
+    ``ensure_table`` issues ``CREATE TABLE`` together with the table's own
+    indexes and unique constraint as one batch, so a concurrent creator can
+    leave ANY of those already present. The loser then sees the table
+    ("table X already exists"), one of its indexes
+    ("index idx_chunks_<ns>_doc already exists") or its constraint reported
+    "already exists" -- every one means the object we asked for is now there,
+    which is the outcome we wanted. SQLite phrases it "<kind> X already exists"
+    (OperationalError); PostgreSQL uses SQLSTATE 42P07 (duplicate table or
+    index) or 42710 (duplicate_object, e.g. a named constraint). A genuine
+    failure -- "no such table", "database is locked", a disk error -- carries
+    none of these words and still propagates.
     """
     code = getattr(getattr(exc, "orig", None), "pgcode", None)
-    if code == "42P07":
+    if code in {"42P07", "42710"}:
         return True
     msg = str(exc).lower()
-    return "already exists" in msg and ("table" in msg or "relation" in msg)
+    return "already exists" in msg and any(
+        kind in msg for kind in ("table", "relation", "index", "constraint")
+    )
 
 
 def ensure_table(table, *, bind) -> None:

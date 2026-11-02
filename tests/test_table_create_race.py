@@ -106,6 +106,11 @@ def test_concurrent_threads_all_survive(tmp_path):
     [
         ("table chunks_t48b48c8a1360 already exists", True),
         ('relation "chunks_v2" already exists', True),
+        # ensure_table creates the table's indexes and unique constraint in the
+        # same batch, so a lost race shows up on those too -- the symptom that
+        # failed test_admin_corpus_reconcile::test_coverage_endpoint_is_queryable.
+        ("index idx_chunks_t5b4ae0209ead_doc already exists", True),
+        ('relation "uq_chunks_v2_project_doc_index" already exists', True),
         ("no such table: chunks_v2", False),
         ("database is locked", False),
         ("disk I/O error", False),
@@ -115,3 +120,60 @@ def test_only_already_exists_is_tolerated(message, expected):
     """A genuine failure must still propagate. Swallowing "no such table" or a
     disk error would turn a broken store into a silent one."""
     assert table_already_exists(Exception(message)) is expected
+
+
+@pytest.mark.parametrize(
+    "orig_message",
+    [
+        "table chunks_t5b4ae0209ead already exists",
+        "index idx_chunks_t5b4ae0209ead_doc already exists",
+    ],
+)
+def test_ensure_table_tolerates_table_or_index_race(orig_message):
+    """``table.create`` emits the table AND its indexes/constraint in one
+    batch; losing the race on EITHER is the same benign outcome, so
+    ensure_table must swallow both symptoms."""
+
+    class _Racer:
+        name = "chunks_t5b4ae0209ead"
+
+        def create(self, *, bind, checkfirst):
+            raise OperationalError("CREATE ...", {}, Exception(orig_message))
+
+    # Must not raise: the object we wanted exists either way.
+    ensure_table(_Racer(), bind=object())
+
+
+class _PgError(Exception):
+    """A driver error exposing only a SQLSTATE, with NO "already exists" text.
+
+    Isolates the pgcode fast-path: PostgreSQL does include "already exists" in
+    the message, but stripping it here means the test can only pass via the
+    ``if code in {...}`` branch -- so it fails if that branch is ever dropped.
+    """
+
+    def __init__(self, pgcode: str) -> None:
+        super().__init__("duplicate object")  # deliberately lacks "already exists"
+        self.orig = type("orig", (), {"pgcode": pgcode})()
+
+
+@pytest.mark.parametrize("pgcode", ["42P07", "42710"])
+def test_pg_sqlstate_alone_is_tolerated(pgcode):
+    """PostgreSQL duplicate-table (42P07) and duplicate-object (42710, e.g. a
+    named index/constraint) are the lost-race success on the SQLSTATE alone,
+    even when the message carries no "already exists" text."""
+    assert table_already_exists(_PgError(pgcode)) is True
+
+
+def test_ensure_table_still_raises_a_genuine_failure():
+    """The tolerance is scoped to "already exists"; a real DDL error -- here a
+    disk I/O error -- must still propagate, never be mistaken for a lost race."""
+
+    class _Broken:
+        name = "chunks_broken"
+
+        def create(self, *, bind, checkfirst):
+            raise OperationalError("CREATE ...", {}, Exception("disk I/O error"))
+
+    with pytest.raises(OperationalError):
+        ensure_table(_Broken(), bind=object())
