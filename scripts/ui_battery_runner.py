@@ -329,6 +329,31 @@ def _bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _existing_doc_names(client: Any, base: str, pid: str, cred: str) -> set[str]:
+    """Names already attached to ``pid``, so a re-run uploads only the rest.
+
+    Best-effort: a listing failure must not wedge the seed, so it falls back to
+    "upload everything" (and logs why) rather than silently skipping files.
+    """
+    try:
+        resp = client.get(
+            f"{base}/v1/projects/{pid}/documents?limit=200",
+            headers=_bearer(cred), timeout=30,
+        )
+        resp.raise_for_status()
+        docs = resp.json().get("documents", []) or []
+    except Exception as exc:  # noqa: BLE001 — logged, not swallowed; safe fallback
+        print(f"[seed] could not list existing documents ({exc}); uploading all")
+        return set()
+    names: set[str] = set()
+    for d in docs:
+        if isinstance(d, dict):
+            name = d.get("original_name") or d.get("name") or d.get("filename")
+            if name:
+                names.add(str(name))
+    return names
+
+
 def _seed_decision(projects: list[dict[str, Any]] | None,
                    name: str) -> tuple[str, dict[str, Any] | None]:
     """('found', row) when a project with exactly ``name`` exists, else
@@ -427,7 +452,15 @@ def seed_main() -> int:
             if not files:
                 print(f"::error::battery seed: no fixtures found in {fixtures_dir}")
                 return 2
+            # Converge on re-run: upload only the fixtures the project does not
+            # already have. A run that failed partway (e.g. file 1 uploaded,
+            # file 2 rejected) left battery-t1 half-made; without this the retry
+            # re-sends file 1 (duplicate) instead of finishing file 2.
+            existing = _existing_doc_names(client, base, pid, cred)
             for path in files:
+                if path.name in existing:
+                    print(f"[seed] already present, skipping {path.name}")
+                    continue
                 ctype = _SEED_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
                 with open(path, "rb") as fh:
                     resp = client.post(
@@ -435,7 +468,16 @@ def seed_main() -> int:
                         files={"file": (path.name, fh, ctype)},
                         headers=_bearer(cred), timeout=120,
                     )
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    # raise_for_status prints only the status line; the server's
+                    # body carries WHICH guard rejected the upload (e.g. a 415's
+                    # "not ingestible" vs "compressed folder" detail). Surface it
+                    # so a rejection is diagnosable from the run log, not opaque.
+                    print(
+                        f"::error::battery seed: POST documents {path.name} "
+                        f"(sent {ctype}) -> {resp.status_code}: {resp.text[:400]}"
+                    )
+                    resp.raise_for_status()
                 print(f"[seed] uploaded {path.name}")
             _wait_until_indexed(fetch_rows, name, SEED_POLL_ATTEMPTS,
                                 lambda: time.sleep(SEED_POLL_SLEEP_S))
