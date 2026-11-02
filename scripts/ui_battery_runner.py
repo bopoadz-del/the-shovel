@@ -394,6 +394,24 @@ _SEED_CONTENT_TYPES = {
 }
 
 
+def _fixture_paths(fixtures_dir: "pathlib.Path") -> list["pathlib.Path"]:
+    """The document fixtures to seed, sorted — ONLY files whose extension is a
+    known document type (``_SEED_CONTENT_TYPES``).
+
+    The fixtures directory also holds repo-control files such as ``.gitattributes``
+    (which marks the binaries). Those are not documents: ``.gitattributes`` has an
+    empty extension, and the project-documents endpoint correctly rejects an
+    empty/unknown type with 415 "not ingestible". Filtering by known document
+    extension skips any such control file by construction, not by name.
+    """
+    if not fixtures_dir.is_dir():
+        return []
+    return sorted(
+        p for p in fixtures_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in _SEED_CONTENT_TYPES
+    )
+
+
 def seed_main() -> int:
     """Provision the battery's target before a run: promote the battery
     account to admin via the role-management endpoint (master-key principal —
@@ -447,8 +465,7 @@ def seed_main() -> int:
 
         if _fixtures_needed(row):
             pid = str((row or {}).get("id") or (row or {}).get("project_id") or "")
-            files = sorted(p for p in fixtures_dir.iterdir() if p.is_file()) \
-                if fixtures_dir.is_dir() else []
+            files = _fixture_paths(fixtures_dir)
             if not files:
                 print(f"::error::battery seed: no fixtures found in {fixtures_dir}")
                 return 2
