@@ -120,8 +120,13 @@ def test_pick_project_never_auto_picks_the_general_corpus(rows, expected_id):
     assert (got["id"] if got else None) == expected_id
 
 
-def test_pick_project_honours_an_explicit_general_corpus_name():
-    # a DELIBERATE project_name is honoured even if it is a general corpus
+@pytest.mark.parametrize("name,expected_id", [
+    # a DELIBERATE project_name is honoured even when it names a general corpus
+    ("General knowledge", "master_corpus"),
+    # a different explicit name selects its own row, not the auto-pick
+    ("Riyadh Tower", "p_real"),
+])
+def test_pick_project_honours_an_explicit_name(name, expected_id):
     rows = [{"id": "master_corpus", "name": "General knowledge", "indexed_documents": 500},
             {"id": "p_real", "name": "Riyadh Tower", "indexed_documents": 12}]
-    assert _pick_project(rows, "General knowledge")["id"] == "master_corpus"
+    assert _pick_project(rows, name)["id"] == expected_id
