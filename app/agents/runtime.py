@@ -11753,17 +11753,25 @@ def project_is_user_fixture(project_id: str | None) -> bool:
 def should_suppress_master_corpus_fallback(
     project_id: str | None, text: str | None,
 ) -> bool:
-    """True when a calculator-shaped ask must not use Master Corpus RAG.
+    """True when an ask must stand on the project, not Master Corpus RAG.
 
     Any non-master project (including a user FIXTURE whose id is a hex
     slug) skips fallback / banner / MC sources for formula-style and
-    named_calculator asks. Operator-selected Master Corpus is unchanged.
+    named_calculator asks, AND for Contract Data lookups (Time for
+    Completion, the Engineer, performance bond, milestones, ...): those
+    answers belong to the project's own contract, so a Master-Corpus chunk
+    must not displace the project corpus in the sources the answer stands on
+    (battery 41540262748 Q4/5/6 read general_rag because MC chunks were kept).
+    This mirrors the owner rule in AGENTS.md: "Contract Data Q&A stays on
+    project-assistant + RAG." Operator-selected Master Corpus is unchanged.
     """
     raw = (text or "").strip()
     if not raw:
         return False
     if project_is_master_corpus(project_id):
         return False
+    if message_is_contract_data_lookup(raw):
+        return True
     if _message_is_formula_style_ask(raw):
         return True
     if _message_wants_named_calculator(raw):
