@@ -105,7 +105,21 @@ jobs:
           if [ -z "$val" ] || [ "$val" = "None" ]; then
             ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
             case "$ref" in
-              arn:aws:secretsmanager:*) val=$(aws secretsmanager get-secret-value --secret-id "$ref" --query SecretString --output text) ;;
+              arn:aws:secretsmanager:*)
+                # An ECS Secrets Manager valueFrom appends :json-key:version-stage:version-id
+                # to the secret ARN when the container var is ONE key inside a JSON secret.
+                # get-secret-value wants the secret ARN alone -- the full valueFrom is an
+                # invalid secret-id (ValidationException: Invalid name). Fields 1-7 are the
+                # secret ARN; field 8, when present, is the JSON key to pull from SecretString.
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
               arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
             esac
           fi
