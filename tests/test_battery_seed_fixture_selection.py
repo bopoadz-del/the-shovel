@@ -28,5 +28,13 @@ def test_non_document_files_are_skipped(tmp_path, junk_name):
     assert got == ["a.pdf", "b.xlsx"], got
 
 
-def test_a_missing_fixtures_dir_is_empty(tmp_path):
-    assert _fixture_paths(tmp_path / "does-not-exist") == []
+@pytest.mark.parametrize("kind", ["absent", "is_a_file"])
+def test_a_non_directory_fixtures_path_is_empty(tmp_path, kind):
+    """Not a directory -> no fixtures, never an error: whether the path is
+    absent or happens to be a regular file, selection yields []."""
+    if kind == "absent":
+        target = tmp_path / "does-not-exist"
+    else:
+        target = tmp_path / "a-file"
+        target.write_text("not a directory")
+    assert _fixture_paths(target) == []
