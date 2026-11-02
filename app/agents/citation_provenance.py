@@ -694,6 +694,15 @@ def _governing_inputs(raw: str) -> dict[str, Any]:
             clean[str(key)] = val
         elif isinstance(val, str) and val.strip():
             clean[str(key)] = val.strip()
+        elif isinstance(val, list) and val and all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) for x in val
+        ):
+            # A list-valued operand (e.g. a rate schedule of bands) is not a
+            # scalar figure, but dropping it leaves the turn's figure with no
+            # visible account of it. Keep it so it surfaces as ONE provenance
+            # input row ("<n> bands"); _input_rows collapses it and the
+            # individual bands are never matched as credited figures.
+            clean[str(key)] = list(val)
     return clean
 
 
@@ -1442,6 +1451,14 @@ def _input_rows(
     rows: list[dict[str, Any]] = []
     scaled_user = _rescaled(user_vals)
     for name, value in (inputs or {}).items():
+        if isinstance(value, list):
+            # A list-valued operand collapses to ONE row: how many entries it
+            # holds, no unit. Its source is the origin stamped at compose time,
+            # else "unresolved"; the entries are never matched against the
+            # user's words or a chunk, so no band is credited as a figure.
+            rows.append({"name": name, "value": f"{len(value)} bands",
+                         "unit": "", "source": stamped.get(name) or "unresolved"})
+            continue
         source = stamped.get(name) or ""
         if not source:
             try:

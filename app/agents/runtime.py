@@ -8481,20 +8481,24 @@ def _record_calculator_tool_turn(
 #: figure for the cost gate. That shape is not a run_calculation envelope, so
 #: the credit path never reads it and the operands the runtime took from the
 #: project's contract data would show "unresolved". Each row says, for one such
-#: payload: the calculation, the operands that came from project_data, and the
+#: payload: the calculation, the SCALAR operands that came from project_data,
+#: the LIST operands (payload field, reader label) that came from project_data
+#: — each surfaced as one "<n> bands" input row rather than dropped — and the
 #: display fields to carry into the mirrored result. Adding a graft here is the
 #: whole wiring — no per-call code.
-_COMPOSED_RATE_CREDITS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
-    ("delay_damages_daily", ("rate_percent", "contract_amount"),
+_COMPOSED_RATE_CREDITS: tuple[
+    tuple[str, tuple[str, ...], tuple[tuple[str, str], ...], tuple[str, ...]], ...
+] = (
+    ("delay_damages_daily", ("rate_percent", "contract_amount"), (),
      ("daily_amount", "rate_percent", "contract_amount", "currency", "note")),
-    ("user_priced_takeoff", ("unit_rate",),
+    ("user_priced_takeoff", ("unit_rate",), (),
      ("net_volume_m3", "volume_with_waste_m3", "unit_rate", "currency",
       "waste_percent", "contingency_percent", "base_cost", "total_cost", "note")),
-    # The rate schedule ("rates") is a list of bands, not a scalar operand, so
-    # it is not a creditable input row (provenance inputs are {name,value,unit,
-    # source} scalars — _governing_inputs drops non-scalars); the Accepted
-    # Contract Amount is the project-sourced scalar this figure is credited to.
-    ("delay_damages_over_period", ("contract_amount",),
+    # The rate schedule ("rates") is a LIST of bands: it is credited as one
+    # "rate schedule" input row showing the band count (project_data), so a
+    # list operand is no longer dropped silently. The Accepted Contract Amount
+    # is the project-sourced scalar the figure is also credited to.
+    ("delay_damages_over_period", ("contract_amount",), (("rates", "rate schedule"),),
      ("amount", "days", "rates", "milestones", "contract_amount", "currency", "note")),
 )
 
@@ -8512,7 +8516,10 @@ def credit_composed_rate_turns(messages: list[dict[str, Any]] | None) -> None:
     one combined guard per message (no return ladder) keeps every mutant
     killable, and _record_calculator_tool_turn dedupes by calculation.
     """
-    specs = {calc: (operands, keys) for calc, operands, keys in _COMPOSED_RATE_CREDITS}
+    specs = {
+        calc: (scalars, lists, keys)
+        for calc, scalars, lists, keys in _COMPOSED_RATE_CREDITS
+    }
     for m in list(messages or []):
         obj = (
             _parse_json_obj(m.get("content"))
@@ -8526,16 +8533,24 @@ def credit_composed_rate_turns(messages: list[dict[str, Any]] | None) -> None:
             and all(obj.get(op) is not None for op in spec[0])
         ):
             continue
-        operands, result_keys = spec
+        scalar_operands, list_operands, result_keys = spec
+        # Scalars by their payload key; each present list operand under its
+        # reader label as the whole list (surfaced later as one "<n> bands"
+        # row). Both origins are project_data — the runtime took them from the
+        # project's contract data.
+        params: dict[str, Any] = {op: obj[op] for op in scalar_operands}
+        for payload_key, label in list_operands:
+            band = obj.get(payload_key)
+            if isinstance(band, list) and band:
+                params[label] = band
         env = {
             "calculation": obj["calculation"],
             "status": "success",
             "result": {key: obj[key] for key in result_keys if key in obj},
         }
         _record_calculator_tool_turn(
-            messages, obj["calculation"],
-            {op: obj[op] for op in operands}, env,
-            input_sources={op: "project_data" for op in operands},
+            messages, obj["calculation"], params, env,
+            input_sources={key: "project_data" for key in params},
         )
 
 
