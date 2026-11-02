@@ -8490,7 +8490,11 @@ _COMPOSED_RATE_CREDITS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]
     ("user_priced_takeoff", ("unit_rate",),
      ("net_volume_m3", "volume_with_waste_m3", "unit_rate", "currency",
       "waste_percent", "contingency_percent", "base_cost", "total_cost", "note")),
-    ("delay_damages_over_period", ("rates", "contract_amount"),
+    # The rate schedule ("rates") is a list of bands, not a scalar operand, so
+    # it is not a creditable input row (provenance inputs are {name,value,unit,
+    # source} scalars — _governing_inputs drops non-scalars); the Accepted
+    # Contract Amount is the project-sourced scalar this figure is credited to.
+    ("delay_damages_over_period", ("contract_amount",),
      ("amount", "days", "rates", "milestones", "contract_amount", "currency", "note")),
 )
 

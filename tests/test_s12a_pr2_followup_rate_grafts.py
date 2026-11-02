@@ -50,7 +50,9 @@ def _delay_over_period():
          "rates": rates, "milestones": None, "contract_amount": aca,
          "currency": "SAR", "note": f"SAR {amount} over 10 days"},
         f"Delay damages over the period are SAR {amount}.",
-        ("rates", "contract_amount"),
+        # "rates" is a list of bands (not a scalar input row); the credited
+        # project-sourced scalar is the Accepted Contract Amount.
+        ("contract_amount",),
     )
 
 
