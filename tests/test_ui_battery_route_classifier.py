@@ -42,21 +42,16 @@ def _turn(tools=(), sources=(), provenance=(), answer=""):
     (_turn(tools=["construction_calc"],
            answer="The delay damages calculator needs the rate and contract amount."),
      ROUTE_ASKS_INPUTS),
+    # the inverse: the answer carries the same "needs"/"what values" phrasing but
+    # a calculator figure WAS credited -> a calculator turn, not an input request
+    (_turn(tools=["construction_calc"],
+           answer="You asked what values I used; the rate needs no change.",
+           provenance=[{"figure": "SAR 10000", "source": "calculator",
+                        "inputs": [{"name": "rate_percent", "source": "project_data"}]}]),
+     ROUTE_CALCULATOR),
 ])
 def test_classify_route_reads_the_observed_route(turn, expected):
     assert classify_route(turn) == expected
-
-
-def test_a_credited_calc_figure_is_not_mistaken_for_an_input_request():
-    # the answer merely mentions "needs" phrasing, but a calculator figure was
-    # credited -> it is a calculator turn, not an input request.
-    turn = _turn(
-        tools=["construction_calc"],
-        answer="You asked what values I used; the rate needs no change.",
-        provenance=[{"figure": "SAR 10000", "source": "calculator",
-                     "inputs": [{"name": "rate_percent", "source": "project_data"}]}],
-    )
-    assert classify_route(turn) == ROUTE_CALCULATOR
 
 
 @pytest.mark.parametrize("events,exp_tools,exp_classes,exp_answer", [
