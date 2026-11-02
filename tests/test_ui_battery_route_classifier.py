@@ -15,6 +15,7 @@ from scripts.ui_battery_runner import (
     ROUTE_PROJECT_RAG,
     ROUTE_TOOL_ON_DOC,
     ROUTE_UNCLASSIFIED,
+    _pick_project,
     classify_route,
     turn_from_events,
 )
@@ -79,3 +80,26 @@ def test_turn_from_events_collects_the_observable_signals(events, exp_tools, exp
     assert turn["tools"] == exp_tools
     assert {s["source_class"] for s in turn["sources"]} == exp_classes
     assert turn["answer"] == exp_answer
+
+
+@pytest.mark.parametrize("project_name,expected_id", [
+    # a name is given -> the project with that exact name, regardless of size
+    ("Riyadh Tower", "p_named"),
+    # no name -> the project with the most indexed documents
+    (None, "p_big"),
+])
+def test_pick_project_by_name_else_most_indexed(project_name, expected_id):
+    projects = [
+        {"id": "p_named", "name": "Riyadh Tower", "indexed_documents": 3},
+        {"id": "p_big", "name": "Other Site", "indexed_documents": 40},
+        {"id": "p_small", "name": "Shed", "indexed_documents": 1},
+    ]
+    assert _pick_project(projects, project_name)["id"] == expected_id
+
+
+@pytest.mark.parametrize("projects", [
+    [],                    # nothing to choose from
+    ["not-a-dict", 5],     # no usable (dict) rows after filtering
+])
+def test_pick_project_is_none_when_no_usable_rows(projects):
+    assert _pick_project(projects, None) is None

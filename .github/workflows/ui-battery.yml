@@ -1,0 +1,87 @@
+name: ui-battery
+
+# ONE-USER UI battery against the LIVE deployment (ORDERS_02NOV_0127Z/0148Z/0229Z).
+# Drives the chat UI as one logged-in user and records, per question, the route
+# the product TOOK vs the route expected. Uses the SAME repository secrets as
+# smoke-live.yml / eval-battery.yml (never printed):
+#   FORK_API_KEY  (or FORK_TOKEN, or FORK_EMAIL + FORK_PASSWORD)
+#   FORK_BASE_URL (optional; defaults to the live deployment)
+#
+# The questions come in as the `battery_json` dispatch input (the generic
+# BATTERY_FILE_T1 content — no client figures). Stdout carries ONLY per-question
+# route PASS/FAIL; the full per-question result (answer + provenance) is uploaded
+# as an artifact for the caller to post to Drive as BATTERY_RESULT_<HHMM>Z.
+
+on:
+  workflow_dispatch:
+    inputs:
+      battery_json:
+        description: "Battery questions JSON: [{question, route_expected}, ...] (no figures)"
+        required: true
+      project_name:
+        description: "Project to run against (blank = the project with the most indexed documents)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-battery-live
+  cancel-in-progress: false
+
+jobs:
+  battery:
+    name: one-user UI battery (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install client deps (scripts only — not the full app)
+        run: pip install httpx
+
+      - name: Check credentials are configured
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+        run: |
+          if [ -z "$FORK_API_KEY" ] && [ -z "$FORK_TOKEN" ] && { [ -z "$FORK_EMAIL" ] || [ -z "$FORK_PASSWORD" ]; }; then
+            echo "::error::Missing credentials. Add FORK_API_KEY (or FORK_TOKEN, or FORK_EMAIL + FORK_PASSWORD) as repository secrets."
+            exit 1
+          fi
+          echo "credentials present"
+
+      - name: Write the battery questions to a file
+        env:
+          BATTERY_JSON: ${{ inputs.battery_json }}
+        run: |
+          printf '%s' "$BATTERY_JSON" > battery.json
+          python -c "import json;print('questions:', len(json.load(open('battery.json'))))"
+
+      - name: Run the battery
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+          BATTERY_FILE: battery.json
+          RESULT_FILE: battery_result.json
+          PROJECT_NAME: ${{ inputs.project_name }}
+          PYTHONPATH: .
+        run: python scripts/ui_battery_runner.py
+
+      - name: Upload the per-question result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: battery-result
+          path: battery_result.json
+          if-no-files-found: warn

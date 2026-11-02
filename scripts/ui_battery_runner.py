@@ -7,14 +7,21 @@ the answer, and the Why-this-answer inputs + sources, as PASS/FAIL against the
 question's declared expected route.
 
 CODE ONLY. The battery questions, expected answers and any figures are NEVER in
-this repo (client-content scanner): they are read at run time from a file the
-caller exports from FLEET_OPS/Drive (``--battery`` / ``BATTERY_FILE``), and the
-results are written back to Drive as ``BATTERY_RESULT_<HHMM>Z`` by the caller.
+this repo (client-content scanner): they are read at run time from BATTERY_FILE
+(the .github/workflows/ui-battery.yml dispatch input, exported from the DECISION
+to Drive), and the per-question result is uploaded as a workflow artifact for
+the caller to post to Drive as ``BATTERY_RESULT_<HHMM>Z``.
+
+Live access uses the SAME repository secrets as smoke-live.yml / eval-battery.yml
+(FORK_TOKEN > FORK_API_KEY > FORK_EMAIL+FORK_PASSWORD, FORK_BASE_URL), resolved
+through scripts/fork_cli.resolve_auth -- no token is ever handed to a lane or
+read from disk. The project is resolved via GET /v1/projects (by PROJECT_NAME,
+else the most-indexed project), never a hardcoded id.
 
 The route is OBSERVED from the SSE turn, never guessed. The observation has two
 pure, unit-tested pieces: ``turn_from_events`` (raw SSE events -> a normalized
-turn) and ``classify_route`` (normalized turn -> one of the five route labels).
-The network driving lives in ``run_battery`` and is intentionally thin.
+turn) and ``classify_route`` (normalized turn -> one of the five route labels);
+``_pick_project`` is the third tested piece. The network driving is thin.
 """
 from __future__ import annotations
 
@@ -22,7 +29,6 @@ import json
 import os
 import re
 import time
-import urllib.request
 from typing import Any, Iterable
 
 # The five routes the battery distinguishes (ORDERS_02NOV_0127Z).
@@ -138,21 +144,71 @@ def _provenance_digest(provenance: list[dict[str, Any]]) -> list[dict[str, Any]]
     return out
 
 
-def _stream_turn(base_url: str, token: str, project_id: str, question: str,
-                 timeout: float = 120.0) -> list[dict[str, Any]]:
-    """POST one question to the live chat SSE endpoint and collect its events.
-    conversation id is ws-{projectId}-{unix_ms} (extra path segments 404)."""
-    conv = f"ws-{project_id}-{int(time.time() * 1000)}"
-    body = json.dumps({"conversation_id": conv, "message": question}).encode()
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/v1/chat/stream", data=body, method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
-                 "Accept": "text/event-stream"},
-    )
+def _indexed_count(project: dict[str, Any]) -> int:
+    """Best-effort count of indexed/embedded documents on a project row, across
+    the field names the projects listing has used."""
+    for key in ("indexed_documents", "indexed_document_count", "embedded_documents",
+                "document_count", "documents", "chunks"):
+        val = project.get(key)
+        if isinstance(val, int):
+            return val
+        if isinstance(val, list):
+            return len(val)
+    return 0
+
+
+def _pick_project(projects: list[dict[str, Any]], project_name: str | None) -> dict[str, Any] | None:
+    """Resolve the battery's project with NO hardcoded id: by exact name when a
+    project_name is given, else the project with the most indexed documents.
+    Returns the project row, or None when the list is empty."""
+    rows = [p for p in (projects or []) if isinstance(p, dict)]
+    if not rows:
+        return None
+    if project_name:
+        named = [p for p in rows if str(p.get("name") or "") == project_name]
+        if named:
+            return named[0]
+    return max(rows, key=_indexed_count)
+
+
+def _auth_base():
+    """(bearer credential, base_url) from the FORK_* env, resolved exactly as
+    scripts/fork_cli.py / smoke-live.yml do (FORK_TOKEN > FORK_API_KEY >
+    FORK_EMAIL+FORK_PASSWORD login). Imported lazily so the pure route-
+    classification helpers import without httpx present."""
+    from types import SimpleNamespace
+
+    from scripts import fork_cli  # lazy: keeps classify_route import-light
+    base = (os.environ.get("FORK_BASE_URL") or "https://theshovel.ai").rstrip("/")
+    cred = fork_cli.resolve_auth(SimpleNamespace(
+        token=None, api_key=None, email=None, password=None, base=base))
+    return cred, base
+
+
+def resolve_project(client, base: str, cred: str, project_name: str | None) -> str:
+    """The project id to run against, chosen by _pick_project over GET /v1/projects."""
+    resp = client.get(f"{base}/v1/projects", headers={"Authorization": f"Bearer {cred}"},
+                      timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    rows = data.get("projects") if isinstance(data, dict) else data
+    chosen = _pick_project(rows if isinstance(rows, list) else [], project_name)
+    if not chosen:
+        raise RuntimeError("no projects available to run the battery against")
+    return str(chosen.get("id") or chosen.get("project_id") or "")
+
+
+def _stream_turn(client, base: str, cred: str, project_id: str, question: str,
+                 agent: str = "project-assistant", timeout: float = 150.0) -> list[dict[str, Any]]:
+    """POST one question to the live chat SSE endpoint and collect its events."""
     events: list[dict[str, Any]] = []
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").strip()
+    url = f"{base}/v1/agents/{agent}/chat/stream"
+    with client.stream("POST", url, json={"message": question, "project_id": project_id},
+                       headers={"Authorization": f"Bearer {cred}",
+                                "Accept": "text/event-stream"}, timeout=timeout) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            line = (line or "").strip()
             if not line.startswith("data:"):
                 continue
             payload = line[len("data:"):].strip()
@@ -165,19 +221,19 @@ def _stream_turn(base_url: str, token: str, project_id: str, question: str,
     return events
 
 
-def run_battery(questions: list[dict[str, Any]], base_url: str, token: str,
-                project_id: str) -> list[dict[str, Any]]:
+def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
+                project_id: str, client) -> list[dict[str, Any]]:
     """Ask each battery question against the live project and judge the route.
 
-    Each question is {"question": str, "route_expected": str}. The expected
-    ANSWER is never hard-compared here (figures are the owner's, live): the
-    result carries the answer + provenance for human/grader review, and the
-    machine PASS/FAIL is on the route the product took."""
+    The machine PASS/FAIL is on the ROUTE the product took (observed, not
+    guessed); the full answer + provenance ride in the result for review but are
+    written only to the artifact file, never to stdout (they may carry the
+    owner's figures)."""
     results: list[dict[str, Any]] = []
     for q in questions:
         text, expected = q.get("question", ""), q.get("route_expected", "")
         try:
-            turn = turn_from_events(_stream_turn(base_url, token, project_id, text))
+            turn = turn_from_events(_stream_turn(client, base, cred, project_id, text))
             observed = classify_route(turn)
             results.append({
                 "question": text, "route_expected": expected, "route_observed": observed,
@@ -193,18 +249,31 @@ def run_battery(questions: list[dict[str, Any]], base_url: str, token: str,
 
 
 def main() -> int:
+    import httpx  # lazy: only the live run needs it
+
     battery_file = os.environ.get("BATTERY_FILE")
-    base_url = os.environ.get("SHOVEL_BASE_URL", "https://theshovel.ai")
-    token = os.environ.get("CEREBRUM_TOKEN", "")
-    project_id = os.environ.get("SHOVEL_PROJECT_ID", "")
-    if not (battery_file and token and project_id):
-        print("set BATTERY_FILE (Drive-exported questions), CEREBRUM_TOKEN, SHOVEL_PROJECT_ID")
+    result_file = os.environ.get("RESULT_FILE", "battery_result.json")
+    project_name = os.environ.get("PROJECT_NAME") or None
+    if not battery_file:
+        print("::error::set BATTERY_FILE to the Drive-exported questions JSON")
         return 2
     with open(battery_file, encoding="utf-8") as fh:
         questions = json.load(fh)
-    results = run_battery(questions, base_url, token, project_id)
+    cred, base = _auth_base()  # exits/raises with the smoke-live ::error if creds absent
+    with httpx.Client() as client:
+        project_id = resolve_project(client, base, cred, project_name)
+        results = run_battery(questions, base, cred, project_id, client)
+    # The artifact carries the full result (answer + provenance) for review.
+    with open(result_file, "w", encoding="utf-8") as fh:
+        json.dump({"project_id": project_id, "results": results}, fh, indent=2)
+    # Stdout (public Actions log) carries ONLY route PASS/FAIL per question —
+    # never the answers, which may contain the owner's figures.
     passed = sum(1 for r in results if r.get("route_pass"))
-    print(json.dumps({"total": len(results), "route_pass": passed, "results": results}, indent=2))
+    for r in results:
+        verdict = "PASS" if r.get("route_pass") else "FAIL"
+        print(f"[{verdict}] {r.get('route_expected')} -> {r.get('route_observed')}  "
+              f"{r.get('question')}")
+    print(f"route_pass {passed}/{len(results)}; full per-question result in {result_file}")
     return 0
 
 
