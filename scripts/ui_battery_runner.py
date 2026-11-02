@@ -168,7 +168,26 @@ def _pick_project(projects: list[dict[str, Any]], project_name: str | None) -> d
         named = [p for p in rows if str(p.get("name") or "") == project_name]
         if named:
             return named[0]
-    return max(rows, key=_indexed_count)
+    # Auto-pick (no name match): never silently land on the GENERAL/master
+    # corpus. A blank PROJECT_NAME must resolve to a real project holding the
+    # owner's documents -- otherwise the project_rag questions fail by
+    # construction and the score is meaningless (observed 2026-11-02: the
+    # general corpus had the most indexed docs, so it won the pick and the
+    # battery read 4/20 against master_corpus). Exclude the general corpora
+    # (an explicit project_name above still honours a deliberate choice); if
+    # none remain, return None so resolve_project fails loudly.
+    real = [p for p in rows if not _is_general_corpus(p)]
+    if not real:
+        return None
+    return max(real, key=_indexed_count)
+
+
+def _is_general_corpus(project: dict[str, Any]) -> bool:
+    """True when this project row is a general/master corpus (not a real
+    document project), by id or name against :data:`_GENERAL_CLASSES`."""
+    ident = str(project.get("id") or project.get("project_id") or "").lower()
+    name = str(project.get("name") or "").lower()
+    return ident in _GENERAL_CLASSES or name in _GENERAL_CLASSES
 
 
 def _auth_base():
@@ -194,7 +213,11 @@ def resolve_project(client, base: str, cred: str, project_name: str | None) -> s
     rows = data.get("projects") if isinstance(data, dict) else data
     chosen = _pick_project(rows if isinstance(rows, list) else [], project_name)
     if not chosen:
-        raise RuntimeError("no projects available to run the battery against")
+        raise RuntimeError(
+            "no real project to run the battery against: only the general/master "
+            "corpus is visible to this login. Set PROJECT_NAME to the owner's "
+            "project, or index the owner's documents into this account, so the "
+            "battery does not silently grade the general corpus.")
     return str(chosen.get("id") or chosen.get("project_id") or "")
 
 

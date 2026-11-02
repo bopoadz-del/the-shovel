@@ -103,3 +103,25 @@ def test_pick_project_by_name_else_most_indexed(project_name, expected_id):
 ])
 def test_pick_project_is_none_when_no_usable_rows(projects):
     assert _pick_project(projects, None) is None
+
+
+@pytest.mark.parametrize("rows,expected_id", [
+    # a general/master corpus with the MOST indexed docs must NOT be auto-picked;
+    # the real document project wins even with far fewer docs
+    ([{"id": "master_corpus", "name": "General knowledge", "indexed_documents": 500},
+      {"id": "p_real", "name": "Riyadh Tower", "indexed_documents": 12}], "p_real"),
+    # when ONLY general corpora are visible, the auto-pick returns None so the
+    # caller fails loudly instead of grading the general corpus
+    ([{"id": "master_corpus", "indexed_documents": 500},
+      {"id": "knowledge_base", "indexed_documents": 9}], None),
+])
+def test_pick_project_never_auto_picks_the_general_corpus(rows, expected_id):
+    got = _pick_project(rows, None)
+    assert (got["id"] if got else None) == expected_id
+
+
+def test_pick_project_honours_an_explicit_general_corpus_name():
+    # a DELIBERATE project_name is honoured even if it is a general corpus
+    rows = [{"id": "master_corpus", "name": "General knowledge", "indexed_documents": 500},
+            {"id": "p_real", "name": "Riyadh Tower", "indexed_documents": 12}]
+    assert _pick_project(rows, "General knowledge")["id"] == "master_corpus"
