@@ -94,6 +94,8 @@ MAGIC = (
 #: a UI asset. Never a real drawing, contract, photo or schedule.
 ALLOWED_BINARIES: dict[str, str] = {
     "frontend/public/favicon.svg": "UI asset (302 B)",
+    "tests/battery/fixtures/harbourline_contract.pdf": "synthetic contract (1.8 KB) — the one-user battery's self-seeded target, no client data (ORDERS_02NOV_1545Z)",
+    "tests/battery/fixtures/harbourline_boq.xlsx": "synthetic 2-sheet BOQ (5.9 KB) — the one-user battery's self-seeded target, no client data (ORDERS_02NOV_1545Z)",
     "tests/fixtures/formats/sample.doc": "generated Word 97 sample for the legacy-format extractor",
     "tests/fixtures/formats/sample.msg": "generated Outlook item for the .msg extractor",
     "tests/fixtures/formats/sample.ppt": "generated PowerPoint 97 sample for the legacy-format extractor",

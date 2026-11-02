@@ -32,6 +32,15 @@ import time
 from typing import Any, Iterable
 
 # The five routes the battery distinguishes (ORDERS_02NOV_0127Z).
+#: The battery's own target (ORDERS_02NOV_1508Z/1545Z): a blank PROJECT_NAME
+#: resolves here, and the seed step creates + indexes it from the committed
+#: synthetic fixtures, so the battery needs no owner setup and never grades
+#: the general corpus.
+DEFAULT_BATTERY_PROJECT = "battery-t1"
+SEED_FIXTURES_DIR = "tests/battery/fixtures"
+SEED_POLL_ATTEMPTS = 90
+SEED_POLL_SLEEP_S = 2.0
+
 ROUTE_PROJECT_RAG = "project_rag_llm"
 ROUTE_GENERAL_RAG = "general_rag_llm"
 ROUTE_CALCULATOR = "llm_calculator"
@@ -284,7 +293,9 @@ def main() -> int:
 
     battery_file = os.environ.get("BATTERY_FILE")
     result_file = os.environ.get("RESULT_FILE", "battery_result.json")
-    project_name = os.environ.get("PROJECT_NAME") or None
+    # A blank PROJECT_NAME targets the battery's own seeded project, never
+    # an implicit "whatever has the most documents" (ORDERS_02NOV_1545Z).
+    project_name = os.environ.get("PROJECT_NAME") or DEFAULT_BATTERY_PROJECT
     if not battery_file:
         print("::error::set BATTERY_FILE to the Drive-exported questions JSON")
         return 2
@@ -312,5 +323,128 @@ def main() -> int:
     return code
 
 
+# ── seed: the battery provisions its own target (ORDERS_02NOV_1545Z) ─────────
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _seed_decision(projects: list[dict[str, Any]] | None,
+                   name: str) -> tuple[str, dict[str, Any] | None]:
+    """('found', row) when a project with exactly ``name`` exists, else
+    ('create', None). Pure, so idempotence (find — never duplicate) is
+    testable without a server."""
+    rows = [p for p in (projects or []) if isinstance(p, dict)]
+    named = [p for p in rows if str(p.get("name") or "") == name]
+    return ("found", named[0]) if named else ("create", None)
+
+
+def _fixtures_needed(row: dict[str, Any] | None) -> bool:
+    """True when the target project holds zero indexed documents — only then
+    does the seed upload the committed fixtures (idempotent on re-run)."""
+    return _indexed_count(row or {}) == 0
+
+
+def _wait_until_indexed(fetch_rows, name: str, attempts: int, sleep) -> dict[str, Any]:
+    """Poll the projects listing until ``name`` shows at least one indexed
+    document; after ``attempts`` tries raise a CLEAR error (never a silent
+    pass against an empty project). ``fetch_rows``/``sleep`` are injectable."""
+    for _ in range(attempts):
+        _, row = _seed_decision(fetch_rows(), name)
+        if row is not None and _indexed_count(row) > 0:
+            return row
+        sleep()
+    raise RuntimeError(
+        f"battery seed: project {name!r} did not reach an indexed state in time. "
+        "The fixtures uploaded but never indexed — only an ADMIN's upload is "
+        "indexed into project RAG, so check the battery account's role and the "
+        "service logs."
+    )
+
+
+_SEED_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
+def seed_main() -> int:
+    """Provision the battery's target before a run: promote the battery
+    account to admin via the role-management endpoint (master-key principal —
+    the value is never printed), find-or-create the target project, upload the
+    committed fixtures when it holds nothing indexed, and poll to indexed.
+    Idempotent on every path."""
+    import pathlib
+
+    import httpx  # lazy: only the live seed needs it
+
+    master = os.environ.get("CEREBRUM_MASTER_KEY") or ""
+    if not master:
+        print("::error::Missing CEREBRUM_MASTER_KEY repository secret — the "
+              "admin principal the battery seed step promotes and uploads with.")
+        return 2
+    name = os.environ.get("PROJECT_NAME") or DEFAULT_BATTERY_PROJECT
+    fixtures_dir = pathlib.Path(os.environ.get("BATTERY_FIXTURES_DIR") or SEED_FIXTURES_DIR)
+    cred, base = _auth_base()
+    with httpx.Client() as client:
+        me = client.get(f"{base}/v1/users/me", headers=_bearer(cred), timeout=30)
+        me.raise_for_status()
+        who = me.json()
+        if who.get("role") != "admin":
+            # require_user reads the role from the DB per request, so the same
+            # credential carries admin immediately after the promotion.
+            resp = client.post(
+                f"{base}/v1/admin/users/{who['user_id']}/role",
+                json={"role": "admin"}, headers=_bearer(master), timeout=30,
+            )
+            resp.raise_for_status()
+            print(f"[seed] battery account promoted to admin (changed={resp.json().get('changed')})")
+        else:
+            print("[seed] battery account already admin")
+
+        def fetch_rows() -> list[dict[str, Any]]:
+            resp = client.get(f"{base}/v1/projects", headers=_bearer(cred), timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            rows = data.get("projects") if isinstance(data, dict) else data
+            return rows if isinstance(rows, list) else []
+
+        decision, row = _seed_decision(fetch_rows(), name)
+        if decision == "create":
+            resp = client.post(f"{base}/v1/projects", json={"name": name},
+                               headers=_bearer(cred), timeout=30)
+            resp.raise_for_status()
+            print(f"[seed] created project {name!r}")
+            _, row = _seed_decision(fetch_rows(), name)
+        else:
+            print(f"[seed] found project {name!r}")
+
+        if _fixtures_needed(row):
+            pid = str((row or {}).get("id") or (row or {}).get("project_id") or "")
+            files = sorted(p for p in fixtures_dir.iterdir() if p.is_file()) \
+                if fixtures_dir.is_dir() else []
+            if not files:
+                print(f"::error::battery seed: no fixtures found in {fixtures_dir}")
+                return 2
+            for path in files:
+                ctype = _SEED_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+                with open(path, "rb") as fh:
+                    resp = client.post(
+                        f"{base}/v1/projects/{pid}/documents",
+                        files={"file": (path.name, fh, ctype)},
+                        headers=_bearer(cred), timeout=120,
+                    )
+                resp.raise_for_status()
+                print(f"[seed] uploaded {path.name}")
+            _wait_until_indexed(fetch_rows, name, SEED_POLL_ATTEMPTS,
+                                lambda: time.sleep(SEED_POLL_SLEEP_S))
+            print("[seed] fixtures indexed")
+        else:
+            print("[seed] project already indexed; nothing to upload")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys as _sys
+    raise SystemExit(seed_main() if _sys.argv[1:2] == ["seed"] else main())

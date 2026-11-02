@@ -327,3 +327,25 @@ def mark_email_verified(user_id: str) -> bool:
             return True
         finally:
             session.close()
+
+
+def set_role(user_id: str, role: str) -> Optional[Dict[str, Any]]:
+    """Admin role management (ORDERS_02NOV_1545Z): write this user's ``role``
+    under the same vocabulary the users table's CheckConstraint enforces
+    (``ck_users_role``). Idempotent — writing the role a user already has is a
+    clean no-op. Returns the public user, or None if the user is unknown. A
+    value outside the constraint raises ValueError before any write."""
+    if role not in ("user", "admin"):
+        raise ValueError(f"role must be 'user' or 'admin', not {role!r}")
+    _ensure_db()
+    with _lock:
+        session = SessionLocal()
+        try:
+            user = session.query(User).filter(User.id == user_id).one_or_none()
+            if user is None:
+                return None
+            user.role = role
+            session.commit()
+            return _public(_as_dict(user))
+        finally:
+            session.close()

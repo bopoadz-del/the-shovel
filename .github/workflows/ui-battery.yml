@@ -85,6 +85,34 @@ jobs:
           test -f "$BATTERY_FILE" || { echo "::error::battery_file not found: $BATTERY_FILE"; exit 1; }
           python -c "import json,sys;print('questions:', len(json.load(open(sys.argv[1]))))" "$BATTERY_FILE"
 
+      # The seed's admin principal. The key is REQUIRED (no skip, no silent
+      # pass) and is passed to the seed step ONLY — the battery run itself
+      # never sees it.
+      - name: Check the master key is configured
+        env:
+          CEREBRUM_MASTER_KEY: ${{ secrets.CEREBRUM_MASTER_KEY }}
+        run: |
+          if [ -z "$CEREBRUM_MASTER_KEY" ]; then
+            echo "::error::Missing CEREBRUM_MASTER_KEY repository secret — the admin principal the battery seed step needs (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          echo "master key present"
+
+      # Provision the battery's own target (ORDERS_02NOV_1545Z): promote the
+      # battery account to admin via the role endpoint, find-or-create
+      # battery-t1, upload the committed synthetic fixtures when nothing is
+      # indexed, poll to indexed. Idempotent on re-run; no value printed.
+      - name: Seed the battery target (admin principal)
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+          CEREBRUM_MASTER_KEY: ${{ secrets.CEREBRUM_MASTER_KEY }}
+          PYTHONPATH: .
+        run: python scripts/ui_battery_runner.py seed
+
       - name: Run the battery
         env:
           FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
