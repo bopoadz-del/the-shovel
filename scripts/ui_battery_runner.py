@@ -435,7 +435,16 @@ def seed_main() -> int:
                         files={"file": (path.name, fh, ctype)},
                         headers=_bearer(cred), timeout=120,
                     )
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    # raise_for_status prints only the status line; the server's
+                    # body carries WHICH guard rejected the upload (e.g. a 415's
+                    # "not ingestible" vs "compressed folder" detail). Surface it
+                    # so a rejection is diagnosable from the run log, not opaque.
+                    print(
+                        f"::error::battery seed: POST documents {path.name} "
+                        f"(sent {ctype}) -> {resp.status_code}: {resp.text[:400]}"
+                    )
+                    resp.raise_for_status()
                 print(f"[seed] uploaded {path.name}")
             _wait_until_indexed(fetch_rows, name, SEED_POLL_ATTEMPTS,
                                 lambda: time.sleep(SEED_POLL_SLEEP_S))
