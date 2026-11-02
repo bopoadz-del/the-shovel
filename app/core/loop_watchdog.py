@@ -53,15 +53,21 @@ def _stack(frame, max_frames: int = _MAX_FRAMES) -> str:
 
 
 def sample_stacks(loop_ident: Optional[int]) -> str:
-    """The loop thread's stack, then every other thread's (innermost first)."""
+    """The loop thread's stack, then every other thread's (innermost first).
+
+    When the loop thread id is not yet resolved (its ``call_soon`` to note it
+    can itself be stuck behind the very stall we are sampling), fall back to the
+    main thread, which is where the event loop runs. The loop stack is therefore
+    always captured, so the worst-stall sample is never empty."""
     names = {t.ident: t.name for t in threading.enumerate()}
     me = threading.get_ident()
     frames = sys._current_frames()
+    target = loop_ident if loop_ident in frames else threading.main_thread().ident
     parts = []
-    if loop_ident in frames:
-        parts.append(f"[loop] {_stack(frames[loop_ident])}")
+    if target in frames:
+        parts.append(f"[loop] {_stack(frames[target])}")
     for ident, frame in frames.items():
-        if ident in (me, loop_ident):
+        if ident in (me, target):
             continue
         parts.append(f"[{names.get(ident, ident)}] {_stack(frame, 8)}")
     return " || ".join(parts)
@@ -76,7 +82,10 @@ class LagMonitor:
         self.log = log
         self.max_lag_ms = 0.0
         self.stalls: list[tuple[float, str]] = []
-        self._loop_ident: Optional[int] = None
+        # The loop runs on the main thread; _note_loop_thread refines this once
+        # it is served. Seeding it (never None) means a stall sampled before
+        # that call still resolves the loop stack instead of dropping it.
+        self._loop_ident: Optional[int] = threading.main_thread().ident
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="loop-watchdog", daemon=True)
         self._last_log = 0.0
@@ -108,14 +117,27 @@ class LagMonitor:
                 self._stop.set()
                 break
             sample = ""
-            if not served.wait(self.threshold):
+            stalled = not served.wait(self.threshold)
+            if stalled:
+                # Sample now and keep re-sampling while the stall persists, so
+                # the stack we keep is the loop caught in the act (the deepest,
+                # most recent frames), not just the instant the threshold passed.
                 sample = sample_stacks(self._loop_ident)
                 while not served.wait(0.05):
                     if self._stop.is_set():
                         return
+                    snap = sample_stacks(self._loop_ident)
+                    if snap:
+                        sample = snap
             lag_ms = (time.monotonic() - posted) * 1000
             self.max_lag_ms = max(self.max_lag_ms, lag_ms)
-            if sample:
+            if stalled:
+                # A detected stall is ALWAYS recorded with its stack. sample is
+                # never empty (sample_stacks falls back to the main thread), but
+                # resample once more as a belt-and-braces guard so the worst
+                # stall can never carry an empty trace.
+                if not sample:
+                    sample = sample_stacks(self._loop_ident)
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:
