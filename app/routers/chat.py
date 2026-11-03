@@ -269,10 +269,6 @@ async def _stream_from_heavy_reasoning(
         "tools_used": tools_used,
         "sources": result.get("sources") or [],
         "provenance": result.get("provenance") or [],
-        # The turn's awaiting-inputs STATE (S1c): {"missing":[...]} when a tool
-        # asked for operands it did not get, {"missing":[]} when the turn
-        # answered. A reader trusts this over the answer's wording.
-        "awaiting_inputs": result.get("awaiting_inputs") or {"missing": []},
         "request_id": get_request_id(),
     }
     yield f"data: {json.dumps(end_event)}\n\n"

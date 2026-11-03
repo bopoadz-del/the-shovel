@@ -1650,4 +1650,12 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
             fixed["content"] = checked
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
+    # The turn's awaiting-inputs STATE rides out on the end event: the field
+    # names a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when
+    # the turn answered. A reader (the route observer) trusts this over the
+    # answer's wording (S1c). Set here and not left to each emitter so every
+    # streamed end event carries it uniformly.
+    if "awaiting_inputs" not in fixed:
+        missing = sorted(set(turn.awaiting_inputs)) if turn else []
+        fixed["awaiting_inputs"] = {"missing": missing}
     return fixed

@@ -84,6 +84,37 @@ def test_a_result_with_no_answer_is_left_without_state(result):
     assert "awaiting_inputs" not in out
 
 
+@pytest.mark.parametrize(
+    "awaiting,expected",
+    [
+        (["volume"], {"missing": ["volume"]}),
+        ([], {"missing": []}),
+    ],
+)
+def test_check_end_event_carries_state(awaiting, expected):
+    """The streamed end event (the agents chat path, which the battery reads)
+    carries the same awaiting-inputs state."""
+    turn = ax.Turn(awaiting_inputs=list(awaiting))
+    event = {"type": "end", "content": "Here is the result.", "sources": []}
+    out = ax.check_end_event(event, "", turn)
+    assert out["awaiting_inputs"] == expected
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "token", "content": "partial"},
+        {"type": "tool_call", "tool": "construction_calc"},
+    ],
+)
+def test_check_end_event_leaves_non_end_events_alone(event):
+    """The type guard: only the terminal 'end' event gets state. (Pins the
+    first branch so dropping it, which would stamp state on every event, is
+    caught.)"""
+    out = ax.check_end_event(dict(event), "", ax.Turn(awaiting_inputs=["x"]))
+    assert "awaiting_inputs" not in out
+
+
 @pytest.mark.parametrize("value", ["a plain string", ["a", "list"]])
 def test_check_result_returns_a_non_dict_unchanged(value):
     """The isinstance guard: a non-dict result passes straight through. (Also
