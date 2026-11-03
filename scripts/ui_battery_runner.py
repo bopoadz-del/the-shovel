@@ -189,14 +189,25 @@ def classify_intent(message: str) -> str:
 
 
 def _arithmetic_was_performed(turn: dict[str, Any]) -> bool:
-    """A calculator actually produced a figure this turn (a credited calculator
-    provenance entry, or the construction_calc tool ran)."""
-    if _CALC_TOOL in (turn.get("tools") or []):
-        return True
-    return any(
+    """A calculator actually produced a figure this turn.
+
+    The calculator tool being DISPATCHED is not enough: it can error on a
+    missing operand, which is an ask for inputs, not a computation. The
+    authoritative signals are a credited calculator provenance entry (a figure
+    was produced) and the turn's awaiting-inputs STATE -- if a tool asked for
+    operands it did not get, nothing was computed (S1c). The tool-in-list
+    reading is kept only as the last resort for a turn that carried neither
+    signal (a legacy end event with no provenance and no state).
+    """
+    if any(
         isinstance(p, dict) and p.get("source") == "calculator"
         for p in turn.get("provenance") or []
-    )
+    ):
+        return True
+    state = turn.get("awaiting_inputs")
+    if isinstance(state, dict) and state.get("missing"):
+        return False
+    return _CALC_TOOL in (turn.get("tools") or [])
 
 
 def classify_route(turn: dict[str, Any], question: str = "") -> str:

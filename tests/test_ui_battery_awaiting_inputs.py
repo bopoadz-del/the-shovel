@@ -18,6 +18,9 @@ import pytest
 
 from scripts.ui_battery_runner import (
     ROUTE_ASKS_INPUTS,
+    ROUTE_CALCULATOR,
+    _CALC_TOOL,
+    _arithmetic_was_performed,
     _asks_for_inputs,
     classify_route,
     turn_from_events,
@@ -90,6 +93,46 @@ def test_compute_turn_with_missing_state_routes_to_asks(missing, question):
     turn = turn_from_events(events)
     assert turn["awaiting_inputs"] == {"missing": missing}
     assert classify_route(turn, question) == ROUTE_ASKS_INPUTS
+
+
+@pytest.mark.parametrize(
+    "missing,question",
+    [
+        (["platform_area"], "Scaffold load capacity for the stated configuration?"),
+        (["volume"], "Carbon footprint of the concrete for the specified grade and volume?"),
+    ],
+)
+def test_a_dispatched_calc_that_asked_is_not_arithmetic(missing, question):
+    """The calculator ran but errored on a missing operand (state present, no
+    calculator figure in provenance). That is an ask, not a computation, so the
+    compute question routes asks_for_inputs -- not calculator."""
+    turn = {
+        "tools": [_CALC_TOOL], "provenance": [], "sources": [],
+        "answer": "The calculator needs more inputs.",
+        "awaiting_inputs": {"missing": missing},
+    }
+    assert _arithmetic_was_performed(turn) is False
+    assert classify_route(turn, question) == ROUTE_ASKS_INPUTS
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Concrete volume for a raft 30 x 20 x 1.5?",
+        "Dig volume for a pit 3.4 x 2.6 x 1.15?",
+    ],
+)
+def test_a_calc_that_produced_a_figure_is_arithmetic(question):
+    """A credited calculator figure means arithmetic ran -> calculator route,
+    whatever else the turn carries."""
+    turn = {
+        "tools": [_CALC_TOOL],
+        "provenance": [{"source": "calculator", "figure": "945 m3", "inputs": {"x": 1}}],
+        "sources": [], "answer": "The volume is 945 m3.",
+        "awaiting_inputs": {"missing": []},
+    }
+    assert _arithmetic_was_performed(turn) is True
+    assert classify_route(turn, question) == ROUTE_CALCULATOR
 
 
 @pytest.mark.parametrize(
