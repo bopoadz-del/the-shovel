@@ -47,7 +47,7 @@ _CLAIM_WORK_RE = re.compile(
 # (P6 "extract the key milestones from the programme").
 _LOOKUP_CUES = (
     re.compile(r"\btime\s+for\s+completion\b", re.IGNORECASE),
-    re.compile(r"\b(?:delay|liquidated)\s+damages\b", re.IGNORECASE),
+    re.compile(r"\b(?:delay|liquidated)[\s-]+damages\b", re.IGNORECASE),
     re.compile(r"\bdefects\s+notification\s+period\b", re.IGNORECASE),
     re.compile(r"\bdnp\b", re.IGNORECASE),
     re.compile(r"\bperformance\s+bond\b", re.IGNORECASE),
@@ -104,12 +104,12 @@ _LOOKUP_CUES = (
         r"|\b(?:contract|require[sd]?|provide|held|under\s+the\s+contract)\b.{0,45}\b(?:retention|insurance)\b",
         re.IGNORECASE | re.DOTALL,
     ),
-    # Money: the liquidated / delay-damages cap.
-    re.compile(
-        r"\b(?:ld|liquidated\s+damages|delay\s+damages|damages)\b.{0,20}\bcap\b"
-        r"|\bcap\b.{0,20}\b(?:ld|liquidated\s+damages|delay\s+damages|damages)\b",
-        re.IGNORECASE | re.DOTALL,
-    ),
+    # Money: a liquidated / delay-damages lookup is already covered by the
+    # delay|liquidated damages cue above (now hyphen-tolerant). A broad
+    # "...cap..." money cue is deliberately NOT added: a worded arithmetic ask
+    # ("ten percent of four million ... LD cap") is a calculation that must stay
+    # on the cost-grounding gate (runtime.py _cost_grounding_gate), not a
+    # Contract Data lookup -- matching it would let a fabricated rate through.
 )
 
 # Numbered contract-volume Schedules ("Schedule 10: Not Used"), not a P6

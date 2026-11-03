@@ -34,8 +34,9 @@ _PROJECT_ID = "4e9480af"
         # security / obligations...
         ("What retention is held under the contract?", True),
         ("What insurance is the Contractor required to provide under the contract?", True),
-        # money terms...
+        # money terms (a liquidated/delay-damages lookup, hyphen tolerant)...
         ("What is the cap on liquidated damages?", True),
+        ("What delay-damages rate and cap does the contract state?", True),
         # A standards / HSE question is neither contract-data nor a calculator
         # ask -> Master Corpus stays allowed (it is a general-knowledge answer).
         ("What is the HSE lighting (lux) requirement for general site areas?", False),
@@ -46,6 +47,11 @@ _PROJECT_ID = "4e9480af"
         ("Ask the site engineer to check the rebar spacing on level 3.", False),
         ("Which insurance company offers the cheapest cover for a van?", False),
         ("How much retention of water does the slab need?", False),
+        # A worded arithmetic ask that mentions "LD cap" is a CALCULATION, not a
+        # Contract Data lookup: it must stay False so the cost-grounding gate
+        # still refuses a fabricated rate (regression guard for
+        # test_leftover_hat_ui_fails::test_fabricated_rate_still_refused...).
+        ("ten percent of four million eight hundred thousand LD cap", False),
     ],
 )
 def test_contract_data_lookup_suppresses_master_corpus_on_a_project(text, expected):
