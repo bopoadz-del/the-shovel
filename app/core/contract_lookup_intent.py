@@ -87,6 +87,29 @@ _LOOKUP_CUES = (
         r"when\s+does\s+(?:the\s+|this\s+)?contract\s+commence)\b",
         re.IGNORECASE,
     ),
+    # Party roles beyond the Engineer: the Employer / Contractor identity,
+    # powers or obligations under the contract. Structural (a party-role
+    # question), not a list of specific questions. A bare "site engineer" is
+    # covered (and excluded) by the Engineer cue above.
+    re.compile(
+        r"\bwho\s+is\s+(?:named\s+as\s+|appointed\s+(?:as\s+)?)?(?:the\s+)?(?:employer|contractor)\b"
+        r"|\bthe\s+(?:employer|contractor)\b.{0,45}\b(?:power|authorit|obligation|responsib|dut|role|named|appoint)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # Security / obligations: retention or insurance AS a contract term,
+    # anchored to contract context so "cheapest insurance for a van" or "water
+    # retention of the slab" do not match.
+    re.compile(
+        r"\b(?:retention|insurance)\b.{0,45}\b(?:contract|require|provide|held|released|percent|%|certificate|policy\s+under)\b"
+        r"|\b(?:contract|require[sd]?|provide|held|under\s+the\s+contract)\b.{0,45}\b(?:retention|insurance)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # Money: the liquidated / delay-damages cap.
+    re.compile(
+        r"\b(?:ld|liquidated\s+damages|delay\s+damages|damages)\b.{0,20}\bcap\b"
+        r"|\bcap\b.{0,20}\b(?:ld|liquidated\s+damages|delay\s+damages|damages)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
 )
 
 # Numbered contract-volume Schedules ("Schedule 10: Not Used"), not a P6
