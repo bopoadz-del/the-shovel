@@ -26,9 +26,15 @@ _PROJECT_ID = "4e9480af"
         ("What is the Time for Completion under the contract?", True),
         ("Who is named as the Engineer and what are their powers?", True),
         ("What performance bond or retention does the contract require?", True),
+        ("What are the milestone dates or sectional completion terms?", True),
         # A standards / HSE question is neither contract-data nor a calculator
         # ask -> Master Corpus stays allowed (it is a general-knowledge answer).
         ("What is the HSE lighting (lux) requirement for general site areas?", False),
+        # A bare mention of a "milestone" or a "site engineer" is not a
+        # Contract Data lookup -> no suppression (the broadened cues need the
+        # role / date / sectional context, not the word alone).
+        ("The project reached a major milestone yesterday.", False),
+        ("Ask the site engineer to check the rebar spacing on level 3.", False),
     ],
 )
 def test_contract_data_lookup_suppresses_master_corpus_on_a_project(text, expected):
