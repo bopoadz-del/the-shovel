@@ -207,7 +207,15 @@ def _arithmetic_was_performed(turn: dict[str, Any]) -> bool:
     state = turn.get("awaiting_inputs")
     if isinstance(state, dict) and state.get("missing"):
         return False
-    return _CALC_TOOL in (turn.get("tools") or [])
+    # Last resort: the calc tool was dispatched but the turn carried neither a
+    # credited figure nor awaiting-inputs state (a legacy end event). This is the
+    # one path that can report a calculator route with no evidence, so -- like
+    # the prose fallback -- it records a flag, surfaced in the artifact next to
+    # asks_inferred (ORDERS_03NOV_0715Z).
+    if _CALC_TOOL in (turn.get("tools") or []):
+        turn["_arith_inferred"] = True
+        return True
+    return False
 
 
 def classify_route(turn: dict[str, Any], question: str = "") -> str:
@@ -231,16 +239,25 @@ def classify_route(turn: dict[str, Any], question: str = "") -> str:
     # branch therefore only resolves in favour of a signal that is present; if it
     # is not, the branch falls through to the real precedence below.
     intent = classify_intent(question)
+    # Per-row diagnostic (ORDERS_03NOV_0715Z): the intent and the branch taken
+    # are recorded on the turn so the artifact shows the observer's path rather
+    # than leaving it to be inferred from the outside.
+    turn["_intent"] = intent
+
+    def _tag(branch: str, route: str) -> str:
+        turn["_route_branch"] = branch
+        return route
+
     if intent == INTENT_DOC_OP:
         # only if a document operation actually happened
         if any(t in _DOC_TOOLS for t in tools):
-            return ROUTE_TOOL_ON_DOC
+            return _tag("doc_op", ROUTE_TOOL_ON_DOC)
         # else: fall through and report what it really did
     if intent == INTENT_COMPUTE:
         if _arithmetic_was_performed(turn):
-            return ROUTE_CALCULATOR
+            return _tag("compute/arith", ROUTE_CALCULATOR)
         if _asks_for_inputs(turn):  # the product must have ACTUALLY asked
-            return ROUTE_ASKS_INPUTS
+            return _tag("compute/ask", ROUTE_ASKS_INPUTS)
         # else: fall through
     if intent == INTENT_LOOKUP:
         # A lookup answered from the project stands on the project, even if the
@@ -249,25 +266,25 @@ def classify_route(turn: dict[str, Any], question: str = "") -> str:
         # retrieved CLASS (an empty-string "class" is not a source) is not a
         # general-RAG answer -- it falls through to the real precedence.
         if classes & _PROJECT_CLASSES:
-            return ROUTE_PROJECT_RAG
+            return _tag("lookup/project", ROUTE_PROJECT_RAG)
         if classes & _GENERAL_CLASSES:  # NOT `if sources` -- [""] is not a class
-            return ROUTE_GENERAL_RAG
+            return _tag("lookup/general", ROUTE_GENERAL_RAG)
         # else: fall through
 
     # ── UNSPECIFIED / fell-through: the pre-intent precedence, untouched ──
     if _asks_for_inputs(turn):
-        return ROUTE_ASKS_INPUTS
+        return _tag("fallback/ask", ROUTE_ASKS_INPUTS)
     if _CALC_TOOL in tools:
-        return ROUTE_CALCULATOR
+        return _tag("fallback/calc", ROUTE_CALCULATOR)
     if any(t in _DOC_TOOLS for t in tools):
-        return ROUTE_TOOL_ON_DOC
+        return _tag("fallback/doc", ROUTE_TOOL_ON_DOC)
     if classes & _PROJECT_CLASSES:
-        return ROUTE_PROJECT_RAG
+        return _tag("fallback/project", ROUTE_PROJECT_RAG)
     if classes & _GENERAL_CLASSES:
-        return ROUTE_GENERAL_RAG
+        return _tag("fallback/general", ROUTE_GENERAL_RAG)
     if not sources and not (turn.get("provenance") or []):
-        return ROUTE_UNCLASSIFIED
-    return ROUTE_GENERAL_RAG
+        return _tag("fallback/unclassified", ROUTE_UNCLASSIFIED)
+    return _tag("fallback/general-default", ROUTE_GENERAL_RAG)
 
 
 # ── R6: grounding gate (ORDERS_03NOV_0310Z / 0420Z) ──────────────────────────
@@ -281,10 +298,12 @@ _PROV_USER = "user_input"
 
 
 def _grounded(expected: str, provenance: list[dict[str, Any]],
-              sources: list[str]) -> bool:
+              sources: list[str], turn: dict[str, Any] | None = None) -> bool:
     """True when the answer is grounded in the kind of source the expected route
-    claims. asks_for_inputs may carry only the user's own figures (or none);
-    tool_on_document is the one class evidenced by the sources panel."""
+    claims. asks_for_inputs may carry only the user's own figures (or none) AND
+    the product must actually have asked (so an evidence-free turn that did not
+    ask is not counted as a grounded ask); tool_on_document is the one class
+    evidenced by the sources panel."""
     kinds = {p.get("source") for p in (provenance or []) if isinstance(p, dict)}
     if expected == ROUTE_PROJECT_RAG:
         return _PROV_PROJECT in kinds
@@ -293,7 +312,8 @@ def _grounded(expected: str, provenance: list[dict[str, Any]],
     if expected == ROUTE_CALCULATOR:
         return _PROV_CALC in kinds
     if expected == ROUTE_ASKS_INPUTS:
-        return kinds <= {_PROV_USER}
+        asked = _asks_for_inputs(turn) if turn is not None else True
+        return kinds <= {_PROV_USER} and asked
     if expected == ROUTE_TOOL_ON_DOC:
         return _PROV_PROJECT in kinds or "project_corpus" in (sources or [])
     return True  # no other class appears in t1.json
@@ -434,8 +454,9 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
             prov = _provenance_digest(turn["provenance"])
             route_pass = observed == expected
             # Grounding reads the RAW provenance (its "source" kinds), not the
-            # flattened digest.
-            grounded = _grounded(expected, turn["provenance"], src_classes)
+            # flattened digest; the turn lets an asks_for_inputs row require that
+            # the product actually asked, not just that it has no other evidence.
+            grounded = _grounded(expected, turn["provenance"], src_classes, turn)
             results.append({
                 "question": text, "route_expected": expected, "route_observed": observed,
                 "answer": turn["answer"], "provenance": prov,
@@ -443,10 +464,17 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
                 "route_pass": route_pass,
                 "grounded": grounded,
                 "pass": route_pass and grounded,
-                # Telemetry (S1c): True when the route had to read the answer's
-                # phrasing because the turn carried no awaiting-inputs state.
-                # This count should fall to zero as the product emits state.
+                # Per-row diagnostic (ORDERS_03NOV_0715Z): the observer's path,
+                # so grading reads the branch instead of inferring it.
+                "intent": turn.get("_intent"),
+                "route_branch": turn.get("_route_branch"),
+                "tools": list(turn.get("tools") or []),
+                # Telemetry: True when the route had to read the answer's phrasing
+                # (asks_inferred) or the bare tool list (_arith_inferred) because
+                # the turn carried no authoritative state. Both should fall to
+                # zero as the product emits state.
                 "asks_inferred": bool(turn.get("_asks_inferred")),
+                "arith_inferred": bool(turn.get("_arith_inferred")),
             })
         except Exception as exc:  # noqa: BLE001 — one bad turn must not abort the battery
             results.append({"question": text, "route_expected": expected,
@@ -495,10 +523,13 @@ def main() -> int:
         print(f"[{verdict}] {r.get('route_expected')} -> {r.get('route_observed')}  "
               f"[{marks}]  {r.get('question')}")
     # R6: the headline is BOTH numbers; the gate keys on `pass` (route AND grounded).
-    # S1c telemetry: how many rows still fell back to prose for the asks-route.
+    # Telemetry: how many rows fell back to prose (asks) or to the bare tool
+    # list (arith) because the turn carried no authoritative state.
     asks_inferred = sum(1 for r in results if r.get("asks_inferred"))
+    arith_inferred = sum(1 for r in results if r.get("arith_inferred"))
     print(f"routes {route_passed}/{total}; grounded {grounded}/{total}; pass {passed}/{total}; "
-          f"asks_inferred {asks_inferred}/{total}; full per-question result in {result_file}")
+          f"asks_inferred {asks_inferred}/{total}; arith_inferred {arith_inferred}/{total}; "
+          f"full per-question result in {result_file}")
     code = battery_exit_code(passed, total)
     if code:
         print(f"::error::battery acceptance FAILED: pass {passed}/{total} "
