@@ -57,9 +57,44 @@ def test_a_grounded_project_answer_records_project_corpus(threshold_fired):
     assert "project_corpus" in classes, sources
 
 
-def test_an_ungrounded_below_threshold_turn_records_no_source():
-    """Trust gate fired and the answer does NOT quote the chunk -> no fabricated
-    sources panel (the pre-existing guard is preserved)."""
-    answer = "I don't have that in the project document sections."
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I don't have that in the project document sections.",
+        "The bond and retention percentages are not something I can state here.",
+    ],
+)
+def test_an_ungrounded_below_threshold_turn_records_no_source(answer):
+    """Trust gate fired and the answer does NOT quote the chunk (a decline or a
+    paraphrase) -> no fabricated sources panel (the pre-existing guard is
+    preserved)."""
     sources = _build_sources_from_audit(_audit(True), answer, [])
     assert sources == [], sources
+
+
+_OTHER_CLAUSE = (
+    "Clause 9.1 the Contractor shall carry out the Works in accordance with the "
+    "Programme and the method statements approved by the Engineer before start"
+)
+
+
+def test_only_the_quoted_chunk_is_recorded_when_the_gate_fired():
+    """Two below-threshold own-layer chunks reach the audit; the answer quotes
+    only the first. The Sources panel records ONLY the quoted chunk -- the
+    unquoted one is not fabricated into the panel. (This also kills the
+    ``chunks = grounded`` filter: dropping it would wrongly list d_other.)"""
+    audit = _audit(True)
+    audit["chunks"].append({
+        "doc_id": "d_other",
+        "layer": "own",
+        "source_name": "harbourline_programme.pdf",
+        "text": _OTHER_CLAUSE,
+        "score": 0.31,
+        "page": 2,
+        "chunk_index": 0,
+        "chunk_id": "c9",
+    })
+    answer = f"The contract requires the following. {_CLAUSE}."
+    sources = _build_sources_from_audit(audit, answer, [])
+    doc_ids = {s.get("doc_id") for s in sources}
+    assert doc_ids == {"d_con"}, sources
