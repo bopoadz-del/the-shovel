@@ -76,6 +76,10 @@ class Turn:
     questions: list[str] = field(default_factory=list)
     #: The question asked in place of the error text that came with it.
     error_questions: dict[str, str] = field(default_factory=dict)
+    #: Field names a tool said it needs and did not get (its ``missing`` list).
+    #: The turn's authoritative "I asked for inputs" state, read on the end
+    #: event by the route observer -- never a phrase match (S1c).
+    awaiting_inputs: list[str] = field(default_factory=list)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -193,6 +197,22 @@ def _input_questions(payload: Any) -> list[tuple[str, str]]:
     return found
 
 
+def _missing_input_names(payload: Any) -> list[str]:
+    """The field names a tool said it needs and did not get -- its ``missing``
+    list, wherever an envelope that asks for inputs carries one, at any depth.
+    This is the turn's state, not a phrase: a needs-input envelope names what it
+    wants, and that is what the route is read from (S1c)."""
+    found: list[str] = []
+    if isinstance(payload, dict):
+        if payload.get("missing") or payload.get("needs_input"):
+            for name in payload.get("missing") or []:
+                if isinstance(name, str) and name.strip():
+                    found.append(name.strip())
+        for key in ("result", "data"):
+            found.extend(_missing_input_names(payload.get(key)))
+    return found
+
+
 def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
     """Record a tool's error text so a copy of it in the answer is recognised,
     and its question for missing inputs."""
@@ -200,6 +220,9 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
     if turn is None:
         return
     try:
+        for name in _missing_input_names(payload):
+            if name not in turn.awaiting_inputs:
+                turn.awaiting_inputs.append(name)
         for question, err in _input_questions(payload):
             if question not in turn.questions:
                 turn.questions.append(question)
@@ -1595,6 +1618,14 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
         fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index)
+        # A completed answer carries its awaiting-inputs STATE: the field names
+        # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
+        # turn answered. A reader (the route observer) trusts this over any
+        # phrase in the prose. Set only when an answer leaves; a hard error with
+        # no answer leaves it absent, so the reader's own fallback still runs.
+        if "awaiting_inputs" not in fixed:
+            missing = sorted(set(turn.awaiting_inputs)) if turn else []
+            fixed["awaiting_inputs"] = {"missing": missing}
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
     return fixed
@@ -1619,4 +1650,12 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
             fixed["content"] = checked
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
+    # The turn's awaiting-inputs STATE rides out on the end event: the field
+    # names a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when
+    # the turn answered. A reader (the route observer) trusts this over the
+    # answer's wording (S1c). Set here and not left to each emitter so every
+    # streamed end event carries it uniformly.
+    if "awaiting_inputs" not in fixed:
+        missing = sorted(set(turn.awaiting_inputs)) if turn else []
+        fixed["awaiting_inputs"] = {"missing": missing}
     return fixed

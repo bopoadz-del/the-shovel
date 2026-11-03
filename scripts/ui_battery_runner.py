@@ -76,6 +76,7 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
     sources: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
     answer = ""
+    awaiting: dict[str, Any] | None = None
     for evt in events:
         if not isinstance(evt, dict):
             continue
@@ -91,7 +92,14 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 sources = [s for s in evt["sources"] if isinstance(s, dict)]
             if isinstance(evt.get("provenance"), list):
                 provenance = [p for p in evt["provenance"] if isinstance(p, dict)]
-    return {"tools": tools, "sources": sources, "provenance": provenance, "answer": answer}
+            # The product's own awaiting-inputs state (S1c). Present only when
+            # the turn emitted it; absent leaves the prose fallback to decide.
+            if isinstance(evt.get("awaiting_inputs"), dict):
+                awaiting = evt["awaiting_inputs"]
+    turn = {"tools": tools, "sources": sources, "provenance": provenance, "answer": answer}
+    if awaiting is not None:
+        turn["awaiting_inputs"] = awaiting
+    return turn
 
 
 def _source_classes(sources: list[dict[str, Any]]) -> set[str]:
@@ -99,8 +107,22 @@ def _source_classes(sources: list[dict[str, Any]]) -> set[str]:
 
 
 def _asks_for_inputs(turn: dict[str, Any]) -> bool:
-    """The product asked for a missing input rather than answering: its reply
-    matches the input-request phrasing and no calculator figure was credited."""
+    """The product asked for a missing input rather than answering.
+
+    The product's own state is authoritative: ``awaiting_inputs.missing`` is the
+    list of operands a tool asked for and did not get ([] when the turn
+    answered). It is read BEFORE any prose -- the closing courtesy of an answer
+    ("if you give me X I can convert ...") is wording, not a decision, and the
+    same question run twice must not flip the route on a rephrase (S1c).
+
+    Only when the turn carried no such state does the observer fall back to the
+    answer's phrasing, and it records ``_asks_inferred`` so that fallback count
+    can be watched to zero as the product's coverage grows.
+    """
+    state = turn.get("awaiting_inputs")
+    if isinstance(state, dict) and "missing" in state:
+        return bool(state.get("missing"))
+    turn["_asks_inferred"] = True
     answer = str(turn.get("answer") or "")
     credited_calc = any(
         isinstance(p, dict) and p.get("source") == "calculator" and p.get("inputs")
@@ -167,14 +189,25 @@ def classify_intent(message: str) -> str:
 
 
 def _arithmetic_was_performed(turn: dict[str, Any]) -> bool:
-    """A calculator actually produced a figure this turn (a credited calculator
-    provenance entry, or the construction_calc tool ran)."""
-    if _CALC_TOOL in (turn.get("tools") or []):
-        return True
-    return any(
+    """A calculator actually produced a figure this turn.
+
+    The calculator tool being DISPATCHED is not enough: it can error on a
+    missing operand, which is an ask for inputs, not a computation. The
+    authoritative signals are a credited calculator provenance entry (a figure
+    was produced) and the turn's awaiting-inputs STATE -- if a tool asked for
+    operands it did not get, nothing was computed (S1c). The tool-in-list
+    reading is kept only as the last resort for a turn that carried neither
+    signal (a legacy end event with no provenance and no state).
+    """
+    if any(
         isinstance(p, dict) and p.get("source") == "calculator"
         for p in turn.get("provenance") or []
-    )
+    ):
+        return True
+    state = turn.get("awaiting_inputs")
+    if isinstance(state, dict) and state.get("missing"):
+        return False
+    return _CALC_TOOL in (turn.get("tools") or [])
 
 
 def classify_route(turn: dict[str, Any], question: str = "") -> str:
@@ -410,6 +443,10 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
                 "route_pass": route_pass,
                 "grounded": grounded,
                 "pass": route_pass and grounded,
+                # Telemetry (S1c): True when the route had to read the answer's
+                # phrasing because the turn carried no awaiting-inputs state.
+                # This count should fall to zero as the product emits state.
+                "asks_inferred": bool(turn.get("_asks_inferred")),
             })
         except Exception as exc:  # noqa: BLE001 — one bad turn must not abort the battery
             results.append({"question": text, "route_expected": expected,
@@ -458,8 +495,10 @@ def main() -> int:
         print(f"[{verdict}] {r.get('route_expected')} -> {r.get('route_observed')}  "
               f"[{marks}]  {r.get('question')}")
     # R6: the headline is BOTH numbers; the gate keys on `pass` (route AND grounded).
+    # S1c telemetry: how many rows still fell back to prose for the asks-route.
+    asks_inferred = sum(1 for r in results if r.get("asks_inferred"))
     print(f"routes {route_passed}/{total}; grounded {grounded}/{total}; pass {passed}/{total}; "
-          f"full per-question result in {result_file}")
+          f"asks_inferred {asks_inferred}/{total}; full per-question result in {result_file}")
     code = battery_exit_code(passed, total)
     if code:
         print(f"::error::battery acceptance FAILED: pass {passed}/{total} "
