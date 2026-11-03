@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.agents import provenance_trail as pt
 from app.agents.citation_provenance import figure_provenance
 from app.lib.construction_formulas import run_calculation
@@ -73,6 +75,28 @@ def test_document_figures_are_credited_with_layer_document_and_page():
         pt.SOURCE_PROJECT, "d_spec", 41)
     assert (by_fig["100 mm"]["source"], by_fig["100 mm"]["doc_id"], by_fig["100 mm"]["page"]) == (
         pt.SOURCE_GENERAL, "d_hand", 17)
+
+
+@pytest.mark.parametrize(
+    "figure,doc_text",
+    [
+        ("10%", "Clause 4.2 Performance Security: 10% of the Accepted Contract Amount."),
+        ("5%", "Clause 14.3 Retention: 5% of each Interim Payment Certificate."),
+    ],
+)
+def test_a_contract_figure_folded_into_the_turn_is_the_project_not_user_input(figure, doc_text):
+    """S1a: a contract figure gets folded into the operator turn (RAG fold), so
+    user_vals is polluted with the document's numbers. The figure still came
+    from the project document and must be credited to it -- never user_input,
+    the one value that tells the owner "you gave me this number"."""
+    ctx = _excerpts(("d_con", "own", 1, "harbourline_contract.pdf", doc_text))
+    # The question echoes the clause text, so the figure is also in user_vals.
+    msgs = _user(f"What does the contract require? {doc_text}")
+    _out, prov = figure_provenance(f"The contract states {figure}.", ctx, msgs, enforce=False)
+    by = {e["figure"]: e for e in prov}
+    assert figure in by, by
+    assert by[figure]["source"] == pt.SOURCE_PROJECT
+    assert by[figure]["source"] != pt.SOURCE_USER
 
 
 def test_an_unsourced_figure_is_removed_when_enforced():

@@ -1557,18 +1557,26 @@ def figure_provenance(
         for m, value in _figure_mentions(text):
             fig = m.group(0).strip()
             entry: dict[str, Any] | None = None
-            if _match(value, _rescaled(user_vals)):
-                entry = {"figure": fig, "source": pt.SOURCE_USER}
-            if entry is None:
-                for nums, meta in calc_entries:
-                    if _match(value, _rescaled(nums)):
-                        entry = {"figure": fig, **meta}
-                        break
+            # S1a: attribute a figure to its SOURCE before crediting the user.
+            # "user_input" is a claim and must be proved against the user's own
+            # numbers only -- but a contract figure gets folded into the operator
+            # turn (RAG fold / predispatch), so user_vals is polluted with
+            # document numbers. Checking the calculator and the retrieved chunks
+            # FIRST means a figure that came from a project/general chunk is
+            # credited to that chunk, and user_input is reached only when the
+            # value matches the user's numbers AND nothing else produced it. A
+            # figure the user never typed can therefore never read user_input.
+            for nums, meta in calc_entries:
+                if _match(value, _rescaled(nums)):
+                    entry = {"figure": fig, **meta}
+                    break
             if entry is None:
                 for rec in retrievals:
                     if _match(value, _nums(rec.text)):
                         entry = _entry_for_record(rec, fig)
                         break
+            if entry is None and _match(value, _rescaled(user_vals)):
+                entry = {"figure": fig, "source": pt.SOURCE_USER}
             if entry is None and working and _match(value, working):
                 entry = {"figure": fig, "source": pt.SOURCE_CALCULATOR, "working": True}
             if entry is None:
