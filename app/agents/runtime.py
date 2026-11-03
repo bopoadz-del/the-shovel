@@ -9208,9 +9208,22 @@ def _build_sources_from_audit(
         return _finish([calc_row] if calc_row else [])
 
     # If the retrieval trust gate fired (identifier miss or confidence
-    # threshold), don't fabricate a sources panel from fallback chunks.
+    # threshold), don't fabricate a sources panel from fallback chunks -- UNLESS
+    # the answer actually QUOTES a retrieved chunk verbatim. A below-threshold
+    # chunk the answer reproduced is the evidence the answer stands on, so it
+    # must be recorded (S1: a turn answered out of a project document records
+    # project_corpus; battery Q5 answered the contract from a below-threshold
+    # chunk and showed sources=[]). _answer_quotes_passage needs a contiguous
+    # verbatim run, so a paraphrase or a decline recovers nothing -- no
+    # fabrication for a genuinely ungrounded low-confidence turn.
     if audit_rec.get("identifier_miss") or audit_rec.get("threshold_fired"):
-        return _finish([calc_row] if calc_row else [])
+        grounded = [
+            c for c in chunks
+            if _answer_quotes_passage(final_text, c.get("text") or "")
+        ]
+        if not grounded:
+            return _finish([calc_row] if calc_row else [])
+        chunks = grounded
 
     # If the assistant explicitly declined to answer, don't fabricate a
     # sources panel from low-score fallback chunks.
