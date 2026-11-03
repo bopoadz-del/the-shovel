@@ -53,13 +53,8 @@ _LOOKUP_CUES = (
     re.compile(r"\bperformance\s+bond\b", re.IGNORECASE),
     re.compile(r"\baccepted\s+contract\s+amount\b", re.IGNORECASE),
     re.compile(
-        # The Engineer's identity / appointment / powers -- a contract-role
-        # lookup. Broadened for "who is NAMED AS the Engineer" and "the Engineer
-        # and what are their POWERS" (battery Q4), while a bare "site engineer"
-        # mention does not match (needs the role context).
-        r"\b(?:who\s+is\s+(?:named\s+as\s+)?(?:the\s+)?engineer"
-        r"|engineer\s+under\s+(?:this\s+|the\s+)?contract"
-        r"|the\s+engineer\b.{0,40}\bpower)",
+        r"\b(?:who\s+is\s+(?:the\s+)?engineer|engineer\s+under\s+"
+        r"(?:this\s+|the\s+)?contract)\b",
         re.IGNORECASE,
     ),
     re.compile(r"\baconex\b", re.IGNORECASE),
@@ -68,11 +63,6 @@ _LOOKUP_CUES = (
         re.IGNORECASE,
     ),
     re.compile(r"\bhow\s+many\s+milestones\b", re.IGNORECASE),
-    # Milestone / sectional completion terms are Contract Data (battery Q6:
-    # "milestone dates or sectional completion terms"). A bare "reached a
-    # milestone" has no date/completion/sectional context and does not match.
-    re.compile(r"\bsectional\s+completion\b", re.IGNORECASE),
-    re.compile(r"\bmilestone\s+(?:date|dates|completion)\b", re.IGNORECASE),
     re.compile(
         r"\bmilestone\s+\d+\b.{0,40}\btime\s+for\s+completion\b",
         re.IGNORECASE | re.DOTALL,
