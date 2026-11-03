@@ -103,24 +103,73 @@ def test_classify_intent_reads_the_question_structure(message, expected_intent):
      _turn(sources=[{"source_class": "project_corpus"}],
            answer="Clause 8.7 ... tell me the Accepted Contract Amount and I'll compute it."),
      ROUTE_PROJECT_RAG),
-    # Q17: a COMPUTE whose operand was never resolved is asks_for_inputs even when
-    # the answer quotes project clauses (no calculator figure was produced).
+    # Q17: a COMPUTE whose operand was never resolved is asks_for_inputs -- but
+    # only because the product ACTUALLY asked (R8); the answer here matches the
+    # product's missing-input phrasing.
     ("Calculate the delay damages.",
      _turn(sources=[{"source_class": "project_corpus"}],
-           answer="Clause 8.7 sets 0.1%/day; give me the Accepted Contract Amount."),
+           answer="I need the Accepted Contract Amount to compute the delay damages."),
      ROUTE_ASKS_INPUTS),
     # a COMPUTE whose calculator DID run is llm_calculator
     ("Concrete volume for a raft 30 x 20 x 1.5 m?",
      _turn(tools=["construction_calc"],
            provenance=[{"figure": "945 m3", "source": "calculator", "inputs": []}]),
      ROUTE_CALCULATOR),
-    # a DOC_OPERATION is tool_on_document
+    # a DOC_OPERATION is tool_on_document -- only because a document tool actually
+    # ran this turn (R8).
     ("Summarise the named specification document.",
-     _turn(sources=[{"source_class": "project_document"}]),
+     _turn(tools=["generate_wbs"], sources=[{"source_class": "project_document"}]),
      ROUTE_TOOL_ON_DOC),
 ])
 def test_classify_route_keys_on_intent_first(question, turn, expected):
     assert classify_route(turn, question) == expected
+
+
+# ── R8: intent RESOLVES a conflict, it never SUPPLIES a route (0455Z) ─────────
+# Each of these would have scored a false PASS under the first #101, where the
+# intent branch returned a route the product's own signals did not support.
+
+
+@pytest.mark.parametrize("question,turn", [
+    # a document-operation question whose turn ran NO document tool -- the product
+    # answered from general knowledge instead (Q19 with no spec in the fixtures)
+    ("Summarise the named specification document.",
+     _turn(sources=[{"source_class": "general_knowledge"}], answer="The handbook says ...")),
+    # a WBS build that the product could NOT complete -- no tool ran
+    ("Build the WBS / work-breakdown for the project.",
+     _turn(answer="I could not build the schedule for this request.")),
+])
+def test_doc_op_without_a_doc_tool_is_not_tool_on_document(question, turn):
+    assert classify_route(turn, question) != ROUTE_TOOL_ON_DOC
+
+
+@pytest.mark.parametrize("question,turn", [
+    # a compute question that neither computed NOR asked -- it answered from
+    # general knowledge (Q18 produced a take-off narrative, no arithmetic, no ask)
+    ("Produce a priced take-off for the element.",
+     _turn(sources=[{"source_class": "general_knowledge"}], answer="A take-off typically lists the measured items.")),
+    # a compute question that quoted a project clause but neither computed nor asked
+    ("Calculate the delay damages.",
+     _turn(sources=[{"source_class": "project_corpus"}], answer="Clause 8.7 states 0.1% per day.")),
+])
+def test_compute_that_neither_computed_nor_asked_is_not_asks_for_inputs(question, turn):
+    assert classify_route(turn, question) != ROUTE_ASKS_INPUTS
+
+
+@pytest.mark.parametrize("question,turn", [
+    # a lookup whose only "source" is the empty-string class is NOT a general-RAG
+    # answer; the empty string is not a source. Q8's real shape: the calculator
+    # ran on defaults, so the honest route is llm_calculator (a FAIL), never a
+    # green general_rag.
+    ("What is the minimum formwork striking time for the specified concrete grade?",
+     _turn(tools=["construction_calc"], sources=[{"source_class": ""}],
+           provenance=[{"figure": "8.0 hours", "source": "calculator"}])),
+    ("What does BS EN 1997 require for a dewatering uplift check?",
+     _turn(tools=["construction_calc"], sources=[{"source_class": ""}],
+           provenance=[{"figure": "1.5", "source": "calculator"}])),
+])
+def test_lookup_with_only_the_empty_class_is_not_general_rag(question, turn):
+    assert classify_route(turn, question) != ROUTE_GENERAL_RAG
 
 
 # ── R6: grounding gate (ORDERS_03NOV_0310Z/0420Z) ────────────────────────────

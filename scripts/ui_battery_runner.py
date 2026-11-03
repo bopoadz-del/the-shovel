@@ -189,22 +189,39 @@ def classify_route(turn: dict[str, Any], question: str = "") -> str:
     sources = turn.get("sources") or []
     classes = _source_classes(sources)
 
+    # R8 (ORDERS_03NOV_0455Z): intent RESOLVES a conflict among the signals the
+    # product actually produced; it never SUPPLIES a route the product's own
+    # signals do not support. Otherwise route_observed becomes a function of the
+    # question, the comparison against route_expected is a tautology, and the
+    # score measures nothing (it would turn ~5 rows green with no product change,
+    # including a turn whose calculator fabricated an operand). Each intent
+    # branch therefore only resolves in favour of a signal that is present; if it
+    # is not, the branch falls through to the real precedence below.
     intent = classify_intent(question)
     if intent == INTENT_DOC_OP:
-        return ROUTE_TOOL_ON_DOC
+        # only if a document operation actually happened
+        if any(t in _DOC_TOOLS for t in tools):
+            return ROUTE_TOOL_ON_DOC
+        # else: fall through and report what it really did
     if intent == INTENT_COMPUTE:
-        return ROUTE_CALCULATOR if _arithmetic_was_performed(turn) else ROUTE_ASKS_INPUTS
+        if _arithmetic_was_performed(turn):
+            return ROUTE_CALCULATOR
+        if _asks_for_inputs(turn):  # the product must have ACTUALLY asked
+            return ROUTE_ASKS_INPUTS
+        # else: fall through
     if intent == INTENT_LOOKUP:
         # A lookup answered from the project stands on the project, even if the
-        # answer also offers to compute something (Q2). A doc tool having run
-        # does not make a lookup a document operation (Q1).
+        # answer also offers to compute something (Q2); a doc tool having run
+        # does not make a lookup a document operation (Q1). But a lookup with no
+        # retrieved CLASS (an empty-string "class" is not a source) is not a
+        # general-RAG answer -- it falls through to the real precedence.
         if classes & _PROJECT_CLASSES:
             return ROUTE_PROJECT_RAG
-        if sources:
+        if classes & _GENERAL_CLASSES:  # NOT `if sources` -- [""] is not a class
             return ROUTE_GENERAL_RAG
-        # a lookup with no retrieved source falls through to the fallback
+        # else: fall through
 
-    # ── UNSPECIFIED fallback: the pre-intent precedence, untouched ──
+    # ── UNSPECIFIED / fell-through: the pre-intent precedence, untouched ──
     if _asks_for_inputs(turn):
         return ROUTE_ASKS_INPUTS
     if _CALC_TOOL in tools:
