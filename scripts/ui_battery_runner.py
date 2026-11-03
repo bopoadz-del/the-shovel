@@ -109,24 +109,125 @@ def _asks_for_inputs(turn: dict[str, Any]) -> bool:
     return bool(_ASK_RE.search(answer)) and not credited_calc
 
 
-def classify_route(turn: dict[str, Any]) -> str:
-    """The route the turn actually took, from observable signals only.
+# ── S2: question-intent layer ───────────────────────────────────────────────
+# The route is driven by what was ASKED first, with sources/tools as
+# confirmation only. Q2 and Q17 produce the same answer shape (a grounded
+# contract figure plus an offer to compute) but differ only in the question:
+# Q2 asks what the contract states (a lookup, fully answerable), Q17 says
+# "calculate" (a computation whose operand is missing). No rule over sources or
+# tools can separate them; the question can. Structural only -- no per-question
+# strings (ORDERS_03NOV_0152Z / 0345Z / 0420Z).
+INTENT_LOOKUP = "lookup"
+INTENT_COMPUTE = "compute"
+INTENT_DOC_OP = "doc_op"
+INTENT_UNSPECIFIED = "unspecified"
 
-    Precedence: an input-request wins (even if a calculator was attempted and
-    came back empty); then a calculator run; then a tool over a document; then
-    the retrieved-source class (project corpus vs general). A turn with no tool,
-    no retrieved source AND no provenance has nothing to attribute the answer to
-    -- it is "unclassified" (a FAIL), never silently passed as general RAG, so a
-    silent/empty answer cannot slip through."""
+# A document OPERATION: an imperative verb over a document/deliverable artefact
+# ("summarise the specification", "build the WBS").
+_DOC_OP_RE = re.compile(
+    r"\b(?:summari[sz]e|build|generate|create|draft|prepare|export|compile)\b"
+    r".{0,40}\b(?:document|spec(?:ification)?|report|wbs|work[\s-]?breakdown|"
+    r"schedule|programme|program|gantt|drawing)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+# A COMPUTATION: an explicit calculate verb, a digit-flanked arithmetic
+# operator, a "per ... at ... rate/amount/times" formula, or a quantity a
+# calculator produces from operands (load capacity, carbon footprint, a priced
+# take-off, a payment certificate). "lux", a bare "rate", or a "requirement"
+# are NOT arithmetic -- those stay lookups.
+_COMPUTE_RE = re.compile(
+    r"\b(?:calculate|compute|work\s+out)\b"
+    r"|\d\s*[x*×/]\s*\d"
+    r"|\bper\s+\w+\b.{0,60}\b(?:times|multiplied|rate|amount)\b"
+    r"|\btimes\b.{0,30}\b(?:amount|rate|total|sum)\b"
+    r"|\b(?:load\s+capacity|carbon\s+footprint|footprint|priced\s+take[\s-]?off|take[\s-]?off)\b"
+    r"|\bissue\s+a\b.{0,30}\b(?:certificate|valuation)\b"
+    r"|\bpayment\s+certificate\b",
+    re.IGNORECASE | re.DOTALL,
+)
+# A LOOKUP: an interrogative asking what a value IS (from a document/standard).
+_LOOKUP_RE = re.compile(
+    r"^\s*(?:what|who|which|when|where|how\s+many|does|is|are|list|name)\b",
+    re.IGNORECASE,
+)
+
+
+def classify_intent(message: str) -> str:
+    """The intent CLASS of the question, by structure. Document-operation beats
+    computation beats lookup; anything else is unspecified (the existing
+    source/tool precedence then decides)."""
+    raw = message or ""
+    if _DOC_OP_RE.search(raw):
+        return INTENT_DOC_OP
+    if _COMPUTE_RE.search(raw):
+        return INTENT_COMPUTE
+    if _LOOKUP_RE.search(raw) or raw.strip().endswith("?"):
+        return INTENT_LOOKUP
+    return INTENT_UNSPECIFIED
+
+
+def _arithmetic_was_performed(turn: dict[str, Any]) -> bool:
+    """A calculator actually produced a figure this turn (a credited calculator
+    provenance entry, or the construction_calc tool ran)."""
+    if _CALC_TOOL in (turn.get("tools") or []):
+        return True
+    return any(
+        isinstance(p, dict) and p.get("source") == "calculator"
+        for p in turn.get("provenance") or []
+    )
+
+
+def classify_route(turn: dict[str, Any], question: str = "") -> str:
+    """The route the turn actually took. The QUESTION'S INTENT decides first;
+    sources and tools confirm. For an UNSPECIFIED question the old
+    source/tool precedence is used unchanged.
+
+    ``question`` is the full operator question, not a truncated preview -- a
+    classifier reading a preview would be a silent defect.
+    """
     tools = turn.get("tools") or []
     sources = turn.get("sources") or []
+    classes = _source_classes(sources)
+
+    # R8 (ORDERS_03NOV_0455Z): intent RESOLVES a conflict among the signals the
+    # product actually produced; it never SUPPLIES a route the product's own
+    # signals do not support. Otherwise route_observed becomes a function of the
+    # question, the comparison against route_expected is a tautology, and the
+    # score measures nothing (it would turn ~5 rows green with no product change,
+    # including a turn whose calculator fabricated an operand). Each intent
+    # branch therefore only resolves in favour of a signal that is present; if it
+    # is not, the branch falls through to the real precedence below.
+    intent = classify_intent(question)
+    if intent == INTENT_DOC_OP:
+        # only if a document operation actually happened
+        if any(t in _DOC_TOOLS for t in tools):
+            return ROUTE_TOOL_ON_DOC
+        # else: fall through and report what it really did
+    if intent == INTENT_COMPUTE:
+        if _arithmetic_was_performed(turn):
+            return ROUTE_CALCULATOR
+        if _asks_for_inputs(turn):  # the product must have ACTUALLY asked
+            return ROUTE_ASKS_INPUTS
+        # else: fall through
+    if intent == INTENT_LOOKUP:
+        # A lookup answered from the project stands on the project, even if the
+        # answer also offers to compute something (Q2); a doc tool having run
+        # does not make a lookup a document operation (Q1). But a lookup with no
+        # retrieved CLASS (an empty-string "class" is not a source) is not a
+        # general-RAG answer -- it falls through to the real precedence.
+        if classes & _PROJECT_CLASSES:
+            return ROUTE_PROJECT_RAG
+        if classes & _GENERAL_CLASSES:  # NOT `if sources` -- [""] is not a class
+            return ROUTE_GENERAL_RAG
+        # else: fall through
+
+    # ── UNSPECIFIED / fell-through: the pre-intent precedence, untouched ──
     if _asks_for_inputs(turn):
         return ROUTE_ASKS_INPUTS
     if _CALC_TOOL in tools:
         return ROUTE_CALCULATOR
     if any(t in _DOC_TOOLS for t in tools):
         return ROUTE_TOOL_ON_DOC
-    classes = _source_classes(sources)
     if classes & _PROJECT_CLASSES:
         return ROUTE_PROJECT_RAG
     if classes & _GENERAL_CLASSES:
@@ -134,6 +235,35 @@ def classify_route(turn: dict[str, Any]) -> str:
     if not sources and not (turn.get("provenance") or []):
         return ROUTE_UNCLASSIFIED
     return ROUTE_GENERAL_RAG
+
+
+# ── R6: grounding gate (ORDERS_03NOV_0310Z / 0420Z) ──────────────────────────
+# A correct route is necessary but not sufficient: the answer must also be
+# GROUNDED in a source of the kind the route claims, or the row fails. This is
+# measurement only -- no product code is involved.
+_PROV_PROJECT = "project_document"
+_PROV_GENERAL = "general_knowledge"
+_PROV_CALC = "calculator"
+_PROV_USER = "user_input"
+
+
+def _grounded(expected: str, provenance: list[dict[str, Any]],
+              sources: list[str]) -> bool:
+    """True when the answer is grounded in the kind of source the expected route
+    claims. asks_for_inputs may carry only the user's own figures (or none);
+    tool_on_document is the one class evidenced by the sources panel."""
+    kinds = {p.get("source") for p in (provenance or []) if isinstance(p, dict)}
+    if expected == ROUTE_PROJECT_RAG:
+        return _PROV_PROJECT in kinds
+    if expected == ROUTE_GENERAL_RAG:
+        return _PROV_GENERAL in kinds
+    if expected == ROUTE_CALCULATOR:
+        return _PROV_CALC in kinds
+    if expected == ROUTE_ASKS_INPUTS:
+        return kinds <= {_PROV_USER}
+    if expected == ROUTE_TOOL_ON_DOC:
+        return _PROV_PROJECT in kinds or "project_corpus" in (sources or [])
+    return True  # no other class appears in t1.json
 
 
 def _provenance_digest(provenance: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -266,17 +396,25 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
         text, expected = q.get("question", ""), q.get("route_expected", "")
         try:
             turn = turn_from_events(_stream_turn(client, base, cred, project_id, text))
-            observed = classify_route(turn)
+            observed = classify_route(turn, text)
+            src_classes = sorted(_source_classes(turn["sources"]))
+            prov = _provenance_digest(turn["provenance"])
+            route_pass = observed == expected
+            # Grounding reads the RAW provenance (its "source" kinds), not the
+            # flattened digest.
+            grounded = _grounded(expected, turn["provenance"], src_classes)
             results.append({
                 "question": text, "route_expected": expected, "route_observed": observed,
-                "answer": turn["answer"], "provenance": _provenance_digest(turn["provenance"]),
-                "sources": sorted(_source_classes(turn["sources"])),
-                "route_pass": observed == expected,
+                "answer": turn["answer"], "provenance": prov,
+                "sources": src_classes,
+                "route_pass": route_pass,
+                "grounded": grounded,
+                "pass": route_pass and grounded,
             })
         except Exception as exc:  # noqa: BLE001 — one bad turn must not abort the battery
             results.append({"question": text, "route_expected": expected,
                             "route_observed": None, "error": f"{type(exc).__name__}: {exc}",
-                            "route_pass": False})
+                            "route_pass": False, "grounded": False, "pass": False})
     return results
 
 
@@ -310,16 +448,22 @@ def main() -> int:
         json.dump({"project_id": project_id, "results": results}, fh, indent=2)
     # Stdout (public Actions log) carries ONLY route PASS/FAIL per question —
     # never the answers, which may contain the owner's figures.
-    passed = sum(1 for r in results if r.get("route_pass"))
+    total = len(results)
+    route_passed = sum(1 for r in results if r.get("route_pass"))
+    grounded = sum(1 for r in results if r.get("grounded"))
+    passed = sum(1 for r in results if r.get("pass"))
     for r in results:
-        verdict = "PASS" if r.get("route_pass") else "FAIL"
+        verdict = "PASS" if r.get("pass") else "FAIL"
+        marks = f"route={'Y' if r.get('route_pass') else 'n'} grounded={'Y' if r.get('grounded') else 'n'}"
         print(f"[{verdict}] {r.get('route_expected')} -> {r.get('route_observed')}  "
-              f"{r.get('question')}")
-    print(f"route_pass {passed}/{len(results)}; full per-question result in {result_file}")
-    code = battery_exit_code(passed, len(results))
+              f"[{marks}]  {r.get('question')}")
+    # R6: the headline is BOTH numbers; the gate keys on `pass` (route AND grounded).
+    print(f"routes {route_passed}/{total}; grounded {grounded}/{total}; pass {passed}/{total}; "
+          f"full per-question result in {result_file}")
+    code = battery_exit_code(passed, total)
     if code:
-        print(f"::error::battery acceptance FAILED: {passed}/{len(results)} routes passed "
-              f"(the run is red until 20/20)")
+        print(f"::error::battery acceptance FAILED: pass {passed}/{total} "
+              f"(routes {route_passed}/{total}, grounded {grounded}/{total}) -- red until 20/20")
     return code
 
 

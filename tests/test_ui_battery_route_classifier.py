@@ -9,14 +9,19 @@ from __future__ import annotations
 import pytest
 
 from scripts.ui_battery_runner import (
+    INTENT_COMPUTE,
+    INTENT_DOC_OP,
+    INTENT_LOOKUP,
     ROUTE_ASKS_INPUTS,
     ROUTE_CALCULATOR,
     ROUTE_GENERAL_RAG,
     ROUTE_PROJECT_RAG,
     ROUTE_TOOL_ON_DOC,
     ROUTE_UNCLASSIFIED,
+    _grounded,
     _pick_project,
     battery_exit_code,
+    classify_intent,
     classify_route,
     turn_from_events,
 )
@@ -65,6 +70,132 @@ def _turn(tools=(), sources=(), provenance=(), answer=""):
 ])
 def test_classify_route_reads_the_observed_route(turn, expected):
     assert classify_route(turn) == expected
+
+
+# ── S2: question-intent layer (ORDERS_03NOV_0152Z/0345Z/0420Z) ───────────────
+
+
+@pytest.mark.parametrize("message,expected_intent", [
+    # LOOKUP: interrogative asking what a value IS (>=2 phrasings)
+    ("What is the Defects Notification Period?", INTENT_LOOKUP),
+    ("What is the HSE lighting (lux) requirement for general site areas?", INTENT_LOOKUP),
+    # COMPUTE: a calculate verb, arithmetic, or a quantity produced from operands
+    ("Calculate the delay damages.", INTENT_COMPUTE),
+    ("Concrete volume for a raft 30 x 20 x 1.5 m?", INTENT_COMPUTE),
+    ("Scaffold load capacity for the stated configuration?", INTENT_COMPUTE),
+    # DOC_OPERATION: an imperative over a document / deliverable
+    ("Summarise the named specification document.", INTENT_DOC_OP),
+    ("Build the WBS / work-breakdown for the project.", INTENT_DOC_OP),
+])
+def test_classify_intent_reads_the_question_structure(message, expected_intent):
+    assert classify_intent(message) == expected_intent
+
+
+@pytest.mark.parametrize("question,turn,expected", [
+    # Q1: a LOOKUP answered from the project is project_rag even though a document
+    # tool ran -- the DOC_OP branch must not claim it.
+    ("What is the Time for Completion under the contract?",
+     _turn(tools=["fetch_document"], sources=[{"source_class": "project_document"}]),
+     ROUTE_PROJECT_RAG),
+    # Q2: a LOOKUP answered from the project that also offers to compute stays
+    # project_rag (not asks_for_inputs).
+    ("What delay-damages rate and cap does the contract state?",
+     _turn(sources=[{"source_class": "project_corpus"}],
+           answer="Clause 8.7 ... tell me the Accepted Contract Amount and I'll compute it."),
+     ROUTE_PROJECT_RAG),
+    # Q17: a COMPUTE whose operand was never resolved is asks_for_inputs -- but
+    # only because the product ACTUALLY asked (R8); the answer here matches the
+    # product's missing-input phrasing.
+    ("Calculate the delay damages.",
+     _turn(sources=[{"source_class": "project_corpus"}],
+           answer="I need the Accepted Contract Amount to compute the delay damages."),
+     ROUTE_ASKS_INPUTS),
+    # a COMPUTE whose calculator DID run is llm_calculator
+    ("Concrete volume for a raft 30 x 20 x 1.5 m?",
+     _turn(tools=["construction_calc"],
+           provenance=[{"figure": "945 m3", "source": "calculator", "inputs": []}]),
+     ROUTE_CALCULATOR),
+    # a DOC_OPERATION is tool_on_document -- only because a document tool actually
+    # ran this turn (R8).
+    ("Summarise the named specification document.",
+     _turn(tools=["generate_wbs"], sources=[{"source_class": "project_document"}]),
+     ROUTE_TOOL_ON_DOC),
+])
+def test_classify_route_keys_on_intent_first(question, turn, expected):
+    assert classify_route(turn, question) == expected
+
+
+# ── R8: intent RESOLVES a conflict, it never SUPPLIES a route (0455Z) ─────────
+# Each of these would have scored a false PASS under the first #101, where the
+# intent branch returned a route the product's own signals did not support.
+
+
+@pytest.mark.parametrize("question,turn", [
+    # a document-operation question whose turn ran NO document tool -- the product
+    # answered from general knowledge instead (Q19 with no spec in the fixtures)
+    ("Summarise the named specification document.",
+     _turn(sources=[{"source_class": "general_knowledge"}], answer="The handbook says ...")),
+    # a WBS build that the product could NOT complete -- no tool ran
+    ("Build the WBS / work-breakdown for the project.",
+     _turn(answer="I could not build the schedule for this request.")),
+])
+def test_doc_op_without_a_doc_tool_is_not_tool_on_document(question, turn):
+    assert classify_route(turn, question) != ROUTE_TOOL_ON_DOC
+
+
+@pytest.mark.parametrize("question,turn", [
+    # a compute question that neither computed NOR asked -- it answered from
+    # general knowledge (Q18 produced a take-off narrative, no arithmetic, no ask)
+    ("Produce a priced take-off for the element.",
+     _turn(sources=[{"source_class": "general_knowledge"}], answer="A take-off typically lists the measured items.")),
+    # a compute question that quoted a project clause but neither computed nor asked
+    ("Calculate the delay damages.",
+     _turn(sources=[{"source_class": "project_corpus"}], answer="Clause 8.7 states 0.1% per day.")),
+])
+def test_compute_that_neither_computed_nor_asked_is_not_asks_for_inputs(question, turn):
+    assert classify_route(turn, question) != ROUTE_ASKS_INPUTS
+
+
+@pytest.mark.parametrize("question,turn", [
+    # a lookup whose only "source" is the empty-string class is NOT a general-RAG
+    # answer; the empty string is not a source. Q8's real shape: the calculator
+    # ran on defaults, so the honest route is llm_calculator (a FAIL), never a
+    # green general_rag.
+    ("What is the minimum formwork striking time for the specified concrete grade?",
+     _turn(tools=["construction_calc"], sources=[{"source_class": ""}],
+           provenance=[{"figure": "8.0 hours", "source": "calculator"}])),
+    ("What does BS EN 1997 require for a dewatering uplift check?",
+     _turn(tools=["construction_calc"], sources=[{"source_class": ""}],
+           provenance=[{"figure": "1.5", "source": "calculator"}])),
+])
+def test_lookup_with_only_the_empty_class_is_not_general_rag(question, turn):
+    assert classify_route(turn, question) != ROUTE_GENERAL_RAG
+
+
+# ── R6: grounding gate (ORDERS_03NOV_0310Z/0420Z) ────────────────────────────
+
+
+@pytest.mark.parametrize("expected,provenance,sources,is_grounded", [
+    # a project route must stand on a project_document provenance
+    (ROUTE_PROJECT_RAG, [{"source": "project_document"}], [], True),
+    (ROUTE_PROJECT_RAG, [{"source": "general_knowledge"}], [], False),
+    # general route -> general_knowledge
+    (ROUTE_GENERAL_RAG, [{"source": "general_knowledge"}], [], True),
+    (ROUTE_GENERAL_RAG, [{"source": "calculator"}], [], False),
+    # calculator route -> a calculator figure
+    (ROUTE_CALCULATOR, [{"source": "calculator"}], [], True),
+    # asks_for_inputs may carry only the user's own figures (or none), never a
+    # figure it got elsewhere
+    (ROUTE_ASKS_INPUTS, [{"source": "user_input"}], [], True),
+    (ROUTE_ASKS_INPUTS, [], [], True),
+    (ROUTE_ASKS_INPUTS, [{"source": "project_document"}], [], False),
+    # tool_on_document is evidenced by the sources panel (a summary/WBS need not
+    # carry a figure)
+    (ROUTE_TOOL_ON_DOC, [], ["project_corpus"], True),
+    (ROUTE_TOOL_ON_DOC, [], ["knowledge_base"], False),
+])
+def test_grounded_requires_the_route_s_own_evidence(expected, provenance, sources, is_grounded):
+    assert _grounded(expected, provenance, sources) is is_grounded
 
 
 @pytest.mark.parametrize("events,exp_tools,exp_classes,exp_answer", [
