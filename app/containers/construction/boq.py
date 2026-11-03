@@ -739,6 +739,19 @@ class ConstructionBoqMixin:
                         "provide 'contract_value' (with 'work_done_percent') "
                         "or 'gross_valuation' to issue a payment certificate"
                     ),
+                    # The turn asked for inputs it did not get: name them as
+                    # state (``missing`` + ``needs_input``) and in the user's
+                    # words (``question``), the same shape the calculator's
+                    # missing-operand envelope carries, so the turn records this
+                    # as an ask and the route reads it from state, not prose
+                    # (S1c). Not an additive offer -- the certificate cannot be
+                    # issued without one of these.
+                    "needs_input": True,
+                    "missing": ["contract_value", "gross_valuation"],
+                    "question": (
+                        "What is the contract value (with the percentage of work "
+                        "done), or the gross valuation, for the payment certificate?"
+                    ),
                 }
         elif direct_gross > 0:
             # Operator stated this-period certified work / gross. Do not
