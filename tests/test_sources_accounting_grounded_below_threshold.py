@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+import app.agents.runtime as rt
 from app.agents.runtime import _build_sources_from_audit
 
 # A real (non-master) project id is a hex slug.
@@ -23,6 +24,10 @@ _CLAUSE = (
     "Clause 4.2 Performance Security shall be ten percent of the Accepted "
     "Contract Amount and Clause 14.3 Retention shall be five percent of each "
     "Interim Payment Certificate released on the Taking-Over Certificate"
+)
+_OTHER_CLAUSE = (
+    "Clause 9.1 the Contractor shall carry out the Works in accordance with the "
+    "Programme and the method statements approved by the Engineer before start"
 )
 
 
@@ -72,29 +77,27 @@ def test_an_ungrounded_below_threshold_turn_records_no_source(answer):
     assert sources == [], sources
 
 
-_OTHER_CLAUSE = (
-    "Clause 9.1 the Contractor shall carry out the Works in accordance with the "
-    "Programme and the method statements approved by the Engineer before start"
-)
-
-
-def test_only_the_quoted_chunk_is_recorded_when_the_gate_fired():
-    """Two below-threshold own-layer chunks reach the audit; the answer quotes
-    only the first. The Sources panel records ONLY the quoted chunk -- the
-    unquoted one is not fabricated into the panel. (This also kills the
-    ``chunks = grounded`` filter: dropping it would wrongly list d_other.)"""
-    audit = _audit(True)
-    audit["chunks"].append({
-        "doc_id": "d_other",
-        "layer": "own",
-        "source_name": "harbourline_programme.pdf",
-        "text": _OTHER_CLAUSE,
-        "score": 0.31,
-        "page": 2,
-        "chunk_index": 0,
-        "chunk_id": "c9",
-    })
-    answer = f"The contract requires the following. {_CLAUSE}."
+@pytest.mark.parametrize("mc_text", [_CLAUSE, _OTHER_CLAUSE])
+def test_master_corpus_is_dropped_when_suppression_fires(monkeypatch, mc_text):
+    """When should_suppress_master_corpus_fallback fires, a master-corpus-layer
+    chunk is dropped so the answer does not stand on another project's corpus;
+    the project's own chunk remains. (Guards the first `if` in the function --
+    removing it would leave the master-corpus chunk in the Sources panel.)"""
+    monkeypatch.setattr(rt, "should_suppress_master_corpus_fallback", lambda pid, ask: True)
+    audit = {
+        "project_id": _PROJECT_ID,
+        "user_message_preview": "irrelevant -- suppression is forced on",
+        "chunks": [
+            {"doc_id": "d_mc", "layer": "master_corpus", "source_name": "other.pdf",
+             "text": mc_text, "score": 0.9, "page": 1, "chunk_index": 0, "chunk_id": "m0"},
+            {"doc_id": "d_con", "layer": "own", "source_name": "harbourline_contract.pdf",
+             "text": _OTHER_CLAUSE, "score": 0.9, "page": 2, "chunk_index": 0, "chunk_id": "c0"},
+        ],
+    }
+    # The answer quotes both chunks, so only the suppression drop keeps the
+    # master-corpus one out of the panel.
+    answer = f"{mc_text} Separately, {_OTHER_CLAUSE}."
     sources = _build_sources_from_audit(audit, answer, [])
-    doc_ids = {s.get("doc_id") for s in sources}
-    assert doc_ids == {"d_con"}, sources
+    classes = {s.get("source_class") for s in sources}
+    assert "master_corpus" not in classes, sources
+    assert "project_corpus" in classes, sources
