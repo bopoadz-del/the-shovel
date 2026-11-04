@@ -1273,6 +1273,27 @@ def current_project_docs() -> list:
     return _PROJECT_DOCS.get() or []
 
 
+def project_docs_from_chunks(chunks, fallback_text=None) -> list:
+    """Operand-resolution documents from a turn's retrieved chunks. Each chunk
+    that carries text becomes ``{document, text, chunk}``; when none carry text
+    but a retrieved blob is present, one ``retrieved project context`` doc holds
+    the blob so a documented operand is still found (citation then generic)."""
+    docs: list = []
+    for chunk in chunks or []:
+        if not isinstance(chunk, dict):
+            continue
+        text = chunk.get("text") or chunk.get("content")
+        if text:
+            docs.append({
+                "document": chunk.get("document") or chunk.get("doc") or chunk.get("source_label"),
+                "text": text,
+                "chunk": chunk.get("chunk_index"),
+            })
+    if not docs and fallback_text:
+        docs = [{"document": "retrieved project context", "text": fallback_text, "chunk": None}]
+    return docs
+
+
 def _ask_blob(params: Dict[str, Any]) -> str:
     return " ".join(
         str(x) for x in (

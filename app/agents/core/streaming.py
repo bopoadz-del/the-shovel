@@ -287,6 +287,18 @@ async def _chat_stream_impl(
         agent_name=self.name,
         history=effective_history,
     )
+    # S3: expose this turn's retrieved documents to operand resolution so a
+    # calculator can resolve a documented operand (waste, bulking) from the
+    # project and cite it, never a default. No chunks -> empty, resolves as
+    # before.
+    from app.lib.construction_formulas import (
+        project_docs_from_chunks as _project_docs_from_chunks,
+        set_project_docs as _set_project_docs,
+    )
+    _set_project_docs(_project_docs_from_chunks(
+        (_rag_audit or {}).get("chunks"),
+        (_rag_sys_msg or {}).get("content") if _rag_sys_msg else None,
+    ))
     # The message preparation below scans the question and the excerpts with
     # many patterns: in a worker thread, like retrieval (CI: 125-203 ms loop
     # stalls here at 15 users). Only this turn's coroutine touches `messages`.

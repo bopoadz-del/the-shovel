@@ -73,6 +73,16 @@ def test_resolve_concrete_volume_calc_cites_documented_waste(docs, expect_waste,
         cf._PROJECT_DOCS.reset(token)
 
 
+@pytest.mark.parametrize("chunks,fallback,expected", [
+    ([{"document": "Spec 02300", "text": "waste 5%", "chunk_index": 3}], None,
+     [{"document": "Spec 02300", "text": "waste 5%", "chunk": 3}]),
+    ([{"document": "X"}], "retrieved blob stating waste 7%",
+     [{"document": "retrieved project context", "text": "retrieved blob stating waste 7%", "chunk": None}]),
+])
+def test_project_docs_from_chunks(chunks, fallback, expected):
+    assert cf.project_docs_from_chunks(chunks, fallback) == expected
+
+
 @pytest.mark.parametrize("docs", [
     [],
     [{"document": "Drawing register", "text": "no waste stated"}],
