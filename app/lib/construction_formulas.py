@@ -1254,6 +1254,25 @@ def _with_current_ask(text: str) -> str:
     return f"{text} {ask}".strip()
 
 
+# S3: the project's own documents available to operand resolution this turn --
+# a list of mappings carrying at least ``text`` (and ``document`` / ``chunk``
+# for the citation), set from the retrieved chunks by the route. Empty by
+# default, so a context that never sets it resolves exactly as before.
+_PROJECT_DOCS: contextvars.ContextVar[list] = contextvars.ContextVar(
+    "calc_project_docs", default=[]
+)
+
+
+def set_project_docs(docs: list):
+    """The retrieved project documents for every calculator run in this
+    context, so an engineering operand can be resolved from them and cited."""
+    return _PROJECT_DOCS.set(list(docs or []))
+
+
+def current_project_docs() -> list:
+    return _PROJECT_DOCS.get() or []
+
+
 def _ask_blob(params: Dict[str, Any]) -> str:
     return " ".join(
         str(x) for x in (

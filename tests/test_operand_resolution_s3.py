@@ -49,3 +49,42 @@ def test_resolve_operand_from_project_document_is_cited(name, docs, expected_val
 ])
 def test_resolve_operand_unresolved_is_none_never_default(docs):
     assert q.resolve_operand("waste_factor", {}, docs) == (None, None)
+
+
+# ── wired path: a documented-waste raft ask resolves from project docs ───────
+import app.lib.construction_formulas as cf  # noqa: E402 -- dotted, for CI-M
+
+
+@pytest.mark.parametrize("docs,expect_waste,expect_cite", [
+    ([{"document": "BOQ preamble", "text": "documented waste 5% on concrete"}], 0.05, "BOQ preamble"),
+    ([{"document": "Spec 02300", "text": "waste factor 7% for in-situ concrete"}], 0.07, "Spec 02300"),
+])
+def test_resolve_concrete_volume_calc_cites_documented_waste(docs, expect_waste, expect_cite):
+    token = cf.set_project_docs(docs)
+    try:
+        _name, out = q.resolve_concrete_volume_calc(
+            "concrete_volume",
+            {"length_m": 30, "width_m": 20, "thickness_m": 1.5,
+             "text": "raft 30 x 20 x 1.5 m including documented waste"},
+        )
+        assert out.get("waste_factor") == expect_waste
+        assert out.get("waste_factor_citation") == expect_cite
+    finally:
+        cf._PROJECT_DOCS.reset(token)
+
+
+@pytest.mark.parametrize("docs", [
+    [],
+    [{"document": "Drawing register", "text": "no waste stated"}],
+])
+def test_documented_waste_ask_with_no_document_stays_awaiting(docs):
+    token = cf.set_project_docs(docs)
+    try:
+        _name, out = q.resolve_concrete_volume_calc(
+            "concrete_volume",
+            {"length_m": 30, "width_m": 20, "thickness_m": 1.5,
+             "text": "raft 30 x 20 x 1.5 m including documented waste"},
+        )
+        assert "waste_factor" not in out   # required input, never invented
+    finally:
+        cf._PROJECT_DOCS.reset(token)

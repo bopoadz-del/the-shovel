@@ -430,9 +430,20 @@ def resolve_concrete_volume_calc(
         # answer saying which rate had been used.
         out["waste_factor"] = stated
     elif requested in (None, "", 0, 0.0) and _DOCUMENTED_WASTE_ASK_RE.search(blob):
-        # K-T5: the ask wants the project's documented waste but no figure
-        # was stated or supplied. It is a required input -- do not invent one.
-        out.pop("waste_factor", None)
+        # K-T5 / S3: the ask wants the project's DOCUMENTED waste, with no
+        # figure stated or supplied. Resolve it from the project's own
+        # documents and cite them; a built-in default is never an option. If
+        # no document states it, it stays a required input (awaiting_inputs),
+        # never invented.
+        from app.lib import construction_formulas as _cf
+        value, provenance = resolve_operand("waste_factor", {}, _cf.current_project_docs())
+        if provenance == "project_document":
+            out["waste_factor"] = value
+            hit = lookup_in_project_documents("waste_factor", _cf.current_project_docs())
+            if hit and hit.get("document"):
+                out["waste_factor_citation"] = hit["document"]
+        else:
+            out.pop("waste_factor", None)
 
     # A follow-up that says "that total" often re-calls this calculator with
     # the per-element size and no count. ``quantity`` used to be dropped on
