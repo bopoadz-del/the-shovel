@@ -138,6 +138,9 @@ jobs:
           FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
           FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
           PYTHONPATH: .
+          # R11 harness: the seed records documents/chunks/uploaded/indexed_wait
+          # here; the battery step reads it into result["harness"]["seeded"].
+          BATTERY_SEED_STATS: seed_stats.json
         # CEREBRUM_MASTER_KEY is inherited from $GITHUB_ENV (the resolve step
         # above); it is intentionally NOT a step-level secret mapping, so an
         # absent repo secret can't override the resolved value with empty.
@@ -152,6 +155,12 @@ jobs:
           FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
           RESULT_FILE: battery_result.json
           PYTHONPATH: .
+          # R11 sha gate: the commit the triggering deploy shipped (empty on a
+          # manual dispatch -> no gate). The runner polls /health build_sha and
+          # FAILS if the live service never reaches it within READY_WAIT_S.
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          READY_WAIT_S: "600"
+          BATTERY_SEED_STATS: seed_stats.json
         run: python scripts/ui_battery_runner.py
 
       - name: Upload the per-question result

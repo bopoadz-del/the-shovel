@@ -349,6 +349,19 @@ def _indexed_count(project: dict[str, Any]) -> int:
     return 0
 
 
+def _chunk_count(project: dict[str, Any]) -> int | None:
+    """Best-effort count of index chunks on a project row, or None when the
+    listing does not expose one — recorded honestly rather than guessed, so the
+    R11 corpus comparison is void when the number is unknown."""
+    for key in ("chunk_count", "indexed_chunks", "embedded_chunks", "total_chunks"):
+        val = project.get(key)
+        if isinstance(val, int):
+            return val
+        if isinstance(val, list):
+            return len(val)
+    return None
+
+
 def _pick_project(projects: list[dict[str, Any]], project_name: str | None) -> dict[str, Any] | None:
     """Resolve the battery's project with NO hardcoded id: by exact name when a
     project_name is given, else the project with the most indexed documents.
@@ -491,11 +504,53 @@ def battery_exit_code(passed: int, total: int) -> int:
     return 0 if total > 0 and passed == total else 1
 
 
+def _await_live_sha(client: Any, base: str, expected_sha: str | None,
+                    wait_s: int | None = None) -> str | None:
+    """Return the commit the live service reports at ``/health`` (``build_sha``).
+
+    With ``expected_sha`` set (the commit the deploy shipped), poll until the
+    live service is actually serving that commit and FAIL if it has not within
+    ``READY_WAIT_S`` — a battery measured against half-rolled or stale code is
+    void (R11). With no expected sha (a manual dispatch carries none), record
+    whatever is live and do not gate.
+    """
+    import time as _time
+
+    import httpx  # lazy, matching main()
+
+    if wait_s is None:
+        wait_s = int(os.environ.get("READY_WAIT_S", "600"))
+    deadline = _time.monotonic() + max(wait_s, 0)
+    live: str | None = None
+    while True:
+        try:
+            resp = client.get(f"{base}/health", timeout=15)
+            if resp.status_code == 200:
+                live = (resp.json() or {}).get("build_sha") or None
+        except (httpx.HTTPError, ValueError) as exc:
+            # A service mid-rollout can refuse or 5xx; keep polling to the
+            # deadline rather than failing on a transient probe.
+            print(f"::warning::battery: /health probe failed, retrying ({exc})")
+            live = None
+        if expected_sha is None:
+            return live
+        if live is not None and live == expected_sha:
+            return live
+        if _time.monotonic() >= deadline:
+            print(f"::error::battery: live sha {live!r} != expected {expected_sha!r} "
+                  f"after {wait_s}s — refusing to measure the wrong code (R11).")
+            raise SystemExit(3)
+        _time.sleep(10)
+
+
 def main() -> int:
     import httpx  # lazy: only the live run needs it
+    from pathlib import Path
 
     battery_file = os.environ.get("BATTERY_FILE")
     result_file = os.environ.get("RESULT_FILE", "battery_result.json")
+    # The commit the deploy that triggered us shipped; empty on a manual dispatch.
+    expected_sha = os.environ.get("EXPECTED_SHA") or None
     # A blank PROJECT_NAME targets the battery's own seeded project, never
     # an implicit "whatever has the most documents" (ORDERS_02NOV_1545Z).
     project_name = os.environ.get("PROJECT_NAME") or DEFAULT_BATTERY_PROJECT
@@ -506,11 +561,29 @@ def main() -> int:
         questions = json.load(fh)
     cred, base = _auth_base()  # exits/raises with the smoke-live ::error if creds absent
     with httpx.Client() as client:
+        # R11 sha gate: a run measured against the wrong code is void. When the
+        # deploy handed us its commit, wait for the live service to be serving
+        # exactly that before asking a single question.
+        live_sha = _await_live_sha(client, base, expected_sha)
         project_id = resolve_project(client, base, cred, project_name)
         results = run_battery(questions, base, cred, project_id, client)
+    # R11 harness: the sha the run actually measured and the corpus it asked
+    # against (written by the seed step), so two runs compare only when both
+    # match; seeded is null when the seed stats are absent rather than invented.
+    seed_stats_path = Path(os.environ.get("BATTERY_SEED_STATS", "seed_stats.json"))
+    seeded: Any = None
+    if seed_stats_path.exists():
+        try:
+            seeded = json.loads(seed_stats_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"::warning::battery: could not read seed stats ({exc}); seeded=null")
     # The artifact carries the full result (answer + provenance) for review.
     with open(result_file, "w", encoding="utf-8") as fh:
-        json.dump({"project_id": project_id, "results": results}, fh, indent=2)
+        json.dump({
+            "project_id": project_id,
+            "harness": {"live_sha": live_sha, "expected_sha": expected_sha, "seeded": seeded},
+            "results": results,
+        }, fh, indent=2)
     # Stdout (public Actions log) carries ONLY route PASS/FAIL per question —
     # never the answers, which may contain the owner's figures.
     total = len(results)
@@ -677,6 +750,8 @@ def seed_main() -> int:
         else:
             print(f"[seed] found project {name!r}")
 
+        uploaded_this_run = False
+        indexed_wait_s = 0.0
         if _fixtures_needed(row):
             pid = str((row or {}).get("id") or (row or {}).get("project_id") or "")
             files = _fixture_paths(fixtures_dir)
@@ -710,11 +785,28 @@ def seed_main() -> int:
                     )
                     resp.raise_for_status()
                 print(f"[seed] uploaded {path.name}")
+                uploaded_this_run = True
+            _t0 = time.time()
             _wait_until_indexed(fetch_rows, name, SEED_POLL_ATTEMPTS,
                                 lambda: time.sleep(SEED_POLL_SLEEP_S))
+            indexed_wait_s = time.time() - _t0
             print("[seed] fixtures indexed")
         else:
             print("[seed] project already indexed; nothing to upload")
+        # R11 harness: record the corpus this run seeded so two battery runs are
+        # compared only when they asked against the same documents. main() reads
+        # this file into result["harness"]["seeded"]; absent -> seeded=null.
+        _, _final = _seed_decision(fetch_rows(), name)
+        _stats = {
+            "documents": _indexed_count(_final or {}),
+            "chunks": _chunk_count(_final or {}),
+            "uploaded_this_run": uploaded_this_run,
+            "indexed_wait_s": round(indexed_wait_s, 1),
+        }
+        pathlib.Path(os.environ.get("BATTERY_SEED_STATS", "seed_stats.json")).write_text(
+            json.dumps(_stats), encoding="utf-8")
+        print(f"[seed] stats documents={_stats['documents']} chunks={_stats['chunks']} "
+              f"uploaded_this_run={uploaded_this_run} indexed_wait_s={_stats['indexed_wait_s']}")
     return 0
 
 
