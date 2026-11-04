@@ -187,6 +187,99 @@ def documented_concrete_waste_factor(text: str = "") -> float | None:
     """The concrete waste factor the project text states, else None (K-T5)."""
     return waste_factor_from_text(text or "")
 
+
+# A documented bulking/swell factor, as a MULTIPLIER (1.25 for "bulking factor
+# 1.25" or "25% swell"). The number must sit within a few words of the
+# bulking/swell word, so a stray percentage elsewhere (retention 5%, a 1.5 m
+# dim) never donates one -- the same belongs-to-the-word rule as waste.
+_BULKING_WORD_RE = re.compile(r"\b(?:bulking|swell)(?:\s+factor)?\b", re.IGNORECASE)
+_BULKING_PCT_RE = re.compile(r"\b(\d{1,2}(?:\.\d+)?)\s*(?:%|per\s?cent(?:age)?)", re.IGNORECASE)
+_BULKING_MULT_RE = re.compile(r"\b([12](?:\.\d+)?)\b")
+_BULKING_WINDOW = 30
+
+
+def bulking_factor_from_text(text: str = "") -> float | None:
+    """The bulking/swell multiplier the project text states (1.25), else None."""
+    if not text:
+        return None
+    word = _BULKING_WORD_RE.search(text)
+    if not word:
+        return None
+    window = text[max(0, word.start() - _BULKING_WINDOW): word.end() + _BULKING_WINDOW]
+    pct = _BULKING_PCT_RE.search(window)
+    if pct:
+        value = float(pct.group(1))
+        if 0.0 < value <= 100.0:
+            return 1.0 + value / 100.0
+    mult = _BULKING_MULT_RE.search(window)
+    if mult:
+        value = float(mult.group(1))
+        if 1.0 <= value <= 3.0:
+            return value
+    return None
+
+
+# S3: an engineering operand resolves in ONE order -- the user's input, then
+# the project's own documents (cited), then an honest ask. A built-in default
+# is never a fourth option (K-T5: an operand is a project value, never a figure
+# pinned in code). Each resolvable operand maps to the extractor that reads it
+# from a document's text, keyed generically so a new operand adds a row here,
+# not a branch in the calculator.
+_OPERAND_EXTRACTORS = {
+    "waste_factor": waste_factor_from_text,
+    "bulking_factor": bulking_factor_from_text,
+}
+
+
+def _operand_supplied(name, supplied) -> bool:
+    if not isinstance(supplied, dict) or name not in supplied:
+        return False
+    value = supplied[name]
+    return value is not None and str(value).strip() != ""
+
+
+def lookup_in_project_documents(name, project_docs):
+    """First (value, citation) for operand ``name`` read from the project's own
+    documents -- BOQ preamble, specification, method statement. ``project_docs``
+    is an iterable of mappings carrying at least ``text`` (and ``document`` /
+    ``chunk`` for the citation). Returns a dict ``{name, value, document,
+    chunk}`` on the first document that states it, else None -- never a default.
+    """
+    extractor = _OPERAND_EXTRACTORS.get(name)
+    if extractor is None:
+        return None
+    for doc in project_docs or []:
+        if not isinstance(doc, dict):
+            continue
+        value = extractor(doc.get("text") or "")
+        if value is not None:
+            return {
+                "name": name,
+                "value": value,
+                "document": doc.get("document") or doc.get("doc") or doc.get("source_label"),
+                "chunk": doc.get("chunk", doc.get("chunk_index")),
+            }
+    return None
+
+
+def resolve_operand(name, supplied, project_docs):
+    """Resolve one engineering operand, in order, with its provenance:
+
+    user input -> ("user_input")          the figure the caller/ask carried
+    project document -> ("project_document")  a value a project doc states, cited
+    neither -> (None, None)               the turn goes to awaiting_inputs.missing
+
+    A built-in default is never returned. The project-document branch's citation
+    is carried on the lookup result (``lookup_in_project_documents``) so the
+    caller can name the document the value came from.
+    """
+    if _operand_supplied(name, supplied):
+        return supplied[name], "user_input"
+    hit = lookup_in_project_documents(name, project_docs)
+    if hit is not None:
+        return hit["value"], "project_document"
+    return None, None
+
 def looks_like_concrete_volume_ask(text: str) -> bool:
     """True when the ask is a concrete/raft/slab volume, not leftover-L6 earthwork."""
     return bool(_CONCRETE_VOLUME_ASK_RE.search(text or ""))
