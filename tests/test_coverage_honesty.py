@@ -162,13 +162,36 @@ def test_total_zero_is_not_a_free_pass():
     assert "did not search" in out
 
 
-def test_the_answer_names_the_corpus_it_searched():
+@pytest.mark.parametrize("session_pid,turn_pid,expected",
+    [("session_pid", "turn_pid", "turn_pid"), ("session_pid", None, "session_pid")])
+def test_the_answer_names_the_corpus_it_searched(session_pid, turn_pid, expected):
     # the turn's own project wins; the session project is only a fallback
-    assert answer_corpus_id("session_pid", "turn_pid") == "turn_pid"
-    assert answer_corpus_id("session_pid", None) == "session_pid"
-    assert answer_corpus_id(None, None) is None
+    assert answer_corpus_id(session_pid, turn_pid) == expected
 
 
-def test_full_index_keeps_the_answer_unchanged():
-    raw = "Clause 8.8 does not exist in this volume."
-    assert finalise_answer(raw, 10, 10) == raw
+@pytest.mark.parametrize("text,indexed,total",
+    [("Clause 8.8 does not exist in this volume.", 10, 10),
+     ("No delay-damages clause here.", 5, 5)])
+def test_full_index_keeps_the_answer_unchanged(text, indexed, total):
+    assert finalise_answer(text, indexed, total) == text
+
+
+@pytest.mark.parametrize("raw",
+    ["The clause does not exist.", "Nothing was found anywhere."])
+def test_apply_with_nothing_returns_unchanged(raw):
+    assert apply_coverage_honesty(raw) == raw
+
+
+def test_apply_with_project_id_uses_live_coverage(monkeypatch):
+    from app.core.rag import coverage_honesty as ch
+    monkeypatch.setattr(ch, "live_coverage", lambda pid: (15, 3352))
+    out = apply_coverage_honesty("The clause does not exist.", project_id="drive_archive")
+    assert "15 of 3352 project documents indexed" in out
+    assert "does not exist" not in out.lower()
+
+
+def test_apply_with_void_coverage_never_claims_a_search():
+    out = apply_coverage_honesty(
+        "I searched the project's documents and found nothing.", coverage=(0, 118))
+    assert "searched" not in out.lower()
+    assert "did not search" in out
