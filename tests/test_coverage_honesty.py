@@ -141,6 +141,9 @@ def test_zero_coverage_never_claims_a_search(indexed, total):
         "specification.", indexed, total)
     assert "I searched the project's documents" not in out
     assert "did not search" in out
+    # The counts footer rides along even at zero: the runtime stamps it on
+    # every answer that knows its project.
+    assert f"{indexed} of {total} project documents indexed" in out
 
 
 @pytest.mark.parametrize("indexed,total", [(2, 118), (117, 118)])
@@ -155,6 +158,7 @@ def test_void_coverage_drops_every_search_claim_sentence():
     out = finalise_answer(raw, 0, 5)
     assert "searched" not in out.lower()
     assert "did not search" in out
+    assert "0 of 5 project documents indexed" in out
 
 
 def test_total_zero_is_not_a_free_pass():

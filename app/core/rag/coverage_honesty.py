@@ -9,7 +9,10 @@ corpus that is still being ingested. Rewrite them to
 
 When NOTHING is indexed, the answer may not claim to have searched the
 project's documents at all. It states what is true: a void-coverage line,
-and any sentence that claims a search is removed. ``total == 0`` is not a
+and any sentence that claims a search is removed. The counts footer still
+rides along (``0 of M project documents indexed``) because the counts are
+true even at zero and the runtime stamps it on every answer that knows its
+project. ``total == 0`` is not a
 free pass either — an empty project is still partial.
 
 The 2,935 / 6,206 pair used in tests is the historical coverage fixture,
@@ -145,9 +148,12 @@ def finalise_answer(text: str, indexed: int, total: int) -> str:
     if coverage_is_void(idx, tot):
         body = strip_search_claims(body)
         line = format_void_coverage(tot)
-        if line in body:
-            return body
-        return (body + "\n\n" + line + "\n") if body else line + "\n"
+        if line not in body:
+            body = (body + "\n\n" + line) if body else line
+        # The counts footer still rides along: ``0 of M project documents
+        # indexed`` is true even at zero, and the runtime contract stamps it
+        # on every answer that knows its project.
+        return ensure_coverage_line(body, idx, tot)
     if is_partial(idx, tot):
         body = rewrite_forbidden_absence_claims(body, idx, tot)
         return ensure_coverage_line(body, idx, tot)
