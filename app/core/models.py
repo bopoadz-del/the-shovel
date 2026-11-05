@@ -416,6 +416,21 @@ class Document(Base):
     # Extractor family that produced the current chunks. Tied to the
     # content-control fix (#550 / 8535199-sdt).
     extractor_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ── OCR page ledger (migration 0032) ────────────────────────────────
+    # A scan truncated by the OCR page cap must never look complete. These
+    # columns are what PARTIAL_OCR reads: pages_in_file vs pages_ocrd, the
+    # truncation flag, why OCR never ran, and pages whose OCR output failed
+    # the quality floor. NULL for non-PDF sources and rows indexed before
+    # the pages ledger existed.
+    pages_in_file: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pages_ocrd: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ocr_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("FALSE"),
+    )
+    ocr_skip_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    ocr_unusable_pages: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=sa_text("0"),
+    )
 
 
 class ProjectFact(Base):

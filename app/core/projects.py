@@ -30,10 +30,12 @@ from app.core.ingest_status import (
     INDEXED,
     INDEXED_STATUSES,
     NO_CHUNK_STATUSES,
+    PARTIAL_OCR,
     QUARANTINED,
     TOMBSTONED,
     UNSUPPORTED_TYPE,
     ZERO_CHUNK,
+    partial_read_note,
 )
 from app.core.models import Document, IngestionJob, Project, ProjectFact
 from app.core.system_projects import GENERAL_KNOWLEDGE_PROJECT_DEFAULT, general_knowledge_env, primary_general_knowledge_project
@@ -285,12 +287,22 @@ def panel_status_for(doc: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
     The detail is the reason already stored on the row (the index skip, or
     the ingest status and its reason). A missing chunk count never becomes
-    an extraction failure on its own.
+    an extraction failure on its own. A PARTIAL_OCR document keeps its
+    chunks, so the chunk-count early return must not hide it: the panel
+    says exactly which pages were read.
     """
+    ingest = str(doc.get("ingest_status") or "").strip()
+    if ingest == PARTIAL_OCR:
+        return {
+            "label": "Partially read",
+            "detail": partial_read_note(
+                doc.get("pages_ocrd"), doc.get("pages_in_file"),
+            ),
+            "status": PARTIAL_OCR,
+        }
     if int(doc.get("chunk_count") or 0) > 0 or doc.get("searchable"):
         return None
     indexing = _indexing_record(doc)
-    ingest = str(doc.get("ingest_status") or "").strip()
     reason = str(doc.get("ingest_status_reason") or "").strip()
     status = str(indexing.get("status") or "").strip()
     detail = str(indexing.get("detail") or "").strip()
@@ -349,6 +361,11 @@ def _document_as_dict(document: Document) -> Dict[str, Any]:
     )
     out["extractor_version"] = getattr(document, "extractor_version", None)
     out["drive_md5"] = getattr(document, "drive_md5", None)
+    out["pages_in_file"] = getattr(document, "pages_in_file", None)
+    out["pages_ocrd"] = getattr(document, "pages_ocrd", None)
+    out["ocr_truncated"] = bool(getattr(document, "ocr_truncated", False))
+    out["ocr_skip_reason"] = getattr(document, "ocr_skip_reason", None)
+    out["ocr_unusable_pages"] = int(getattr(document, "ocr_unusable_pages", 0) or 0)
     pointers = extract_document_source_pointers(out)
     local = _path_looks_present(out.get("file_path") or "")
     out["has_remote_source"] = bool(pointers["drive_file_id"])
@@ -1720,6 +1737,11 @@ def stamp_document_index(
     ingest_status_reason: Optional[str] = None,
     extractor_version: Optional[str] = None,
     stamp_extractor_version: bool = True,
+    pages_in_file: Optional[int] = None,
+    pages_ocrd: Optional[int] = None,
+    ocr_truncated: bool = False,
+    ocr_skip_reason: Optional[str] = None,
+    ocr_unusable_pages: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """Write ledger columns after a successful (re)index. Never deletes.
 
@@ -1742,6 +1764,11 @@ def stamp_document_index(
             document.chunk_count = int(chunk_count)
             document.ingest_status = ingest_status
             document.ingest_status_reason = ingest_status_reason
+            document.pages_in_file = pages_in_file
+            document.pages_ocrd = pages_ocrd
+            document.ocr_truncated = bool(ocr_truncated)
+            document.ocr_skip_reason = ocr_skip_reason
+            document.ocr_unusable_pages = int(ocr_unusable_pages or 0)
             if ingest_status in NO_CHUNK_STATUSES:
                 delete_document_chunks(session, doc_id)
                 document.chunk_count = 0

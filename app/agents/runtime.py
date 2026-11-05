@@ -3659,6 +3659,17 @@ def _resolve_file_path(project_id: str, raw: Any) -> Any:
 _FETCH_DOCUMENT_MAX_CHARS = 24_000
 
 
+def _partial_read_note_for_doc(doc: dict[str, Any] | None) -> str | None:
+    """PARTIAL_OCR rows: the user-facing 'partially read, pages 1-N of M'
+    note read from the ledger columns. None for every other status."""
+    if not doc:
+        return None
+    from app.core.ingest_status import PARTIAL_OCR, partial_read_note
+    if str(doc.get("ingest_status") or "") != PARTIAL_OCR:
+        return None
+    return partial_read_note(doc.get("pages_ocrd"), doc.get("pages_in_file"))
+
+
 def _fetch_document_content(
     project_id: str, doc_id: str, filename: str
 ) -> tuple:
@@ -3753,6 +3764,8 @@ def _fetch_document_content(
                 )
             doc_project_id, doc = partial[0]
 
+    partial_note = _partial_read_note_for_doc(doc)
+
     # Preferred source: the indexed RAG chunks (already extracted/cleaned).
     text = ""
     source = "chunks"
@@ -3778,6 +3791,10 @@ def _fetch_document_content(
         except Exception as exc:  # noqa: BLE001
             return None, doc, f"could not read document content: {exc}"
     if not text.strip():
+        if partial_note:
+            # A PARTIAL_OCR document with no usable pages is not "unreadable
+            # scan"; the ledger says exactly what happened.
+            return None, doc, partial_note
         return None, doc, (
             "document has no extractable text (it may be a scanned/raster file "
             "that is not yet OCR-indexed)"
@@ -3787,7 +3804,12 @@ def _fetch_document_content(
     truncated = len(text) > fetch_cap
     if truncated:
         text = text[:fetch_cap]
-    return {"text": text, "truncated": truncated, "source": source}, doc, None
+    content = {"text": text, "truncated": truncated, "source": source}
+    if partial_note:
+        # The ledger says this document was partially read; the answer for it
+        # must say so too, never present the OCR'd prefix as the whole file.
+        content["partial_read"] = partial_note
+    return content, doc, None
 
 
 def _build_attached_documents_note(attached: list[dict[str, Any]]) -> str:

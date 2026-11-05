@@ -52,6 +52,10 @@ UNSUPPORTED_TYPE = "UNSUPPORTED_TYPE"
 EXTRACT_FAILED = "EXTRACT_FAILED"
 TOMBSTONED = "TOMBSTONED"
 QUARANTINED = "QUARANTINED"
+# A scanned PDF whose OCR was capped mid-file. NOT INDEXED -- the user is
+# told "partially read, pages 1-N of M" -- but its chunks (the pages that
+# WERE read) stay retrievable, so it is not a no-chunk status either.
+PARTIAL_OCR = "PARTIAL_OCR"
 # Reason token, not a CHECK status. OCR skipped above the size/memory
 # ceiling must be visible on the ledger; adding a new ingest_status value
 # would require an ALTER CONSTRAINT. Recoverable: force_ocr / raise ceiling.
@@ -70,6 +74,7 @@ ALL_STATUSES = frozenset(
         EXTRACT_FAILED,
         TOMBSTONED,
         QUARANTINED,
+        PARTIAL_OCR,
     }
 )
 
@@ -78,7 +83,9 @@ ALL_STATUSES = frozenset(
 # transaction (projects.delete_document_chunks), and retrieval ignores any
 # chunk of such a document. UNVERIFIED (not yet classified) is neither: a
 # document holds its chunks for a moment before the ledger classifies it.
-NO_CHUNK_STATUSES = ALL_STATUSES - INDEXED_STATUSES - {UNVERIFIED}
+# PARTIAL_OCR is deliberately excluded too: its chunks are real, readable
+# pages -- the document is partially read, not chunk-less.
+NO_CHUNK_STATUSES = ALL_STATUSES - INDEXED_STATUSES - {UNVERIFIED, PARTIAL_OCR}
 
 # Extractor family stamped on INDEXED rows after the content-control fix.
 # #550 / 8535199: Word SDT + deduped text boxes. Bump the suffix when the
@@ -107,6 +114,18 @@ RECOVERABLE = "recoverable"  # a richer source for this document exists
 # the reason; the row is then closed for this extractor. A new
 # EXTRACTOR_VERSION or new source bytes reopen it.
 ATTEMPTS_MARK = "attempts_exhausted@"
+
+
+def partial_read_note(pages_ocrd: int | None, pages_in_file: int | None) -> str:
+    """The user-facing phrasing for a PARTIAL_OCR document: what was read
+    and what the file actually holds. One wording for the UI and the chat."""
+    n = int(pages_ocrd or 0)
+    m = int(pages_in_file or 0)
+    if m > 0 and n > 0:
+        return f"partially read, pages 1-{min(n, m)} of {m}"
+    if m > 0:
+        return f"partially read, no usable OCR text from its {m} pages"
+    return "partially read (the OCR pass was cut short)"
 
 
 def is_ingestible(name_or_ext: str | None) -> bool:
