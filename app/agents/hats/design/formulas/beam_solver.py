@@ -97,8 +97,6 @@ def selected_condition(text: str | None) -> str | None:
     raw = text or ""
     if _PROP_RE.search(raw):
         return "propped_cantilever"
-    if not raw.strip():
-        return None
     if _FIXED_BOTH_RE.search(raw):
         return "fixed_fixed"
     if _OVERHANG_RE.search(raw):
@@ -121,8 +119,6 @@ def _load_list(loads: Any) -> list[dict[str, Any]]:
     accepts both shapes rather than iterating a dict's keys."""
     if isinstance(loads, dict):
         return [loads]
-    if loads is None:
-        return []
     if isinstance(loads, (list, tuple)):
         return [load for load in loads if isinstance(load, dict)]
     return []
@@ -244,9 +240,9 @@ def _finite_in_range(value: Any, lo: float, hi: float) -> float | None:
             exc_info=True,
         )
         return None
-    if not (lo <= v <= hi):
-        return None
     if not math.isfinite(v):
+        return None
+    if not (lo <= v <= hi):
         return None
     return v
 
@@ -401,9 +397,12 @@ def _length_and_force(text: str) -> tuple[float | None, float | None]:
 
 def _param_number(params: dict[str, Any], *names: str) -> float | None:
     for name in names:
+        val = params.get(name)
+        if val is None or val == "":
+            continue
         try:
-            return float(params.get(name))
-        except (TypeError, ValueError):
+            return float(val)
+        except ValueError:
             continue
     return None
 

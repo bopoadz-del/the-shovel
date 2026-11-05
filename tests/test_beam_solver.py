@@ -18,12 +18,14 @@ mechanism, not the transcript:
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
 from app.agents.hats.design.formulas import beam_solver as solver
 from app.agents.hats.design.formulas.beam_solver import (
     _finite_in_range,
+    _param_number,
     beam_governing_moment,
     beam_reactions,
     governing_moment,
@@ -237,6 +239,23 @@ def test_reactions_reject_a_non_positive_span(support):
 ])
 def test_finite_in_range_filters_by_the_range(value, lo, hi, expected):
     assert _finite_in_range(value, lo, hi) == expected
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan")])
+def test_finite_in_range_rejects_non_finite_values_at_infinite_bounds(value):
+    """isfinite is the only thing rejecting inf when governing_moment calls
+    with (-inf, inf) bounds -- the range check alone passes it through."""
+    assert _finite_in_range(value, -math.inf, math.inf) is None
+
+
+@pytest.mark.parametrize("params,names,expected", [
+    ({}, ("missing",), None),
+    ({"span_m": ""}, ("span_m",), None),
+    ({"span_m": "10"}, ("span_m",), 10.0),
+    ({"udl_w_kn_m": 6}, ("udl_w_kn_m", "w"), 6.0),
+])
+def test_param_number_guards_absent_and_blank_values(params, names, expected):
+    assert _param_number(params, *names) == expected
 
 
 @pytest.mark.parametrize("support", ["propped_cantilever", "fixed_fixed"])

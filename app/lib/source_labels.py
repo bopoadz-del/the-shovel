@@ -92,6 +92,16 @@ def _fmt_value(value: Any) -> str:
     return str(value)
 
 
+_param_labels: Dict[str, str] = {}
+
+
+def parameter_label_words(key: str, unit: str = "") -> str:
+    """The words a user reads for a parameter: its declared label when the
+    registry gives one, else its name with the unit suffix stripped."""
+    label = _param_labels.get(str(key).lower())
+    return label or parameter_words(key, unit)
+
+
 def parameter_words(key: str, unit: str = "") -> str:
     """``length_m`` with unit "m" -> "length", ``bearing_kn_m2`` with unit
     "kN/m2" -> "bearing": the name without the unit its last words spell."""
@@ -651,7 +661,7 @@ def _registry_maps() -> Tuple[Dict[str, str], Dict[str, str], set]:
     only when it is one of those ids, so a file name or an engineering
     symbol that is not registered is left as written.
     """
-    global _display_by_id, _param_units, _known_units, _id_pattern
+    global _display_by_id, _param_units, _known_units, _id_pattern, _param_labels
     if _display_by_id is not None and _param_units is not None and _known_units is not None:
         return _display_by_id, _param_units, _known_units
     from app.agents.core.tool_registry import OWNERS, get, tools_of
@@ -660,9 +670,16 @@ def _registry_maps() -> Tuple[Dict[str, str], Dict[str, str], set]:
     displays: Dict[str, str] = {}
     params: Dict[str, str] = {}
     units: set = set()
+    labels: Dict[str, str] = {}
     for spec in formula_registry.all_specs():
         if spec.name and spec.display_name and "_" in spec.name:
             displays[spec.name.lower()] = spec.display_name
+        # A declared label is the words a user reads for that parameter --
+        # the only readable form a name has when its segments are short.
+        for key, declared_param in (spec.params or {}).items():
+            label = getattr(declared_param, "label", "")
+            if label and "_" in key:
+                labels.setdefault(key.lower(), label)
         unitless = {_norm(item) for item in _UNITLESS}
         declared = list((spec.inputs or {}).items()) + list((spec.outputs or {}).items())
         for key, unit in declared:
@@ -684,6 +701,7 @@ def _registry_maps() -> Tuple[Dict[str, str], Dict[str, str], set]:
     _display_by_id = displays
     _param_units = params
     _known_units = units
+    _param_labels = labels
     if displays:
         alt = "|".join(re.escape(name) for name in sorted(displays, key=len, reverse=True))
         _id_pattern = re.compile(
