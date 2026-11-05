@@ -23,6 +23,7 @@ from app.core.drive_relink import (
     relink_shell_rows,
     resolve_row,
 )
+from app.core.projects import relink_document_drive_id
 from app.core.ingest_status import EXTRACT_FAILED, UNVERIFIED
 
 
@@ -60,7 +61,7 @@ def _row(source_path: str, size_bytes: int = 0) -> dict:
 
 @pytest.mark.parametrize(
     "source_path",
-    [r"G:\My Drive\Master Folder\Sub\file.pdf", "/Master Folder/Sub/file.pdf"],
+    [r"G:\Archive Root\Sub\file.pdf", "/Archive Root/Sub/file.pdf"],
 )
 def test_exactly_one_basename_match_relinks(source_path):
     outcome, hit = resolve_row(_row(source_path), _index("file.pdf"))
@@ -102,7 +103,7 @@ def test_undecidable_matches_stay_untouched_and_ambiguous(row):
 
 @pytest.mark.parametrize(
     "source_path",
-    [r"G:\My Drive\Master Folder\gone.pdf", r"G:\My Drive\Master Folder\other\gone.pdf"],
+    [r"G:\Archive Root\gone.pdf", r"G:\Archive Root\other\gone.pdf"],
 )
 def test_zero_matches_stay_untouched_and_missing(source_path):
     outcome, hit = resolve_row(_row(source_path), _index("present.pdf"))
@@ -113,8 +114,8 @@ def test_zero_matches_stay_untouched_and_missing(source_path):
 @pytest.mark.parametrize(
     "path,expected",
     [
-        (r"G:\My Drive\Master Folder\DG2\file.pdf", "file.pdf"),
-        ("/Master Folder/DG2/file.pdf", "file.pdf"),
+        (r"G:\Archive Root\file.pdf", "file.pdf"),
+        ("/Archive Root/file.pdf", "file.pdf"),
     ],
 )
 def test_basename_is_platform_neutral(path, expected):
@@ -162,7 +163,7 @@ def test_build_drive_index_skips_blank_names(monkeypatch, blank_name):
 def test_rows_without_drive_id_skips_linked_rows(fresh_db, has_drive_id):
     from app.core import drive_relink as dr
     pid = projects_mod.create_project("demo_proj", "demo_owner")["id"]
-    meta = {"source_path": r"G:\My Drive\Master Folder.pdf"}
+    meta = {"source_path": r"G:\Archive Root.pdf"}
     if has_drive_id:
         meta["drive_file_id"] = "already-linked"
     projects_mod.add_document(pid, "a.pdf", file_path="a.pdf", size=0, metadata=meta)
@@ -178,9 +179,9 @@ def test_relinking_reopens_the_row_with_the_drive_id(fresh_db, name):
     pid = projects_mod.create_project("demo_proj", "demo_owner")["id"]
     doc = projects_mod.add_document(
         pid, name, file_path=name, size=0,
-        metadata={"source_path": rf"G:\My Drive\Master Folder\{name}"},
+        metadata={"source_path": rf"G:\Archive Root\{name}"},
     )
-    updated = projects_mod.relink_document_drive_id(doc["id"], "drive-file-9")
+    updated = relink_document_drive_id(doc["id"], "drive-file-9")
     assert updated is True
     row = projects_mod.get_document(doc["id"])
     assert (row.get("metadata") or {}).get("drive_file_id") == "drive-file-9"
@@ -194,10 +195,10 @@ def test_running_the_relink_twice_changes_nothing_the_second_time(fresh_db, firs
     pid = projects_mod.create_project("demo_proj", "demo_owner")["id"]
     doc = projects_mod.add_document(
         pid, "plan.pdf", file_path="plan.pdf", size=0,
-        metadata={"source_path": r"G:\My Drive\Master Folder\plan.pdf"},
+        metadata={"source_path": r"G:\Archive Root\plan.pdf"},
     )
-    assert projects_mod.relink_document_drive_id(doc["id"], first_id) is True
-    assert projects_mod.relink_document_drive_id(doc["id"], "drive-file-2") is False
+    assert relink_document_drive_id(doc["id"], first_id) is True
+    assert relink_document_drive_id(doc["id"], "drive-file-2") is False
     row = projects_mod.get_document(doc["id"])
     assert (row.get("metadata") or {}).get("drive_file_id") == first_id
 
@@ -208,7 +209,7 @@ def test_a_row_with_a_drive_file_id_is_never_overwritten(fresh_db, existing_id):
     doc = projects_mod.add_document(
         pid, "plan.pdf", file_path="plan.pdf", size=0,
         metadata={
-            "source_path": r"G:\My Drive\Master Folder\plan.pdf",
+            "source_path": r"G:\Archive Root\plan.pdf",
             "drive_file_id": existing_id,
         },
     )
@@ -216,7 +217,7 @@ def test_a_row_with_a_drive_file_id_is_never_overwritten(fresh_db, existing_id):
         doc["id"], chunk_count=0, ingest_status=EXTRACT_FAILED,
         ingest_status_reason="attempts_exhausted@old:1:terminal",
     )
-    updated = projects_mod.relink_document_drive_id(doc["id"], "new-id")
+    updated = relink_document_drive_id(doc["id"], "new-id")
     assert updated is False
     row = projects_mod.get_document(doc["id"])
     assert (row.get("metadata") or {}).get("drive_file_id") == existing_id
@@ -228,15 +229,15 @@ def test_the_runner_counts_relinked_ambiguous_and_missing(monkeypatch, fresh_db,
     pid = projects_mod.create_project("demo_proj", "demo_owner")["id"]
     projects_mod.add_document(
         pid, "solo.pdf", file_path="solo.pdf", size=0,
-        metadata={"source_path": r"G:\My Drive\Master Folder\solo.pdf"},
+        metadata={"source_path": r"G:\Archive Root\solo.pdf"},
     )
     projects_mod.add_document(
         pid, "dupe.pdf", file_path="dupe.pdf", size=0,
-        metadata={"source_path": r"G:\My Drive\Master Folder\dupe.pdf"},
+        metadata={"source_path": r"G:\Archive Root\dupe.pdf"},
     )
     projects_mod.add_document(
         pid, "gone.pdf", file_path="gone.pdf", size=0,
-        metadata={"source_path": r"G:\My Drive\Master Folder\gone.pdf"},
+        metadata={"source_path": r"G:\Archive Root\gone.pdf"},
     )
     monkeypatch.setattr(
         "app.core.drive_relink.build_drive_index",
