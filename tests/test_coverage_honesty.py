@@ -12,9 +12,11 @@ from pathlib import Path
 from app.agents.runtime import _postprocess_answer
 from app.core.rag.coverage_honesty import (
     FORBIDDEN_ABSENCE_PHRASES,
+    answer_corpus_id,
     apply_coverage_honesty,
     format_coverage_line,
     format_not_found,
+    finalise_answer,
     is_partial,
     rewrite_forbidden_absence_claims,
 )
@@ -129,3 +131,71 @@ def test_ast_guard_forbids_unguarded_absence_phrases():
         "complete-search phrases in answer-producing modules must go through "
         f"coverage_honesty rewrite: {offenders}"
     )
+import pytest
+
+
+@pytest.mark.parametrize("indexed,total", [(0, 118), (0, 0)])
+def test_zero_coverage_never_claims_a_search(indexed, total):
+    out = finalise_answer(
+        "I searched the project's documents and found no IT load "
+        "specification.", indexed, total)
+    assert "I searched the project's documents" not in out
+    assert "did not search" in out
+    # The counts footer rides along even at zero: the runtime stamps it on
+    # every answer that knows its project.
+    assert f"{indexed} of {total} project documents indexed" in out
+
+
+@pytest.mark.parametrize("indexed,total", [(2, 118), (117, 118)])
+def test_partial_coverage_states_the_numbers(indexed, total):
+    out = finalise_answer("... found no X.", indexed, total)
+    assert f"{indexed} of {total} project documents indexed" in out
+
+
+def test_void_coverage_drops_every_search_claim_sentence():
+    raw = ("I searched the documents and found nothing. "
+           "The results are all general reference material.")
+    out = finalise_answer(raw, 0, 5)
+    assert "searched" not in out.lower()
+    assert "did not search" in out
+    assert "0 of 5 project documents indexed" in out
+
+
+def test_total_zero_is_not_a_free_pass():
+    out = finalise_answer("No such clause in the contract.", 0, 0)
+    assert "did not search" in out
+
+
+@pytest.mark.parametrize("session_pid,turn_pid,expected",
+    [("session_pid", "turn_pid", "turn_pid"), ("session_pid", None, "session_pid")])
+def test_the_answer_names_the_corpus_it_searched(session_pid, turn_pid, expected):
+    # the turn's own project wins; the session project is only a fallback
+    assert answer_corpus_id(session_pid, turn_pid) == expected
+
+
+@pytest.mark.parametrize("text,indexed,total",
+    [("Clause 8.8 does not exist in this volume.", 10, 10),
+     ("No delay-damages clause here.", 5, 5)])
+def test_full_index_keeps_the_answer_unchanged(text, indexed, total):
+    assert finalise_answer(text, indexed, total) == text
+
+
+@pytest.mark.parametrize("raw",
+    ["The clause does not exist.", "Nothing was found anywhere."])
+def test_apply_with_nothing_returns_unchanged(raw):
+    assert apply_coverage_honesty(raw) == raw
+
+
+def test_apply_with_project_id_uses_live_coverage(monkeypatch):
+    from app.core.rag import coverage_honesty as ch
+    monkeypatch.setattr(ch, "live_coverage", lambda pid: (3, 9))
+    out = apply_coverage_honesty("The clause does not exist.", project_id="demo_proj")
+    assert "3 of 9 project documents indexed" in out
+    assert "does not exist" not in out.lower()
+
+
+def test_apply_with_void_coverage_never_claims_a_search():
+    out = apply_coverage_honesty(
+        "I searched the project's documents and found nothing.", coverage=(0, 118))
+    assert "searched" not in out.lower()
+    assert "did not search" in out
