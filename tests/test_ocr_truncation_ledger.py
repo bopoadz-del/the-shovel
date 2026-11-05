@@ -161,6 +161,19 @@ def test_ocr_quality_floor_rejects_and_accepts_by_mechanism(
     assert ocr_page_usable(accept_input)
 
 
+def _real_pdf(path: str, pages: int = 2) -> str:
+    """A real multi-page PDF with a text layer, so the batched path takes
+    its own code (page-count > 0) rather than delegating to _extract_pdf."""
+    import fitz
+    doc = fitz.open()
+    for n in range(pages):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Real page content for the quarantine test {n}.")
+    doc.save(path)
+    doc.close()
+    return path
+
+
 @pytest.mark.parametrize("reason", ["suspect head", "orphaned source"])
 def test_extract_pdf_keeps_quarantined_documents_blocked(tmp_path, monkeypatch, reason):
     """A quarantined file never reaches extraction: the blocked meta is the
@@ -170,9 +183,7 @@ def test_extract_pdf_keeps_quarantined_documents_blocked(tmp_path, monkeypatch, 
         di, "_quarantine_meta",
         lambda path, name: {"quarantined": True, "reason": reason},
     )
-    from app.core import file_crypto
-    pdf_path = str(tmp_path / "q.pdf")
-    file_crypto.write_document(pdf_path, b"%PDF-1.4 dummy")
+    pdf_path = _real_pdf(str(tmp_path / "q.pdf"))
 
     text, meta = di._extract_pdf(pdf_path, "q.pdf")
     assert text == ""
@@ -188,9 +199,7 @@ def test_extract_pdf_batched_keeps_quarantined_documents_blocked(tmp_path, monke
         di, "_quarantine_meta",
         lambda path, name: {"quarantined": True, "reason": reason},
     )
-    from app.core import file_crypto
-    pdf_path = str(tmp_path / "q.pdf")
-    file_crypto.write_document(pdf_path, b"%PDF-1.4 dummy")
+    pdf_path = _real_pdf(str(tmp_path / "q.pdf"))
 
     text, meta = di._extract_pdf_batched(pdf_path, "q.pdf")
     assert text == ""
