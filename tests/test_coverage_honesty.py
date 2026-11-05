@@ -12,9 +12,11 @@ from pathlib import Path
 from app.agents.runtime import _postprocess_answer
 from app.core.rag.coverage_honesty import (
     FORBIDDEN_ABSENCE_PHRASES,
+    answer_corpus_id,
     apply_coverage_honesty,
     format_coverage_line,
     format_not_found,
+    finalise_answer,
     is_partial,
     rewrite_forbidden_absence_claims,
 )
@@ -129,3 +131,44 @@ def test_ast_guard_forbids_unguarded_absence_phrases():
         "complete-search phrases in answer-producing modules must go through "
         f"coverage_honesty rewrite: {offenders}"
     )
+import pytest
+
+
+@pytest.mark.parametrize("indexed,total", [(0, 118), (0, 0)])
+def test_zero_coverage_never_claims_a_search(indexed, total):
+    out = finalise_answer(
+        "I searched the project's documents and found no IT load "
+        "specification.", indexed, total)
+    assert "I searched the project's documents" not in out
+    assert "did not search" in out
+
+
+@pytest.mark.parametrize("indexed,total", [(2, 118), (117, 118)])
+def test_partial_coverage_states_the_numbers(indexed, total):
+    out = finalise_answer("... found no X.", indexed, total)
+    assert f"{indexed} of {total} project documents indexed" in out
+
+
+def test_void_coverage_drops_every_search_claim_sentence():
+    raw = ("I searched the documents and found nothing. "
+           "The results are all general reference material.")
+    out = finalise_answer(raw, 0, 5)
+    assert "searched" not in out.lower()
+    assert "did not search" in out
+
+
+def test_total_zero_is_not_a_free_pass():
+    out = finalise_answer("No such clause in the contract.", 0, 0)
+    assert "did not search" in out
+
+
+def test_the_answer_names_the_corpus_it_searched():
+    # the turn's own project wins; the session project is only a fallback
+    assert answer_corpus_id("session_pid", "turn_pid") == "turn_pid"
+    assert answer_corpus_id("session_pid", None) == "session_pid"
+    assert answer_corpus_id(None, None) is None
+
+
+def test_full_index_keeps_the_answer_unchanged():
+    raw = "Clause 8.8 does not exist in this volume."
+    assert finalise_answer(raw, 10, 10) == raw

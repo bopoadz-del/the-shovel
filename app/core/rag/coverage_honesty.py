@@ -7,6 +7,11 @@ there is ``no such clause`` — those phrases claim a complete search of a
 corpus that is still being ingested. Rewrite them to
 ``not found in the N indexed``.
 
+When NOTHING is indexed, the answer may not claim to have searched the
+project's documents at all. It states what is true: a void-coverage line,
+and any sentence that claims a search is removed. ``total == 0`` is not a
+free pass either — an empty project is still partial.
+
 The 2,935 / 6,206 pair used in tests is the historical coverage fixture,
 not a claim about live Neon.
 """
@@ -21,11 +26,23 @@ logger = logging.getLogger(__name__)
 
 COVERAGE_LINE_TEMPLATE = "{n} of {m} project documents indexed"
 NOT_FOUND_IN_INDEXED = "not found in the {n} indexed"
+VOID_COVERAGE_TEMPLATE = (
+    "None of this project's {m} documents are indexed, so I did not search "
+    "them. What follows is general reference material only."
+)
 
 # Phrases that assert a complete search. Forbidden on a partial index.
 FORBIDDEN_ABSENCE_PHRASES: tuple[str, ...] = (
     "does not exist",
     "no such clause",
+)
+
+# A sentence that claims the project's documents were searched. On a void
+# index the claim is false, so the sentence is dropped and the void line
+# says what is true instead.
+_SEARCH_CLAIM_RE = re.compile(
+    r"[^.\n]*\bsearched\b[^.\n]*(?:documents|corpus|files|index)[^.\n]*[.\n]?",
+    re.IGNORECASE,
 )
 
 _COVERAGE_LINE_RE = re.compile(
@@ -46,8 +63,20 @@ def format_not_found(indexed: int) -> str:
     return NOT_FOUND_IN_INDEXED.format(n=int(indexed))
 
 
+def format_void_coverage(total: int) -> str:
+    return VOID_COVERAGE_TEMPLATE.format(m=int(total))
+
+
 def is_partial(indexed: int, total: int) -> bool:
-    return int(total) > 0 and int(indexed) < int(total)
+    """True when the corpus is below 100%: fewer indexed than total, and a
+    total of zero is still partial — an empty project is not a complete
+    search."""
+    return int(indexed) < int(total)
+
+
+def coverage_is_void(indexed: int, total: int) -> bool:
+    """True when nothing at all is indexed; the answer may not claim a search."""
+    return int(indexed) == 0
 
 
 def rewrite_forbidden_absence_claims(text: str, indexed: int, total: int) -> str:
@@ -56,6 +85,13 @@ def rewrite_forbidden_absence_claims(text: str, indexed: int, total: int) -> str
         return text
     replacement = format_not_found(indexed)
     return _FORBIDDEN_RE.sub(replacement, text or "")
+
+
+def strip_search_claims(text: str) -> str:
+    """Remove sentences that claim the documents were searched."""
+    stripped = _SEARCH_CLAIM_RE.sub("", text or "")
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped.strip()
 
 
 def ensure_coverage_line(text: str, indexed: int, total: int) -> str:
@@ -93,6 +129,31 @@ def live_coverage(project_id: str) -> Optional[tuple[int, int]]:
         return None
 
 
+def answer_corpus_id(project_id: str | None, turn_project_id: str | None) -> str | None:
+    """The corpus the answer must be measured against: the turn's own project,
+    falling back to the session project only when the turn records none. A
+    mismatch between the two is a defect to surface, never silently bridge."""
+    return turn_project_id or project_id
+
+
+def finalise_answer(text: str, indexed: int, total: int) -> str:
+    """The public honesty pass: void coverage strips search claims and states
+    the void line; partial coverage rewrites absence claims and stamps the
+    numbers. ``total == 0`` is never a free pass."""
+    idx, tot = int(indexed), int(total)
+    body = text or ""
+    if coverage_is_void(idx, tot):
+        body = strip_search_claims(body)
+        line = format_void_coverage(tot)
+        if line in body:
+            return body
+        return (body + "\n\n" + line + "\n") if body else line + "\n"
+    if is_partial(idx, tot):
+        body = rewrite_forbidden_absence_claims(body, idx, tot)
+        return ensure_coverage_line(body, idx, tot)
+    return body
+
+
 def apply_coverage_honesty(
     text: str,
     *,
@@ -110,6 +171,4 @@ def apply_coverage_honesty(
         counts = live_coverage(project_id)
     if counts is None:
         return text
-    indexed, total = int(counts[0]), int(counts[1])
-    out = rewrite_forbidden_absence_claims(text, indexed, total)
-    return ensure_coverage_line(out, indexed, total)
+    return finalise_answer(text, counts[0], counts[1])
