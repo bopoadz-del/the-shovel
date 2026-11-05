@@ -28,6 +28,11 @@ from app.agents.hats.design.formulas.beam_solver import (
     resolve_beam_moment_calc,
     selected_condition,
 )
+from app.agents.hats.design.formulas.construction_formulas_beam_analysis import (
+    beam_moment_fixed_udl,
+    beam_moment_point_load,
+    beam_moment_simple,
+)
 from app.lib import construction_formulas as cf
 
 
@@ -74,10 +79,17 @@ def test_a_cantilever_never_gets_the_fixed_fixed_coefficient():
     assert '"moment_kn_m": -500.0' in out
 
 
-def test_a_classified_condition_without_a_load_errors_naming_the_reason():
-    env = cf.run_calculation("beam_moment_fixed_udl", {"text": "moment on a 5 m cantilever"})
+@pytest.mark.parametrize(
+    "q,condition",
+    [
+        ("moment on a 5 m cantilever", "cantilever"),
+        ("the moment for a propped cantilever of 6 m", "propped_cantilever"),
+    ],
+)
+def test_a_classified_condition_without_a_load_errors_naming_the_reason(q, condition):
+    env = cf.run_calculation("beam_moment_fixed_udl", {"text": q})
     assert env.get("status") == "error"
-    assert "cantilever" in str(env.get("error") or "")
+    assert condition in str(env.get("error") or "")
 
 
 # --- P1.2 the solver and its oracles ----------------------------------------
@@ -120,6 +132,39 @@ def test_closed_form_and_solver_never_disagree(support, w, L):
 
 
 @pytest.mark.parametrize(
+    "calc,params,expected,condition",
+    [
+        (beam_moment_simple, {"udl_w_kn_m": 10, "span_m": 10}, 125.0, "simply_supported"),
+        (beam_moment_simple, {"udl_w_kn_m": 6, "span_m": 4}, 12.0, "simply_supported"),
+        (beam_moment_fixed_udl, {"udl_w_kn_m": 10, "span_m": 10}, 83.333, "fixed_fixed"),
+        (beam_moment_fixed_udl, {"udl_w_kn_m": 6, "span_m": 4}, 8.0, "fixed_fixed"),
+        (beam_moment_point_load, {"point_load_kn": 100, "span_m": 10}, 250.0, "simply_supported"),
+        (beam_moment_point_load, {"point_load_kn": 100, "span_m": 10, "distance_from_left_m": 2.5}, 187.5, "simply_supported"),
+    ],
+)
+def test_the_closed_forms_report_their_support_condition(
+    calc, params, expected, condition,
+):
+    out = calc(**params)
+    assert out.get("support_condition") == condition
+    assert abs(out.get("max_moment_kn_m") - expected) < 1e-3
+
+
+@pytest.mark.parametrize(
+    "calc,bad_params",
+    [
+        (beam_moment_simple, {"udl_w_kn_m": 10, "span_m": 0}),
+        (beam_moment_fixed_udl, {"udl_w_kn_m": 10, "span_m": 0}),
+        (beam_moment_point_load, {"point_load_kn": 100, "span_m": 0}),
+        (beam_moment_point_load, {"point_load_kn": 100, "span_m": 10, "distance_from_left_m": 20}),
+    ],
+)
+def test_the_closed_forms_keep_their_error_guards(calc, bad_params):
+    out = calc(**bad_params)
+    assert "error" in out
+
+
+@pytest.mark.parametrize(
     "support,loads,expected",
     [
         ("cantilever", [{"kind": "triangular", "w_max": 10}], 166.667),  # w*L^2/6
@@ -131,30 +176,48 @@ def test_untabulated_cases_are_solved_not_looked_up(support, loads, expected):
     assert abs(abs(got) - expected) < 1e-2
 
 
-def test_the_solver_names_the_support_condition_it_computed():
-    out = governing_moment(10, [{"kind": "udl", "w": 10}], "propped_cantilever")
-    assert out["support"] == "propped_cantilever"
+@pytest.mark.parametrize("support", ["propped_cantilever", "fixed_fixed"])
+def test_the_solver_names_the_support_condition_it_computed(support):
+    out = governing_moment(10, [{"kind": "udl", "w": 10}], support)
+    assert out["support"] == support
     assert "x" in out["expression"] or "C" not in out["expression"]
 
 
-def test_reactions_balance_a_udl():
-    out = reactions(10, [{"kind": "udl", "w": 10}], "simply_supported")
-    assert out["reaction_left_kn"] == 50.0
-    assert out["reaction_right_kn"] == 50.0
-    fixed = reactions(10, [{"kind": "udl", "w": 10}], "cantilever")
-    assert fixed["reaction_left_kn"] == 100.0
-    assert abs(fixed["moment_left_kn_m"]) == 500.0
+@pytest.mark.parametrize(
+    "w,L,expected",
+    [(10, 10, 50.0), (6, 4, 12.0)],
+)
+def test_reactions_balance_a_udl(w, L, expected):
+    out = reactions(L, [{"kind": "udl", "w": w}], "simply_supported")
+    assert out["reaction_left_kn"] == expected
+    assert out["reaction_right_kn"] == expected
+
+
+@pytest.mark.parametrize(
+    "w,L,expected_shear,expected_moment",
+    [(10, 10, 100.0, 500.0), (6, 4, 24.0, 48.0)],
+)
+def test_cantilever_reactions_and_fixed_moment(w, L, expected_shear, expected_moment):
+    fixed = reactions(L, [{"kind": "udl", "w": w}], "cantilever")
+    assert fixed["reaction_left_kn"] == expected_shear
+    assert abs(fixed["moment_left_kn_m"]) == expected_moment
 
 
 # --- P1.3 the printed condition ---------------------------------------------
 
 
-def test_the_printed_condition_equals_the_classified_condition():
-    q = "moment of 100 kN evenly distributed on a 10 m cantilever"
+@pytest.mark.parametrize(
+    "q,condition,key",
+    [
+        ("moment of 100 kN evenly distributed on a 10 m cantilever", "cantilever", "support"),
+        ("moment of 100 kN evenly distributed on a 10 m beam fixed both ends", "fixed_fixed", "support_condition"),
+    ],
+)
+def test_the_printed_condition_equals_the_classified_condition(q, condition, key):
     env = cf.run_calculation("beam_moment_fixed_udl", {"text": q})
     assert env.get("status") == "success", env
-    assert env["result"]["support"] == "cantilever"
-    assert env["result"]["support"] == selected_condition(q)
+    assert env["result"][key] == condition
+    assert env["result"][key] == selected_condition(q)
 
 
 # --- P1.4 dimensional-form operand resolution --------------------------------
@@ -173,11 +236,15 @@ def test_total_load_over_length_resolves_by_dimension(phrasing):
     assert abs(env["result"]["moment_kn_m"]) == 500.0
 
 
-def test_an_intensity_ask_is_left_as_an_intensity():
+@pytest.mark.parametrize(
+    "span_m,w,expected",
+    [(10, 10, 500.0), (4, 6, 48.0)],
+)
+def test_an_intensity_ask_is_left_as_an_intensity(span_m, w, expected):
     env = cf.run_calculation(
         "beam_governing_moment",
-        {"text": "moment on a 10 m cantilever under 10 kN/m", "span_m": 10,
-         "support": "cantilever", "loads": [{"kind": "udl", "w": 10}]},
+        {"text": f"moment on a {span_m} m cantilever under {w} kN/m", "span_m": span_m,
+         "support": "cantilever", "loads": [{"kind": "udl", "w": w}]},
     )
     assert env.get("status") == "success", env
-    assert abs(env["result"]["moment_kn_m"]) == 500.0
+    assert abs(env["result"]["moment_kn_m"]) == expected
