@@ -23,6 +23,9 @@ import pytest
 
 from app.agents.hats.design.formulas import beam_solver as solver
 from app.agents.hats.design.formulas.beam_solver import (
+    _finite_in_range,
+    beam_governing_moment,
+    beam_reactions,
     governing_moment,
     reactions,
     resolve_beam_moment_calc,
@@ -52,6 +55,9 @@ def answer(q: str, name: str = "beam_moment_fixed_udl") -> str:
         ("moment of 100 kN evenly distributed on a 10 m cantilever", "cantilever"),
         ("moment of 100 kN evenly distributed on a 10 m beam fixed both ends",
          "fixed_fixed"),
+        ("moment on a propped cantilever of 6 m", "propped_cantilever"),
+        ("moment on a simply supported beam of 6 m", "simply_supported"),
+        ("moment of 100 kN on a 10 m beam", None),
     ],
 )
 def test_support_condition_binds_the_calculator(q, expect):
@@ -71,6 +77,32 @@ def test_the_resolver_binds_by_the_classified_condition(q, expected_calc):
     name, params = resolve_beam_moment_calc("beam_moment_fixed_udl", {"text": q})
     assert name == expected_calc
     assert params.get("udl_w_kn_m") == 10.0 or params.get("loads")
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        "moment of 100 kN evenly distributed on a 10 m beam",
+        "the moment from 200 kN spread across an 8 m member",
+    ],
+)
+def test_an_ask_with_no_support_condition_keeps_the_callers_pick(q):
+    name, params = resolve_beam_moment_calc("beam_moment_fixed_udl", {"text": q})
+    assert name == "beam_moment_fixed_udl"
+    assert "loads" not in params
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"udl_w_kn_m": 10, "span_m": 10, "text": "moment on a simply supported beam"},
+        {"udl_w_kn_m": 6, "span_m": 4, "text": "moment on a simply supported beam"},
+    ],
+)
+def test_the_resolver_reads_numbers_from_params(params):
+    name, out = resolve_beam_moment_calc("beam_moment_fixed_udl", params)
+    assert name == "beam_moment_simple"
+    assert out.get("udl_w_kn_m") == params["udl_w_kn_m"]
 
 
 def test_a_cantilever_never_gets_the_fixed_fixed_coefficient():
@@ -176,6 +208,37 @@ def test_untabulated_cases_are_solved_not_looked_up(support, loads, expected):
     assert abs(abs(got) - expected) < 1e-2
 
 
+@pytest.mark.parametrize("bad_kind", ["nonsense", "helicopter"])
+def test_an_unknown_load_kind_errors_naming_it(bad_kind):
+    with pytest.raises(ValueError, match="unknown load kind"):
+        governing_moment(10, [{"kind": bad_kind, "w": 5}], "cantilever")
+
+
+def test_overhang_errors_naming_the_missing_support_positions():
+    with pytest.raises(ValueError, match="overhang requires"):
+        governing_moment(10, [{"kind": "udl", "w": 10}], "overhang")
+
+
+@pytest.mark.parametrize("support", ["cantilever", "simply_supported"])
+def test_a_non_positive_span_errors_naming_it(support):
+    with pytest.raises(ValueError, match="span must be > 0"):
+        governing_moment(0, [{"kind": "udl", "w": 10}], support)
+
+
+@pytest.mark.parametrize("support", ["cantilever", "simply_supported"])
+def test_reactions_reject_a_non_positive_span(support):
+    with pytest.raises(ValueError, match="span must be > 0"):
+        reactions(0, [{"kind": "udl", "w": 10}], support)
+
+
+@pytest.mark.parametrize("value,lo,hi,expected", [
+    (2.5, 0.0, 4.0, 2.5),
+    (8.0, 0.0, 4.0, None),
+])
+def test_finite_in_range_filters_by_the_range(value, lo, hi, expected):
+    assert _finite_in_range(value, lo, hi) == expected
+
+
 @pytest.mark.parametrize("support", ["propped_cantilever", "fixed_fixed"])
 def test_the_solver_names_the_support_condition_it_computed(support):
     out = governing_moment(10, [{"kind": "udl", "w": 10}], support)
@@ -188,7 +251,7 @@ def test_the_solver_names_the_support_condition_it_computed(support):
     [(10, 10, 50.0), (6, 4, 12.0)],
 )
 def test_reactions_balance_a_udl(w, L, expected):
-    out = reactions(L, [{"kind": "udl", "w": w}], "simply_supported")
+    out = beam_reactions(L, "simply_supported", [{"kind": "udl", "w": w}])
     assert out["reaction_left_kn"] == expected
     assert out["reaction_right_kn"] == expected
 
@@ -198,9 +261,18 @@ def test_reactions_balance_a_udl(w, L, expected):
     [(10, 10, 100.0, 500.0), (6, 4, 24.0, 48.0)],
 )
 def test_cantilever_reactions_and_fixed_moment(w, L, expected_shear, expected_moment):
-    fixed = reactions(L, [{"kind": "udl", "w": w}], "cantilever")
+    fixed = beam_reactions(L, "cantilever", [{"kind": "udl", "w": w}])
     assert fixed["reaction_left_kn"] == expected_shear
     assert abs(fixed["moment_left_kn_m"]) == expected_moment
+
+
+@pytest.mark.parametrize("loads", [
+    {"kind": "udl", "w": 10},
+    {"kind": "udl", "w": 6},
+])
+def test_the_solver_accepts_a_single_load_dict(loads):
+    out = beam_governing_moment(10, "cantilever", loads)
+    assert out.get("moment_kn_m") == -(loads["w"] * 100 / 2)
 
 
 # --- P1.3 the printed condition ---------------------------------------------

@@ -17,6 +17,7 @@ dependency is added here.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from typing import Any
@@ -24,6 +25,8 @@ from typing import Any
 import sympy as sp
 
 from app.lib.formula_registry import Param, formula
+
+logger = logging.getLogger(__name__)
 
 x = sp.Symbol("x", nonnegative=True)
 
@@ -92,10 +95,10 @@ def selected_condition(text: str | None) -> str | None:
     condition returns None so the caller does not guess one.
     """
     raw = text or ""
-    if not raw.strip():
-        return None
     if _PROP_RE.search(raw):
         return "propped_cantilever"
+    if not raw.strip():
+        return None
     if _FIXED_BOTH_RE.search(raw):
         return "fixed_fixed"
     if _OVERHANG_RE.search(raw):
@@ -116,10 +119,10 @@ def _load_list(loads: Any) -> list[dict[str, Any]]:
 
     The calc plumbing flattens a single-element list to its dict; the solver
     accepts both shapes rather than iterating a dict's keys."""
-    if loads is None:
-        return []
     if isinstance(loads, dict):
         return [loads]
+    if loads is None:
+        return []
     if isinstance(loads, (list, tuple)):
         return [load for load in loads if isinstance(load, dict)]
     return []
@@ -183,6 +186,11 @@ def moment_field(
     coefficient. ``overhang`` needs support positions the generic solver
     does not guess, so it errors naming that reason.
     """
+    if support == "overhang":
+        raise ValueError(
+            "overhang requires the support positions; the generic solver does "
+            "not guess them -- supply the support locations explicitly",
+        )
     L = sp.sympify(span)
     w = _intensity(loads, L)
     C1, C2 = sp.symbols("C1 C2")
@@ -217,11 +225,6 @@ def moment_field(
             theta.subs(x, 0), delta.subs(x, 0),
             M.subs(x, L), delta.subs(x, L),
         ]
-    elif support == "overhang":
-        raise ValueError(
-            "overhang requires the support positions; the generic solver does "
-            "not guess them -- supply the support locations explicitly",
-        )
     else:
         raise ValueError(f"unknown support condition: {support}")
 
@@ -236,10 +239,14 @@ def _finite_in_range(value: Any, lo: float, hi: float) -> float | None:
     try:
         v = float(sp.N(value))
     except Exception:  # noqa: BLE001 -- an unevaluable candidate is skipped; the other candidates still govern
-        return None
-    if not math.isfinite(v):
+        logger.warning(
+            "beam solver: candidate point did not evaluate; skipping it",
+            exc_info=True,
+        )
         return None
     if not (lo <= v <= hi):
+        return None
+    if not math.isfinite(v):
         return None
     return v
 
@@ -251,6 +258,11 @@ def _critical_points(M: sp.Expr, span: float, loads: list[dict[str, Any]] | None
     try:
         roots = sp.solve(sp.diff(M, x), x)
     except Exception:  # noqa: BLE001 -- a piecewise moment field has no closed derivative roots; the ends and load points still hold
+        logger.warning(
+            "beam solver: derivative roots did not solve symbolically; "
+            "using the ends and load points",
+            exc_info=True,
+        )
         roots = []
     for r in roots:
         v = _finite_in_range(r, 0.0, float(span))
@@ -275,15 +287,15 @@ def governing_moment(
     The divisor is a result of the boundary conditions, never an input; the
     expression is returned so the coefficients can be read off by eye.
     """
+    if float(span) <= 0:
+        raise ValueError("span must be > 0")
     M = moment_field(span, loads, support)
     crit = _critical_points(M, float(span), loads)
     best_m: float | None = None
     best_pos: float = 0.0
     for c in crit:
         val = _finite_in_range(M.subs(x, c), -math.inf, math.inf)
-        if val is None:
-            continue
-        if best_m is None or abs(val) > abs(best_m):
+        if val is not None and (best_m is None or abs(val) > abs(best_m)):
             best_m, best_pos = val, c
     if best_m is None:
         raise ValueError("the moment field produced no finite value to govern")
@@ -303,6 +315,8 @@ def reactions(
 ) -> dict[str, Any]:
     """Support reactions from the solved shear field. Absent from the
     platform before this solver -- exposed here, not assumed anywhere."""
+    if float(span) <= 0:
+        raise ValueError("span must be > 0")
     L = sp.sympify(span)
     w = _intensity(loads, L)
     C1, C2 = sp.symbols("C1 C2")
@@ -387,11 +401,8 @@ def _length_and_force(text: str) -> tuple[float | None, float | None]:
 
 def _param_number(params: dict[str, Any], *names: str) -> float | None:
     for name in names:
-        val = params.get(name)
-        if val is None or val == "":
-            continue
         try:
-            return float(val)
+            return float(params.get(name))
         except (TypeError, ValueError):
             continue
     return None
