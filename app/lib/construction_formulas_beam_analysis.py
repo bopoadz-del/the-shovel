@@ -12,3 +12,12 @@ from app.agents.hats.design.formulas.construction_formulas_beam_analysis import 
     beam_moment_simple,
     beam_shear_simple,
 )
+from app.agents.hats.design.formulas.beam_solver import (  # noqa: F401 -- moved
+    beam_governing_moment,
+    beam_reactions,
+    governing_moment,
+    moment_field,
+    reactions,
+    resolve_beam_moment_calc,
+    selected_condition,
+)

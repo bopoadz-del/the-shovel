@@ -95,7 +95,7 @@ def _err(name: str, *, expect: str = "error", **params):
 
 def test_audit_slice_matches_live_registry():
     """sorted(available_calculations())[44:] must stay the owned F–W set."""
-    assert available_calculations()[44:] == _AUDIT_SLICE
+    assert available_calculations()[46:] == _AUDIT_SLICE
 
 
 def test_audit_file_has_two_cases_per_calculator():
