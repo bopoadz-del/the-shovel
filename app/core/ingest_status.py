@@ -83,7 +83,12 @@ NO_CHUNK_STATUSES = ALL_STATUSES - INDEXED_STATUSES - {UNVERIFIED}
 # Extractor family stamped on INDEXED rows after the content-control fix.
 # #550 / 8535199: Word SDT + deduped text boxes. Bump the suffix when the
 # extract walk changes again; do not invent a hash that is not this family.
-EXTRACTOR_VERSION = "8535199-sdt"
+# 8535199-sdt2: E-1 of the corpus order. The 8535199-sdt family terminally
+# closed ~3,300 documents on its first failure without one recorded success
+# (the canary in projects.extractor_family_proven now gates that). The bump
+# reopens every row carrying attempts_exhausted@8535199-sdt:* on deploy --
+# attempts_exhausted() keys on the CURRENT version, so no SQL is needed.
+EXTRACTOR_VERSION = "8535199-sdt2"
 #: Reopen sentinel written by ``scripts/reopen_embed_failed_docx``. Not
 #: ``EXTRACTOR_VERSION``, so ``docx_stale_extractor_open`` stays true.
 EMBED_FAILED_SUFFIX = "/embed-failed"
