@@ -40,6 +40,8 @@ def build_drive_index(root_folder_id: str) -> dict[str, list[dict[str, Any]]]:
     files, _errors = gdrive_service.walk_folder(root_folder_id)
     index: dict[str, list[dict[str, Any]]] = {}
     for entry in files:
+        if (entry.get("mimeType") or "") == FOLDER_MIME:
+            continue
         name = (entry.get("name") or "").strip()
         if not name:
             continue
