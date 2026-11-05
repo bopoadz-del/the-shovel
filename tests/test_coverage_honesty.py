@@ -184,9 +184,9 @@ def test_apply_with_nothing_returns_unchanged(raw):
 
 def test_apply_with_project_id_uses_live_coverage(monkeypatch):
     from app.core.rag import coverage_honesty as ch
-    monkeypatch.setattr(ch, "live_coverage", lambda pid: (15, 3352))
-    out = apply_coverage_honesty("The clause does not exist.", project_id="drive_archive")
-    assert "15 of 3352 project documents indexed" in out
+    monkeypatch.setattr(ch, "live_coverage", lambda pid: (3, 9))
+    out = apply_coverage_honesty("The clause does not exist.", project_id="demo_proj")
+    assert "3 of 9 project documents indexed" in out
     assert "does not exist" not in out.lower()
 
 
