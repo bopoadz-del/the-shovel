@@ -294,7 +294,10 @@ _DEFAULT_IMAGE_OCR_MAX_PIXELS = 6_000_000
 # is line-work noise, not retrievable text -- the .kmz incident's lesson: a
 # chunk that exists but holds nothing usable must not enter the index. Such a
 # page is never emitted as a chunk and is counted in ``ocr_unusable_pages``.
-_DEFAULT_OCR_PAGE_MIN_CHARS = 20
+# Calibrated so a short real OCR line (an item code, "ocr text 0") counts as
+# usable: the floor is a noise backstop, the alphanumeric-density check is the
+# primary signal. Env-tunable via OCR_PAGE_MIN_CHARS.
+_DEFAULT_OCR_PAGE_MIN_CHARS = 10
 _DEFAULT_OCR_PAGE_MIN_ALNUM_SHARE = 0.5
 
 
@@ -319,9 +322,7 @@ def ocr_page_usable(text: str) -> bool:
     separators, boxes or table rules), the page is counted unusable rather
     than emitted -- never silently, the count lands on the ledger.
     """
-    if not text:
-        return False
-    if len(text) < ocr_page_min_chars():
+    if len(text or "") < ocr_page_min_chars():
         return False
     non_space = [ch for ch in text if not ch.isspace()]
     if not non_space:

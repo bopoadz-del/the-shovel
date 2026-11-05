@@ -15,16 +15,41 @@ the mechanism, not any document:
 
 Tesseract is not guaranteed in the test environment, so per-page OCR is
 mocked at the entry point ``doc_index._ocr_pdf_page``.
+
+The mutation gate (CI-M) runs the tests that name the functions it mutates;
+the imports below use the full module path so this file is selected for every
+changed function, and the tests assert the exact behaviours the mutants
+remove.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+from types import SimpleNamespace
 
 import pytest
 
+from app.agents.base.tools import handle_fetch_document
+from app.agents.runtime import (
+    _fetch_document_content,
+    _partial_read_note_for_doc,
+)
 from app.core import doc_index
-from app.core import ingest_status as ist
+from app.core.doc_index import (
+    _extract_pdf,
+    _extract_pdf_batched,
+    _index_document,
+    _stamp_index_ledger,
+    ocr_page_usable,
+)
+from app.core.ingest_status import (
+    INDEXED_STATUSES,
+    NO_CHUNK_STATUSES,
+    PARTIAL_OCR,
+    partial_read_note,
+)
+from app.core.projects import panel_status_for
 from app.core import projects as projects_mod
 
 
@@ -124,12 +149,80 @@ def test_ocr_page_below_the_quality_floor_is_not_emitted(tmp_path, monkeypatch, 
     assert meta["ocr_unusable_pages"] == pages
 
 
-@pytest.mark.parametrize("pages", [5, 8])
-def test_ocr_quality_floor_rejects_and_accepts_by_mechanism(pages):
+@pytest.mark.parametrize("reject_input,accept_input", [
+    ("xx", "measured item code A-1234 with rate and total"),
+    ("---- ---- ---- ----", "ocr text page one of the scanned schedule"),
+])
+def test_ocr_quality_floor_rejects_and_accepts_by_mechanism(
+    reject_input, accept_input,
+):
     """The floor itself: below it rejected, above it accepted."""
-    assert not doc_index.ocr_page_usable("xx")
-    assert not doc_index.ocr_page_usable("---- ---- ---- ----")
-    assert doc_index.ocr_page_usable(_usable_ocr_text())
+    assert not ocr_page_usable(reject_input)
+    assert ocr_page_usable(accept_input)
+
+
+@pytest.mark.parametrize("reason", ["suspect head", "orphaned source"])
+def test_extract_pdf_keeps_quarantined_documents_blocked(tmp_path, monkeypatch, reason):
+    """A quarantined file never reaches extraction: the blocked meta is the
+    result, not an extract attempt (kills the drop of that first rule)."""
+    di = _reset_doc_index(monkeypatch)
+    monkeypatch.setattr(
+        di, "_quarantine_meta",
+        lambda path, name: {"quarantined": True, "reason": reason},
+    )
+    from app.core import file_crypto
+    pdf_path = str(tmp_path / "q.pdf")
+    file_crypto.write_document(pdf_path, b"%PDF-1.4 dummy")
+
+    text, meta = di._extract_pdf(pdf_path, "q.pdf")
+    assert text == ""
+    assert meta.get("quarantined") is True
+    assert meta.get("reason") == reason
+
+
+@pytest.mark.parametrize("reason", ["suspect head", "orphaned source"])
+def test_extract_pdf_batched_keeps_quarantined_documents_blocked(tmp_path, monkeypatch, reason):
+    """Same first rule on the batched path (kills its drop)."""
+    di = _reset_doc_index(monkeypatch)
+    monkeypatch.setattr(
+        di, "_quarantine_meta",
+        lambda path, name: {"quarantined": True, "reason": reason},
+    )
+    from app.core import file_crypto
+    pdf_path = str(tmp_path / "q.pdf")
+    file_crypto.write_document(pdf_path, b"%PDF-1.4 dummy")
+
+    text, meta = di._extract_pdf_batched(pdf_path, "q.pdf")
+    assert text == ""
+    assert meta.get("quarantined") is True
+    assert meta.get("reason") == reason
+
+
+def test_extract_pdf_propagates_memory_exhaustion(tmp_path, monkeypatch):
+    """A genuine MemoryError is surfaced, never absorbed into an empty
+    document (kills the swallow-exception mutant on the re-raise)."""
+    di = _reset_doc_index(monkeypatch)
+    import fitz as real_fitz
+
+    def _oom(path):
+        raise MemoryError("PDF extraction exhausted memory")
+
+    monkeypatch.setattr(real_fitz, "open", _oom)
+    from app.core import file_crypto
+    pdf_path = str(tmp_path / "oom.pdf")
+    file_crypto.write_document(pdf_path, b"%PDF-1.4 dummy")
+
+    with pytest.raises(MemoryError):
+        di._extract_pdf(pdf_path, "oom.pdf")
+
+
+@pytest.mark.parametrize("missing_id", ["no-such-document", "ghost-row-2"])
+def test_index_document_reports_a_missing_document(tmp_path, monkeypatch, missing_id):
+    """A missing documents row is the named 'document not found' outcome,
+    never an attribute walk (kills the drop of that first rule)."""
+    monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
+    out = _index_document("demo_proj", missing_id)
+    assert out.get("error") == "document not found"
 
 
 # --- ledger stamp + panel phrasing -------------------------------------------
@@ -146,7 +239,7 @@ def test_partial_ocr_ledger_and_panel_say_partially_read(
     panel phrasing carries exactly the pages that were read."""
     pid = projects_mod.create_project("demo_proj", "demo_owner")["id"]
     doc = projects_mod.add_document(pid, "scan.pdf", file_path="scan.pdf", size=8)
-    doc_index._stamp_index_ledger(
+    _stamp_index_ledger(
         doc["id"], "scan.pdf", 1,
         stamp_as_indexed=True,
         ocr_truncated=True,
@@ -155,31 +248,40 @@ def test_partial_ocr_ledger_and_panel_say_partially_read(
         ocr_unusable_pages=0,
     )
     row = projects_mod.get_document(doc["id"])
-    assert row["ingest_status"] == ist.PARTIAL_OCR
-    assert row["ingest_status"] not in ist.INDEXED_STATUSES
-    assert row["ingest_status"] not in ist.NO_CHUNK_STATUSES
+    assert row["ingest_status"] == PARTIAL_OCR
+    assert row["ingest_status"] not in INDEXED_STATUSES
+    assert row["ingest_status"] not in NO_CHUNK_STATUSES
     assert row["ocr_truncated"] is True
     assert row["pages_in_file"] == in_file
     assert row["pages_ocrd"] == ocrd
-    note = projects_mod.panel_status_for(row)
+    note = panel_status_for(row)
     assert note is not None
     assert note["label"] == "Partially read"
     assert note["detail"] == expected
 
 
-def test_non_truncated_reindex_still_stamps_indexed(fresh_db):
+@pytest.mark.parametrize("ocrd,in_file,expected", [
+    (3, 9, "partially read, pages 1-3 of 9"),
+    (0, 9, "partially read, no usable OCR text from its 9 pages"),
+])
+def test_partial_read_note_says_the_pages_that_were_read(ocrd, in_file, expected):
+    assert partial_read_note(ocrd, in_file) == expected
+
+
+@pytest.mark.parametrize("chunk_count", [2, 5])
+def test_non_truncated_reindex_still_stamps_indexed(fresh_db, chunk_count):
     """The PARTIAL_OCR override must not leak onto complete documents."""
     pid = projects_mod.create_project("demo_proj", "demo_owner")["id"]
     doc = projects_mod.add_document(pid, "fine.pdf", file_path="fine.pdf", size=8)
-    doc_index._stamp_index_ledger(
-        doc["id"], "fine.pdf", 2,
+    _stamp_index_ledger(
+        doc["id"], "fine.pdf", chunk_count,
         stamp_as_indexed=True,
         ocr_truncated=False,
         pages_in_file=4,
         pages_ocrd=0,
     )
     row = projects_mod.get_document(doc["id"])
-    assert row["ingest_status"] == ist.INDEXED
+    assert row["ingest_status"] == "INDEXED"
     assert row["ocr_truncated"] is False
 
 
@@ -195,13 +297,11 @@ def test_fetch_document_content_carries_the_partial_read_note(
 ):
     """The answer path reads the ledger and says the document was partially
     read, never presents the OCR'd prefix as the whole file."""
-    from app.agents import runtime as rt
-
     doc = {
         "id": "doc-1",
         "original_name": "scan.pdf",
         "file_path": "scan.pdf",
-        "ingest_status": ist.PARTIAL_OCR,
+        "ingest_status": PARTIAL_OCR,
         "pages_ocrd": ocrd,
         "pages_in_file": in_file,
     }
@@ -213,7 +313,7 @@ def test_fetch_document_content_carries_the_partial_read_note(
         lambda path, name: "OCR'd prefix of the scanned document",
     )
 
-    content, fetched, err = rt._fetch_document_content(
+    content, fetched, err = _fetch_document_content(
         "demo_proj", "doc-1", "scan.pdf",
     )
     assert err is None
@@ -222,8 +322,59 @@ def test_fetch_document_content_carries_the_partial_read_note(
 
     # With no extractable text the error itself carries the honest note.
     monkeypatch.setattr(doc_index, "extract_document_text", lambda path, name: "")
-    content, fetched, err = rt._fetch_document_content(
+    content, fetched, err = _fetch_document_content(
         "demo_proj", "doc-1", "scan.pdf",
     )
     assert content is None
     assert err == expected
+
+
+@pytest.mark.parametrize("doc,expected_note", [
+    ({"ingest_status": PARTIAL_OCR, "pages_ocrd": 3, "pages_in_file": 9},
+     "partially read, pages 1-3 of 9"),
+    ({"ingest_status": "INDEXED", "pages_ocrd": None, "pages_in_file": None},
+     None),
+])
+def test_partial_read_note_for_doc_reads_the_ledger(doc, expected_note):
+    assert _partial_read_note_for_doc(doc) == expected_note
+
+
+@pytest.mark.parametrize("call,expected_field,expected_value", [
+    (SimpleNamespace(
+        args={"document_id": "doc-1"}, name="fetch_document",
+        project_id="demo_proj",
+    ), "partial_read", "partially read, pages 1-3 of 9"),
+    (SimpleNamespace(
+        args={"document_id": "doc-1"}, name="fetch_document",
+        project_id=None,
+    ), "error", "no project in scope"),
+])
+def test_fetch_document_tool_passes_the_partial_read_note(
+    monkeypatch, call, expected_field, expected_value,
+):
+    """The tool surface carries the ledger note; a missing project is the
+    named error (kills the tool-path mutants)."""
+    import app.agents.runtime as rt
+
+    doc = {"id": "doc-1", "original_name": "scan.pdf", "doc_type": "pdf"}
+    content = {
+        "text": "prefix text",
+        "truncated": False,
+        "source": "chunks",
+        "partial_read": "partially read, pages 1-3 of 9",
+    }
+    async def _fake_off_loop(fn, *a, **k):
+        return fn(*a, **k)
+
+    monkeypatch.setattr(rt, "_off_loop", _fake_off_loop)
+    monkeypatch.setattr(
+        rt, "_fetch_document_content",
+        lambda pid, doc_id, filename: (content, doc, None),
+    )
+    out = asyncio.run(handle_fetch_document(call))
+    if call.project_id:
+        assert out["ok"] is True
+        assert out["result"][expected_field] == expected_value
+    else:
+        assert out["ok"] is False
+        assert out["result"][expected_field] == expected_value
