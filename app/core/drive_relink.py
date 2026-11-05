@@ -64,8 +64,6 @@ def resolve_row(
     ZERO matches                          -> missing
     """
     base = basename_of(row.get("source_path") or "").strip().lower()
-    if not base:
-        return ("missing", None)
     hits = index.get(base, [])
     if not hits:
         return ("missing", None)
