@@ -9560,6 +9560,8 @@ def retrieve_with_filter(
     if not project_id:
         raise ValueError("project_id is required")
 
+    reset_lexical_leg()
+
     embedder = get_embedder()
     query_vec = embedder.encode_queries([query])[0]
     # F18 dual-query: also embed the wrapper-stripped phrase-intact variant

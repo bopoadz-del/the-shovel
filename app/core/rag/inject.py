@@ -912,9 +912,11 @@ def _emit_retrieval_trace(
         return
     try:
         from app.infra.monitoring import request_id_ctx
+        from app.core.rag.vector_store import lexical_leg_state
 
         rid = request_id_ctx.get()
         handed_ids = {getattr(c, "chunk_id", None) for c in handed}
+        leg = lexical_leg_state()
         payload = {
             "request_id": rid,
             "path": "pre_injection",
@@ -926,6 +928,8 @@ def _emit_retrieval_trace(
             "handed_k": len(handed),
             "threshold_fired": threshold_fired,
             "identifier_miss": identifier_miss,
+            "lexical_leg": leg,
+            "degraded": leg in ("empty", "disabled"),
             "top_score": round(float(top_score or 0.0), 6),
             "chunks": [_trace_chunk(i + 1, c) for i, c in enumerate(handed)],
             "not_handed": [

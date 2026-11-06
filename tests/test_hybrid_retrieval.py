@@ -395,6 +395,37 @@ def test_hybrid_disabled_falls_back_to_semantic(store_with_corpus, monkeypatch):
     )
 
 
+def test_empty_bm25_leg_sets_state_and_warns(store_with_corpus, monkeypatch, caplog):
+    """The degrade is visible: empty BM25 sets the per-request state the
+    trace reads, and logs at WARNING instead of a silent INFO line."""
+    import logging
+
+    from app.core.rag.vector_store import lexical_leg_state, reset_lexical_leg
+
+    store, embedder, _ = store_with_corpus
+    reset_lexical_leg()
+    query = "xyzqwertyuiop nonsenseword foobaz quuxzapper"
+    monkeypatch.setenv("RAG_HYBRID_SEARCH", "true")
+    with caplog.at_level(logging.WARNING, logger="app.core.rag.vector_store"):
+        _run_search(store, embedder, query, k=5, query_text=query)
+    assert lexical_leg_state() in ("empty",)
+    assert any("bm25 leg empty" in m for m in caplog.messages)
+    reset_lexical_leg()
+    assert lexical_leg_state() not in ("empty", "disabled")
+
+
+def test_hybrid_off_sets_disabled_state(store_with_corpus, monkeypatch):
+    """Hybrid off (or no query_text) means the lexical leg never ran."""
+    from app.core.rag.vector_store import lexical_leg_state, reset_lexical_leg
+
+    store, embedder, _ = store_with_corpus
+    reset_lexical_leg()
+    monkeypatch.setenv("RAG_HYBRID_SEARCH", "false")
+    _run_search(store, embedder, "telecom", k=5, query_text="telecom")
+    assert lexical_leg_state() in ("disabled",)
+    reset_lexical_leg()
+
+
 def test_bm25_only_query_with_no_matches(store_with_corpus, monkeypatch):
     """A query whose tokens don't appear in the FTS5 index should fall
     through to semantic-only results (graceful degrade — empty bm25

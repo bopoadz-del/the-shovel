@@ -96,6 +96,21 @@ def _identifier_tokens(ident: str) -> List[str]:
     return [t for t in re.split(r"[^a-z0-9]+", collapsed) if t]
 
 
+# Per-request lexical-leg state for the retrieval trace: "ok", "empty"
+# (BM25 ran and matched nothing anywhere the semantic leg looked) or
+# "disabled" (hybrid off / no query text). Set inside ``search()``; reset
+# by the retriever at the top of each retrieval.
+_LEXICAL_LEG: "contextvars.ContextVar[str]" = contextvars.ContextVar("rag_lexical_leg", default="ok")
+
+
+def lexical_leg_state() -> str:
+    return _LEXICAL_LEG.get()
+
+
+def reset_lexical_leg() -> None:
+    _LEXICAL_LEG.set("ok")
+
+
 def _hybrid_enabled() -> bool:
     """Read RAG_HYBRID_SEARCH live so tests / operators can flip it
     without re-importing the module. Truthy values: 1, true, yes, on
@@ -1788,6 +1803,7 @@ class VectorStore:
         )
 
         if not hybrid:
+            _LEXICAL_LEG.set("disabled")
             return self._semantic_search(project_id, q, k)
 
         sem_results = self._semantic_search(project_id, q, HYBRID_FETCH_PER_LEG)
@@ -1803,7 +1819,8 @@ class VectorStore:
             # this was silent (and PostgreSQL ANDed its terms, so it fired
             # constantly) the platform served cosine-only answers that were
             # indistinguishable, to the reader, from fully-grounded ones.
-            logger.info(
+            _LEXICAL_LEG.set("empty")
+            logger.warning(
                 "bm25 leg empty for project=%s; retrieval degraded to "
                 "semantic-only. query=%r", project_id, (query_text or "")[:120],
             )
