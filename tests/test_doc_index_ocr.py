@@ -153,7 +153,7 @@ def _ocr_spy(monkeypatch):
     return calls
 
 
-@pytest.mark.parametrize("name", ["drawing.png", "scan.tiff"])
+@pytest.mark.parametrize("name", ["drawing.png", "site.jpg", "scan.tiff"])
 def test_an_image_is_not_extracted_or_ocrd(tmp_path, monkeypatch, name):
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
     from app.core import doc_index
@@ -168,16 +168,16 @@ def test_an_image_is_not_extracted_or_ocrd(tmp_path, monkeypatch, name):
 
 
 def test_an_image_document_is_skipped_by_the_indexer(fresh_db, tmp_path, monkeypatch):
-    """A non-photo image row (pre-rule data) is skipped by the indexer as an
+    """Even if an image row exists (pre-rule data), the indexer skips it as an
     unsupported type -- it never reaches OCR, chunks or the vector store."""
     from app.core import doc_index
     importlib.reload(doc_index)
     calls = _ocr_spy(monkeypatch)
 
     pid = projects_mod.create_project("Image Skip Project")["id"]
-    img_path = str(tmp_path / "rebar.png")
-    file_crypto.write_document(img_path, b"\x89PNG\r\n\x1a\n png bytes")
-    projects_mod.add_document(pid, "rebar.png", file_path=img_path, size=8)
+    img_path = str(tmp_path / "rebar.jpg")
+    file_crypto.write_document(img_path, b"\xff\xd8 jpeg")
+    projects_mod.add_document(pid, "rebar.jpg", file_path=img_path, size=8)
 
     result = doc_index.index_project(pid)
 
