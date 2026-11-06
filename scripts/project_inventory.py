@@ -10,6 +10,11 @@ from __future__ import annotations
 import os
 import sys
 
+# Invoked as `python scripts/project_inventory.py` (entrypoint WORKER_COMMAND),
+# which puts scripts/ on sys.path, not the repo root. Make `app` importable
+# regardless of invocation form (also covers `python -m` and direct runs).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from sqlalchemy import text
 
 from app.core.db import SessionLocal
