@@ -878,9 +878,8 @@ def test_file_over_the_memory_budget_is_recorded_not_downloaded_then_skipped(har
 
 
 def test_excluded_formats_are_never_assigned_downloaded_or_recorded(harness, monkeypatch):
-    """Video, CAD and non-photo images in the Drive folder: zero downloads,
-    zero rows, never assigned on this run or on resume -- only counted by
-    format. (Site photos .jpg/.jpeg are corpus material since 2026-11-06.)"""
+    """Video, CAD and photos in the Drive folder: zero downloads, zero rows,
+    never assigned on this run or on resume -- only counted by format."""
     from app.core import gdrive_service
     from app.core import projects as projects_mod
 
@@ -889,8 +888,8 @@ def test_excluded_formats_are_never_assigned_downloaded_or_recorded(harness, mon
          "mimeType": "video/mp4", "size": 400_000_000},
         {"id": "cad001", "name": "plan.dwg", "_drive_path": f"{FOLDER_NAME}/cad/plan.dwg",
          "mimeType": "application/acad", "size": 9_000_000},
-        {"id": "img001", "name": "site.png", "_drive_path": f"{FOLDER_NAME}/photos/site.png",
-         "mimeType": "image/png", "size": 6_000_000},
+        {"id": "img001", "name": "site.jpg", "_drive_path": f"{FOLDER_NAME}/photos/site.jpg",
+         "mimeType": "image/jpeg", "size": 6_000_000},
     ]
     harness.files.extend(excluded)
     downloads: Dict[str, int] = {}
@@ -913,7 +912,7 @@ def test_excluded_formats_are_never_assigned_downloaded_or_recorded(harness, mon
         assert acc["assigned"] == harness.expected_assigned, acc
         assert acc["unsupported_by_format"].get(".mp4") == 1
         assert acc["unsupported_by_format"].get(".dwg") == 1
-        assert acc["unsupported_by_format"].get(".png") == 1
+        assert acc["unsupported_by_format"].get(".jpg") == 1
     assert all(downloads.get(f["id"], 0) == 0 for f in excluded), downloads
     assert not {f["id"] for f in excluded} & set(rows), rows
 

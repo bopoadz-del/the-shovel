@@ -240,13 +240,3 @@ def _ifc(file_path: str, filename: str, force_ocr: bool):
     from app.core import doc_index
 
     return "\n".join(doc_index._ifc_census(file_path, filename)), {}
-
-
-@reads(".jpg", ".jpeg")
-def _photo(file_path: str, filename: str, force_ocr: bool):
-    # Owner ruling 2026-11-06: site photos are corpus material again (the
-    # text-only rule from #773 excluded them by design). OCR the bounded
-    # bitmap; the baked YOLO-World summary rides along when configured.
-    from app.core import doc_index
-
-    return doc_index.extract_photo(file_path, filename)

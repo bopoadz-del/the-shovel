@@ -325,7 +325,7 @@ TEXT_BEARING_EXTS = _text_extractors.formats()
 # chunk_count, because evidence-beats-policy (the ordering that protected
 # .dwg/.dxf) would otherwise let an already-chunked .kmz back in as INDEXED.
 _GEOSPATIAL_EXTS = frozenset({".kmz", ".kml"})
-# Spreadsheets stay UPLOADABLE (the BOQ calculators price .xlsx/.xls working
+# Spreadsheets stay UPLOADABLE (the BOQ calculators price .xls/.xlsx working
 # documents, and previews render them), but they are never CHUNKED into the
 # RAG (owner ruling 2026-11-06). Same mechanism as the kmz denylist above:
 # checked in ``classify`` before the evidence-beats-policy check, so an

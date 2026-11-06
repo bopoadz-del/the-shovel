@@ -1,8 +1,9 @@
 """CDE ingest obeys the ingest rules (docs/INGEST_EXCLUSION_RULE.md).
 
-Text formats, site photos and spreadsheets all pass the CDE format gate
-(spreadsheets are working documents — owner ruling 2026-11-06 — they are
-only excluded from RAG chunking downstream, in ingest_status.classify).
+Text formats and spreadsheets pass the CDE format gate (spreadsheets are
+working documents — owner ruling 2026-11-06 — excluded from RAG chunking
+downstream in ingest_status.classify). Images, CAD, video and everything
+else outside TEXT_BEARING_EXTS are refused.
 """
 from __future__ import annotations
 
@@ -11,22 +12,8 @@ import pytest
 from app.core.cde.ingest import CdeError, ingest_cde_bytes
 
 
-@pytest.mark.parametrize("filename", ["plan.dwg", "drone.mp4"])
-def test_ingest_cde_bytes_refuses_a_non_ingestible_format(filename):
-    with pytest.raises(CdeError):
-        ingest_cde_bytes(
-            "proj-1",
-            original_name=filename,
-            payload=b"\x00" * 64,
-            cde_document_id="cde-1",
-            vendor="acontex",
-            cde_project_id="cde-proj",
-            eager_index=False,
-        )
-
-
-@pytest.mark.parametrize("filename", ["notes.txt", "site.jpg", "boq.xlsx"])
-def test_ingest_cde_bytes_text_photos_and_spreadsheets_pass_the_gate(monkeypatch, tmp_path, filename):
+@pytest.mark.parametrize("filename", ["notes.txt", "boq.xlsx"])
+def test_ingest_cde_bytes_text_and_spreadsheets_pass_the_gate(monkeypatch, tmp_path, filename):
     """Accepted formats clear the gate (store errors come later)."""
     import app.core.projects as store
 
@@ -54,3 +41,17 @@ def test_ingest_cde_bytes_text_photos_and_spreadsheets_pass_the_gate(monkeypatch
     )
     assert "doc-1" in str(out)
     assert seen.get("stored") is True
+
+
+@pytest.mark.parametrize("filename", ["plan.dwg", "drone.mp4", "site.jpg"])
+def test_ingest_cde_bytes_refuses_a_non_ingestible_format(filename):
+    with pytest.raises(CdeError):
+        ingest_cde_bytes(
+            "proj-1",
+            original_name=filename,
+            payload=b"\x00" * 64,
+            cde_document_id="cde-1",
+            vendor="acontex",
+            cde_project_id="cde-proj",
+            eager_index=False,
+        )
