@@ -74,19 +74,66 @@ calculation, specification, product evidence, inspection/test record, and closeo
 record. This is an author-recommended coordination method, not a claim that a
 particular spreadsheet or submission template is prescribed by the code.
 
+## Source-verified numerical and closeout examples
+
+These are limited examples from the January 2023 text, not a replacement for its
+rating/applicability schedules. [Source 1]
+
+- **501.01, Table 501.01(1):** the Golden/Platinum maximum average U-value for
+  external walls and exposed floors is **0.42 W/(m²·K)**. It is a different tier
+  from Silver; the roof criterion does not become less demanding at a higher
+  rating. Consult the glazing-specific tables rather than extending an opaque
+  wall criterion to a window.
+- **501.05:** air-conditioned buildings with cooling loads **at least 1 MW**
+  have an envelope-leakage ceiling of **5 m³/(h·m²)** at **50 Pa** differential
+  pressure. This is not a natural-infiltration rate or a test at arbitrary pressure.
+- **502.01:** the household air-conditioner rating floor is **4 stars for Golden**
+  and **5 stars for Platinum**. The commercial/central-system provision uses an
+  efficiency improvement of **at least 10%** over the DBC minima instead; a star
+  label is not a substitute for that distinct comparison.
+- **601.03:** condensate recovery/reuse is triggered at **350 kW or more** for the
+  stated new-building equipment scope. Its mixed-air case is qualified by the
+  outside air not being preconditioned. The permitted use must avoid direct human
+  contact. DBC **H.5.2.4** says **greater than 350 kW**, so the exact-boundary case
+  and the governing combined requirement need authority resolution: **confirm against the official code**. No unverified interpretation of the separate
+  higher-tier standalone-system percentages is supplied here.
+- **602.01(A–B):** additional major-use water metering is triggered by cooling
+  load **at least 1 MW** or gross floor area **at least 5,000 m²**; meter records
+  are kept for **5 years**. Individual tenancy and BMS-integration provisions are
+  separate from the size trigger.
+- **702.01:** for the stated new-building scope outside the CBD exception, the
+  diversion minimum is **50%** of construction/demolition waste, measured
+  consistently by weight or volume. Excavated earth, clearance debris and hazardous
+  waste are excluded from that percentage and need their designated handling;
+  concrete and other recyclables have specified routing/reuse provisions.
+
+**Closeout and rating changes:** DM **Circular 10-1-1/2021, items 8–10**, links
+rating changes to a modification approval and compliance to completion. Its
+higher-tier route describes interim Silver certification and a later review
+after **six operating months**, not automatic final Gold/Platinum at practical
+completion. This is the published circular's process, not a guarantee of current
+portal screens or an automatic award. **Circular 10-1-2**, dated **26 January
+2023**, directs use of the updated requirements from **20 January 2023**. These
+are official-hosted technical translations; Arabic controls ambiguity. [Sources
+3–4]
+
 ## Details not established here
 
 **confirm against the official code:** later amendments; the complete mandatory/
 optional matrix and exceptions; rating-specific glazing, U-value and solar-gain
-limits; thermal/air-quality/noise criteria; equipment efficiencies and lighting
-power; recovery thresholds; fixture flows and reuse-water criteria; material
-percentages; waste-diversion targets; and required test/certification methods.
-No copied numerical schedule or generic percentage target is supplied here.
+limits; thermal/air-quality/noise criteria; equipment performance outside the identified
+examples and lighting power; other recovery thresholds; fixture flows and reuse-water criteria; material
+percentages; diversion targets outside the identified construction-waste scope; and required test/certification methods.
+The examples above resolve only the identified tiers, quantities and scope; they
+do not reproduce the full schedules or establish later amendments.
 
 ## Sources
 
 1. [Dubai Municipality — Al Sa'fat, second edition, January 2023](https://dmpmedia.dm.gov.ae/uploads/2023/01/Al-Safat-%E2%80%93-Dubai-Green-Building-System-2nd-editionJan2023.pdf).
 2. [Dubai Municipality — Al Sa'fat publication, baseline rating, and edition information](https://www.dm.gov.ae/municipality-business/al-safat-dubai-green-building-system/).
+
+3. [DM — Circular 10-1-1/2021, application/classification, especially items 8–10](https://dmpmedia.dm.gov.ae/uploads/2024/11/10-1-1-application-of-green-building-requirements-and-classification.pdf).
+4. [DM — Circular 10-1-2, dated 26 January 2023, updating the requirements](https://dmpmedia.dm.gov.ae/uploads/2024/11/10-1-2-updating-Al-Safat-List-Dubai-Green-Building-System.pdf). The translation's edition-title wording is inconsistent with the manual cover; no separate 2020 edition is inferred from it.
 
 Related: [Dubai Building Code](uae_dubai_building_code.md) and
 [authority/NOC coordination](uae_authority_noc_workflow.md).

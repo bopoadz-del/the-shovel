@@ -71,19 +71,72 @@ more than the originating discipline. Record the revised design basis and obtain
 any required authority acceptance before treating the change as approved.
 [Source 1, A.8 and F.4.1]
 
+## Bounded numerical examples from DBC 2021
+
+These examples are directly supported by the official edition, not inferred from
+IBC, ADA, ASHRAE or another emirate's requirements. They remain subject to the
+cited provision's scope and any applicable amendment. [Source 1]
+
+- **C.5.9.1.1–C.5.9.1.2; Table C.13:** distinguish the ramp's longitudinal
+  gradient from crossfall. The table's upper longitudinal gradient is **8.33%**;
+  crossfall is limited to **2%**. The clear dimension between handrails is at least
+  **1,000 mm**, and a run longer than **10 m** needs an intermediate landing.
+  Recommended gentler gradients, landing geometry, edge protection and egress
+  capacity remain separate checks; these four figures alone do not design a ramp.
+- **E.5.2.1:** under the elemental envelope route, conditioned-space façades,
+  excluding shopfronts, have total window/wall-ratio ceilings of **40% for
+  residential** and **60% for other uses**. The orientation checks in **E.5.2.2
+  and Table E.3** apply as well; a total ratio does not remove them.
+- **E.5.2.3.1; Table E.4:** average opaque-element U-value ceilings are
+  **0.30 W/(m²·K)** for roofs and **0.57 W/(m²·K)** for external walls and
+  exposed floors, with the identified non-conditioned enclosed-parking exception.
+  Ground-contact insulation and glazed assemblies have different provisions;
+  these are assembly limits, not insulation-board datasheet values.
+- **H.5.2.2; Table H.5:** illustrative fitting limits include **8 L/min** for
+  showers, **6 L/min** for handbasins, and **7 L/min** for kitchen sinks. The
+  dual-flush quantities are **6 L full / 3 L partial**. Public-facility controls
+  and authority-approved specialist-faucet exceptions are additional issues.
+  Use the villa-specific provisions where applicable rather than assuming this
+  example is the entire Part K schedule.
+- **H.5.2.4:** the general-building condensate-recovery trigger is a cooling load
+  **greater than 350 kW** for the equipment classes listed there. Al Sa'fat
+  **601.03** instead uses an inclusive **350 kW** boundary. The distinction is
+  recorded in the [Al Sa'fat note](uae_al_safat.md); do not silently round away
+  the difference or treat a recovery requirement as permission for bodily contact.
+
+## A later official concrete attachment needs a validity check
+
+DM's public **Attachment 7.2.2.1**, **Sections 2–4, 7–8**, describes temporary
+SCM-related treatment for specified superstructure concrete. Its scope excludes
+a blanket relaxation for foundations/basements, and excludes direct marine,
+splash/tidal and other listed chloride exposures. **Section 4.5(b)** separates
+minimum reinforcement cover from nominal cover including a deviation allowance.
+The attachment retains a **35 MPa cube-strength** structural-concrete floor
+(**C28/35**), not a universal 35 MPa cylinder strength. [Source 3]
+
+The attachment is expressly temporary, subject to later DM notice. It does not
+establish that a particular mix, exposure classification, or concession is
+approved. The governing issued circular, applicable revision and any later
+withdrawal: **confirm against the official code** and the authority record.
+The public upload path is not treated as a legal commencement date. [Source 3,
+Sections 1, 2, 4.5 and 8]
+
 ## Details not established here
 
 **confirm against the official code:** current amendments and transition rules;
-plot controls; occupancy-specific dimensions, areas and height limits; exit and
-accessibility geometry; envelope thermal/fire criteria; lift calculations;
-structural actions and site parameters; utility capacity; ventilation/water/drainage
+plot controls; occupancy-specific dimensions, areas and height limits; other exit and
+accessibility geometry; envelope criteria outside the bounded examples; lift calculations;
+structural actions and site parameters; utility capacity; other ventilation/water/drainage
 values; test acceptance limits; and alternative-solution approval conditions.
-No universal design value or authority exemption is supplied by this summary.
+The bounded 2021 examples above do not settle other limits, later amendments,
+or a particular alternative-solution approval.
 
 ## Sources
 
 1. [Dubai Municipality — DBC 2021, public official edition](https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf).
 2. [Dubai Municipality — DBC publication page and supporting calculation schedules](https://www.dm.gov.ae/municipality-business/planning-and-construction/dubai-building-code-2/).
+
+3. [Dubai Municipality — temporary concrete Attachment 7.2.2.1, public Rev 03 download](https://dmpmedia.dm.gov.ae/uploads/2026/08/%D9%85%D9%84%D8%AD%D9%82-%D8%B1%D9%82%D9%85-7-2-2-1-REV-03.pdf), scope, concrete-strength basis, cover terminology and validity provisions. The associated issuance instrument/date is not inferred from the URL.
 
 Related summaries: [Al Sa'fat](uae_al_safat.md),
 [UAE fire/life safety](uae_fire_life_safety_code.md), and

@@ -68,9 +68,9 @@ subsequent occupancy obligation. **Article 2** sets phased application and
 conditions for different building categories; in its first-phase conditional
 path it includes civil-defence approval and relevant safety matters. Do not
 flatten those categories into a permanent rule for every existing villa.
-Current implementation, later grace-period decisions, validity, exceptions, and
-the competent issuing municipality: **confirm against the official code** and
-current administrative instructions. [Source 5]
+The later August 2026 notice below resolves part of the implementation/route
+question. Category-specific validity, exceptions and newer decisions still depend
+on the responsible municipality. [Sources 5, 7]
 
 Estidama design/construction assessment is an additional coordination stream.
 Identify the current rating obligations and completion interfaces rather than
@@ -96,15 +96,51 @@ record the impact and obtain the required revised approvals instead of assuming
 that an earlier NOC covers changed work. This register is author guidance, not a
 claim that all six items are separate applications for every project.
 
+## Later official occupancy implementation notice — August 2026
+
+DMT's **5 August 2026 announcement** directs occupancy applications/renewals
+through the **Municipal e-Permitting System** and identifies **16 September
+2026** as its advertised application deadline. That date is already past at the
+**6 November 2026** review date; it must not be presented as an upcoming grace
+period. The notice describes **six additional months or another UPPC-approved
+period** for parties that had begun formal procedures. It is not a blanket
+extension for an application that was never started. [Source 7]
+
+The notice identifies checks/reports for structure, civil-defence/fire safety,
+gas, water/plumbing and HVAC/ventilation, based on building use. It also describes
+municipal inspections and the link between a valid occupancy certificate and
+registration of new Tawtheeq leases. These are later implementation facts, not
+a replacement for the certificate categories in Decision 1/2024. The applicable
+individual deadline, accepted extension and any newer decision: **confirm against the official code** and the municipality's record. [Sources 5, 7]
+
+## A current, category-specific master-plan submission dependency
+
+For the **multiple-plot/building Detailed Master Plan** category, DMT's
+**18 August 2026 guidance, 1.1 General Notes and 2.1**, requires traceable links
+from the relevant narrative to NOCs/supporting appendices, an approved
+**Transportation Master Plan (TMP)** unless DMT gives written permission to
+proceed without it, and indexed responses using the authority's review-tracking
+template. **D7.1.1** identifies the TMP confirmation interface. This is a sourced
+category-specific dependency, not a rule that every individual building permit
+needs a separate master-plan approval. The guidance's **Section 1** identifies
+**TAMM** for this planning submission, not for every municipal or civil-defence
+service. [Source 8]
+
+The same guidance's **D4.1** addresses Estidama planning evidence; see the
+[Estidama summary](uae_estidama_pbrs_pcrs.md). Its public submission route does
+not prove that all other municipal/fire services share the same portal, forms,
+fees or review sequence. [Source 8]
+
 ## Details not established here
 
-**confirm against the official code:** the live platform/category coverage;
+**confirm against the official code:** live platform/category coverage beyond the identified examples;
 precise NOC trigger lists; authority-specific drawing/signature requirements;
 application and inspection order; resubmission rules; fees and service times;
-certificate validity/renewal; temporary occupancy conditions; later occupancy
+individual certificate validity/renewal conditions; temporary occupancy conditions; later occupancy
 implementation changes; and ongoing fire-safety certification requirements.
-No current fee, guaranteed turnaround, universal clearance list, or invented
-service/code clause is asserted.
+No current fee, guaranteed turnaround or universal clearance list is asserted.
+The dated occupancy notice and master-plan category do not establish every other
+service's live workflow.
 
 ## Sources
 
@@ -114,3 +150,6 @@ service/code clause is asserted.
 4. [DMT — Binaa launch, 18 June 2025, including phased initial scope](https://www.dmt.gov.ae/en/Media-Centre/News/Binaa-Construction-Permits-Platform-Launched).
 5. [DMT — Administrative Decision 1/2024, Articles 1–2](https://pages.dmt.gov.ae/-/media/0E6A6EEBFFFF4FA68DC6868F0AE85DD0.ashx).
 6. [ADCDA — Civil Protection Sector responsibilities](https://www.adcda.gov.ae/en/about-us/Department2).
+
+7. [DMT — occupancy-certificate compliance/grace-period announcement, 5 August 2026](https://www.dmt.gov.ae/en/Media-Centre/News/DMT-Grants-Grace-Period-to-Comply-with-Occupancy-Certificate-Rules).
+8. [DMT — Detailed Master Plan Submission Guidelines & Requirements, 18 August 2026, 1.1, 2.1, D4.1 and D7.1.1](https://www.dmt.gov.ae/-/media/Project/DMT/DMT/E-Library/07-08-2026/DMP-Masterplan-Submission-Guidelines--Requirements20260818.pdf).

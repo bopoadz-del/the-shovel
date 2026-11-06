@@ -6,8 +6,9 @@ Dubai Municipality's official **DBC 2021**. Sources checked on **2026-11-06**.
 
 **Evidence limitation:** the DCD-indexed 2018 code page was identifiable, but its
 primary code download could not be retrieved successfully for this review. The
-clause pointers below were verified **indirectly through DBC 2021**, not through
-a full reading of the 2018 fire-code text. They are useful entry points, not a
+initial cross-reference map below was verified **indirectly through DBC 2021**;
+the later, explicitly labelled hydrant examples use specialist secondary evidence.
+Neither is a full reading of the 2018 fire-code text. They are useful entry points, not a
 complete fire-code checklist or a declaration that the 2018 edition has no later
 amendments. Do not substitute the accessible older 2011 code for the 2018 text
 or transfer its numbering. [Sources 1–2]
@@ -68,18 +69,61 @@ Use the [authority/NOC summary](uae_authority_noc_workflow.md) for their procedu
 interfaces; a generic fire-code overview cannot establish the approvals needed
 for every building.
 
+## Bounded 2018 hydrant facts from specialist secondary evidence
+
+A public Fire & Smoke Systems engineering comparison explicitly identifies the
+**2018** UAE code and **Chapter 9, Table 9.13**, rather than borrowing the
+accessible 2011 table numbering. These facts are **secondary-source-supported**;
+the full primary 2018 table and any local amendment were not directly retrieved.
+They resolve a limited evidence gap, not the entire water-supply design. [Source 4]
+
+- **Table 9.13, item 5:** the reported hydraulic basis is **1,900 L/min per
+  hydrant**, **950 L/min per outlet**, with **two hydrants / 3,800 L/min** in
+  the calculation and at least **6.9 bar** at the remote hydrant.
+- **Table 9.13, item 3:** the reported minimum component rating is **12.1 bar**.
+  A component pressure class is not the required flowing pressure; the two checks
+  cannot substitute for one another.
+- **Table 9.13, item 9:** the reported building offset is **2–12 m**, with
+  access-road spacings of **120 m generally**, **100 m** for the identified
+  light/ordinary-hazard storage/industrial cases, and **60 m** for the stated
+  high-hazard/logistics/waste cases. The hazard and site arrangement must actually
+  qualify; this is not permission to choose the longest spacing on every site.
+
+The comparison flags a difference between the general yard-hydrant statement in
+**Chapter 2, 2.10.1(a)** and the area triggers in **Table 9.13, item 2**. No
+blanket below-threshold exemption is inferred. Nor is its reported Abu Dhabi
+public-hydrant concession adopted: the unauthenticated 2026 circular limitation
+above remains. Establish applicability, current local changes, simultaneous system
+demand, storage duration and approval with Civil Defence before design. [Source 4]
+
+## Direct authority evidence for construction-stage safety
+
+**Dubai Development Authority Circular 333, 20 October 2019**, reiterates fire
+safety during construction, alteration and demolition. Its listed measures
+include a fire-risk assessment, ignition-producing work controlled by permits,
+smoking restrictions, protection of escape and fire-service approach, and the
+necessary temporary alarm/protection arrangements. It also identifies **DCD
+approval for bulk flammable-material storage**. This is a direct authority
+circular, not a fabricated fire-code subclause or a universal NOC list. [Source 5]
+
 ## Details not established here
 
 **confirm against the official code:** the complete primary 2018 text and later
 amendments; occupancy/height/hazard classifications; compartment and separation
 ratings; exit capacities, distances and dimensions; fire-appliance geometry;
-façade/roof test acceptance; system triggers; sprinkler/water-supply design;
+façade/roof test acceptance; system triggers; full sprinkler/water-supply design beyond the bounded secondary
+examples;
 alarm/voice coverage; smoke-control calculations; emergency-power endurance;
 inspection/testing requirements; and emirate-specific modifications.
-No unverified numerical fire-design value or exemption is supplied here.
+The limited hydraulic/location figures above are attributed to a specialist
+secondary source, not independently certified against the primary 2018 text.
+Other quantities and exemptions remain unverified.
 
 ## Sources and evidence status
 
 1. **Official, directly reviewed:** [Dubai Municipality — DBC 2021](https://dmpmedia.dm.gov.ae/uploads/2021/12/Dubai%20Building%20Code_English_2021%20Edition_compressed.pdf), cited clauses and the UAE FLSC references in Parts B/E/H.
 2. **Official listing, primary download not retrieved:** [DCD — UAE fire/life-safety code publication page](https://www.dcd.gov.ae/portal/en/preventive-safety/rules-regulations/uae-fire-and-life-safety-code-of-practice.jsp).
 3. **Secondary mirror, unofficial English translation, not authenticated here:** [Circular 3/2026 copy hosted by a fire consultancy](https://vortexfire.com/wp-content/uploads/2026/03/Circular-03-2026-Amendments-to-the-UAE-FLS-Code-of-Practice-002.pdf).
+
+4. **Specialist secondary source:** [Fire & Smoke Systems — hydrant criteria, UAE 2018 versus Saudi editions](https://www.fireandsmokesystems.com/post/fire-hydrant-design-criteria-uae-vs-ksa), explicit UAE Table 9.13 item references. Its old-edition Saudi material and reported Abu Dhabi concession are not adopted as current UAE rules.
+5. **Official authority circular:** [DDA — Circular 333, construction-stage fire safety, 20 October 2019](https://dda.gov.ae/-/media/638CE9B231D844848FFA84D11CCF495D.pdf). Its linked September 2018 DCD PDF was identifiable but not successfully retrieved for this review.
