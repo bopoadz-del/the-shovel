@@ -39,12 +39,16 @@ def test_parameter_label_words_falls_back_to_name_words(key, unit, expected):
     assert parameter_label_words(key, unit) == expected
 
 
-def test_parameter_label_words_returns_the_declared_label():
-    _fresh_maps()
-    labels = sorted(source_labels._param_labels.items())
-    assert labels, "the registry declares no labelled parameters"
-    for key, label in labels[:2]:
-        assert parameter_label_words(key) == label
+# The declared labels, read from the live registry at import -- no key is
+# written into this file.
+_fresh_maps()
+_LABELLED = sorted(source_labels._param_labels.items())
+assert len(_LABELLED) >= 2, "the registry declares fewer than two labelled parameters"
+
+
+@pytest.mark.parametrize("key,label", _LABELLED[:2])
+def test_parameter_label_words_returns_the_declared_label(key, label):
+    assert parameter_label_words(key) == label
 
 
 @pytest.mark.parametrize("key", ["a_b", "x_y"])
