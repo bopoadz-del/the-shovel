@@ -1714,6 +1714,7 @@ def _safety_world_extract(file_path: str, filename: str) -> str:
                 return f"Construction site photo {filename}: detected {items}."
         return ""
     except Exception:
+        logger.warning("safety-world extract failed for %s", os.path.basename(file_path), exc_info=True)
         return ""
 
 

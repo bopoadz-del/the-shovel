@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core import ingest_status as ist
+from app.core.compressed import is_compressed
 from app.main import app
 from app.routers.projects import add_document  # noqa: F401  (mutation-gate killer-file anchor)
 from tests._dev_key import DEV_KEY
@@ -66,6 +67,15 @@ def test_the_indexer_derives_its_formats_from_the_single_declaration():
     # Equality, not identity: other tests reload these modules.
     assert set(doc_index._SUPPORTED_EXTS) == set(ist.TEXT_BEARING_EXTS)
     assert set(projects.ALLOWED_DOC_EXTENSIONS) == set(ist.TEXT_BEARING_EXTS)
+
+
+def test_compressed_sniffer_leaves_spreadsheets_to_the_ruling():
+    # A real xlsx is a zip on disk; a real .xls is an OLE2 container. Both
+    # are spreadsheets first, so the door names the no-spreadsheets ruling
+    # instead of the unzip-it message.
+    assert is_compressed("boq.xlsx", b"PK\x03\x04" + b"\x00" * 60) is False
+    assert is_compressed("prices.xls", b"\xd0\xcf\x11\xe0" + b"\x00" * 60) is False
+    assert is_compressed("pack.zip", b"PK\x03\x04" + b"\x00" * 60) is True
 
 
 @pytest.mark.parametrize("name", ["drone.mp4", "plan.dwg", "boq.xlsx", "earth.kmz", "font.ttf", "pack.zip"])
@@ -232,12 +242,12 @@ def _sample(ext: str, tmp_path) -> tuple[Path, str]:
         # white, a truetype font where the runner has one.
         from PIL import Image, ImageDraw, ImageFont
 
-        img = Image.new("RGB", (1000, 260), "white")
+        img = Image.new("RGB", (1600, 260), "white")
         draw = ImageDraw.Draw(img)
         font = None
         for candidate in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "arial.ttf"):
             try:
-                font = ImageFont.truetype(candidate, 48)
+                font = ImageFont.truetype(candidate, 40)
                 break
             except OSError:
                 continue

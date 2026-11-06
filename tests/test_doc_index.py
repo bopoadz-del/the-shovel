@@ -712,20 +712,21 @@ def test_extract_docx_mocked(tmp_path, monkeypatch):
     assert "Excavation" in text and "100 m3" in text
 
 
-def test_extract_xlsx_is_excluded_by_ruling(tmp_path, monkeypatch):
+@pytest.mark.parametrize("ext", [".xlsx", ".xls"])
+def test_extract_xlsx_is_excluded_by_ruling(tmp_path, monkeypatch, ext):
     """Spreadsheets are excluded by owner ruling 2026-11-06: no extractor is
     registered, so extraction never runs and the document is UNSUPPORTED."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
 
-    doc_path = str(tmp_path / "priced_boq.xlsx")
+    doc_path = str(tmp_path / f"priced_boq{ext}")
     file_crypto.write_document(doc_path, b"PK\x03\x04 fake xlsx bytes")
 
     from app.core import doc_index, ingest_status
     importlib.reload(doc_index)
-    text = doc_index.extract_document_text(doc_path, "priced_boq.xlsx")
+    text = doc_index.extract_document_text(doc_path, f"priced_boq{ext}")
 
     assert text == ""
-    assert ingest_status.classify(chunk_count=0, extension=".xlsx").status == ingest_status.UNSUPPORTED_TYPE
+    assert ingest_status.classify(chunk_count=0, extension=ext).status == ingest_status.UNSUPPORTED_TYPE
 
 def test_extract_kmz_is_unsupported(tmp_path, monkeypatch):
     """.kmz is EXCLUDED from ``_SUPPORTED_EXTS``, not extracted for labels.
@@ -770,11 +771,12 @@ def test_extract_kmz_is_unsupported(tmp_path, monkeypatch):
     assert text == ""
 
 
-def test_extract_xlsx_mocked_never_opens_the_workbook(tmp_path, monkeypatch):
-    """The registry refuses .xlsx before openpyxl could ever open it."""
+@pytest.mark.parametrize("filename", ["budget.xlsx", "budget.xls"])
+def test_extract_xlsx_mocked_never_opens_the_workbook(tmp_path, monkeypatch, filename):
+    """The registry refuses spreadsheets before any reader could open them."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
 
-    doc_path = str(tmp_path / "budget.xlsx")
+    doc_path = str(tmp_path / filename)
     file_crypto.write_document(doc_path, b"PK\x03\x04 fake xlsx bytes")
 
     import openpyxl as real_openpyxl
@@ -785,7 +787,7 @@ def test_extract_xlsx_mocked_never_opens_the_workbook(tmp_path, monkeypatch):
 
     from app.core import doc_index
     importlib.reload(doc_index)
-    text = doc_index.extract_document_text(doc_path, "budget.xlsx")
+    text = doc_index.extract_document_text(doc_path, filename)
     assert text == ""
 
 def test_extract_unsupported_returns_empty(tmp_path, monkeypatch):
