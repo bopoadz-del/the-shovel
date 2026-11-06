@@ -991,7 +991,12 @@ def _drop_dump_fences(text: str) -> str:
 
 def _plain_identifiers(text: str, steps: frozenset[str] = frozenset(),
                        called: frozenset[str] = frozenset()) -> str:
-    from app.lib.source_labels import _registry_maps, parameter_words, plain_registry_text
+    from app.lib.source_labels import (
+        _registry_maps,
+        parameter_label_words,
+        parameter_words,
+        plain_registry_text,
+    )
 
     text = plain_registry_text(_unwrap_chips(_drop_dumps(text), steps, called))
     _displays, params, _units = _registry_maps()
@@ -1008,10 +1013,13 @@ def _plain_identifiers(text: str, steps: frozenset[str] = frozenset(),
         token = m.group("id")
         if _is_step_name(token, steps):
             return _STEP
+        # A registered parameter is authoritative over its name's shape:
+        # it reads as its declared label (or its words), even when the name
+        # has no wordy segments.
+        if token in params:
+            return parameter_label_words(token, params[token]) or _words(token)
         if not _is_word_ident(token):
             return token
-        if token in params:
-            return parameter_words(token, params[token]) or _words(token)
         return _words(token)
 
     text = _IDENT_RE.sub(ident, text)

@@ -2959,6 +2959,23 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             "swallowed %s in resolve_fw_calc() — continuing",
             "Exception", exc_info=True,
         )
+    # Beam-moment asks (P1 of the structural-formulas order): a recognised
+    # support condition BINDS the calculator -- cantilever / propped /
+    # overhang route to the boundary-condition solver, never to another
+    # condition's coefficient. A classified condition whose inputs are
+    # incomplete errors naming the reason instead of falling through.
+    try:
+        from app.agents.hats.design.formulas.beam_solver import (
+            resolve_beam_moment_calc,
+        )
+        name, params = resolve_beam_moment_calc(name, params)
+    except ValueError as exc:
+        return {"status": "error", "error": str(exc)}
+    except Exception:  # noqa: BLE001 — never break a non-beam calc
+        logger.warning(
+            "swallowed %s in resolve_beam_moment_calc() — continuing",
+            "Exception", exc_info=True,
+        )
     fn = CALCULATORS.get(name)
     if fn is None:
         # Recover only from the ask/params prose (text/formula/message/query).

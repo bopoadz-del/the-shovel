@@ -30,6 +30,7 @@ def beam_moment_simple(udl_w_kn_m: float, span_m: float) -> dict:
     return {
         "max_moment_kn_m": round(m, 3),
         "location": "midspan",
+        "support_condition": "simply_supported",
         "standard": "statics (SS, UDL)",
         "note": f"Mmax = w*L^2/8 = {w}*{L}^2/8 = {m:.3f} kN.m at midspan.",
     }
@@ -73,6 +74,7 @@ def beam_moment_point_load(
     return {
         "max_moment_kn_m": round(m, 3),
         "location": loc,
+        "support_condition": "simply_supported",
         "standard": "statics (SS, point load)",
         "note": f"M = {expr} = {m:.3f} kN.m ({loc}).",
     }
@@ -134,6 +136,7 @@ def beam_moment_fixed_udl(udl_w_kn_m: float, span_m: float) -> dict:
         "support_moment_kn_m": round(m_support, 3),
         "midspan_moment_kn_m": round(m_mid, 3),
         "max_moment_kn_m": round(m_support, 3),
+        "support_condition": "fixed_fixed",
         "standard": "statics (fixed-fixed, UDL)",
         "note": (f"Support (hogging) = w*L^2/12 = {w}*{L}^2/12 = {m_support:.3f}; "
                  f"midspan (sagging) = w*L^2/24 = {m_mid:.3f} kN.m."),

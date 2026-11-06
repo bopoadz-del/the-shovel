@@ -140,3 +140,22 @@ Nothing deferred — the full drop-catalog gap-fill is built, each behind its or
 Each batch: one module + oracle tests (dual-code where a code applies) + smoke
 inputs, green through the full referee gate (`comprehensive_engine_test` 93/93 +
 coverage guard + calc-intact) before merge.
+
+## Batch 9 - Beam statics solver (P1.2 of the structural-formulas order)
+
+Module: `app/agents/hats/design/formulas/beam_solver.py`
+Tests: `tests/test_beam_solver.py`
+
+The governing moment is derived by double integration with the boundary
+conditions imposed - the divisor is a result, never an input. The four closed
+forms are the oracle: CI fails when the solver disagrees with them on their
+own cases, and untabulated cases are solved, not looked up.
+
+| Formula | Support | Inputs | Oracle | Basis | Status | Sign-off |
+|---------|---------|--------|--------|-------|--------|----------|
+| beam_governing_moment | simply_supported | w=10, L=10 | **125.0 kN.m** (wL2/8) | statics | GATED | |
+| beam_governing_moment | fixed_fixed | w=10, L=10 | **83.333 kN.m** (wL2/12) | statics | GATED | |
+| beam_governing_moment | cantilever | w=10, L=10 | **500.0 kN.m** (wL2/2) | statics | GATED | |
+| beam_governing_moment | cantilever triangular | w_max=10, L=10 | **166.667 kN.m** (wL2/6) | statics | GATED | |
+| beam_governing_moment | propped_cantilever | w=10, L=10 | **125.0 kN.m** fixed end (wL2/8) | statics | GATED | |
+| beam_reactions | simply_supported | w=10, L=10 | **50.0 kN** each end | statics | GATED | |
