@@ -8,7 +8,21 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.cde.ingest import ingest_cde_bytes
+from app.core.cde.ingest import CdeError, ingest_cde_bytes
+
+
+@pytest.mark.parametrize("filename", ["plan.dwg", "drone.mp4"])
+def test_ingest_cde_bytes_refuses_a_non_ingestible_format(filename):
+    with pytest.raises(CdeError):
+        ingest_cde_bytes(
+            "proj-1",
+            original_name=filename,
+            payload=b"\x00" * 64,
+            cde_document_id="cde-1",
+            vendor="acontex",
+            cde_project_id="cde-proj",
+            eager_index=False,
+        )
 
 
 @pytest.mark.parametrize("filename", ["notes.txt", "site.jpg", "boq.xlsx"])

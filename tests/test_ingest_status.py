@@ -132,7 +132,7 @@ def test_spreadsheets_are_never_indexed_even_with_chunks(ext):
     assert not c.is_open
 
 
-@pytest.mark.parametrize("ext", [".xlsx", ".xls"])
+@pytest.mark.parametrize("ext", [".xlsx", "xlsx", ".xls", "xls"])
 def test_spreadsheets_with_no_chunks_are_unsupported_and_closed(ext):
     c = ist.classify(chunk_count=0, extension=ext)
     assert c.status == ist.UNSUPPORTED_TYPE

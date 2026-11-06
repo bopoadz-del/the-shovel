@@ -7,6 +7,8 @@ and the bitmap is bounded before OCR. Spreadsheets stay out of the registry.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.core import doc_index
@@ -138,21 +140,20 @@ def test_image_ocr_max_pixels(monkeypatch, env_value, expected):
     assert doc_index.image_ocr_max_pixels() == expected
 
 
-@pytest.mark.parametrize("pixels,expect_bounded", [(3000 * 3000, True), (100 * 100, False)])
-def test_bounded_image_scales_only_when_over_cap(monkeypatch, tmp_path, pixels, expect_bounded):
+@pytest.mark.parametrize("side", [3000, 2500])
+def test_bounded_image_scales_and_removes_its_temp_copy(monkeypatch, tmp_path, side):
     from PIL import Image
 
-    photo = tmp_path / "site.jpg"
-    side = int(pixels**0.5)
+    photo = tmp_path / "big.jpg"
     Image.new("RGB", (side, side), (200, 200, 200)).save(photo, "JPEG")
     monkeypatch.setenv("IMAGE_OCR_MAX_PIXELS", "6000000")
+    bounded_path = None
     with doc_index._bounded_image(str(photo)) as bounded:
-        if expect_bounded:
-            assert bounded != str(photo)
-            with Image.open(bounded) as img:
-                assert img.width * img.height <= 6_000_000
-        else:
-            assert bounded == str(photo)
+        bounded_path = bounded
+        assert bounded != str(photo)
+        with Image.open(bounded) as img:
+            assert img.width * img.height <= 6_000_000
+    assert not os.path.exists(bounded_path)
 
 
 @pytest.mark.parametrize("detector", [None, _Detector([])], ids=["no-detector", "no-detections"])
