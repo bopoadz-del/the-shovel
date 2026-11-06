@@ -119,7 +119,7 @@ def test_kmz_is_never_indexed_even_with_chunks(ext):
     assert not c.is_open
 
 
-@pytest.mark.parametrize("ext", [".xlsx", ".xls"])
+@pytest.mark.parametrize("ext", [".xlsx", "xlsx", ".xls", "xls"])
 def test_spreadsheets_are_never_indexed_even_with_chunks(ext):
     """Owner ruling 2026-11-06: spreadsheets stay uploadable (BOQ
     calculators, previews) but are never chunked into the RAG. The
