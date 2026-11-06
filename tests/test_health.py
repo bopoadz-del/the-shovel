@@ -42,11 +42,12 @@ def test_health_payload_includes_build_sha(client: TestClient):
     assert data["build_sha"] is None or isinstance(data["build_sha"], str)
 
 
-def test_health_build_sha_from_git_sha(client: TestClient, monkeypatch):
+@pytest.mark.parametrize("sha", ["abc123def456", "fedcba987654"])
+def test_health_build_sha_from_git_sha(client: TestClient, monkeypatch, sha):
     monkeypatch.delenv("SOURCE_VERSION", raising=False)
-    monkeypatch.setenv("GIT_SHA", "abc123def456")
+    monkeypatch.setenv("GIT_SHA", sha)
     data = client.get("/health").json()
-    assert data["build_sha"] == "abc123def456"
+    assert data["build_sha"] == sha
 
 
 def test_health_build_sha_null_when_unset(client: TestClient, monkeypatch):
