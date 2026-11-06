@@ -396,14 +396,31 @@ def _auth_base():
     return cred, base
 
 
-def resolve_project(client, base: str, cred: str, project_name: str | None) -> str:
-    """The project id to run against, chosen by _pick_project over GET /v1/projects."""
+def resolve_project(client, base: str, cred: str, project_name: str | None,
+                    my_user_id: str | None = None) -> str:
+    """The project id to run against, chosen by _pick_project over
+    GET /v1/projects. When the named project belongs to another account,
+    fall back to the deterministic per-account suffix name (created by the
+    seed step), so the battery never grades a project it cannot chat."""
     resp = client.get(f"{base}/v1/projects", headers={"Authorization": f"Bearer {cred}"},
                       timeout=30)
     resp.raise_for_status()
     data = resp.json()
     rows = data.get("projects") if isinstance(data, dict) else data
-    chosen = _pick_project(rows if isinstance(rows, list) else [], project_name)
+    rows = rows if isinstance(rows, list) else []
+    chosen = _pick_project(rows, project_name)
+    if chosen is not None and my_user_id \
+            and str(chosen.get("user_id") or "") != my_user_id:
+        fallback = _owned_target_name(rows, project_name, my_user_id)
+        # Exact-name lookup only: _pick_project auto-picks the most-indexed
+        # project when the name misses, which would silently grade the
+        # foreign-owned target again. The fallback either exists or we fail.
+        named = [p for p in rows if str(p.get("name") or "") == fallback]
+        chosen = named[0] if named else None
+        if chosen is None:
+            raise RuntimeError(
+                f"battery target {project_name!r} is owned by another account "
+                f"and no {fallback!r} exists - the seed step should have created it.")
     if not chosen:
         raise RuntimeError(
             "no real project to run the battery against: only the general/master "
@@ -514,7 +531,10 @@ def main() -> int:
         questions = json.load(fh)
     cred, base = _auth_base()  # exits/raises with the smoke-live ::error if creds absent
     with httpx.Client() as client:
-        project_id = resolve_project(client, base, cred, project_name)
+        me = client.get(f"{base}/v1/users/me", headers=_bearer(cred), timeout=30)
+        me.raise_for_status()
+        my_user_id = (me.json() or {}).get("user_id")
+        project_id = resolve_project(client, base, cred, project_name, my_user_id)
         results = run_battery(questions, base, cred, project_id, client)
     # The artifact carries the full result (answer + provenance) for review.
     with open(result_file, "w", encoding="utf-8") as fh:
@@ -584,6 +604,22 @@ def _seed_decision(projects: list[dict[str, Any]] | None,
     rows = [p for p in (projects or []) if isinstance(p, dict)]
     named = [p for p in rows if str(p.get("name") or "") == name]
     return ("found", named[0]) if named else ("create", None)
+
+
+def _owned_target_name(projects: list[dict[str, Any]], name: str,
+                       my_user_id: str) -> str:
+    """The battery target project NAME for this account.
+
+    ``name`` when a project with exactly that name is owned by
+    ``my_user_id``; otherwise a deterministic per-account suffix name the
+    seed creates under this account. Pure, so the seed and the battery step
+    converge on the same name without sharing state.
+    """
+    rows = [p for p in (projects or []) if isinstance(p, dict)]
+    named = [p for p in rows if str(p.get("name") or "") == name]
+    if named and str(named[0].get("user_id") or "") == my_user_id:
+        return name
+    return f"{name}-{str(my_user_id or '')[:8]}"
 
 
 def _fixtures_needed(row: dict[str, Any] | None) -> bool:
@@ -675,6 +711,10 @@ def seed_main() -> int:
             rows = data.get("projects") if isinstance(data, dict) else data
             return rows if isinstance(rows, list) else []
 
+        target = _owned_target_name(fetch_rows(), name, who["user_id"])
+        if target != name:
+            print(f"[seed] {name!r} is owned by another account; using {target!r}")
+        name = target
         decision, row = _seed_decision(fetch_rows(), name)
         if decision == "create":
             resp = client.post(f"{base}/v1/projects", json={"name": name},

@@ -278,6 +278,7 @@ def test_pick_project_honours_an_explicit_name(name, expected_id):
 from scripts.ui_battery_runner import (  # noqa: E402  (grouped with their tests)
     DEFAULT_BATTERY_PROJECT,
     _fixtures_needed,
+    _owned_target_name,
     _seed_decision,
     _wait_until_indexed,
 )
@@ -294,6 +295,68 @@ def test_seed_decision_finds_or_creates_never_duplicates(projects, expected):
     decision, row = _seed_decision(projects, DEFAULT_BATTERY_PROJECT)
     assert decision == expected
     assert (row is not None) == (expected == "found")
+
+
+@pytest.mark.parametrize("projects,my_uid,expected", [
+    # owned by this account -> the plain name (the pre-existing behaviour)
+    ([{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "user_id": "me-123"},
+      {"id": "p2", "name": "Other", "user_id": "you-456"}], "me-123", DEFAULT_BATTERY_PROJECT),
+    # owned by another account -> a deterministic per-account suffix name
+    ([{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "user_id": "you-456"}],
+     "me-123", f"{DEFAULT_BATTERY_PROJECT}-me-123"),
+    # no project of that name -> the suffix name the seed will create
+    ([{"id": "p2", "name": "Other", "user_id": "me-123"}],
+     "me-123", f"{DEFAULT_BATTERY_PROJECT}-me-123"),
+])
+def test_owned_target_name_converges_on_this_account(projects, my_uid, expected):
+    assert _owned_target_name(projects, DEFAULT_BATTERY_PROJECT, my_uid) == expected
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def get(self, url, **kwargs):
+        return _FakeResp(self._payload)
+
+
+@pytest.mark.parametrize("rows,my_uid,expected_id", [
+    # owned -> the plain target
+    ([{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "user_id": "me-123",
+       "indexed_documents": 2}], "me-123", "p1"),
+    # foreign-owned, per-account fallback exists -> the fallback id
+    ([{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "user_id": "you-456",
+       "indexed_documents": 2},
+      {"id": "p2", "name": f"{DEFAULT_BATTERY_PROJECT}-me-123", "user_id": "me-123",
+       "indexed_documents": 2}], "me-123", "p2"),
+])
+def test_resolve_project_uses_the_accounts_own_target(rows, my_uid, expected_id):
+    from scripts.ui_battery_runner import resolve_project
+    client = _FakeClient({"projects": rows})
+    assert resolve_project(client, "https://x", "cred", DEFAULT_BATTERY_PROJECT,
+                           my_uid) == expected_id
+
+
+def test_resolve_project_loud_when_no_owned_target_exists():
+    from scripts.ui_battery_runner import resolve_project
+    rows = [{"id": "p1", "name": DEFAULT_BATTERY_PROJECT, "user_id": "you-456",
+             "indexed_documents": 2}]
+    client = _FakeClient({"projects": rows})
+    with pytest.raises(RuntimeError) as err:
+        resolve_project(client, "https://x", "cred", DEFAULT_BATTERY_PROJECT,
+                        "me-123")
+    assert "owned by another account" in str(err.value)
 
 
 @pytest.mark.parametrize("row,expected", [
