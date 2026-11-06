@@ -421,7 +421,15 @@ def _stream_turn(client, base: str, cred: str, project_id: str, question: str,
     with client.stream("POST", url, json={"message": question, "project_id": project_id},
                        headers={"Authorization": f"Bearer {cred}",
                                 "Accept": "text/event-stream"}, timeout=timeout) as resp:
-        resp.raise_for_status()
+        if resp.is_error:
+            # Surface the server's detail (e.g. which 404 gate fired) in the
+            # per-row error, instead of a bare status that hides the cause.
+            try:
+                detail = resp.read().decode("utf-8", "replace")[:500]
+            except Exception:  # noqa: BLE001
+                detail = ""
+            raise RuntimeError(
+                f"chat endpoint HTTP {resp.status_code}: {detail}") from None
         for line in resp.iter_lines():
             line = (line or "").strip()
             if not line.startswith("data:"):
