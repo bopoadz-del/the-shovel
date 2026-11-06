@@ -227,6 +227,7 @@ async def handle_fetch_document(call: ToolCall) -> dict:
             "content": content["text"],
             "truncated": content["truncated"],
             "source": content["source"],
+            "partial_read": content.get("partial_read"),
         },
     }
 

@@ -289,6 +289,48 @@ def _run_sync(coro):
 _DEFAULT_IMAGE_OCR_MAX_PIXELS = 6_000_000
 
 
+# OCR page quality floor (mechanism, not a per-document rule). An OCR'd page
+# whose output is below the character floor or carries no alphanumeric density
+# is line-work noise, not retrievable text -- the .kmz incident's lesson: a
+# chunk that exists but holds nothing usable must not enter the index. Such a
+# page is never emitted as a chunk and is counted in ``ocr_unusable_pages``.
+# Calibrated so a short real OCR line (an item code, "ocr text 0") counts as
+# usable: the floor is a noise backstop, the alphanumeric-density check is the
+# primary signal. Env-tunable via OCR_PAGE_MIN_CHARS.
+_DEFAULT_OCR_PAGE_MIN_CHARS = 10
+_DEFAULT_OCR_PAGE_MIN_ALNUM_SHARE = 0.5
+
+
+def ocr_page_min_chars() -> int:
+    """Character floor for OCR output. Read at call time so env changes apply."""
+    return max(0, _env_int("OCR_PAGE_MIN_CHARS", _DEFAULT_OCR_PAGE_MIN_CHARS))
+
+
+def ocr_page_min_alnum_share() -> float:
+    """Minimum share of non-whitespace characters that must be alphanumeric."""
+    try:
+        value = float(os.getenv("OCR_PAGE_MIN_ALNUM_SHARE", str(_DEFAULT_OCR_PAGE_MIN_ALNUM_SHARE)))
+    except ValueError:
+        return _DEFAULT_OCR_PAGE_MIN_ALNUM_SHARE
+    return max(0.0, min(1.0, value))
+
+
+def ocr_page_usable(text: str) -> bool:
+    """True when OCR output is worth indexing.
+
+    Below the character floor, or without alphanumeric density (a wall of
+    separators, boxes or table rules), the page is counted unusable rather
+    than emitted -- never silently, the count lands on the ledger.
+    """
+    if len(text or "") < ocr_page_min_chars():
+        return False
+    non_space = [ch for ch in text if not ch.isspace()]
+    if not non_space:
+        return False
+    alnum = sum(1 for ch in non_space if ch.isalnum())
+    return alnum / len(non_space) >= ocr_page_min_alnum_share()
+
+
 
 
 
@@ -678,6 +720,8 @@ def _extract_pdf(
     chars = 0
     text_truncated = False
     ocr_skipped = False
+    pages_in_file = 0
+    ocr_unusable_pages = 0
     try:
         if ocr_budget is None:
             page_cap = pdf_ocr_page_cap(filename)
@@ -709,6 +753,7 @@ def _extract_pdf(
                     plumber = None
             doc = fitz.open(readable_path)
             try:
+                pages_in_file = int(getattr(doc, "page_count", 0) or 0)
                 for i, page in enumerate(doc):
                     if i < start_page:
                         continue
@@ -737,9 +782,15 @@ def _extract_pdf(
                             ocr_attempts += 1
                             ocr_text = _ocr_pdf_page(page)
                             if ocr_text.strip():
-                                _add(ocr_text, i)
-                                chars += len(ocr_text)
-                                ocr_pages += 1
+                                if ocr_page_usable(ocr_text):
+                                    _add(ocr_text, i)
+                                    chars += len(ocr_text)
+                                    ocr_pages += 1
+                                else:
+                                    # Below the quality floor: not a chunk,
+                                    # counted on the ledger instead of
+                                    # silently entering the index.
+                                    ocr_unusable_pages += 1
                         elif page_cap > 0:
                             truncated = True
                     if plumber is not None and i < len(plumber.pages):
@@ -827,6 +878,9 @@ def _extract_pdf(
     if empty_text_pages:
         meta["empty_text_pages"] = empty_text_pages
     meta["pages_read"] = pages_read
+    meta["pages_in_file"] = pages_in_file
+    meta["pages_ocrd"] = ocr_pages
+    meta["ocr_unusable_pages"] = ocr_unusable_pages
     if page_starts:
         meta["page_starts"] = page_starts
     if _mostly_without_text(empty_text_pages, pages_read) and ocr_attempts == 0:
@@ -842,6 +896,7 @@ def _extract_pdf(
         meta["extract_chars"] = chars
     if ocr_skipped:
         meta["ocr_skipped_too_large"] = True
+        meta["ocr_skip_reason"] = "ocr_skipped_over_size_ceiling"
     return "\n".join(parts), meta
 
 
@@ -952,6 +1007,7 @@ def _extract_pdf_batched(
     ocr_attempts = 0
     empty_text_pages = 0
     pages_read = 0
+    ocr_unusable_pages = 0
     for start in range(0, n_pages, batch):
         end = min(start + batch, n_pages)
         remaining = max(0, budget - ocr_attempts)
@@ -973,6 +1029,7 @@ def _extract_pdf_batched(
         ocr_attempts += int((bmeta or {}).get("ocr_attempts") or 0)
         empty_text_pages += int((bmeta or {}).get("empty_text_pages") or 0)
         pages_read += int((bmeta or {}).get("pages_read") or 0)
+        ocr_unusable_pages += int((bmeta or {}).get("ocr_unusable_pages") or 0)
         for key in (
             "ocr_low_quality",
             "ocr_truncated",
@@ -990,6 +1047,7 @@ def _extract_pdf_batched(
 
     if ocr_skipped:
         meta["ocr_skipped_too_large"] = True
+        meta["ocr_skip_reason"] = "ocr_skipped_over_size_ceiling"
         meta["size_mb"] = round(size_mb, 1)
     if ocr_used:
         meta["ocr_pages"] = ocr_used
@@ -999,6 +1057,9 @@ def _extract_pdf_batched(
     if empty_text_pages:
         meta["empty_text_pages"] = empty_text_pages
     meta["pages_read"] = pages_read
+    meta["pages_in_file"] = n_pages
+    meta["pages_ocrd"] = ocr_used
+    meta["ocr_unusable_pages"] = ocr_unusable_pages
     if page_starts:
         meta["page_starts"] = page_starts
     if _mostly_without_text(empty_text_pages, pages_read) and ocr_attempts == 0:
@@ -3003,6 +3064,11 @@ def _stamp_index_ledger(
     rag_error: str | None = None,
     ocr_degraded: bool = False,
     reason_override: str | None = None,
+    ocr_truncated: bool = False,
+    pages_in_file: int | None = None,
+    pages_ocrd: int | None = None,
+    ocr_skip_reason: str | None = None,
+    ocr_unusable_pages: int = 0,
 ) -> None:
     """Write documents.chunk_count / ingest_status / extractor_version.
 
@@ -3025,6 +3091,11 @@ def _stamp_index_ledger(
     ext = os.path.splitext(filename or "")[1]
     if extract_failed:
         status, reason = ist.EXTRACT_FAILED, None
+    elif ocr_truncated:
+        # A scan the OCR page cap cut short is NOT indexed, whatever the
+        # reindex flag says: the tail pages are missing and the user must be
+        # told "partially read, pages 1-N of M", not shown a complete doc.
+        status, reason = ist.PARTIAL_OCR, "ocr_truncated"
     elif stamp_as_indexed and chunk_count > 0:
         status, reason = ist.INDEXED, None
     else:
@@ -3063,6 +3134,11 @@ def _stamp_index_ledger(
             "ingest_status": status,
             "ingest_status_reason": reason,
             "stamp_extractor_version": advance,
+            "pages_in_file": pages_in_file,
+            "pages_ocrd": pages_ocrd,
+            "ocr_truncated": bool(ocr_truncated),
+            "ocr_skip_reason": ocr_skip_reason,
+            "ocr_unusable_pages": int(ocr_unusable_pages or 0),
         }
         if advance:
             kwargs["extractor_version"] = ist.EXTRACTOR_VERSION
@@ -3378,6 +3454,11 @@ def _index_document(
                 document_id, filename, 0,
                 stamp_as_indexed=False,
                 ocr_degraded=True,
+                pages_in_file=meta.get("pages_in_file"),
+                pages_ocrd=meta.get("pages_ocrd"),
+                ocr_truncated=bool(meta.get("ocr_truncated")),
+                ocr_skip_reason=meta.get("ocr_skip_reason"),
+                ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
             )
             return {
                 "status": "error",
@@ -3436,6 +3517,11 @@ def _index_document(
                 stamp_as_indexed=stamp_as_indexed,
                 extract_failed=bool(extract_error),
                 ocr_degraded=bool(meta.get("ocr_skipped_too_large")),
+                pages_in_file=meta.get("pages_in_file"),
+                pages_ocrd=meta.get("pages_ocrd"),
+                ocr_truncated=bool(meta.get("ocr_truncated")),
+                ocr_skip_reason=meta.get("ocr_skip_reason"),
+                ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
             )
             return result
         entry = {
@@ -3538,6 +3624,11 @@ def _index_document(
         rag_indexed=rag_indexed,
         rag_error=rag_error,
         ocr_degraded=bool(meta.get("ocr_skipped_too_large")),
+        ocr_truncated=bool(meta.get("ocr_truncated")),
+        pages_in_file=meta.get("pages_in_file"),
+        pages_ocrd=meta.get("pages_ocrd"),
+        ocr_skip_reason=meta.get("ocr_skip_reason"),
+        ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
     )
     result = {
         "status": "ok",
@@ -3552,6 +3643,11 @@ def _index_document(
         "ocr_pages": int(meta.get("ocr_pages") or 0),
         "ocr_attempts": int(meta.get("ocr_attempts") or 0),
         "empty_text_pages": int(meta.get("empty_text_pages") or 0),
+        "pages_in_file": meta.get("pages_in_file"),
+        "pages_ocrd": meta.get("pages_ocrd"),
+        "ocr_truncated": bool(meta.get("ocr_truncated")),
+        "ocr_skip_reason": meta.get("ocr_skip_reason"),
+        "ocr_unusable_pages": int(meta.get("ocr_unusable_pages") or 0),
     }
     if ext == ".pdf":
         result["pages_without_text"] = int(meta.get("empty_text_pages") or 0)
