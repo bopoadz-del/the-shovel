@@ -99,14 +99,21 @@ A contents entry confirms where a subject is addressed, not its detailed rule,
 exceptions, calculation method, or numerical limit. The review suggestions below
 are explanatory guidance, not additional statutory requirements.
 
-Three evidence limits are important:
+The following evidence limits are important:
 
 - **SBC 301:** the detailed section references below are verified for **2018 only**.
   The official 2024 description verifies the current volume's subject matter,
   but the 2024 section mapping was not established.
-- **SBC 601:** only **2018 chapter-level** navigation was established, using an
-  ICC-published study-companion contents preview. That companion is educational,
-  not the code itself. No 2024 section numbers are asserted.
+- **SBC 601:** chapter navigation and selected operative HVAC provisions were
+  verified for **2018**, using ICC study-companion previews. These educational
+  publications are not a substitute for the adopted code; no 2024 equivalence
+  is asserted.
+- **Other historical examples:** the ICC samples also reproduce limited 2018
+  provisions for SBC 303, 501, 701, 801 and 901. The examples below are explicitly
+  dated and must not be treated as verified 2024 requirements.
+- **SBC 201 business population:** a professional fire-engineering review supplies
+  the identified 2024 Table 1004.5 example. It is secondary evidence, not a
+  substitute for checking the complete adopted table and its qualifications.
 - **SBC 306:** navigation comes from the official **2024 Arabic AR publication**.
   Its introduction describes AR as a partial, educational rendering rather than
   the technical design/execution reference. The chapter numbers cited here are
@@ -117,7 +124,8 @@ referenced-standard editions, applicability, and exceptions before design or
 approval. CR identifies requirements; CC includes both requirements and commentary;
 commentary is not an independent mandatory provision. Do not substitute an IBC,
 ASCE, ACI, AISC, IEC, NFPA, or ASHRAE clause number for an SBC clause without checking
-the adopted SBC text. No numerical design limits are established by this extension.
+the adopted SBC text. Only the bounded, source-labelled examples below establish
+numerical facts; they do not constitute a complete design-value schedule.
 
 ### SBC 201 — Overall building strategy and approvals (2024 references)
 
@@ -144,9 +152,19 @@ this scope and the following section navigation.
 - **Sections 1103–1106:** include accessible routes, entrances, and parking in the
   early layout review rather than treating accessibility as a late signage item.
 
+**Sourced 2024 example — Table 1004.5:** the business-use population calculation
+uses **14 m²/person**, according to the [Vortex Fire review of the 2024
+changes][sbc2024-fire-review]. This is a use-specific population factor, not an
+exit-width allowance or a factor for every space within a business building.
+Check the actual table's area basis, mixed uses, and any applicable qualifications
+before using it. The review also identifies **Section 404.10** as the conditional
+route for counting an open atrium stair as egress; being inside an atrium does
+not, on its own, qualify a stair.
+
 **Unverified detail — confirm against the official code:** occupancy-specific
 area/height limits, fire-resistance durations, sprinkler exceptions, occupant-load
-factors, exit widths/count triggers, travel distances, and accessibility dimensions.
+factors other than the business example above, exit widths/count triggers, travel
+distances, and accessibility dimensions.
 
 ### SBC 301 — Structural actions and hazard inputs (2018 section references only)
 
@@ -229,6 +247,14 @@ control. See the [official overview][sbc303-page] and [2024 CR contents][sbc303-
   distinct design topics; one generic ground-improvement recipe is insufficient.
 - **Sections 13.2–13.5:** assess damp exclusion, waterproofing, groundwater
   drainage, and water-retaining structures as related but different functions.
+
+**Verified historical example — 2018 Section 3.7:** the [ICC soils/foundations
+sample][sbc303-sample] gives an ordinary near-foundation ground fall of **5% over
+3,000 mm**, measured away from the wall. Within that distance, the sample sets
+**2%** for swales and impervious surfaces. Obstructions can require a different
+water-diversion arrangement, and a soil/climate exception can reduce the ground
+slope to **2%**. Allow for fill settlement when setting finished levels. This is
+a surface-drainage example, not a safe excavation angle or a verified 2024 rule.
 
 **Unverified detail — confirm against the official code:** investigation triggers
 and borehole coverage, bearing pressures, settlement limits, compaction targets,
@@ -384,17 +410,25 @@ Coordinate mechanical fire functions with SBC 201/801 and energy-performance
 questions with SBC 601. Neither safety compliance nor equipment capacity alone
 establishes energy compliance.
 
+**Verified historical example — 2018 Section 304.10:** the [ICC mechanical
+sample][sbc501-sample] distinguishes equipment supported at grade on an approved,
+level base projecting **75 mm** above nearby ground from equipment suspended
+**150 mm** above it. These are installation-to-grade dimensions, not service
+access, roof-edge protection, or refrigerant-clearance dimensions. Their 2024
+status remains unverified.
+
 **Unverified detail — confirm against the official code:** ventilation/exhaust
 rates, separation distances, service clearances, duct/insulation classes, hood
 triggers, refrigerant charge limits, machinery-room safeguards, and test conditions.
 
-### SBC 601 — Energy review for nonresidential buildings (2018 chapter pointers)
+### SBC 601 — Energy review for nonresidential buildings (2018 references only)
 
 The [official 2024 overview][sbc601-page] identifies envelope, HVAC, water heating,
 ventilation/indoor air quality, and lighting as energy topics. The chapter pointers
 below are verified **only for 2018**, in the publisher's public
-[ICC study-companion contents][sbc601-guide]. They are not verified 2024 clauses
-and do not establish a compliance route or numerical target.
+[ICC study-companion contents][sbc601-guide]. The additional operative examples
+come from its [HVAC sample pages][sbc601-sample]. Neither source establishes
+2024 clause equivalence or a current numerical target.
 
 - **2018 Chapters 1, 2 and 4:** establish applicability and the compliance
   documentation/review framework before assembling an energy submission.
@@ -413,6 +447,17 @@ and do not establish a compliance route or numerical target.
 The official catalog lists residential energy provisions separately as SBC 602;
 check the scope boundary for the actual building rather than assuming all housing
 uses the same energy book.
+
+**Verified historical HVAC provisions:** the 2018 sample connects new-system
+compliance to **Sections 6.1.1.1 and 6.2**. **Section 6.4.1.1** addresses minimum
+equipment performance at the specified rating conditions, not an unspecified
+supplier efficiency figure. **Section 6.4.1.4** distinguishes certification,
+independent testing and permitted manufacturer evidence, including verification
+of mixed-component combinations. **Section 6.4.1.5.1** addresses an ASHRAE 90.1
+compliance label for equipment outside the Saudi Energy Efficiency Programme's
+coverage. Check the applicable referenced edition and the relevant evidence
+route; a label alone is not a whole-building energy demonstration. These are
+2018 operative pointers, not a claim that every product has the same approval path.
 
 **Unverified detail — confirm against the official code:** all 2024 clause
 numbers, applicable compliance paths and mandatory provisions, climate-zone
@@ -441,6 +486,12 @@ vents, fixtures, hot water, and roof drainage. See the
 - **Sections 112 and 312:** plan the relevant inspection and test evidence
   alongside installation. Obtain actual procedures/acceptance criteria from
   the adopted code rather than from these navigation pointers.
+
+**Verified historical example — 2018 Section 308.6:** the [ICC plumbing
+sample][sbc701-sample] calls for rigid sway restraint where piping of **100 mm
+or larger** changes direction by **more than 45°**. This is a piping-bracing
+condition, not a drainage-slope or fixture-unit rule, and it has not been verified
+against the 2024 text.
 
 **Unverified detail — confirm against the official code:** fixture ratios,
 flow/pressure limits, backflow-device selection, drainage slopes, fixture-unit
@@ -472,6 +523,15 @@ building configuration and passive-protection review under SBC 201.
 - **Chapters 50 and 57:** locate general hazardous-material and combustible/
   flammable-liquid topics before considering storage or process arrangements.
   The relevant hazard and occupancy determine which detailed rules need review.
+
+**Verified historical example — 2018 Section 304.3.2:** the [ICC fire
+sample][sbc801-sample] addresses waste containers larger than **0.15 m³** with
+lid and material-performance conditions, subject to the identified **Section 808**
+wastebasket exception. The combustible-material option uses ASTM E1354 testing:
+the peak heat-release-rate ceiling is **300 kW/m²**, with an applied radiant flux
+of **50 kW/m²** and the stated horizontal test orientation. These test quantities
+are not a general storage fire-load allowance. Check the complete provision and
+the adopted edition before specifying a container; 2024 continuity is unverified.
 
 **Unverified detail — confirm against the official code:** sprinkler/alarm
 triggers, fire-flow and pump criteria, access geometry, emergency-power duration,
@@ -505,6 +565,16 @@ cover repairs, alterations, additions, changed use, and relocation.
 - **Sections 1502 and 1504–1509:** include adjoining-property protection,
   escape, accessibility, and firefighting arrangements during the works,
   particularly where other parts of the building remain occupied.
+
+**Verified historical example — 2018 Section 401.2.3:** the [ICC existing-building
+sample][sbc901-sample] addresses existing lateral systems that can be classified
+as ordinary: use that system class's coefficients **R, Ω₀ and Cᵈ**, unless
+evidence demonstrates the
+performance needed for another system classification. Do not assign an
+intermediate/special system merely because that choice produces a convenient
+coefficient. This is a 2018 prescriptive-route example: its Chapter 4 location
+must not be overlaid on the different 2024 chapter map above. It supplies no
+numerical coefficients or alteration-area threshold.
 
 **Unverified detail — confirm against the official code:** alteration-level
 thresholds, upgrade triggers, allowable demand/capacity changes, assessment and
@@ -574,3 +644,21 @@ occupancy. They contain no project-specific design assumptions.
 [sbc301-toc]: https://sbc.gov.sa/ar/BC/Documents/tableofcontent2018/SBC%20301/SBC301_CR_T2018.pdf
 [sbc306-ar]: https://sbc.gov.sa/ar/BC/Documents/tableofcontent2024/SBC%20306/SBC306_AR_250601M.pdf
 [sbc601-guide]: https://shop.iccsafe.org/media/wysiwyg/material/4807S18SBC-TOC.pdf
+
+### Additional sources for bounded operative examples
+
+- [Vortex Fire: SBC 201/801 2024 changes][sbc2024-fire-review] — professional
+  secondary explanation; supports the specific 2024 business population and
+  atrium-stair pointers, not a complete transcription of either code.
+- ICC-published **2018** study-companion samples reproducing limited provisions:
+  [SBC 303][sbc303-sample], [SBC 501][sbc501-sample], [SBC 601][sbc601-sample],
+  [SBC 701][sbc701-sample], [SBC 801][sbc801-sample] and [SBC 901][sbc901-sample].
+  Their educational commentary is not an additional mandatory rule.
+
+[sbc2024-fire-review]: https://vortexfire.com/insights/sbc-201-801-2024-edition-the-key-changes-you-need-to-know
+[sbc303-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4617S18SBC-Sample.pdf
+[sbc501-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4317S18SBC-Sample.pdf
+[sbc601-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4807S18SBC-Sample.pdf
+[sbc701-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4217S18SBC-Sample.pdf
+[sbc801-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4407S18SBC-Sample.pdf
+[sbc901-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4517S18SBC-Sample.pdf
