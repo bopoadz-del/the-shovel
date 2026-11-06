@@ -38,6 +38,7 @@ in as INDEXED the way the evidence-beats-policy ordering was designed to let
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Collection, Mapping, NamedTuple
 
 from app.core import text_extractors as _text_extractors
@@ -307,6 +308,11 @@ def attempt_count(prior: Mapping[str, Any]) -> int:
 #: project document upload, the indexer -- derives from this set; no other
 #: list may decide ingestibility. Compressed files are never ingestible. See
 #: ``is_ingestible`` and docs/INGEST_EXCLUSION_RULE.md.
+def is_spreadsheet(name: str) -> bool:
+    """True for .xls/.xlsx -- accepted as working documents (the BOQ
+    calculators and previews read them) but never chunked into the RAG and
+    never assigned by the Drive ingest (owner ruling 2026-11-06)."""
+    return Path(name or "").suffix.lower() in _SPREADSHEET_EXTS
 # Built from the extractor registry (app/core/text_extractors.py): a format
 # is ingestible only when a working text extractor is registered for it.
 TEXT_BEARING_EXTS = _text_extractors.formats()

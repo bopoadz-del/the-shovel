@@ -918,6 +918,46 @@ def test_excluded_formats_are_never_assigned_downloaded_or_recorded(harness, mon
     assert not {f["id"] for f in excluded} & set(rows), rows
 
 
+def test_spreadsheets_are_never_assigned_by_the_drive_ingest(harness, monkeypatch):
+    """Owner ruling 2026-11-06: .xls/.xlsx stay uploadable project documents
+    but the Drive ingest never assigns or downloads them -- counted by format."""
+    from app.core import gdrive_service
+    from app.core import projects as projects_mod
+
+    excluded = [
+        {"id": "boq001", "name": "priced_boq.xlsx",
+         "_drive_path": f"{FOLDER_NAME}/boq/priced_boq.xlsx",
+         "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+         "size": 120_000},
+        {"id": "boq002", "name": "legacy_boq.xls",
+         "_drive_path": f"{FOLDER_NAME}/boq/legacy_boq.xls",
+         "mimeType": "application/vnd.ms-excel", "size": 90_000},
+    ]
+    harness.files.extend(excluded)
+    downloads = {}
+    rows = []
+
+    def _download(fid):
+        downloads[fid] = downloads.get(fid, 0) + 1
+        return b"x" * 256, None
+
+    def _add_document(**kw):
+        rows.append((kw.get("metadata") or {}).get("drive_file_id"))
+        return {"id": f"new-{len(rows):03d}"}
+
+    monkeypatch.setattr(gdrive_service, "download_file_bytes", _download)
+    monkeypatch.setattr(projects_mod, "add_document", _add_document)
+
+    for _ in range(2):  # the run, then a resume
+        assert harness.run() == 0
+        acc = harness.report()["accounting"]
+        assert acc["assigned"] == harness.expected_assigned, acc
+        assert acc["unsupported_by_format"].get(".xlsx") == 1
+        assert acc["unsupported_by_format"].get(".xls") == 1
+    assert all(downloads.get(f["id"], 0) == 0 for f in excluded), downloads
+    assert not {f["id"] for f in excluded} & set(rows), rows
+
+
 def test_zero_byte_drive_files_are_never_downloaded(harness, monkeypatch):
     """Drive says 0 bytes: nothing to ingest. They used to be downloaded,
     found empty and dropped with no record, so every resume fetched them

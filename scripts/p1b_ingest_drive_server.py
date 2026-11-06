@@ -374,6 +374,7 @@ def _ingest_file(
     if (
         mime in _UNSUPPORTED_MIMES
         or not _ist_gate.is_ingestible(rel)
+        or _ist_gate.is_spreadsheet(rel)
         or _is_geodatabase_internal(rel)
     ):
         return rel, {
@@ -1277,6 +1278,7 @@ def main() -> int:
                 return (
                     mime in _UNSUPPORTED_MIMES
                     or not _ist_gate.is_ingestible(path)
+                    or _ist_gate.is_spreadsheet(path)
                     or _is_geodatabase_internal(path)
                 )
 
@@ -1352,10 +1354,14 @@ def main() -> int:
             return (
                 mime in _UNSUPPORTED_MIMES
                 or _is_geodatabase_internal(path)
-                # The RAG ingests text formats only (TEXT_BEARING_EXTS, see
-                # the module docstring): anything else is never assigned,
-                # downloaded, stored or archived -- only counted.
+                # The RAG ingests text formats and site photos
+                # (TEXT_BEARING_EXTS, see the module docstring): anything
+                # else is never assigned, downloaded, stored or archived --
+                # only counted.
                 or not ist.is_ingestible(path)
+                # Spreadsheets stay uploadable project documents but the
+                # Drive ingest never assigns them (owner ruling 2026-11-06).
+                or ist.is_spreadsheet(path)
                 # A file Drive reports as zero bytes has nothing to ingest.
                 # It used to be downloaded, found empty and dropped with no
                 # record -- so every resume downloaded it again.
