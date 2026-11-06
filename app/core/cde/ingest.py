@@ -53,7 +53,8 @@ def ingest_cde_bytes(
     if ext not in TEXT_BEARING_EXTS:
         raise CdeError(
             f"CDE file type '{ext}' is not ingestible: the knowledge base takes "
-            f"text formats only (docs/INGEST_EXCLUSION_RULE.md)"
+            f"text formats and site photos — no spreadsheets "
+            f"(docs/INGEST_EXCLUSION_RULE.md)"
         )
     digest = hashlib.sha256(payload).hexdigest()
     existing = store.find_document_by_sha(fork_project_id, digest)

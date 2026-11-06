@@ -1,9 +1,9 @@
-"""The RAG takes text formats only, at every door (docs/INGEST_EXCLUSION_RULE.md).
+"""The RAG takes text formats and site photos, at every door (docs/INGEST_EXCLUSION_RULE.md).
 
-docs/RAG_GAPS_REVIEW_2026-09-12.md section E: CAD, images, Google Earth,
-video, GIS internals and fonts are excluded BY DESIGN. Live 2026-10-04 a
-Drive ingest downloaded and registered 8 videos, hundreds of drawings and
-photos anyway. These tests pin the rule where files enter:
+docs/RAG_GAPS_REVIEW_2026-09-12.md section E: CAD, video, GIS internals
+and fonts are excluded BY DESIGN; spreadsheets (.xls/.xlsx) are excluded
+by owner ruling 2026-11-06, which also made site photos (.jpg/.jpeg)
+corpus material again. These tests pin the rule where files enter:
   * one declaration (ingest_status.TEXT_BEARING_EXTS) the indexer derives from;
   * archive members that are not text are never read;
   * a project upload / Drive import of an excluded format is refused (415)
@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 
 from app.core import ingest_status as ist
 from app.main import app
+from app.routers.projects import add_document  # noqa: F401  (mutation-gate killer-file anchor)
 from tests._dev_key import DEV_KEY
 
 H = {"Authorization": "Bearer " + DEV_KEY}
@@ -67,12 +68,12 @@ def test_the_indexer_derives_its_formats_from_the_single_declaration():
     assert set(projects.ALLOWED_DOC_EXTENSIONS) == set(ist.TEXT_BEARING_EXTS)
 
 
-@pytest.mark.parametrize("name", ["drone.mp4", "plan.dwg", "site.jpg", "earth.kmz", "font.ttf", "pack.zip"])
+@pytest.mark.parametrize("name", ["drone.mp4", "plan.dwg", "boq.xlsx", "earth.kmz", "font.ttf", "pack.zip"])
 def test_excluded_formats_are_not_ingestible(name):
     assert not ist.is_ingestible(name)
 
 
-@pytest.mark.parametrize("name", ["contract.pdf", "boq.xlsx", "notes.txt", "Spec.DOCX"])
+@pytest.mark.parametrize("name", ["contract.pdf", "site.jpg", "notes.txt", "Spec.DOCX"])
 def test_text_formats_are_ingestible(name):
     assert ist.is_ingestible(name)
 
@@ -83,7 +84,7 @@ def test_text_formats_are_ingestible(name):
 @pytest.mark.parametrize("name,mime", [
     ("drone.mp4", "video/mp4"),
     ("plan.dwg", "application/acad"),
-    ("site.jpg", "image/jpeg"),
+    ("boq.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
 ])
 def test_project_upload_of_an_excluded_format_is_refused_and_writes_nothing(client, name, mime):
     proj = _new_project(client, f"Refuse {name}")
@@ -93,7 +94,7 @@ def test_project_upload_of_an_excluded_format_is_refused_and_writes_nothing(clie
         files={"file": (name, b"\x00" * 128, mime)}, headers=H,
     )
     assert r.status_code == 415, r.text
-    assert "text formats only" in r.json()["detail"]
+    assert "text formats and site photos" in r.json()["detail"]
     assert _doc_count(client, proj["id"]) == before
 
 
@@ -106,7 +107,7 @@ def test_upload_with_a_project_refuses_an_excluded_format(client):
         data={"project_id": proj["id"]}, headers=H,
     )
     assert r.status_code == 415, r.text
-    assert "text formats only" in r.json()["detail"]
+    assert "text formats and site photos" in r.json()["detail"]
     assert _doc_count(client, proj["id"]) == before
 
 
@@ -226,6 +227,22 @@ def _sample(ext: str, tmp_path) -> tuple[Path, str]:
         deck.save(str(path))
     elif ext == ".ifc":
         return FIXTURES / "sample_office.ifc", "IFC MODEL"
+    elif ext in (".jpg", ".jpeg"):
+        # OCR must read the probe back out of the bitmap: big black text on
+        # white, a truetype font where the runner has one.
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = Image.new("RGB", (1000, 260), "white")
+        draw = ImageDraw.Draw(img)
+        font = None
+        for candidate in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "arial.ttf"):
+            try:
+                font = ImageFont.truetype(candidate, 48)
+                break
+            except OSError:
+                continue
+        draw.text((40, 80), line, fill="black", font=font)
+        img.save(str(path), "JPEG")
     else:  # legacy binaries written by the real applications
         return FIXTURES / "formats" / f"sample{ext}", PROBE
     return path, PROBE
@@ -235,7 +252,12 @@ def _sample(ext: str, tmp_path) -> tuple[Path, str]:
 def test_every_registered_format_reads_its_sample_into_a_chunk(ext, tmp_path):
     """A format is ingestible only if a registered extractor reads it: each
     one, generated from the registry, yields a chunk holding its known text."""
+    import shutil
+
     from app.core import doc_index
+
+    if ext in (".jpg", ".jpeg") and shutil.which("tesseract") is None:
+        pytest.skip("tesseract not installed on this box")
 
     path, expected = _sample(ext, tmp_path)
     assert path.exists(), f"no sample for registered format {ext}"

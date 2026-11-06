@@ -97,63 +97,6 @@ def _docx(file_path: str, filename: str, force_ocr: bool):
         return doc_index._docx_plain_text(docx.Document(readable_path)), {}
 
 
-def _sheet_rows(rows) -> str:
-    """Row-wise, not cell-wise: a priced-BOQ line stays together
-    ("<desc> | <qty> | <unit> | <rate> | <total>"). Flattening every cell into
-    one blob separates a rate from its item and makes unit rates unfindable."""
-    parts = []
-    for row in rows:
-        cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
-        if cells:
-            parts.append(" | ".join(cells))
-    return "\n".join(parts)
-
-
-@reads(".xlsx", office_package=True)
-def _xlsx(file_path: str, filename: str, force_ocr: bool):
-    import openpyxl
-
-    from app.core import file_crypto
-
-    with file_crypto.open_plaintext(file_path) as readable_path:
-        wb = openpyxl.load_workbook(readable_path, data_only=True)
-        return "\n".join(
-            _sheet_rows([cell.value for cell in row] for row in wb[name])
-            for name in wb.sheetnames
-        ), {}
-
-
-@reads(".xls")
-def _xls(file_path: str, filename: str, force_ocr: bool):
-    # Legacy BIFF workbook: the same row-wise spreadsheet text as .xlsx,
-    # read with xlrd (pure Python).
-    import xlrd
-
-    from app.core import file_crypto
-
-    book = xlrd.open_workbook(file_contents=file_crypto.read_document(file_path))
-    sheets = []
-    for sheet in book.sheets():
-        rows = (
-            [_xls_cell(cell, book.datemode) for cell in sheet.row(r)]
-            for r in range(sheet.nrows)
-        )
-        sheets.append(_sheet_rows(rows))
-    return "\n".join(sheets), {}
-
-
-def _xls_cell(cell, datemode: int):
-    import xlrd
-
-    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
-        return None
-    if cell.ctype == xlrd.XL_CELL_NUMBER and float(cell.value).is_integer():
-        return int(cell.value)
-    if cell.ctype == xlrd.XL_CELL_DATE:
-        return xlrd.xldate.xldate_as_datetime(cell.value, datemode).date().isoformat()
-    return cell.value
-
-
 @reads(".pptx", office_package=True)
 def _pptx(file_path: str, filename: str, force_ocr: bool):
     from app.core import doc_index
@@ -240,3 +183,13 @@ def _ifc(file_path: str, filename: str, force_ocr: bool):
     from app.core import doc_index
 
     return "\n".join(doc_index._ifc_census(file_path, filename)), {}
+
+
+@reads(".jpg", ".jpeg")
+def _photo(file_path: str, filename: str, force_ocr: bool):
+    # Owner ruling 2026-11-06: site photos are corpus material again (the
+    # text-only rule from #773 excluded them by design). OCR the bounded
+    # bitmap; the baked YOLO-World summary rides along when configured.
+    from app.core import doc_index
+
+    return doc_index.extract_photo(file_path, filename)

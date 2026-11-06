@@ -76,7 +76,8 @@ logger = logging.getLogger(__name__)
 # The owner's ruling was NO kmz in the RAG at all. Reuse this constant rather
 # than adding a parallel kmz/kml check elsewhere -- see the matching
 # UNSUPPORTED_TYPE guard in app/core/ingest_status.py.
-# Derived, never declared here: the RAG ingests text formats only (see
+# Derived, never declared here: the RAG ingests text formats and site
+# photos (see
 # ingest_status.TEXT_BEARING_EXTS and docs/INGEST_EXCLUSION_RULE.md).
 from app.core import text_extractors as _text_extractors  # noqa: E402
 from app.core.ingest_status import TEXT_BEARING_EXTS as _TEXT_BEARING_EXTS  # noqa: E402
@@ -1596,16 +1597,154 @@ def _extract_with_meta_impl(
     return "", {}
 
 
+_IMAGE_EXTS = frozenset({".jpg", ".jpeg"})
+
+_DEFAULT_IMAGE_OCR_MAX_PIXELS = 6_000_000
+
+
+def image_ocr_max_pixels() -> int:
+    """Pixel cap for a standalone image before OCR and detection.
+
+    Defaults to the same 6 MP the PDF page path has used since
+    ``PDF_OCR_MAX_PIXELS`` -- OCR on a site photo does not improve past it.
+    ``IMAGE_OCR_MAX_PIXELS`` overrides; anything unparseable keeps the default.
+    """
+    raw = (os.getenv("IMAGE_OCR_MAX_PIXELS") or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_IMAGE_OCR_MAX_PIXELS
+    return value if value > 0 else _DEFAULT_IMAGE_OCR_MAX_PIXELS
+
+
+@contextlib.contextmanager
+def _bounded_image(file_path: str):
+    """Yield a path to ``file_path`` bounded to ``image_ocr_max_pixels()``.
+
+    Restored 2026-11-06 for the photo-ingest ruling. Live 9e6fe98: the
+    oom_kill counter went 3 -> 47 in seventy files on 20-48 MP aerial
+    photos; this path ran OCR and the YOLO detector at native size with
+    nothing bounding the bitmap. Decodes ONCE, at reduced scale where the
+    codec allows it, and yields one temp copy for both consumers. Under the
+    cap, or on anything PIL cannot open, the original path is yielded
+    unchanged so a bad file stays a bad file rather than becoming a crash
+    here.
+    """
+    cap = image_ocr_max_pixels()
+    tmp_path = None
+    try:
+        from PIL import Image
+
+        with file_crypto.open_plaintext(file_path) as plain_path:
+            with Image.open(plain_path) as img:
+                if img.width * img.height > cap:
+                    scale = (cap / (img.width * img.height)) ** 0.5
+                    target = (
+                        max(1, int(img.width * scale)),
+                        max(1, int(img.height * scale)),
+                    )
+                    # JPEG: the decoder picks the smallest 1/2^n scale that
+                    # still covers ``target`` -- the full bitmap is never built.
+                    img.draft(img.mode if img.mode in ("L", "RGB") else "RGB", target)
+                    img.thumbnail(target, Image.Resampling.LANCZOS)
+                    fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
+                    os.close(fd)
+                    (img if img.mode in ("L", "RGB") else img.convert("RGB")).save(
+                        tmp_path, "JPEG", quality=85
+                    )
+    except Exception:
+        logger.debug("image bound skipped for %s", os.path.basename(file_path), exc_info=True)
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        tmp_path = None
+    try:
+        yield tmp_path or file_path
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _ocr_extract(file_path: str) -> tuple[str, bool]:
+    """Run the OCR block on ``file_path``; return ``(text, low_quality)``.
+
+    Never raises -- any OCR error / missing text yields ``("", False)``.
+    """
+    try:
+        from app.blocks.ocr import OCRBlock
+
+        result = _run_sync(OCRBlock().process(file_path))
+        if not isinstance(result, dict) or result.get("status") == "error":
+            return "", False
+        text = result.get("text") or ""
+        quality = result.get("quality") or {}
+        return text, bool(quality.get("low_quality"))
+    except Exception:
+        return "", False
+
+
+def _safety_world_extract(file_path: str, filename: str) -> str:
+    """Baked YOLO-World summary so a photo that OCRs blank still indexes.
+
+    Only runs when ``SAFETY_WORLD_WEIGHTS`` points at an existing baked
+    .onnx file. Never raises -- any failure yields "".
+    """
+    try:
+        from pathlib import Path
+
+        from app.blocks.safety_world_detector import default_detector
+        from app.core.file_crypto import open_plaintext
+
+        detector = default_detector()
+        if detector is not None:
+            conf = float(os.getenv("SAFETY_WORLD_CONF", "0.05"))
+            with open_plaintext(file_path) as plain_path:
+                detections = detector.detect(Path(plain_path), conf_threshold=conf)
+            if detections:
+                by_class: dict[str, float] = {}
+                for d in detections:
+                    cls = d.get("class", "unknown")
+                    by_class[cls] = max(by_class.get(cls, 0.0), float(d.get("confidence") or 0.0))
+                items = ", ".join(
+                    f"{cls} ({conf_val:.2f})"
+                    for cls, conf_val in sorted(by_class.items(), key=lambda kv: (-kv[1], kv[0]))
+                )
+                return f"Construction site photo {filename}: detected {items}."
+        return ""
+    except Exception:
+        return ""
+
+
+def extract_photo(file_path: str, filename: str) -> tuple[str, dict[str, Any]]:
+    """Site-photo text: bounded OCR plus the YOLO-World summary fallback.
+
+    Photos are SUPPORTED even when OCR yields no text and no detector is
+    baked -- a blank photo indexes with empty chunks, exactly like a blank
+    PDF page (owner ruling 2026-11-06).
+    """
+    with _bounded_image(file_path) as bounded_path:
+        text, low_quality = _ocr_extract(bounded_path)
+        yolo_text = _safety_world_extract(bounded_path, filename or "")
+    if yolo_text:
+        text = f"{text}\n\n{yolo_text}".strip() if text else yolo_text
+    meta: dict[str, Any] = {}
+    if low_quality:
+        meta["ocr_low_quality"] = True
+    return text, meta
+
+
 def extract_document_text(file_path: str, filename: str) -> str:
     """Extract plaintext from a document.
 
     Supports .txt/.md/.csv/.json/.xml (via file_crypto.read_document),
     .pdf (via fitz / PyMuPDF + open_plaintext, with OCR fallback for scanned
     image-only PDFs), .doc (antiword/catdoc/textract/Word COM), .docx (via
-    python-docx + open_plaintext), .xlsx (via openpyxl + open_plaintext), .pptx
-    (python-pptx), .kmz (KML text), .zip/.rar (recursive archive flattening),
-    .msg (Outlook email body), and image formats (.jpg/.jpeg/.png/.webp/.gif/
-    .bmp/.tif/.tiff) via OCR.
+    python-docx + open_plaintext), .pptx (python-pptx), .kmz (KML text),
+    .zip/.rar (recursive archive flattening), .msg (Outlook email body), and
+    site photos (.jpg/.jpeg) via OCR + the YOLO-World summary. Spreadsheets
+    (.xls/.xlsx) are excluded by owner ruling (2026-11-06).
 
     Returns "" for unsupported extensions and on any extraction error —
     callers treat the empty string as "skipped". Never raises.

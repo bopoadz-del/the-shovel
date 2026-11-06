@@ -47,7 +47,7 @@ def test_cad_sources_are_unsupported_but_recoverable(ext):
     assert c.is_open, "a convertible CAD source must stay visible as open work"
 
 
-@pytest.mark.parametrize("ext", [".jpg", ".ttf", ".gdbtable", ".shx"])
+@pytest.mark.parametrize("ext", [".xls", ".ttf", ".gdbtable", ".shx"])
 def test_formats_that_can_never_yield_text_are_closed(ext):
     c = ist.classify(chunk_count=0, extension=ext)
     assert c.status == ist.UNSUPPORTED_TYPE

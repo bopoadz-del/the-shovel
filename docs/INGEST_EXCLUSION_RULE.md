@@ -1,10 +1,12 @@
-# Ingest rules — text formats only, and no archive
+# Ingest rules — text formats and site photos; no archive; no spreadsheets
 
 **Read this before touching any ingest path.** Three owner rules, all binding:
 
-1. **Text formats only** (below): video, CAD drawings, photos/images, map
-   files and every format not in `TEXT_BEARING_EXTS` are never ingested,
-   downloaded or retried.
+1. **Text formats and site photos** (below): video, CAD drawings, map
+   files, spreadsheets (`.xls`/`.xlsx`) and every format not in
+   `TEXT_BEARING_EXTS` are never ingested, downloaded or retried. Site
+   photos (`.jpg`/`.jpeg`) ARE corpus material (owner ruling 2026-11-06,
+   reversing the 2026-10-04 text-only ruling for photos).
 2. **No archive** ([below](#no-archive)): the platform keeps no copy of an
    original file. Google Drive is the source of truth for admin-added
    project documents; the extracted chunks are what the RAG needs.
@@ -14,16 +16,18 @@
 
 Both follow [`RAG_GAPS_REVIEW_2026-09-12.md` §E](RAG_GAPS_REVIEW_2026-09-12.md).
 
-The knowledge base is text-only by design. From
+The knowledge base takes text formats and site photos. From
 [`RAG_GAPS_REVIEW_2026-09-12.md` §E](RAG_GAPS_REVIEW_2026-09-12.md):
 
 > **Excluded BY DESIGN — never ingested, not gaps:** CAD (`.dwg/.dxf`),
-> images (`.jpg/.png`), Google Earth (`.kmz/.kml`), video, GIS internals,
-> fonts. Only text formats produce retrievable chunks.
+> Google Earth (`.kmz/.kml`), video, GIS internals, fonts, and
+> spreadsheets (`.xls`/`.xlsx`, owner ruling 2026-11-06). Site photos
+> (`.jpg`/`.jpeg`) are corpus material again (owner ruling 2026-11-06):
+> OCR plus the YOLO-World summary make them retrievable.
 
-Photos are not corpus material either
-([`PHOTO_RAG_STATUS.md`](PHOTO_RAG_STATUS.md)): a photo attached in chat is
-question context (`POST /v1/chat/analyze-photo`), never a document.
+A photo attached in chat is still question context
+(`POST /v1/chat/analyze-photo`) — and can now also be indexed as a
+project document through the admin path.
 
 ## The single declaration
 
