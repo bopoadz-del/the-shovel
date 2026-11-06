@@ -3116,11 +3116,20 @@ def _stamp_index_ledger(
         existing,
         ist.attempt_key(existing.get("content_sha256") or existing.get("drive_md5")),
     )
-    if attempts >= ist.max_attempts() and status in ist.OPEN_STATUSES and ist.is_open(
-        status, reason,
-        extension=ext,
-        extractor_version=existing.get("extractor_version"),
+    if (
+        attempts >= ist.max_attempts()
+        and status in ist.OPEN_STATUSES
+        and ist.is_open(
+            status, reason,
+            extension=ext,
+            extractor_version=existing.get("extractor_version"),
+        )
+        and projects_mod.extractor_family_proven()
     ):
+        # E-1 canary: the terminal closure is reserved for a family that has
+        # recorded at least one success. A fresh family's failures stay open
+        # -- the live 8535199-sdt family closed the whole eligible corpus on
+        # its first attempt without ever extracting one document.
         reason = ist.exhausted_reason(reason, attempts)
     advance = bool(advance_extractor_version) and ist.should_advance_extractor_version(
         ingest_status=status,

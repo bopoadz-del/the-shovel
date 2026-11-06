@@ -197,6 +197,15 @@ def test_open_outcome_closes_at_max_attempts_and_resume_skips_it(monkeypatch, tm
     projects, doc_index, pid = _reload(monkeypatch, tmp_path)
     from app.core import ingest_status as ist
 
+    # E-1 canary precondition: the terminal closure is reserved for a
+    # family that has recorded a success. The fresh-family half (failures
+    # stay open) is pinned in tests/test_extractor_family_canary.py.
+    proven = projects.add_document(pid, "proven.txt", file_path="proven.txt", size=8)
+    projects.stamp_document_index(
+        proven["id"], chunk_count=2, ingest_status=ist.INDEXED,
+        extractor_version=ist.EXTRACTOR_VERSION,
+    )
+
     monkeypatch.setenv("INGEST_MAX_ATTEMPTS", "2")
     monkeypatch.setattr(doc_index, "_produce_chunks", lambda *a: ([], {}))
     doc = _add_txt(projects, tmp_path, pid, "empty.txt", b"x")

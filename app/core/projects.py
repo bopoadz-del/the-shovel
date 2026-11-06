@@ -1802,6 +1802,58 @@ def delete_document_chunks(session, doc_id: str) -> int:
     return removed
 
 
+def relink_document_drive_id(doc_id: str, drive_file_id: str) -> bool:
+    """Set a missing drive_file_id and reopen the row (E-2 relink).
+
+    Only rows whose drive_file_id is empty are touched: a row that already
+    has one is never overwritten, and a re-run is a no-op on rows already
+    done. Reopening clears the ingest ledger so the row re-enters the
+    pipeline as UNVERIFIED with its new source bytes -- the design's own
+    reopen path (ingest_status.py: new source bytes reopen the row).
+    """
+    if not doc_id or not (drive_file_id or "").strip():
+        return False
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            document = session.get(Document, doc_id)
+            if document is None:
+                return False
+            meta = coerce_document_metadata(document.metadata_)
+            if (meta.get("drive_file_id") or "").strip():
+                return False
+            # A fresh dict: SQLAlchemy JSON does not track in-place mutation,
+            # so mutate-and-reassign of the same object would never flush.
+            document.metadata_ = {**meta, "drive_file_id": drive_file_id.strip()}
+            document.ingest_status = "UNVERIFIED"
+            document.ingest_status_reason = None
+            document.extractor_version = None
+            session.commit()
+    return True
+
+
+def extractor_family_proven() -> bool:
+    """True when the CURRENT extractor family has recorded at least one
+    successful extraction (a row stamped with EXTRACTOR_VERSION).
+
+    E-1 of the corpus order: a brand-new extractor family may not stamp
+    ``attempts_exhausted`` terminal closures until it has proved it can
+    extract anything -- the live 8535199-sdt family closed ~3,300 documents
+    on their first failure without a single recorded success. The check is
+    about recorded successes, never about the attempt bound (R16: the guard
+    changes, the bound does not).
+    """
+    _ensure_db()
+    with SessionLocal() as session:
+        row = session.execute(
+            sqla_text(
+                "SELECT 1 FROM documents WHERE extractor_version = :v LIMIT 1"
+            ),
+            {"v": EXTRACTOR_VERSION},
+        ).first()
+    return row is not None
+
+
 def backfill_chunk_counts_from_table(
     *,
     project_id: Optional[str] = None,
