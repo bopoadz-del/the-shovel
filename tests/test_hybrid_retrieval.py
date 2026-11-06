@@ -252,14 +252,14 @@ def _ids(chunks):
     return [c.chunk_id for c in chunks]
 
 
-def _run_search(store, embedder, query, k=5, query_text=None):
+def _run_search(store, embedder, query, k=5, query_text=None, pid=PROJECT_ID):
     """Run store.search with optional query_text. ``query_text=None``
     means "don't pass it" so the legacy semantic-only path is taken
     independently of the env flag."""
     q_vec = embedder.encode([query])[0]
     if query_text is None:
-        return store.search(PROJECT_ID, q_vec, k=k)
-    return store.search(PROJECT_ID, q_vec, k=k, query_text=query_text)
+        return store.search(pid, q_vec, k=k)
+    return store.search(pid, q_vec, k=k, query_text=query_text)
 
 
 def _contains_doc(chunks, doc_id):
@@ -395,35 +395,90 @@ def test_hybrid_disabled_falls_back_to_semantic(store_with_corpus, monkeypatch):
     )
 
 
-def test_empty_bm25_leg_sets_state_and_warns(store_with_corpus, monkeypatch, caplog):
-    """The degrade is visible: empty BM25 sets the per-request state the
-    trace reads, and logs at WARNING instead of a silent INFO line."""
+def test_no_chunks_project_sets_state_and_warns(monkeypatch, caplog):
+    """G2(ii): an EMPTY project's lexical leg records 'no_chunks' and logs
+    at WARNING — the trace can then say the project has nothing at all."""
     import logging
 
-    from app.core.rag.vector_store import lexical_leg_state, reset_lexical_leg
+    from app.core.rag.vector_store import VectorStore, _memo_get, end_turn_memo, start_turn_memo
+
+    reset_embedder_cache()
+    embedder = get_embedder()
+    tmpdir = tempfile.mkdtemp(prefix="hybrid_empty_")
+    db_path = os.path.join(tmpdir, f"empty_{uuid.uuid4().hex}.db")
+    store = VectorStore(db_path=db_path, dim=embedder.dim)
+    token = start_turn_memo()
+    try:
+        pid = "empty_proj_no_chunks"
+        monkeypatch.setenv("RAG_HYBRID_SEARCH", "true")
+        with caplog.at_level(logging.WARNING, logger="app.core.rag.vector_store"):
+            _run_search(store, embedder, "concrete days", k=5, query_text="concrete days", pid=pid)
+        assert _memo_get(("lexical_leg", pid)) in ("no_chunks",)
+        assert any("has no chunks at all" in m for m in caplog.messages)
+    finally:
+        end_turn_memo(token)
+        store.close()
+        try:
+            os.remove(db_path)
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
+
+
+def test_non_overlapping_query_records_no_lexeme_match(store_with_corpus, monkeypatch, caplog):
+    """G2(i): an indexed project queried with words nowhere in its corpus
+    records 'no_lexeme_match' (INFO, not WARNING) — chunks exist, the query
+    just has no lexical anchor."""
+    import logging
+
+    from app.core.rag.vector_store import _memo_get, end_turn_memo, start_turn_memo
 
     store, embedder, _ = store_with_corpus
-    reset_lexical_leg()
-    query = "xyzqwertyuiop nonsenseword foobaz quuxzapper"
-    monkeypatch.setenv("RAG_HYBRID_SEARCH", "true")
-    with caplog.at_level(logging.WARNING, logger="app.core.rag.vector_store"):
-        _run_search(store, embedder, query, k=5, query_text=query)
-    assert lexical_leg_state() in ("empty",)
-    assert any("bm25 leg empty" in m for m in caplog.messages)
-    reset_lexical_leg()
-    assert lexical_leg_state() not in ("empty", "disabled")
+    token = start_turn_memo()
+    try:
+        pid = PROJECT_ID
+        query = "xyzqwertyuiop nonsenseword foobaz quuxzapper"
+        monkeypatch.setenv("RAG_HYBRID_SEARCH", "true")
+        with caplog.at_level(logging.INFO, logger="app.core.rag.vector_store"):
+            _run_search(store, embedder, query, k=5, query_text=query, pid=pid)
+        assert _memo_get(("lexical_leg", pid)) in ("no_lexeme_match",)
+        assert any("no query lexeme" in m for m in caplog.messages)
+    finally:
+        end_turn_memo(token)
 
 
-def test_hybrid_off_sets_disabled_state(store_with_corpus, monkeypatch):
-    """Hybrid off (or no query_text) means the lexical leg never ran."""
-    from app.core.rag.vector_store import lexical_leg_state, reset_lexical_leg
+def test_matching_query_records_hit(store_with_corpus, monkeypatch):
+    """G2(iii): a query whose tokens exist in the corpus records 'hit'."""
+    from app.core.rag.vector_store import _memo_get, end_turn_memo, start_turn_memo
 
     store, embedder, _ = store_with_corpus
-    reset_lexical_leg()
-    monkeypatch.setenv("RAG_HYBRID_SEARCH", "false")
-    _run_search(store, embedder, "telecom", k=5, query_text="telecom")
-    assert lexical_leg_state() in ("disabled",)
-    reset_lexical_leg()
+    token = start_turn_memo()
+    try:
+        pid = PROJECT_ID
+        monkeypatch.setenv("RAG_HYBRID_SEARCH", "true")
+        _run_search(store, embedder, "manhole", k=5, query_text="manhole", pid=pid)
+        assert _memo_get(("lexical_leg", pid)) in ("hit",)
+    finally:
+        end_turn_memo(token)
+
+
+def test_retrieval_trace_carries_lexical_and_degraded(monkeypatch, caplog):
+    """G2(iv): rag_retrieval_trace carries the per-project lexical map and
+    the degraded flag."""
+    import logging
+
+    from app.core.rag import inject as inject_mod
+
+    monkeypatch.setattr(inject_mod, "retrieval_trace_enabled", lambda: True)
+    with caplog.at_level(logging.INFO, logger="app.rag.retrieval_trace"):
+        inject_mod._emit_retrieval_trace(
+            query_label="q", project_id="some_proj", conversation_id=None,
+            agent_name="t", retrieved=[], handed=[], threshold_fired=False,
+            identifier_miss=False, top_score=0.0,
+        )
+    lines = [r.message for r in caplog.records]
+    assert any('"lexical"' in line for line in lines)
+    assert any('"degraded"' in line for line in lines)
 
 
 def test_bm25_only_query_with_no_matches(store_with_corpus, monkeypatch):

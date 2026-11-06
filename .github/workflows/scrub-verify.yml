@@ -14,14 +14,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "measure | repair | dryrun | tsvector | list | probe"
+        description: "measure | repair | dryrun | tsvector | list"
         type: choice
-        options: [measure, repair, dryrun, tsvector, list, probe]
+        options: [measure, repair, dryrun, tsvector, list]
         default: measure
-      project_id:
-        description: "Project id for mode=probe (counts only)"
-        type: string
-        default: ""
       restore_endpoint:
         description: "Neon endpoint id on the restore-point branch (ep-...)"
         type: string
@@ -76,7 +72,6 @@ jobs:
           VERIFY_MODE: ${{ inputs.mode }}
           VERIFY_ENDPOINT: ${{ inputs.restore_endpoint }}
           VERIFY_CONFIRM: ${{ inputs.confirm }}
-          VERIFY_PROJECT_ID: ${{ inputs.project_id }}
         run: |
           set +x
-          python scripts/scrub_verify.py --mode "$VERIFY_MODE" --endpoint "$VERIFY_ENDPOINT" --confirm "$VERIFY_CONFIRM" --project-id "$VERIFY_PROJECT_ID"
+          python scripts/scrub_verify.py --mode "$VERIFY_MODE" --endpoint "$VERIFY_ENDPOINT" --confirm "$VERIFY_CONFIRM"

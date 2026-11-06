@@ -316,8 +316,8 @@ def tsvector_state(live, table: str) -> Dict[str, str]:
 
 # ── run ──────────────────────────────────────────────────────────────────────
 def run(mode: str, *, endpoint: str = "", confirm: str = "", batch: int = 200,
-        project_id: str = "", rules_raw: Optional[List[Tuple[str, str]]] = None) -> Dict[str, object]:
-    if mode not in {"measure", "repair", "dryrun", "tsvector", "list", "probe"}:
+        rules_raw: Optional[List[Tuple[str, str]]] = None) -> Dict[str, object]:
+    if mode not in {"measure", "repair", "dryrun", "tsvector", "list"}:
         raise Refused("bad_mode")
     if mode == "list":
         # Secret NAMES only (metadata, never values): locate where the
@@ -334,27 +334,6 @@ def run(mode: str, *, endpoint: str = "", confirm: str = "", batch: int = 200,
         for name in sorted(names):
             _emit(mode=mode, secret_name=name)
         return {"secret_names": names}
-    if mode == "probe":
-        # Counts only: does one project have indexed chunks, and does the
-        # generated text_search column hold them? Answers the empty-lexical-
-        # leg question (project with no chunks) without reading chunk text.
-        if not project_id.strip():
-            raise Refused("project_id_required")
-        from sqlalchemy import text as sql
-
-        table = chunk_table()
-        live = _session_factory(_live_url())
-        with live() as s:
-            total = s.execute(
-                sql(f"SELECT count(*) FROM {table} WHERE project_id = :p"), {"p": project_id},
-            ).scalar()
-            with_tsv = s.execute(
-                sql(f"SELECT count(text_search) FROM {table} WHERE project_id = :p"),
-                {"p": project_id},
-            ).scalar()
-        out = {"project_id": project_id, "chunks_total": total, "with_text_search": with_tsv}
-        _emit(mode=mode, **out)
-        return out
     table = chunk_table()
     live = _session_factory(_live_url())
     if mode == "tsvector":
@@ -392,15 +371,13 @@ def run(mode: str, *, endpoint: str = "", confirm: str = "", batch: int = 200,
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Verify / repair the scrub-at-source clean (counts only).")
-    ap.add_argument("--mode", required=True, choices=("measure", "repair", "dryrun", "tsvector", "list", "probe"))
+    ap.add_argument("--mode", required=True, choices=("measure", "repair", "dryrun", "tsvector", "list"))
     ap.add_argument("--endpoint", default="")
     ap.add_argument("--confirm", default="")
-    ap.add_argument("--project-id", default="")
     ap.add_argument("--batch-size", type=int, default=200)
     a = ap.parse_args(argv)
     try:
-        run(a.mode, endpoint=a.endpoint, confirm=a.confirm, batch=max(1, a.batch_size),
-            project_id=a.project_id)
+        run(a.mode, endpoint=a.endpoint, confirm=a.confirm, batch=max(1, a.batch_size))
     except Refused as exc:
         _emit(error=exc.code, **exc.fields)
         return 2
