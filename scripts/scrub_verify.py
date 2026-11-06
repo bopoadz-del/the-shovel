@@ -392,7 +392,7 @@ def run(mode: str, *, endpoint: str = "", confirm: str = "", batch: int = 200,
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Verify / repair the scrub-at-source clean (counts only).")
-    ap.add_argument("--mode", required=True, choices=("measure", "repair", "dryrun", "tsvector", "list"))
+    ap.add_argument("--mode", required=True, choices=("measure", "repair", "dryrun", "tsvector", "list", "probe"))
     ap.add_argument("--endpoint", default="")
     ap.add_argument("--confirm", default="")
     ap.add_argument("--project-id", default="")
