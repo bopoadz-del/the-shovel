@@ -39,7 +39,9 @@ jobs:
           HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           files=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || true)
-          if [ -n "$files" ] && ! echo "$files" | grep -qvE '(^docs/|^FLEET_OPS/|\.md$)'; then
+          if [ -n "$files" ] \
+             && ! echo "$files" | grep -qE '^docs/knowledge/' \
+             && ! echo "$files" | grep -qvE '(^docs/|^FLEET_OPS/|\.md$)'; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"; echo "docs-only change: suites skipped"
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
