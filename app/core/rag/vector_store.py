@@ -1803,12 +1803,24 @@ class VectorStore:
             # this was silent (and PostgreSQL ANDed its terms, so it fired
             # constantly) the platform served cosine-only answers that were
             # indistinguishable, to the reader, from fully-grounded ones.
-            logger.info(
-                "bm25 leg empty for project=%s; retrieval degraded to "
-                "semantic-only. query=%r", project_id, (query_text or "")[:120],
-            )
+            if self.has_chunks(project_id):
+                state = "no_lexeme_match"
+                logger.info(
+                    "lexical leg empty: no query lexeme in project=%s; "
+                    "semantic-only for this layer. query=%r",
+                    project_id, (query_text or "")[:120],
+                )
+            else:
+                state = "no_chunks"
+                logger.warning(
+                    "lexical leg empty: project=%s has no chunks at all; "
+                    "semantic-only for this layer. query=%r",
+                    project_id, (query_text or "")[:120],
+                )
+            _memo_put(("lexical_leg", project_id), state)
             return sem_results[:k]
 
+        _memo_put(("lexical_leg", project_id), "hit")
         return _rrf_combine(sem_results, bm25_results, k)
 
     def identifier_search(

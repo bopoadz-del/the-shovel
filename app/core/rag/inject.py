@@ -915,6 +915,13 @@ def _emit_retrieval_trace(
 
         rid = request_id_ctx.get()
         handed_ids = {getattr(c, "chunk_id", None) for c in handed}
+        from app.core.rag.retriever import retrievable_project_ids
+        from app.core.rag.vector_store import _MISS, _memo_get
+
+        lexical = {}
+        for pid in retrievable_project_ids(project_id):
+            s = _memo_get(("lexical_leg", pid))
+            lexical[pid] = "not_run" if s is _MISS else s
         payload = {
             "request_id": rid,
             "path": "pre_injection",
@@ -926,6 +933,8 @@ def _emit_retrieval_trace(
             "handed_k": len(handed),
             "threshold_fired": threshold_fired,
             "identifier_miss": identifier_miss,
+            "lexical": lexical,
+            "degraded": any(v != "hit" for v in lexical.values()),
             "top_score": round(float(top_score or 0.0), 6),
             "chunks": [_trace_chunk(i + 1, c) for i, c in enumerate(handed)],
             "not_handed": [
@@ -1037,6 +1046,16 @@ def rag_inject(
             for c in chunks
             for ident in id_lower
         ):
+            identifier_miss = True
+
+    # Own project with NO chunks at all: an identifier ask cannot be grounded
+    # in the project documents, so it must not answer from GK cosine as if
+    # grounded (the empty-lexical-leg diagnosis). Same miss path, no new rescue.
+    if identifiers and not identifier_miss:
+        from app.core.rag.vector_store import _MISS, _memo_get
+
+        own_leg = _memo_get(("lexical_leg", project_id))
+        if own_leg is not _MISS and own_leg == "no_chunks":
             identifier_miss = True
 
     # A named contract/doc id is scoped to that id's files. Token-soup
