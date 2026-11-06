@@ -164,12 +164,14 @@ jobs:
           AWS_REGION: us-west-2
         run: |
           now=$(date +%s%3N); start=$((now - 7200000))
-          echo "=== (a) rag_retrieval_trace lexical/degraded shapes ==="
-          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"rag_retrieval_trace"' --query 'events[].message' --output text 2>/dev/null | grep -oE '"lexical":\{[^}]*\},"degraded":(true|false)' | sort | uniq -c || echo "(no trace lines yet)"
-          echo "=== (b) no-chunks WARNING project ids ==="
-          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"has no chunks at all"' --query 'events[].message' --output text 2>/dev/null | grep -oE 'project=[^ ;]+' | sort -u || echo "(none)"
+          echo "=== (a) rag_retrieval_trace: event count, then lexical/degraded shapes ==="
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"rag_retrieval_trace"' --query 'length(events)' --output text
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"rag_retrieval_trace"' --query 'events[].message' --output text | sed 's/\\//g' | grep -oE '"lexical":\{[^}]*\},"degraded":(true|false)' | sort | uniq -c || echo "(no trace lines yet)"
+          echo "=== (b) no-chunks WARNING: event count, then project ids ==="
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"has no chunks at all"' --query 'length(events)' --output text
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"has no chunks at all"' --query 'events[].message' --output text | grep -oE 'project=[^ ;]+' | sort -u || echo "(none)"
           echo "=== (d) legacy 'bm25 leg empty' count (must be 0) ==="
-          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"bm25 leg empty"' --query 'length(events)' --output text 2>/dev/null || echo "0"
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"bm25 leg empty"' --query 'length(events)' --output text || echo "0"
 
       - name: Upload the per-question result
         if: always()
