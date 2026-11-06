@@ -987,7 +987,7 @@ async def add_document(
         raise HTTPException(
             upload_limits.UNSUPPORTED_TYPE_STATUS,
             f"File type '{ext}' is not ingestible: the knowledge base takes text "
-            f"formats only (docs/INGEST_EXCLUSION_RULE.md). Drawings, photos, "
+            f"formats and site photos (docs/INGEST_EXCLUSION_RULE.md). Drawings, "
             f"video and CAD can still be attached to a chat for the session.",
         )
 

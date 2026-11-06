@@ -86,4 +86,4 @@ def test_compressed_and_non_text_files_are_refused(client):
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("a.txt", "x")
     assert _post(client, "bundle.zip", buf.getvalue(), "application/zip").status_code == 415
-    assert _post(client, "photo.jpg", b"\xff\xd8\xff", "image/jpeg").status_code == 415
+    assert _post(client, "photo.png", b"\x89PNG", "image/png").status_code == 415
