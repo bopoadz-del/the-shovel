@@ -325,6 +325,12 @@ TEXT_BEARING_EXTS = _text_extractors.formats()
 # chunk_count, because evidence-beats-policy (the ordering that protected
 # .dwg/.dxf) would otherwise let an already-chunked .kmz back in as INDEXED.
 _GEOSPATIAL_EXTS = frozenset({".kmz", ".kml"})
+# Spreadsheets stay UPLOADABLE (the BOQ calculators price .xls/.xlsx working
+# documents, and previews render them), but they are never CHUNKED into the
+# RAG (owner ruling 2026-11-06). Same mechanism as the kmz denylist above:
+# checked in ``classify`` before the evidence-beats-policy check, so an
+# already-chunked spreadsheet cannot slip back in as INDEXED.
+_SPREADSHEET_EXTS = frozenset({".xls", ".xlsx"})
 
 # Formats whose text lives in a convertible source rather than the file we hold.
 # ``.dwg`` carries real TEXT/MTEXT/ATTRIB entities; recovering them is the
@@ -603,6 +609,15 @@ def classify(
     # already-chunked .kmz would fall straight through to INDEXED below and
     # silently re-admit exactly what the owner ordered purged.
     if ext in _GEOSPATIAL_EXTS:
+        return Classification(UNSUPPORTED_TYPE, f"{ext.lstrip('.')}:{TERMINAL}", ext)
+
+    # SPREADSHEETS ARE NEVER CHUNKED, regardless of chunk_count (owner ruling
+    # 2026-11-06). They remain accepted project documents -- the BOQ
+    # calculators and previews read them -- but nothing spreadsheet-shaped
+    # enters the RAG. This guard runs before evidence-beats-policy for the
+    # same reason the kmz guard does: the extractors read .xls/.xlsx rows
+    # fine, and "produced chunks" must not re-admit them as INDEXED.
+    if ext in _SPREADSHEET_EXTS:
         return Classification(UNSUPPORTED_TYPE, f"{ext.lstrip('.')}:{TERMINAL}", ext)
 
     # EVIDENCE BEATS POLICY. A document that produced chunks yielded text, and

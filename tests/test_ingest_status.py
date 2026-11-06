@@ -12,6 +12,7 @@ import importlib
 import pytest
 
 from app.core import ingest_status as ist
+from app.core.ingest_status import classify  # noqa: F401  (mutation-gate killer-file anchor)
 
 # Calibration measured on 10 known-sparse drawing sheets vs 10 known-rich text
 # PDFs. The gap between these two numbers is empty in the sample; the threshold
@@ -114,6 +115,27 @@ def test_kmz_is_never_indexed_even_with_chunks(ext):
     failing.
     """
     c = ist.classify(chunk_count=45, extension=ext)
+    assert c.status == ist.UNSUPPORTED_TYPE
+    assert c.reason == f"{ext.lstrip('.')}:terminal"
+    assert not c.is_open
+
+
+@pytest.mark.parametrize("ext", [".xlsx", "xlsx", ".xls", "xls"])
+def test_spreadsheets_are_never_indexed_even_with_chunks(ext):
+    """Owner ruling 2026-11-06: spreadsheets stay uploadable (BOQ
+    calculators, previews) but are never chunked into the RAG. The
+    extractors read .xls/.xlsx rows fine, so without this denylist an
+    already-chunked spreadsheet would fall through evidence-beats-policy
+    and register as INDEXED."""
+    c = ist.classify(chunk_count=12, extension=ext)
+    assert c.status == ist.UNSUPPORTED_TYPE
+    assert c.reason == f"{ext.lstrip('.')}:terminal"
+    assert not c.is_open
+
+
+@pytest.mark.parametrize("ext", [".xlsx", "xlsx", ".xls", "xls"])
+def test_spreadsheets_with_no_chunks_are_unsupported_and_closed(ext):
+    c = ist.classify(chunk_count=0, extension=ext)
     assert c.status == ist.UNSUPPORTED_TYPE
     assert c.reason == f"{ext.lstrip('.')}:terminal"
     assert not c.is_open

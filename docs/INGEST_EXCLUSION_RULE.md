@@ -3,8 +3,12 @@
 **Read this before touching any ingest path.** Three owner rules, all binding:
 
 1. **Text formats only** (below): video, CAD drawings, photos/images, map
-   files and every format not in `TEXT_BEARING_EXTS` are never ingested,
-   downloaded or retried.
+   files, spreadsheets (`.xls`/`.xlsx`) and every format not in
+   `TEXT_BEARING_EXTS` are never ingested, downloaded or retried.
+   Spreadsheets stay accepted as working documents (the BOQ calculators
+   price them, previews render them) but are **never chunked into the
+   RAG** (owner ruling 2026-11-06; `ingest_status._SPREADSHEET_EXTS`
+   denylist).
 2. **No archive** ([below](#no-archive)): the platform keeps no copy of an
    original file. Google Drive is the source of truth for admin-added
    project documents; the extracted chunks are what the RAG needs.
