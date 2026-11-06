@@ -987,9 +987,8 @@ async def add_document(
         raise HTTPException(
             upload_limits.UNSUPPORTED_TYPE_STATUS,
             f"File type '{ext}' is not ingestible: the knowledge base takes text "
-            f"formats and site photos — no spreadsheets "
-            f"(docs/INGEST_EXCLUSION_RULE.md). Drawings, video and CAD can "
-            f"still be attached to a chat for the session.",
+            f"formats and site photos (docs/INGEST_EXCLUSION_RULE.md). Drawings, "
+            f"video and CAD can still be attached to a chat for the session.",
         )
 
     max_size = _max_doc_upload_size()

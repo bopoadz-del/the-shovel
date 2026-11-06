@@ -1,4 +1,4 @@
-# Ingest rules — text formats and site photos; no archive; no spreadsheets
+# Ingest rules — text formats and site photos; no archive; spreadsheets never chunked
 
 **Read this before touching any ingest path.** Three owner rules, all binding:
 
@@ -28,6 +28,10 @@ The knowledge base takes text formats and site photos. From
 A photo attached in chat is still question context
 (`POST /v1/chat/analyze-photo`) — and can now also be indexed as a
 project document through the admin path.
+
+Spreadsheets stay uploadable (the BOQ calculators price them and
+previews render them) but are never chunked into the RAG
+(ingest_status._SPREADSHEET_EXTS denylist, owner ruling 2026-11-06).
 
 ## The single declaration
 

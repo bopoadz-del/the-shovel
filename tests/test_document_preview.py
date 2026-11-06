@@ -1,8 +1,8 @@
 """Tests for the inline document-preview endpoint.
 
 Covers the render-friendly JSON shapes returned by
-``GET /v1/projects/{pid}/documents/{did}/preview`` — a spreadsheet upload is refused at the door
-an unpreviewable-but-allowed extension reports 'unsupported', and a
+``GET /v1/projects/{pid}/documents/{did}/preview`` — an xlsx workbook renders
+as a table, an unpreviewable-but-allowed extension reports 'unsupported', and a
 malformed spreadsheet returns 422 (never 500).
 """
 
@@ -52,21 +52,23 @@ def _xlsx_bytes() -> bytes:
     return buf.getvalue()
 
 
-def test_xlsx_upload_to_a_project_is_refused(client):
+def test_xlsx_previews_as_table(client):
     proj = _new_project(client)
-    r = client.post(
-        f"/v1/projects/{proj['id']}/documents",
-        files={
-            "file": (
-                "boq.xlsx",
-                _xlsx_bytes(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-        headers=H,
+    doc = _upload(
+        client, proj["id"], "boq.xlsx", _xlsx_bytes(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    assert r.status_code == 415, r.text
-    assert "no spreadsheets" in r.json()["detail"]
+    r = client.get(
+        f"/v1/projects/{proj['id']}/documents/{doc['id']}/preview", headers=H
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "table"
+    assert len(body["sheets"]) == 1
+    sheet = body["sheets"][0]
+    assert sheet["name"] == "BOQ"
+    assert sheet["rows"][0] == ["Item", "Qty", "Rate"]
+    assert sheet["rows"][1] == ["Concrete", "100", "350"]
 
 
 def test_unsupported_extension_reports_unsupported(client):
@@ -85,21 +87,17 @@ def test_unsupported_extension_reports_unsupported(client):
     assert body["ext"] == ".ifc"
 
 
-def test_malformed_spreadsheet_is_refused_at_the_door(client):
+def test_malformed_spreadsheet_returns_422(client):
     proj = _new_project(client)
-    # The door refuses spreadsheets before content sniffing, malformed or not.
-    r = client.post(
-        f"/v1/projects/{proj['id']}/documents",
-        files={
-            "file": (
-                "broken.xlsx",
-                b"not a real spreadsheet",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-        headers=H,
+    # A .xlsx extension over non-workbook bytes must 422, not 500.
+    doc = _upload(
+        client, proj["id"], "broken.xlsx", b"not a real spreadsheet",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    assert r.status_code == 415, r.text
+    r = client.get(
+        f"/v1/projects/{proj['id']}/documents/{doc['id']}/preview", headers=H
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_txt_previews_as_text(client):

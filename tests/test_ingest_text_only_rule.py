@@ -78,12 +78,12 @@ def test_compressed_sniffer_leaves_spreadsheets_to_the_ruling():
     assert is_compressed("pack.zip", b"PK\x03\x04" + b"\x00" * 60) is True
 
 
-@pytest.mark.parametrize("name", ["drone.mp4", "plan.dwg", "boq.xlsx", "earth.kmz", "font.ttf", "pack.zip"])
+@pytest.mark.parametrize("name", ["drone.mp4", "plan.dwg", "earth.kmz", "font.ttf", "pack.zip"])
 def test_excluded_formats_are_not_ingestible(name):
     assert not ist.is_ingestible(name)
 
 
-@pytest.mark.parametrize("name", ["contract.pdf", "site.jpg", "notes.txt", "Spec.DOCX"])
+@pytest.mark.parametrize("name", ["contract.pdf", "boq.xlsx", "site.jpg", "notes.txt", "Spec.DOCX"])
 def test_text_formats_are_ingestible(name):
     assert ist.is_ingestible(name)
 
@@ -94,7 +94,7 @@ def test_text_formats_are_ingestible(name):
 @pytest.mark.parametrize("name,mime", [
     ("drone.mp4", "video/mp4"),
     ("plan.dwg", "application/acad"),
-    ("boq.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ("photo.png", "image/png"),
 ])
 def test_project_upload_of_an_excluded_format_is_refused_and_writes_nothing(client, name, mime):
     proj = _new_project(client, f"Refuse {name}")

@@ -45,12 +45,10 @@ def test_photo_pipeline_imports_resolve():
     from app.core.text_extractors import extractor_for, formats  # noqa: F401
 
 
-def test_photo_formats_are_registered_and_spreadsheets_are_not():
+def test_photo_formats_are_registered():
     formats = text_extractors.formats()
     assert ".jpg" in formats
     assert ".jpeg" in formats
-    assert ".xls" not in formats
-    assert ".xlsx" not in formats
 
 
 def test_photo_extractor_reads_through_doc_index(monkeypatch, tmp_path):

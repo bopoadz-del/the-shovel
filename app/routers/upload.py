@@ -90,9 +90,9 @@ async def upload_v1(
                 status_code=upload_limits.UNSUPPORTED_TYPE_STATUS,
                 detail=(
                     f"File type '{ext}' is not ingestible into a project: the "
-                    f"knowledge base takes text formats and site photos — no "
-                    f"spreadsheets (docs/INGEST_EXCLUSION_RULE.md). Upload it "
-                    f"without a project to use it in a chat for the session."
+                    f"knowledge base takes text formats and site photos "
+                    f"(docs/INGEST_EXCLUSION_RULE.md). Upload it without a "
+                    f"project to use it in a chat for the session."
                 ),
             )
 

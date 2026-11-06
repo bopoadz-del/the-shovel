@@ -6,13 +6,10 @@ so ingest excludes it at discovery like any other non-ingestible file. This
 module only names it for the uploader: an upload that IS a compressed file
 gets one clear message instead of a generic "type not ingestible", whatever
 its extension. Recognised by the container's own signature -- an Office
-package is a zip on disk but is a document, so it is recognised as one first;
-a spreadsheet (.xls/.xlsx) is also not a compressed folder, so it gets the
-no-spreadsheets ruling message, never the unzip-it one.
+package is a zip on disk but is a document, so it is recognised as one first.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
 from app.core.ingest_status import is_ingestible
@@ -36,19 +33,13 @@ _SIGNATURES = (
 HEAD_BYTES = 262
 
 
-_SPREADSHEET_EXTS = {".xls", ".xlsx"}
-
-
 def is_compressed(filename: Optional[str], head: bytes) -> bool:
     """True when ``head`` (the file's first bytes) is a compressed folder.
 
     A file whose name is an ingestible document (``.docx`` is a zip inside)
-    is a document, not a compressed folder. Spreadsheets get the same
-    carve-out so the door can name the no-spreadsheets ruling.
+    is a document, not a compressed folder.
     """
-    if filename and (
-        is_ingestible(filename) or Path(filename).suffix.lower() in _SPREADSHEET_EXTS
-    ):
+    if filename and is_ingestible(filename):
         return False
     return any(head[at:at + len(sig)] == sig for at, sig in _SIGNATURES)
 

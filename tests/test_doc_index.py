@@ -712,21 +712,38 @@ def test_extract_docx_mocked(tmp_path, monkeypatch):
     assert "Excavation" in text and "100 m3" in text
 
 
-@pytest.mark.parametrize("ext", [".xlsx", ".xls"])
-def test_extract_xlsx_is_excluded_by_ruling(tmp_path, monkeypatch, ext):
-    """Spreadsheets are excluded by owner ruling 2026-11-06: no extractor is
-    registered, so extraction never runs and the document is UNSUPPORTED."""
+def test_extract_xlsx_keeps_priced_boq_row_intact(tmp_path, monkeypatch):
+    """A priced-BOQ .xlsx must extract row-wise, so each unit rate stays
+    adjacent to its item description in one line. The old cell-wise flatten
+    ("<all cells> ".join) scattered a rate away from its item and made company
+    unit rates unretrievable."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
+    openpyxl = pytest.importorskip("openpyxl")
 
-    doc_path = str(tmp_path / f"priced_boq{ext}")
-    file_crypto.write_document(doc_path, b"PK\x03\x04 fake xlsx bytes")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Description", "Qty", "Unit", "Rate (SAR)", "Amount"])
+    ws.append(["Ready-mix concrete C30", 500, "m3", 220, 110000])
+    ws.append(["Rebar 12mm", 40, "tonne", 3000, 120000])
+    raw_path = str(tmp_path / "_raw.xlsx")
+    wb.save(raw_path)
+    with open(raw_path, "rb") as fh:
+        xlsx_bytes = fh.read()
 
-    from app.core import doc_index, ingest_status
+    doc_path = str(tmp_path / "priced_boq.xlsx")
+    file_crypto.write_document(doc_path, xlsx_bytes)
+
+    from app.core import doc_index
     importlib.reload(doc_index)
-    text = doc_index.extract_document_text(doc_path, f"priced_boq{ext}")
+    text = doc_index.extract_document_text(doc_path, "priced_boq.xlsx")
 
-    assert text == ""
-    assert ingest_status.classify(chunk_count=0, extension=ext).status == ingest_status.UNSUPPORTED_TYPE
+    # The concrete rate (220) must sit on the same line as its description.
+    line = next(ln for ln in text.splitlines() if "Ready-mix concrete C30" in ln)
+    assert "220" in line and "m3" in line
+    # Rebar row is a distinct line — rows are not merged into one blob.
+    assert "Rebar 12mm" not in line
+    assert any("Rebar 12mm" in ln and "3000" in ln for ln in text.splitlines())
+
 
 def test_extract_kmz_is_unsupported(tmp_path, monkeypatch):
     """.kmz is EXCLUDED from ``_SUPPORTED_EXTS``, not extracted for labels.
@@ -771,24 +788,43 @@ def test_extract_kmz_is_unsupported(tmp_path, monkeypatch):
     assert text == ""
 
 
-@pytest.mark.parametrize("filename", ["budget.xlsx", "budget.xls"])
-def test_extract_xlsx_mocked_never_opens_the_workbook(tmp_path, monkeypatch, filename):
-    """The registry refuses spreadsheets before any reader could open them."""
+def test_extract_xlsx_mocked(tmp_path, monkeypatch):
+    """XLSX extraction: monkeypatch openpyxl.load_workbook; assert cell text."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
 
-    doc_path = str(tmp_path / filename)
+    doc_path = str(tmp_path / "budget.xlsx")
     file_crypto.write_document(doc_path, b"PK\x03\x04 fake xlsx bytes")
+
+    class FakeCell:
+        def __init__(self, val):
+            self.value = val
+
+    class FakeSheet:
+        def __iter__(self):
+            return iter([
+                [FakeCell("Activity"), FakeCell("Cost"), FakeCell(None)],
+                [FakeCell("Excavation"), FakeCell(15000), FakeCell("")],
+            ])
+
+    class FakeWorkbook:
+        sheetnames = ["Sheet1"]
+
+        def __getitem__(self, name):
+            return FakeSheet()
 
     import openpyxl as real_openpyxl
     monkeypatch.setattr(
         real_openpyxl, "load_workbook",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("xlsx must never be opened")),
+        lambda path, data_only=True: FakeWorkbook()
     )
 
     from app.core import doc_index
     importlib.reload(doc_index)
-    text = doc_index.extract_document_text(doc_path, filename)
-    assert text == ""
+    text = doc_index.extract_document_text(doc_path, "budget.xlsx")
+    assert "Activity" in text
+    assert "Cost" in text
+    assert "Excavation" in text
+
 
 def test_extract_unsupported_returns_empty(tmp_path, monkeypatch):
     """Unsupported extension returns empty string, never raises.

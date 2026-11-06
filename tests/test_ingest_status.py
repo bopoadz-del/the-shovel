@@ -47,7 +47,7 @@ def test_cad_sources_are_unsupported_but_recoverable(ext):
     assert c.is_open, "a convertible CAD source must stay visible as open work"
 
 
-@pytest.mark.parametrize("ext", [".xls", ".ttf", ".gdbtable", ".shx"])
+@pytest.mark.parametrize("ext", [".png", ".ttf", ".gdbtable", ".shx"])
 def test_formats_that_can_never_yield_text_are_closed(ext):
     c = ist.classify(chunk_count=0, extension=ext)
     assert c.status == ist.UNSUPPORTED_TYPE
@@ -114,6 +114,27 @@ def test_kmz_is_never_indexed_even_with_chunks(ext):
     failing.
     """
     c = ist.classify(chunk_count=45, extension=ext)
+    assert c.status == ist.UNSUPPORTED_TYPE
+    assert c.reason == f"{ext.lstrip('.')}:terminal"
+    assert not c.is_open
+
+
+@pytest.mark.parametrize("ext", [".xlsx", ".xls"])
+def test_spreadsheets_are_never_indexed_even_with_chunks(ext):
+    """Owner ruling 2026-11-06: spreadsheets stay uploadable (BOQ
+    calculators, previews) but are never chunked into the RAG. The
+    extractors read .xls/.xlsx rows fine, so without this denylist an
+    already-chunked spreadsheet would fall through evidence-beats-policy
+    and register as INDEXED."""
+    c = ist.classify(chunk_count=12, extension=ext)
+    assert c.status == ist.UNSUPPORTED_TYPE
+    assert c.reason == f"{ext.lstrip('.')}:terminal"
+    assert not c.is_open
+
+
+@pytest.mark.parametrize("ext", [".xlsx", ".xls"])
+def test_spreadsheets_with_no_chunks_are_unsupported_and_closed(ext):
+    c = ist.classify(chunk_count=0, extension=ext)
     assert c.status == ist.UNSUPPORTED_TYPE
     assert c.reason == f"{ext.lstrip('.')}:terminal"
     assert not c.is_open
