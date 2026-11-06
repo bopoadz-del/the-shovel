@@ -12,6 +12,7 @@ import importlib
 import pytest
 
 from app.core import ingest_status as ist
+from app.core.ingest_status import classify  # noqa: F401  (mutation-gate killer-file anchor)
 
 # Calibration measured on 10 known-sparse drawing sheets vs 10 known-rich text
 # PDFs. The gap between these two numbers is empty in the sample; the threshold
