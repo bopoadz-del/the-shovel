@@ -23,7 +23,7 @@ unobservable, so three runs produced three identical mysteries. The four ways
 a Python process ends with no traceback, and what is recorded for each:
 
 1. ``SIGTERM`` / ``SIGINT`` / ``SIGHUP`` — container recycle, a deploy of the
-   web service the shell is attached to, or the Render Shell session closing
+   web service the shell is attached to, or the shell session closing
    on a run that was not a session leader. Handleable: ``install_signal_handlers``
    names the signal, the run drains what is in flight, and the caller's flush
    callback still writes a report marked ``complete: false``.
@@ -88,8 +88,8 @@ def default_log(message: str) -> None:
 def _read_text(path: Path) -> Optional[str]:
     """File contents, or None when the path is absent or unreadable.
 
-    Every reader here is best-effort by design: this module runs on Render
-    (cgroup v2), on Fargate (no cgroup-v1 memory files), on a dev box, and
+    Every reader here is best-effort by design: this module runs in a
+    container (cgroup v2), on Fargate (no cgroup-v1 memory files), on a dev box, and
     under pytest with fake roots. A missing file is not an error — the
     snapshot logs once when no memory counter exists. A present file that
     cannot be read logs one line and does not raise into the ingest loop.
@@ -316,7 +316,7 @@ def read_memory_snapshot(
 ) -> MemorySnapshot:
     """RSS + cgroup usage/limit + the cgroup OOM-kill counter.
 
-    Reads cgroup v2 first (Render, modern Docker) and falls back to v1 paths.
+    Reads cgroup v2 first (modern Docker) and falls back to v1 paths.
     The ``oom_kill`` counter is the whole point: a SIGKILLed process cannot log
     its own death, but the counter it left behind survives it, so the next
     start — or a supervisor — can say "the kernel did this" instead of
@@ -491,7 +491,7 @@ def memory_pressure(
 def process_identity() -> Dict[str, Any]:
     """pid/ppid/pgid/sid and whether a shell exit can HUP this run.
 
-    A job started from Render Shell without ``setsid``/``nohup`` is not a
+    A job started from a shell without ``setsid``/``nohup`` is not a
     session leader: it shares the shell's session, so closing the shell
     delivers SIGHUP to it. ``session_leader=False`` in the start banner is
     therefore a live hazard the operator can see BEFORE the run dies, and a
@@ -602,7 +602,7 @@ class StopFlag:
 def stop_signals() -> List[int]:
     """The signals a batch job should treat as "stop and report".
 
-    SIGHUP is in the list on purpose. A detached Render Shell run that is not
+    SIGHUP is in the list on purpose. A detached shell run that is not
     a session leader is HUPed when the shell closes, and the default SIGHUP
     action is to die instantly with no tally — indistinguishable from the OOM
     kill this module exists to identify.
@@ -1088,7 +1088,7 @@ class RunLifecycle:
 
         Runs in the main thread on top of whatever it was doing, so it takes no
         lock and touches no buffered file object — just a raw-fd sidecar write.
-        Render sends SIGTERM and then SIGKILL ~30s later; if the graceful drain
+        The platform sends SIGTERM and then SIGKILL ~30s later; if the graceful drain
         does not finish in that window, THIS is the record that survives.
         """
         self._write_state(f"signal:{name}", complete=False, extra={"signum": signum})

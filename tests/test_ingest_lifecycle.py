@@ -237,7 +237,7 @@ def test_default_log_goes_to_unbuffered_stderr(capsys):
 
 @POSIX_ONLY
 def test_sighup_is_a_stop_signal_not_a_silent_death():
-    """A detached Render Shell run gets HUPed when the shell closes. Default
+    """A detached shell run gets HUPed when the shell closes. Default
     SIGHUP action is instant death with no tally — the exact signature of the
     incident this module exists for."""
     assert signal.SIGHUP in lifecycle.stop_signals()
@@ -614,7 +614,7 @@ def test_a_forked_child_cannot_clobber_the_parents_evidence(tmp_path):
 
 @POSIX_ONLY
 def test_stop_signal_writes_the_sidecar_from_inside_the_handler(tmp_path):
-    """Render sends SIGTERM then SIGKILL ~30s later. If the graceful drain
+    """The platform sends SIGTERM then SIGKILL ~30s later. If the graceful drain
     does not finish in that window, the handler's own write is the only
     record that survives."""
     flushes = []

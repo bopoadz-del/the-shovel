@@ -1,6 +1,6 @@
 """Guard for scripts/rag_backfill_platform_index.py.
 
-The Render-era R2 backfill pipeline (rag_backfill_loader / _batch_loader /
+The R2 backfill pipeline (rag_backfill_loader / _batch_loader /
 _local / _batch_local / _local_platform) was removed with the R2 archive:
 the platform keeps no copy of originals and has no object store. Its loader
 tests went with it; this guard covers the script that remains.

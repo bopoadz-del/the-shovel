@@ -32,7 +32,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Render / non-root containers can't write ~/.config/Ultralytics.
+# Non-root containers can't write ~/.config/Ultralytics.
 os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ def _load_yolo():
     torch and cv2 — measured 2026-08-11, the single largest item in this app's
     boot. app/blocks/__init__.py imports every block eagerly, so that cost was
     paid on EVERY boot even where the feature is off: SAFETY_WORLD_WEIGHTS is
-    unset on the Render service, so default_detector() returns None and no
+    unset in prod, so default_detector() returns None and no
     model is ever built. Deferring it here keeps the whole 265 MB out of any
     deployment that has not configured weights.
 
@@ -129,7 +129,7 @@ class SafetyWorldDetector:
 
 #: Where the image bakes the detector weights (the Dockerfile copies
 #: data/models/safety_world_v2.onnx here, off the data volume). Used when
-#: SAFETY_WORLD_WEIGHTS is unset: the Render service set the variable, the
+#: SAFETY_WORLD_WEIGHTS is unset: the deploy env set the variable, the
 #: ECS task definition never did, and every chat photo came back with no
 #: observations while the weights sat in the image. A dev checkout opts in
 #: with SAFETY_WORLD_WEIGHTS.

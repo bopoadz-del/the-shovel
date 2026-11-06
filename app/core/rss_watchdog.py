@@ -1,7 +1,7 @@
 """Name the code that is eating the memory, before the kernel kills us.
 
 Live 21 Sep 2026, 18:16 UAE-4: RSS sat at 773 MB, then one chat turn took the
-web instance past its 2 GiB limit in ~40 s and Render OOM-killed it. The last
+web instance past its 2 GiB limit in ~40 s and the platform OOM-killed it. The last
 log line was the final LLM call; nothing after it said which function was
 allocating. An OOM kill leaves no traceback.
 

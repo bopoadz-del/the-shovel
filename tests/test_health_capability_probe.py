@@ -39,7 +39,7 @@ def test_health_healthy_when_db_ok(client):
 
 def test_health_degraded_but_200_when_db_down(client, monkeypatch):
     # A DB blip must surface as degraded, NOT a non-200 that restarts the live
-    # service (Render's healthCheckPath is /health = liveness).
+    # service (the platform's health check path is /health = liveness).
     monkeypatch.setattr("app.routers.health.probe_database",
                         lambda *a, **k: {"ok": False, "latency_ms": 1, "error": "down"})
     r = client.get("/health")

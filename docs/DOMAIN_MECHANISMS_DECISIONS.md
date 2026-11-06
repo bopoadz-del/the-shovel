@@ -8,13 +8,13 @@ clear RECOMMENDATION for the owner to accept or reject.
 Scope covered: §5.1 Source precedence, §5.2 Revision currency, §5.3
 Pre-retrieval scope refusal.
 
-> **Flag-truth caveat (applies to 5.1).** `render.yaml` env is **not**
-> auto-synced to the Render dashboard, and `RAG_LAYERED` /
+> **Flag-truth caveat (applies to 5.1).** The deploy env is **not**
+> auto-synced to any dashboard, and `RAG_LAYERED` /
 > `RAG_AUTHORITY_WEIGHT` / `RAG_LAYER_WEIGHT` are **not pinned in
-> `render.yaml`** (confirmed: no match in `render.yaml`). Therefore the
+> the deploy env** (confirmed: no match there). Therefore the
 > version-controlled truth is the **CODE DEFAULT** and the **live dashboard
 > value is UNKNOWN**. Where the live flag state matters below, it is flagged as
-> "must be confirmed against the Render dashboard" and is not asserted here.
+> "must be confirmed against the dashboard" and is not asserted here.
 
 ---
 
@@ -276,6 +276,6 @@ Two low-risk follow-ups instead of a full classifier:
 
 | § | Mechanism | Current behavior (key evidence) | Recommendation |
 |---|-----------|----------------------------------|----------------|
-| 5.1 | Source precedence | Real authority order (`layers.py:19-20`) as a `0.05` additive tie-break (`layers.py:150-157`, `retriever.py:722-725`), **default-OFF** (`layers.py:33-36`); not pinned in `render.yaml` so live value UNKNOWN | **Known-limitation; do NOT autonomously flip ON.** Confirm dashboard value + backfill first; a nudge ≠ "contract wins" — schedule a conflict resolver for that claim |
+| 5.1 | Source precedence | Real authority order (`layers.py:19-20`) as a `0.05` additive tie-break (`layers.py:150-157`, `retriever.py:722-725`), **default-OFF** (`layers.py:33-36`); not pinned in the deploy env so live value UNKNOWN | **Known-limitation; do NOT autonomously flip ON.** Confirm dashboard value + backfill first; a nudge ≠ "contract wins" — schedule a conflict resolver for that claim |
 | 5.2 | Revision currency | Type-not-currency classification (`construction/__init__.py:51-72`); revision parsed (`__init__.py:173-176`, `documents.py:198`, `drawing_qto.py:686-727`) but **never used in ranking**; superseded down-weight is layered-off (`layers.py:70`) | **MUST-FIX (staged).** Phase 1: always-on superseded penalty + revision disclosure; Phase 2: same-drawing highest-revision preference |
 | 5.3 | Pre-retrieval scope refusal | `REFUSE` enum unwired (`models.py:47`, only merged at `catalog.py:146`); no `out_of_scope`/`must_refuse`; refusals are corpus-empty (`runtime.py:2689-2705`) or post-retrieval honest-error (`runtime.py:1300-1315`) | **Keep-as-is.** Marginal safety low vs false-refusal risk; the dangerous case is already gated post-retrieval. Document `REFUSE` as reserved |

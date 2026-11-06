@@ -23,7 +23,7 @@ from app.core.universal_base import UniversalBlock
 # (~1.0s) even though app/blocks/__init__.py imports this module eagerly and
 # most requests never evaluate a formula. See
 # tests/test_boot_does_not_import_heavy_libraries.py for why boot weight
-# mattered: it cost the service its Render deploy.
+# mattered: it cost the service a deploy.
 #
 # The simplified strings are NOT hardcoded here on purpose — sympy renders
 # variance_pct as "100*actual/avg - 100", not the naive form, and the caller is

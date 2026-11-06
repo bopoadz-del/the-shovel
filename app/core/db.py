@@ -44,7 +44,7 @@ def to_psycopg_url(url: str) -> str:
 def get_database_url() -> str:
     """Resolve DATABASE_URL from env, honoring DATA_DIR at call time.
 
-    Render/Postgres URLs are typically `postgresql://...`. SQLAlchemy maps
+    Postgres URLs are typically `postgresql://...`. SQLAlchemy maps
     that dialect to psycopg2, but this project installs psycopg v3 only
     (`psycopg[binary]`), so the scheme is normalized to `postgresql+psycopg://`
     via ``to_psycopg_url``.
@@ -64,7 +64,7 @@ def _engine_kwargs(url: str) -> dict[str, Any]:
     if url.startswith("postgresql"):
         # Default pool_size=10 was fine for one web process, but five
         # identical Pro ingest workers × 10 = 50 connections and knocks
-        # Render Postgres into recovery ("not yet accepting connections").
+        # Postgres into recovery ("not yet accepting connections").
         # Ingest only needs 1–2 live connections (P1B_PARALLELISM≤2).
         # Override with DB_POOL_SIZE / DB_MAX_OVERFLOW on workers.
         pool_size = max(1, int(os.getenv("DB_POOL_SIZE", "10")))

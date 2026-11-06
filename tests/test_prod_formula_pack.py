@@ -1,6 +1,6 @@
 """Production formula-pack F1–F5 against the live construction_calc registry.
 
-These are the pending formula gates that must stay green after Render deploys.
+These are the pending formula gates that must stay green after deploys.
 They call ``run_calculation`` — the same dispatcher the agent ``construction_calc``
 tool uses — not the hat LLM.
 """

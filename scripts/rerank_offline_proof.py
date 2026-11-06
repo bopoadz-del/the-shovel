@@ -14,7 +14,7 @@ data/learning/rag_audit/rerank_proof.json).
 Usage:
   python scripts/rerank_offline_proof.py                     # defaults below
   python scripts/rerank_offline_proof.py --model BAAI/bge-reranker-base \
-      --sample 60 --seed 42 --base https://the-fork-jn3t.onrender.com
+      --sample 60 --seed 42 --base https://theshovel.ai
 
 Auth: FORK_API_KEY / FORK_TOKEN / FORK_EMAIL+FORK_PASSWORD (same as
 rag_recall_eval.py).
@@ -37,7 +37,7 @@ OUT = "data/learning/rag_audit/rerank_proof.json"
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--base", default=os.getenv("FORK_BASE_URL",
-                                                "https://the-fork-jn3t.onrender.com"))
+                                                "https://theshovel.ai"))
     ap.add_argument("--model", default="cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--sample", type=int, default=60)
     ap.add_argument("--seed", type=int, default=42)

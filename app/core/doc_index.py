@@ -1175,7 +1175,7 @@ def _extract_doc(file_path: str) -> str:
     """Extract text from a legacy binary Microsoft Word .doc file.
 
     Tries external converters in order of reliability:
-    ``antiword`` (Linux/Render), ``catdoc`` (Linux/Render), ``textract``
+    ``antiword`` (Linux), ``catdoc`` (Linux), ``textract``
     (if installed), then Windows Word COM automation (if Word is installed
     and pywin32 is available). Never raises.
     """
@@ -3494,7 +3494,7 @@ def _index_document(
             # failure: the document "exists" but can never be retrieved. Three
             # whole projects sat in that state for weeks before the 2026-06
             # audit noticed. WARNING (not error) because empty-but-valid files
-            # exist; the marker makes the condition grep-able in Render logs.
+            # exist; the marker makes the condition grep-able in the platform logs.
             extract_error = None
             if meta.get("extract_failed"):
                 detail = meta.get("extract_failed_detail") or ""
@@ -3816,7 +3816,7 @@ async def search_project_documents(
     Postgres, optional cross-encoder rerank. Run inline in this coroutine it
     froze the single worker's event loop for the whole search: live
     21 Sep 2026 a search stalled /livez 4-6 s during chat turns, and one past
-    5 s made Render restart the instance (health check timed out). It runs in
+    5 s made the platform restart the instance (health check timed out). It runs in
     a thread, like the chat pre-retrieval already does.
     """
     from app.core.rag import retrieval_worker

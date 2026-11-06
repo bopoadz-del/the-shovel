@@ -3,7 +3,7 @@
 Live 8e2f736, 21 Sep 2026 20:51 UTC: a priced-BOQ item question, then "+10%".
 The RSS watchdog logged the main thread in
 _cost_grounding_gate -> _cg_grounded_numbers -> _cg_user_arithmetic_closure
--> _times at 1.2, 1.5 and 1.8 GB; Render OOM-killed the 2 GiB instance
+-> _times at 1.2, 1.5 and 1.8 GB; the 2 GiB instance was OOM-killed
 seconds later. The closure multiplies every pairwise product of the user
 figures by every count, every percent factor and every money figure --
 O(n^2 x counts x money) entries, unbounded. Synthetic figures only.
