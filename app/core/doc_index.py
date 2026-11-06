@@ -88,7 +88,7 @@ _SUPPORTED_EXTS = _TEXT_BEARING_EXTS
 _PDF_OCR_THRESHOLD = 30
 
 # Skip PDFs above this size entirely. Multi-hundred-MB scanned drawing sets
-# (e.g. 450 MB) OOM the 2 GB Render worker during fitz load / OCR.
+# (e.g. 450 MB) OOM the 2 GB worker during fitz load / OCR.
 _DEFAULT_PDF_MAX_SIZE_MB = 100.0
 # For PDFs above this size, do NOT run OCR — only extract any existing text
 # layer. 25 MB was too tight: a live priced BOQ (a scanned ~28 MB
