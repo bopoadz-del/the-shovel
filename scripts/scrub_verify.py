@@ -317,8 +317,23 @@ def tsvector_state(live, table: str) -> Dict[str, str]:
 # ── run ──────────────────────────────────────────────────────────────────────
 def run(mode: str, *, endpoint: str = "", confirm: str = "", batch: int = 200,
         rules_raw: Optional[List[Tuple[str, str]]] = None) -> Dict[str, object]:
-    if mode not in {"measure", "repair", "dryrun", "tsvector"}:
+    if mode not in {"measure", "repair", "dryrun", "tsvector", "list"}:
         raise Refused("bad_mode")
+    if mode == "list":
+        # Secret NAMES only (metadata, never values): locate where the
+        # retired rules live so the dryrun can be pointed at them.
+        import subprocess
+
+        proc = subprocess.run(
+            ["aws", "secretsmanager", "list-secrets", "--max-results", "100", "--output", "json"],
+            check=False, capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise Refused("aws_failed")
+        names = [s.get("Name", "") for s in json.loads(proc.stdout or "null").get("SecretList", [])]
+        for name in sorted(names):
+            _emit(mode=mode, secret_name=name)
+        return {"secret_names": names}
     table = chunk_table()
     live = _session_factory(_live_url())
     if mode == "tsvector":
@@ -356,7 +371,7 @@ def run(mode: str, *, endpoint: str = "", confirm: str = "", batch: int = 200,
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Verify / repair the scrub-at-source clean (counts only).")
-    ap.add_argument("--mode", required=True, choices=("measure", "repair", "dryrun", "tsvector"))
+    ap.add_argument("--mode", required=True, choices=("measure", "repair", "dryrun", "tsvector", "list"))
     ap.add_argument("--endpoint", default="")
     ap.add_argument("--confirm", default="")
     ap.add_argument("--batch-size", type=int, default=200)

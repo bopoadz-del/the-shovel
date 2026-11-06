@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "measure | repair | dryrun | tsvector"
+        description: "measure | repair | dryrun | tsvector | list"
         type: choice
-        options: [measure, repair, dryrun, tsvector]
+        options: [measure, repair, dryrun, tsvector, list]
         default: measure
       restore_endpoint:
         description: "Neon endpoint id on the restore-point branch (ep-...)"
