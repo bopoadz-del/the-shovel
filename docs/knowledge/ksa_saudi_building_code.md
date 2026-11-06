@@ -152,19 +152,12 @@ this scope and the following section navigation.
 - **Sections 1103–1106:** include accessible routes, entrances, and parking in the
   early layout review rather than treating accessibility as a late signage item.
 
-**Sourced 2024 example — Table 1004.5:** the business-use population calculation
-uses **14 m²/person**, according to the [Vortex Fire review of the 2024
-changes][sbc2024-fire-review]. This is a use-specific population factor, not an
-exit-width allowance or a factor for every space within a business building.
-Check the actual table's area basis, mixed uses, and any applicable qualifications
-before using it. The review also identifies **Section 404.10** as the conditional
-route for counting an open atrium stair as egress; being inside an atrium does
-not, on its own, qualify a stair.
-
 **Unverified detail — confirm against the official code:** occupancy-specific
 area/height limits, fire-resistance durations, sprinkler exceptions, occupant-load
-factors other than the business example above, exit widths/count triggers, travel
-distances, and accessibility dimensions.
+factors (including any Table 1004.5 business-use population factor), exit
+widths/count triggers, travel distances, accessibility dimensions, and whether
+Section 404.10 allows counting an open atrium stair as egress under the operative
+2024 text. No vendor-blog numerical claim is retained here.
 
 ### SBC 301 — Structural actions and hazard inputs (2018 section references only)
 
@@ -647,7 +640,6 @@ occupancy. They contain no project-specific design assumptions.
 
 ### Additional sources for bounded operative examples
 
-- [Vortex Fire: SBC 201/801 2024 changes][sbc2024-fire-review] — professional
   secondary explanation; supports the specific 2024 business population and
   atrium-stair pointers, not a complete transcription of either code.
 - ICC-published **2018** study-companion samples reproducing limited provisions:
@@ -655,7 +647,6 @@ occupancy. They contain no project-specific design assumptions.
   [SBC 701][sbc701-sample], [SBC 801][sbc801-sample] and [SBC 901][sbc901-sample].
   Their educational commentary is not an additional mandatory rule.
 
-[sbc2024-fire-review]: https://vortexfire.com/insights/sbc-201-801-2024-edition-the-key-changes-you-need-to-know
 [sbc303-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4617S18SBC-Sample.pdf
 [sbc501-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4317S18SBC-Sample.pdf
 [sbc601-sample]: https://shop.iccsafe.org/media/wysiwyg/material/4807S18SBC-Sample.pdf
