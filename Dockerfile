@@ -226,7 +226,7 @@ USER appuser
 VOLUME /app/data
 
 # Commit baked into the ECS image by .github/workflows/deploy-aws.yml
-# (--build-arg GIT_SHA). GET /health reads RENDER_GIT_COMMIT before GIT_SHA
+# (--build-arg GIT_SHA). GET /health reads GIT_SHA
 # and ignores a blank value, so an omitted arg does not fail the build and
 # does not hide the baked commit.
 ARG GIT_SHA

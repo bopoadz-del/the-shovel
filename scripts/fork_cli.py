@@ -35,7 +35,7 @@ import time
 
 import httpx
 
-DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://the-fork-jn3t.onrender.com")
+DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://theshovel.ai")
 DEFAULT_AGENT = os.getenv("FORK_AGENT", "project-assistant")
 
 # Windows consoles default to cp1252; force utf-8 so event traces with unicode

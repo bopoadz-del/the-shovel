@@ -39,7 +39,7 @@ import time
 
 import httpx
 
-DEFAULT_BASE = "https://the-fork-jn3t.onrender.com"
+DEFAULT_BASE = "https://theshovel.ai"
 BASELINE_30 = "data/learning/rag_audit/sample_retrieval_recall_projects_folder.json"
 QUESTIONS_V2 = "data/learning/training_scenarios_drive_archive_v2.jsonl"
 # The audit measures the master corpus directly. On prod it lives under

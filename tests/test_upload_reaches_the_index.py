@@ -5,7 +5,7 @@ service returned HTTP 200 with ``indexed: true, indexing_status: "queued"`` and
 then sat at ``chunk_count = 0`` forever. Asking about its contents produced
 "I could not confirm this reference in the indexed project sources".
 
-Mechanism: the arq ingest worker was removed from render.yaml on 2026-08-08 to
+Mechanism: the arq ingest worker was removed from the blueprint on 2026-08-08 to
 halve the compute bill, on the stated assumption that inline ingestion in the
 web request would take over. It never did. ``upload_v1`` only falls back to
 inline ``maybe_eager_index`` when ``enqueue_ingest()`` returns False, and that

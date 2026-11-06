@@ -14,9 +14,9 @@ from app.infra.monitoring import get_observability_health_payload
 
 router = APIRouter()
 
-# Deploy platforms inject the shipped commit. Render sets RENDER_GIT_COMMIT.
-# GIT_SHA / SOURCE_VERSION are accepted aliases. Never invent a hash.
-_BUILD_SHA_ENV_KEYS = ("RENDER_GIT_COMMIT", "GIT_SHA", "SOURCE_VERSION")
+# Deploy platforms inject the shipped commit. deploy-aws.yml bakes GIT_SHA.
+# SOURCE_VERSION is an accepted alias. Never invent a hash.
+_BUILD_SHA_ENV_KEYS = ("GIT_SHA", "SOURCE_VERSION")
 
 
 def _deployed_build_sha() -> str | None:

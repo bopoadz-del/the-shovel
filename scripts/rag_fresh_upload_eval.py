@@ -38,7 +38,7 @@ import time
 
 import httpx
 
-DEFAULT_BASE = "https://the-fork-jn3t.onrender.com"
+DEFAULT_BASE = "https://theshovel.ai"
 PROJECT_NAME = "FIXTURE — Fresh Upload Eval"
 OUT = "data/learning/rag_audit/v2_fresh_upload_wins.json"
 

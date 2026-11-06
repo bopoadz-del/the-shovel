@@ -43,7 +43,7 @@ import time
 
 import httpx
 
-DEFAULT_BASE = "https://the-fork-jn3t.onrender.com"
+DEFAULT_BASE = "https://theshovel.ai"
 
 # (label, query, text signature of the expected GK note — fallback GK marker)
 CASES = [

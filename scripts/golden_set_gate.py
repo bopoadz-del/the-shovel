@@ -69,7 +69,7 @@ DEFAULT_GOLDEN_SET = ROOT / "tests" / "golden_set.yaml"
 DEFAULT_BASE = (
     os.getenv("FORK_BASE_URL")
     or os.getenv("FORK_BASE")
-    or "https://the-fork-jn3t.onrender.com"
+    or "https://theshovel.ai"
 )
 RESULTS_JSONL = ROOT / "golden_set_results.jsonl"
 REPORT_MD = ROOT / "GOLDEN_SET_REPORT.md"

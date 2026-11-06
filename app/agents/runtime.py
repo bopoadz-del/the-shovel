@@ -11315,7 +11315,7 @@ def _get_smart_orchestrator_block() -> Any | None:
 
 
 def _routing_disabled() -> bool:
-    """Kill-switch read at every call so Render env-var flips take effect
+    """Kill-switch read at every call so deploy env-var flips take effect
     without a restart."""
     return os.getenv("SMART_ORCH_ROUTING_DISABLED", "").strip().lower() in ("1", "true", "yes")
 
@@ -12854,7 +12854,7 @@ def _cg_strip_unit_noise(text: str) -> str:
 # Each step of the user-arithmetic closure multiplies the set it is given, so
 # the whole is O(n^2 x counts x money x percents) in the user's figures. A
 # normal ask (a handful of figures) builds ~16k entries. Live 21 Sep 2026 a
-# figure-heavy user text drove it past 2 GiB and Render OOM-killed the web
+# figure-heavy user text drove it past 2 GiB and the platform OOM-killed the web
 # instance. A step that would exceed this many entries is skipped and logged:
 # fewer grounded numbers only makes the gate stricter, never looser.
 _CG_USER_CLOSURE_MAX = 250_000

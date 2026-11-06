@@ -744,8 +744,8 @@ async def _chat_stream_impl(
         # accepted minor gap; streaming is off in prod regardless.)
         and not (_cost_grounding_enabled() and _is_cost_shaped_query(user_message))
     )
-    # WARNING-level timing instrumentation: Render drops INFO app logs on this
-    # service, so the deliverable-hang call-count/latency was invisible.
+    # WARNING-level timing instrumentation: the platform drops INFO app logs
+    # on this service, so the deliverable-hang call-count/latency was invisible.
     # Gate behind AGENT_TIMING_LOG=1 so it's off by default.
     _timing = os.getenv("AGENT_TIMING_LOG") == "1"
     # The clock counts from the request's arrival (app.core.turn_timing),

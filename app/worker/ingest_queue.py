@@ -11,7 +11,7 @@ def _worker_declared() -> bool:
     """True only when an ingest worker is DECLARED to be draining the queue.
 
     Redis being configured does not imply a worker exists. Redis is also used
-    for sessions and rate limiting, so it stayed in render.yaml when the arq
+    for sessions and rate limiting, so it stayed in the blueprint when the arq
     worker was removed on 2026-08-08 — and every subsequent upload was enqueued
     to a queue nobody served, leaving documents at chunk_count 0 permanently.
     Callers fall back to inline indexing on False, so the safe default is False:
