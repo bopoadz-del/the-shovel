@@ -1,12 +1,13 @@
 # Build the image and push it to ECR, then roll the ECS services.
 #
-# Replaces Render's auto-deploy-on-merge. Render built the image itself from
-# this repo's Dockerfile; ECS pulls a prebuilt image, so the build moves into
-# CI rather than depending on one machine having Docker.
+# Replaces the old platform's auto-deploy-on-merge: the previous host built
+# the image itself from this repo's Dockerfile; ECS pulls a prebuilt image,
+# so the build moves into CI rather than depending on one machine having
+# Docker.
 #
 # ONE image serves both the web service and the ingest worker — they are the
-# same application with a different command, exactly as on Render, where the
-# worker ran `python scripts/p1b_ingest_drive_server.py` against the same
+# same application with a different command: the worker ran
+# `python scripts/p1b_ingest_drive_server.py` against the same
 # build. Building once keeps them from drifting apart. The ingest is a JOB:
 # it is started once by ingest-run-once.yml, never kept running as a service
 # (the service's desired count is pinned to 0 below).
@@ -96,7 +97,7 @@ jobs:
         run: |
           IMAGE="$REGISTRY/$ECR_REPOSITORY"
           # ECS sets none of the env vars the liveness route reads for build_sha
-          # (RENDER_GIT_COMMIT, GIT_SHA, SOURCE_VERSION). Bake the commit.
+          # (GIT_SHA, SOURCE_VERSION). Bake the commit.
           docker build \
             --build-arg GIT_SHA="$DEPLOY_SHA" \
             -t "$IMAGE:$DEPLOY_SHA" \

@@ -157,7 +157,7 @@ def main() -> int:
     # summary ----------------------------------------------------------------
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     mode = "DRY-RUN" if args.dry_run else "LIVE"
-    base = os.getenv("FORK_BASE_URL") or "https://the-fork-jn3t.onrender.com"
+    base = os.getenv("FORK_BASE_URL") or "https://theshovel.ai"
     lines = [
         "# Eval battery summary",
         "",

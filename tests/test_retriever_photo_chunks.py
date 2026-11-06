@@ -68,7 +68,7 @@ def test_bm25_search_photos_finds_class_name(store_with_photos):
 
 def test_bm25_search_photos_uses_source_url_from_metadata(sqlite_url):
     """photo_url is pulled from photo_metadata.source_url when present;
-    Render does NOT serve photo bytes itself."""
+    The platform does NOT serve photo bytes itself."""
     engine = create_engine(sqlite_url)
     with engine.begin() as conn:
         conn.execute(text("""

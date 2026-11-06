@@ -1,7 +1,7 @@
 """The secret scanner has to catch the shapes that actually got committed.
 
 Two live credentials were sitting in this repository when the scanner was
-written — a Fork API key in a recovery runbook and a Render key hardcoded in
+written — a Fork API key in a recovery runbook and a live deploy API key hardcoded in
 a scheduled-task script. A third pair survived the FIRST version of the
 scanner, because it was written as
 

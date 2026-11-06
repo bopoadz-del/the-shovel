@@ -11,7 +11,7 @@ Usage:
   python scripts/reconcile_migration.py
 
 Environment:
-  FORK_BASE_URL  target deployment (default: https://the-fork-jn3t.onrender.com)
+  FORK_BASE_URL  target deployment (default: https://theshovel.ai)
   FORK_API_KEY   admin CEREBRUM_MASTER_KEY
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://the-fork-jn3t.onrender.com")
+DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://theshovel.ai")
 
 # Projects involved in the drive_archive migration + the GK identity.
 WATCHED_PROJECTS = {

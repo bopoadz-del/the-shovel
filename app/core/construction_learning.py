@@ -28,7 +28,7 @@ def _storage_path() -> str:
     """Resolve learning JSON path at call time (tests can swap via env).
 
     Prefer CONSTRUCTION_LEARNING_STORAGE; else DATA_DIR/learning/… so
-    Render/ephemeral hosts do not default to /tmp (lost on restart).
+    Ephemeral hosts do not default to /tmp (lost on restart).
     """
     explicit = os.environ.get("CONSTRUCTION_LEARNING_STORAGE")
     if explicit:

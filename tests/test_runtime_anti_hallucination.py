@@ -189,7 +189,7 @@ def test_intent_requires_tool_returns_false_after_tool_call_iteration():
     after the user message. If we still flipped tool_choice="required"
     on these iterations the model would be FORCED to call another tool
     instead of summarising into the final answer — a forever-loop trap
-    seen in prod via the Render debug log.
+    seen in prod via the debug log.
 
     The matcher must return False whenever the tail of messages is
     NOT a user turn.

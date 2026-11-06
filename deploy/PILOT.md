@@ -97,13 +97,13 @@ One-off Render jobs do not mount `/app/data`. Run cutover from the web process:
 ```bash
 # After deploy with admin endpoints + CEREBRUM_MASTER_KEY set:
 curl -sS -X POST -H "Authorization: Bearer $CEREBRUM_MASTER_KEY" \
-  "https://the-fork-jn3t.onrender.com/v1/admin/debug/migrate-sqlite?dry_run=true"
+  "https://theshovel.ai/v1/admin/debug/migrate-sqlite?dry_run=true"
 
 curl -sS -H "Authorization: Bearer $CEREBRUM_MASTER_KEY" \
-  "https://the-fork-jn3t.onrender.com/v1/admin/debug/pilot-preflight"
+  "https://theshovel.ai/v1/admin/debug/pilot-preflight"
 
 curl -sS -X POST -H "Authorization: Bearer $CEREBRUM_MASTER_KEY" \
-  "https://the-fork-jn3t.onrender.com/v1/admin/debug/sentry-smoke"
+  "https://theshovel.ai/v1/admin/debug/sentry-smoke"
 ```
 
 **81 users** in SQLite dry-run likely includes test-account accumulation — prune or document before `execute=true`.

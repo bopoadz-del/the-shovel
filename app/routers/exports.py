@@ -43,8 +43,8 @@ def _public_base_url() -> str:
 
     Env-derived, never hardcoded: the previous footer baked in
     the-fork.onrender.com, and when the 2026-08-09 migration moved the service
-    to a new Render workspace (new slug), every exported Word document kept
-    stamping a dead link. RENDER_EXTERNAL_URL is set by Render automatically;
+    to a new host (new slug), every exported Word document kept
+    stamping a dead link. RENDER_EXTERNAL_URL was set by the old deploy host;
     PUBLIC_BASE_URL is the operator override for custom domains. Empty string
     when neither is set (local dev) -- callers omit the link rather than
     stamping localhost into a client deliverable.
@@ -53,7 +53,7 @@ def _public_base_url() -> str:
 
 
 # Hosts that must never be stamped into a client deliverable. #332 was a dead
-# render slug; a localhost stamp would be worse. A host that is not publicly
+# deploy slug; a localhost stamp would be worse. A host that is not publicly
 # resolvable is treated as absent, and the caller omits the link.
 _PRIVATE_HOST_RE = re.compile(
     r"^(?:localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|"

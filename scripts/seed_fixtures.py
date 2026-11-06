@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE = (
     os.getenv("FORK_BASE_URL")
     or os.getenv("FORK_BASE")
-    or "https://the-fork-jn3t.onrender.com"
+    or "https://theshovel.ai"
 )
 FIXTURES_DIR = Path(os.getenv("FIXTURES_DIR", ROOT / "data" / "fixtures"))
 

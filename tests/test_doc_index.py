@@ -7,6 +7,7 @@ TDD order:
   Wave 3 — Task 3: index build + JSON persistence
 """
 
+import asyncio
 import importlib
 import os
 import sys
@@ -1706,3 +1707,44 @@ def test_existing_gates_still_win(monkeypatch):
 
     _fake_pdf(monkeypatch, pages=10, size_mb=5.0, w=2384.0, h=1684.0)  # A1
     assert doc_index._pdf_tables_enabled("drawing.pdf") is False, "page-size gate"
+
+
+@pytest.mark.parametrize("stdout,expected", [("FIRST DOC\n", "FIRST DOC"), ("SECOND DOC\n", "SECOND DOC")])
+def test_extract_doc_uses_antiword_when_on_path(monkeypatch, tmp_path, stdout, expected):
+    from types import SimpleNamespace
+
+    from app.core import doc_index as di
+
+    class _Plaintext:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self.path
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(di.file_crypto, "open_plaintext", lambda p: _Plaintext(p))
+    monkeypatch.setattr("shutil.which", lambda name: "/fake/antiword" if name == "antiword" else None)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: SimpleNamespace(stdout=stdout, returncode=0))
+    assert di._extract_doc(str(tmp_path / "sample.doc")) == expected
+
+
+def test_search_project_documents_uses_retrieval_worker_when_enabled(monkeypatch):
+    import app.core.rag as rag
+
+    from app.core import doc_index as di
+
+    monkeypatch.setattr(rag.retrieval_worker, "enabled", lambda: True)
+    calls = []
+
+    async def fake_call(job, *args):
+        calls.append(job)
+        return [{"ok": True}]
+
+    monkeypatch.setattr(rag.retrieval_worker, "call", fake_call)
+    monkeypatch.setattr("app.core.privileges.caller_role", lambda: "admin")
+    result = asyncio.run(di.search_project_documents("proj", "query"))
+    assert calls
+    assert result[0]["ok"] is True

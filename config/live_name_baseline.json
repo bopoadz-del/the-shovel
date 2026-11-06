@@ -227,10 +227,6 @@
  "frontend/src/pages/ProjectWorkspace.tsx": {
   "af5bb6f7c922e0cd54bf": 1
  },
- "render.yaml": {
-  "03725f2fc780df6bfd97": 2,
-  "af5bb6f7c922e0cd54bf": 2
- },
  "scripts/_build_drive_archive_eval_set.py": {
   "af5bb6f7c922e0cd54bf": 2
  },
@@ -268,9 +264,6 @@
  },
  "scripts/index_drive_archive.py": {
   "af5bb6f7c922e0cd54bf": 1
- },
- "scripts/migrate_drive_archive_to_render.py": {
-  "af5bb6f7c922e0cd54bf": 4
  },
  "scripts/p0d_one_doc_proof_bge.py": {
   "55c06635d90608bfc807": 2

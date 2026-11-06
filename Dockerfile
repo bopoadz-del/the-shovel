@@ -86,7 +86,7 @@ RUN pip install --no-cache-dir "sentence-transformers==5.5.1" "transformers==5.1
 #
 # WHY: the weights were never in the image. Only the LIBRARIES were installed,
 # so the first embed call resolved the model name against huggingface.co at
-# RUNTIME via snapshot_download. Render containers are ephemeral and no
+# RUNTIME via snapshot_download. Containers are ephemeral and no
 # HF_HOME/persistent cache was configured, which made every deploy, restart and
 # scale event re-download the model — a live third-party host sitting in the
 # boot path of the retrieval stack.
@@ -123,7 +123,7 @@ COPY scripts/prefetch_embedder.py /tmp/prefetch_embedder.py
 RUN python /tmp/prefetch_embedder.py "${RAG_EMBEDDING_MODEL}" && rm /tmp/prefetch_embedder.py
 
 # Frontend stage: build the React SPA. VITE_API_BASE='' makes the app talk to
-# the same origin it was served from, so a single Render service is enough.
+# the same origin it was served from, so a single service is enough.
 FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS frontend
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -204,7 +204,7 @@ COPY --from=frontend /frontend/dist /app/frontend/dist
 
 # Copy detector weights OUT of /app/data (which is a volume mount at
 # runtime -- the volume overlay hides the image's content) to a stable,
-# non-volume location. SAFETY_WORLD_WEIGHTS on Render points here.
+# non-volume location. SAFETY_WORLD_WEIGHTS points here.
 # The checksum gate: a missing, truncated or swapped weights file fails the
 # build here instead of shipping (scripts/fetch_model.py --check reads the pin
 # from data/models/manifest.json).
@@ -226,10 +226,9 @@ USER appuser
 VOLUME /app/data
 
 # Commit baked into the ECS image by .github/workflows/deploy-aws.yml
-# (--build-arg GIT_SHA). Render builds this Dockerfile without that arg, so
-# the value stays empty. GET /health reads RENDER_GIT_COMMIT before GIT_SHA
+# (--build-arg GIT_SHA). GET /health reads GIT_SHA
 # and ignores a blank value, so an omitted arg does not fail the build and
-# does not hide Render's commit.
+# does not hide the baked commit.
 ARG GIT_SHA
 ENV GIT_SHA=$GIT_SHA
 

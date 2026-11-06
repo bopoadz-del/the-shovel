@@ -26,7 +26,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://the-fork-jn3t.onrender.com")
+DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://theshovel.ai")
 
 # Drive-linked projects from docs/recovery/re_import_manifest.md.
 # Each entry has the platform project_id and one or more folder-name aliases to

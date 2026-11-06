@@ -2,7 +2,7 @@
 
 Run before handing any pilot-critical surface to review:
 
-    python scripts/consistency_oracle.py --base https://the-fork-jn3t.onrender.com
+    python scripts/consistency_oracle.py --base https://theshovel.ai
 
 Auth: FORK_TOKEN or FORK_API_KEY env (same resolution as fork_cli.py).
 
@@ -122,7 +122,7 @@ def run_oracle(base: str, tok: str) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--base", default=os.getenv("FORK_BASE", "https://the-fork-jn3t.onrender.com"))
+    ap.add_argument("--base", default=os.getenv("FORK_BASE", "https://theshovel.ai"))
     args = ap.parse_args()
     tok = _token()
     healthy = preflight_corpus_health(args.base, tok)

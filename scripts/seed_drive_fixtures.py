@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://the-fork-jn3t.onrender.com")
+DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://theshovel.ai")
 
 sys.path.insert(0, str(ROOT / "scripts"))
 

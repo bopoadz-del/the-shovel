@@ -4,7 +4,7 @@
 Design guarantees
 -----------------
 * Never auto-wipes production. Destructive wipe requires ``--destructive-wipe``.
-* Render Postgres is the source of truth; local checkpoint is an operational aid.
+* Postgres is the source of truth; local checkpoint is an operational aid.
 * Each embed batch is persisted in a short transaction and committed before the
   next batch. A crash loses at most the in-flight batch.
 * Resume skips rows that already have a *valid* embedding (matching model, dim,
@@ -27,7 +27,6 @@ import re
 import sys
 import time
 import traceback
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +47,6 @@ from app.core.ingest_lifecycle import (  # noqa: E402 - after sys.path bootstrap
     install_signal_handlers as _install_signal_handlers,
 )
 
-PG_ID = "dpg-d8m22mcm0tmc73b04elg-a"
 # The project + expected totals were hardcoded to the first backfill
 # (example_infra_pack, 27 docs / 7538 chunks). They are env-overridable so the
 # same hardened writer can load another corpus -- e.g. the 2,924-doc
@@ -67,7 +65,7 @@ CHECKPOINT_PATH = REPO / "rag_render_bulk_ingest_checkpoint.json"
 LOCK_PATH = REPO / "rag_render_bulk_ingest.lock"
 NAMESPACE = "v2"
 
-# Write resilience/pacing (Render Postgres drops connections under sustained
+# Write resilience/pacing (Postgres drops connections under sustained
 # bulk load). Tunable via env; defaults chosen for a starter-tier DB.
 _RETRY_ATTEMPTS = max(1, int(os.getenv("INGEST_RETRY_ATTEMPTS", "5")))
 _RETRY_BACKOFF_S = float(os.getenv("INGEST_RETRY_BACKOFF_S", "2.0"))
@@ -408,7 +406,7 @@ class PostgresStore:
                     )
                     return int(cur.fetchone()[0])
 
-        # A struggling Render Postgres closes the connection mid-write under
+        # A struggling Postgres closes the connection mid-write under
         # sustained bulk load ("server closed the connection unexpectedly").
         # Raw psycopg has no pool_pre_ping safety net (unlike the app's
         # SQLAlchemy engine), so reconnect-and-retry here. INSERT is idempotent
@@ -881,24 +879,13 @@ def run_ingest(
     return stats
 
 
-# ── Render URL ───────────────────────────────────────────────────────────────
 
 
-def fetch_database_url(api_key: Optional[str] = None) -> str:
-    token = (
-        api_key
-        or os.environ.get("RENDER_API_KEY")
-        or os.environ.get("RENDER_MCP_TOKEN")
-        or ""
-    )
-    if not token:
-        raise RuntimeError("RENDER_API_KEY / RENDER_MCP_TOKEN missing")
-    req = urllib.request.Request(
-        f"https://api.render.com/v1/postgres/{PG_ID}/connection-info",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        url = json.loads(resp.read().decode())["externalConnectionString"]
+def fetch_database_url() -> str:
+    """Prod database URL from DATABASE_URL, normalized for SQLAlchemy."""
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL missing")
     if "sslmode=" not in url:
         url += ("&" if "?" in url else "?") + "sslmode=require"
     if url.startswith("postgresql://"):
@@ -923,7 +910,7 @@ def _tune_torch(threads: int) -> None:
 def install_signal_handlers(stop_flag: StopFlag) -> None:
     """One-arg shim so existing call sites keep working; the implementation is
     ``app.core.ingest_lifecycle.install_signal_handlers``. SIGHUP is included
-    there — a detached Render Shell run that is HUPed on shell close used to
+    there — a detached shell run that is HUPed on shell close used to
     die as silently as an OOM kill."""
     _install_signal_handlers(stop_flag, log=log)
 
@@ -1036,7 +1023,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         url = args.database_url
     else:
         url = fetch_database_url()
-    log(f"[target] Render Postgres {redact(url)}")
+    log(f"[target] Postgres {redact(url)}")
     log(
         f"[config] batch={args.batch_size} threads={args.threads} "
         f"model={EMBED_MODEL} resume={resume} verify_only={args.verify_only} "

@@ -70,7 +70,7 @@ except ImportError:  # pragma: no cover
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests" / "feature_matrix_manifest.yaml"
-DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://the-fork-jn3t.onrender.com")
+DEFAULT_BASE = os.getenv("FORK_BASE_URL", "https://theshovel.ai")
 REVIEW_DIR = ROOT / "review_pack"
 RESULTS_JSONL = ROOT / "feature_matrix_results.jsonl"
 REPORT_MD = ROOT / "FEATURE_MATRIX.md"

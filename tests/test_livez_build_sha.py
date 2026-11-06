@@ -1,6 +1,6 @@
 """GET /livez reports the same deployed build_sha as /health, with no DB call.
 
-The image already injects RENDER_GIT_COMMIT, GIT_SHA, or SOURCE_VERSION.
+The image already injects GIT_SHA or SOURCE_VERSION.
 /health reads those through _deployed_build_sha. /livez must reuse that
 helper. A liveness probe that opens a session would wake a scale-to-zero
 database on every poll.
@@ -25,7 +25,6 @@ def client():
 
 def _pin_sha(monkeypatch):
     """One synthetic value, and no higher-priority key hiding it."""
-    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
     monkeypatch.delenv("SOURCE_VERSION", raising=False)
     monkeypatch.setenv("GIT_SHA", _SYNTHETIC_SHA)
 

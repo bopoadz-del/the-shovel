@@ -68,7 +68,7 @@ def _transcode_to_wav_sync(src_path: str) -> str:
         # pydub raises this when the ffmpeg subprocess can't be launched.
         raise RuntimeError(
             f"ffmpeg not found on PATH — pydub needs it to decode "
-            f"non-WAV audio. Install ffmpeg (Render: `apt install ffmpeg` "
+            f"non-WAV audio. Install ffmpeg (deploy: `apt install ffmpeg` "
             f"in build steps; local: `choco install ffmpeg` / "
             f"`brew install ffmpeg`). Underlying error: {e}"
         ) from e

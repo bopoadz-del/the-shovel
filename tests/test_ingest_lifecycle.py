@@ -19,6 +19,7 @@ These tests pin the guarantees that make that impossible to repeat:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -29,6 +30,7 @@ from pathlib import Path
 import pytest
 
 from app.core import ingest_lifecycle as lifecycle
+from app.core.ingest_lifecycle import StopFlag
 
 POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="POSIX signals only")
 
@@ -237,7 +239,7 @@ def test_default_log_goes_to_unbuffered_stderr(capsys):
 
 @POSIX_ONLY
 def test_sighup_is_a_stop_signal_not_a_silent_death():
-    """A detached Render Shell run gets HUPed when the shell closes. Default
+    """A detached shell run gets HUPed when the shell closes. Default
     SIGHUP action is instant death with no tally — the exact signature of the
     incident this module exists for."""
     assert signal.SIGHUP in lifecycle.stop_signals()
@@ -614,7 +616,7 @@ def test_a_forked_child_cannot_clobber_the_parents_evidence(tmp_path):
 
 @POSIX_ONLY
 def test_stop_signal_writes_the_sidecar_from_inside_the_handler(tmp_path):
-    """Render sends SIGTERM then SIGKILL ~30s later. If the graceful drain
+    """The platform sends SIGTERM then SIGKILL ~30s later. If the graceful drain
     does not finish in that window, the handler's own write is the only
     record that survives."""
     flushes = []
@@ -801,3 +803,38 @@ def test_supervised_child_reports_its_own_signal_handling(tmp_path):
     assert written == {"exit_reason": "signal:SIGTERM", "complete": False}
     assert lifecycle.read_state(state)["phase"] == "signal:SIGTERM"
     assert "EXIT run=kid reason=signal:SIGTERM complete=False" in proc.stderr
+
+
+def test_stop_flag_imports_the_same_class():
+    assert StopFlag is lifecycle.StopFlag
+
+
+def test_read_text_never_reads_what_is_not_a_file(tmp_path, monkeypatch):
+    """The is_file guard exists so non-files never reach a filesystem read."""
+    target = tmp_path / "not-a-file.txt"
+    monkeypatch.setattr("pathlib.Path.is_file", lambda self: False)
+    monkeypatch.setattr("pathlib.Path.read_text", lambda self, **kwargs: "SHOULD NOT BE READ")
+    assert lifecycle._read_text(target) is None
+
+
+def test_memory_snapshot_missing_cgroup_warns(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger="app.core.ingest_lifecycle"):
+        snap = lifecycle.read_memory_snapshot(
+            proc_root=tmp_path / "proc", cgroup_root=tmp_path / "cgroup",
+        )
+    assert snap.cgroup_current_mb is None
+    assert "cgroup memory path isn't available" in caplog.text
+
+
+def test_on_signal_writes_a_signal_record(tmp_path):
+    from app.core.ingest_lifecycle import RunLifecycle
+
+    state = tmp_path / "run.json"
+    rl = RunLifecycle(
+        run_id="r-1", label="t", state_path=state,
+        install_handlers=False, register_atexit=False,
+    )
+    rl._on_signal(int(signal.SIGTERM), "SIGTERM")
+    raw = state.read_text(encoding="utf-8")
+    assert "signal:SIGTERM" in raw
+    assert '"complete": false' in raw

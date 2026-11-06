@@ -203,8 +203,8 @@ The repo's own docs disagree in places because prod moved faster than the
 docs, and this file does not hide that:
 - **Provider ladder.** `DECISIONS.md` / `docs/archive/PROGRESS.md` still
   describe OpenAI-primary or Groq-Scout-primary + Ollama-fallback;
-  live prod is **Kimi-primary + Groq-fallback** since 2026-07-24
-  (`PLATFORM_HEALTH_REPORT.md:22` F2, `render.yaml:82-104`). README's LLM claim
+  live prod is **DeepSeek-primary + OpenRouter-fallback**
+  (`PLATFORM_HEALTH_REPORT.md:22` F2). README's LLM claim
   was corrected in this same change set.
 - **Groq free-tier ceiling.** The Groq fallback 413s payloads above ~12k tokens
   on the current free account, so it catches normal turns but not large grounded

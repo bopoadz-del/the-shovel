@@ -16,12 +16,12 @@ unrecognised `LLM_PROVIDER` still resolves to Kimi (historical default).
 Do not reintroduce OpenAI. Temperature is not pinned (`fixed_temperature`
 is a Kimi-K2 constraint only).
 
-**Render dashboard:**
+**Deploy env (AWS ECS):**
 ```
 LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=…
 DEEPSEEK_MODEL=deepseek-chat
-LLM_FALLBACK_PROVIDER=kimi
+LLM_FALLBACK_PROVIDER=openrouter
 ```
 
 ## 2026-09-05 — OpenRouter free models as a first-class cloud provider
@@ -38,8 +38,9 @@ unless `OPENROUTER_ALLOW_PAID=1`. The previous production workaround
 (`LLM_PROVIDER=ollama` + `OLLAMA_URL=https://openrouter.ai/api/v1/chat/completions`)
 is replaced by this native branch — do not keep the ollama-URL shim.
 
-**Live intent:** `LLM_PROVIDER=openrouter`, `OPENROUTER_MODEL=openrouter/free`,
-`OPENROUTER_API_KEY` set on Render. Kimi/Groq keys optional.
+**Live intent:** `LLM_PROVIDER=deepseek` (`DEEPSEEK_MODEL=deepseek-chat`),
+fallback `LLM_FALLBACK_PROVIDER=openrouter`. Keys set in the deploy env.
+No Kimi/Groq keys.
 
 ## 2026-07-24 — SUPERSEDES all prior provider rulings: Kimi primary + Groq fallback
 
@@ -162,7 +163,7 @@ pilot.
   are out. They consumed multiple days without producing a clean, repeatable
   10/10 smoke gate on prod.
 
-### Operational env (Render prod)
+### Operational env (AWS prod)
 
 - `LLM_PROVIDER=openai`
 - `OPENAI_MODEL=gpt-4o-mini`
@@ -228,7 +229,7 @@ OpenAI support is added but not yet tested.
   gate passes (`smoke --runs 3`: 3/3, tool-backed, model=glm-5.2:cloud).
 - **OpenAI gpt-4o-mini** provider support was added to `runtime.py` at the
   user's request as an alternative to test, but no `OPENAI_API_KEY` is set
-  locally or on Render, so it has not been exercised.
+  locally or in the deploy env, so it has not been exercised.
 
 ### Operational env
 
@@ -254,7 +255,7 @@ OpenAI support is added but not yet tested.
   `GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct`. Do not flip prod
   without the gate.
 - **OpenAI gpt-4o-mini:** Parked on key availability. Set
-  `OPENAI_API_KEY` on Render and run the same smoke gate before any prod
+  `OPENAI_API_KEY` in the deploy env and run the same smoke gate before any prod
   flip.
 
 ## 2026-07-07 — LLM provider ladder FROZEN for pilot
@@ -277,12 +278,11 @@ Kimi K2.6 and Moonshot v1 are **out of the active chain** for the pilot.
 
 ### Frozen ladder
 
-1. **Primary:** Groq — `meta-llama/llama-4-scout-17b-16e-instruct` (pinned in
-   Render env as `GROQ_MODEL`).
-2. **Fallback:** Ollama — `glm-5.2:cloud` ( Render env `OLLAMA_*` ), used only
-   on Groq retryable failures (429, 5xx, timeout).
-3. **Kimi / Moonshot:** parked. Any post-pilot re-evaluation requires the owner's
-   explicit written instruction naming this freeze.
+1. **Primary:** DeepSeek — `deepseek-chat` (`LLM_PROVIDER=deepseek`).
+2. **Fallback:** OpenRouter (`LLM_FALLBACK_PROVIDER=openrouter`), used only
+   on DeepSeek retryable failures (429, 5xx, timeout).
+3. **Groq / Ollama / Kimi / Moonshot:** parked. Any post-pilot re-evaluation
+   requires the owner's explicit written instruction naming this freeze.
 
 ### Operational env
 
@@ -305,7 +305,7 @@ Kimi K2.6 and Moonshot v1 are **out of the active chain** for the pilot.
 - **Single GK project: `training_material`.** After the drive_archive migration,
   the curated general-knowledge corpus lives in `training_material` (241 docs).
   `curated_kb` exists but is empty (0 docs). `RAG_GENERAL_KNOWLEDGE_PROJECTS`
-  is therefore `training_material` in prod and in `render.yaml`.
+  is therefore `training_material` in prod.
 - **Consequence:** Any eval harness or manifest that still points GK at
   `curated_kb` is stale and has been updated.
 
@@ -507,14 +507,14 @@ bug, now fixed in PR #154. `ff905e29` and `bc812f36` are still missing.
 
 **Finding:** The source data for the lost master-corpus blobs and the
 Drive-approved projects is intact in Google Drive, but the surviving project
-metadata does not contain the Drive folder IDs. The Render env currently has no
+metadata does not contain the Drive folder IDs. The deploy env currently has no
 `GDRIVE_SERVICE_ACCOUNT_JSON` or `GDRIVE_PROJECT_FOLDERS` set.
 
 **Classification:** Infrastructure/configuration gap, not a code bug.
 
 **Disposition:** PARKED pending the owner providing:
 1. A service-account JSON key with read access to the Drive folders, set as
-   `GDRIVE_SERVICE_ACCOUNT_JSON` on Render (or as a mounted file path).
+   `GDRIVE_SERVICE_ACCOUNT_JSON` in the deploy env (or as a mounted file path).
 2. The complete `GDRIVE_PROJECT_FOLDERS` mapping, including sibling packs under
    the same parent as `the client project` (folder ID
    `1ExampleFolderId001xxxxxxxxxxxxxx`).

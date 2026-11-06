@@ -88,7 +88,7 @@ Everything else in the SPA is bundled (no CDN JS/CSS, no analytics/telemetry, no
 
 ## 8. Build-time fetches (vendor for an air-gapped build box; not a runtime concern)
 
-`Dockerfile` + `render-build.sh` + `deploy/*`: PyPI (`requirements*.txt`), `download.pytorch.org/whl/cpu` (torch/torchvision/ultralytics/onnxruntime), `npm ci`, `apt-get`, and base images (`python:3.11-slim`, `node:20-slim` from Docker Hub, each **pinned by `@sha256` digest** in the Dockerfile since 2026-09-30 so a re-pointed tag cannot change the OS under a build; `pgvector/pgvector:pg16`; Jetson `nvcr.io/nvidia/l4t-pytorch`). `entrypoint.sh` does **no** start-time downloads (hardware probe + `alembic upgrade` + uvicorn only). Air-gapped builds need a local PyPI/npm/apt mirror + a pinned registry. (Note: `deploy/edge/Dockerfile.jetson` references a missing `requirements-edge.txt` — broken regardless; fix in STEP 4.)
+`Dockerfile` + `deploy/*`: PyPI (`requirements*.txt`), `download.pytorch.org/whl/cpu` (torch/torchvision/ultralytics/onnxruntime), `npm ci`, `apt-get`, and base images (`python:3.11-slim`, `node:20-slim` from Docker Hub, each **pinned by `@sha256` digest** in the Dockerfile since 2026-09-30 so a re-pointed tag cannot change the OS under a build; `pgvector/pgvector:pg16`; Jetson `nvcr.io/nvidia/l4t-pytorch`). `entrypoint.sh` does **no** start-time downloads (hardware probe + `alembic upgrade` + uvicorn only). Air-gapped builds need a local PyPI/npm/apt mirror + a pinned registry. (Note: `deploy/edge/Dockerfile.jetson` references a missing `requirements-edge.txt` — broken regardless; fix in STEP 4.)
 
 ## 9. Scripts (manual only — not the running server)
 

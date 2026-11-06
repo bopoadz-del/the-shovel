@@ -86,7 +86,7 @@ class HALBlock:
                 return True
         except Exception:
             # `nvidia-smi` missing is the NORMAL case on any host without an
-            # NVIDIA GPU, which includes most dev machines and the Render box.
+            # NVIDIA GPU, which includes most dev machines and the prod box.
             # DEBUG, and no traceback: at WARNING this fires on every single
             # boot with a full stack, which teaches operators that warnings
             # from this app are noise. The consequence is stated instead.
@@ -124,7 +124,7 @@ class HALBlock:
     def _detect_environment(self) -> str:
         """Detect runtime environment"""
         # Check for cloud providers
-        if os.getenv("RENDER") or os.getenv("RAILWAY"):
+        if os.getenv("RAILWAY"):
             return "cloud"
         if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
             return "cloud"

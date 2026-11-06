@@ -39,7 +39,7 @@ _LLM_TRANSPORT_MARKERS = (
 
 
 class JsonLogFormatter(logging.Formatter):
-    """Emit one JSON object per log line for Render/log-drain ingestion."""
+    """Emit one JSON object per log line for log-drain ingestion."""
 
     def format(self, record: logging.LogRecord) -> str:
         payload: Dict[str, Any] = {

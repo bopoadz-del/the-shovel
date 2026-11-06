@@ -2,7 +2,7 @@
 
 These tests drive the real ``scripts/p1b_ingest_drive_server.main()`` against
 an in-memory Drive and project store. They exist because the run that mattered
-died at 101/1359 on Render leaving nothing that could distinguish "finished"
+died at 101/1359 in prod leaving nothing that could distinguish "finished"
 from "killed", while the number people were quoting as proof of completion —
 ``already_indexed + assigned == supported`` — is an identity that holds on
 every run including that one.

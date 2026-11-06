@@ -4,7 +4,7 @@ Live 21 Sep 2026: the agent's search tool and POST /v1/rag/search ran the
 hybrid retriever (embedding + BM25/vector over Postgres + rerank) inline in
 their coroutines. The single uvicorn worker's loop froze for the whole
 search -- /livez stalled 4-6 s during ordinary chat turns, and at 18:32 UTC
-one search passed Render's 5 s health-check timeout and the instance was
+one search passed the 5 s health-check timeout and the instance was
 restarted. Retrieval is replaced here by a synthetic slow stand-in.
 """
 import asyncio

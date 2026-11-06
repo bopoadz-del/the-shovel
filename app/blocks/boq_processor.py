@@ -278,7 +278,7 @@ class BOQProcessorBlock(UniversalBlock):
 
     # Every parser is synchronous, CPU-bound work. The web service runs ONE
     # uvicorn worker, so parsing on the event loop freezes health checks and
-    # every other user for the whole parse (Render then kills the instance as
+    # every other user for the whole parse (the platform then kills the instance as
     # unhealthy). The async wrappers hand the work to a thread.
 
     async def _parse_csv(self, file_path: str, params: Dict) -> Dict:

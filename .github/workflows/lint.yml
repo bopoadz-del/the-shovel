@@ -119,7 +119,7 @@ jobs:
     #    ingest path — every drawing came out with no tables, no markups and
     #    no title block, and nothing said so.
     #  - scan_secrets found a live Fork API key in a recovery runbook and a
-    #    live Render key hardcoded in a scheduled-task script.
+    #    live deploy API key hardcoded in a scheduled-task script.
     #  - scan_exception_pass is the S110 twin for `except Exception: pass`,
     #    which ruff's default S110 does not cover.
     runs-on: ubuntu-latest

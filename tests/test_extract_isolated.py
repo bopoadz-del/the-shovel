@@ -73,7 +73,7 @@ def test_isolation_is_not_nested(monkeypatch):
 
 @pytest.mark.skipif(
     not extract_isolated.isolation_available(),
-    reason="requires POSIX fork (Render/Linux); skipped on the Windows dev box",
+    reason="requires POSIX fork (Linux); skipped on the Windows dev box",
 )
 def test_a_memory_hog_is_contained_and_reported(monkeypatch):
     """THE case this module exists for: the allocation dies inside the child,
@@ -92,7 +92,7 @@ def test_a_memory_hog_is_contained_and_reported(monkeypatch):
 
 @pytest.mark.skipif(
     not extract_isolated.isolation_available(),
-    reason="requires POSIX fork (Render/Linux); skipped on the Windows dev box",
+    reason="requires POSIX fork (Linux); skipped on the Windows dev box",
 )
 def test_a_crashing_extractor_is_reported_not_raised():
     out, diag = extract_isolated.run_isolated(
@@ -105,7 +105,7 @@ def test_a_crashing_extractor_is_reported_not_raised():
 
 @pytest.mark.skipif(
     not extract_isolated.isolation_available(),
-    reason="requires POSIX fork (Render/Linux); skipped on the Windows dev box",
+    reason="requires POSIX fork (Linux); skipped on the Windows dev box",
 )
 def test_a_wedged_extractor_times_out_instead_of_pinning_the_worker(monkeypatch):
     monkeypatch.setattr(extract_isolated, "_TIMEOUT_S", 1.0)
