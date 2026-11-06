@@ -154,6 +154,23 @@ jobs:
           PYTHONPATH: .
         run: python scripts/ui_battery_runner.py
 
+      # A3 (ORDERS_06NOV_1920Z S2): live verification of #118's trace
+      # visibility. Counts only, never message bodies; runs even when the
+      # battery is red (a red battery is the norm until 20/20 - the trace
+      # check must still run). Uses the AWS creds configured above.
+      - name: A3 trace-visibility check (live /ecs/the-fork, last 2h)
+        if: always()
+        env:
+          AWS_REGION: us-west-2
+        run: |
+          now=$(date +%s%3N); start=$((now - 7200000))
+          echo "=== (a) rag_retrieval_trace lexical/degraded shapes ==="
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"rag_retrieval_trace"' --query 'events[].message' --output text 2>/dev/null | grep -oE '"lexical":\{[^}]*\},"degraded":(true|false)' | sort | uniq -c || echo "(no trace lines yet)"
+          echo "=== (b) no-chunks WARNING project ids ==="
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"has no chunks at all"' --query 'events[].message' --output text 2>/dev/null | grep -oE 'project=[^ ;]+' | sort -u || echo "(none)"
+          echo "=== (d) legacy 'bm25 leg empty' count (must be 0) ==="
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"bm25 leg empty"' --query 'length(events)' --output text 2>/dev/null || echo "0"
+
       - name: Upload the per-question result
         if: always()
         uses: actions/upload-artifact@v4
