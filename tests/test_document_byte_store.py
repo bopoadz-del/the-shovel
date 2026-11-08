@@ -875,6 +875,34 @@ def test_reupload_unknown_document_is_404(sample, tmp_path, monkeypatch, client,
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("empty_kind", ["doc-id", "path"])
+def test_restore_refuses_a_missing_id_or_path(empty_kind, tmp_path, monkeypatch):
+    """The restore guard is the mechanism: a missing doc id or path must
+    not clobber an existing row with empty values."""
+    root = _root(tmp_path, monkeypatch)
+    pid = _project(USER["user_id"], f"restore-guard-{empty_kind}")
+    doc = store.add_document(
+        pid, f"kept-{empty_kind}.txt", file_path=str(root / f"kept-{empty_kind}.txt"),
+        size=2, metadata={"provenance": "user_upload"},
+    )
+    before = store.get_document(doc["id"])
+
+    if empty_kind == "doc-id":
+        refused = store.restore_document_bytes(
+            "", file_path=before["file_path"], stored_as="local", size=2,
+        )
+    else:
+        refused = store.restore_document_bytes(
+            doc["id"], file_path="", stored_as="local", size=0,
+        )
+    assert refused is None
+
+    after = store.get_document(doc["id"])
+    assert after["file_path"] == before["file_path"]
+    assert after["stored_as"] == before["stored_as"]
+    assert after["size"] == before["size"]
+
+
 @pytest.mark.parametrize("sample", ["ingest-a", "ingest-b"])
 def test_ingest_without_a_file_is_400(sample, client):
     bare = client.post("/ingest", headers=NO_KEY)
