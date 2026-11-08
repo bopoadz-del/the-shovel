@@ -96,7 +96,9 @@ def resolve_auth(args) -> str:
         tried.append("FORK_EMAIL+FORK_PASSWORD")
         cred = _login(base, email, password)
         if cred and _accepts(base, cred):
-            print(f"[auth] logged in as {email}", file=sys.stderr)
+            # Label only. The address is a credential and must not land in
+            # CI logs when a stale key falls through to email login.
+            print("[auth] logged in via FORK_EMAIL", file=sys.stderr)
             return cred
     sys.exit(
         f"::error::No accepted credential (tried: {', '.join(tried) or 'none'}). "

@@ -2,19 +2,26 @@ name: health-watch
 
 # Minimum-viable production alerting, from the repo side.
 #
-# The only scheduled probe is /livez. It is DB-free: it does not open a
-# session, run a statement, or ping a pool. The database bills by
-# compute-time and suspends when idle, so a scheduled dependency check
-# would wake it. curl does not follow redirects, so a 301 is not success,
-# and --proto '=https' refuses an http URL.
+# Scheduled probes:
+#   /livez — DB-free liveness, on the service URL and on the public hostname.
+#   /ready — readiness. The route fails closed with HTTP 503 when a required
+#            dependency is down. Two attempts a minute apart, so one blip
+#            does not page. A 503 in that pair with no 200 fails the job and
+#            uploads a sanitized BLOCKER artifact (fixed labels and status
+#            integers; the response body is discarded).
 #
-# When a probe fails, GitHub notifies the repository owner (default
-# notification setting for failed scheduled workflows on watched repos).
-# Two attempts a minute apart so a single blip doesn't page.
+# The page is the failed job. GitHub emails repository watchers through the
+# existing workflow-failure notification. This file does not call a mail API.
+#
+# curl does not follow redirects, so a 301 is not success, and
+# --proto '=https' refuses an http URL.
+#
+# Rollback: delete the `readiness` job. The two /livez jobs stay. Deleting
+# the job stops the scheduled /ready wake and the 503 page.
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # liveness — DB-free
+    - cron: "*/15 * * * *"   # liveness — DB-free; readiness is the same cadence
   workflow_dispatch:
 
 permissions:
@@ -72,3 +79,43 @@ jobs:
           done
           echo "::error::$PUBLIC_URL/livez returned $code twice. Check DNS for theshovel.ai (apex and www), the custom-domain binding, and certificate validity."
           exit 1
+
+  readiness:
+    # /ready runs a dependency check, so this job is the one that wakes the
+    # database. Two attempts, then the shared decider. Rollback: delete this
+    # job. See the file header.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GET /ready (two attempts; page on 503)
+        run: |
+          url="$BASE_URL/ready"
+          codes=()
+          for attempt in 1 2; do
+            code=$(curl --proto '=https' -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url" || echo "000")
+            code=$(printf '%s' "$code" | tr -cd '0-9')
+            [ -n "$code" ] || code=000
+            echo "attempt $attempt: GET /ready -> $code"
+            codes+=("$code")
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            [ "$attempt" = "1" ] && sleep 60
+          done
+          python3 scripts/ready_probe.py \
+            --status "${codes[0]}" \
+            --status "${codes[1]}" \
+            --artifact "${RUNNER_TEMP}/BLOCKER.txt"
+
+      - name: Upload sanitized BLOCKER
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLOCKER
+          path: ${{ runner.temp }}/BLOCKER.txt
+          if-no-files-found: ignore

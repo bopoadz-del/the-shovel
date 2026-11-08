@@ -1,7 +1,9 @@
 name: smoke-live
 
 # Routine deliverable smoke against the LIVE deployment.
-# Uses repository secrets FORK_API_KEY + FORK_BASE_URL (never printed).
+# Auth is scripts/fork_cli.resolve_auth only: FORK_TOKEN, then FORK_API_KEY,
+# then FORK_EMAIL+FORK_PASSWORD. A rejected key falls through to email login.
+# Credential values are never printed. FORK_BASE_URL selects the target.
 # VERDICT: scripts/smoke.sh exit 0 (all runs succeed + tool path fired).
 
 on:
@@ -55,23 +57,35 @@ jobs:
       - name: Preflight auth (status only, no secrets)
         env:
           FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+          FORK_EMAIL: ${{ secrets.FORK_EMAIL }}
+          FORK_PASSWORD: ${{ secrets.FORK_PASSWORD }}
+          FORK_TOKEN: ${{ secrets.FORK_TOKEN }}
           FORK_BASE_URL: ${{ secrets.FORK_BASE_URL }}
+          PYTHONPATH: .
         run: |
           python - <<'PY'
           import os
+          import sys
+          import time
+          from types import SimpleNamespace
           from urllib.parse import urlparse
           import httpx
+          from scripts.fork_cli import headers, resolve_auth
           base = (os.environ.get("FORK_BASE_URL") or "https://theshovel.ai").rstrip("/")
           parsed = urlparse(base)
           print(f"base_scheme={parsed.scheme}")
           print(f"base_host={parsed.netloc}")
-          key = os.environ.get("FORK_API_KEY") or ""
-          print(f"key_set={bool(key)} key_len={len(key)}")
+          # Which slots are filled, never the values or their lengths.
+          print(
+              "cred_slots="
+              f"token:{bool(os.environ.get('FORK_TOKEN'))},"
+              f"api_key:{bool(os.environ.get('FORK_API_KEY'))},"
+              f"email:{bool(os.environ.get('FORK_EMAIL') and os.environ.get('FORK_PASSWORD'))}"
+          )
           # The single instance answers 502 while it restarts (every deploy,
           # and under load). Wait for it rather than scoring a restart as a
-          # product failure -- then FAIL FAST, with the reason, if the target
-          # or the key is wrong, instead of three opaque "HTTP 404" runs.
-          import sys, time
+          # product failure -- then resolve one credential. A stale
+          # FORK_API_KEY falls through to email login inside resolve_auth.
           deadline = time.time() + 180
           while True:
               try:
@@ -86,9 +100,12 @@ jobs:
           if live != 200:
               sys.exit(f"::error::{parsed.netloc} is not serving (/livez={live}) after 180s. "
                        "Site down or restarting -- not a product regression.")
+          cred = resolve_auth(SimpleNamespace(
+              base=base, token=None, api_key=None, email=None, password=None,
+          ))
           r = httpx.get(
               f"{base}/v1/projects",
-              headers={"Authorization": f"Bearer {key}"} if key else {},
+              headers=headers(cred),
               timeout=30,
           )
           print(f"projects_http={r.status_code}")
@@ -96,8 +113,8 @@ jobs:
               sys.exit("::error::/v1/projects is 404: FORK_BASE_URL points at a host that "
                        "is not this app.")
           if r.status_code in (401, 403):
-              sys.exit("::error::/v1/projects refused the credential: FORK_API_KEY is "
-                       "wrong, revoked or expired.")
+              sys.exit("::error::/v1/projects rejected the resolved credential.")
+          print("auth=accepted")
           PY
 
       - name: Run scripts/smoke.sh against live
