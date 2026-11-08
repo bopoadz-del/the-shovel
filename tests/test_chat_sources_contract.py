@@ -149,8 +149,12 @@ async def test_chat_returns_general_tier(monkeypatch, layer):
     assert result["tier"] == "general"
 
 
+@pytest.mark.parametrize("question", [
+    "What does the spec say?",
+    "Summarise the contract.",
+])
 @pytest.mark.asyncio
-async def test_chat_zero_chunk_project_is_refused(monkeypatch):
+async def test_chat_zero_chunk_project_is_refused(monkeypatch, question):
     agent = _make_agent()
 
     async def _not_ready(pid):
@@ -165,7 +169,7 @@ async def test_chat_zero_chunk_project_is_refused(monkeypatch):
         lambda pid, msg: False,
     )
 
-    result = await agent.chat("What does the spec say?", project_id="proj_a")
+    result = await agent.chat(question, project_id="proj_a")
 
     assert result["status"] == "success"
     assert "no indexed documents" in result["answer"]
