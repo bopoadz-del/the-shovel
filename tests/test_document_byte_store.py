@@ -714,6 +714,7 @@ def test_changed_modules_stay_referenced(sample):
     import app.core.projects
     import app.main
     import app.routers.admin
+    import app.routers.drive
     import app.routers.exports
     import app.routers.projects
     import app.routers.upload
@@ -727,6 +728,7 @@ def test_changed_modules_stay_referenced(sample):
     assert callable(app.main._validate_startup_env)
     assert callable(app.routers.projects.restore_document_bytes)
     assert callable(app.routers.upload._store_upload)
+    assert callable(app.routers.drive.drive_import)
     assert callable(app.routers.exports._persist_and_index)
     assert callable(app.worker.ingest_worker.ingest_document)
     assert callable(app.worker.run_worker.main)

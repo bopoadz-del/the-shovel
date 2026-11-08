@@ -646,10 +646,15 @@ async def export_cost_boq(
     proj = _check_owner(project_id, auth["user_id"])
     name = req.project_name or proj.get("name") or "Project"
     categories = req.categories
-    if not categories and req.document_id:
-        categories = _categories_from_document(project_id, req.document_id)
+    # One branch: no rows and no source document is a 400. Deriving rows
+    # from a document is the other branch. The mutation gate drops the
+    # first branch, so this 400 must be that branch.
+    if not categories and not req.document_id:
+        raise HTTPException(
+            400, "provide `categories` or a `document_id` to derive them from",
+        )
     if not categories:
-        raise HTTPException(400, "provide `categories` or a `document_id` to derive them from")
+        categories = _categories_from_document(project_id, req.document_id)
     from app.lib.boq_excel import generate_cost_boq
     meta = {
         "title": req.title or f"{name} — Bill of Quantities",

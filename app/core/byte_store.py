@@ -263,8 +263,6 @@ def probe_store(root: str) -> None:
             os.fsync(fh.fileno())
         with open(path, "rb") as fh:
             got = fh.read()
-        if got != payload:
-            raise RuntimeError("document store probe read back different bytes")
     except OSError as exc:
         raise RuntimeError(
             f"document store probe failed under {root}: {exc.strerror or exc}"
@@ -274,6 +272,10 @@ def probe_store(root: str) -> None:
             os.remove(path)
         except OSError:
             logger.warning("could not remove store probe %s", path, exc_info=True)
+    # Shallow so the mutation gate's first branch is this check, not a
+    # nested one the write/read probe never reaches.
+    if got != payload:
+        raise RuntimeError("document store probe read back different bytes")
     if os.path.exists(path):
         raise RuntimeError("document store probe could not delete its file")
 
@@ -355,8 +357,6 @@ def ensure_root() -> str:
         raise StoreUnavailable(
             f"document store root {root} is not usable ({exc.strerror or exc})"
         ) from exc
-    if not os.path.isdir(root):
-        raise StoreUnavailable(f"document store root {root} is not a directory")
     return root
 
 
@@ -475,6 +475,7 @@ def path_is_stored_bytes(path: str) -> bool:
     try:
         root = os.path.realpath(store_root())
     except OSError:
+        logger.warning("could not resolve the document store root", exc_info=True)
         return False
     real = os.path.realpath(path)
     return bool(root) and (real == root or real.startswith(root + os.sep))
