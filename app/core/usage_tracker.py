@@ -1,20 +1,16 @@
-"""LLM usage + soft-cap tracker.
+"""LLM usage + daily cost guard.
 
-Records every LLM round-trip (`prompt_tokens`, `completion_tokens`,
-estimated cost) to the unified The Fork database and lets the runtime block
-calls once a per-user daily budget is exceeded.
+Records every LLM round-trip (tokens and an estimated cost) and answers
+whether today's account spend has met ``USAGE_DAILY_CAP_USD``.
 
-Wired in two places:
+The pre-call check lives with the callers that already invoke
+``is_over_cap``. This module prices the call and applies the account-wide
+ceiling. It does not itself open a provider connection.
 
-* ``app/agents/runtime.py::_call_llm`` — records every response's
-  ``usage`` field and short-circuits when ``USAGE_DAILY_CAP_USD`` is
-  set and the caller is over the cap.
-* ``app/routers/usage.py`` — read endpoints for the UI: today, last 7
-  days, per-agent + per-provider breakdown.
-
-Cost model is a hardcoded per-provider+model rate table. Free-tier Groq
-models are recorded at $0 — total_tokens still tracked so we can warn
-before hitting Groq's daily TPD cap.
+An explicit ``0`` rate is free. A provider/model pair that is not in the
+pricing file is unknown: it is billed at the configured fallback, never at
+``0``, and the provider and model names are logged once. A missing fallback
+makes ``is_over_cap`` return True so a capped caller refuses the call.
 
 SQLAlchemy-backed via app.core.db — unified The Fork schema.
 """
@@ -79,49 +75,282 @@ def init_db() -> None:
         _initialized_for_url = url
 
 
-# Per-provider pricing per 1M tokens loaded from config/llm_pricing.json
-# at first use. Operator-editable; missing models / providers cost $0
-# (tokens still recorded so daily TPD usage stays visible).
+# USD per 1M tokens, loaded from config/llm_pricing.json at first use.
+# An explicit 0 is free. An absent provider/model uses ``fallback`` and is
+# logged once. It is never silently priced at 0.
 _PRICING_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "llm_pricing.json")
 _PRICING_OVERRIDE_ENV = "LLM_PRICING_FILE"
-_PRICING_CACHE: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None
-_PRICING_MTIME: float = 0.0
+_DOC_CACHE: Optional[Dict[str, Any]] = None
+_DOC_MTIME: float = 0.0
+_PRICE_KEYS = ("prompt", "completion", "cache_hit")
+_CONDITION_KEYS = {"min_prompt_tokens", "utc_start", "utc_end", "utc_days"}
+_UNKNOWN_LOGGED: set[tuple[str, str]] = set()
+_ALERTED_DAYS: set[str] = set()
+_ALERT_FRACTION = 0.8
 
 
-def _load_pricing() -> Dict[str, Dict[str, Dict[str, float]]]:
-    """Reload the pricing table when the on-disk JSON has changed. The
-    operator can edit prices without a redeploy: next `record()` call
-    picks up the new file."""
-    global _PRICING_CACHE, _PRICING_MTIME
+def _pricing_document() -> Dict[str, Any]:
+    """Reload the pricing document when the on-disk JSON changes."""
+    global _DOC_CACHE, _DOC_MTIME
     import json
     path = os.getenv(_PRICING_OVERRIDE_ENV) or _PRICING_PATH
     try:
         mtime = os.path.getmtime(path)
     except OSError:
-        logger.warning("LLM pricing file missing or unreadable at %s", path, exc_info=True)
+        logger.warning("LLM pricing file missing or unreadable at %s", path)
         return {}
-    if _PRICING_CACHE is not None and mtime == _PRICING_MTIME:
-        return _PRICING_CACHE
+    if _DOC_CACHE is not None and mtime == _DOC_MTIME:
+        return _DOC_CACHE
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        _PRICING_CACHE = data.get("providers", {}) if isinstance(data, dict) else {}
-        _PRICING_MTIME = mtime
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
     except (OSError, ValueError):
-        _PRICING_CACHE = _PRICING_CACHE or {}
-    return _PRICING_CACHE
+        logger.warning("LLM pricing file could not be parsed at %s", path)
+        return _DOC_CACHE if isinstance(_DOC_CACHE, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    _DOC_CACHE = data
+    _DOC_MTIME = mtime
+    return _DOC_CACHE
 
 
-def _estimate_cost(provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = _load_pricing()
-    rates = pricing.get(provider, {}).get(model)
-    if not rates:
-        return 0.0
-    return round(
-        (prompt_tokens / 1_000_000) * rates.get("prompt", 0.0)
-        + (completion_tokens / 1_000_000) * rates.get("completion", 0.0),
-        6,
+def _load_pricing() -> Dict[str, Dict[str, Dict[str, float]]]:
+    """Provider map from the pricing document. Kept for existing readers."""
+    providers = _pricing_document().get("providers", {})
+    return providers if isinstance(providers, dict) else {}
+
+
+def _number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        negative = text.startswith("-")
+        body = text.removeprefix("-").removeprefix("+")
+        if body.count(".") > 1:
+            return None
+        digits = body.replace(".", "", 1)
+        if digits.isdigit():
+            return -float(body) if negative else float(body)
+    return None
+
+
+def _clock_hhmm(when: datetime) -> int:
+    return when.hour * 100 + when.minute
+
+
+def _window_matches(when: datetime, start: Any, end: Any) -> bool:
+    """Inclusive start, exclusive end, as an HHMM clock. A later end that is
+    not after the start wraps past midnight. An end of 0 means end of day."""
+    start_n = _number(start)
+    end_n = _number(end)
+    if start_n is None or end_n is None:
+        return False
+    start_i = int(start_n)
+    end_i = int(end_n)
+    tick = _clock_hhmm(when)
+    if end_i == 0:
+        return tick >= start_i
+    if end_i > start_i:
+        return start_i <= tick < end_i
+    return tick >= start_i or tick < end_i
+
+
+def _override_applies(entry: Any, when: datetime, prompt_tokens: int) -> bool:
+    """True when every recognised condition matches. An unknown condition
+    field skips the entry so a newer tariff cannot be applied by guess."""
+    if not isinstance(entry, dict):
+        return False
+    for key in entry:
+        if key in _PRICE_KEYS or key == "cache_miss":
+            continue
+        if key not in _CONDITION_KEYS:
+            return False
+    if "min_prompt_tokens" in entry:
+        threshold = _number(entry.get("min_prompt_tokens"))
+        if threshold is None or prompt_tokens <= threshold:
+            return False
+    days = entry.get("utc_days")
+    if days is not None:
+        if not isinstance(days, list) or when.strftime("%A").lower() not in days:
+            return False
+    if "utc_start" in entry or "utc_end" in entry:
+        if not _window_matches(when, entry.get("utc_start", 0), entry.get("utc_end", 0)):
+            return False
+    return True
+
+
+def _resolved_rates(entry: Any, when: datetime, prompt_tokens: int) -> Optional[Dict[str, float]]:
+    if not isinstance(entry, dict):
+        return None
+    prompt = _number(entry.get("prompt"))
+    completion = _number(entry.get("completion"))
+    if prompt is None or completion is None:
+        return None
+    cache_hit = _number(entry.get("cache_hit"))
+    rates = {
+        "prompt": prompt,
+        "completion": completion,
+        "cache_hit": prompt if cache_hit is None else cache_hit,
+    }
+    overrides = entry.get("overrides") or []
+    if isinstance(overrides, list):
+        for override in overrides:
+            if not _override_applies(override, when, prompt_tokens):
+                continue
+            for key in _PRICE_KEYS:
+                parsed = _number(override.get(key)) if isinstance(override, dict) else None
+                if parsed is not None:
+                    rates[key] = parsed
+    rates["free"] = (
+        rates["prompt"] == 0.0
+        and rates["completion"] == 0.0
+        and rates["cache_hit"] == 0.0
     )
+    return rates
+
+
+def _log_unknown_model(provider: str, model: str) -> None:
+    key = (provider or "", model or "")
+    with _LOCK:
+        if key in _UNKNOWN_LOGGED:
+            return
+        _UNKNOWN_LOGGED.add(key)
+    logger.warning(
+        "unpriced model; using configured fallback rate provider=%s model=%s",
+        key[0],
+        key[1],
+    )
+
+
+def _split_input(usage: Optional[Dict[str, Any]], prompt_tokens: int) -> tuple[int, int]:
+    """Cache-hit tokens and cache-miss tokens. Without a split, the whole
+    prompt is a miss (the higher of the two input rates when they differ)."""
+    prompt = max(int(prompt_tokens or 0), 0)
+    if not isinstance(usage, dict):
+        return 0, prompt
+    hit = usage.get("prompt_cache_hit_tokens", usage.get("cache_hit_tokens"))
+    miss = usage.get("prompt_cache_miss_tokens", usage.get("cache_miss_tokens"))
+    hit_n = _number(hit)
+    miss_n = _number(miss)
+    if hit_n is None and miss_n is None:
+        return 0, prompt
+    hit_i = max(int(hit_n or 0), 0)
+    if miss_n is None:
+        return hit_i, max(prompt - hit_i, 0)
+    return hit_i, max(int(miss_n), 0)
+
+
+def price_call(
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    usage: Optional[Dict[str, Any]] = None,
+    when: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Price one call.
+
+    ``kind`` is ``free`` (explicit zero rates), ``priced`` (listed non-zero
+    rates), ``fallback`` (unlisted model, configured conservative rates),
+    or ``unpriced`` (no listing and no configured fallback). ``unpriced``
+    has ``cost_usd`` None so it is not stored as zero.
+    """
+    moment = when or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    prompt_tokens = max(int(prompt_tokens or 0), 0)
+    completion_tokens = max(int(completion_tokens or 0), 0)
+    document = _pricing_document()
+    providers = document.get("providers") if isinstance(document, dict) else None
+    entry = None
+    if isinstance(providers, dict) and isinstance(providers.get(provider), dict):
+        entry = providers[provider].get(model)
+    rates = _resolved_rates(entry, moment, prompt_tokens) if entry is not None else None
+    kind = "priced"
+    if rates is None:
+        fallback = document.get("fallback") if isinstance(document, dict) else None
+        rates = _resolved_rates(fallback, moment, prompt_tokens)
+        kind = "fallback"
+        _log_unknown_model(provider, model)
+    if rates is None:
+        return {"kind": "unpriced", "cost_usd": None}
+    if rates["free"] and kind != "fallback":
+        kind = "free"
+    hit, miss = _split_input(usage, prompt_tokens)
+    cost = (
+        (hit / 1_000_000) * rates["cache_hit"]
+        + (miss / 1_000_000) * rates["prompt"]
+        + (completion_tokens / 1_000_000) * rates["completion"]
+    )
+    return {"kind": kind, "cost_usd": round(cost, 6)}
+
+
+def _estimate_cost(
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    usage: Optional[Dict[str, Any]] = None,
+    when: Optional[datetime] = None,
+) -> Optional[float]:
+    return price_call(
+        provider, model, prompt_tokens, completion_tokens, usage=usage, when=when
+    )["cost_usd"]
+
+
+def _daily_cap() -> float:
+    raw = os.getenv("USAGE_DAILY_CAP_USD")
+    if raw is None or raw.strip() == "":
+        return 0.0
+    parsed = _number(raw)
+    if parsed is None or parsed <= 0:
+        return 0.0
+    return parsed
+
+
+def threshold_state(cost_usd: float, cap_usd: float) -> str:
+    """``disabled``, ``ok``, ``alert`` (80% of the cap), or ``cap``."""
+    if cap_usd is None or cap_usd <= 0:
+        return "disabled"
+    if cost_usd >= cap_usd:
+        return "cap"
+    if cost_usd >= cap_usd * _ALERT_FRACTION:
+        return "alert"
+    return "ok"
+
+
+def note_daily_threshold(
+    cost_usd: float,
+    cap_usd: float,
+    *,
+    day: Optional[str] = None,
+) -> str:
+    """Log the 80% line once per UTC day. The cap itself is not a log line
+    here; callers refuse the call from ``is_over_cap``."""
+    state = threshold_state(cost_usd, cap_usd)
+    if state != "alert":
+        return state
+    stamp = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with _LOCK:
+        fresh = stamp not in _ALERTED_DAYS
+        if fresh:
+            _ALERTED_DAYS.add(stamp)
+    if fresh:
+        logger.warning(
+            "USAGE_DAILY_CAP_USD 80%% line reached for utc day %s",
+            stamp,
+        )
+    return state
+
+
+def pricing_fail_closed() -> bool:
+    """True when an unknown model would be billed at the configured fallback."""
+    document = _pricing_document()
+    fallback = document.get("fallback") if isinstance(document, dict) else None
+    return _resolved_rates(fallback, datetime.now(timezone.utc), 0) is not None
 
 
 def record(
@@ -144,7 +373,7 @@ def record(
         pt: int | None = int(usage.get("prompt_tokens") or 0)
         ct: int | None = int(usage.get("completion_tokens") or 0)
         tt: int | None = int(usage.get("total_tokens") or (pt + ct))
-        cost: float | None = _estimate_cost(provider, model, pt, ct)
+        cost = _estimate_cost(provider, model, pt, ct, usage=usage)
     else:
         pt = ct = tt = None
         cost = None
@@ -166,6 +395,9 @@ def record(
                 )
             )
             session.commit()
+    cap = _daily_cap()
+    if cap > 0:
+        note_daily_threshold(daily_total(None)["cost_usd"], cap)
 
 
 def daily_total(user_id: Optional[str], day: Optional[str] = None) -> Dict[str, float]:
@@ -188,11 +420,30 @@ def daily_total(user_id: Optional[str], day: Optional[str] = None) -> Dict[str, 
 
 
 def is_over_cap(user_id: Optional[str], cap_usd: float) -> bool:
-    """True iff today's spend for ``user_id`` already meets or exceeds
-    ``cap_usd``. Caller is expected to short-circuit upstream."""
+    """True when today's account spend, or this user's spend, meets ``cap_usd``.
+
+    The ceiling is account-wide: one user's rows are part of
+    ``daily_total(None)``. The per-user total is also checked so a caller
+    that passes a user still refuses when that user alone has reached the
+    cap. A non-positive cap disables the check. When the pricing file has
+    no usable fallback, the result is True so a capped caller fails closed
+    instead of treating unknown models as free.
+
+    A database error still propagates. Callers that catch it and continue
+    are outside this module.
+    """
     if cap_usd is None or cap_usd <= 0:
         return False
-    return daily_total(user_id)["cost_usd"] >= cap_usd
+    if not pricing_fail_closed():
+        logger.warning("usage cap fail-closed: pricing fallback is not configured")
+        return True
+    account = daily_total(None)["cost_usd"]
+    note_daily_threshold(account, float(cap_usd))
+    if account >= cap_usd:
+        return True
+    if user_id is not None and daily_total(user_id)["cost_usd"] >= cap_usd:
+        return True
+    return False
 
 
 def history(user_id: Optional[str], days: int = 7) -> List[Dict[str, Any]]:

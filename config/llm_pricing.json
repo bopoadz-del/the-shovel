@@ -1,19 +1,127 @@
 {
-  "_comment": "Per-provider, per-model LLM rates in USD per 1,000,000 tokens. Edit this file to update pricing without a code change. Anything not listed defaults to $0 (cost still 0; tokens still recorded).",
-  "_last_updated": "2026-06-06",
+  "_comment": "USD per 1,000,000 tokens. An explicit 0 is free. A provider/model pair that is absent is unknown and is billed at fallback, never at 0. Peak windows below are UTC clock times; Chinese public holidays are not subtracted, so a holiday inside a weekday window is priced at the peak rate (higher, not lower).",
+  "_last_updated": "2026-11-08",
+  "_sources": [
+    "https://api-docs.deepseek.com/quick_start/pricing/",
+    "https://api-docs.deepseek.com/guides/kv_cache",
+    "https://openrouter.ai/api/v1/model/openrouter/free",
+    "https://openrouter.ai/docs/guides/overview/models"
+  ],
+  "fallback": {
+    "_comment": "Highest peak cache-miss input and peak output published for deepseek-v4-pro. Used only when the provider/model pair is not listed. This is not that model's invoice and not a rate for any other vendor.",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "prompt": 1.32,
+    "completion": 3.96,
+    "cache_hit": 1.32
+  },
   "providers": {
-    "kimi": {
-      "kimi-k2.6": {"prompt": 0.0, "completion": 0.0}
+    "deepseek": {
+      "_note": "Off-peak rates are the base. Peak is 01:00-04:00 and 06:00-10:00 UTC, Monday-Friday. deepseek-chat and deepseek-reasoner are not listed: the pricing page does not give them rates or say they bill as flash. deepseek-v4-flash and deepseek-v4-flash-vision-exp are listed because that page says those legacy names are still accepted and billed at the Flash price.",
+      "deepseek-flash": {
+        "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "prompt": 0.15,
+        "completion": 0.6,
+        "cache_hit": 0.003,
+        "overrides": [
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 100,
+            "utc_end": 400,
+            "prompt": 0.3,
+            "completion": 1.2,
+            "cache_hit": 0.006
+          },
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 600,
+            "utc_end": 1000,
+            "prompt": 0.3,
+            "completion": 1.2,
+            "cache_hit": 0.006
+          }
+        ]
+      },
+      "deepseek-v4-flash": {
+        "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "prompt": 0.15,
+        "completion": 0.6,
+        "cache_hit": 0.003,
+        "overrides": [
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 100,
+            "utc_end": 400,
+            "prompt": 0.3,
+            "completion": 1.2,
+            "cache_hit": 0.006
+          },
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 600,
+            "utc_end": 1000,
+            "prompt": 0.3,
+            "completion": 1.2,
+            "cache_hit": 0.006
+          }
+        ]
+      },
+      "deepseek-v4-flash-vision-exp": {
+        "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "prompt": 0.15,
+        "completion": 0.6,
+        "cache_hit": 0.003,
+        "overrides": [
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 100,
+            "utc_end": 400,
+            "prompt": 0.3,
+            "completion": 1.2,
+            "cache_hit": 0.006
+          },
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 600,
+            "utc_end": 1000,
+            "prompt": 0.3,
+            "completion": 1.2,
+            "cache_hit": 0.006
+          }
+        ]
+      },
+      "deepseek-v4-pro": {
+        "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "prompt": 0.66,
+        "completion": 1.98,
+        "cache_hit": 0.022,
+        "overrides": [
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 100,
+            "utc_end": 400,
+            "prompt": 1.32,
+            "completion": 3.96,
+            "cache_hit": 0.044
+          },
+          {
+            "utc_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "utc_start": 600,
+            "utc_end": 1000,
+            "prompt": 1.32,
+            "completion": 3.96,
+            "cache_hit": 0.044
+          }
+        ]
+      }
     },
-    "groq": {
-      "_note": "Groq free tier prices at $0; tokens still tracked so the operator can see TPD usage. Update when moving to a paid tier.",
-      "llama-3.3-70b-versatile":                       {"prompt": 0.0, "completion": 0.0},
-      "llama-3.1-8b-instant":                           {"prompt": 0.0, "completion": 0.0},
-      "meta-llama/llama-4-scout-17b-16e-instruct":      {"prompt": 0.0, "completion": 0.0},
-      "openai/gpt-oss-20b":                              {"prompt": 0.0, "completion": 0.0},
-      "openai/gpt-oss-120b":                             {"prompt": 0.0, "completion": 0.0},
-      "qwen/qwen3-32b":                                  {"prompt": 0.0, "completion": 0.0},
-      "groq/compound":                                   {"prompt": 0.0, "completion": 0.0}
+    "openrouter": {
+      "openrouter/free": {
+        "source": "https://openrouter.ai/api/v1/model/openrouter/free",
+        "billing": "free",
+        "prompt": 0,
+        "completion": 0,
+        "cache_hit": 0
+      }
     }
   }
 }
