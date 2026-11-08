@@ -120,8 +120,12 @@ def _validate_startup_env() -> None:
     must be loaded from THIS repo (CEREBRUM_VIRGIN=false and
     CEREBRUM_DOMAIN_KITS=construction) — do not pull kits from the store.
     """
+    from app.core import byte_store
+
     env = os.getenv("ENV", os.getenv("ENVIRONMENT", "")).strip().lower()
     if env not in ("prod", "production"):
+        # Still rejects an efs backend whose mount is not real. local is a no-op.
+        byte_store.enforce_startup_guard()
         return
     if not os.getenv("SECRET_KEY"):
         raise RuntimeError(
@@ -161,6 +165,10 @@ def _validate_startup_env() -> None:
             "from BLOCK_REGISTRY. Pin CEREBRUM_DOMAIN_KITS=construction and "
             "ensure this repo's construction container loaded."
         )
+    # After the other production checks, so a missing secret still fails
+    # first. The storage guard is off until REQUIRE_DURABLE_DOCUMENT_STORE
+    # is set — the live task has no durable volume yet.
+    byte_store.enforce_startup_guard()
 
 
 def _warn_when_the_llm_has_no_fallback() -> None:

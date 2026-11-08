@@ -8,7 +8,7 @@ from typing import Any
 
 from arq.connections import RedisSettings
 
-from app.core import doc_index
+from app.core import byte_store, doc_index
 from app.core.db import SessionLocal
 from app.core.models import IngestionJob
 
@@ -41,6 +41,23 @@ async def ingest_document(
         result = await loop.run_in_executor(
             None, doc_index.maybe_eager_index, project_id, document_id
         )
+        # A confirmed missing file is terminal: retrying will not recreate
+        # the bytes. The job is failed and not completed. Any other
+        # non-raising result, including an extraction error, still completes
+        # — that result is not a lost file.
+        if byte_store.is_terminal_bytes_missing(result):
+            if job is not None:
+                detail = ""
+                if isinstance(result, dict):
+                    detail = str(
+                        result.get("banner") or result.get("detail") or byte_store.MISSING_LABEL
+                    )
+                job.status = "failed"
+                job.error = (detail or byte_store.MISSING_LABEL)[:500]
+                job.chunks = 0
+                db.commit()
+            return
+
         chunks = len(result.get("chunks", [])) if isinstance(result, dict) else 0
 
         if job is not None:

@@ -131,6 +131,37 @@ def _drive_files_factory():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("file_id", ["sc-a", "sc-b"])
+async def test_a_shortcut_without_a_target_is_skipped(isolated_data_dir, monkeypatch, file_id):
+    from app.routers import drive as drive_router
+    from app.core import projects as projects_mod
+
+    tree = {
+        "root": [{
+            "id": file_id,
+            "name": "alias.txt",
+            "mimeType": "application/vnd.google-apps.shortcut",
+        }],
+    }
+    files = {file_id: ("application/vnd.google-apps.shortcut", b"")}
+    fake_client = _FakeDriveClient(tree, files)
+    monkeypatch.setattr(drive_router.httpx, "AsyncClient", lambda *a, **kw: fake_client)
+    monkeypatch.setattr(drive_router.doc_index, "maybe_eager_index", lambda *a, **kw: None)
+    proj = projects_mod.create_project(name=f"Shortcut {file_id}", user_id="system")
+    result = await drive_router._walk_drive_folder_into_project(
+        project_id=proj["id"],
+        user_id="system",
+        access_token=STUB_TOKEN_07,
+        folder_id="root",
+        max_files=10,
+        max_depth=2,
+        role="other",
+    )
+    assert result["imported"] == []
+    assert any("shortcut has no target" in item.get("reason", "") for item in result["skipped"])
+
+
+@pytest.mark.asyncio
 async def test_walk_drive_folder_into_project_recurses(isolated_data_dir, monkeypatch):
     from app.routers import drive as drive_router
     from app.core import projects as projects_mod

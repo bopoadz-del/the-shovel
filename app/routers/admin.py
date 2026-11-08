@@ -743,7 +743,7 @@ async def admin_drive_ingest_proof(
     import os
 
     from app.core import doc_index as _doc_index
-    from app.core import file_crypto, gdrive_service, projects as _projects
+    from app.core import gdrive_service, projects as _projects
 
     if not _projects.get_project(req.project_id):
         return {"ok": False, "error": f"project {req.project_id} not found"}
@@ -760,11 +760,12 @@ async def admin_drive_ingest_proof(
         return {"ok": False, "error": dl_err or "download failed"}
 
     original_name = target.get("name") or file_id
-    data_dir = os.getenv("DATA_DIR", "data")
+    from app.core import byte_store
+
     stored_as = f"{hashlib.sha256(file_id.encode()).hexdigest()[:8]}_{original_name}"
     stored_as = os.path.basename(stored_as.replace("\\", "/"))
-    filepath = os.path.join(data_dir, stored_as)
-    file_crypto.write_document(filepath, blob)
+    filepath = byte_store.allocate_path(stored_as)
+    byte_store.write_bytes(filepath, blob)
 
     try:
         doc = _projects.add_document(
@@ -2401,13 +2402,13 @@ async def admin_add_knowledge_document(
             # concurrently, or get_project hides it. Either way it is there.
             logger.info("general-knowledge project %s already exists", gk)
 
-    data_dir = os.getenv("DATA_DIR", "./data")
-    os.makedirs(data_dir, exist_ok=True)
+    from app.core import byte_store
+
     stored_as = f"{str(uuid.uuid4())[:8]}_{name}"
-    filepath = os.path.join(data_dir, stored_as)
+    filepath = byte_store.allocate_path(stored_as)
     hasher = hashlib.sha256()
     try:
-        size = file_crypto.write_document_stream(
+        size = byte_store.write_stream(
             filepath, file.file,
             max_bytes=upload_limits.admin_knowledge_max_bytes(),
             hasher=hasher,

@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from app.dependencies import require_user
 from app.core import projects as projects_store
 from app.core import agent_memory
-from app.core import doc_index, file_crypto, privileges
+from app.core import byte_store, doc_index, privileges
 
 router = APIRouter()
 
@@ -136,11 +136,6 @@ def _add_page_footer(doc: Any, base_url: str, sources: list | None = None) -> No
         run = para.add_run(text)
         run.italic = True
         run.font.size = Pt(8)
-
-# Mirror the upload path's storage root so generated workbooks persist next to
-# uploaded documents and feed the same RAG indexer (see app/routers/projects.py).
-DATA_DIR = os.getenv("DATA_DIR", "./data")
-
 
 class ScheduleExportRequest(BaseModel):
     """Inline activity list. Each activity is a dict with at least
@@ -651,10 +646,15 @@ async def export_cost_boq(
     proj = _check_owner(project_id, auth["user_id"])
     name = req.project_name or proj.get("name") or "Project"
     categories = req.categories
-    if not categories and req.document_id:
-        categories = _categories_from_document(project_id, req.document_id)
+    # One branch: no rows and no source document is a 400. Deriving rows
+    # from a document is the other branch. The mutation gate drops the
+    # first branch, so this 400 must be that branch.
+    if not categories and not req.document_id:
+        raise HTTPException(
+            400, "provide `categories` or a `document_id` to derive them from",
+        )
     if not categories:
-        raise HTTPException(400, "provide `categories` or a `document_id` to derive them from")
+        categories = _categories_from_document(project_id, req.document_id)
     from app.lib.boq_excel import generate_cost_boq
     meta = {
         "title": req.title or f"{name} — Bill of Quantities",
@@ -681,8 +681,8 @@ async def export_cost_boq(
             original_name = f"{name} - Cost BOQ (generated).xlsx"
             file_id = str(uuid.uuid4())[:8]
             stored_as = f"{file_id}_{original_name}"
-            stored_path = os.path.join(DATA_DIR, stored_as)
-            file_crypto.write_document(stored_path, raw_bytes)
+            stored_path = byte_store.allocate_path(stored_as)
+            byte_store.write_bytes(stored_path, raw_bytes)
             doc = projects_store.add_document(
                 project_id, original_name, stored_as, stored_path,
                 len(raw_bytes), role=None,
@@ -713,8 +713,8 @@ def _persist_and_index(
         original_name = f"{name} - Priced BOQ (ESTIMATED from rate-card).xlsx"
         file_id = str(uuid.uuid4())[:8]
         stored_as = f"{file_id}_{original_name}"
-        stored_path = os.path.join(DATA_DIR, stored_as)
-        file_crypto.write_document(stored_path, raw_bytes)
+        stored_path = byte_store.allocate_path(stored_as)
+        byte_store.write_bytes(stored_path, raw_bytes)
         doc = projects_store.add_document(
             project_id, original_name, stored_as, stored_path,
             len(raw_bytes), role=None,

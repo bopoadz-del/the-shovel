@@ -56,7 +56,9 @@ interface DocumentRecord {
   /**
    * Why a stored file is absent from project search, taken from the row.
    * Absent when the file is searchable. The panel shows this and does not
-   * invent an extraction failure.
+   * invent an extraction failure. ``bytes_missing`` is a lost file, which
+   * is separate from an extraction failure and is shown even when older
+   * chunks are still stored.
    */
   panel_status?: { label: string; detail: string; status?: string } | null
 }
@@ -322,6 +324,7 @@ interface DocumentsPanelProps {
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
   onDocumentRemoved: (docId: string) => void
+  onDocumentReplaced: (doc: DocumentRecord) => void
 }
 
 // Cap how many document rows we render at once. The master-corpus alias backs
@@ -335,12 +338,16 @@ function DocumentsPanel({
   documents,
   onDocumentAdded,
   onDocumentRemoved,
+  onDocumentReplaced,
 }: DocumentsPanelProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [replacingId, setReplacingId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const replaceInputRef = useRef<HTMLInputElement>(null)
+  const replaceTarget = useRef<string | null>(null)
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -367,6 +374,34 @@ function DocumentsPanel({
       setUploading(false)
       // Reset the input so the same file can be re-uploaded if needed
       if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  function beginReplace(docId: string) {
+    replaceTarget.current = docId
+    replaceInputRef.current?.click()
+  }
+
+  async function handleReplaceChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    const docId = replaceTarget.current
+    e.target.value = ''
+    if (!file || !docId) return
+    setReplacingId(docId)
+    setUploadError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await apiPostForm<{ document: DocumentRecord }>(
+        `/v1/projects/${projectId}/documents/${docId}/bytes`,
+        form,
+      )
+      onDocumentReplaced(resp.document)
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Re-upload failed.')
+    } finally {
+      setReplacingId(null)
+      replaceTarget.current = null
     }
   }
 
@@ -436,6 +471,16 @@ function DocumentsPanel({
                       {formatRelativeDate(doc.uploaded_at)}
                     </span>
                   )}
+                  {indexNote?.status === 'bytes_missing' && (
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => beginReplace(doc.id)}
+                      disabled={replacingId === doc.id}
+                    >
+                      {replacingId === doc.id ? 'Re-uploading…' : 'Re-upload'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="doc-row__delete"
@@ -458,6 +503,13 @@ function DocumentsPanel({
       )}
 
       <div className="docs-upload">
+        <input
+          ref={replaceInputRef}
+          type="file"
+          className="docs-upload__input"
+          onChange={(e) => void handleReplaceChange(e)}
+          aria-label="Choose file to restore"
+        />
         <input
           ref={fileInputRef}
           type="file"
@@ -965,6 +1017,10 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // PR #104: DocumentsPanel is back in the LeftPanel — handler used again.
   const handleDocumentRemoved = useCallback((docId: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== docId))
+  }, [])
+
+  const handleDocumentReplaced = useCallback((doc: DocumentRecord) => {
+    setDocuments((prev) => prev.map((row) => (row.id === doc.id ? doc : row)))
   }, [])
 
   const handlePreviewHydrated = useCallback((docId: string, size: number) => {
@@ -1542,6 +1598,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               documents={documents}
               onDocumentAdded={handleDocumentAdded}
               onDocumentRemoved={handleDocumentRemoved}
+              onDocumentReplaced={handleDocumentReplaced}
             />
           }
         />
