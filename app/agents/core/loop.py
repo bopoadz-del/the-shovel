@@ -116,7 +116,7 @@ async def _chat_impl(
         MAX_TOOL_ITERATIONS, _EMPTY_RESPONSE_FALLBACK, _EMPTY_ROUTER_NUDGE, _LOG,
         _SEARCH_PREAMBLE_RETRY_NUDGE, _TOOL_ERROR_NUDGE_CAP, _TOOL_FORMAT_FALLBACK,
         _TOOL_FORMAT_RETRY_NUDGE, _UNINDEXED_PROJECT_MESSAGE, _apply_hat_activation,
-        _apply_rag_context, _build_capability_answer, _build_exports_from_audit,
+        _answer_tier, _apply_rag_context, _build_capability_answer, _build_exports_from_audit,
         _build_missing_reference_answer, _build_sources_from_audit,
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
@@ -631,13 +631,15 @@ async def _chat_impl(
                     # User turn was already persisted up front.
                     (await _off_loop(agent_memory.append_message, conversation_id, "assistant", final_text))
                 await _emit("final", {"answer": final_text})
+                _src = await _off_loop(_build_sources_from_audit, _rag_audit, final_text, tool_calls_made)
                 return {
                     "status": "success",
                     "answer": final_text,
                     "tool_calls": tool_calls_made,
                     "iterations": iteration + 1,
                     "messages": messages,
-                    "sources": (await _off_loop(_build_sources_from_audit, _rag_audit, final_text, tool_calls_made)),
+                    "sources": _src,
+                    "tier": _answer_tier(_src),
                     "provenance": (_rag_audit or {}).get("provenance") or [],
                     "exports": (await _off_loop(_build_exports_from_audit, _rag_audit, final_text, tool_calls_made, conversation_id=conversation_id)),
                 }
@@ -761,6 +763,9 @@ async def _chat_impl(
         from app.core import agent_memory
         # User turn was already persisted up front.
         (await _off_loop(agent_memory.append_message, conversation_id, "assistant", final_text))
+    _final_sources = await _off_loop(
+        _build_sources_from_audit, _rag_audit, final_text, tool_calls_made,
+    )
     return {
         "status": "success",
         "answer": final_text,
@@ -768,7 +773,8 @@ async def _chat_impl(
         "iterations": MAX_TOOL_ITERATIONS,
         "messages": messages,
         "forced_final": True,
-        "sources": (await _off_loop(_build_sources_from_audit, _rag_audit, final_text, tool_calls_made)),
+        "sources": _final_sources,
+        "tier": _answer_tier(_final_sources),
         "provenance": (_rag_audit or {}).get("provenance") or [],
         "exports": (await _off_loop(_build_exports_from_audit, _rag_audit, final_text, tool_calls_made, conversation_id=conversation_id)),
     }
