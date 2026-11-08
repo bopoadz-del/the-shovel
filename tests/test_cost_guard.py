@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import delete
 
 from app.core import usage_tracker
+from app.core.usage_tracker import price_call
 from app.core.db import SessionLocal
 from app.core.models import UsageRun
 
@@ -196,6 +197,72 @@ def test_eighty_percent_line_is_logged_once_per_utc_day(caplog, day):
     assert lines == [f"USAGE_DAILY_CAP_USD 80% line reached for utc day {day}"]
 
 
+@pytest.mark.parametrize(
+    "provider,model",
+    [("deepseek", "deepseek-flash"), ("openrouter", "openrouter/free")],
+)
+def test_provider_map_lists_cited_models(provider, model):
+    assert model in usage_tracker._load_pricing()[provider]
+
+
+@pytest.mark.parametrize(
+    "model,kind",
+    [("deepseek-flash", "priced"), ("deepseek-chat", "fallback")],
+)
+def test_estimate_cost_matches_the_quote(model, kind):
+    estimated = usage_tracker._estimate_cost(
+        "deepseek", model, _MILLION, 0, when=_OFFPEAK
+    )
+    quoted = price_call("deepseek", model, _MILLION, 0, when=_OFFPEAK)
+    assert estimated == quoted["cost_usd"]
+    assert quoted["kind"] == kind
+
+
+@pytest.mark.parametrize("value,expected", [(True, None), (2, 2.0)])
+def test_number_rejects_bools_and_keeps_counts(value, expected):
+    assert usage_tracker._number(value) == expected
+
+
+@pytest.mark.parametrize(
+    "start,end,matches",
+    [("nope", 400, False), (100, 400, True)],
+)
+def test_rate_window_rejects_a_non_numeric_bound(start, end, matches):
+    assert usage_tracker._window_matches(_PEAK, start, end) is matches
+
+
+@pytest.mark.parametrize("body", ["[]", "null"])
+def test_non_object_pricing_file_does_not_invent_a_zero(monkeypatch, tmp_path, body):
+    path = tmp_path / "pricing.json"
+    path.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("LLM_PRICING_FILE", str(path))
+    usage_tracker._DOC_CACHE = None
+    usage_tracker._DOC_MTIME = 0.0
+    try:
+        quoted = price_call("deepseek", "deepseek-flash", 100, 1, when=_OFFPEAK)
+    finally:
+        usage_tracker._DOC_CACHE = None
+        usage_tracker._DOC_MTIME = 0.0
+    assert quoted["kind"] == "unpriced"
+    assert quoted["cost_usd"] is None
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+def test_non_positive_cap_does_not_block(usage_db, cap):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _insert("user-a", 99.0, today)
+    assert usage_tracker.is_over_cap("user-a", cap) is False
+
+
+@pytest.mark.parametrize(
+    "cost,cap,state",
+    [(1.0, 10.0, "ok"), (8.0, 10.0, "alert")],
+)
+def test_note_daily_threshold_returns_the_state_without_dropping_ok(cost, cap, state):
+    usage_tracker._ALERTED_DAYS.clear()
+    assert usage_tracker.note_daily_threshold(cost, cap, day="2026-04-01") == state
+
+
 @pytest.mark.parametrize("workers", [2, 4])
 def test_concurrent_records_keep_every_call(usage_db, workers):
     import threading
@@ -219,6 +286,7 @@ def test_concurrent_records_keep_every_call(usage_db, workers):
         thread.join(timeout=10)
         assert not thread.is_alive()
     assert usage_tracker.totals()["calls"] == workers
+    assert usage_tracker.totals()["tokens"] == 15 * workers
     assert usage_tracker.totals()["cost_usd"] == pytest.approx(0.0)
 
 

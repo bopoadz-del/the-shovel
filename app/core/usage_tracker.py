@@ -95,23 +95,14 @@ def _pricing_document() -> Dict[str, Any]:
     import json
     path = os.getenv(_PRICING_OVERRIDE_ENV) or _PRICING_PATH
     try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        logger.warning("LLM pricing file missing or unreadable at %s", path)
-        return {}
-    if _DOC_CACHE is not None and mtime == _DOC_MTIME:
-        return _DOC_CACHE
-    try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError):
-        logger.warning("LLM pricing file could not be parsed at %s", path)
-        return _DOC_CACHE if isinstance(_DOC_CACHE, dict) else {}
+        logger.warning("LLM pricing file missing or unreadable at %s", path)
+        return {}
     if not isinstance(data, dict):
         return {}
-    _DOC_CACHE = data
-    _DOC_MTIME = mtime
-    return _DOC_CACHE
+    return data
 
 
 def _load_pricing() -> Dict[str, Dict[str, Dict[str, float]]]:
@@ -258,6 +249,8 @@ def price_call(
     or ``unpriced`` (no listing and no configured fallback). ``unpriced``
     has ``cost_usd`` None so it is not stored as zero.
     """
+    if prompt_tokens is None and completion_tokens is None and usage is None:
+        return {"kind": "unpriced", "cost_usd": None}
     moment = when or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
