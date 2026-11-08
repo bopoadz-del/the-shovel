@@ -1482,7 +1482,9 @@ def check_text(
 ) -> str:
     """The answer as it may leave: citations resolved to name and page or
     removed, no chunk numbers, ids, dumps, raw tool errors or machinery words."""
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str):
+        return text
+    if not text.strip():
         return text
     try:
         turn = turn if turn is not None else _TURN.get()

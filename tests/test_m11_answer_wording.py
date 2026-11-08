@@ -49,3 +49,11 @@ def test_check_text_guard_returns_unchanged(text):
     # Exercises the isinstance/blank-text guard so a drop_rule mutant that
     # removes it cannot pass unnoticed.
     assert check_text(text) == text
+
+
+@pytest.mark.parametrize("text", [123, b"raw"])
+def test_check_text_non_string_returns_unchanged(text):
+    # Without the isinstance guard, `.strip()` on a non-string raises
+    # AttributeError outside the try, so this kills the drop_rule mutant
+    # that removes the guard.
+    assert check_text(text) == text
