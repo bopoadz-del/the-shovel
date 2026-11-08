@@ -77,7 +77,16 @@ def _chunk_dim() -> int:
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # These tests assert exact corpus counts (dangling_total == 0) after
+    # _wipe_all(). The app's background warm-up runs _seed_knowledge()
+    # (docs/knowledge/*.md) on its own task, and if it lands between
+    # _wipe_all() and the reconcile query it leaves chunks whose parent
+    # document was just deleted -- the order-dependent "19 dangling" CI
+    # failure that reverted #135. Block warm-up so the seed completes inside
+    # lifespan, before the test body can race it. Idempotent and cheap on an
+    # already-seeded store, so this costs nothing after the first test.
+    monkeypatch.setenv("WARM_MODELS_BLOCKING", "1")
     with TestClient(app) as c:
         yield c
 
