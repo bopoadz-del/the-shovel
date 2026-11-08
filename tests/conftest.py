@@ -380,6 +380,17 @@ def dev_key_is_admin(monkeypatch):
     monkeypatch.setattr(auth_manager, "validate_key", _validate)
 
 
+@pytest.fixture(autouse=True)
+def _reset_provider_state_between_tests():
+    """M9 health state is module-global; a test that records an exhausted
+    402 must not leak it into the next test's serving verdict. Reset before
+    every test so the health/readiness suite is order-independent."""
+    from app.core.health_probes import reset_provider_state
+
+    reset_provider_state()
+    yield
+
+
 _CREDENTIAL_ROLES: dict = {}
 
 

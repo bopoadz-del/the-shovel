@@ -57,6 +57,24 @@ def record_provider_result(
         logger.debug("record_provider_result swallowed %r", exc)
 
 
+def reset_provider_state() -> None:
+    """Clear recorded provider outcomes and counters.
+
+    The provider state is module-global, so a test that records an
+    ``exhausted`` 402 can leak it into the next test's ``serving`` verdict and
+    make the health/readiness suite order-dependent. Tests reset this before
+    each case (conftest autouse) so the verdict depends only on what THAT test
+    records. Never raises."""
+    global _LAST_SERVED_AT
+    try:
+        with _PROVIDER_LOCK:
+            _PROVIDER_LAST.clear()
+            _PROVIDER_COUNTS.update({"billing_402": 0, "rate_429": 0})
+        _LAST_SERVED_AT = 0.0
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("reset_provider_state swallowed %r", exc)
+
+
 def provider_snapshot() -> Dict[str, Any]:
     """Per-provider last outcome (with age), the distinct 402/429 counts, and a
     ``serving`` flag. ``serving`` is a STATE, not a window: a fresh box (no

@@ -85,3 +85,24 @@ def test_ready_and_health_reflect_not_serving(clock):
 
     assert ready_resp.status_code == 503  # readiness fails closed
     assert ready_resp.json()["ready"] is False
+
+
+@pytest.mark.parametrize("statuses", [
+    [("primary", "exhausted", 402), ("fallback", "exhausted", 429)],
+    [("primary", "error", None), ("fallback", "error", None)],
+])
+def test_reset_provider_state_clears_recorded_outcomes(clock, statuses):
+    """reset_provider_state() must actually clear state: after two failing
+    records, a reset returns the box to the fresh (serving, empty) state."""
+    from app.core.health_probes import reset_provider_state
+
+    for provider, status, http in statuses:
+        hp.record_provider_result(provider, status, http)
+    assert hp.provider_snapshot()["serving"] is False
+
+    reset_provider_state()
+    snap = hp.provider_snapshot()
+    assert snap["serving"] is True
+    assert snap["providers"] == {}
+    assert snap["counts"]["billing_402"] == 0
+    assert snap["counts"]["rate_429"] == 0
