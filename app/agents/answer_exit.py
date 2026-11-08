@@ -1508,8 +1508,8 @@ def check_text(
                 src_list = list(sources)
                 if src_list and _answer_tier(src_list) == "general":
                     tier = "general"
-            except Exception:  # noqa: BLE001 - wording must not break an answer
-                pass
+            except Exception:  # noqa: BLE001
+                _LOG.exception("answer_exit: tier check failed; wording stays project-scoped")
         out = _machine_wording(out, tier)
         out = _restore(out, held)
         out = _tidy(out)
