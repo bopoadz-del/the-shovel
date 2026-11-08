@@ -157,7 +157,13 @@ def ready(response: Response):
         embedder_ok = not identity_serving_blocked()
     except Exception:  # noqa: BLE001 — a probe never breaks readiness evaluation
         embedder_ok = True
-    payload["ready"] = payload["checks"]["database"]["ok"] and embedder_ok
+    # M9: an LLM that is not currently serving (every provider's latest
+    # outcome exhausted/error) is not ready either, even though /health stays
+    # 200-degraded for liveness.
+    llm_serving = payload["checks"]["llm"].get("serving", True)
+    payload["ready"] = (
+        payload["checks"]["database"]["ok"] and embedder_ok and llm_serving
+    )
     if not embedder_ok:
         payload["embedder_identity"] = "mismatch — serving blocked"
     if not payload["ready"]:
