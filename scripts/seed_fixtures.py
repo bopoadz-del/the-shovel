@@ -206,6 +206,30 @@ def _reindex_doc(client: httpx.Client, project_id: str, doc_id: str) -> Dict[str
     return r.json()
 
 
+def _supersede(client: httpx.Client, project_id: str, old_id: str, new_id: str) -> None:
+    """Retire a broken row in favour of a freshly re-uploaded copy.
+
+    Reversible (never deletes): hides the old row from retrieval and points it
+    at the replacement. The source bytes of an old fixture may no longer exist
+    on the live box (rows migrated, files not), so re-upload is the only
+    non-destructive repair.
+    """
+    r = client.post(
+        f"/v1/admin/documents/{old_id}/supersede",
+        params={"new_id": new_id},
+    )
+    r.raise_for_status()
+
+
+def _doc_is_usable(doc: Dict[str, Any]) -> bool:
+    """True when an existing row already holds indexed content and is not
+    retired. A zero-chunk or superseded row means the bytes are gone (or it
+    never indexed), so the seeder must re-upload to re-persist them."""
+    if doc.get("retrieval_visible") is False:
+        return False
+    return (doc.get("chunk_count") or 0) > 0
+
+
 def _verify_chunks(
     client: httpx.Client,
     project_id: str,
@@ -221,6 +245,9 @@ def _verify_chunks(
     waited = 0
     while waited <= max_wait:
         docs = _list_docs(client, project_id)
+        # A superseded row is retired: its chunk_count is irrelevant. Only
+        # visible rows participate in the zero-chunk tripwire.
+        docs = [d for d in docs if d.get("retrieval_visible") is not False]
         # Detail enrichment returns chunk_count when doc_count is small.
         if docs and all("chunk_count" in d for d in docs):
             zero_chunk = [d["id"] for d in docs if (d.get("chunk_count") or 0) == 0]
@@ -248,6 +275,7 @@ def _verify_chunks(
         waited += poll_interval
 
     docs = _list_docs(client, project_id)
+    docs = [d for d in docs if d.get("retrieval_visible") is not False]
     zero_chunk = [d["id"] for d in docs if (d.get("chunk_count") or 0) == 0]
     total_chunks = sum((d.get("chunk_count") or 0) for d in docs)
     return len(docs), total_chunks, zero_chunk
@@ -260,13 +288,19 @@ def _seed_fresh_upload_eval(client: httpx.Client, spec: Dict[str, Any]) -> Dict[
     if not created:
         print(f"[skip-create] {spec['name']} already exists as {project_id}")
 
-    existing = {d["original_name"] for d in _list_docs(client, project_id)}
+    docs = _list_docs(client, project_id)
+    by_name = {d["original_name"]: d for d in docs}
     for fname, text, _query in spec["cases"]:
-        if fname in existing:
+        old = by_name.get(fname)
+        if old is not None and _doc_is_usable(old):
             print(f"[skip-upload] {fname}")
             continue
         doc = _upload_case(client, project_id, fname, text)
-        print(f"[upload] {fname} -> doc {doc['id']}")
+        if old is not None:
+            _supersede(client, project_id, old["id"], doc["id"])
+            print(f"[re-upload] {fname} -> doc {doc['id']} (superseded {old['id']})")
+        else:
+            print(f"[upload] {fname} -> doc {doc['id']}")
 
     print(f"[wait] indexing {spec['name']} ...")
     total_docs, total_chunks, zero_chunk = _verify_chunks(client, project_id)
@@ -325,10 +359,14 @@ def _seed_from_dir(
     if not created:
         print(f"[skip-create] {name} already exists as {project_id}")
 
-    existing = {d["original_name"] for d in _list_docs(client, project_id)}
-    files_to_upload = [f for f in required + any_present + optional if f not in existing]
+    docs = _list_docs(client, project_id)
+    by_name = {d["original_name"]: d for d in docs}
+    files_to_upload = [
+        f for f in required + any_present + optional
+        if f not in by_name or not _doc_is_usable(by_name[f])
+    ]
     if not files_to_upload:
-        print(f"[skip-upload] {name}: all files already present")
+        print(f"[skip-upload] {name}: all files already present and indexed")
     for fname in files_to_upload:
         path = fixtures_dir / fname
         if not path.is_file():
@@ -338,7 +376,12 @@ def _seed_from_dir(
         if doc is None:
             print(f"[skip-noningestible] {fname}")
             continue
-        print(f"[upload] {fname} -> doc {doc['id']}")
+        old = by_name.get(fname)
+        if old is not None:
+            _supersede(client, project_id, old["id"], doc["id"])
+            print(f"[re-upload] {fname} -> doc {doc['id']} (superseded {old['id']})")
+        else:
+            print(f"[upload] {fname} -> doc {doc['id']}")
 
     print(f"[wait] indexing {name} ...")
     total_docs, total_chunks, zero_chunk = _verify_chunks(client, project_id)
