@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.agents.runtime import (
     _CG_REFUSAL,
     _graft_rate_only_item,
@@ -300,6 +302,40 @@ def test_inject_states_rate_only_on_a_single_class_set():
     assert "Rate Only" in text
     assert "generic acknowledgement" in text
     assert "SOURCE CLASS" not in text
+
+
+def _gk_chunk(cid, doc_id, score, text):
+    return Chunk(
+        chunk_id=cid,
+        project_id=ACTIVE,
+        doc_id=doc_id,
+        chunk_index=0,
+        text=text,
+        score=score,
+        layer="general_knowledge",
+    )
+
+
+@pytest.mark.parametrize("chunks,expect_class,expect_precedence", [
+    # general-only: class definitions present, precedence absent
+    ([_gk_chunk("g1", "FIDIC", 0.9,
+                "FIDIC delay damages is a percentage of the contract amount."),
+      _gk_chunk("g2", "CESMM", 0.8,
+                "CESMM classifies excavation by depth.")], True, False),
+    # mixed project + general: both present
+    ([_chunk("p1", RO_DOC, 0.95, RATE_ONLY_ROW),
+      _gk_chunk("g1", "FIDIC", 0.7,
+                "FIDIC administration note on delay damages.")], True, True),
+])
+def test_source_class_header_emits_for_any_non_project_set(
+        chunks, expect_class, expect_precedence):
+    """M11: a general-only set must still learn what class=... means, or the
+    model reads curated reference material as this project's own document."""
+    text = format_chunks_as_system_message(
+        chunks, len(chunks), query="delay damages",
+    )["content"]
+    assert ("SOURCE CLASS" in text) is expect_class
+    assert ("PRECEDENCE" in text) is expect_precedence
 
 
 def test_inject_does_not_invent_rate_only_from_priced_lookalikes():
