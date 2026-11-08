@@ -33,6 +33,10 @@ VOID_COVERAGE_TEMPLATE = (
     "None of this project's {m} documents are indexed, so I did not search "
     "them. What follows is general reference material only."
 )
+VOID_ATTACHED_TEMPLATE = (
+    "This answer is from the attached file {name}, which is not part of the "
+    "project's indexed documents."
+)
 
 # Phrases that assert a complete search. Forbidden on a partial index.
 FORBIDDEN_ABSENCE_PHRASES: tuple[str, ...] = (
@@ -68,6 +72,10 @@ def format_not_found(indexed: int) -> str:
 
 def format_void_coverage(total: int) -> str:
     return VOID_COVERAGE_TEMPLATE.format(m=int(total))
+
+
+def format_void_attached(name: str) -> str:
+    return VOID_ATTACHED_TEMPLATE.format(name=name)
 
 
 def is_partial(indexed: int, total: int) -> bool:
@@ -139,15 +147,29 @@ def answer_corpus_id(project_id: str | None, turn_project_id: str | None) -> str
     return turn_project_id or project_id
 
 
-def finalise_answer(text: str, indexed: int, total: int) -> str:
+def finalise_answer(
+    text: str,
+    indexed: int,
+    total: int,
+    *,
+    source_tier: str | None = None,
+    attached_names: list[str] | None = None,
+) -> str:
     """The public honesty pass: void coverage strips search claims and states
     the void line; partial coverage rewrites absence claims and stamps the
-    numbers. ``total == 0`` is never a free pass."""
+    numbers. ``total == 0`` is never a free pass. ``source_tier`` names which
+    tier produced the answer (``"attached"``/``"general"``/``"project"``); on a
+    void project index an attached-file answer states the attached line by
+    name instead of claiming general reference material only."""
     idx, tot = int(indexed), int(total)
     body = text or ""
     if coverage_is_void(idx, tot):
         body = strip_search_claims(body)
-        line = format_void_coverage(tot)
+        names = [n for n in (attached_names or []) if str(n).strip()]
+        if source_tier == "attached" and names:
+            line = format_void_attached(names[0])
+        else:
+            line = format_void_coverage(tot)
         if line not in body:
             body = (body + "\n\n" + line) if body else line
         # The counts footer still rides along: ``0 of M project documents
@@ -165,16 +187,23 @@ def apply_coverage_honesty(
     *,
     project_id: str | None = None,
     coverage: tuple[int, int] | None = None,
+    source_tier: str | None = None,
+    attached_names: list[str] | None = None,
 ) -> str:
     """Rewrite + stamp the coverage line when counts are known.
 
     ``coverage`` is the fixture/override pair ``(indexed, total)``. When
     omitted, live counts are read for ``project_id``. No project and no
     fixture → the text is unchanged (tests of other gates stay stable).
+    ``source_tier``/``attached_names`` name the tier that answered; they only
+    change the void-coverage line and default to the project-index path.
     """
     counts = coverage
     if counts is None and project_id:
         counts = live_coverage(project_id)
     if counts is None:
         return text
-    return finalise_answer(text, counts[0], counts[1])
+    return finalise_answer(
+        text, counts[0], counts[1],
+        source_tier=source_tier, attached_names=attached_names,
+    )
