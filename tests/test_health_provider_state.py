@@ -85,3 +85,18 @@ def test_ready_and_health_reflect_not_serving(clock):
 
     assert ready_resp.status_code == 503  # readiness fails closed
     assert ready_resp.json()["ready"] is False
+
+
+def test_reset_provider_state_clears_recorded_outcomes(clock):
+    """reset_provider_state() must actually clear state: after two exhausted
+    records, a reset returns the box to the fresh (serving, empty) state."""
+    hp.record_provider_result("primary", "exhausted", 402)
+    hp.record_provider_result("fallback", "exhausted", 429)
+    assert hp.provider_snapshot()["serving"] is False
+
+    hp.reset_provider_state()
+    snap = hp.provider_snapshot()
+    assert snap["serving"] is True
+    assert snap["providers"] == {}
+    assert snap["counts"]["billing_402"] == 0
+    assert snap["counts"]["rate_429"] == 0

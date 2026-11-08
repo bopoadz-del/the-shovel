@@ -98,6 +98,9 @@ def test_ready_returns_503_when_identity_serving_blocked(monkeypatch):
     payload = health.ready(resp)
     assert resp.status_code == 503
     assert payload["ready"] is False
+    # M9 regression guard: the body must still NAME the identity-block reason
+    # when the embedder identity check fails, independent of provider state.
+    assert payload.get("embedder_identity") == "mismatch — serving blocked"
 
 
 def test_real_check_identity_flags_stored_vs_embedder_dim_mismatch(tmp_path, monkeypatch):
