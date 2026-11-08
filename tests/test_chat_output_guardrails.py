@@ -125,6 +125,27 @@ def test_strip_reasoning_blocks_direct(text, expected):
     assert _strip_reasoning_blocks(text) == expected
 
 
+@pytest.mark.parametrize("legitimate", [
+    # a < in a standards clause (not a tag frame)
+    'cure at < 28 days for structural concrete',
+    # a comparison with a numeric limit
+    'minimum cover < 50 mm unless a higher value is specified',
+    # an "analysis" heading as plain prose (no angle brackets)
+    'Section 5: Analysis of curing requirements for mass concrete',
+    # a code-like fragment with a comparison operator
+    'if days < 7: return early-striking tables',
+    # the flipped-row answer shape: refusal prose with a counts footer
+    'I do not have a curing requirement in the project sections. '
+    '1 of 2 project documents indexed',
+])
+def test_strip_leaves_legitimate_fragments_intact(legitimate):
+    """M1 battery-drop diag (0420Z item 2): the strip anchors on real tag
+    frames only. A bare <, an "analysis" heading, a comparison, or a code-like
+    fragment must pass through unchanged - nothing legitimate is removed."""
+    assert _strip_reasoning_blocks(legitimate) == legitimate
+    assert _sanitize_final_text(legitimate) == legitimate
+
+
 @pytest.mark.parametrize("block,name", [
     ('<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>', 'search_project_documents'),
     ('<tool_call>{"name": "formula_executor_v2", "arguments": {"expression": "1+1"}}</tool_call>', 'formula_executor_v2'),
