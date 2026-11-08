@@ -88,6 +88,7 @@ def test_ready_returns_503_when_identity_serving_blocked(monkeypatch):
     from starlette.responses import Response
 
     from app.routers import health
+    from app.routers.health import ready
 
     monkeypatch.setattr(
         health, "_evaluate_health",
@@ -95,7 +96,7 @@ def test_ready_returns_503_when_identity_serving_blocked(monkeypatch):
     )
     monkeypatch.setattr(vs, "_IDENTITY_SERVING_BLOCKED", True, raising=False)
     resp = Response()
-    payload = health.ready(resp)
+    payload = ready(resp)
     assert resp.status_code == 503
     assert payload["ready"] is False
     # M9 regression guard: the body must still NAME the identity-block reason

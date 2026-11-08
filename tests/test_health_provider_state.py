@@ -87,14 +87,20 @@ def test_ready_and_health_reflect_not_serving(clock):
     assert ready_resp.json()["ready"] is False
 
 
-def test_reset_provider_state_clears_recorded_outcomes(clock):
-    """reset_provider_state() must actually clear state: after two exhausted
+@pytest.mark.parametrize("statuses", [
+    [("primary", "exhausted", 402), ("fallback", "exhausted", 429)],
+    [("primary", "error", None), ("fallback", "error", None)],
+])
+def test_reset_provider_state_clears_recorded_outcomes(clock, statuses):
+    """reset_provider_state() must actually clear state: after two failing
     records, a reset returns the box to the fresh (serving, empty) state."""
-    hp.record_provider_result("primary", "exhausted", 402)
-    hp.record_provider_result("fallback", "exhausted", 429)
+    from app.core.health_probes import reset_provider_state
+
+    for provider, status, http in statuses:
+        hp.record_provider_result(provider, status, http)
     assert hp.provider_snapshot()["serving"] is False
 
-    hp.reset_provider_state()
+    reset_provider_state()
     snap = hp.provider_snapshot()
     assert snap["serving"] is True
     assert snap["providers"] == {}
