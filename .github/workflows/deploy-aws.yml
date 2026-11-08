@@ -23,6 +23,11 @@
 # cancel one already rolling. After the roll, the job waits for the web
 # service to be stable and for /livez build_sha to equal that commit. The
 # origin is the PUBLIC_BASE_URL repository variable.
+#
+# If that stability wait or the live SHA check fails after the web roll was
+# requested, the job puts the-fork back on the task definition that was
+# serving before the roll (the deployment holding tasks, not revision N-1),
+# checks that recovery, and still exits 1. See deploy/ECS_ROLLBACK.md.
 name: deploy-aws
 
 on:
@@ -125,6 +130,15 @@ jobs:
           fi
           echo "email settings present: PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM"
 
+      - name: Record the serving web task definition
+        run: |
+          set -euo pipefail
+          aws ecs describe-services --cluster "$ECS_CLUSTER" --services the-fork \
+            --output json > "$RUNNER_TEMP/web-service.json"
+          python3 scripts/ecs_rollback.py capture "$RUNNER_TEMP/web-service.json" \
+            > "$RUNNER_TEMP/prior-web-taskdef"
+          echo "captured the task definition that is serving"
+
       - name: Roll the web service
         run: |
           for svc in the-fork; do
@@ -135,6 +149,7 @@ jobs:
               aws ecs update-service --cluster "$ECS_CLUSTER" \
                 --service "$svc" --force-new-deployment >/dev/null
               echo "$svc: deployment triggered"
+              echo started > "$RUNNER_TEMP/web-roll-started"
             else
               echo "$svc: not created yet"
             fi
@@ -211,4 +226,51 @@ jobs:
             fi
           done
           echo "::error::/livez did not report build_sha $DEPLOY_SHA after $attempts attempts"
+          exit 1
+
+      - name: Restore the previously serving web task definition
+        if: failure()
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/web-roll-started" ]; then
+            echo "::error::deploy failed before the web service changed; no rollback"
+            exit 1
+          fi
+          prior=$(tr -d '[:space:]' < "$RUNNER_TEMP/prior-web-taskdef")
+          if [ -z "$prior" ]; then
+            echo "::error::no captured serving task definition; deploy stays failed"
+            exit 1
+          fi
+          set +e
+          aws ecs update-service --cluster "$ECS_CLUSTER" \
+            --service the-fork \
+            --task-definition "$prior" \
+            --force-new-deployment >/dev/null
+          update_rc=$?
+          wait_rc=1
+          if [ "$update_rc" -eq 0 ]; then
+            timeout 600 aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services the-fork
+            wait_rc=$?
+          fi
+          describe_rc=1
+          if [ "$update_rc" -eq 0 ] && [ "$wait_rc" -eq 0 ]; then
+            aws ecs describe-services --cluster "$ECS_CLUSTER" --services the-fork \
+              --output json > "$RUNNER_TEMP/web-service-after.json"
+            describe_rc=$?
+          fi
+          verified=1
+          if [ "$describe_rc" -eq 0 ]; then
+            python3 scripts/ecs_rollback.py verify "$RUNNER_TEMP/web-service-after.json" --prior "$prior"
+            verified=$?
+          fi
+          set -e
+          if [ "$verified" -eq 0 ]; then
+            echo "recovery verified: web service is on the captured task definition"
+          else
+            echo "::error::recovery check failed; web service is not on the captured task definition"
+          fi
+          echo "::error::deploy verdict FAILED"
           exit 1
