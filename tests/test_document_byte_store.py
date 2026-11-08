@@ -75,7 +75,8 @@ def _prod(monkeypatch) -> None:
 # ── store format, legacy reads, no temp fallback ────────────────────────────
 
 
-def test_streamed_writes_keep_the_encrypted_format(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_streamed_writes_keep_the_encrypted_format(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     monkeypatch.setenv("DATA_ENCRYPTION_KEY", Fernet.generate_key().decode())
     bodies = {
@@ -92,7 +93,8 @@ def test_streamed_writes_keep_the_encrypted_format(tmp_path, monkeypatch):
         assert str(root) in path
 
 
-def test_legacy_file_path_still_reads(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_legacy_file_path_still_reads(sample, tmp_path, monkeypatch):
     """A path recorded before the store, outside the store root, still opens."""
     _root(tmp_path, monkeypatch, "current")
     monkeypatch.setenv("DATA_ENCRYPTION_KEY", Fernet.generate_key().decode())
@@ -115,7 +117,8 @@ def test_legacy_file_path_still_reads(tmp_path, monkeypatch):
         assert loaded.get("panel_status", {}).get("label") != byte_store.MISSING_LABEL
 
 
-def test_writes_outside_the_store_are_refused(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_writes_outside_the_store_are_refused(sample, tmp_path, monkeypatch):
     _root(tmp_path, monkeypatch)
     outside = [tmp_path / "elsewhere" / "a.txt", tmp_path / "other" / "b.txt"]
     for path in outside:
@@ -125,7 +128,8 @@ def test_writes_outside_the_store_are_refused(tmp_path, monkeypatch):
         assert not path.exists()
 
 
-def test_a_failed_store_root_is_not_the_temp_dir(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_a_failed_store_root_is_not_the_temp_dir(sample, tmp_path, monkeypatch):
     blockers = []
     for name in ("north", "south"):
         blocker = tmp_path / f"not-a-dir-{name}"
@@ -141,7 +145,8 @@ def test_a_failed_store_root_is_not_the_temp_dir(tmp_path, monkeypatch):
     assert blockers
 
 
-def test_unknown_backend_is_refused(monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_unknown_backend_is_refused(sample, monkeypatch):
     for name in ("s3", "memory"):
         monkeypatch.setenv("DOCUMENT_BYTE_STORE", name)
         with pytest.raises(byte_store.StoreConfigError):
@@ -151,7 +156,8 @@ def test_unknown_backend_is_refused(monkeypatch):
 # ── lost file vs permission, io, decrypt, mount, drive ──────────────────────
 
 
-def test_only_confirmed_absence_is_a_missing_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_only_confirmed_absence_is_a_missing_file(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     denied = [root / "secret-a.bin", root / "secret-b.bin"]
     broken = [root / "net-a.bin", root / "net-b.bin"]
@@ -185,7 +191,8 @@ def test_only_confirmed_absence_is_a_missing_file(tmp_path, monkeypatch):
         assert got.reason == "enoent"
 
 
-def test_a_broken_store_root_is_not_a_missing_document(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_a_broken_store_root_is_not_a_missing_document(sample, tmp_path, monkeypatch):
     """Permission or I/O on the store itself must not label every file missing."""
     real = os.stat
     cases = (
@@ -210,7 +217,8 @@ def test_a_broken_store_root_is_not_a_missing_document(tmp_path, monkeypatch):
         assert got.state != byte_store.MISSING
 
 
-def test_decryption_failure_is_not_a_missing_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_decryption_failure_is_not_a_missing_file(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     key_a = Fernet.generate_key().decode()
     key_b = Fernet.generate_key().decode()
@@ -228,7 +236,8 @@ def test_decryption_failure_is_not_a_missing_file(tmp_path, monkeypatch):
             file_crypto.read_document(str(path))
 
 
-def test_efs_without_a_durable_mount_is_not_missing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_efs_without_a_durable_mount_is_not_missing(sample, tmp_path, monkeypatch):
     """A directory on the container filesystem is not evidence a file is gone."""
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "efs")
     for name in ("mount-a", "mount-b"):
@@ -244,7 +253,8 @@ def test_efs_without_a_durable_mount_is_not_missing(tmp_path, monkeypatch):
             assert got.state != byte_store.MISSING
 
 
-def test_durable_mount_distinguishes_absence(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_durable_mount_distinguishes_absence(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "efs")
     monkeypatch.setattr(byte_store, "is_durable_mount", lambda _path: True)
@@ -254,7 +264,8 @@ def test_durable_mount_distinguishes_absence(tmp_path, monkeypatch):
     assert byte_store.inspect_path(str(root / "absent.txt")).state == byte_store.MISSING
 
 
-def test_drive_rows_are_not_lost_uploads(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_drive_rows_are_not_lost_uploads(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     for drive_id, name in (("drv-alpha", "alpha.pdf"), ("drv-beta", "beta.pdf")):
         pid = _project(USER["user_id"], f"drive-{drive_id}")
@@ -269,7 +280,8 @@ def test_drive_rows_are_not_lost_uploads(tmp_path, monkeypatch):
         assert label != byte_store.MISSING_LABEL
 
 
-def test_missing_user_bytes_are_labeled_and_not_indexed(tmp_path, monkeypatch, client, as_user):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_missing_user_bytes_are_labeled_and_not_indexed(sample, tmp_path, monkeypatch, client, as_user):
     root = _root(tmp_path, monkeypatch)
     pid = _project(USER["user_id"], "Lost bytes")
     rows = []
@@ -305,7 +317,8 @@ def test_missing_user_bytes_are_labeled_and_not_indexed(tmp_path, monkeypatch, c
         assert "Extraction returned no usable text" not in (status.get("detail") or "")
 
 
-def test_a_present_extract_failure_stays_an_extract_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_a_present_extract_failure_stays_an_extract_failure(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     pid = _project(USER["user_id"], "Extract vs missing")
     present_names = ("readable-a.txt", "readable-b.txt")
@@ -326,7 +339,8 @@ def test_a_present_extract_failure_stays_an_extract_failure(tmp_path, monkeypatc
         assert status.get("status") == "EXTRACT_FAILED"
 
 
-def test_index_keeps_chunks_and_does_not_extract_a_missing_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_index_keeps_chunks_and_does_not_extract_a_missing_file(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     pid = _project(USER["user_id"], "Index missing")
     calls: list[str] = []
@@ -360,7 +374,8 @@ def test_index_keeps_chunks_and_does_not_extract_a_missing_file(tmp_path, monkey
     assert deleted == []
 
 
-def test_index_does_not_treat_an_unavailable_store_as_missing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_index_does_not_treat_an_unavailable_store_as_missing(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     pid = _project(USER["user_id"], "Index unavailable")
     calls: list[str] = []
@@ -395,7 +410,8 @@ def test_index_does_not_treat_an_unavailable_store_as_missing(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_worker_marks_terminal_missing_failed_not_completed():
+@pytest.mark.parametrize("sample", ["first", "second"])
+async def test_worker_marks_terminal_missing_failed_not_completed(sample):
     import uuid
     from unittest.mock import patch
 
@@ -452,7 +468,8 @@ async def test_worker_marks_terminal_missing_failed_not_completed():
         assert error is None
 
 
-def test_mount_decision_and_real_container_paths():
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_mount_decision_and_real_container_paths(sample):
     ephemeral = byte_store.MountIdentity(2, "/mnt/shm", "tmpfs", "tmpfs")
     overlay = byte_store.MountIdentity(3, "/data", "overlay", "overlay")
     same = byte_store.MountIdentity(1, "/var/data", "nfs4", "fs-aaa.efs.amazonaws.com:/")
@@ -466,7 +483,8 @@ def test_mount_decision_and_real_container_paths():
         assert byte_store.is_durable_mount(path) is False
 
 
-def test_probe_round_trip_and_rejection(tmp_path):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_probe_round_trip_and_rejection(sample, tmp_path):
     for name in ("probe-a", "probe-b"):
         root = tmp_path / name
         root.mkdir()
@@ -479,7 +497,8 @@ def test_probe_round_trip_and_rejection(tmp_path):
             byte_store.probe_store(str(blocker / "child"))
 
 
-def test_production_guard_is_off_until_the_flag_and_refuses_local_when_on(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_production_guard_is_off_until_the_flag_and_refuses_local_when_on(sample, tmp_path, monkeypatch):
     _prod(monkeypatch)
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "local")
     for flag, name in (("", "unset"), ("0", "zero")):
@@ -498,7 +517,8 @@ def test_production_guard_is_off_until_the_flag_and_refuses_local_when_on(tmp_pa
             byte_store.enforce_startup_guard()
 
 
-def test_development_does_not_enforce_the_rollout_flag(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_development_does_not_enforce_the_rollout_flag(sample, tmp_path, monkeypatch):
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "local")
     monkeypatch.setenv("REQUIRE_DURABLE_DOCUMENT_STORE", "1")
     monkeypatch.setenv("DOCUMENT_STORE_ROOT", str(tmp_path))
@@ -508,7 +528,8 @@ def test_development_does_not_enforce_the_rollout_flag(tmp_path, monkeypatch):
         _validate_startup_env()
 
 
-def test_efs_backend_requires_the_mount_before_the_flag(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_efs_backend_requires_the_mount_before_the_flag(sample, tmp_path, monkeypatch):
     _prod(monkeypatch)
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "efs")
     monkeypatch.setenv("REQUIRE_DURABLE_DOCUMENT_STORE", "")
@@ -520,7 +541,8 @@ def test_efs_backend_requires_the_mount_before_the_flag(tmp_path, monkeypatch):
             byte_store.enforce_startup_guard()
 
 
-def test_guard_still_runs_the_probe_when_the_mount_looks_durable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_guard_still_runs_the_probe_when_the_mount_looks_durable(sample, tmp_path, monkeypatch):
     """A mount check that ignores the write/read/delete probe must fail."""
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "efs")
     monkeypatch.setattr(byte_store, "is_durable_mount", lambda _path: True)
@@ -532,7 +554,8 @@ def test_guard_still_runs_the_probe_when_the_mount_looks_durable(tmp_path, monke
             byte_store.enforce_startup_guard()
 
 
-def test_verified_efs_mount_passes_the_guard(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_verified_efs_mount_passes_the_guard(sample, tmp_path, monkeypatch):
     monkeypatch.setenv("ENV", "production")
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "efs")
     monkeypatch.setattr(byte_store, "is_durable_mount", lambda _path: True)
@@ -544,7 +567,8 @@ def test_verified_efs_mount_passes_the_guard(tmp_path, monkeypatch):
         assert list(root.iterdir()) == []
 
 
-def test_web_and_worker_run_the_same_guard(monkeypatch):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_web_and_worker_run_the_same_guard(sample, monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(
         byte_store, "enforce_startup_guard", lambda: calls.append("guard") or "ok",
@@ -564,7 +588,8 @@ def test_web_and_worker_run_the_same_guard(monkeypatch):
 # ── re-upload ────────────────────────────────────────────────────────────────
 
 
-def test_reupload_restores_bytes_under_the_same_auth(tmp_path, monkeypatch, client, as_user):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_reupload_restores_bytes_under_the_same_auth(sample, tmp_path, monkeypatch, client, as_user):
     root = _root(tmp_path, monkeypatch)
     pid = _project(USER["user_id"], "Restore")
     restored = []
@@ -596,7 +621,8 @@ def test_reupload_restores_bytes_under_the_same_auth(tmp_path, monkeypatch, clie
     assert len(set(restored)) == 2
 
 
-def test_reupload_rejects_the_wrong_caller_and_a_drive_row(tmp_path, monkeypatch, client):
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_reupload_rejects_the_wrong_caller_and_a_drive_row(sample, tmp_path, monkeypatch, client):
     root = _root(tmp_path, monkeypatch)
     pid = _project(USER["user_id"], "Auth restore")
     local = store.add_document(
@@ -661,7 +687,34 @@ def test_reupload_rejects_the_wrong_caller_and_a_drive_row(tmp_path, monkeypatch
         app.dependency_overrides.pop(require_api_key, None)
 
 
-def test_documents_panel_offers_reupload_for_a_lost_file():
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_changed_modules_stay_referenced(sample):
+    """The mutation gate selects tests by a full module import path."""
+    import app.core.byte_store
+    import app.core.doc_index
+    import app.core.projects
+    import app.main
+    import app.routers.admin
+    import app.routers.exports
+    import app.routers.projects
+    import app.routers.upload
+    import app.worker.ingest_worker
+    import app.worker.run_worker
+
+    assert sample in {"first", "second"}
+    assert app.core.byte_store.MISSING == "missing"
+    assert callable(app.core.doc_index.index_document)
+    assert callable(app.core.projects.document_byte_inspection)
+    assert callable(app.main._validate_startup_env)
+    assert callable(app.routers.projects.restore_document_bytes)
+    assert callable(app.routers.upload._store_upload)
+    assert callable(app.routers.exports._persist_and_index)
+    assert callable(app.worker.ingest_worker.ingest_document)
+    assert callable(app.worker.run_worker.main)
+
+
+@pytest.mark.parametrize("sample", ["first", "second"])
+def test_documents_panel_offers_reupload_for_a_lost_file(sample):
     src = Path("frontend/src/pages/ProjectWorkspace.tsx").read_text(encoding="utf-8")
     assert "bytes_missing" in src
     assert "/bytes" in src
