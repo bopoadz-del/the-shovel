@@ -32,21 +32,6 @@ secrets belong in the host environment (Render dashboard `sync: false`
 blueprint values, or an equivalent secret store). Rotate any credential
 that has appeared in git history before treating it as live.
 
-## Rate limits behind a proxy
-
-Anonymous buckets use the socket peer unless both `TRUSTED_PROXY_COUNT` and
-`TRUSTED_PROXY_CIDRS` are set. The count is the number of `X-Forwarded-For`
-hops the proxy tier appends. The CIDRs are the networks those proxies belong
-to; the immediate peer must fall in one of them. Unset, zero, or invalid
-configuration ignores forwarded headers (fail closed). `0.0.0.0/0` and `::/0`
-are rejected. `X-Real-IP` and `Forwarded` are not consulted.
-
-Credential routes (login, registration, password reset, email verification,
-and `/v1/auth`) are denied when the shared Redis limiter cannot answer.
-Other routes stay available during a Redis error. Set the two proxy variables
-in the service environment to the real proxy tier; they are not secrets, and
-this repository does not ship a production value for them.
-
 ## Dependency alerts
 
 Open Dependabot alerts that cannot be cleared by a semver bump are
