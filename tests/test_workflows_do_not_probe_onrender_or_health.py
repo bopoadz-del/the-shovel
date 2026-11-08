@@ -27,18 +27,51 @@ def test_no_workflow_references_onrender_or_slash_health():
     assert hits == [], "\n".join(hits)
 
 
+_READY_CONTRACT = (
+    "$BASE_URL/ready",
+    "for attempt in 1 2",
+    "sleep 60",
+    "scripts/ready_probe.py",
+    "--status",
+    "--artifact",
+    "--proto '=https'",
+    "-o /dev/null",
+    "name: BLOCKER",
+    "actions/upload-artifact@v4",
+)
+
+
+def scheduled_probe_violations(text: str) -> list[str]:
+    """Scheduled /health is banned. Scheduled /ready must be the two-attempt page.
+
+    A /ready probe is the dependency check, so it is allowed only when the
+    file shows two attempts, discards the body, asks the shared decider, and
+    uploads the sanitized BLOCKER artifact. The filename is not an exemption.
+    """
+    lines = text.splitlines()
+    if not any(line.strip() == "schedule:" for line in lines):
+        return []
+    problems: list[str] = []
+    for number, line in enumerate(lines, 1):
+        if "/health" in line or "onrender.com" in line:
+            problems.append(f"{number}:{line.strip()}")
+    if "/ready" in text and not all(part in text for part in _READY_CONTRACT):
+        problems.append("scheduled /ready probe lacks the two-attempt 503 page contract")
+    if "/ready" in text and "-L" in text:
+        problems.append("scheduled /ready probe follows redirects")
+    return problems
+
+
 def test_no_scheduled_workflow_probes_ready_or_health():
-    """A schedule may call /livez only. /ready and /health wake the database."""
+    """/health stays banned. /ready is only the two-attempt 503 page."""
     hits: list[str] = []
     for path in sorted(_WORKFLOWS.iterdir()):
         if path.suffix not in {".yml", ".yaml"}:
             continue
-        lines = path.read_text(encoding="utf-8").splitlines()
-        if not any(line.strip() == "schedule:" for line in lines):
-            continue
-        for number, line in enumerate(lines, 1):
-            if "/ready" in line or "/health" in line:
-                hits.append(f"{path.name}:{number}:{line.strip()}")
+        hits.extend(
+            f"{path.name}:{item}"
+            for item in scheduled_probe_violations(path.read_text(encoding="utf-8"))
+        )
     assert hits == [], "\n".join(hits)
 
 
@@ -51,9 +84,14 @@ def test_health_watch_probes_https_livez_without_following_redirects():
     assert "onrender.com" not in text
     assert 'cron: "*/15 * * * *"' in text
     assert 'cron: "7 */6 * * *"' not in text
-    assert "/ready" not in text
     assert "-L" not in text
     assert "--proto '=https'" in text
     assert "$BASE_URL/livez" in text
     assert "$PUBLIC_URL/livez" in text
-    assert "$BASE_URL/ready" not in text
+    assert "$BASE_URL/ready" in text
+    assert text.count("for attempt in 1 2") == 3
+    assert text.count("sleep 60") == 3
+    assert "-o /dev/null" in text
+    assert "scripts/ready_probe.py" in text
+    assert "name: BLOCKER" in text
+    assert scheduled_probe_violations(text) == []
