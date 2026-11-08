@@ -172,6 +172,8 @@ jobs:
           aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"has no chunks at all"' --query 'events[].message' --output text | grep -oE 'project=[^ ;]+' | sort -u || echo "(none)"
           echo "=== (d) legacy 'bm25 leg empty' count (must be 0) ==="
           aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --filter-pattern '"bm25 leg empty"' --query 'length(events)' --output text || echo "0"
+          echo "=== (e) M1 raw tool frames in answers (must be 0) ==="
+          aws logs filter-log-events --log-group-name /ecs/the-fork --start-time "$start" --query 'events[].message' --output text | grep -c '<tool_call\|<parameter=' || echo "0"
 
       - name: Upload the per-question result
         if: always()

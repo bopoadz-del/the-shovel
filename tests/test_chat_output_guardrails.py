@@ -14,7 +14,9 @@ import pytest
 from app.agents.runtime import (
     Agent,
     _looks_like_internal_tool_json,
+    _recover_tool_calls_from_content,
     _sanitize_final_text,
+    _strip_reasoning_blocks,
     _EMPTY_RESPONSE_FALLBACK,
     _TOOL_FORMAT_FALLBACK,
     _TOOL_FORMAT_RETRY_NUDGE,
@@ -82,6 +84,38 @@ def test_sanitize_final_text_strips_dsml_and_tool_json():
         '</function_calls>'
     )
     assert _sanitize_final_text(xml_leak) == _TOOL_FORMAT_FALLBACK
+
+
+def test_sanitize_final_text_hides_anthropic_tool_call_block():
+    block = '<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>'
+    assert _sanitize_final_text(block) == _TOOL_FORMAT_FALLBACK
+
+
+def test_sanitize_final_text_hides_malformed_tool_call_frame():
+    # M1: <parameter=action> read ... </tool_call> must never render, even when
+    # the frame cannot be parsed into a real tool call.
+    frame = '<tool_call><parameter=action> read something </tool_call>'
+    assert _sanitize_final_text(frame) == _TOOL_FORMAT_FALLBACK
+
+
+def test_sanitize_final_text_strips_reasoning_blocks():
+    assert _sanitize_final_text('<think>hidden chain of thought</think> Visible answer') == 'Visible answer'
+    assert _sanitize_final_text('<thinking>hidden</thinking>\nThe answer.') == 'The answer.'
+    assert _sanitize_final_text('<think>only reasoning, no answer') == ''
+
+
+def test_strip_reasoning_blocks_direct():
+    assert _strip_reasoning_blocks('<think>a</think> b') == 'b'
+    assert _strip_reasoning_blocks('<reasoning>a</reasoning> b') == 'b'
+    assert _strip_reasoning_blocks('no reasoning here') == 'no reasoning here'
+    assert _strip_reasoning_blocks('') == ''
+
+
+def test_recover_tool_calls_from_content_handles_anthropic_block():
+    block = '<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>'
+    recovered = _recover_tool_calls_from_content(block)
+    assert recovered
+    assert recovered[0]["function"]["name"] == "search_project_documents"
 
 
 def test_final_text_needs_forced_retry_on_tool_format_fallback():
