@@ -580,6 +580,7 @@ async def _reject_oversize_bodies(request: Request, call_next):
 # the per-API-key limiter never covered. Controlled by RATE_LIMIT_PER_MINUTE.
 from app.core import rate_limit as _rate_limit
 from app.core import jwt_auth as _jwt_auth
+from app.core.client_address import ClientAddressMiddleware
 
 _RATE_LIMIT_EXEMPT_PREFIXES = ("/dashboard", "/assets")
 _RATE_LIMIT_EXEMPT_EXACT = {
@@ -719,6 +720,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Outside the rate-limit middleware (added earlier, therefore inner) and
+# inside CORS (added last, therefore outermost). Binds the socket peer and
+# X-Forwarded-For so anonymous buckets can use a forwarded client only when
+# TRUSTED_PROXY_COUNT and TRUSTED_PROXY_CIDRS say to. Must not become the
+# outermost layer: CORS has to wrap the 429 this stack can still emit.
+app.add_middleware(ClientAddressMiddleware)
 
 
 # ── CORS — registered LAST so it is the OUTERMOST middleware ───────────────
