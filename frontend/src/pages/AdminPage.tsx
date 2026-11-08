@@ -139,6 +139,8 @@ export default function AdminPage() {
           onPickProject={(pid) => navigate(`/projects/${pid}`)}
         />
 
+        <UsersSection />
+
         <DriverModeSection />
 
         <footer className="admin-main__footer">
@@ -895,6 +897,132 @@ function ApprovedProjectsSection({
             })}
           </tbody>
         </table>
+      )}
+    </section>
+  )
+}
+
+
+// ─── Users (read-only account list) ──────────────────────────────────────
+
+interface AdminUserRow {
+  id: string
+  email: string
+  display_name: string | null
+  role: string
+  created_at: string
+  email_verified: boolean
+  driver_mode: boolean
+}
+
+interface AdminUsersPage {
+  users: AdminUserRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+function UsersSection() {
+  const limit = 25
+  const [q, setQ] = useState('')
+  const [submitted, setSubmitted] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState<AdminUsersPage | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    })
+    if (submitted) params.set('q', submitted)
+    try {
+      setPage(await apiGet<AdminUsersPage>(`/v1/admin/users?${params.toString()}`))
+      setError(null)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load users.')
+    }
+  }, [offset, submitted])
+
+  useEffect(() => { void load() }, [load])
+
+  const onSearch = (event: FormEvent) => {
+    event.preventDefault()
+    setOffset(0)
+    setSubmitted(q.trim())
+  }
+
+  const total = page?.total ?? 0
+  const atEnd = page ? offset + page.users.length >= total : true
+
+  return (
+    <section className="admin-section" aria-labelledby="admin-users-title">
+      <header className="admin-section__head">
+        <h2 id="admin-users-title" className="admin-section__title">Users</h2>
+      </header>
+      <p className="admin-section__hint">
+        Accounts on this server. Search matches the email or display name. This list does not change accounts.
+      </p>
+      <form className="admin-drive-search" onSubmit={onSearch}>
+        <label className="admin-drive-importer__label" htmlFor="admin-users-q">Search</label>
+        <input
+          id="admin-users-q"
+          className="admin-drive-search__input"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          maxLength={200}
+        />
+        <button type="submit" className="admin-btn admin-btn--primary">
+          <Search size={14} />
+          <span>Search</span>
+        </button>
+      </form>
+      {error && <p className="admin-alert">{error}</p>}
+      {!error && page && page.users.length === 0 && (
+        <p className="admin-empty">No accounts match.</p>
+      )}
+      {page && page.users.length > 0 && (
+        <table className="admin-corpus">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Name</th>
+              <th>Role</th>
+              <th>Verified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {page.users.map((user) => (
+              <tr key={user.id}>
+                <td>{user.email}</td>
+                <td>{user.display_name || ''}</td>
+                <td>{user.role}</td>
+                <td>{user.email_verified ? 'yes' : 'no'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {page && (
+        <div className="admin-users-pager">
+          <button
+            type="button"
+            className="admin-btn"
+            disabled={offset === 0}
+            onClick={() => setOffset((current) => Math.max(0, current - limit))}
+          >
+            Previous
+          </button>
+          <span>{total} account{total === 1 ? '' : 's'}</span>
+          <button
+            type="button"
+            className="admin-btn"
+            disabled={atEnd}
+            onClick={() => setOffset((current) => current + limit)}
+          >
+            Next
+          </button>
+        </div>
       )}
     </section>
   )
