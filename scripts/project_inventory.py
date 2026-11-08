@@ -28,6 +28,13 @@ _DOCUMENTS_SQL = (
     "SELECT ingest_status, retrieval_visible, count(*) FROM documents "
     "WHERE project_id = :p GROUP BY 1, 2 ORDER BY 1, 2"
 )
+# Per-document diagnostic (INVENTORY_DOCS=1): size, file existence on the task
+# filesystem, and the recorded ingest status + reason. Read-only, no DML.
+_DOC_DETAIL_SQL = (
+    "SELECT id, original_name, size, file_path, ingest_status, "
+    "ingest_status_reason, chunk_count, content_sha256 "
+    "FROM documents WHERE project_id = :p ORDER BY original_name"
+)
 
 
 def _counts(session, pid: str) -> tuple:
@@ -37,6 +44,10 @@ def _counts(session, pid: str) -> tuple:
     ).one()
     rows = session.execute(text(_DOCUMENTS_SQL), {"p": pid}).all()
     return chunks, fts, rows
+
+
+def _doc_detail(session, pid: str) -> list:
+    return session.execute(text(_DOC_DETAIL_SQL), {"p": pid}).all()
 
 
 def main() -> int:
@@ -52,6 +63,13 @@ def main() -> int:
         print(f"{st} | {vis} | {n}")
     if not rows and chunks == 0:
         print("RESULT: no documents and no chunks for this project")
+    if os.environ.get("INVENTORY_DOCS"):
+        with SessionLocal() as s:
+            docs = _doc_detail(s, pid)
+        print("id | original_name | size | file_exists | ingest_status | reason | chunks")
+        for did, name, size, fpath, status, reason, nchunks, sha in docs:
+            exists = bool(fpath) and os.path.exists(fpath)
+            print(f"{did} | {name} | {size} | {exists} | {status} | {reason} | {nchunks}")
     return 0
 
 

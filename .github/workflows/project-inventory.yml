@@ -15,6 +15,11 @@ on:
         description: "project id to count (read-only)"
         required: true
         type: string
+      docs:
+        description: "also print per-document detail (size, file exists, ingest status + reason)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,10 +43,11 @@ jobs:
       - name: Run the read-only count as a one-off task
         env:
           PID: ${{ inputs.project_id }}
+          DOCS: ${{ inputs.docs }}
         run: |
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$SERVICE_FOR_NETWORK" --query 'services[0].networkConfiguration' --output json)
           container=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query 'taskDefinition.containerDefinitions[0].name' --output text)
-          overrides=$(jq -cn --arg c "$container" --arg pid "$PID" '{containerOverrides:[{name:$c, environment:[{name:"WORKER_COMMAND",value:"python -m scripts.project_inventory"},{name:"INVENTORY_PROJECT_ID",value:$pid}]}]}')
+          overrides=$(jq -cn --arg c "$container" --arg pid "$PID" --arg docs "$DOCS" '{containerOverrides:[{name:$c, environment:([{name:"WORKER_COMMAND",value:"python -m scripts.project_inventory"},{name:"INVENTORY_PROJECT_ID",value:$pid}] + (if $docs=="true" then [{name:"INVENTORY_DOCS",value:"1"}] else [] end))}]}')
           arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" --task-definition "$TASK_FAMILY" --launch-type FARGATE --network-configuration "$netcfg" --overrides "$overrides" --query 'tasks[0].taskArn' --output text)
           for attempt in $(seq 1 30); do
             aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null && break
