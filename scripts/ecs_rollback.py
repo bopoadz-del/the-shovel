@@ -24,10 +24,19 @@ from typing import Any
 
 
 def _running(deployment: dict) -> int:
-    try:
-        return int(deployment.get("runningCount") or 0)
-    except (TypeError, ValueError):
+    """A numeric runningCount, or 0 when the field is absent or not a count."""
+    value = deployment.get("runningCount")
+    if isinstance(value, bool) or value is None:
         return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        negative = text.startswith("-")
+        digits = text.removeprefix("-")
+        if digits.isdigit():
+            return -int(digits) if negative else int(digits)
+    return 0
 
 
 def service_from_payload(payload: Any) -> dict:
