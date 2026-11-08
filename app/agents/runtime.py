@@ -8829,6 +8829,7 @@ def _postprocess_answer(
     project_id: str | None = None,
     coverage: tuple[int, int] | None = None,
     audit_rec: dict[str, Any] | None = None,
+    attached_documents: list[dict[str, Any]] | None = None,
 ) -> str:
     """Final-answer post-processing: cost-grounding gate (may refuse an
     ungrounded cost claim) then the standards advisory (appends a non-blocking
@@ -8912,10 +8913,20 @@ def _postprocess_answer(
         # Live: pe_unit_convert ran and the answer still opened with it.
         text = _MASTER_CORPUS_FALLBACK_NOTE + text
     from app.core.rag.coverage_honesty import apply_coverage_honesty
+    # Name the tier that actually answered. An answer is "attached" tier only
+    # when it cites an attached document's name; otherwise the void line keeps
+    # the general-reference wording. Names only, no ids.
+    attached_names = [
+        (str(d.get("original_name") or d.get("filename") or "")).strip()
+        for d in (attached_documents or [])
+    ]
+    cited = [n for n in attached_names if n and n in text]
     text = apply_coverage_honesty(
         text,
         project_id=project_id or (audit_rec or {}).get("project_id"),
         coverage=coverage,
+        source_tier="attached" if cited else None,
+        attached_names=cited,
     )
     # After graft: #587's INTERNAL GUIDANCE did not stop extract from
     # electing the ENGINEER APPOINTMENT heading. Strip leftover steering

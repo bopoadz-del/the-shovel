@@ -1081,7 +1081,7 @@ async def _chat_stream_impl(
                         )):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                     final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
-                    final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit))
+                    final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
                     for chunk in _chunks(final_text, 80):
                         yield {"type": "token", "content": chunk}
                 else:
@@ -1294,7 +1294,7 @@ async def _chat_stream_impl(
                                 if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
                                     final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
-                final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit))
+                final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
                 if _timing:
                     _timing_log("TIMING chat_stream STREAMING-FINAL iter=%d chars=%d cum=%.1fs",
                                  iteration, len(final_text), time.monotonic() - _turn_t0)
@@ -1464,7 +1464,7 @@ async def _chat_stream_impl(
             _LOG.warning("chat_stream: forced final unusable, using fallback")
             final_text = _EMPTY_RESPONSE_FALLBACK
     final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
-    final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit))
+    final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
     for chunk in _chunks(final_text, 80):
         yield {"type": "token", "content": chunk}
     if conversation_id:

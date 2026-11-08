@@ -198,6 +198,57 @@ def test_apply_coverage_honesty_passes_the_attached_tier():
     assert "general reference material" not in out
 
 
+@pytest.mark.parametrize("name,doc_text", [
+    ("S1_contract_data.md", "The cover is 50 mm per S1_contract_data.md."),
+    ("field-inspection-notes.pdf", "The curing is per field-inspection-notes.pdf."),
+])
+def test_postprocess_answer_threads_the_attached_tier(name, doc_text):
+    from app.agents.runtime import _postprocess_answer
+
+    out = _postprocess_answer(
+        doc_text, None, [], coverage=(0, 3),
+        attached_documents=[{"original_name": name}],
+    )
+    assert "attached file" in out
+    assert name in out
+    assert "general reference material" not in out
+
+
+@pytest.mark.parametrize("text", ["No result.", "Not present in this project."])
+def test_postprocess_answer_without_attachment_keeps_general(text):
+    from app.agents.runtime import _postprocess_answer
+
+    out = _postprocess_answer(text, None, [], coverage=(0, 3))
+    assert "general reference material" in out
+    assert "attached file" not in out
+
+
+@pytest.mark.parametrize("truncation", [
+    ("Tool result exceeded 4000 characters and was truncated. Call this tool "
+     "again with char_offset=3005."),
+    ("Tool result exceeded 8000 characters and was truncated. Call again with "
+     "char_offset=6100 until chars_remaining is 0."),
+])
+def test_postprocess_answer_blanks_a_truncation_notice(truncation):
+    """The truncation hint is internal; it is never the user-facing answer."""
+    from app.agents.runtime import _postprocess_answer
+
+    out = _postprocess_answer(truncation, None, [], coverage=(0, 3))
+    assert "Tool result exceeded" not in out
+
+
+def test_postprocess_answer_with_uncited_attachment_keeps_general():
+    """An attachment the answer does not cite is not the attached tier."""
+    from app.agents.runtime import _postprocess_answer
+
+    out = _postprocess_answer(
+        "No result.", None, [], coverage=(0, 3),
+        attached_documents=[{"original_name": "unrelated_file.pdf"}],
+    )
+    assert "general reference material" in out
+    assert "attached file" not in out
+
+
 @pytest.mark.parametrize("session_pid,turn_pid,expected",
     [("session_pid", "turn_pid", "turn_pid"), ("session_pid", None, "session_pid")])
 def test_the_answer_names_the_corpus_it_searched(session_pid, turn_pid, expected):
