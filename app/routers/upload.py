@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from app.dependencies import require_api_key, block_instances, _create_block_instance
 from app.blocks import BLOCK_REGISTRY
-from app.core import file_crypto
+from app.core import byte_store, file_crypto
 from app.core.projects import create_ingestion_job
 from app.worker.ingest_queue import enqueue_ingest
 
@@ -23,13 +23,18 @@ from app.core import upload_limits
 
 ALLOWED_UPLOAD_EXTENSIONS = upload_limits.ALLOWED_UPLOAD_EXTENSIONS
 
-DATA_DIR = os.getenv("DATA_DIR", "./data")
-try:
-    os.makedirs(DATA_DIR, exist_ok=True)
-except PermissionError:
-    # Fallback to temp dir if DATA_DIR is not writable
-    import tempfile
-    DATA_DIR = tempfile.gettempdir()
+
+def _store_upload(original_name: str, fileobj, max_bytes: int | None = None) -> tuple[str, str, int]:
+    """Stream one upload into the document byte store.
+
+    Returns ``(stored_as, path, plaintext_size)``. A store that cannot be
+    created raises ``StoreUnavailable``; nothing is written to the temp dir.
+    """
+    file_id = str(uuid.uuid4())[:8]
+    stored_as = f"{file_id}_{original_name}"
+    path = byte_store.allocate_path(stored_as)
+    size = byte_store.write_stream(path, fileobj, max_bytes=max_bytes)
+    return stored_as, path, size
 
 
 @router.post("/upload")
@@ -96,22 +101,20 @@ async def upload_v1(
                 ),
             )
 
-        # Generate unique filename
-        file_id = str(uuid.uuid4())[:8]
-        filename = f"{file_id}_{original_name}"
-        filepath = os.path.join(DATA_DIR, filename)
-
         # Save uploaded file — encrypted at rest iff DATA_ENCRYPTION_KEY is set
         # (opt-in; plaintext otherwise — see app/core/file_crypto.py). Streamed
         # in blocks so a large drawing set never sits in memory whole.
         try:
-            file_size = file_crypto.write_document_stream(
-                filepath, file.file, max_bytes=max_size,
+            filename, filepath, file_size = _store_upload(
+                original_name, file.file, max_size,
             )
         except file_crypto.UploadTooLarge as exc:
             raise HTTPException(
                 status_code=413, detail=f"File too large. Max size: {exc.limit} bytes",
             ) from exc
+        except byte_store.StoreUnavailable as exc:
+            logger.error("document store refused an upload: %s", exc)
+            raise HTTPException(status_code=503, detail="Document storage is unavailable") from exc
 
         # NB: uploaded files live under DATA_DIR, not on any static route —
         # the old ``/static/{filename}`` URL 404'd. Documents are reached
@@ -275,13 +278,13 @@ async def ingest(
             if ext not in (".pdf", ".docx", ".xlsx", ".doc", ".xls"):
                 raise HTTPException(400, f"File type '{ext}' not supported for ingest")
 
-            # Save to temp — encrypted at rest iff DATA_ENCRYPTION_KEY is set.
-            file_id = str(uuid.uuid4())[:8]
-            filename = f"{file_id}_{original_name}"
-            filepath = os.path.join(DATA_DIR, filename)
-
+            # Encrypted at rest iff DATA_ENCRYPTION_KEY is set. Streamed.
             file_obj.file.seek(0)
-            file_crypto.write_document(filepath, file_obj.file.read())
+            try:
+                _filename, filepath, _size = _store_upload(original_name, file_obj.file)
+            except byte_store.StoreUnavailable as exc:
+                logger.error("document store refused an ingest upload: %s", exc)
+                raise HTTPException(503, "Document storage is unavailable") from exc
 
             saved_paths[key] = filepath
             temp_files.append(filepath)
@@ -378,12 +381,13 @@ async def ingest_via_block(
             _, ext = os.path.splitext(original_name.lower())
             if ext not in (".pdf", ".docx", ".xlsx", ".doc", ".xls"):
                 raise HTTPException(400, f"File type '{ext}' not supported")
-            file_id = str(uuid.uuid4())[:8]
-            filename = f"{file_id}_{original_name}"
-            filepath = os.path.join(DATA_DIR, filename)
-            # Encrypted at rest iff DATA_ENCRYPTION_KEY is set (opt-in).
+            # Encrypted at rest iff DATA_ENCRYPTION_KEY is set (opt-in). Streamed.
             file_obj.file.seek(0)
-            file_crypto.write_document(filepath, file_obj.file.read())
+            try:
+                _filename, filepath, _size = _store_upload(original_name, file_obj.file)
+            except byte_store.StoreUnavailable as exc:
+                logger.error("document store refused an ingest upload: %s", exc)
+                raise HTTPException(503, "Document storage is unavailable") from exc
             saved_paths[key] = filepath
             temp_files.append(filepath)
 

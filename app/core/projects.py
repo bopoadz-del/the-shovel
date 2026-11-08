@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import and_, delete, func, or_, select, text as sqla_text
 from sqlalchemy.exc import IntegrityError
 
+from app.core import byte_store
 from app.core.db import SessionLocal, engine, get_database_url
 from app.core.ingest_status import (
     EXTRACT_FAILED,
@@ -256,6 +257,23 @@ def _path_looks_present(path: str) -> bool:
     return bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
 
 
+def document_byte_inspection(doc: Dict[str, Any]) -> byte_store.ByteInspection:
+    """Whether this row's own bytes are present, missing, or not ours to judge.
+
+    Drive-sourced rows are not judged: the platform keeps no copy of those
+    originals. Permission, network, decryption and mount failures come back
+    as unavailable, not as a lost file.
+    """
+    pointers = extract_document_source_pointers(doc)
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    provenance = meta.get("provenance") if isinstance(meta.get("provenance"), str) else ""
+    return byte_store.inspect_local_claim(
+        file_path=doc.get("file_path") or "",
+        drive_file_id=pointers.get("drive_file_id") or "",
+        provenance=provenance,
+    )
+
+
 # A zero chunk count is not an extraction failure. These two stored statuses
 # are the ones that mean the extract itself produced nothing.
 _EXTRACT_FAILURE_DETAIL = (
@@ -290,7 +308,17 @@ def panel_status_for(doc: Dict[str, Any]) -> Optional[Dict[str, str]]:
     an extraction failure on its own. A PARTIAL_OCR document keeps its
     chunks, so the chunk-count early return must not hide it: the panel
     says exactly which pages were read.
+
+    A document whose bytes are confirmed gone is a lost file, including
+    when chunks from an earlier index are still on the row. That note is
+    not an extraction failure, and the chunk count does not hide it.
     """
+    if str(doc.get("bytes_state") or "") == byte_store.MISSING:
+        return {
+            "label": byte_store.MISSING_LABEL,
+            "detail": byte_store.MISSING_DETAIL,
+            "status": byte_store.BYTES_MISSING,
+        }
     ingest = str(doc.get("ingest_status") or "").strip()
     if ingest == PARTIAL_OCR:
         return {
@@ -367,9 +395,23 @@ def _document_as_dict(document: Document) -> Dict[str, Any]:
     out["ocr_skip_reason"] = getattr(document, "ocr_skip_reason", None)
     out["ocr_unusable_pages"] = int(getattr(document, "ocr_unusable_pages", 0) or 0)
     pointers = extract_document_source_pointers(out)
-    local = _path_looks_present(out.get("file_path") or "")
+    inspection = document_byte_inspection(out)
+    out["bytes_state"] = inspection.state
+    out["bytes_state_reason"] = inspection.reason
     out["has_remote_source"] = bool(pointers["drive_file_id"])
+    if inspection.state == byte_store.PRESENT:
+        local = True
+    elif inspection.state == byte_store.NOT_STORED:
+        local = _path_looks_present(out.get("file_path") or "")
+    else:
+        local = False
     out["has_file"] = local or out["has_remote_source"]
+    # Confirmed-gone bytes are not an indexed document, even when older
+    # chunks are still stored. has_file stays false: a remote id on a
+    # user upload does not stand in for the missing local copy.
+    if inspection.state == byte_store.MISSING:
+        out["searchable"] = False
+        out["has_file"] = False
     attach_panel_status(out)
     return out
 
@@ -1529,6 +1571,42 @@ def set_document_drive_md5(doc_id: str, token: Optional[str]) -> Optional[Dict[s
             if document is None:
                 return None
             document.drive_md5 = (token or "").strip() or None
+            session.commit()
+    return get_document(doc_id)
+
+
+def restore_document_bytes(
+    doc_id: str,
+    *,
+    file_path: str,
+    stored_as: str,
+    size: int,
+) -> Optional[Dict[str, Any]]:
+    """Point ``doc_id`` at a freshly stored copy. The row id and its chunks stay.
+
+    Does not change ``ingest_status`` or ``chunk_count``. A lost-file note
+    clears on the next read because the bytes are present again. The
+    indexing record is marked restored so a stale lost-file error is not
+    what the panel shows once the file is back.
+    """
+    if not doc_id or not file_path:
+        return None
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            document = session.get(Document, doc_id)
+            if document is None:
+                return None
+            document.file_path = file_path
+            document.stored_as = stored_as
+            document.size = int(size)
+            current = dict(coerce_document_metadata(document.metadata_))
+            indexing = dict(current.get("indexing") or {})
+            indexing["status"] = "restored"
+            indexing["error"] = None
+            indexing["detail"] = "Bytes restored."
+            current["indexing"] = indexing
+            document.metadata_ = current
             session.commit()
     return get_document(doc_id)
 

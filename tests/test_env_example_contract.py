@@ -23,6 +23,9 @@ REQUIRED_KEYS = [
     # and per-process state.
     "DATABASE_URL",
     "DATA_DIR",
+    "DOCUMENT_BYTE_STORE",
+    "DOCUMENT_STORE_ROOT",
+    "REQUIRE_DURABLE_DOCUMENT_STORE",
     "REDIS_URL",
     # Ingestion routing. Not a tuning knob: set true without a live worker and
     # every upload lands on a queue nobody drains (200 + chunk_count 0

@@ -3413,6 +3413,27 @@ def _index_document(
     ext = _ext_of(filename)
     fingerprint = f"{doc.get('uploaded_at', '')}:{doc.get('size', 0)}"
 
+    # Confirmed-gone bytes are not an extraction failure. Do not stamp
+    # EXTRACT_FAILED (that status deletes chunks) and do not burn a retry:
+    # the file will not reappear until someone uploads it again.
+    from app.core import byte_store as _byte_store
+
+    byte_inspection = _projects.document_byte_inspection(doc)
+    if byte_inspection.state == _byte_store.MISSING:
+        return {
+            "status": "error",
+            "error": _byte_store.BYTES_MISSING,
+            "terminal": True,
+            "banner": _byte_store.MISSING_LABEL,
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": filename,
+            "indexed": 0,
+            "skipped_unsupported": 0,
+            "total_chunks": int(doc.get("chunk_count") or 0),
+            "chunks_kept": True,
+        }
+
     # Bounded retries: count this attempt on the ledger row BEFORE the work,
     # so an attempt that kills the process still counts (see ingest_status).
     from app.core import ingest_status as _ist

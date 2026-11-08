@@ -17,7 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.core import audit, doc_index, file_crypto, projects as store
+from app.core import audit, byte_store, doc_index, file_crypto, projects as store
 from app.blocks import BLOCK_REGISTRY, get_block
 from app.dependencies import (
     require_user,
@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-DATA_DIR = os.getenv("DATA_DIR", "./data")
 # Cap + accepted formats come from app.core.upload_limits so this route and
 # /upload can never drift apart again (they had different caps AND different
 # extension sets). Read through the function so a deployment-time env change
@@ -50,11 +49,6 @@ PILOT_INCOMPLETE_SHELL_DOC_THRESHOLD = int(
 # rest load on demand via GET .../documents. Keeps a 2700-doc corpus from
 # serializing every row on every workspace open.
 _DOC_FIRST_PAGE = int(os.getenv("PROJECT_DETAIL_DOC_PAGE", "100"))
-try:
-    os.makedirs(DATA_DIR, exist_ok=True)
-except PermissionError:
-    import tempfile
-    DATA_DIR = tempfile.gettempdir()
 
 # A project document is persisted and indexed: the RAG takes text formats
 # only (ingest_status.TEXT_BEARING_EXTS, docs/INGEST_EXCLUSION_RULE.md).
@@ -352,7 +346,13 @@ async def get_project(project_id: str, auth: dict = Depends(require_user)):
             chunk_counts = chunk_store.count_by_doc(resolved_id)
             for doc in proj.get("documents", []) or []:
                 doc["chunk_count"] = chunk_counts.get(doc.get("id"), 0)
-                doc["searchable"] = bool(doc["chunk_count"])
+                # Live chunk counts must not mark a lost file as indexed.
+                # The chunks themselves stay; the row is just not searchable
+                # until the bytes are restored.
+                if doc.get("bytes_state") == byte_store.MISSING:
+                    doc["searchable"] = False
+                else:
+                    doc["searchable"] = bool(doc["chunk_count"])
                 _idx_meta = (doc.get("metadata") or {}).get("indexing")
                 if _idx_meta:
                     doc["indexing_status"] = _idx_meta
@@ -1006,22 +1006,17 @@ async def add_document(
             f"File too large ({declared_size} bytes). Max is {max_size} bytes.",
         )
 
-    file_id = str(uuid.uuid4())[:8]
-    stored_as = f"{file_id}_{original_name}"
-    filepath = os.path.join(DATA_DIR, stored_as)
-    # Persist the document — encrypted at rest iff DATA_ENCRYPTION_KEY is set
-    # (opt-in; plaintext otherwise — see app/core/file_crypto.py). The recorded
-    # `size` is the original plaintext size, not the (larger) ciphertext size.
     try:
-        size = file_crypto.write_document_stream(
-            filepath, file.file, max_bytes=max_size,
-        )
+        stored_as, filepath, size = _persist_upload(original_name, file, max_size)
     except file_crypto.UploadTooLarge as exc:
         # Reachable when the declared size understated the stream (chunked
         # transfer encoding sends no length).
         raise HTTPException(
             413, f"File too large. Max is {exc.limit} bytes.",
         ) from exc
+    except byte_store.StoreUnavailable as exc:
+        logger.error("document store refused an upload: %s", exc)
+        raise HTTPException(503, "Document storage is unavailable") from exc
 
     if role is not None and role not in store.VALID_ROLES:
         raise HTTPException(
@@ -1072,6 +1067,120 @@ async def add_document(
         "readiness": store.compute_readiness(project_id),
     }
     return response
+
+
+def _persist_upload(original_name: str, file: UploadFile, max_size: int) -> Tuple[str, str, int]:
+    """Stream ``file`` into the document byte store. Returns name, path, plaintext size.
+
+    The on-disk format is still ``file_crypto`` (encrypted iff a key is set),
+    written in bounded blocks. A store that cannot be created raises
+    ``StoreUnavailable`` — it is never redirected at the temp directory.
+    """
+    file_id = str(uuid.uuid4())[:8]
+    stored_as = f"{file_id}_{original_name}"
+    filepath = byte_store.allocate_path(stored_as)
+    size = byte_store.write_stream(filepath, file.file, max_bytes=max_size)
+    return stored_as, filepath, size
+
+
+@router.post("/v1/projects/{project_id}/documents/{document_id}/bytes")
+async def restore_document_bytes(
+    project_id: str,
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    auth: dict = Depends(require_user),
+):
+    """Replace the stored bytes of an existing document. The row id stays.
+
+    Same access as adding a document: anyone who can open the project.
+    Drive-sourced rows are refused — those originals stay in Drive and this
+    route does not start archiving them. Chunks already indexed are kept.
+    """
+    _owned_or_404(
+        project_id, auth["user_id"], read_only=True,
+        role=auth.get("role", "user"), doc_limit=0,
+    )
+    doc = store.get_document(document_id)
+    owner = (doc or {}).get("project_id")
+    resolved = store.storage_project_id(project_id)
+    if not doc or owner not in {project_id, resolved}:
+        raise HTTPException(404, f"Document '{document_id}' not found")
+
+    inspection = store.document_byte_inspection(doc)
+    if inspection.reason == "drive_source":
+        raise HTTPException(
+            409,
+            "This document is kept in Google Drive. The platform does not archive a copy.",
+        )
+
+    upload_name = os.path.basename((file.filename or "").replace("\\", "/")).strip()
+    if not upload_name or upload_name in {".", ".."}:
+        raise HTTPException(400, "Invalid filename")
+    from app.core import compressed
+
+    if compressed.is_compressed(upload_name, compressed.head_of(file.file)):
+        raise HTTPException(415, compressed.COMPRESSED_UPLOAD_DETAIL)
+    old_ext = os.path.splitext((doc.get("original_name") or "").lower())[1]
+    new_ext = os.path.splitext(upload_name.lower())[1]
+    if new_ext != old_ext:
+        raise HTTPException(
+            415,
+            "Re-upload must be the same file type as the document.",
+        )
+
+    max_size = _max_doc_upload_size()
+    file.file.seek(0, 2)
+    declared_size = file.file.tell()
+    file.file.seek(0)
+    if declared_size > max_size:
+        raise HTTPException(
+            413,
+            f"File too large ({declared_size} bytes). Max is {max_size} bytes.",
+        )
+
+    # Keep the row's name. The new object uses that name so the extension
+    # the extractors see stays the one the row already has.
+    previous = doc.get("file_path") or ""
+    try:
+        stored_as, filepath, size = _persist_upload(doc["original_name"], file, max_size)
+    except file_crypto.UploadTooLarge as exc:
+        raise HTTPException(413, f"File too large. Max is {exc.limit} bytes.") from exc
+    except byte_store.StoreUnavailable as exc:
+        logger.error("document store refused a re-upload: %s", exc)
+        raise HTTPException(503, "Document storage is unavailable") from exc
+
+    updated = store.restore_document_bytes(
+        document_id, file_path=filepath, stored_as=stored_as, size=size,
+    )
+    if updated is None:
+        raise HTTPException(404, f"Document '{document_id}' not found")
+    if previous and previous != filepath and byte_store.inspect_path(previous).state == byte_store.PRESENT:
+        try:
+            if os.path.realpath(previous).startswith(os.path.realpath(byte_store.store_root()) + os.sep):
+                os.remove(previous)
+        except OSError:
+            logger.warning("could not remove replaced document bytes %s", previous, exc_info=True)
+
+    await audit.arecord(
+        "document.bytes_restored",
+        project_id=project_id,
+        document_id=document_id,
+        name=doc.get("original_name"),
+        size=size,
+        user_id=auth["user_id"],
+    )
+    from app.core import privileges
+
+    if privileges.caller_may_add_to_project_rag(auth.get("role")):
+        background_tasks.add_task(
+            doc_index.maybe_eager_index, store.storage_project_id(project_id), document_id,
+        )
+    return {
+        "status": "stored",
+        "message": f"Restored bytes for '{doc.get('original_name')}'.",
+        "document": updated,
+    }
 
 
 # ── gated progress tracking (Roadmap V2 · 0.2) ──────────────────────────────
