@@ -3244,8 +3244,15 @@ _XML_PARAM_RE = re.compile(
     r'<\s*parameter\s+name\s*=\s*["\']([^"\']+)["\']\s*>(.*?)</\s*parameter\s*>',
     re.IGNORECASE | re.DOTALL,
 )
+# Anthropic's native tool-call content block, emitted as prose by models that
+# fail to produce the structured tool_calls field:
+#   <tool_call>{"name":"...","arguments":{...}}</tool_call>
+_ANTHROPIC_TOOL_CALL_RE = re.compile(
+    r'<\s*tool_call\b[^>]*>\s*(\{.*?\})\s*</\s*tool_call\s*>',
+    re.IGNORECASE | re.DOTALL,
+)
 _XML_TOOL_LEAK_RE = re.compile(
-    r"<\s*(?:function_calls|function_results|invoke)\b",
+    r"<\s*(?:function_calls|function_results|invoke|tool_call|tool_use)\b",
     re.IGNORECASE,
 )
 _VALIDATION_STAGE_ORDER = (
@@ -3303,7 +3310,8 @@ def _looks_like_tool_markup_leak(text: str) -> bool:
 
 
 def _recover_xml_tool_calls(text: str) -> list[dict]:
-    """Recover ``<invoke name=...>`` XML leaked into ``content``."""
+    """Recover ``<invoke name=...>`` and ``<tool_call>{...}</tool_call>``
+    XML leaked into ``content``."""
     if not text or not _looks_like_xml_tool_leak(text):
         return []
     out: list[dict] = []
@@ -3326,6 +3334,16 @@ def _recover_xml_tool_calls(text: str) -> list[dict]:
             "type": "function",
             "function": {"name": name, "arguments": json.dumps(args)},
         })
+    # Anthropic content-block form: a JSON body with name + arguments.
+    for body in _ANTHROPIC_TOOL_CALL_RE.finditer(text):
+        try:
+            obj = json.loads(body.group(1))
+        except json.JSONDecodeError:
+            continue
+        recovered = _tool_calls_from_json_obj(obj)
+        for tc in recovered:
+            tc["id"] = f"recovered_xml_{len(out) + 1}"
+            out.append(tc)
     return out
 
 
@@ -3426,6 +3444,34 @@ def _graft_validation_verdict_if_unusable(
     return _format_validation_verdict(payload)
 
 
+def _strip_reasoning_blocks(text: str) -> str:
+    """Remove hidden reasoning/thinking blocks and markers so they never
+    reach the user. Handles paired ``<think>...</think>`` / ``<thinking>`` /
+    ``<reasoning>`` / ``<analysis>`` tags (any case, any whitespace) and Qwen /
+    DeepSeek's ``...`` closing markers. Returns the remaining text, which may
+    be empty."""
+    if not text:
+        return text
+    for tag in ("think", "thinking", "reasoning", "analysis"):
+        # Paired block first, then an unpaired open tag drops everything after
+        # it (the reasoning region is hidden; only what follows is visible).
+        text = re.sub(
+            rf'<\s*{tag}\s*>.*?<\s*/\s*{tag}\s*>', "", text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        text = re.sub(
+            rf'<\s*{tag}\s*>.*', "", text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    # A leftover closing marker (e.g. Qwen ``...``) starts the visible
+    # answer; drop the marker itself, keep what follows.
+    text = re.sub(
+        r'<\s*/\s*[\uFF5C|]?\s*(?:think|thinking|reasoning|analysis)\s*>',
+        "", text, flags=re.IGNORECASE,
+    )
+    return text.strip()
+
+
 def _sanitize_final_text(
     text: str,
     messages: list[dict[str, Any]] | None = None,
@@ -3434,16 +3480,18 @@ def _sanitize_final_text(
     """Prepare assistant content for display.
 
     1. Strip DeepSeek DSML tool-call markup.
-    2. Detect raw internal tool-call JSON or Anthropic XML tool leaks.
-    3. Return a controlled fallback if the content is raw internal tool args.
-    4. If that fallback would hide a ``validation_pipeline`` verdict, graft it.
-    5. Return empty string if nothing usable remains.
+    2. Strip hidden reasoning/thinking blocks.
+    3. Detect raw internal tool-call JSON or Anthropic XML tool leaks.
+    4. Return a controlled fallback if the content is raw internal tool args.
+    5. If that fallback would hide a ``validation_pipeline`` verdict, graft it.
+    6. Return empty string if nothing usable remains.
     """
     if not text:
         cleaned = ""
     else:
         cleaned = _strip_dsml(text).strip()
         cleaned = _strip_answer_routing_preamble(cleaned)
+        cleaned = _strip_reasoning_blocks(cleaned)
 
     if cleaned:
         # Unwrap a sole markdown fence / BOM before the tool-JSON detector so
