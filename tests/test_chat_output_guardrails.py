@@ -163,6 +163,27 @@ def test_final_text_needs_forced_retry_on_tool_format_fallback():
     assert _final_text_needs_forced_retry("Real answer") is False
 
 
+@pytest.mark.parametrize("greeting", [
+    "What can I help you with today?",
+    "How can I assist you?",
+    "What would you like to know?",
+    "Is there anything I can help you with?",
+    "Hello! How may I help you?",
+])
+def test_final_text_needs_forced_retry_on_greeting_only(greeting):
+    """M4: a greeting-only reply on a real question is a failed turn."""
+    assert _final_text_needs_forced_retry(greeting) is True
+
+
+def test_final_text_needs_forced_retry_does_not_catch_substantive_answer():
+    """M4 negative control: a real answer that ends on a help-offer is kept."""
+    answer = (
+        "The minimum cover is 50 mm for substructure concrete. "
+        "Is there anything else I can help with?"
+    )
+    assert _final_text_needs_forced_retry(answer) is False
+
+
 @pytest.mark.asyncio
 async def test_chat_stream_retries_when_sanitizer_would_emit_tool_format_fallback(monkeypatch):
     """After search tools, a leaked search-args JSON final must trigger a forced

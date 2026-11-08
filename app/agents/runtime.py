@@ -513,6 +513,12 @@ _SEARCH_PREAMBLE_RETRY_NUDGE = (
     "numbers, hold/witness or variance, and signatories. Never reply with an "
     "intention to search."
 )
+_GREETING_RETRY_NUDGE = (
+    "Your previous reply was only a greeting offering help and did not answer "
+    "the question. Answer the user's question now in plain text from what "
+    "this thread already holds. If something could not be found or read, say "
+    "what is missing; if an input is needed, ask for it by name."
+)
 
 
 # Retry instruction when the model handed back its own input. Distinct from
@@ -596,6 +602,34 @@ def _looks_like_search_preamble(text: str) -> bool:
     return _strip_progress_narration(t) != t
 
 
+_GREETING_ONLY_RE = re.compile(
+    r"^\s*"
+    r"(?:(?:hi|hello|hey)[\s,.!]*)?"
+    r"(?:"
+    r"(?:what|how)\s+(?:can|may|could|would|shall)\s+(?:i|we)\s+(?:help|assist)"
+    r"|"
+    r"(?:what|how)\s+(?:would|could|do)\s+you\s+(?:like|need|want)"
+    r"|"
+    r"(?:is|are)\s+there\s+anything\s+(?:i|we)\s+can\s+(?:help|assist)"
+    r")"
+    r"[^.!?\n]{0,80}\??\s*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_greeting_only(text: str) -> bool:
+    """True when the reply is only a help-offer greeting with no answer.
+
+    M4: an empty greeting ("What can I help you with today?") on a real
+    question is a failed turn. Only a SHORT single-sentence help-offer
+    matches, so a substantive answer that ends on "anything else I can help
+    with?" is never caught (its earlier sentences are not help-offers)."""
+    t = (text or "").strip()
+    if not t or len(t) > 200 or t.count("\n") > 3:
+        return False
+    return bool(_GREETING_ONLY_RE.match(t))
+
+
 def _final_text_needs_forced_retry(
     text: str, *, user_message: str | None = None,
 ) -> bool:
@@ -611,6 +645,8 @@ def _final_text_needs_forced_retry(
     # contract-particular lookup and a delay-damages ask). The request
     # type does not change whether a dangling promise is an answer.
     if _looks_like_search_preamble(text):
+        return True
+    if _looks_like_greeting_only(text):
         return True
     return _exit_leaves_nothing(text)
 
@@ -644,6 +680,8 @@ def _forced_retry_nudge(text: str) -> str | None:
         return _TOOL_FORMAT_RETRY_NUDGE
     if _looks_like_search_preamble(text):
         return _SEARCH_PREAMBLE_RETRY_NUDGE
+    if _looks_like_greeting_only(text):
+        return _GREETING_RETRY_NUDGE
     if _exit_leaves_nothing(text):
         return _USER_TERMS_RETRY_NUDGE
     return None
