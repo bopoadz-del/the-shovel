@@ -136,7 +136,7 @@ def test_a_failed_store_root_is_not_the_temp_dir(sample, tmp_path, monkeypatch):
         blocker.write_text("x")
         blockers.append(blocker)
         monkeypatch.setenv("DOCUMENT_STORE_ROOT", str(blocker / "child"))
-        with pytest.raises(byte_store.StoreUnavailable):
+        with pytest.raises(byte_store.StoreUnavailable, match="not usable"):
             byte_store.ensure_root()
     upload_src = Path("app/routers/upload.py").read_text(encoding="utf-8")
     projects_src = Path("app/routers/projects.py").read_text(encoding="utf-8")
@@ -730,6 +730,213 @@ def test_changed_modules_stay_referenced(sample):
     assert callable(app.routers.exports._persist_and_index)
     assert callable(app.worker.ingest_worker.ingest_document)
     assert callable(app.worker.run_worker.main)
+
+
+@pytest.mark.parametrize("sample", ["left", "right"])
+def test_mount_helpers_keep_their_first_rule(sample, tmp_path, monkeypatch):
+    assert byte_store._covers("/", "/tmp/" + sample) is True
+    assert byte_store._covers("/mnt/efs", "/mnt/other/" + sample) is False
+    assert byte_store._not_enforcing_message().startswith("REQUIRE_DURABLE_DOCUMENT_STORE")
+    assert "container" in byte_store._not_enforcing_message()
+
+    class _Buf:
+        def __init__(self, text):
+            self._text = text
+
+        def read(self):
+            return self._text
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    good = "1 2 3:4 / /mnt/efs rw - nfs4 fs-" + sample + ".efs:/ rw\n"
+    text = "not a mount line\n" + good
+
+    def _open(path, *args, **kwargs):
+        if str(path) == "/proc/self/mountinfo":
+            return _Buf(text)
+        return open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _open)
+    rows = byte_store.read_mount_table()
+    assert len(rows) == 1
+    assert rows[0][1] == "nfs4"
+
+    monkeypatch.setattr(byte_store, "read_mount_table", lambda: [])
+    ident = byte_store.mount_identity(str(tmp_path))
+    assert ident.fstype == ""
+    assert ident.mountpoint == os.path.realpath(str(tmp_path))
+
+    here = tmp_path / sample
+    here.mkdir()
+    missing = here / "nope"
+    assert byte_store._existing_ancestor(str(here)) == str(here.resolve())
+    assert byte_store._existing_ancestor(str(missing)) == str(here.resolve())
+
+    marker = tmp_path / f"file-{sample}"
+    marker.write_text("x")
+    monkeypatch.setattr(byte_store, "durable_decision", lambda store, root: True)
+    assert byte_store.is_durable_mount(str(marker)) is False
+    assert byte_store.is_durable_mount(str(here)) is True
+
+
+@pytest.mark.parametrize("name", ["..", ""])
+def test_allocate_rejects_a_bad_name_and_a_symlink(name, tmp_path, monkeypatch):
+    root = _root(tmp_path, monkeypatch, "alloc-" + (name or "empty").replace(".", "d"))
+    with pytest.raises(byte_store.StoreConfigError):
+        byte_store.allocate_path(name)
+    link = root / f"link-{name or 'empty'}"
+    outside = tmp_path / f"out-{name or 'empty'}"
+    outside.write_text("secret")
+    link.symlink_to(outside)
+    with pytest.raises(byte_store.StoreConfigError):
+        byte_store.write_bytes(str(link), b"nope")
+    assert outside.read_text() == "secret"
+
+
+@pytest.mark.parametrize("errno_no,reason", [(errno.EACCES, "permission"), (errno.EIO, "io")])
+def test_errno_reason_names_permission_and_io(errno_no, reason):
+    assert byte_store._errno_reason(OSError(errno_no, "boom")) == reason
+    assert byte_store.inspect_path("") == byte_store.ByteInspection(
+        byte_store.NOT_STORED, "no_path", "",
+    )
+
+
+@pytest.mark.parametrize("sample", ["probe-a", "probe-b"])
+def test_probe_rejects_a_mismatch_and_an_uncreatable_root(sample, tmp_path, monkeypatch):
+    root = tmp_path / sample
+    root.mkdir()
+    real_open = open
+
+    def _open(path, mode="r", *args, **kwargs):
+        fh = real_open(path, mode, *args, **kwargs)
+        if "r" in mode and "fork-store-probe" in str(path):
+            fh.close()
+            class _Bad:
+                def read(self):
+                    return b"different"
+                def __enter__(self):
+                    return self
+                def __exit__(self, *a):
+                    return False
+            return _Bad()
+        return fh
+
+    monkeypatch.setattr("builtins.open", _open)
+    with pytest.raises(RuntimeError, match="different bytes"):
+        byte_store.probe_store(str(root))
+    monkeypatch.undo()
+    blocker = tmp_path / f"block-{sample}"
+    blocker.write_text("x")
+    with pytest.raises(RuntimeError, match="cannot create"):
+        byte_store.probe_store(str(blocker / "child"))
+
+
+@pytest.mark.parametrize("sample", ["abs-a", "abs-b"])
+def test_absolute_paths_are_stored_claims_and_bare_names_are_not(sample, tmp_path):
+    assert byte_store.path_is_stored_bytes(str(tmp_path / sample)) is True
+    assert byte_store.path_is_stored_bytes(sample + ".pdf") is False
+
+
+@pytest.mark.parametrize("sample", ["one", "two"])
+def test_project_page_loads_when_the_chunk_store_is_down(sample, tmp_path, monkeypatch, client, as_user):
+    root = _root(tmp_path, monkeypatch, sample)
+    pid = _project(USER["user_id"], f"nostore-{sample}")
+    store.add_document(
+        pid, f"{sample}.txt", file_path=str(root / f"gone-{sample}.txt"), size=4,
+        metadata={"provenance": "user_upload"},
+    )
+
+    def _boom():
+        raise RuntimeError("no embedder")
+
+    monkeypatch.setattr("app.core.rag.embeddings.get_embedder", _boom)
+    listed = client.get(f"/v1/projects/{pid}", headers=NO_KEY)
+    assert listed.status_code == 200
+    doc = listed.json()["documents"][0]
+    assert doc["searchable"] is False
+    assert doc["panel_status"]["label"] == "File missing, re-upload"
+
+
+@pytest.mark.parametrize("sample", ["missing-doc-a", "missing-doc-b"])
+def test_reupload_unknown_document_is_404(sample, tmp_path, monkeypatch, client, as_user):
+    _root(tmp_path, monkeypatch)
+    pid = _project(USER["user_id"], f"missing-row-{sample}")
+    response = client.post(
+        f"/v1/projects/{pid}/documents/{sample}/bytes",
+        files={"file": ("note.txt", b"hello", "text/plain")},
+        headers=NO_KEY,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("sample", ["ingest-a", "ingest-b"])
+def test_ingest_without_a_file_is_400(sample, client):
+    bare = client.post("/ingest", headers=NO_KEY)
+    via = client.post("/ingest-via-block", headers=NO_KEY)
+    assert bare.status_code == 400
+    assert via.status_code == 400
+    assert sample
+
+
+@pytest.mark.parametrize("sample", ["boq-a", "boq-b"])
+def test_cost_boq_without_categories_is_400(sample, tmp_path, monkeypatch, client, as_user):
+    _root(tmp_path, monkeypatch)
+    pid = _project(USER["user_id"], f"boq-{sample}")
+    response = client.post(
+        f"/v1/projects/{pid}/export/cost-boq",
+        json={"title": sample},
+        headers=NO_KEY,
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("sample", ["drive-a", "drive-b"])
+def test_drive_import_unknown_project_is_404(sample, client, as_user):
+    response = client.post(
+        f"/v1/projects/no-such-{sample}/drive/import",
+        json={"file_id": sample, "name": "note.txt"},
+        headers=NO_KEY,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sample", ["run-a", "run-b"])
+async def test_worker_marks_the_job_running_before_index(sample):
+    import uuid
+    from unittest.mock import patch
+
+    from app.core.db import SessionLocal, engine
+    from app.core.models import IngestionJob
+    from app.worker.ingest_worker import ingest_document
+
+    IngestionJob.__table__.create(bind=engine, checkfirst=True)
+    db = SessionLocal()
+    job = IngestionJob(
+        id=uuid.uuid4(),
+        project_id=f"proj-{sample}",
+        document_id=f"doc-{sample}",
+        status="pending",
+    )
+    db.add(job)
+    db.commit()
+    seen = []
+
+    def _index(*args, **kwargs):
+        db.refresh(job)
+        seen.append(job.status)
+        return {"chunks": ["a", "b"]}
+
+    try:
+        with patch("app.worker.ingest_worker.doc_index.maybe_eager_index", _index):
+            await ingest_document({}, job.project_id, job.document_id, str(job.id))
+        assert seen == ["running"]
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize("sample", ["first", "second"])

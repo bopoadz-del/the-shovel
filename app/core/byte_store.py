@@ -222,12 +222,13 @@ def durable_decision(store: MountIdentity, root: MountIdentity) -> bool:
 
 def _existing_ancestor(path: str) -> str:
     cur = os.path.abspath(path)
-    while not os.path.exists(cur):
+    while True:
+        if os.path.exists(cur):
+            return cur
         parent = os.path.dirname(cur)
         if parent == cur:
             return cur
         cur = parent
-    return cur
 
 
 def is_durable_mount(path: str) -> bool:
@@ -467,18 +468,16 @@ def path_is_stored_bytes(path: str) -> bool:
     object. Absence of that name is not a lost upload. An absolute path, or
     any path under the store root, is.
     """
+    if os.path.isabs(path or ""):
+        return True
     if not path:
         return False
-    if os.path.isabs(path):
-        return True
     try:
         root = os.path.realpath(store_root())
     except OSError:
-        root = ""
+        return False
     real = os.path.realpath(path)
-    if root and (real == root or real.startswith(root + os.sep)):
-        return True
-    return False
+    return bool(root) and (real == root or real.startswith(root + os.sep))
 
 
 def inspect_local_claim(

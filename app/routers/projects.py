@@ -339,32 +339,28 @@ async def get_project(project_id: str, auth: dict = Depends(require_user)):
         proj["indexed_chunks"] = None
         proj["has_indexed_chunks"] = None
 
-    # Per-document chunk_count for the first page (same page the endpoint
-    # returns). A healthy bulk-migrated doc must never show 0 here.
-    try:
-        if chunk_store is not None:
-            chunk_counts = chunk_store.count_by_doc(resolved_id)
-            for doc in proj.get("documents", []) or []:
-                doc["chunk_count"] = chunk_counts.get(doc.get("id"), 0)
-                # Live chunk counts must not mark a lost file as indexed.
-                # The chunks themselves stay; the row is just not searchable
-                # until the bytes are restored.
-                if doc.get("bytes_state") == byte_store.MISSING:
-                    doc["searchable"] = False
-                else:
-                    doc["searchable"] = bool(doc["chunk_count"])
-                _idx_meta = (doc.get("metadata") or {}).get("indexing")
-                if _idx_meta:
-                    doc["indexing_status"] = _idx_meta
-                # Live counts override the ledger. Recompute the note so a
-                # file that now has chunks does not keep a not-indexed label.
-                store.attach_panel_status(doc)
-    except Exception:
-        # Enrichment is best-effort — never break the project load on it.
-        logger.warning(
-            "swallowed %s in get_project() — continuing",
-            "Exception", exc_info=True,
-        )
+    # Per-document chunk_count for the first page. A lost file is not
+    # searchable even when the chunk table still holds its text. When the
+    # chunk store itself is down, that flag is still applied and the page
+    # loads. Counting chunks is not wrapped: a store that exists and then
+    # fails is a real error, not a missing file.
+    documents = proj.get("documents") or []
+    if chunk_store is None:
+        for doc in documents:
+            if doc.get("bytes_state") == byte_store.MISSING:
+                doc["searchable"] = False
+    else:
+        chunk_counts = chunk_store.count_by_doc(resolved_id)
+        for doc in documents:
+            doc["chunk_count"] = chunk_counts.get(doc.get("id"), 0)
+            if doc.get("bytes_state") == byte_store.MISSING:
+                doc["searchable"] = False
+            else:
+                doc["searchable"] = bool(doc["chunk_count"])
+            _idx_meta = (doc.get("metadata") or {}).get("indexing")
+            if _idx_meta:
+                doc["indexing_status"] = _idx_meta
+            store.attach_panel_status(doc)
 
     return proj
 
