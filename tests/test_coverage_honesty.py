@@ -166,6 +166,38 @@ def test_total_zero_is_not_a_free_pass():
     assert "did not search" in out
 
 
+@pytest.mark.parametrize("name", [
+    "S1_contract_data.md",
+    "field-inspection-notes.pdf",
+])
+def test_void_coverage_names_the_attached_file(name):
+    """M3: an answer sourced from an attached file never carries the
+    general-reference void sentence; it names the file instead."""
+    out = finalise_answer(
+        "The cover is 50 mm.", 0, 3,
+        source_tier="attached", attached_names=[name],
+    )
+    assert "attached file" in out
+    assert name in out
+    assert "general reference material" not in out
+    assert "0 of 3 project documents indexed" in out
+
+
+def test_void_coverage_without_attachment_still_says_general():
+    out = finalise_answer("No result.", 0, 3)
+    assert "general reference material" in out
+    assert "attached file" not in out
+
+
+def test_apply_coverage_honesty_passes_the_attached_tier():
+    out = apply_coverage_honesty(
+        "The cover is 50 mm.", coverage=(0, 3),
+        source_tier="attached", attached_names=["S1.md"],
+    )
+    assert "attached file" in out
+    assert "general reference material" not in out
+
+
 @pytest.mark.parametrize("session_pid,turn_pid,expected",
     [("session_pid", "turn_pid", "turn_pid"), ("session_pid", None, "session_pid")])
 def test_the_answer_names_the_corpus_it_searched(session_pid, turn_pid, expected):
