@@ -223,6 +223,25 @@ def test_postprocess_answer_without_attachment_keeps_general(text):
     assert "attached file" not in out
 
 
+@pytest.mark.parametrize("sources,expected", [
+    ([{"layer": "own", "doc_name": "a"}], "project"),
+    ([{"layer": "general_knowledge"}], "general"),
+    ([{"layer": "master_corpus"}], "general"),
+    ([], "general"),
+    ([{"layer": "general_knowledge"}, {"layer": "own"}], "project"),
+    # no layer key -> defaults to the own layer (the project tier)
+    ([{"doc_name": "a", "chunk_id": "c1"}], "project"),
+    # non-dict entries are skipped, not treated as own
+    ([None, {"layer": "general_knowledge"}], "general"),
+    # None sources fall back to the general tier
+    (None, "general"),
+])
+def test_answer_tier_marks_general_only(sources, expected):
+    from app.agents.runtime import _answer_tier
+
+    assert _answer_tier(sources) == expected
+
+
 @pytest.mark.parametrize("truncation", [
     ("Tool result exceeded 4000 characters and was truncated. Call this tool "
      "again with char_offset=3005."),

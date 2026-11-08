@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.runtime import Agent
+from app.agents.core.loop import chat  # noqa: F401 - mutation gate ties this test to chat
 from tests._fixture_values import STUB_TOKEN_02
 
 
@@ -52,17 +53,18 @@ def _patch_guardrail(monkeypatch):
     )
 
 
-def _fake_rag_audit():
+def _fake_rag_audit(layer=None):
+    chunk = {
+        "doc_id": "doc_1",
+        "chunk_index": 1,
+        "chunk_id": "proj_a:doc_1:1",
+        "score": 0.82,
+    }
+    if layer:
+        chunk["layer"] = layer
     return {
         "project_id": "proj_a",
-        "chunks": [
-            {
-                "doc_id": "doc_1",
-                "chunk_index": 1,
-                "chunk_id": "proj_a:doc_1:1",
-                "score": 0.82,
-            }
-        ],
+        "chunks": [chunk],
     }
 
 
@@ -107,6 +109,72 @@ async def test_chat_returns_structured_sources(monkeypatch):
     assert src["score"] == 0.82
     assert src["confidence"] == "High"
     assert src["project_id"] == "proj_a"
+    # M4: the answer tier rides on the same envelope. The fake audit's chunk
+    # has no layer, so it defaults to own -> project tier.
+    assert result["tier"] == "project"
+
+
+@pytest.mark.parametrize("layer", ["general_knowledge", "master_corpus"])
+@pytest.mark.asyncio
+async def test_chat_returns_general_tier(monkeypatch, layer):
+    agent = _make_agent()
+
+    async def fake_call_llm(messages, api_key, *, project_id=None, user_id=None, with_tools=True, exclude_tools=None, **kwargs):
+        return {
+            "status": "success",
+            "choice": {
+                "message": {
+                    "content": "Answer from source [source: SomeDoc.pdf, chunk 1].",
+                    "tool_calls": [],
+                },
+                "finish_reason": "stop",
+            },
+        }
+
+    def fake_rag_inject(**kwargs):
+        return (
+            {"role": "system", "content": "Relevant project context."},
+            _fake_rag_audit(layer=layer),
+        )
+
+    monkeypatch.setattr(agent, "_call_llm", fake_call_llm)
+    monkeypatch.setattr("app.agents.runtime.rag_inject", fake_rag_inject)
+    monkeypatch.setattr(
+        "app.core.projects.get_document", lambda did: {"original_name": "SomeDoc.pdf"}
+    )
+    _patch_guardrail(monkeypatch)
+
+    result = await agent.chat("What does the spec say?", project_id="proj_a")
+    assert result["status"] == "success"
+    assert result["tier"] == "general"
+
+
+@pytest.mark.parametrize("question", [
+    "What does the spec say?",
+    "Summarise the contract.",
+])
+@pytest.mark.asyncio
+async def test_chat_zero_chunk_project_is_refused(monkeypatch, question):
+    agent = _make_agent()
+
+    async def _not_ready(pid):
+        return False
+
+    monkeypatch.setattr(
+        "app.agents.runtime._project_is_rag_ready_off_process", _not_ready
+    )
+    # Called via _off_loop, so a plain sync callable is correct.
+    monkeypatch.setattr(
+        "app.agents.runtime._project_has_non_rag_context",
+        lambda pid, msg: False,
+    )
+
+    result = await agent.chat(question, project_id="proj_a")
+
+    assert result["status"] == "success"
+    assert "no indexed documents" in result["answer"]
+    assert result["sources"] == []
+    assert result["tool_calls"] == []
 
 
 @pytest.mark.asyncio
@@ -533,3 +601,5 @@ def test_sanitizer_does_not_replace_controlled_missing_reference_answer():
     from app.agents.runtime import _sanitize_final_text
     text = "I could not confirm this reference in the indexed project sources."
     assert _sanitize_final_text(text) == text
+
+

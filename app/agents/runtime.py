@@ -9273,6 +9273,18 @@ def _dedupe_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _answer_tier(sources: list[dict[str, Any]]) -> str:
+    """The tier the answer's cited sources came from: "project" when at least
+    one cited source is an own-project chunk, else "general" (general-only or
+    master-corpus fallback). Threads the #118 degraded signal onto the answer
+    envelope so the client can label a general-only answer GENERAL and never
+    show HIGH confidence."""
+    for s in sources or []:
+        if isinstance(s, dict) and (s.get("layer") or "own") == "own":
+            return "project"
+    return "general"
+
+
 def _build_sources_from_audit(
     audit_rec: dict[str, Any],
     final_text: str = "",
