@@ -265,6 +265,25 @@ def test_durable_mount_distinguishes_absence(sample, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("sample", ["first", "second"])
+@pytest.mark.parametrize("name", ["scan.pdf", "notes.docx"])
+def test_a_bare_filename_is_not_a_lost_upload(sample, tmp_path, monkeypatch, name):
+    """Ledger placeholders are not stored objects. Their panel stays the ingest status."""
+    _root(tmp_path, monkeypatch)
+    pid = _project(USER["user_id"], f"placeholder-{sample}-{name}")
+    doc = store.add_document(pid, name, file_path=name, size=8)
+    store.stamp_document_index(
+        doc["id"], chunk_count=1, ingest_status="PARTIAL_OCR",
+        ingest_status_reason=None,
+        pages_in_file=9, pages_ocrd=3, ocr_truncated=True,
+    )
+    loaded = store.get_document(doc["id"])
+    assert loaded["bytes_state"] == byte_store.NOT_STORED
+    status = loaded.get("panel_status") or {}
+    assert status.get("label") == "Partially read"
+    assert status.get("label") != byte_store.MISSING_LABEL
+
+
+@pytest.mark.parametrize("sample", ["first", "second"])
 def test_drive_rows_are_not_lost_uploads(sample, tmp_path, monkeypatch):
     root = _root(tmp_path, monkeypatch)
     for drive_id, name in (("drv-alpha", "alpha.pdf"), ("drv-beta", "beta.pdf")):

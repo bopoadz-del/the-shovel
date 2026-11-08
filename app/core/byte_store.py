@@ -460,6 +460,27 @@ def inspect_path(path: str) -> ByteInspection:
     return ByteInspection(PRESENT, "ok", "")
 
 
+def path_is_stored_bytes(path: str) -> bool:
+    """True when ``path`` is a filesystem object this store or a legacy upload wrote.
+
+    A bare file name (``scan.pdf``) is a ledger placeholder, not a stored
+    object. Absence of that name is not a lost upload. An absolute path, or
+    any path under the store root, is.
+    """
+    if not path:
+        return False
+    if os.path.isabs(path):
+        return True
+    try:
+        root = os.path.realpath(store_root())
+    except OSError:
+        root = ""
+    real = os.path.realpath(path)
+    if root and (real == root or real.startswith(root + os.sep)):
+        return True
+    return False
+
+
 def inspect_local_claim(
     *,
     file_path: str | None,
@@ -469,8 +490,8 @@ def inspect_local_claim(
     """Classify the bytes a document row claims.
 
     A Drive-sourced row keeps no archive. A missing local path on that row
-    is the no-archive rule, not a lost upload. A user upload (no Drive id,
-    or provenance ``user_upload``) is a local claim: confirmed absence is
+    is the no-archive rule, not a lost upload. A user upload, or any path
+    that is actually a stored file, is a local claim: confirmed absence is
     ``missing``.
     """
     drive_id = (drive_file_id or "").strip()
@@ -478,6 +499,8 @@ def inspect_local_claim(
     path = file_path or ""
     if drive_id and origin != "user_upload":
         return ByteInspection(NOT_STORED, "drive_source", "")
+    if origin != "user_upload" and not path_is_stored_bytes(path):
+        return ByteInspection(NOT_STORED, "no_local_claim", "")
     if not path:
         return ByteInspection(NOT_STORED, "no_path", "")
     return inspect_path(path)
