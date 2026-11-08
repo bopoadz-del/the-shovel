@@ -1168,7 +1168,7 @@ def _modified(before: str) -> bool:
     return word not in _CLOSED_CLASS and not re.fullmatch(_MACHINE_ADJ, word) and not word.endswith("ly")
 
 
-def _machine_wording(text: str) -> str:
+def _machine_wording(text: str, tier: str = "project") -> str:
     def phrase(m: re.Match[str]) -> str:
         noun = m.group("noun").lower()
         adjs = (m.group("adjs") or "").lower()
@@ -1185,20 +1185,28 @@ def _machine_wording(text: str) -> str:
         if not (strong or machine):
             return m.group(0)
         plural = noun.endswith("s") or noun.startswith(("search", "retrieval"))
+        if tier == "general":
+            unit = "reference material"
+            many = "reference material"
+            blob = "reference material"
+        else:
+            unit = "project document section"
+            many = "project document sections"
+            blob = "project material"
         if not det and _modified(m.string[:m.start()]):
             # "the specification excerpt": the noun phrase began earlier,
             # with its own determiner; only the head noun is replaced.
             new = "material" if noun == "context" else ("sections" if plural else "section")
         elif noun == "context":
-            new = f"{det if det in ('no', 'any', 'all the') else 'the'} project material"
+            new = f"{det if det in ('no', 'any', 'all the') else 'the'} {blob}"
         elif plural:
             keep = det if det in ("no", "any", "some", "all", "all the", "all of the") else "the"
-            new = f"{keep} project document sections"
+            new = f"{keep} {many}"
         elif not det:
-            new = "project document section"
+            new = unit
         else:
             keep = {"an": "a", "these": "the", "those": "the"}.get(det, det)
-            new = f"{keep} project document section"
+            new = f"{keep} {unit}"
         return _cap_like(m.group(0), new)
 
     text = _MACHINE_PHRASE_RE.sub(phrase, text)
@@ -1491,7 +1499,18 @@ def check_text(
         out = _plain_identifiers(out, _static_step_names() | called, called)
         out = _TOOL_PHRASE_RE.sub(_STEP, out)
         out = _settle_steps(out)
-        out = _machine_wording(out)
+        # M11: a general-only answer (no own-layer source) must not be
+        # reworded as if its material were THIS project's documents.
+        tier = "project"
+        if sources is not None:
+            try:
+                from app.agents.runtime import _answer_tier  # local, like _apply_answer_tier
+                src_list = list(sources)
+                if src_list and _answer_tier(src_list) == "general":
+                    tier = "general"
+            except Exception:  # noqa: BLE001 - wording must not break an answer
+                pass
+        out = _machine_wording(out, tier)
         out = _restore(out, held)
         out = _tidy(out)
         out = _dedupe_source_lines(out)
@@ -1652,7 +1671,7 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     rows = fixed.get("sources")
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
-        fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index)
+        fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
         # turn answered. A reader (the route observer) trusts this over any
@@ -1680,7 +1699,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
     if not isinstance(content, str) or not content.strip():
         content = streamed
     if isinstance(content, str) and content.strip():
-        checked = check_text_or_fallback(content, turn=turn, index=index)
+        checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
     if isinstance(rows, list):

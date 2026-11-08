@@ -334,3 +334,19 @@ _SITE_TEXT = (
 @pytest.mark.parametrize("text", _SITE_TEXT)
 def test_site_text_is_left_as_written(text):
     assert _ax().check_text(text) == text
+
+
+@pytest.mark.parametrize("sources,expected,forbidden", [
+    # general-only: rewrites to reference material, never project documents
+    ([{"layer": "general_knowledge", "doc_name": "Dubai Building Code"}],
+     "reference material", "project document sections"),
+    # project-cited: keeps the project-scoped wording
+    ([{"layer": "own", "doc_name": "Contract.pdf"}],
+     "project document sections", "reference material"),
+])
+def test_check_text_tier_aware_wording(sources, expected, forbidden):
+    """M11: a general-only answer must not be reworded as if its material
+    were this project's documents."""
+    out = _ax().check_text("I don't have that in the excerpts.", sources=sources)
+    assert expected in out
+    assert forbidden not in out
