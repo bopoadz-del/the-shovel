@@ -123,16 +123,24 @@ def test_documented_legacy_flash_names_use_the_flash_price(model):
     assert legacy["kind"] == "priced"
 
 
-def test_unknown_model_is_logged_once_per_pair(caplog):
+@pytest.mark.parametrize(
+    "provider,model",
+    [("deepseek", "deepseek-chat"), ("kimi", "kimi-k2.6")],
+)
+def test_unknown_model_is_logged_once_per_pair(caplog, provider, model):
     usage_tracker._UNKNOWN_LOGGED.clear()
     with caplog.at_level("WARNING"):
-        usage_tracker.price_call("deepseek", "deepseek-chat", 10, 1, when=_OFFPEAK)
-        usage_tracker.price_call("deepseek", "deepseek-chat", 10, 1, when=_OFFPEAK)
-        usage_tracker.price_call("kimi", "kimi-k2.6", 10, 1, when=_OFFPEAK)
-    messages = [rec.message for rec in caplog.records if "unpriced model" in rec.message]
-    assert sum("model=deepseek-chat" in message for message in messages) == 1
-    assert sum("model=kimi-k2.6" in message for message in messages) == 1
-    assert all("sk-" not in message and "Bearer" not in message for message in messages)
+        usage_tracker.price_call(provider, model, 10, 1, when=_OFFPEAK)
+        usage_tracker.price_call(provider, model, 10, 1, when=_OFFPEAK)
+    messages = [
+        rec.getMessage()
+        for rec in caplog.records
+        if "unpriced model" in rec.getMessage()
+    ]
+    assert messages == [
+        "unpriced model; using configured fallback rate "
+        f"provider={provider} model={model}"
+    ]
 
 
 @pytest.mark.parametrize(
