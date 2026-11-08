@@ -121,3 +121,14 @@ def test_a_broken_check_never_breaks_the_turn(monkeypatch):
     monkeypatch.setattr(rt, "derivation_mismatches", lambda _t: 1 / 0)
     text = "4800/20 = 200 mm"
     assert rt._annotate_derivation_mismatches(text) == text
+
+
+@pytest.mark.parametrize("text,expected", [
+    # R5: an exponent + juxtaposed product is a mixed expression - skip the
+    # side, never partially parse it into a fragment like "2/8".
+    ("Mmax = w L^2/8 = 12.0 6.0^2/8 = 54.000 kN.m", 0),
+    # a plain wrong quotient is still caught
+    ("4800 / 20 = 24", 1),
+])
+def test_mixed_expression_is_skipped_not_partial(text, expected):
+    assert len(_mismatches(text)) == expected

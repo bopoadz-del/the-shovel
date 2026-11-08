@@ -8149,6 +8149,14 @@ def _derivation_bound_to_previous(text: str, start: int) -> bool:
     if ch in "xX":
         prev = text[i - 1] if i else ""
         return not (prev.isalnum() or prev == "_")
+    # Exponent ("6.0^2", "6.0**2", "6.0²") and a juxtaposed product
+    # ("12.0 6.0^2/8"): the number is part of a mixed expression, never a
+    # standalone chain start. Reading it isolates a fragment (e.g. "2/8")
+    # that the stated result did not mean (M12 / UI R5).
+    if ch == "*" and i > 0 and text[i - 1] == "*":
+        return True
+    if ch in "^²³":
+        return True
     return False
 
 
