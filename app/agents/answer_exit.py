@@ -1617,6 +1617,33 @@ def check_sources(
         return rows
 
 
+_GENERAL_TIER_CONFIDENCE_CEILING = "Medium"
+
+
+def _apply_answer_tier(env: dict[str, Any]) -> dict[str, Any]:
+    """M4 server-envelope rule: name the tier that answered, cap confidence.
+
+    The envelope carries ``tier`` = "project" when at least one cited source
+    is an own-project chunk, else "general". A general-only envelope's source
+    rows never read HIGH confidence: the server caps them at Medium, so the
+    API, exports and every client see at most MEDIUM on a general-only
+    answer. The cap is on the envelope the client renders -- nothing here
+    trusts a client to soften it.
+    """
+    try:
+        from app.agents.runtime import _answer_tier  # local import, like loop.py
+        rows = env.get("sources")
+        tier = _answer_tier(rows if isinstance(rows, list) else [])
+        env["tier"] = tier
+        if tier == "general" and isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and row.get("confidence") == "High":
+                    row["confidence"] = _GENERAL_TIER_CONFIDENCE_CEILING
+    except Exception:  # noqa: BLE001 -- the exit must never break an answer
+        _LOG.exception("answer_exit: M4 tier/cap check failed; envelope passed through")
+    return env
+
+
 def check_result(result: Any, turn: Turn | None = None) -> Any:
     """A whole-turn result (``answer`` and ``sources``) as it may leave."""
     if not isinstance(result, dict):
@@ -1636,7 +1663,7 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
             fixed["awaiting_inputs"] = {"missing": missing}
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
-    return fixed
+    return _apply_answer_tier(fixed)
 
 
 def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None = None) -> dict[str, Any]:
@@ -1666,4 +1693,4 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
     if "awaiting_inputs" not in fixed:
         missing = sorted(set(turn.awaiting_inputs)) if turn else []
         fixed["awaiting_inputs"] = {"missing": missing}
-    return fixed
+    return _apply_answer_tier(fixed)
