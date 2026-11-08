@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.runtime import Agent
-from app.agents.core.loop import _chat_impl  # noqa: F401 - mutation gate ties this test to _chat_impl
+from app.agents.core.loop import chat  # noqa: F401 - mutation gate ties this test to chat
 from tests._fixture_values import STUB_TOKEN_02
 
 
@@ -597,3 +597,5 @@ def test_sanitizer_does_not_replace_controlled_missing_reference_answer():
     from app.agents.runtime import _sanitize_final_text
     text = "I could not confirm this reference in the indexed project sources."
     assert _sanitize_final_text(text) == text
+
+
