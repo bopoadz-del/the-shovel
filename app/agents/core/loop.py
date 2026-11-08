@@ -61,12 +61,9 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
     ask_token = _calc_words.set_current_ask(_user_message_of(self, args, kwargs))
     try:
         result = await self._chat_impl(*args, **kwargs)
-        # M4: name the tier that answered (general-only vs project), from the
-        # sources the answer already carries. The client uses this to label a
-        # general-only answer GENERAL and never show HIGH confidence.
-        from app.agents.runtime import _answer_tier  # local, like _chat_impl
-        if isinstance(result, dict):
-            result["tier"] = _answer_tier(result.get("sources") or [])
+        # M4: the tier + confidence cap are applied on the SERVER envelope by
+        # answer_exit.check_result/check_end_event -- the single exit choke
+        # point for every return path, computed from the final sources.
         return await off_loop(answer_exit.check_result, result, turn)
     finally:
         _calc_words._CURRENT_ASK.reset(ask_token)
