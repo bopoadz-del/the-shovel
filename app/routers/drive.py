@@ -22,8 +22,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.dependencies import require_user
-from app.core import audit, doc_index, drive_auth, file_crypto, jwt_auth, privileges, projects as store
-from app.routers import projects as projects_router
+from app.core import audit, byte_store, doc_index, drive_auth, jwt_auth, privileges, projects as store
 from app.routers.projects import ALLOWED_DOC_EXTENSIONS
 
 router = APIRouter()
@@ -633,8 +632,8 @@ async def _walk_drive_folder_into_project(
                 previous = imported_from.get(child["id"])
                 file_uuid = str(uuid.uuid4())[:8]
                 stored_as = f"{file_uuid}_{stored_basename}"
-                filepath = os.path.join(projects_router.DATA_DIR, stored_as)
-                file_crypto.write_document(filepath, raw_bytes)
+                filepath = byte_store.allocate_path(stored_as)
+                byte_store.write_bytes(filepath, raw_bytes)
                 doc = store.add_document(
                     project_id, stored_basename, stored_as,
                     filepath, len(raw_bytes),
@@ -744,12 +743,12 @@ async def drive_import(project_id: str, req: DriveImportRequest,
         )
 
     # Reuse the upload storage scheme: UUID-prefixed stored filename, written
-    # via file_crypto.write_document (encrypted at rest iff DATA_ENCRYPTION_KEY
-    # is set) — exactly as projects.py add_document / upload.py do.
+    # through the document byte store (encrypted at rest iff DATA_ENCRYPTION_KEY
+    # is set) — the same format as projects.py add_document / upload.py.
     file_id = str(uuid.uuid4())[:8]
     stored_as = f"{file_id}_{original_name}"
-    filepath = os.path.join(projects_router.DATA_DIR, stored_as)
-    file_crypto.write_document(filepath, raw_bytes)
+    filepath = byte_store.allocate_path(stored_as)
+    byte_store.write_bytes(filepath, raw_bytes)
     size = len(raw_bytes)
 
     # Register the document through the SAME app.core.projects call.
