@@ -1057,6 +1057,11 @@ async def add_document(
             "detail": privileges.PROJECT_RAG_ADMIN_ONLY_DETAIL,
         }}) or doc
 
+    # The upload response carries the same panel note the sidebar shows, so
+    # the client can tell a non-admin AT upload time that the file was stored
+    # but not indexed.
+    store.attach_panel_status(doc)
+
     response: Dict[str, Any] = {
         "status": "stored",
         "message": (

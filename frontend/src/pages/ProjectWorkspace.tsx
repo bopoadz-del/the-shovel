@@ -355,6 +355,12 @@ function DocumentsPanel({
         form,
       )
       onDocumentAdded(resp.document)
+      // Tell a non-admin AT upload time that the file was stored but not
+      // indexed, instead of leaving it to the sidebar label only.
+      const notIndexed = resp.document.panel_status?.detail
+      if (notIndexed) {
+        setUploadError(notIndexed)
+      }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
     } finally {

@@ -107,6 +107,11 @@ def test_user_project_upload_is_stored_not_indexed(client, as_caller, indexed):
     row = store.get_document(doc["id"])
     assert os.path.exists(row["file_path"])  # the user keeps the file
     assert (row.get("metadata") or {})["indexing"]["status"] == "not_indexed"
+    # M3 part 2: the upload response itself carries the panel note, so the
+    # client can say "stored, not indexed" at upload time.
+    panel = doc.get("panel_status") or {}
+    assert panel.get("status") == "not_indexed"
+    assert "admin" in (panel.get("detail") or "").lower()
 
 
 def test_user_upload_with_a_project_is_stored_not_indexed(client, as_caller, indexed, monkeypatch):
