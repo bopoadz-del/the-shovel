@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # outage keys were present while every call returned 402/429, so /health
 # stayed green while no ask could be served. These record the last REAL
 # provider outcome so health can tell "serving" from merely "configured".
-_PROVIDER_STALE_S = 300.0  # a result older than this no longer bears on "serving"
+_PROVIDER_STALE_S = 300.0  # age annotation only (the serving verdict is a state, not a window)
 _PROVIDER_LOCK = threading.Lock()
 # provider -> {"status": "ok"|"exhausted"|"error", "at": epoch, "http": int|None}
 _PROVIDER_LAST: Dict[str, Dict[str, Any]] = {}
@@ -59,9 +59,12 @@ def record_provider_result(
 
 def provider_snapshot() -> Dict[str, Any]:
     """Per-provider last outcome (with age), the distinct 402/429 counts, and a
-    ``serving`` flag. ``serving`` is conservative: a single transient failure
-    does not flip it — only a recent failure with NO recent success does, and a
-    quiet box with no data stays serving. Never raises."""
+    ``serving`` flag. ``serving`` is a STATE, not a window: a fresh box (no
+    recorded outcome) serves, and so does any provider whose LATEST outcome is
+    ``ok``. Only when every provider that has reported has a latest outcome of
+    ``exhausted``/``error`` is it false. Age never resurrects a dead state - a
+    real ``record_provider_result('ok')`` is the only thing that does. Never
+    raises."""
     try:
         now = time.time()
         with _PROVIDER_LOCK:
@@ -74,16 +77,10 @@ def provider_snapshot() -> Dict[str, Any]:
             last_served_age = (
                 round(now - _LAST_SERVED_AT, 1) if _LAST_SERVED_AT else None
             )
-        served_recently = (
-            last_served_age is not None and last_served_age <= _PROVIDER_STALE_S
-        )
-        recent_failure = any(
-            v["status"] != "ok" and v["age_s"] <= _PROVIDER_STALE_S
-            for v in providers.values()
-        )
-        # Unhealthy only when a real failure is recent AND nothing has been
-        # served recently. No data (quiet box) stays serving.
-        serving = served_recently or not recent_failure
+        if not providers:
+            serving = True
+        else:
+            serving = any(r["status"] == "ok" for r in providers.values())
         return {"providers": providers, "counts": counts,
                 "last_served_age_s": last_served_age, "serving": serving}
     except Exception as exc:  # noqa: BLE001 — a probe never breaks /health
@@ -524,13 +521,25 @@ def probe_llm() -> Dict[str, Any]:
 
         primary = _llm_config()
         key = primary.get("env_key")
+        primary_configured = bool(os.getenv(key)) if key else True
+        fallback_configured = _llm_fallback_config(primary) is not None
+        snap = provider_snapshot()
+        providers = snap.get("providers", {}) if isinstance(snap, dict) else {}
+
+        def _latest_ok(role: str) -> bool:
+            """Ready = configured AND the role's latest recorded outcome is not
+            a failure. No recorded outcome yet means nothing has failed, so a
+            configured role reads ready (fresh box)."""
+            last = providers.get(role)
+            return last is None or last.get("status") == "ok"
+
         out = {
-            "primary_ready": bool(os.getenv(key)) if key else True,
-            "fallback_ready": _llm_fallback_config(primary) is not None,
+            "primary_ready": primary_configured and _latest_ok("primary"),
+            "fallback_ready": fallback_configured and _latest_ok("fallback"),
         }
         # Merge the LAST REAL provider outcomes so health reflects whether the
         # model can actually be reached, not just whether a key is set.
-        out.update(provider_snapshot())
+        out.update(snap)
         return out
     except Exception as exc:  # noqa: BLE001 - a probe never breaks /health
         return {"primary_ready": False, "fallback_ready": False,

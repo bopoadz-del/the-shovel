@@ -57,16 +57,18 @@ def test_primary_down_but_fallback_served_is_serving():
     assert snap["counts"]["billing_402"] == 1
 
 
-def test_recent_failure_after_stale_success_is_not_serving():
-    """A success older than the window no longer counts; a recent failure wins."""
+def test_stale_success_still_serves_while_it_is_the_latest_outcome():
+    """M9: age does not resurrect a dead state, and it does not kill a live one.
+    A provider whose LATEST recorded outcome is ok keeps the box serving even
+    after it is stale - the verdict is the latest outcome, not recency."""
     hp.record_provider_result("primary", "ok")
-    # Age the success past the staleness window.
+    # Age the success past the annotation window.
     with hp._PROVIDER_LOCK:
         hp._PROVIDER_LAST["primary"]["at"] -= hp._PROVIDER_STALE_S + 10
     hp._LAST_SERVED_AT -= hp._PROVIDER_STALE_S + 10
     hp.record_provider_result("fallback", "exhausted", 429)
     snap = hp.provider_snapshot()
-    assert snap["serving"] is False
+    assert snap["serving"] is True
 
 
 def test_probe_llm_includes_providers_and_serving():
