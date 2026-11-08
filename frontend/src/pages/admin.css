@@ -75,6 +75,14 @@
   font-size: 13px;
   border-radius: 8px;
 }
+.admin-users-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 .admin-empty   { color: var(--text-tertiary); background: var(--bg-surface-alt); }
 .admin-loading { color: var(--text-secondary); }
 .admin-alert   { color: #b04230; background: rgba(176,66,48,0.08); border: 1px solid rgba(176,66,48,0.3); }

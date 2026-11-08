@@ -385,6 +385,90 @@ def admin_set_driver_mode(body: Dict[str, Any] = Body(...), auth: dict = Depends
     return {"email": user["email"], "driver_mode": user["driver_mode"]}
 
 
+_USER_PAGE_MAX = 50
+_USER_OFFSET_MAX = 10_000
+_USER_QUERY_MAX = 200
+_USER_PUBLIC_FIELDS = (
+    "id",
+    "email",
+    "display_name",
+    "role",
+    "created_at",
+    "email_verified",
+    "driver_mode",
+)
+
+
+def _public_admin_user(user) -> Dict[str, Any]:
+    """Fields an admin list may show. Never the password hash, salt, or a token."""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "role": user.role,
+        "created_at": user.created_at,
+        "email_verified": bool(user.email_verified),
+        "driver_mode": bool(user.driver_mode),
+    }
+
+
+def _user_search_pattern(term: str) -> str:
+    """Literal substring. % and _ in the query are not wildcards."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+@router.get("/v1/admin/users")
+def admin_list_users(
+    q: str = Query(""),
+    limit: int = Query(25),
+    offset: int = Query(0),
+    auth: dict = Depends(require_api_key),
+):
+    """List accounts for an admin. Search is a literal email or display-name
+    substring. The page size and offset are bounded. The body has no
+    password hash, salt, or session token."""
+    _require_admin(auth)
+    if (
+        limit < 1
+        or limit > _USER_PAGE_MAX
+        or offset < 0
+        or offset > _USER_OFFSET_MAX
+    ):
+        raise HTTPException(status_code=422, detail="page is out of range")
+    term = (q or "").strip()
+    if len(term) > _USER_QUERY_MAX:
+        raise HTTPException(status_code=422, detail="search is too long")
+
+    from sqlalchemy import func, or_, select
+
+    from app.core.db import SessionLocal
+    from app.core.models import User
+
+    count_stmt = select(func.count()).select_from(User)
+    list_stmt = select(User).order_by(User.email.asc(), User.id.asc())
+    if term:
+        pattern = _user_search_pattern(term)
+        match = or_(
+            User.email.ilike(pattern, escape="\\"),
+            User.display_name.ilike(pattern, escape="\\"),
+        )
+        count_stmt = count_stmt.where(match)
+        list_stmt = list_stmt.where(match)
+    with SessionLocal() as session:
+        total = int(session.scalar(count_stmt) or 0)
+        rows = session.scalars(list_stmt.offset(offset).limit(limit)).all()
+        users = [_public_admin_user(row) for row in rows]
+    leaked = {"password_hash", "salt", "token", "password"}
+    for row in users:
+        if leaked & set(row):
+            raise HTTPException(status_code=500, detail="user list leaked a secret field")
+        extra = set(row) - set(_USER_PUBLIC_FIELDS)
+        if extra:
+            raise HTTPException(status_code=500, detail="user list returned an unexpected field")
+    return {"users": users, "total": total, "limit": limit, "offset": offset}
+
+
 @router.post("/v1/admin/users/{user_id}/role")
 def admin_set_user_role(user_id: str, body: Dict[str, Any] = Body(...),
                         auth: dict = Depends(require_api_key)):
