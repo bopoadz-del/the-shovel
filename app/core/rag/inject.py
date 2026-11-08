@@ -315,17 +315,24 @@ def format_chunks_as_system_message(
     # delay-rate ask reproduced the FIDIC knowledge-base note instead of the
     # project's own Contract Data rate.
     #
-    # Emitted only when the excerpts are actually mixed. On a single-class
-    # set the rule cannot change any answer, and an instruction that never
-    # applies is noise that costs context and dilutes the ones that do.
+    # Emitted whenever the set carries any non-project class. A general-only
+    # set (all knowledge_base/template/master_corpus) must still learn what
+    # class=... means, or the model reads curated reference material as this
+    # project's own document and refuses in the project tier (M11). PRECEDENCE
+    # is mixed-only: without a project_corpus excerpt there is nothing to
+    # prefer, and the instruction would be noise.
     classes = {_source_class(c) for c in chunks}
-    if len(classes) > 1:
+    non_project = classes - {"project_corpus"}
+    if non_project:
         header += (
             "SOURCE CLASS — each excerpt below is tagged class=... . "
             "project_corpus is THIS project's own record; knowledge_base is "
             "curated cross-project reference material; template is a blank "
             "or standard form; master_corpus is a disclosed fallback corpus "
             "that is NOT this project.\n"
+        )
+    if non_project and "project_corpus" in classes:
+        header += (
             "PRECEDENCE — when a project_corpus excerpt and an excerpt of "
             "any other class can both answer, the project_corpus excerpt IS "
             "the answer. Never present knowledge_base, template or "
