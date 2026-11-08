@@ -295,10 +295,8 @@ def _estimate_cost(
 
 
 def _daily_cap() -> float:
-    raw = os.getenv("USAGE_DAILY_CAP_USD")
-    if raw is None or raw.strip() == "":
-        return 0.0
-    parsed = _number(raw)
+    """The configured UTC-day cap in USD, or 0.0 when unset or non-positive."""
+    parsed = _number(os.getenv("USAGE_DAILY_CAP_USD"))
     if parsed is None or parsed <= 0:
         return 0.0
     return parsed

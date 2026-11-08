@@ -299,3 +299,47 @@ def test_missing_fallback_refuses_even_with_no_spend(monkeypatch):
         lambda: {"providers": {}, "fallback": {"prompt": 1.0, "completion": 2.0}},
     )
     assert usage_tracker.pricing_fail_closed() is True
+
+
+@pytest.mark.parametrize("body", ["[]", "42"])
+def test_pricing_document_rejects_non_object_json(monkeypatch, tmp_path, body):
+    path = tmp_path / "pricing.json"
+    path.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("LLM_PRICING_FILE", str(path))
+    assert usage_tracker._pricing_document() == {}
+
+
+@pytest.mark.parametrize("entry", [[], ["prompt"]])
+def test_override_applies_requires_a_dict(entry):
+    assert usage_tracker._override_applies(entry, _OFFPEAK, 0) is False
+
+
+@pytest.mark.parametrize(
+    "provider,model",
+    [("deepseek", "deepseek-flash"), ("openrouter", "openrouter/free")],
+)
+def test_price_call_without_token_info_is_unpriced(provider, model):
+    quoted = usage_tracker.price_call(provider, model, None, None)
+    assert quoted["kind"] == "unpriced"
+    assert quoted["cost_usd"] is None
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("__unset__", 0.0), ("", 0.0), ("0", 0.0), ("-4", 0.0), ("12.5", 12.5)],
+)
+def test_daily_cap_parses_positive_env_only(monkeypatch, raw, expected):
+    if raw == "__unset__":
+        monkeypatch.delenv("USAGE_DAILY_CAP_USD", raising=False)
+    else:
+        monkeypatch.setenv("USAGE_DAILY_CAP_USD", raw)
+    assert usage_tracker._daily_cap() == expected
+
+
+@pytest.mark.parametrize("day", ["2026-11-08", "2026-11-09"])
+def test_ok_state_does_not_log_or_consume_the_day(caplog, day):
+    usage_tracker._ALERTED_DAYS.clear()
+    with caplog.at_level("WARNING"):
+        state = usage_tracker.note_daily_threshold(1.0, 10.0, day=day)
+    assert state == "ok"
+    assert not [r for r in caplog.records if "80" in r.getMessage()]
