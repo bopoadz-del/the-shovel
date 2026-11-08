@@ -128,16 +128,17 @@ def fixture_key_for_name(name: str) -> Optional[str]:
 
 
 def _auth_header(base: str) -> dict:
-    tok = os.getenv("FORK_TOKEN") or os.getenv("FORK_API_KEY")
-    if not tok:
-        email, pw = os.getenv("FORK_EMAIL"), os.getenv("FORK_PASSWORD")
-        if not (email and pw):
-            sys.exit("No credentials: set FORK_TOKEN / FORK_API_KEY / FORK_EMAIL+FORK_PASSWORD")
-        r = httpx.post(f"{base}/v1/users/login", json={"email": email, "password": pw}, timeout=30)
-        r.raise_for_status()
-        tok = r.json()["token"]
-        print(f"[auth] logged in as {email}", file=sys.stderr)
-    return {"Authorization": f"Bearer {tok}"}
+    """Resolve the Bearer header through the ONE auth implementation
+    (scripts/fork_cli.resolve_auth), which probes each candidate credential
+    against GET /v1/projects and falls through when a stale token is rejected.
+    A blind FORK_TOKEN/FORK_API_KEY therefore no longer wedges the seeder."""
+    from types import SimpleNamespace
+
+    import fork_cli  # scripts/ is on sys.path (top of file)
+
+    cred = fork_cli.resolve_auth(SimpleNamespace(
+        token=None, api_key=None, email=None, password=None, base=base))
+    return fork_cli.headers(cred)
 
 
 def _resolve_project(client: httpx.Client, name: str) -> Optional[Dict[str, Any]]:
@@ -173,12 +174,19 @@ def _upload_case(client: httpx.Client, project_id: str, fname: str, text: str) -
     return r.json()["document"]
 
 
-def _upload_file(client: httpx.Client, project_id: str, path: Path) -> Dict[str, Any]:
+def _upload_file(client: httpx.Client, project_id: str, path: Path) -> Optional[Dict[str, Any]]:
     with open(path, "rb") as fh:
         r = client.post(
             f"/v1/projects/{project_id}/documents",
             files={"file": (path.name, fh, "application/octet-stream")},
         )
+    if r.status_code == 415:
+        # The knowledge base takes text formats only: the project-document
+        # endpoint rejects a non-ingestible type (CAD/drawing/compressed) with
+        # 415 by design (app/routers/projects.py). That rejection is not a seed
+        # failure; such files attach to a chat session, not the corpus.
+        print(f"[noningestible] {path.name}", file=sys.stderr)
+        return None
     r.raise_for_status()
     return r.json()["document"]
 
@@ -327,6 +335,9 @@ def _seed_from_dir(
             print(f"[skip-optional] {fname} not found in {fixtures_dir}")
             continue
         doc = _upload_file(client, project_id, path)
+        if doc is None:
+            print(f"[skip-noningestible] {fname}")
+            continue
         print(f"[upload] {fname} -> doc {doc['id']}")
 
     print(f"[wait] indexing {name} ...")
