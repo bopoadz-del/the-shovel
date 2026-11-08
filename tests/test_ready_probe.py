@@ -139,8 +139,20 @@ def test_scheduled_ready_contract_is_not_a_filename_exemption(text, ok):
     assert (problems == []) is ok
 
 
-def test_health_watch_file_meets_the_contract_and_bans_health():
-    text = (_ROOT / ".github" / "workflows" / "health-watch.yml").read_text(encoding="utf-8")
-    assert scheduled_probe_violations(text) == []
-    banned = "on:\n  schedule:\n    - cron: '0 * * * *'\njobs:\n  x:\n    run: curl /health\n"
-    assert scheduled_probe_violations(banned)
+_HEALTH_WATCH = (_ROOT / ".github" / "workflows" / "health-watch.yml").read_text(
+    encoding="utf-8"
+)
+_BANNED_HEALTH = (
+    "on:\n  schedule:\n    - cron: '0 * * * *'\njobs:\n  x:\n    run: curl /health\n"
+)
+
+
+@pytest.mark.parametrize(
+    "text,clean",
+    [
+        (_HEALTH_WATCH, True),
+        (_BANNED_HEALTH, False),
+    ],
+)
+def test_scheduled_probe_contract_on_real_and_banned(text, clean):
+    assert (scheduled_probe_violations(text) == []) is clean
