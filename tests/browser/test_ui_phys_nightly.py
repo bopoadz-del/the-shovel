@@ -10,7 +10,6 @@ this directory (``--ignore=tests/browser``).
 """
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pytest
@@ -21,22 +20,26 @@ FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "ui_phys"
 pytestmark = pytest.mark.browser
 
 
-def _register(page: Page, base: str) -> None:
+BOOTSTRAP_EMAIL = "ui-phys-bootstrap@example.com"
+BOOTSTRAP_PASSWORD = "UiPhysBootstrap9!"
+
+
+def _login(page: Page, base: str) -> None:
+    """Sign in with the bootstrapped, already-verified account the fixture
+    seeds via BOOTSTRAP_USER_EMAIL/PASSWORD (tests/browser/conftest.py).
+    Registration now requires email verification, so the nightly signs in
+    instead of registering a fresh account."""
     page.goto(f"{base}/login", wait_until="networkidle")
     expect(page.locator("#email")).to_be_visible(timeout=15_000)
-    page.get_by_role("button", name="Create one").click()
-    expect(page.get_by_role("heading", name="Create account")).to_be_visible()
-    page.locator("#email").fill(f"ui-phys-nightly-{int(time.time())}@example.com")
-    page.locator("#password").fill("UiPhysNightly9!")
-    page.locator("#displayName").fill("UI PHYS Nightly")
-    page.get_by_role("button", name="Create account").click()
-    # Dev auto-verifies and navigates home. If the form stays put, surface it.
+    page.locator("#email").fill(BOOTSTRAP_EMAIL)
+    page.locator("#password").fill(BOOTSTRAP_PASSWORD)
+    page.get_by_role("button", name="Sign in").click()
     try:
         expect(page.get_by_role("heading", name="Projects")).to_be_visible(timeout=20_000)
     except AssertionError:
         notice = page.locator(".auth-error, .auth-notice").inner_text() if page.locator(".auth-error, .auth-notice").count() else ""
         raise AssertionError(
-            f"register did not reach Projects; url={page.url} notice={notice!r} "
+            f"login did not reach Projects; url={page.url} notice={notice!r} "
             f"body={page.locator('body').inner_text()[:500]!r}"
         ) from None
 
@@ -134,7 +137,7 @@ def test_ui_phys_nightly_login_upload_ask_export(page: Page, live_app, ui_phys_c
     base = live_app["base"]
     cases = ui_phys_catalog["cases"]
 
-    _register(page, base)
+    _login(page, base)
     expect(page.get_by_role("heading", name="Projects")).to_be_visible(timeout=15_000)
 
     _create_project(page, ui_phys_catalog["project_name"])

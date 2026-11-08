@@ -67,12 +67,16 @@ def live_app(tmp_path_factory):
         "CEREBRUM_UI_PHYS_STUB": "1",
         "PUBLIC_BASE_URL": "https://theshovel.ai",
         "PYTHONPATH": str(REPO),
+        # Seed an already-verified account at boot (the operator-set env seam,
+        # same one app/main.py uses for the first admin), so the nightly signs
+        # in instead of registering a fresh account that now requires email
+        # verification. No skip-verification flag in product code.
+        "BOOTSTRAP_USER_EMAIL": "ui-phys-bootstrap@example.com",
+        "BOOTSTRAP_USER_PASSWORD": "UiPhysBootstrap9!",
     })
     # Pass the chat_stream env-key gate; the stub never dials a provider.
     from tests.browser._llm_stub import stub_provider_env
     env.update(stub_provider_env())
-    # Dev registration auto-verifies; no email provider needed.
-    env.pop("RESEND_API_KEY", None)
 
     boot = (
         "from tests.browser._llm_stub import install_stub; "
