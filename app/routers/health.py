@@ -159,8 +159,11 @@ def ready(response: Response):
         embedder_ok = True
     # M9: an LLM that is not currently serving (every provider's latest
     # outcome exhausted/error) is not ready either, even though /health stays
-    # 200-degraded for liveness.
-    llm_serving = payload["checks"]["llm"].get("serving", True)
+    # 200-degraded for liveness. Read it defensively: the identity-block path
+    # below must still 503 on embedder mismatch regardless of provider state
+    # (a mocked payload that omits the llm probe must not crash the route).
+    llm_serving = (payload.get("checks") or {}).get("llm") or {}
+    llm_serving = llm_serving.get("serving", True)
     payload["ready"] = (
         payload["checks"]["database"]["ok"] and embedder_ok and llm_serving
     )

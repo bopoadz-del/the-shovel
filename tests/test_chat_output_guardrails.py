@@ -86,36 +86,53 @@ def test_sanitize_final_text_strips_dsml_and_tool_json():
     assert _sanitize_final_text(xml_leak) == _TOOL_FORMAT_FALLBACK
 
 
-def test_sanitize_final_text_hides_anthropic_tool_call_block():
-    block = '<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>'
+@pytest.mark.parametrize("block", [
+    '<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>',
+    '<tool_call>{"name": "formula_executor_v2", "arguments": {"expression": "1+1"}}</tool_call>',
+])
+def test_sanitize_final_text_hides_anthropic_tool_call_block(block):
     assert _sanitize_final_text(block) == _TOOL_FORMAT_FALLBACK
 
 
-def test_sanitize_final_text_hides_malformed_tool_call_frame():
+@pytest.mark.parametrize("frame", [
+    '<tool_call><parameter=action> read something </tool_call>',
+    'Answer here <tool_call><parameter name="q">x</parameter></tool_call>',
+])
+def test_sanitize_final_text_hides_malformed_tool_call_frame(frame):
     # M1: <parameter=action> read ... </tool_call> must never render, even when
     # the frame cannot be parsed into a real tool call.
-    frame = '<tool_call><parameter=action> read something </tool_call>'
     assert _sanitize_final_text(frame) == _TOOL_FORMAT_FALLBACK
 
 
-def test_sanitize_final_text_strips_reasoning_blocks():
-    assert _sanitize_final_text('<think>hidden chain of thought</think> Visible answer') == 'Visible answer'
-    assert _sanitize_final_text('<thinking>hidden</thinking>\nThe answer.') == 'The answer.'
-    assert _sanitize_final_text('<think>only reasoning, no answer') == ''
+@pytest.mark.parametrize("text,expected", [
+    ('<think>hidden chain of thought</think> Visible answer', 'Visible answer'),
+    ('<thinking>hidden</thinking>\nThe answer.', 'The answer.'),
+    ('<reasoning>hidden</reasoning> tail', 'tail'),
+    ('<think>only reasoning, no answer', ''),
+])
+def test_sanitize_final_text_strips_reasoning_blocks(text, expected):
+    assert _sanitize_final_text(text) == expected
 
 
-def test_strip_reasoning_blocks_direct():
-    assert _strip_reasoning_blocks('<think>a</think> b') == 'b'
-    assert _strip_reasoning_blocks('<reasoning>a</reasoning> b') == 'b'
-    assert _strip_reasoning_blocks('no reasoning here') == 'no reasoning here'
-    assert _strip_reasoning_blocks('') == ''
+@pytest.mark.parametrize("text,expected", [
+    ('<think>a</think> b', 'b'),
+    ('<reasoning>a</reasoning> b', 'b'),
+    ('<analysis>a</analysis> b', 'b'),
+    ('no reasoning here', 'no reasoning here'),
+    ('', ''),
+])
+def test_strip_reasoning_blocks_direct(text, expected):
+    assert _strip_reasoning_blocks(text) == expected
 
 
-def test_recover_tool_calls_from_content_handles_anthropic_block():
-    block = '<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>'
+@pytest.mark.parametrize("block,name", [
+    ('<tool_call>{"name": "search_project_documents", "arguments": {"query": "x"}}</tool_call>', 'search_project_documents'),
+    ('<tool_call>{"name": "formula_executor_v2", "arguments": {"expression": "1+1"}}</tool_call>', 'formula_executor_v2'),
+])
+def test_recover_tool_calls_from_content_handles_anthropic_block(block, name):
     recovered = _recover_tool_calls_from_content(block)
     assert recovered
-    assert recovered[0]["function"]["name"] == "search_project_documents"
+    assert recovered[0]["function"]["name"] == name
 
 
 def test_final_text_needs_forced_retry_on_tool_format_fallback():
