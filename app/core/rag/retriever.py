@@ -10265,6 +10265,7 @@ def index_chunks(
     chunks: List[str],
     *,
     pages: Optional[List[Optional[int]]] = None,
+    ocr_flags: Optional[List[bool]] = None,
 ) -> int:
     """Embed ``chunks`` and write them to the store for retrieval.
 
@@ -10296,6 +10297,8 @@ def index_chunks(
     # Pages go to the store only when some are known, so a store (or a test
     # double) written before pages existed keeps working for non-PDF sources.
     extra = {"pages": list(pages)} if pages and any(pages) else {}
+    if ocr_flags and any(ocr_flags):
+        extra["ocr_flags"] = list(ocr_flags)
     return store.upsert_chunks(
         project_id, doc_id, chunks, embeddings,
         knowledge_layer=knowledge_layer, authority=authority, **extra)

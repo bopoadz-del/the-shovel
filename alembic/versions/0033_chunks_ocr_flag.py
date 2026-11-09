@@ -22,17 +22,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":
-        return
-    op.execute(sa.text(
-        "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS ocr "
-        "BOOLEAN NOT NULL DEFAULT FALSE"
-    ))
+    op.add_column(
+        "chunks",
+        sa.Column("ocr", sa.Boolean(), nullable=False, server_default=sa.text("FALSE")),
+    )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "sqlite":
-        return
-    op.execute(sa.text("ALTER TABLE chunks DROP COLUMN IF EXISTS ocr"))
+    op.drop_column("chunks", "ocr")

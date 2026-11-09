@@ -1238,6 +1238,7 @@ class VectorStore:
         knowledge_layer: Optional[str] = None,
         authority: Optional[str] = None,
         pages: Optional[List[Optional[int]]] = None,
+        ocr_flags: Optional[List[bool]] = None,
     ) -> int:
         """Replace all existing chunks for ``(project_id, doc_id)`` with
         the supplied set. Idempotent — calling twice with the same input
@@ -1302,6 +1303,7 @@ class VectorStore:
                             knowledge_layer=knowledge_layer,
                             authority=authority,
                             page=int(page) if page else None,
+                            ocr=bool(ocr_flags[i]) if ocr_flags and i < len(ocr_flags) else False,
                         )
                     )
                 session.commit()
