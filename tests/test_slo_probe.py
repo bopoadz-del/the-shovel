@@ -133,14 +133,21 @@ def test_evaluate_empty_vs_present_samples_verdict(monkeypatch, samples):
     assert out["samples"] == len(samples)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"samples": []},   # samples key present but empty
+        [],                # top-level empty list
+    ],
+)
 def test_main_zero_samples_writes_no_samples_report_and_exits_nonzero(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, payload,
 ):
     monkeypatch.delenv("SLO_AVAILABILITY", raising=False)
     monkeypatch.delenv("SLO_LATENCY_P95_MS", raising=False)
     samples = tmp_path / "samples.json"
     out = tmp_path / "report.json"
-    samples.write_text(json.dumps({"samples": []}))
+    samples.write_text(json.dumps(payload))
     rc = slo_probe.main(["--json", str(samples), "--out", str(out)])
     assert rc == 1
     verdict = json.loads(out.read_text())
