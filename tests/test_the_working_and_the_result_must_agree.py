@@ -18,6 +18,7 @@ what the reader needs.
 import pytest
 
 from app.agents import runtime as rt
+from app.agents.runtime import _derivation_bound_to_previous  # noqa: F401  (mutation gate tie)
 
 
 def _mismatches(text):
@@ -141,4 +142,4 @@ def test_mixed_expression_is_skipped_not_partial(text, expected):
     ("= 54", 2, False),
 ])
 def test_bound_to_previous_exponent(text, start, expected):
-    assert rt._derivation_bound_to_previous(text, start) is expected
+    assert _derivation_bound_to_previous(text, start) is expected
