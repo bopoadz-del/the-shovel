@@ -252,6 +252,11 @@ def make_rag_chunk_class(
             # 1-based page of the source PDF where the chunk's text starts
             # (Alembic 0021). NULL for non-PDF sources and older rows.
             "page": mapped_column(Integer, nullable=True),
+            # OCR provenance (Alembic 0033): True when the chunk's text was
+            # captured by OCR rather than the PDF text layer.
+            "ocr": mapped_column(
+                Boolean, nullable=False, default=False, server_default=sa_text("FALSE"),
+            ),
             # Embedding identity — stamped on every row and verified at startup.
             "embedding_model": mapped_column(String, nullable=False, default=model_name),
             "embedding_dim": mapped_column(Integer, nullable=False, default=dim),
