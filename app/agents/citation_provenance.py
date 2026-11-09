@@ -179,6 +179,35 @@ CITABLE_CLASSES: frozenset[str] = frozenset(
 )
 
 
+def _construction_calc_declares_source(text: str) -> bool:
+    """True when a ``construction_calc`` result declares a source it is based on.
+
+    The envelope carries ``standard`` (the first of the result's standard /
+    code / reference / source keys, else ``"none declared"``). A result may
+    also carry its own ``provenance`` (a reference table's
+    "owner-supplied ... unverified"). Either is a source the answer may cite,
+    so the gate must not treat the turn as having read nothing and strip it.
+    """
+    if not text:
+        return False
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    standard = data.get("standard")
+    if isinstance(standard, str) and standard.strip() and standard.strip() != "none declared":
+        return True
+    result = data.get("result")
+    if isinstance(result, dict):
+        for key in ("provenance", "source", "reference", "standard", "code"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+    return False
+
+
 @dataclass
 class EvidenceRecord:
     """One thing that actually happened this turn.
@@ -204,6 +233,12 @@ class EvidenceRecord:
         if self.kind == "retrieval":
             return bool(self.text.strip())
         if self.kind == "tool_run":
+            if (self.tool or "") == "construction_calc":
+                # A calculator that declares the source it computed from (a
+                # standard / template / reference table) IS citing that
+                # source; only a bare computation ("none declared") reads
+                # nothing and stays non-corpus.
+                return _construction_calc_declares_source(self.text)
             return (self.tool or "") not in NON_CORPUS_TOOLS
         return False
 
