@@ -47,3 +47,23 @@ def test_progress_kpi_agrees(planned, actual, total, want_ppct, want_apct, want_
     assert out["actual_pct"] == pytest.approx(want_apct)
     assert out["variance_pct"] == pytest.approx(want_var)
     assert out["spi_progress"] == pytest.approx(want_spi)
+
+
+from app.agents.hats.planning.formulas.productivity_benchmarks import productivity_benchmark
+
+
+@pytest.mark.parametrize("item,want_unit,want_rate", [
+    ("blockwork walls", "m2", 12.0),
+    ("internal wall plaster", "m2", 20.0),
+])
+def test_productivity_benchmark_lookup(item, want_unit, want_rate):
+    out = productivity_benchmark(item)
+    assert out["unit"] == want_unit
+    assert out["rate_per_crew_day"] == want_rate
+    assert "unverified" in out["provenance"]
+
+
+def test_productivity_benchmark_unknown_item_is_not_invented():
+    out = productivity_benchmark("widget extrusion")
+    assert out["rate_per_crew_day"] is None
+    assert "no benchmark entry" in out["flag"]
