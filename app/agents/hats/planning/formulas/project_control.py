@@ -130,3 +130,85 @@ def progress_kpi(
         "standard": "progress-based SPI (planner template, not EVM cost-based)",
         "note": note,
     }
+
+
+@formula(
+    owner="planning",
+    display_name="Contractor cash flow (monthly)",
+    description=(
+        "Advance, retention, certified valuations, net cash and the peak "
+        "funding requirement from a monthly value and cost series."
+    ),
+    inputs={
+        "monthly_value": Param("currency", 0, 1e12, label="projected monthly work value (series)"),
+        "monthly_cost": Param("currency", 0, 1e12, label="monthly cost (series)"),
+        "advance_pct": Param("ratio", 0, 1, label="advance % (suggested 10%)"),
+        "retention_pct": Param("ratio", 0, 1, label="retention % (suggested 5%)"),
+        "payment_lag_days": Param("days", 0, 365, label="payment lag days (suggested 15)"),
+    },
+    outputs={
+        "contract_value": "currency",
+        "advance_payment": "currency",
+        "retention_total": "currency",
+        "peak_funding_requirement": "currency",
+        "check_advance_recovery": "currency",
+        "check_retention": "currency",
+        "check_valuation": "currency",
+    },
+)
+def cash_flow(
+    monthly_value: list,
+    monthly_cost: list,
+    advance_pct: float = 0.10,
+    retention_pct: float = 0.05,
+    payment_lag_days: float = 15.0,
+) -> dict:
+    """A1 contractor cash flow.
+
+    advance paid at month 0, recovered pro-rata; retention deducted monthly
+    and released in full at completion (last month); payments arrive lagged by
+    ceil(payment_lag_days / 30) months. advance_pct / retention_pct / lag are
+    inputs (10% / 5% / 15 days are only suggested defaults).
+    """
+    V = [float(v) for v in (monthly_value or [])]
+    C = [float(c) for c in (monthly_cost or [])]
+    if not V:
+        return {"error": "monthly_value must be a non-empty series."}
+    if len(C) != len(V):
+        return {"error": "monthly_cost must match monthly_value length."}
+    ap, rp = float(advance_pct), float(retention_pct)
+    lag = math.ceil(float(payment_lag_days) / 30.0)
+    contract_value = sum(V)
+    advance_payment = ap * contract_value
+    retention_total = rp * contract_value
+    advance_recovery = [-ap * v for v in V]
+    retention_deduction = [-rp * v for v in V]
+    certified = [v + ar + rd for v, ar, rd in zip(V, advance_recovery, retention_deduction)]
+    certified[-1] += retention_total  # release at completion
+    cash_in = [0.0] * len(V)
+    for m in range(len(V)):
+        if m - lag >= 0:
+            cash_in[m] = certified[m - lag]
+    net = [cash_in[m] - C[m] for m in range(len(V))]
+    cum = [0.0] * len(V)
+    running = advance_payment
+    for m in range(len(V)):
+        running += net[m]
+        cum[m] = running
+    peak = max(0.0, -min(cum))
+    return {
+        "contract_value": round(contract_value, 2),
+        "advance_payment": round(advance_payment, 2),
+        "retention_total": round(retention_total, 2),
+        "peak_funding_requirement": round(peak, 2),
+        "check_advance_recovery": round(sum(advance_recovery), 2),
+        "check_retention": round(sum(retention_deduction), 2),
+        "check_valuation": round(sum(certified), 2),
+        "standard": "owner-supplied project-control template, 09 Nov 2026; standard planner practice",
+        "note": (
+            f"contract value = {contract_value:,.2f}; advance {ap:.0%} = "
+            f"{advance_payment:,.2f} at month 0; retention {rp:.0%} = "
+            f"{retention_total:,.2f} released at completion; payment lag "
+            f"{lag} month(s); peak funding = {peak:,.2f}."
+        ),
+    }

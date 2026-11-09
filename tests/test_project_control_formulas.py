@@ -67,3 +67,23 @@ def test_productivity_benchmark_unknown_item_is_not_invented():
     out = productivity_benchmark("widget extrusion")
     assert out["rate_per_crew_day"] is None
     assert "no benchmark entry" in out["flag"]
+
+
+from app.agents.hats.planning.formulas.project_control import cash_flow
+
+
+@pytest.mark.parametrize("value,cost,adv,ret,lag,want_cv,want_adv,want_ret,want_peak", [
+    # 2 months, 10% advance, 5% retention, 15-day lag (1 month)
+    ([100.0, 100.0], [90.0, 90.0], 0.10, 0.05, 15.0, 200.0, 20.0, 10.0, 75.0),
+    # 1 month, no advance/retention, no lag
+    ([1000.0], [800.0], 0.0, 0.0, 0.0, 1000.0, 0.0, 0.0, 0.0),
+])
+def test_cash_flow_agrees(value, cost, adv, ret, lag, want_cv, want_adv, want_ret, want_peak):
+    out = cash_flow(value, cost, adv, ret, lag)
+    assert out["contract_value"] == pytest.approx(want_cv)
+    assert out["advance_payment"] == pytest.approx(want_adv)
+    assert out["retention_total"] == pytest.approx(want_ret)
+    assert out["peak_funding_requirement"] == pytest.approx(want_peak)
+    # checks: recovery sums to -advance, deduction sums to -retention
+    assert out["check_advance_recovery"] == pytest.approx(-want_adv)
+    assert out["check_retention"] == pytest.approx(-want_ret)
