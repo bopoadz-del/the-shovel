@@ -30,3 +30,20 @@ def test_crew_sizing_agrees(qty, days, rate, hours, want_crews, up, crew_days, m
 def test_crew_sizing_duration_for_crews(qty, rate, crew, days):
     out = crew_sizing(qty, 15.0, rate, 10.0, crew_size=crew)
     assert out["duration_for_crews"] == pytest.approx(days, abs=0.01)
+
+
+from app.agents.hats.planning.formulas.project_control import progress_kpi
+
+
+@pytest.mark.parametrize("planned,actual,total,want_ppct,want_apct,want_var,want_spi", [
+    # on schedule: 50 planned, 50 actual, 100 total -> 50/50/0/1.0
+    (50.0, 50.0, 100.0, 50.0, 50.0, 0.0, 1.0),
+    # behind: 60 planned, 45 actual, 100 total -> 60/45/-15/0.75
+    (60.0, 45.0, 100.0, 60.0, 45.0, -15.0, 0.75),
+])
+def test_progress_kpi_agrees(planned, actual, total, want_ppct, want_apct, want_var, want_spi):
+    out = progress_kpi(planned, actual, total)
+    assert out["planned_pct"] == pytest.approx(want_ppct)
+    assert out["actual_pct"] == pytest.approx(want_apct)
+    assert out["variance_pct"] == pytest.approx(want_var)
+    assert out["spi_progress"] == pytest.approx(want_spi)
