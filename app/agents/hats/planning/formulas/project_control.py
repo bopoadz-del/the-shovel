@@ -96,7 +96,7 @@ def crew_sizing(
     inputs={
         "planned_cum": Param("count", 0, 1e12, label="planned cumulative to date"),
         "actual_cum": Param("count", 0, 1e12, label="actual cumulative to date"),
-        "planned_total": Param("count", 0, 1e12, label="planned total at finish"),
+        "planned_total": Param("count", 0, 1e12, label="planned total at finish", required=False),
     },
     outputs={
         "planned_pct": "%",
@@ -108,21 +108,34 @@ def crew_sizing(
 def progress_kpi(
     planned_cum: float,
     actual_cum: float,
-    planned_total: float,
+    planned_total: float | None = None,
 ) -> dict:
     """Planned vs actual + KPI.
 
-    Percent complete is against the baseline total (planned_total). The SPI
-    here is progress-based (actual_cum / planned_cum), which is what these
-    jobs use - it is stated as such, never an EVM cost-based CPI/SPI.
+    SPI is progress-based (actual_cum / planned_cum) and needs no total.
+    Percent complete is against the baseline total, so ``planned_total`` is
+    optional: given it, the formula also reports planned/actual/variance
+    percent; without it, it reports the SPI only.
     """
-    pc, ac, tot = float(planned_cum), float(actual_cum), float(planned_total)
+    pc, ac = float(planned_cum), float(actual_cum)
+    spi = ac / pc if pc > 0 else None
+    if planned_total is None:
+        note = (f"SPI (progress-based) = {ac} / {pc} = {spi:.3f}." if spi is not None
+                else "SPI undefined (planned_cum = 0).")
+        return {
+            "planned_pct": None,
+            "actual_pct": None,
+            "variance_pct": None,
+            "spi_progress": round(spi, 3) if spi is not None else None,
+            "standard": "progress-based SPI (planner template, not EVM cost-based)",
+            "note": note,
+        }
+    tot = float(planned_total)
     if tot <= 0:
         return {"error": "planned_total must be > 0."}
     planned_pct = pc / tot * 100
     actual_pct = ac / tot * 100
     variance = actual_pct - planned_pct
-    spi = ac / pc if pc > 0 else None
     note = (
         f"planned = {pc} / {tot} = {planned_pct:.1f}%; actual = {ac} / {tot} = "
         f"{actual_pct:.1f}%; variance = {variance:+.1f}%. SPI (progress-based) = "

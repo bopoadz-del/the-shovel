@@ -543,6 +543,20 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
         declared is not None and declared.dimension == "count"
         and written is not None and written.dimension in _COUNTABLE_MEASURES
     )
+    carries_rate_measure = (
+        declared is not None and declared.dimension == "count/time"
+        and written is not None
+        and written.dimension.split("/", 1)[0] in _COUNTABLE_MEASURES
+        and written.dimension.split("/", 1)[-1] == "time"
+    )
+    if carries_rate_measure:
+        # A rate declared "count per day" carries the unit it is per
+        # ("12 m2/crew-day", "12 m3/day"): the number is the rate, the
+        # numerator names what is measured and the denominator is the time.
+        return {"value": number,
+                "conversion": {"parameter": spec.name, "value_in": number,
+                               "from_unit": unit, "to_unit": unit, "value_out": number,
+                               "note": "rate carries the stated unit"}}
     if declared is None or (dimensionless and (written is None or written.dimension
                                                 in (declared.dimension, "fraction")
                                                 or carries_measure)):
