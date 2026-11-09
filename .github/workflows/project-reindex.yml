@@ -1,0 +1,42 @@
+name: project-reindex
+
+# Ops workflow (Advisor 20:30Z): full rebuild of a project's doc_index on the
+# live deployment, from its current document list. Slow -- extracts text from
+# every document -- so it is a manual workflow_dispatch only, with a REQUIRED
+# project_id (no default). Uses the seed admin principal already held as the
+# Actions secret FORK_API_KEY (the same credential ui-battery.yml uses) as the
+# Bearer key on /v1/admin/debug/project-reindex. The run prints the HTTP status
+# and the response JSON (chunk/doc counts -- no secrets) and fails on non-2xx.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project whose doc_index to rebuild from its current document list"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  reindex:
+    name: reindex project (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+    steps:
+      - name: Rebuild project doc_index
+        env:
+          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
+        run: |
+          set -euo pipefail
+          url="${BASE_URL%/}/v1/admin/debug/project-reindex?project_id=${PROJECT_ID}"
+          echo "POST ${url}"
+          curl --fail-with-body --max-time 3600 \
+            -X POST \
+            -H "Authorization: Bearer ${FORK_API_KEY}" \
+            -H "Accept: application/json" \
+            -w "\nHTTP %{http_code}\n" \
+            "${url}"
