@@ -5,6 +5,7 @@ gate's two-input lint holds and the CI-M mutants die.
 """
 from __future__ import annotations
 
+import logging
 import sys
 import types
 
@@ -129,3 +130,17 @@ async def test_submit_support_email_contents(monkeypatch, message, contact, ok):
     assert message in sent["html"]
     if contact:
         assert contact in sent["html"]
+
+
+def test_log_support_mx_warns_without_mx(monkeypatch, caplog):
+    _install_fake_dns(monkeypatch, [])  # no MX -> warn
+    with caplog.at_level(logging.WARNING, logger="app.routers.support"):
+        support.log_support_mx()
+    assert "no MX record" in caplog.text
+
+
+def test_log_support_mx_silent_with_mx(monkeypatch, caplog):
+    _install_fake_dns(monkeypatch, ["mx1.example.com."])  # MX present -> silent
+    with caplog.at_level(logging.WARNING, logger="app.routers.support"):
+        support.log_support_mx()
+    assert "no MX record" not in caplog.text
