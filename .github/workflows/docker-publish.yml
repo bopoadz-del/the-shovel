@@ -6,6 +6,7 @@ on:
     tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -22,6 +23,10 @@ concurrency:
 
 jobs:
   build:
+    # A draft PR does not build the image (it runs only the fast checks). The
+    # image build is part of the full run that happens once the PR is marked
+    # ready. Pushes to main and tags always build.
+    if: github.event_name != 'pull_request' || ! github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

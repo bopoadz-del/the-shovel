@@ -1,0 +1,94 @@
+# Fast checks for DRAFT pull requests. CI runs the FULL suite once per PR,
+# on the READY state (test.yml + mutation-gate.yml are gated on
+# `github.event.pull_request.draft == false`). While a PR is a draft, only
+# these cheap gates run so the author can iterate without paying the 20-45
+# minute full suite on every push. Target: <=5 minutes of runner time.
+#
+# Mechanism, not special cases: this file carries no branch names or PR
+# numbers. The targeted test selection is the same `tests_for` mapping the
+# ready-state mutation gate uses (scripts/mutation_gate.py), so a test that
+# runs here is the same test CI-M would use to kill a mutant on the changed
+# function.
+name: fast
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  two-input-lint:
+    # Gate 2 from the mutation gate, alone. Pure AST over the diff -- no app
+    # dependencies, no model download, so this stays under a minute.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Two-input test lint on changed test files
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags origin "$BASE" 2>/dev/null || true
+          python3 scripts/mutation_gate.py --base "$BASE" --src app --tests tests --lint-only
+
+  targeted-tests:
+    # The tests that actually reference the changed functions, and nothing
+    # else. Needs the app installed (these tests import app.*), so this job
+    # pays the pip-install cost once; it does not install OCR system deps or
+    # stand up Postgres, so it stays well short of the full suite.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ENV: testing
+      CEREBRUM_VIRGIN: "true"
+      RAG_EMBEDDING_MODEL: fake
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: A random development key for this run
+        # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
+        # source, and none repeats between runs.
+        run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - name: Data dir for this run
+        run: echo "DATA_DIR=$RUNNER_TEMP/data-fast" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout
+
+      - name: Targeted tests for changed files (tests_for selection)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags origin "$BASE" 2>/dev/null || true
+          TESTS=$(python3 scripts/mutation_gate.py --base "$BASE" --src app --tests tests --print-tests)
+          echo "targeted tests:"
+          printf '%s\n' "$TESTS"
+          if [ -n "$TESTS" ]; then
+            python -m pytest -q -p no:cacheprovider --timeout=120 --ignore=tests/browser $TESTS
+          else
+            echo "no changed source functions with referencing tests; nothing to run"
+          fi
