@@ -133,7 +133,7 @@ async def _chat_stream_impl(
         _is_capability_request, _is_cost_shaped_query, _latest_operator_ask, _llm_config,
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
         _looks_like_search_preamble, _looks_like_tool_markup_leak,
-        _message_wants_locked_deliverable, _normalize_tool_call_ids, _nudge_for_failed_tool,
+        _message_is_formula_style_ask, _message_wants_locked_deliverable, _normalize_tool_call_ids, _nudge_for_failed_tool,
         _off_loop, _parse_dsml_tool_calls, _persist_failed_turn, _postprocess_answer,
         _predispatch_file_tool, _predispatch_formula_calc, _predispatch_look_ahead,
         _predispatch_remaining_deliverables, _predispatch_resource_histogram,
@@ -522,7 +522,7 @@ async def _chat_stream_impl(
                "predispatched": True}
 
     _calc_pre = None
-    if not _locked and _budget.allow("formula_calc"):
+    if _budget.allow("formula_calc") and (not _locked or _message_is_formula_style_ask(user_message)):
         _calc_pre = await _predispatch_formula_calc(
             self, messages, project_id, operator_text=user_message,
         )
