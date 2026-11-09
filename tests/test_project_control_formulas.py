@@ -171,3 +171,47 @@ def test_manhours_scurve_refuses_zero_total(planned, actual):
 ])
 def test_floor_cycle_refuses_bad_input(comp, tot, wt):
     assert "error" in floor_cycle_progress(comp, tot, wt)
+
+
+# ── 1b(a): a rate declared count-per-time carries its unit-per-unit ─────────
+
+@pytest.mark.parametrize("rate", [
+    "12 m2/crew-day",
+    "12 m3/day",
+])
+def test_a_rate_with_a_unit_per_unit_is_accepted(rate):
+    out = cf.run_calculation("crew_sizing", {
+        "quantity": "3,000 m2", "duration_days": 15, "rate_per_crew_day": rate,
+    })
+    assert out["status"] == "success", out
+    assert out["result"]["crews_required"] == pytest.approx(16.667, abs=0.001)
+
+
+# ── 1b(c): SPI needs no planned_total ───────────────────────────────────────
+
+@pytest.mark.parametrize("planned,actual,want", [
+    (60, 45, 0.75),
+    (50, 50, 1.0),
+])
+def test_spi_without_a_planned_total(planned, actual, want):
+    out = cf.run_calculation("progress_kpi", {"planned_cum": planned, "actual_cum": actual})
+    assert out["status"] == "success", out
+    assert out["result"]["spi_progress"] == pytest.approx(want)
+    assert out["result"]["planned_pct"] is None
+
+
+# ── 1b(b): benchmark provenance carries tier / confidence ───────────────────
+
+@pytest.mark.parametrize("item,want_rate", [
+    ("blockwork walls", 12.0),
+    ("internal wall plaster", 20.0),
+])
+def test_benchmark_provenance_is_unverified_general(item, want_rate):
+    out = cf.run_calculation("productivity_benchmark", {"work_item": item})
+    assert out["status"] == "success", out
+    res = out["result"]
+    assert res["rate_per_crew_day"] == pytest.approx(want_rate)
+    assert "unverified" in res["provenance"]
+    assert "owner" in res["provenance"] and "template" in res["provenance"]
+    assert res["tier"] == "GENERAL"
+    assert res["confidence"] == "MEDIUM"

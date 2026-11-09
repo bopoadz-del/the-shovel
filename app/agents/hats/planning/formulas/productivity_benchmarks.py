@@ -10,7 +10,8 @@ from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 
 _BENCHMARK_PROVENANCE = (
-    "owner-supplied planner template (GCC residential tower, finishing trades), unverified"
+    "benchmark, unverified, owner-supplied planner template "
+    "(GCC residential tower, finishing trades)"
 )
 
 # (work item, unit, crew, rate per crew-day, flag note)
@@ -50,6 +51,8 @@ _BENCHMARK_KEYS = {item: (unit, crew, rate, flag) for item, unit, crew, rate, fl
         "crew": "-",
         "rate_per_crew_day": "count/d",
         "provenance": "-",
+        "tier": "-",
+        "confidence": "-",
         "flag": "-",
     },
 )
@@ -66,6 +69,8 @@ def productivity_benchmark(work_item: str) -> dict:
             "work_item": work_item,
             "rate_per_crew_day": None,
             "provenance": _BENCHMARK_PROVENANCE,
+            "tier": "GENERAL",
+            "confidence": "MEDIUM",
             "flag": "no benchmark entry for this work item; use the project's own rate",
         }
     unit, crew, rate, flag = _BENCHMARK_KEYS[key]
@@ -75,6 +80,8 @@ def productivity_benchmark(work_item: str) -> dict:
         "crew": crew,
         "rate_per_crew_day": rate,
         "provenance": _BENCHMARK_PROVENANCE,
+        "tier": "GENERAL",
+        "confidence": "MEDIUM",
         "flag": flag,
         "note": f"{work_item}: {rate} {unit} / crew-day ({crew}). {_BENCHMARK_PROVENANCE}."
                 + (f" FLAG: {flag}." if flag else ""),

@@ -107,6 +107,8 @@ _FAMILIES: Dict[str, Dict[str, Any]] = {
         "mh": 1.0, "mhr": 1.0, "mhrs": 1.0, "man-hr": 1.0, "man-hrs": 1.0,
         "man-day": (1.0, _HPD), "man-days": (1.0, _HPD), "md": (1.0, _HPD),
         "man-week": (1.0, _HPD_DPW), "man-weeks": (1.0, _HPD_DPW),
+        "crew-day": (1.0, _HPD), "crew-days": (1.0, _HPD),
+        "crew-week": (1.0, _HPD_DPW), "crew-weeks": (1.0, _HPD_DPW),
     },
     "working time": {
         "working hour": 1.0, "working hours": 1.0,
