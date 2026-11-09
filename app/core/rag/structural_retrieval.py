@@ -17,10 +17,12 @@ def _normalize(text: str) -> str:
 
 
 def _contains_sequence(hay: list[str], needle: list[str]) -> bool:
-    """True when ``needle`` appears as a contiguous run of words in ``hay``."""
+    """True when ``needle`` appears as a contiguous run of words in ``hay``.
+
+    ``rows_matching`` guards the empty-needle case before this is reached, so
+    an empty ``needle`` here would match every row; that cannot happen.
+    """
     n = len(needle)
-    if n == 0:
-        return False
     return any(hay[i:i + n] == needle for i in range(len(hay) - n + 1))
 
 

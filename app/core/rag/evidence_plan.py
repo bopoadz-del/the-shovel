@@ -87,14 +87,13 @@ def missing_plan_items(plan: EvidencePlan, evidence_text: str) -> tuple[str, ...
     absent the item is a gap and triggers another round. This errs toward
     re-querying (a bounded extra round), never toward silently accepting a
     missing row — a false negative on coverage would drop the very row the
-    loop exists to fetch.
+    loop exists to fetch. An item whose only words are stopwords carries no
+    signal, so it is never a gap.
     """
     evidence = " ".join((evidence_text or "").lower().split())
     missing = []
     for item in plan.items:
         terms = _terms(item)
-        if not terms:
-            continue  # an empty plan item is not a gap; it carries no signal
         if not all(term in evidence for term in terms):
             missing.append(item)
     return tuple(missing)
