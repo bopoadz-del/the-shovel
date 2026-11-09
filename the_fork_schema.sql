@@ -227,6 +227,7 @@ CREATE TABLE chunks (
     knowledge_layer TEXT,
     authority       TEXT,
     page            INTEGER,
+    ocr             BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (project_id, doc_id, chunk_index)
 );
 

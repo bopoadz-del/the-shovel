@@ -713,6 +713,7 @@ def _extract_pdf(
         joined_len = start + len(part)
 
     ocr_pages = 0
+    ocr_page_numbers: list[int] = []
     ocr_attempts = 0
     empty_text_pages = 0
     pages_read = 0
@@ -786,6 +787,7 @@ def _extract_pdf(
                                     _add(ocr_text, i)
                                     chars += len(ocr_text)
                                     ocr_pages += 1
+                                    ocr_page_numbers.append(i + 1)
                                 else:
                                     # Below the quality floor: not a chunk,
                                     # counted on the ledger instead of
@@ -850,6 +852,7 @@ def _extract_pdf(
                 if ocr_pages > 0:
                     partial_meta["ocr_low_quality"] = True
                     partial_meta["ocr_pages"] = ocr_pages
+                    partial_meta["ocr_page_numbers"] = ocr_page_numbers
                 if ocr_attempts:
                     partial_meta["ocr_attempts"] = ocr_attempts
                 if empty_text_pages:
@@ -873,6 +876,7 @@ def _extract_pdf(
         # The doc relied on OCR for some pages — flag for lower confidence.
         meta["ocr_low_quality"] = True
         meta["ocr_pages"] = ocr_pages
+        meta["ocr_page_numbers"] = ocr_page_numbers
     if ocr_attempts:
         meta["ocr_attempts"] = ocr_attempts
     if empty_text_pages:
@@ -2529,7 +2533,9 @@ def index_project(project_id: str) -> dict[str, Any]:
             from app.core.rag import retriever as _rag
             if _rag.available() and chunks:
                 _rag.index_chunks(
-                    project_id, doc["id"], chunks, pages=_pages_for(chunks, meta),
+                    project_id, doc["id"], chunks,
+                    pages=_pages_for(chunks, meta),
+                    ocr_flags=_ocr_flags_for(chunks, meta),
                 )
         except Exception as exc:  # noqa: BLE001 — RAG must never break primary indexing
             import logging as _logging
@@ -3319,6 +3325,19 @@ def _pages_for(chunks: list[str], meta: dict[str, Any] | None) -> list[int | Non
     return list(pages)
 
 
+def _ocr_flags_for(chunks: list[str], meta: dict[str, Any] | None) -> list[bool] | None:
+    """Per-chunk OCR provenance from ``meta``, or None when pages do not line up.
+
+    A chunk is OCR-derived when its 1-based start page is among the pages the
+    PDF extractor OCR'd (``ocr_page_numbers``).
+    """
+    ocr_pages = set((meta or {}).get("ocr_page_numbers") or [])
+    pages = (meta or {}).get("chunk_pages")
+    if not ocr_pages or not pages or len(pages) != len(chunks):
+        return None
+    return [bool(p and p in ocr_pages) for p in pages]
+
+
 def indexing_record(result: dict[str, Any]) -> dict[str, Any]:
     """The ``metadata.indexing`` summary written for one ``index_document`` result."""
     indexing: dict[str, Any] = {
@@ -3577,6 +3596,7 @@ def _index_document(
                 rag_indexed = _rag.index_chunks(
                     project_id, document_id, chunks,
                     pages=_pages_for(chunks, meta),
+                    ocr_flags=_ocr_flags_for(chunks, meta),
                 ) or 0
                 entry["rag_indexed"] = rag_indexed
                 if rag_indexed < len(chunks):
@@ -3958,6 +3978,8 @@ def _search_project_documents_sync(
             "filename": _doc_name_for_id(doc_id),
             "chunk": _join_chunk_texts(kept),
             "score": float(kept[0].score or 0.0),
+            # OCR provenance (item 7): true when any kept chunk was OCR-derived.
+            "ocr": any(bool(getattr(c, "ocr", False)) for c in kept),
             # Where this hit actually came from: "own" | "general_knowledge"
             # | "master_corpus". `Chunk.layer` is withheld from the LLM path
             # by design (the chat runtime reads it to phrase its own
@@ -3998,6 +4020,7 @@ def _search_project_documents_sync(
             # the caller — that is exactly how the first attempt at this
             # field shipped as a silent no-op.
             "origin": item.get("origin", "own"),
+            "ocr": bool(item.get("ocr", False)),
         }
         if ocr_flag_by_doc.get(item["document_id"]):
             result_row["ocr_low_quality"] = True

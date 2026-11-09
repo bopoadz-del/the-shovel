@@ -276,7 +276,7 @@ def test_a_whole_book_is_indexed_in_page_batches_with_pages_and_its_own_ceiling(
     monkeypatch.setattr(extract_isolated, "run_isolated", _spy)
     captured = {}
 
-    def _index_chunks(pid, did, chunks, *, pages=None):
+    def _index_chunks(pid, did, chunks, *, pages=None, ocr_flags=None):
         captured.update(chunks=list(chunks), pages=pages)
         return len(chunks)
 

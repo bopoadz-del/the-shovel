@@ -49,8 +49,13 @@ jobs:
 
       - name: Mutants on changed functions + two-input test lint
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          git fetch --no-tags origin "$BASE"
+          # Diff against the CURRENT base branch tip, not the stale
+          # ``pull_request.base.sha``: a PR opened before another PR merged
+          # would otherwise mutate functions the other PR changed (they are in
+          # the base's advance, not this PR), producing uncovered mutants this
+          # PR neither touches nor should have to kill.
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+          BASE="$(git rev-parse FETCH_HEAD)"
           python3 scripts/mutation_gate.py --base "$BASE" \
             --src app --tests tests --workdir . \
             --pytest-arg=--timeout=120 --pytest-arg=--ignore=tests/browser \

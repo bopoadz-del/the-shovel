@@ -118,6 +118,7 @@ def panel(
             "confidence": _confidence(score),
             "layer": layer,
             "layer_label": _LAYER_LABELS.get(layer, "Knowledge base"),
+            "ocr": bool(h.get("ocr", False)),
         })
         if len(out) >= _MAX_SOURCES:
             break

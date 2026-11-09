@@ -334,6 +334,10 @@ class Chunk:
     # 1-based page of the source PDF where this chunk's text starts; None for
     # non-PDF sources and for rows indexed before pages were recorded.
     page: Optional[int] = field(default=None, compare=False)
+    # OCR provenance (Alembic 0033): True when this chunk's text was captured
+    # by OCR rather than the PDF text layer. Hydrated from the stored column;
+    # compare=False so it does not affect Chunk equality.
+    ocr: bool = field(default=False, compare=False)
     # Revision currency (app.core.rag.revision, audit §5.2). Filename-derived,
     # set by ``retrieve_with_filter`` on every search: ``revision`` is the
     # parsed single-char revision token ("" when none), ``drawing_number`` the
@@ -876,12 +880,33 @@ def _ensure_page_column(eng, table_name: str) -> None:
         )
 
 
+def _ensure_ocr_column(eng, table_name: str) -> None:
+    """Add the ``ocr`` provenance column to a chunk table that predates it.
+
+    Namespaced tables are created here, not by Alembic, so a table created
+    before 0033 must gain the column here too or every write that sets
+    ``ocr`` fails. Idempotent; a failure is logged, never raised.
+    """
+    try:
+        from sqlalchemy import inspect as _inspect
+
+        columns = {c["name"] for c in _inspect(eng).get_columns(table_name)}
+        if "ocr" in columns:
+            return
+        with eng.begin() as conn:
+            conn.execute(text(
+                f"ALTER TABLE {table_name} ADD COLUMN ocr BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+    except Exception:  # noqa: BLE001 — never block startup; reads log their own failure
+        logger.warning(
+            "could not ensure the ocr column on %s", table_name, exc_info=True,
+        )
+
+
 def _ensure_schema(url: str, rag_chunk_cls: type) -> None:
     global _INITIALIZED_NAMESPACES
     table_name = rag_chunk_cls.__tablename__
     init_key = (url, table_name)
-    if init_key in _INITIALIZED_NAMESPACES:
-        return
     with _INIT_LOCK:
         if init_key in _INITIALIZED_NAMESPACES:
             return
@@ -889,6 +914,7 @@ def _ensure_schema(url: str, rag_chunk_cls: type) -> None:
         eng = _engine_for_url(url)
         ensure_table(rag_chunk_cls.__table__, bind=eng)
         _ensure_page_column(eng, table_name)
+        _ensure_ocr_column(eng, table_name)
         # `checkfirst=True` above SKIPS the whole table create — indexes
         # included — when the table already exists. A prod table that predates
         # the idx_chunks_project declaration therefore never got the btree, so
@@ -1238,6 +1264,7 @@ class VectorStore:
         knowledge_layer: Optional[str] = None,
         authority: Optional[str] = None,
         pages: Optional[List[Optional[int]]] = None,
+        ocr_flags: Optional[List[bool]] = None,
     ) -> int:
         """Replace all existing chunks for ``(project_id, doc_id)`` with
         the supplied set. Idempotent — calling twice with the same input
@@ -1302,6 +1329,7 @@ class VectorStore:
                             knowledge_layer=knowledge_layer,
                             authority=authority,
                             page=int(page) if page else None,
+                            ocr=bool(ocr_flags[i]) if ocr_flags and i < len(ocr_flags) else False,
                         )
                     )
                 session.commit()
@@ -1533,7 +1561,7 @@ class VectorStore:
         cls = self._rag_chunk_cls
         return (
             cls.chunk_id, cls.project_id, cls.doc_id, cls.chunk_index, cls.text,
-            cls.knowledge_layer, cls.authority, cls.page,
+            cls.knowledge_layer, cls.authority, cls.page, cls.ocr,
         )
 
     @staticmethod
@@ -1548,6 +1576,7 @@ class VectorStore:
             knowledge_layer=getattr(r, "knowledge_layer", None),
             authority=getattr(r, "authority", None),
             page=getattr(r, "page", None),
+            ocr=bool(getattr(r, "ocr", False)),
         )
 
     def _hidden_doc_ids_among(
@@ -1647,7 +1676,7 @@ class VectorStore:
                         vis = self._hidden_doc_sql(self._table_name)
                     sql = text(
                         "SELECT chunk_id, project_id, doc_id, chunk_index, text, "
-                        "knowledge_layer, authority, page "
+                        "knowledge_layer, authority, page, ocr "
                         f"FROM {self._table_name} "
                         "WHERE project_id = :project_id "
                         f"AND {' AND '.join(clauses)} "
@@ -1673,6 +1702,7 @@ class VectorStore:
                 knowledge_layer=getattr(r, "knowledge_layer", None),
                 authority=getattr(r, "authority", None),
                 page=getattr(r, "page", None),
+                ocr=bool(getattr(r, "ocr", False)),
             )
             for r in rows
         ]
@@ -1896,7 +1926,7 @@ class VectorStore:
                         vis = self._hidden_doc_sql(self._table_name)
                     sql = text(
                         "SELECT chunk_id, project_id, doc_id, chunk_index, text, "
-                        "knowledge_layer, authority, page "
+                        "knowledge_layer, authority, page, ocr "
                         f"FROM {self._table_name} "
                         "WHERE project_id = :project_id "
                         f"AND ({like_clauses}) "
@@ -1935,6 +1965,7 @@ class VectorStore:
                     knowledge_layer=r.knowledge_layer,
                     authority=r.authority,
                     page=getattr(r, "page", None),
+                    ocr=bool(getattr(r, "ocr", False)),
                 )
             )
         # Discard SQL pre-filter false positives: a chunk that passed the
@@ -2025,6 +2056,7 @@ class VectorStore:
                 self._rag_chunk_cls.knowledge_layer,
                 self._rag_chunk_cls.authority,
                 self._rag_chunk_cls.page,
+                self._rag_chunk_cls.ocr,
                 score_expr,
             )
             .where(self._rag_chunk_cls.project_id == project_id)
@@ -2062,6 +2094,7 @@ class VectorStore:
                 knowledge_layer=row.knowledge_layer,
                 authority=row.authority,
                 page=getattr(row, "page", None),
+                ocr=bool(getattr(row, "ocr", False)),
             )
             for row in rows
         ]
@@ -2098,6 +2131,7 @@ class VectorStore:
                     knowledge_layer=getattr(r, "knowledge_layer", None),
                     authority=getattr(r, "authority", None),
                     page=getattr(r, "page", None),
+                    ocr=bool(getattr(r, "ocr", False)),
                 )
             )
         return out
@@ -2183,6 +2217,7 @@ class VectorStore:
                 knowledge_layer=r.knowledge_layer,
                 authority=r.authority,
                 page=getattr(r, "page", None),
+                ocr=bool(getattr(r, "ocr", False)),
             )
             for r in rows
         ]
@@ -2195,7 +2230,7 @@ class VectorStore:
         """
         return (
             "SELECT c.chunk_id, c.project_id, c.doc_id, c.chunk_index, "
-            "c.text, c.knowledge_layer, c.authority, c.page, "
+            "c.text, c.knowledge_layer, c.authority, c.page, c.ocr, "
             "ts_rank(c.text_search, q) AS rank "
             f"FROM {self._table_name} c, websearch_to_tsquery('english', :q) AS q "
             f"WHERE {where} AND c.project_id = :project_id {vis} "
@@ -2315,7 +2350,7 @@ class VectorStore:
                     sql = text(
                         f"""
                         SELECT c.chunk_id, c.project_id, c.doc_id, c.chunk_index,
-                               c.text, c.knowledge_layer, c.authority, c.page,
+                               c.text, c.knowledge_layer, c.authority, c.page, c.ocr,
                                {fts_table}.rank AS bm25_rank
                         FROM {fts_table}
                         JOIN {table} c ON c.rowid = {fts_table}.rowid
@@ -2349,6 +2384,7 @@ class VectorStore:
                 knowledge_layer=r.knowledge_layer,
                 authority=r.authority,
                 page=getattr(r, "page", None),
+                ocr=bool(getattr(r, "ocr", False)),
             )
             for r in rows
         ]
