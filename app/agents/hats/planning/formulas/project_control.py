@@ -42,7 +42,7 @@ def crew_sizing(
     hours_per_day: float = 10.0,
     crew_size: float | None = None,
 ) -> dict:
-    """A4 productivity / crew sizing.
+    """Productivity / crew sizing.
 
     crews_required = Q / (D * R); crew_days = Q / R; man_hours = crew_days * h.
     Fractional crews are reported rounded UP with the rounding shown, and the
@@ -102,7 +102,7 @@ def progress_kpi(
     actual_cum: float,
     planned_total: float,
 ) -> dict:
-    """A2 planned vs actual + KPI.
+    """Planned vs actual + KPI.
 
     Percent complete is against the baseline total (planned_total). The SPI
     here is progress-based (actual_cum / planned_cum), which is what these
@@ -163,7 +163,7 @@ def cash_flow(
     retention_pct: float = 0.05,
     payment_lag_days: float = 15.0,
 ) -> dict:
-    """A1 contractor cash flow.
+    """Contractor cash flow.
 
     advance paid at month 0, recovered pro-rata; retention deducted monthly
     and released in full at completion (last month); payments arrive lagged by
@@ -212,3 +212,103 @@ def cash_flow(
             f"{lag} month(s); peak funding = {peak:,.2f}."
         ),
     }
+
+
+@formula(
+    owner="planning",
+    display_name="Manhours S-curve",
+    description=(
+        "Planned vs actual manhours percent complete and a productivity index "
+        "(progress earned per manhour)."
+    ),
+    inputs={
+        "planned_mh": Param("count", 0, 1e12, label="planned manhours (series)"),
+        "actual_mh": Param("count", 0, 1e12, label="actual manhours to date (series)"),
+    },
+    outputs={
+        "cum_planned_pct": "%",
+        "cum_actual_pct": "%",
+        "productivity_index": "-",
+    },
+)
+def manhours_scurve(planned_mh: list, actual_mh: list) -> dict:
+    """Manhours S-curve. Actual is normalised to the PLANNED total, and the
+    productivity index is progress earned per manhour."""
+    planned = [float(x) for x in (planned_mh or [])]
+    actual = [float(x) for x in (actual_mh or [])]
+    planned_total = sum(planned)
+    if planned_total <= 0:
+        return {"error": "planned_mh must sum to more than 0."}
+    n = min(len(planned), len(actual))
+    cum_planned = sum(planned[:n])
+    cum_actual = sum(actual[:n])
+    cum_planned_pct = cum_planned / planned_total * 100
+    cum_actual_pct = cum_actual / planned_total * 100
+    prod = (cum_planned_pct / cum_actual_pct) if cum_actual_pct > 0 else None
+    note = (
+        f"planned {cum_planned:,.0f} / {planned_total:,.0f} = {cum_planned_pct:.1f}%; "
+        f"actual {cum_actual:,.0f} / {planned_total:,.0f} = {cum_actual_pct:.1f}%; "
+        + (f"productivity index = {cum_planned_pct:.1f} / {cum_actual_pct:.1f} = {prod:.3f}."
+           if prod is not None else "productivity index undefined (no actual manhours).")
+    )
+    return {
+        "cum_planned_pct": round(cum_planned_pct, 1),
+        "cum_actual_pct": round(cum_actual_pct, 1),
+        "productivity_index": round(prod, 3) if prod is not None else None,
+        "standard": "owner-supplied project-control template, 09 Nov 2026; standard planner practice",
+        "note": note,
+    }
+
+
+@formula(
+    owner="planning",
+    display_name="Floor-cycle progress weighting",
+    description=(
+        "Weighted progress across floor/zone elements from completed and total "
+        "units per element."
+    ),
+    inputs={
+        "completed_units": Param("count", 0, 1e12, label="completed units (series)"),
+        "total_units": Param("count", 0, 1e12, label="total units (series)"),
+        "weights": Param("count", 0, 1e12, label="element weights (series, input)"),
+    },
+    outputs={
+        "weighted_progress": "-",
+        "element_progress": "-",
+    },
+)
+def floor_cycle_progress(
+    completed_units: list,
+    total_units: list,
+    weights: list,
+) -> dict:
+    """Floor-cycle weighting. element_progress = completed/total per element;
+    weighted_progress = SUM(element_progress * weight) / SUM(weight). Weights are
+    inputs (the template used ~0.9 of an activity complete at a stage)."""
+    comp = [float(x) for x in (completed_units or [])]
+    tot = [float(x) for x in (total_units or [])]
+    wt = [float(x) for x in (weights or [])]
+    if not (len(comp) == len(tot) == len(wt)) or not comp:
+        return {"error": "completed_units, total_units and weights must be non-empty and equal length."}
+    elements = []
+    num = 0.0
+    den = 0.0
+    for c, t, w in zip(comp, tot, wt):
+        if t <= 0:
+            return {"error": "total_units must be > 0 for every element."}
+        p = c / t
+        elements.append(round(p, 3))
+        num += p * w
+        den += w
+    weighted = num / den if den > 0 else None
+    note = (
+        f"element progress = {elements}; weighted progress = "
+        + (f"{weighted:.3f}." if weighted is not None else "undefined (weights sum to 0).")
+    )
+    return {
+        "weighted_progress": round(weighted, 3) if weighted is not None else None,
+        "element_progress": elements,
+        "standard": "owner-supplied project-control template, 09 Nov 2026; standard planner practice",
+        "note": note,
+    }
+

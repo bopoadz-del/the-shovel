@@ -87,3 +87,26 @@ def test_cash_flow_agrees(value, cost, adv, ret, lag, want_cv, want_adv, want_re
     # checks: recovery sums to -advance, deduction sums to -retention
     assert out["check_advance_recovery"] == pytest.approx(-want_adv)
     assert out["check_retention"] == pytest.approx(-want_ret)
+
+
+from app.agents.hats.planning.formulas.project_control import manhours_scurve, floor_cycle_progress
+
+
+@pytest.mark.parametrize("planned,actual,want_cp,want_ca,want_pi", [
+    ([100.0, 100.0], [80.0, 80.0], 100.0, 80.0, 1.25),
+    ([50.0, 50.0, 50.0], [50.0, 40.0], 66.7, 60.0, 1.111),
+])
+def test_manhours_scurve_agrees(planned, actual, want_cp, want_ca, want_pi):
+    out = manhours_scurve(planned, actual)
+    assert out["cum_planned_pct"] == pytest.approx(want_cp, abs=0.1)
+    assert out["cum_actual_pct"] == pytest.approx(want_ca, abs=0.1)
+    assert out["productivity_index"] == pytest.approx(want_pi, abs=0.001)
+
+
+@pytest.mark.parametrize("comp,tot,wt,want", [
+    ([6.0, 4.0], [8.0, 8.0], [1.0, 1.0], 0.625),
+    ([9.0, 1.0], [10.0, 2.0], [2.0, 1.0], 0.767),
+])
+def test_floor_cycle_progress_agrees(comp, tot, wt, want):
+    out = floor_cycle_progress(comp, tot, wt)
+    assert out["weighted_progress"] == pytest.approx(want, abs=0.001)
