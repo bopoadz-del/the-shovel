@@ -309,3 +309,13 @@ def test_an_effort_unit_in_a_rate_keeps_its_effort_dimension(token, dimension):
     """A working day/week names an effort unit, not plain time, in a rate."""
     assert planning.unit_dimension(token) == dimension
 
+
+@pytest.mark.parametrize("from_unit,to_unit,unknown", [
+    ("florps", "m", "florps"),
+    ("m", "florps", "florps"),
+])
+def test_convert_units_reports_an_unknown_unit_instead_of_crashing(from_unit, to_unit, unknown):
+    """An unknown unit is reported, never an attribute error."""
+    out = planning.convert_units(5.0, from_unit, to_unit)
+    assert "error" in out and out.get("unknown_unit") == unknown, out
+
