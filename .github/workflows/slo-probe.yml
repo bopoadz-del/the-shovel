@@ -45,16 +45,24 @@ jobs:
           set -euo pipefail
           samples="$RUNNER_TEMP/samples.json"
           echo '{"samples": [' > "$samples"
-          first=1
+          sep=""
           for attempt in 1 2 3 4 5 6; do
             url="$BASE_URL/livez"
-            curl --proto '=https' -sS -o /dev/null --max-time 30 \
-              -w "%{http_code} %{time_total}" "$url" \
-            | while read -r code secs; do
-                ms=$(python3 -c "print(round(float('$secs')*1000, 1))")
-                if [ "$first" = "1" ]; then first=0; else echo ',' >> "$samples"; fi
-                echo "{\"status\": $code, \"latency_ms\": $ms}" >> "$samples"
-              done
+            # Capture curl's -w output in the parent shell (no pipe -> no
+            # subshell), so the comma separator survives every iteration.
+            # curl exits 0 on any HTTP response and non-zero only on a
+            # transport failure; a failed attempt records no sample and the
+            # parser emits an explicit NO_SAMPLES verdict when all fail.
+            if out="$(curl --proto '=https' -sS -o /dev/null --max-time 30 \
+                -w '%{http_code} %{time_total}' "$url")"; then
+              code="${out%% *}"
+              secs="${out#* }"
+              [ -n "$code" ] || code=000
+              [ -n "$secs" ] || secs=0.0
+              ms=$(python3 -c "print(round(float('$secs')*1000, 1))")
+              printf '%s{"status": %s, "latency_ms": %s}' "$sep" "$code" "$ms" >> "$samples"
+              sep=","
+            fi
           done
           echo ']}' >> "$samples"
           python3 scripts/slo_probe.py --json "$samples" --out "$RUNNER_TEMP/slo_report.json"
