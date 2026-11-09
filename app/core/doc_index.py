@@ -2466,6 +2466,7 @@ def index_project(project_id: str) -> dict[str, Any]:
     documents: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     total_chunks = 0
+    ocr_chunks = 0
     zero_chunk = 0
 
     for doc in docs:
@@ -2523,6 +2524,9 @@ def index_project(project_id: str) -> dict[str, Any]:
             entry["ocr_low_quality"] = True
         documents.append(entry)
         total_chunks += len(chunks)
+        ocr_flags = _ocr_flags_for(chunks, meta)
+        if ocr_flags:
+            ocr_chunks += sum(ocr_flags)
 
         # PR #94: mirror the RAG hook from ``index_document`` so the
         # chunks table stays in sync with the JSON index. Without this,
@@ -2535,7 +2539,7 @@ def index_project(project_id: str) -> dict[str, Any]:
                 _rag.index_chunks(
                     project_id, doc["id"], chunks,
                     pages=_pages_for(chunks, meta),
-                    ocr_flags=_ocr_flags_for(chunks, meta),
+                    ocr_flags=ocr_flags,
                 )
         except Exception as exc:  # noqa: BLE001 — RAG must never break primary indexing
             import logging as _logging
@@ -2567,6 +2571,7 @@ def index_project(project_id: str) -> dict[str, Any]:
             "zero_chunk": zero_chunk,
             "skipped_unsupported": skipped_unsupported,
             "total_chunks": 0,
+            "ocr_chunks": ocr_chunks,
         }
 
     return {
@@ -2576,6 +2581,7 @@ def index_project(project_id: str) -> dict[str, Any]:
         "zero_chunk": zero_chunk,
         "skipped_unsupported": skipped_unsupported,
         "total_chunks": total_chunks,
+        "ocr_chunks": ocr_chunks,
     }
 
 

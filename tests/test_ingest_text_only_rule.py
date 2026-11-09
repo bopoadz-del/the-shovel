@@ -15,6 +15,7 @@ The Drive ingest discovery filter is covered in test_p1b_ingest_accounting.
 from __future__ import annotations
 
 import io
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -231,11 +232,25 @@ def _sample(ext: str, tmp_path) -> tuple[Path, str]:
     return path, PROBE
 
 
+_DOC_CONVERTERS = ("antiword", "catdoc")
+
+
+def _doc_converter_on_path() -> bool:
+    return any(shutil.which(c) for c in _DOC_CONVERTERS)
+
+
 @pytest.mark.parametrize("ext", sorted(ist.TEXT_BEARING_EXTS))
 def test_every_registered_format_reads_its_sample_into_a_chunk(ext, tmp_path):
     """A format is ingestible only if a registered extractor reads it: each
     one, generated from the registry, yields a chunk holding its known text."""
     from app.core import doc_index
+
+    if ext == ".doc" and not _doc_converter_on_path():
+        # .doc extraction (antiword/catdoc/textract/Word COM) needs an
+        # external binary that the fast bare-runner path does not install;
+        # the full Docker suite still exercises it. Same detection as
+        # doc_index._extract_doc.
+        pytest.skip("no .doc converter (antiword/catdoc) on PATH")
 
     path, expected = _sample(ext, tmp_path)
     assert path.exists(), f"no sample for registered format {ext}"
