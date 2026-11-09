@@ -1,0 +1,68 @@
+name: slo-probe
+
+# Client-facing SLO measurement (availability + response time), repo side.
+#
+# Complements health-watch (which is binary up/down and pages on a failed job):
+# this one records NUMBERS every 30 minutes so a slow-but-up service or a
+# creeping availability drop is visible as data, not just as a green/red light.
+#
+# The SLO targets live in repository variables (SLO_AVAILABILITY as a fraction,
+# SLO_LATENCY_P95_MS in milliseconds) — the owner's numbers, not hardcoded. With
+# no targets set the run is report-only and never fails; once the owner sets
+# them, a breach fails the job and the existing workflow-failure notification
+# pages repository watchers.
+#
+# Sanitized: only HTTP status and wall-clock latency are recorded. Response
+# bodies are discarded; no secrets are read or written.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://theshovel.ai
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # /livez only: it is the DB-free, client-facing liveness endpoint and
+      # the right surface for an availability + latency SLO. Readiness paging
+      # (the dependency check) is health-watch's two-attempt 503 contract;
+      # probing it here would wake the database every run and duplicate that
+      # page (test_workflows_do_not_probe_onrender_or_health enforces the
+      # split).
+      - name: Probe /livez with timing
+        shell: bash
+        run: |
+          set -euo pipefail
+          samples="$RUNNER_TEMP/samples.json"
+          echo '{"samples": [' > "$samples"
+          first=1
+          for attempt in 1 2 3 4 5 6; do
+            url="$BASE_URL/livez"
+            curl --proto '=https' -sS -o /dev/null --max-time 30 \
+              -w "%{http_code} %{time_total}" "$url" \
+            | while read -r code secs; do
+                ms=$(python3 -c "print(round(float('$secs')*1000, 1))")
+                if [ "$first" = "1" ]; then first=0; else echo ',' >> "$samples"; fi
+                echo "{\"status\": $code, \"latency_ms\": $ms}" >> "$samples"
+              done
+          done
+          echo ']}' >> "$samples"
+          python3 scripts/slo_probe.py --json "$samples" --out "$RUNNER_TEMP/slo_report.json"
+
+      - name: Upload SLO report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slo-report
+          path: ${{ runner.temp }}/slo_report.json
+          if-no-files-found: ignore
