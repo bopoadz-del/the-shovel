@@ -339,8 +339,10 @@ def test_ocr_provenance_flag_reaches_citation_panel():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _search_project_documents_sync: the empty/whitespace-query guard returns []
-# before the hybrid retriever runs. drop_rule removes the guard, reaches
-# ``retrieve_with_filter`` and the raised AssertionError fails the test.
+# before the hybrid retriever runs. drop_rule removes the guard, so the call
+# reaches ``retrieve_with_filter``; a raised error is swallowed by ``_query``'s
+# ``except Exception`` and returns [] anyway, so the kill returns a non-empty
+# hit instead -- the mutant then yields results for an empty query and fails.
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("query", ["", "   "])
@@ -348,8 +350,18 @@ def test_search_project_documents_sync_empty_query_returns_empty(monkeypatch, qu
     from app.core import doc_index
     from app.core.rag import retriever as retriever_mod
 
-    def _boom(*a, **k):
-        raise AssertionError("retriever reached for an empty query")
+    class _Chunk:
+        doc_id = "d-empty"
+        score = 1.0
+        ocr = False
+        layer = "own"
+        text = "a clause the retriever must never fetch for an empty query"
 
-    monkeypatch.setattr(retriever_mod, "retrieve_with_filter", _boom)
+    def _fake_retrieve(*a, **k):
+        return ([_Chunk()], 0)
+
+    monkeypatch.setattr(retriever_mod, "retrieve_with_filter", _fake_retrieve)
+    monkeypatch.setattr(retriever_mod, "_doc_name_for_id", lambda doc_id: "fake.pdf")
+    monkeypatch.setattr(doc_index, "_load_index", lambda project_id: None)
+
     assert doc_index._search_project_documents_sync("p", query) == []
