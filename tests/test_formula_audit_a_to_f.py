@@ -1039,7 +1039,11 @@ def test_audit_fall_arrest_force():
 
 # ── cash_flow (project-control A1) ─────────────────────────────────────────
 
-def test_audit_cash_flow():
+@pytest.mark.parametrize("value,cost,adv,ret,lag,want_cv,want_adv,want_ret,want_peak", [
+    ([100, 100], [90, 90], 0.10, 0.05, 15, 200.0, 20.0, 10.0, 75.0),
+    ([1000], [800], 0.0, 0.0, 0, 1000.0, 0.0, 0.0, 0.0),
+])
+def test_audit_cash_flow(value, cost, adv, ret, lag, want_cv, want_adv, want_ret, want_peak):
     """Contractor cash flow (A1): advance at month 0 recovered pro-rata,
     retention deducted monthly and released at completion, payments lagged
     ceil(lag/30) months.
@@ -1047,35 +1051,41 @@ def test_audit_cash_flow():
       contract 200, advance 20, retention 10;
       certified = [100-10-5, 100-10-5+10] = [85, 95];
       cash_in = [0, 85]; net = [-90, -5]; cum = [20-90, -70-5] = [-70, -75];
-      peak funding 75. A mismatched cost series must error.
+      peak funding 75.
+    Second case: no advance/retention/lag on [1000]/[800] -> contract 1000,
+    peak 0. A mismatched cost series must error.
     """
-    r = _ok("cash_flow", {
-        "monthly_value": [100, 100], "monthly_cost": [90, 90],
-        "advance_pct": 0.10, "retention_pct": 0.05, "payment_lag_days": 15,
-    })
-    assert r["contract_value"] == pytest.approx(200.0)
-    assert r["advance_payment"] == pytest.approx(20.0)
-    assert r["retention_total"] == pytest.approx(10.0)
-    assert r["peak_funding_requirement"] == pytest.approx(75.0)
-    assert r["check_advance_recovery"] == pytest.approx(-20.0)
-    assert r["check_retention"] == pytest.approx(-10.0)
+    r = _ok("cash_flow", {"monthly_value": value, "monthly_cost": cost,
+                          "advance_pct": adv, "retention_pct": ret,
+                          "payment_lag_days": lag})
+    assert r["contract_value"] == pytest.approx(want_cv)
+    assert r["advance_payment"] == pytest.approx(want_adv)
+    assert r["retention_total"] == pytest.approx(want_ret)
+    assert r["peak_funding_requirement"] == pytest.approx(want_peak)
+    assert r["check_advance_recovery"] == pytest.approx(-want_adv)
+    assert r["check_retention"] == pytest.approx(-want_ret)
 
     _err("cash_flow", {"monthly_value": [100], "monthly_cost": [90, 90]})
 
 
 # ── crew_sizing (project-control A4) ───────────────────────────────────────
 
-def test_audit_crew_sizing():
+@pytest.mark.parametrize("qty,days,rate,hours,want_crews,want_up,want_cd,want_mh", [
+    (3000, 15, 12, 10, 16.667, 17, 250.0, 2500.0),
+    (350, 10, 20, 8, 1.75, 2, 17.5, 140.0),
+])
+def test_audit_crew_sizing(qty, days, rate, hours, want_crews, want_up, want_cd, want_mh):
     """Crew sizing (A4): crews = Q / (D * R); crew-days = Q / R;
     man-hours = crew-days * h; fractional crews rounded UP.
     Hand: 3000 / (15 * 12) = 16.667 -> 17 crews; 3000/12 = 250 crew-days;
-    * 10 h = 2500 man-hours. A non-positive quantity must error.
+    * 10 h = 2500 man-hours. Second case: 350 / (10 * 20) = 1.75 -> 2.
+    A non-positive quantity must error.
     """
-    r = _ok("crew_sizing", {"quantity": 3000, "duration_days": 15,
-                            "rate_per_crew_day": 12})
-    assert r["crews_required"] == pytest.approx(16.667, abs=0.001)
-    assert r["crews_required_rounded_up"] == 17
-    assert r["crew_days"] == pytest.approx(250.0)
-    assert r["man_hours"] == pytest.approx(2500.0)
+    r = _ok("crew_sizing", {"quantity": qty, "duration_days": days,
+                            "rate_per_crew_day": rate, "hours_per_day": hours})
+    assert r["crews_required"] == pytest.approx(want_crews, abs=0.001)
+    assert r["crews_required_rounded_up"] == want_up
+    assert r["crew_days"] == pytest.approx(want_cd)
+    assert r["man_hours"] == pytest.approx(want_mh)
 
     _err("crew_sizing", {"quantity": 0, "duration_days": 15, "rate_per_crew_day": 12})

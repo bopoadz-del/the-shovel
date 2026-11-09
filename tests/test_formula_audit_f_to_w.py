@@ -1412,42 +1412,57 @@ async def test_container_construction_calc_remaps_resource_line():
 
 # ── project-control formulas (planning hat, SPEC_09NOV) ────────────────────
 
-def test_audit_floor_cycle_progress():
+@pytest.mark.parametrize("comp,tot,wt,want_wp,want_ep", [
+    ([6, 4], [8, 8], [1, 1], 0.625, [0.75, 0.5]),
+    ([9, 1], [10, 2], [2, 1], 0.767, [0.9, 0.5]),
+])
+def test_audit_floor_cycle_progress(comp, tot, wt, want_wp, want_ep):
     """Floor-cycle weighting (A5): element = completed/total; weighted =
     SUM(element * weight) / SUM(weight).
     Hand: [6/8, 4/8] = [0.75, 0.5]; (0.75 + 0.5) / 2 = 0.625.
+    Second case: [9/10, 1/2] weighted (0.9*2 + 0.5*1)/3 = 0.767.
     A zero total must error.
     """
-    r = _ok("floor_cycle_progress", completed_units=[6, 4],
-            total_units=[8, 8], weights=[1, 1])
-    assert r["weighted_progress"] == pytest.approx(0.625)
-    assert r["element_progress"] == pytest.approx([0.75, 0.5])
+    r = _ok("floor_cycle_progress", completed_units=comp,
+            total_units=tot, weights=wt)
+    assert r["weighted_progress"] == pytest.approx(want_wp, abs=0.001)
+    assert r["element_progress"] == pytest.approx(want_ep)
 
     _err("floor_cycle_progress", completed_units=[1, 1],
          total_units=[0, 8], weights=[1, 1])
 
 
-def test_audit_manhours_scurve():
+@pytest.mark.parametrize("planned,actual,want_cp,want_ca,want_pi", [
+    ([100, 100], [80, 80], 100.0, 80.0, 1.25),
+    ([50, 50, 50], [50, 40], 66.7, 60.0, 1.111),
+])
+def test_audit_manhours_scurve(planned, actual, want_cp, want_ca, want_pi):
     """Manhours S-curve (A3): actual is normalised to the PLANNED total;
     productivity index = cum planned % / cum actual %.
     Hand: planned [100,100] total 200; actual [80,80] -> 100% / 80% = 1.25.
+    Second case: [50,50,50]/[50,40] -> 66.7% / 60% = 1.111.
     A zero planned total must error.
     """
-    r = _ok("manhours_scurve", planned_mh=[100, 100], actual_mh=[80, 80])
-    assert r["cum_planned_pct"] == pytest.approx(100.0)
-    assert r["cum_actual_pct"] == pytest.approx(80.0)
-    assert r["productivity_index"] == pytest.approx(1.25)
+    r = _ok("manhours_scurve", planned_mh=planned, actual_mh=actual)
+    assert r["cum_planned_pct"] == pytest.approx(want_cp, abs=0.1)
+    assert r["cum_actual_pct"] == pytest.approx(want_ca, abs=0.1)
+    assert r["productivity_index"] == pytest.approx(want_pi, abs=0.001)
 
     _err("manhours_scurve", planned_mh=[0], actual_mh=[0])
 
 
-def test_audit_productivity_benchmark():
+@pytest.mark.parametrize("item,want_unit,want_rate", [
+    ("blockwork walls", "m2", 12.0),
+    ("internal wall plaster", "m2", 20.0),
+])
+def test_audit_productivity_benchmark(item, want_unit, want_rate):
     """Benchmark table (B): owner template, unverified. Blockwork walls =
-    12 m2 / crew-day. An unknown item is not invented.
+    12 m2 / crew-day; internal wall plaster = 20. An unknown item is not
+    invented.
     """
-    r = _ok("productivity_benchmark", work_item="blockwork walls")
-    assert r["unit"] == "m2"
-    assert r["rate_per_crew_day"] == pytest.approx(12.0)
+    r = _ok("productivity_benchmark", work_item=item)
+    assert r["unit"] == want_unit
+    assert r["rate_per_crew_day"] == pytest.approx(want_rate)
     assert "unverified" in r["provenance"]
 
     unknown = _ok("productivity_benchmark", work_item="widget extrusion")
@@ -1455,16 +1470,20 @@ def test_audit_productivity_benchmark():
     assert "no benchmark entry" in unknown["flag"]
 
 
-def test_audit_progress_kpi():
+@pytest.mark.parametrize("planned,actual,total,want_pp,want_ap,want_var,want_spi", [
+    (60, 45, 100, 60.0, 45.0, -15.0, 0.75),
+    (50, 50, 100, 50.0, 50.0, 0.0, 1.0),
+])
+def test_audit_progress_kpi(planned, actual, total, want_pp, want_ap, want_var, want_spi):
     """Progress KPI (A2): percent of the baseline total; SPI is
     progress-based (actual/planned cum), not EVM cost-based.
     Hand: 60/100 = 60%, 45/100 = 45%, variance -15%, SPI 45/60 = 0.75.
-    A zero total must error.
+    Second case: 50/50 on 100 -> 50/50/0/1.0. A zero total must error.
     """
-    r = _ok("progress_kpi", planned_cum=60, actual_cum=45, planned_total=100)
-    assert r["planned_pct"] == pytest.approx(60.0)
-    assert r["actual_pct"] == pytest.approx(45.0)
-    assert r["variance_pct"] == pytest.approx(-15.0)
-    assert r["spi_progress"] == pytest.approx(0.75)
+    r = _ok("progress_kpi", planned_cum=planned, actual_cum=actual, planned_total=total)
+    assert r["planned_pct"] == pytest.approx(want_pp)
+    assert r["actual_pct"] == pytest.approx(want_ap)
+    assert r["variance_pct"] == pytest.approx(want_var)
+    assert r["spi_progress"] == pytest.approx(want_spi)
 
     _err("progress_kpi", planned_cum=60, actual_cum=45, planned_total=0)
