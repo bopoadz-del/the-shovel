@@ -90,7 +90,14 @@ def test_panel_library_keeps_title(title, filename):
     assert rows[0]["doc_name"] == title
 
 
-def test_panel_filters_hits_not_quoted_by_the_answer():
+@pytest.mark.parametrize(
+    "fetched_name, fetched_text, search_name, search_snippet, answer",
+    [
+        ("alpha_store.md", "The stored total is 42 m.", "beta_store.md", "The contract figure is 100 m.", "The stored total is 42 m."),
+        ("gamma_store.md", "The delay damages are 5%.", "delta_store.md", "The BOQ rate is 380.", "The delay damages are 5%."),
+    ],
+)
+def test_panel_filters_hits_not_quoted_by_the_answer(fetched_name, fetched_text, search_name, search_snippet, answer):
     # A non-empty answer that quotes a fetched document must drop search hits
     # it did not use. Covers the answer guard in panel() (drop_rule mutant).
     trail = [
@@ -98,7 +105,7 @@ def test_panel_filters_hits_not_quoted_by_the_answer():
             "role": "tool",
             "name": "fetch_document",
             "content": json.dumps(
-                {"result": {"filename": "alpha_store.md", "content": "The stored total is 42 m."}}
+                {"result": {"filename": fetched_name, "content": fetched_text}}
             ),
         },
         {
@@ -106,11 +113,11 @@ def test_panel_filters_hits_not_quoted_by_the_answer():
             "name": "search_project_documents",
             "content": json.dumps(
                 {"result": {"results": [
-                    {"document_id": "d1", "filename": "beta_store.md",
-                     "snippet": "The contract figure is 100 m.", "score": 0.9, "origin": "own"},
+                    {"document_id": "d1", "filename": search_name,
+                     "snippet": search_snippet, "score": 0.9, "origin": "own"},
                 ]}}
             ),
         },
     ]
-    rows = sources.panel(trail, [], answer="The stored total is 42 m.")
-    assert [r["doc_name"] for r in rows] == ["alpha_store.md"]
+    rows = sources.panel(trail, [], answer=answer)
+    assert [r["doc_name"] for r in rows] == [fetched_name]
