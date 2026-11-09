@@ -179,6 +179,34 @@ CITABLE_CLASSES: frozenset[str] = frozenset(
 )
 
 
+def _construction_calc_declares_source(text: str) -> bool:
+    """True when a ``construction_calc`` result declares a source it is based on.
+
+    The envelope carries ``standard`` (the first of the result's standard /
+    code / reference / source keys, else ``"none declared"``). A result may
+    also carry its own ``provenance`` (a reference table's
+    "owner-supplied ... unverified"). Either is a source the answer may cite,
+    so the gate must not treat the turn as having read nothing and strip it.
+    """
+    try:
+        data = json.loads(text or "")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        _LOG.debug(
+            "construction_calc result is not parseable JSON; no declared source",
+            exc_info=True,
+        )
+        return False
+    envelope = data if isinstance(data, dict) else {}
+    standard = envelope.get("standard")
+    result = envelope.get("result")
+    provenance = result.get("provenance") if isinstance(result, dict) else None
+    declares_standard = (
+        isinstance(standard, str) and standard.strip() not in ("", "none declared")
+    )
+    declares_provenance = isinstance(provenance, str) and provenance.strip()
+    return declares_standard or declares_provenance
+
+
 @dataclass
 class EvidenceRecord:
     """One thing that actually happened this turn.
@@ -204,6 +232,12 @@ class EvidenceRecord:
         if self.kind == "retrieval":
             return bool(self.text.strip())
         if self.kind == "tool_run":
+            if (self.tool or "") == "construction_calc":
+                # A calculator that declares the source it computed from (a
+                # standard / template / reference table) IS citing that
+                # source; only a bare computation ("none declared") reads
+                # nothing and stays non-corpus.
+                return _construction_calc_declares_source(self.text)
             return (self.tool or "") not in NON_CORPUS_TOOLS
         return False
 
