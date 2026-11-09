@@ -29,6 +29,7 @@ from app.lib.construction_formulas_quantities import (
 # Confirmed against live registry on this branch. STOP if this drifts.
 _AUDIT_SLICE = [
     "fineness_modulus",
+    "floor_cycle_progress",
     "formwork_striking_time",
     "foundation_bearing_pressure",
     "grout_pressure_calc",
@@ -37,6 +38,7 @@ _AUDIT_SLICE = [
     "laser_scan_accuracy",
     "leed_points_estimate",
     "live_load_reduction",
+    "manhours_scurve",
     "masonry_wall_capacity",
     "material_consumption",
     "mobilization_cost_estimate",
@@ -46,8 +48,10 @@ _AUDIT_SLICE = [
     "plumbing_flow_programme",
     "post_tensioning_force",
     "precast_beam_erection_check",
+    "productivity_benchmark",
     "productivity_manpower_duration",
     "productivity_rate",
+    "progress_kpi",
     "progress_quantity",
     "rc_beam_moment_capacity",
     "rc_beam_shear_capacity",
@@ -94,8 +98,8 @@ def _err(name: str, *, expect: str = "error", **params):
 # ── registry contract ───────────────────────────────────────────────────────
 
 def test_audit_slice_matches_live_registry():
-    """sorted(available_calculations())[44:] must stay the owned F–W set."""
-    assert available_calculations()[46:] == _AUDIT_SLICE
+    """sorted(available_calculations())[48:] must stay the owned F–W set."""
+    assert available_calculations()[48:] == _AUDIT_SLICE
 
 
 def test_audit_file_has_two_cases_per_calculator():
@@ -1404,3 +1408,82 @@ async def test_container_construction_calc_remaps_resource_line():
     assert r.get("calculation") == "resource_line_cost"
     inner = r.get("result") or {}
     assert inner.get("labour_cost") == pytest.approx(2800.0, abs=0.01)
+
+
+# ── project-control formulas (planning hat, SPEC_09NOV) ────────────────────
+
+@pytest.mark.parametrize("comp,tot,wt,want_wp,want_ep", [
+    ([6, 4], [8, 8], [1, 1], 0.625, [0.75, 0.5]),
+    ([9, 1], [10, 2], [2, 1], 0.767, [0.9, 0.5]),
+])
+def test_audit_floor_cycle_progress(comp, tot, wt, want_wp, want_ep):
+    """Floor-cycle weighting (A5): element = completed/total; weighted =
+    SUM(element * weight) / SUM(weight).
+    Hand: [6/8, 4/8] = [0.75, 0.5]; (0.75 + 0.5) / 2 = 0.625.
+    Second case: [9/10, 1/2] weighted (0.9*2 + 0.5*1)/3 = 0.767.
+    A zero total must error.
+    """
+    r = _ok("floor_cycle_progress", completed_units=comp,
+            total_units=tot, weights=wt)
+    assert r["weighted_progress"] == pytest.approx(want_wp, abs=0.001)
+    assert r["element_progress"] == pytest.approx(want_ep)
+
+    _err("floor_cycle_progress", completed_units=[1, 1],
+         total_units=[0, 8], weights=[1, 1])
+
+
+@pytest.mark.parametrize("planned,actual,want_cp,want_ca,want_pi", [
+    ([100, 100], [80, 80], 100.0, 80.0, 1.25),
+    ([50, 50, 50], [50, 40], 66.7, 60.0, 1.111),
+])
+def test_audit_manhours_scurve(planned, actual, want_cp, want_ca, want_pi):
+    """Manhours S-curve (A3): actual is normalised to the PLANNED total;
+    productivity index = cum planned % / cum actual %.
+    Hand: planned [100,100] total 200; actual [80,80] -> 100% / 80% = 1.25.
+    Second case: [50,50,50]/[50,40] -> 66.7% / 60% = 1.111.
+    A zero planned total must error.
+    """
+    r = _ok("manhours_scurve", planned_mh=planned, actual_mh=actual)
+    assert r["cum_planned_pct"] == pytest.approx(want_cp, abs=0.1)
+    assert r["cum_actual_pct"] == pytest.approx(want_ca, abs=0.1)
+    assert r["productivity_index"] == pytest.approx(want_pi, abs=0.001)
+
+    _err("manhours_scurve", planned_mh=[0], actual_mh=[0])
+
+
+@pytest.mark.parametrize("item,want_unit,want_rate", [
+    ("blockwork walls", "m2", 12.0),
+    ("internal wall plaster", "m2", 20.0),
+])
+def test_audit_productivity_benchmark(item, want_unit, want_rate):
+    """Benchmark table (B): owner template, unverified. Blockwork walls =
+    12 m2 / crew-day; internal wall plaster = 20. An unknown item is not
+    invented.
+    """
+    r = _ok("productivity_benchmark", work_item=item)
+    assert r["unit"] == want_unit
+    assert r["rate_per_crew_day"] == pytest.approx(want_rate)
+    assert "unverified" in r["provenance"]
+
+    unknown = _ok("productivity_benchmark", work_item="widget extrusion")
+    assert unknown["rate_per_crew_day"] is None
+    assert "no benchmark entry" in unknown["flag"]
+
+
+@pytest.mark.parametrize("planned,actual,total,want_pp,want_ap,want_var,want_spi", [
+    (60, 45, 100, 60.0, 45.0, -15.0, 0.75),
+    (50, 50, 100, 50.0, 50.0, 0.0, 1.0),
+])
+def test_audit_progress_kpi(planned, actual, total, want_pp, want_ap, want_var, want_spi):
+    """Progress KPI (A2): percent of the baseline total; SPI is
+    progress-based (actual/planned cum), not EVM cost-based.
+    Hand: 60/100 = 60%, 45/100 = 45%, variance -15%, SPI 45/60 = 0.75.
+    Second case: 50/50 on 100 -> 50/50/0/1.0. A zero total must error.
+    """
+    r = _ok("progress_kpi", planned_cum=planned, actual_cum=actual, planned_total=total)
+    assert r["planned_pct"] == pytest.approx(want_pp)
+    assert r["actual_pct"] == pytest.approx(want_ap)
+    assert r["variance_pct"] == pytest.approx(want_var)
+    assert r["spi_progress"] == pytest.approx(want_spi)
+
+    _err("progress_kpi", planned_cum=60, actual_cum=45, planned_total=0)

@@ -125,7 +125,7 @@ async def _chat_impl(
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
         _final_text_needs_forced_retry, _forced_retry_nudge, _fulfill_answer_report, _has_unread_windows,
         _inline_boq_hard_excludes, _is_capability_request, _latest_operator_ask, _llm_config,
-        _looks_like_search_preamble, _message_wants_locked_deliverable,
+        _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
         _normalize_tool_call_ids, _nudge_for_failed_tool, _off_loop, _parse_dsml_tool_calls,
         _postprocess_answer, _predispatch_file_tool, _predispatch_formula_calc,
         _predispatch_look_ahead, _predispatch_remaining_deliverables,
@@ -334,7 +334,7 @@ async def _chat_impl(
     if _more_pre:
         tool_calls_made.append(_more_pre)
     _calc_pre = None
-    if not _locked:
+    if not _locked or _message_is_formula_style_ask(user_message):
         _calc_pre = await _predispatch_formula_calc(
             self, messages, project_id, operator_text=user_message,
         )

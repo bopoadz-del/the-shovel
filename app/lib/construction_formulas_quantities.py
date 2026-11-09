@@ -365,6 +365,7 @@ def resolve_concrete_volume_calc(
 # consumption / an F–W registry name in the text).
 FW_ROUTE_NAMES = frozenset({
     "fineness_modulus",
+    "floor_cycle_progress",
     "formwork_striking_time",
     "foundation_bearing_pressure",
     "grout_pressure_calc",
@@ -373,6 +374,7 @@ FW_ROUTE_NAMES = frozenset({
     "laser_scan_accuracy",
     "leed_points_estimate",
     "live_load_reduction",
+    "manhours_scurve",
     "masonry_wall_capacity",
     "material_consumption",
     "mobilization_cost_estimate",
@@ -382,8 +384,10 @@ FW_ROUTE_NAMES = frozenset({
     "plumbing_flow_programme",
     "post_tensioning_force",
     "precast_beam_erection_check",
+    "productivity_benchmark",
     "productivity_manpower_duration",
     "productivity_rate",
+    "progress_kpi",
     "progress_quantity",
     "rc_beam_moment_capacity",
     "rc_beam_shear_capacity",

@@ -224,6 +224,14 @@ _SMOKE_INPUTS = {
                                   radius_gyration_mm=115.47, code="aci"),
     "masonry_wall_capacity": dict(masonry_strength_mpa=10, net_area_mm2=190000,
                                   height_mm=3000, thickness_mm=190, code="aci"),
+    # Planning hat — project-control formulas (SPEC_09NOV_PROJECT_CONTROL_FORMULAS_AND_RATES).
+    "cash_flow": dict(monthly_value=[100, 100], monthly_cost=[90, 90],
+                       advance_pct=0.10, retention_pct=0.05, payment_lag_days=15),
+    "progress_kpi": dict(planned_cum=60, actual_cum=45, planned_total=100),
+    "manhours_scurve": dict(planned_mh=[100, 100], actual_mh=[80, 80]),
+    "crew_sizing": dict(quantity=3000, duration_days=15, rate_per_crew_day=12),
+    "floor_cycle_progress": dict(completed_units=[6, 4], total_units=[8, 8], weights=[1, 1]),
+    "productivity_benchmark": dict(work_item="blockwork walls"),
 }
 
 

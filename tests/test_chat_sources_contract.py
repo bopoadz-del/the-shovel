@@ -603,3 +603,38 @@ def test_sanitizer_does_not_replace_controlled_missing_reference_answer():
     assert _sanitize_final_text(text) == text
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ask", [
+    "Export A1-A9 answers as a docx report",
+    "Export this conversation as a Word document",
+])
+async def test_answer_report_ask_short_circuits_to_a_docx_without_the_llm(ask):
+    """The H1 export guard is the first rule in _chat_impl: a docx export
+    ask is answered from the thread (no LLM), with an export offer. Dropping
+    that guard (drop_rule mutant) falls through to the model path and must
+    fail this assertion, so the gate ties the guard to its behaviour."""
+    from app.agents.runtime import Agent
+    from app.core import agent_memory
+
+    agent = Agent(
+        name="project-assistant",
+        description="test",
+        system_prompt="test",
+        allowed_blocks=[],
+    )
+    cid = f"ws-h1-loop-answer-report-{hash(ask) & 0xffff}"
+    agent_memory.get_or_create_conversation(cid, "project-assistant", "p-h1")
+    for q, a in [
+        ("What is the Accepted Contract Amount?", "SAR 8,640,000.00."),
+        ("Who is the Engineer?", "The Named Engineer."),
+    ]:
+        agent_memory.append_message(cid, "user", q)
+        agent_memory.append_message(cid, "assistant", a)
+
+    out = await agent.chat(ask, project_id="p-h1", conversation_id=cid)
+    assert out.get("status") == "success", out
+    assert "Prepared a Word report" in (out.get("answer") or ""), out
+    assert out.get("exports"), "no docx offer — the answer-report short circuit did not run"
+    assert out.get("tool_calls") == [], out
+
+
