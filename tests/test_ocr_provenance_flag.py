@@ -15,6 +15,7 @@ import pytest
 
 from app.core import file_crypto
 from app.core import projects as projects_mod
+import app.core.doc_index  # noqa: F401  dotted token so CI-M selects this file
 
 
 @pytest.fixture
@@ -95,7 +96,11 @@ def test_row_as_chunk_hydrates_ocr(stored_ocr):
 # index_project threads ocr_flags into RAG
 # ────────────────────────────────────────────────────────────────────────────
 
-def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch):
+@pytest.mark.parametrize("ocr_pages,expected", [
+    ([1], [True, False]),
+    ([2], [False, True]),
+])
+def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch, ocr_pages, expected):
     from app.core import doc_index
     importlib.reload(doc_index)
     from app.core.rag import retriever as retriever_mod
@@ -109,7 +114,7 @@ def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch):
     monkeypatch.setattr(retriever_mod, "index_chunks", fake_index_chunks)
     monkeypatch.setattr(
         doc_index, "_extract_with_meta",
-        lambda fp, fn, *a, **k: ("scanned text", {"ocr_page_numbers": [1]}),
+        lambda fp, fn, *a, **k: ("scanned text", {"ocr_page_numbers": ocr_pages}),
     )
     monkeypatch.setattr(
         doc_index, "_text_chunks_with_pages",
@@ -126,7 +131,7 @@ def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch):
     assert captured, "index_chunks was never called"
     doc_id, flags = captured[0]
     assert doc_id == doc["id"]
-    assert flags[:2] == [True, False]
+    assert flags[:2] == expected
 
 
 # ────────────────────────────────────────────────────────────────────────────

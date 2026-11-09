@@ -23,6 +23,7 @@ import pytest
 
 from app.core import file_crypto
 from app.core import projects as projects_mod
+import app.core.doc_index  # noqa: F401  dotted token so CI-M selects this file
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -259,6 +260,11 @@ def test_scanned_pdf_with_failed_ocr_is_indexed_not_skipped(fresh_db, tmp_path, 
     result = doc_index.index_project(pid)
 
     assert result["skipped_unsupported"] == 0
+    # A supported file that produced zero chunks is a ZERO_CHUNK error, not
+    # a silent ok — the index_project drop_rule mutant would flatten this
+    # guard and return status ok.
+    assert result["status"] == "error"
+    assert result["error"] == "ZERO_CHUNK"
 
 
 # ────────────────────────────────────────────────────────────────────────────
