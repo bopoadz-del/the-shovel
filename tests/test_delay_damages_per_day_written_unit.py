@@ -129,6 +129,17 @@ def test_convert_figure_carries_a_unit_on_a_count(number, written):
     assert out["conversion"]["from_unit"] == written
 
 
+@pytest.mark.parametrize("number,written", [
+    (12.0, "m2/crew-day"),
+    (12.0, "m3/day"),
+])
+def test_convert_figure_carries_a_unit_on_a_rate(number, written):
+    """A rate declared count-per-time carries its unit-per-unit ("12 m2/crew-day")."""
+    out = fr.convert_figure(_spec("count/d"), number, written)
+    assert out["value"] == pytest.approx(number)
+    assert out["conversion"]["from_unit"] == written
+
+
 @pytest.mark.parametrize("amount,days,total", [
     ("SAR 200 per man hour", 10, 48000.0),
     ("SAR 50 per man hour", 60, 72000.0),
