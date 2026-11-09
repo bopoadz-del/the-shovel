@@ -33,24 +33,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Probe /livez and /ready with timing
+      # /livez only: it is the DB-free, client-facing liveness endpoint and
+      # the right surface for an availability + latency SLO. Readiness paging
+      # (the dependency check) is health-watch's two-attempt 503 contract;
+      # probing it here would wake the database every run and duplicate that
+      # page (test_workflows_do_not_probe_onrender_or_health enforces the
+      # split).
+      - name: Probe /livez with timing
         shell: bash
         run: |
           set -euo pipefail
           samples="$RUNNER_TEMP/samples.json"
           echo '{"samples": [' > "$samples"
           first=1
-          for endpoint in livez ready; do
-            for attempt in 1 2 3; do
-              url="$BASE_URL/$endpoint"
-              curl --proto '=https' -sS -o /dev/null --max-time 30 \
-                -w "%{http_code} %{time_total}" "$url" \
-              | while read -r code secs; do
-                  ms=$(python3 -c "print(round(float('$secs')*1000, 1))")
-                  if [ "$first" = "1" ]; then first=0; else echo ',' >> "$samples"; fi
-                  echo "{\"status\": $code, \"latency_ms\": $ms}" >> "$samples"
-                done
-            done
+          for attempt in 1 2 3 4 5 6; do
+            url="$BASE_URL/livez"
+            curl --proto '=https' -sS -o /dev/null --max-time 30 \
+              -w "%{http_code} %{time_total}" "$url" \
+            | while read -r code secs; do
+                ms=$(python3 -c "print(round(float('$secs')*1000, 1))")
+                if [ "$first" = "1" ]; then first=0; else echo ',' >> "$samples"; fi
+                echo "{\"status\": $code, \"latency_ms\": $ms}" >> "$samples"
+              done
           done
           echo ']}' >> "$samples"
           python3 scripts/slo_probe.py --json "$samples" --out "$RUNNER_TEMP/slo_report.json"
