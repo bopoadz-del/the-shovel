@@ -215,3 +215,42 @@ def test_benchmark_provenance_is_unverified_general(item, want_rate):
     assert "owner" in res["provenance"] and "template" in res["provenance"]
     assert res["tier"] == "GENERAL"
     assert res["confidence"] == "MEDIUM"
+
+
+# ── 1b residual (a): a working-days duration needs no hours per day ────────
+
+@pytest.mark.parametrize("qty,days,rate,want_crews", [
+    ("2,400 m2", "20 working days", "10 m2/crew-day", 12.0),
+    ("3,150 m3", "30 workdays", "9 m3/crew-day", 11.667),
+])
+def test_a_working_days_duration_needs_no_hours_per_day(qty, days, rate, want_crews):
+    """crews_required = qty / (days * rate) uses no hours-per-day, so a
+    duration written in working days runs straight through, never asking for it."""
+    out = cf.run_calculation("crew_sizing", {
+        "quantity": qty, "duration_days": days, "rate_per_crew_day": rate,
+    })
+    assert out["status"] == "success", out
+    assert out["result"]["crews_required"] == pytest.approx(want_crews, abs=0.001)
+    # the run is not an ask for hours-per-day: it succeeds and reports no
+    # question (the unused hours_per_day default is disclosed, not requested)
+    assert "question" not in out and "rejected" not in out, out
+
+
+# ── 1b residual (b): an hours-per-day input takes a time-per-time ratio ────
+
+@pytest.mark.parametrize("hours,want_mh", [
+    ("8 hours per day", 1920.0),
+    ("10 working hours per day", 2400.0),
+    ("9 h/day", 2160.0),
+    ("11 h/d", 2640.0),
+])
+def test_an_hours_per_day_input_takes_a_time_per_time_ratio(hours, want_mh):
+    """A per-day rate is the declared dimension of hours_per_day (h/d); any
+    time-per-time spelling is that same quantity, never "does not convert"."""
+    out = cf.run_calculation("crew_sizing", {
+        "quantity": "2,400 m2", "duration_days": 20, "rate_per_crew_day": "10 m2/crew-day",
+        "hours_per_day": hours,
+    })
+    assert out["status"] == "success", out
+    assert out["result"]["man_hours"] == pytest.approx(want_mh)
+

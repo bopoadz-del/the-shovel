@@ -289,3 +289,23 @@ def test_a_whole_unit_wins_over_splitting_it_as_a_ratio(token, dimension, scale)
 
     unit = planning.parse_unit(token)
     assert (unit.dimension, unit.scale) == (dimension, scale)
+
+
+@pytest.mark.parametrize("token", [
+    "h/d", "h/day", "hours per day", "working hours per day", "working hour per day",
+])
+def test_a_time_per_time_ratio_reads_as_time_per_time(token):
+    """"hours per day" is a time-per-time rate, whatever word leads the hours."""
+    unit = planning.parse_unit(token)
+    assert unit is not None, token
+    assert unit.dimension == "time/time", (token, unit.dimension)
+
+
+@pytest.mark.parametrize("token,dimension", [
+    ("AED per Working Week", "currency/working time"),
+    ("SAR per working day", "currency/working time"),
+])
+def test_an_effort_unit_in_a_rate_keeps_its_effort_dimension(token, dimension):
+    """A working day/week names an effort unit, not plain time, in a rate."""
+    assert planning.unit_dimension(token) == dimension
+
