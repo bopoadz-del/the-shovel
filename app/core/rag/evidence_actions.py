@@ -4,8 +4,8 @@ Each action has the ``RetrievalAction`` shape ``(plan_item_text) -> evidence
 text`` the fetch loop consumes. The adapters here turn the real primitives —
 semantic ``retrieve_with_filter`` (returns chunks), lexical ``bm25_search``
 (returns chunks), structural ``rows_matching`` (returns sheet rows) — into
-that shape via top-level query helpers, so the helpers are directly testable.
-Nothing here knows a project, an item or a column.
+that shape. They are unit-testable with fake primitives; nothing here knows a
+project, an item or a column.
 """
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from typing import Callable, Mapping, Sequence
 from app.core.rag.evidence_retrieval import RetrievalAction
 from app.core.rag.structural_retrieval import render_rows, rows_matching
 
-
+#: A chunk has ``text``; a plain string passes through; anything without a
+#: usable text yields the empty string (so it never fabricates evidence).
 def chunk_text(chunk) -> str:
     if isinstance(chunk, str):
         return chunk
@@ -28,23 +29,9 @@ def chunks_to_text(chunks) -> str:
     return "\n".join(chunk_text(c) for c in chunks if chunk_text(c).strip())
 
 
-def _semantic_query(retrieve_fn, project_id, k, item):
+def _semantic_retrieve(retrieve_fn, project_id: str, k: int, item: str) -> str:
     chunks, _ = retrieve_fn(item, project_id, k=k)
     return chunks_to_text(chunks)
-
-
-def _lexical_query(bm25_fn, project_id, k, item):
-    return chunks_to_text(bm25_fn(project_id, item, k=k))
-
-
-def _structural_query(sheets, headers, item):
-    parts = []
-    for name, rows in sheets.items():
-        matched = rows_matching(rows, item)
-        if not matched:
-            continue
-        parts.append(f"--- {name} ---\n" + render_rows(matched, headers.get(name, ())))
-    return "\n".join(parts)
 
 
 def semantic_action(
@@ -53,7 +40,11 @@ def semantic_action(
     k: int = 5,
 ) -> RetrievalAction:
     """Semantic: the existing top-k. ``retrieve_fn`` returns ``(chunks, n)``."""
-    return partial(_semantic_query, retrieve_fn, project_id, k)
+    return partial(_semantic_retrieve, retrieve_fn, project_id, k)
+
+
+def _lexical_retrieve(bm25_fn, project_id: str, k: int, item: str) -> str:
+    return chunks_to_text(bm25_fn(project_id, item, k=k))
 
 
 def lexical_action(
@@ -62,7 +53,23 @@ def lexical_action(
     k: int = 50,
 ) -> RetrievalAction:
     """Lexical: BM25 over the same index. ``bm25_fn`` returns chunks."""
-    return partial(_lexical_query, bm25_fn, project_id, k)
+    return partial(_lexical_retrieve, bm25_fn, project_id, k)
+
+
+def _rows_for_item(
+    sheets: Mapping[str, Sequence[Sequence[str]]],
+    headers: Mapping[str, Sequence[str]] | None,
+    item: str,
+) -> str:
+    """All rows of every sheet whose cells match ``item``, as TSV sections."""
+    parts: list[str] = []
+    for name, rows in sheets.items():
+        matched = rows_matching(rows, item)
+        if not matched:
+            continue
+        head = (headers or {}).get(name, ())
+        parts.append(f"--- {name} ---\n" + render_rows(matched, head))
+    return "\n".join(parts)
 
 
 def structural_action(
@@ -74,4 +81,4 @@ def structural_action(
     ``sheets`` maps a sheet name to its rows (the WBS ``XLSXDocument.sheets``
     shape); ``headers`` optionally maps a sheet name to its header row.
     """
-    return partial(_structural_query, sheets, headers or {})
+    return partial(_rows_for_item, sheets, headers)
