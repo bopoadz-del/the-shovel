@@ -73,6 +73,7 @@ from app.routers import (
     redline,
     schedule as schedule_router,
     static,
+    support,
     upload,
     users,
     workflows,
@@ -195,6 +196,8 @@ async def lifespan(app: FastAPI):
     """Initialize all blocks + load runtime agents at startup."""
     _validate_startup_env()
     _warn_when_the_llm_has_no_fallback()
+    from app.routers import support as _support_router
+    _support_router.log_support_mx()
     from app.core import rss_watchdog
     rss_watchdog.start()
     from app.core import loop_watchdog
@@ -864,6 +867,7 @@ app.include_router(rag_router.router)
 app.include_router(redline.router)
 app.include_router(project.router)
 app.include_router(users.router)
+app.include_router(support.router)
 app.include_router(doc_types.router)
 app.include_router(workflows.router)
 app.include_router(health.router)

@@ -118,6 +118,27 @@
   color: var(--text-primary);
 }
 
+.left-panel__support {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.left-panel__support:hover {
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+}
+
 .left-panel__signout {
   display: flex;
   align-items: center;

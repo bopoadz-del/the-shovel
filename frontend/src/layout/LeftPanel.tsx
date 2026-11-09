@@ -13,7 +13,7 @@
  *   • Sign out — bottom of rail.
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { Plus, LogOut, Download, RotateCcw, Settings, MessageSquare, Pencil } from 'lucide-react'
+import { Plus, LogOut, Download, RotateCcw, Settings, MessageSquare, Pencil, LifeBuoy } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiGet, ApiError } from '../lib/api'
@@ -367,6 +367,10 @@ export default function LeftPanel({
       )}
 
       <div className="left-panel__footer">
+        <Link to="/support" className="left-panel__support">
+          <LifeBuoy size={14} />
+          <span>Support</span>
+        </Link>
         {user?.role === 'admin' ? (
           <Link to="/admin" className="left-panel__admin">
             <Settings size={14} />
