@@ -259,3 +259,74 @@ def test_scanned_pdf_with_failed_ocr_is_indexed_not_skipped(fresh_db, tmp_path, 
     result = doc_index.index_project(pid)
 
     assert result["skipped_unsupported"] == 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# OCR provenance flag (item 7): ocr=true on the chunk a citation reads.
+# Two inputs (two synthetic scanned pages) drive one decision: the flag is
+# per-chunk provenance, not a document-wide guess.
+# ────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ocr_provenance_flag_reaches_search_hit(fresh_db, tmp_path, monkeypatch):
+    """One OCR-derived page and one text-layer page index side by side.
+
+    The OCR-derived chunk must come back ``ocr=true`` and the text-layer
+    chunk ``ocr=false`` — the exact flag the Sources panel reads.
+    """
+    from app.core import doc_index
+    importlib.reload(doc_index)
+
+    extracted = {
+        "scan-a.pdf": (
+            "scanned steel beam connection detail drawing recovered by OCR",
+            {"page_starts": [[1, 0]], "ocr_page_numbers": [1]},
+        ),
+        "scan-b.pdf": (
+            "ordinary typed title block and drawing revision notes",
+            {"page_starts": [[1, 0]], "ocr_page_numbers": []},
+        ),
+    }
+
+    def _extract(fp, fn, *a, **k):
+        text, meta = extracted[fn]
+        return text, dict(meta)
+
+    monkeypatch.setattr(doc_index, "_extract_with_meta", _extract)
+    monkeypatch.setenv("DOC_EXTRACT_ISOLATE_MIN_MB", "1000000")
+
+    pid = projects_mod.create_project("OCR provenance two-input")["id"]
+    docs = {}
+    for name in ("scan-a.pdf", "scan-b.pdf"):
+        p = str(tmp_path / name)
+        file_crypto.write_document(p, b"%PDF-1.4 x")
+        docs[name] = projects_mod.add_document(pid, name, file_path=p, size=13)
+
+    doc_index.index_project(pid)
+
+    ocr_hits = await doc_index.search_project_documents(pid, "steel beam connection")
+    ocr_hit = next(h for h in ocr_hits if h["document_id"] == docs["scan-a.pdf"]["id"])
+    assert ocr_hit["ocr"] is True
+
+    text_hits = await doc_index.search_project_documents(pid, "title block revision notes")
+    text_hit = next(h for h in text_hits if h["document_id"] == docs["scan-b.pdf"]["id"])
+    assert text_hit["ocr"] is False
+
+
+def test_ocr_provenance_flag_reaches_citation_panel():
+    """The Sources panel copies ``ocr`` off each hit, not just document id."""
+    from app.agents.driver import sources
+
+    trail = [{
+        "role": "tool",
+        "name": "search_project_documents",
+        "content": json.dumps({"result": {"results": [
+            {"document_id": "d-ocr", "filename": "scan-a.pdf", "score": 0.9, "ocr": True},
+            {"document_id": "d-text", "filename": "scan-b.pdf", "score": 0.8, "ocr": False},
+        ]}}),
+    }]
+
+    rows = sources.panel(trail, [], answer="")
+    by_doc = {row["doc_id"]: row for row in rows}
+    assert by_doc["d-ocr"]["ocr"] is True
+    assert by_doc["d-text"]["ocr"] is False
