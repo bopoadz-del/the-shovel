@@ -335,3 +335,21 @@ def test_ocr_provenance_flag_reaches_citation_panel():
     by_doc = {row["doc_id"]: row for row in rows}
     assert by_doc["d-ocr"]["ocr"] is True
     assert by_doc["d-text"]["ocr"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _search_project_documents_sync: the empty/whitespace-query guard returns []
+# before the hybrid retriever runs. drop_rule removes the guard, reaches
+# ``retrieve_with_filter`` and the raised AssertionError fails the test.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("query", ["", "   "])
+def test_search_project_documents_sync_empty_query_returns_empty(monkeypatch, query):
+    from app.core import doc_index
+    from app.core.rag import retriever as retriever_mod
+
+    def _boom(*a, **k):
+        raise AssertionError("retriever reached for an empty query")
+
+    monkeypatch.setattr(retriever_mod, "retrieve_with_filter", _boom)
+    assert doc_index._search_project_documents_sync("p", query) == []

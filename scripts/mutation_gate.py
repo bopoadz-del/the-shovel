@@ -153,24 +153,69 @@ def _module_refs(text: str, tok: str) -> bool:
     return False
 
 
+def _callers_in_module(src: str, fn_name: str) -> set[str]:
+    """Function names in ``src`` that transitively call ``fn_name`` (within
+    the module), including ``fn_name`` itself.
+
+    A test that names any of these can observe a mutant of ``fn_name`` even
+    when it never spells ``fn_name``: helper functions are exercised through
+    their callers, so a mutant of ``execute`` is killed by the test that names
+    ``fee`` when ``fee`` calls ``execute``. Keeping this graph intra-module is
+    what stops a hot module (``vector_store``, ``doc_index``) from matching
+    every file that merely imports it, while not dropping any indirect killer.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return {fn_name}
+    defs: dict[str, ast.AST] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            defs[node.name] = node
+    calls: dict[str, set[str]] = {}
+    for name, node in defs.items():
+        called: set[str] = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                fn = sub.func
+                if isinstance(fn, ast.Name):
+                    called.add(fn.id)
+                elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+                    called.add(fn.attr)
+        calls[name] = called & set(defs)
+    reachable = {fn_name}
+    changed = True
+    while changed:
+        changed = False
+        for name, callees in calls.items():
+            if name not in reachable and callees & reachable:
+                reachable.add(name)
+                changed = True
+    return reachable
+
+
 def tests_for(path: str, fn_name: str, repo: Path, test_roots: Sequence[str], src_roots: Sequence[str]) -> list[str]:
     """Test files that can kill a mutant of ``fn_name``.
 
-    A killer must name the function (word boundary) AND reference its module
-    (dotted path or any import form). Naming the function stops a hot module
-    (``vector_store``, ``doc_index``) from matching every file that merely
-    imports it -- which ran nearly the whole suite per mutant and blew the
-    job ceiling on a change to those modules. No killer is dropped: a test
-    that imports the module but never names the function cannot fail a
-    mutant of that function's body either way.
+    A killer must reference the function's module (dotted path or any import
+    form) AND name ``fn_name`` or any in-module function that transitively
+    calls it. Naming the function (or one of its callers) stops a hot module
+    from matching every file that merely imports it -- which ran nearly the
+    whole suite per mutant and blew the job ceiling -- without dropping a
+    legitimate indirect killer.
     """
     toks = module_tokens(path, src_roots, repo)
-    fn_re = re.compile(rf"\b{re.escape(fn_name)}\b")
+    try:
+        src = (repo / path).read_text("utf-8", "replace")
+    except OSError:
+        src = ""
+    callers = _callers_in_module(src, fn_name)
+    name_re = re.compile(r"\b(?:" + "|".join(re.escape(c) for c in sorted(callers)) + r")\b")
     hits = []
     for root in test_roots:
         for t in sorted((repo / root).rglob("test_*.py")):
             text = t.read_text("utf-8", "replace")
-            if not fn_re.search(text):
+            if not name_re.search(text):
                 continue
             if any(_module_refs(text, tok) for tok in toks):
                 hits.append(str(t.relative_to(repo)))

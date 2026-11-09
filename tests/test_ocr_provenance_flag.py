@@ -145,3 +145,14 @@ def test_sources_panel_forwards_ocr_flag(ocr_flag):
     }]
     rows = sources_mod.panel(trail, [], answer="", calculated=False)
     assert rows[0]["ocr"] is ocr_flag
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# make_rag_chunk_class: the legacy namespace (empty string) reuses RagChunk.
+# drop_rule removes the namespace guard and would build a dynamic class for
+# ``chunks_``, so ``is RagChunk`` fails and kills the mutant.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_make_rag_chunk_class_empty_namespace_returns_base():
+    from app.core.models import RagChunk, make_rag_chunk_class
+    assert make_rag_chunk_class("", 8, "fake") is RagChunk

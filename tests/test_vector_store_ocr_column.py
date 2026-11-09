@@ -224,3 +224,74 @@ def test_bm25_postgres_empty_query_returns_empty(tmp_path, monkeypatch):
     st, _ = _pg_store(tmp_path, monkeypatch, rows=[_row()])
     got = st._bm25_postgres("p", "!!!", 5)
     assert not got
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Guard branches on the mutated methods: a drop_rule mutant removes the first
+# ``if``, so each test below fails when that guard is gone (the guarded early
+# return is the only thing standing between the caller and a downstream query
+# or a length-mismatch write).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_upsert_chunks_rejects_mismatched_lengths(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    store = vs.VectorStore(db_path=str(tmp_path / "rag.db"))
+    with pytest.raises(ValueError):
+        store.upsert_chunks(
+            "p", "d", ["one", "two"], np.ones((1, store.dim), dtype=np.float32),
+        )
+
+
+@pytest.mark.parametrize("url", ["sqlite:///g1.db", "sqlite:///g2.db"])
+def test_ensure_schema_memoizes_init(monkeypatch, url):
+    parent_calls = []
+    monkeypatch.setattr(vs, "_ensure_sqlite_parent_dir", lambda u: parent_calls.append(u))
+    monkeypatch.setattr(
+        vs, "_engine_for_url",
+        lambda u: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+    )
+    monkeypatch.setattr(vs, "ensure_table", lambda *a, **k: None)
+    monkeypatch.setattr(vs, "_ensure_page_column", lambda *a, **k: None)
+    monkeypatch.setattr(vs, "_ensure_ocr_column", lambda *a, **k: None)
+
+    class _T:
+        __tablename__ = "chunks_guard"
+        __table__ = SimpleNamespace(indexes=[])
+
+    monkeypatch.setattr(vs, "_INITIALIZED_NAMESPACES", set())
+    vs._ensure_schema(url, _T)
+    vs._ensure_schema(url, _T)
+    # Memoised: the second call returns at the guard and never reaches the
+    # parent-dir step. drop_rule (guard removed) would re-initialise and
+    # append a second entry.
+    assert parent_calls == [url]
+
+
+@pytest.mark.parametrize("project_id", ["", None])
+def test_chunks_containing_all_skips_query_on_falsy_project(project_id):
+    st = object.__new__(vs.VectorStore)
+    st._table_name = "chunks_t"
+    st._lock = contextlib.nullcontext()
+    st._docs_visibility_ready = lambda s: False
+    st._hidden_doc_sql = lambda t: ""
+    session = _Session(rows=[])
+    st._session_factory = lambda: (lambda: session)
+    got = st.chunks_containing_all(project_id, ["steel"])
+    assert got == []
+    assert session.sent == []
+
+
+@pytest.mark.parametrize(
+    "project_id,identifiers", [("", ["D549.2"]), ("p", [])],
+)
+def test_identifier_search_skips_query_when_empty(project_id, identifiers):
+    st = object.__new__(vs.VectorStore)
+    st._table_name = "chunks_t"
+    st._lock = contextlib.nullcontext()
+    st._docs_visibility_ready = lambda s: False
+    st._hidden_doc_sql = lambda t: ""
+    session = _Session(rows=[])
+    st._session_factory = lambda: (lambda: session)
+    got = st.identifier_search(project_id, identifiers)
+    assert got == []
+    assert session.sent == []

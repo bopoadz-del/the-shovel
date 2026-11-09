@@ -907,8 +907,6 @@ def _ensure_schema(url: str, rag_chunk_cls: type) -> None:
     global _INITIALIZED_NAMESPACES
     table_name = rag_chunk_cls.__tablename__
     init_key = (url, table_name)
-    if init_key in _INITIALIZED_NAMESPACES:
-        return
     with _INIT_LOCK:
         if init_key in _INITIALIZED_NAMESPACES:
             return
