@@ -23,8 +23,8 @@ from app.lib.formula_registry import Param, formula
         "quantity": Param("count", 0, 1e12, label="quantity"),
         "duration_days": Param("days", 0, 1e9, label="duration in working days"),
         "rate_per_crew_day": Param("count/d", 0, 1e9, label="rate (units per crew-day)"),
-        "hours_per_day": Param("h/d", 0, 24, label="hours per day"),
-        "crew_size": Param("count", 0, 1e6, label="crew size (optional, for duration)"),
+        "hours_per_day": Param("h/d", 0, 24, label="working hours per day"),
+        "crew_size": Param("count", 0, 1e6, label="crew size"),
     },
     outputs={
         "crews_required": "-",

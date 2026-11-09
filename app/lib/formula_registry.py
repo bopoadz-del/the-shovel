@@ -535,7 +535,8 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
                                                 in (declared.dimension, "fraction"))):
         # No unit of its own: a count, a ratio, a factor, or a figure in
         # whatever unit its companions use. The written number stands (an
-        # unrecognised word after a count names what is counted); a
+        # unrecognised word after a count names what is counted; a known
+        # unit of another kind, "5 m" for a count, is refused below); a
         # percentage only becomes a fraction for an input whose range is a
         # fraction.
         if (written is not None and written.dimension == "fraction"
@@ -545,14 +546,6 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
                     "conversion": {"parameter": spec.name, "value_in": number, "from_unit": unit,
                                    "to_unit": "fraction", "value_out": value, "note": ""}}
         return {"value": number}
-    if declared is not None and declared.dimension == "count" and written is not None:
-        # A count with a stated unit names WHAT is counted/measured
-        # ("1,200 m3", "350 m2"): the number stands and the unit is carried
-        # so a companion rate denominated per-count reads per-that-unit.
-        return {"value": number,
-                "conversion": {"parameter": spec.name, "value_in": number,
-                               "from_unit": unit, "to_unit": unit, "value_out": number,
-                               "note": "count carries the stated unit"}}
     if written is None:
         if declared.dimension == "currency" or unit.strip().lower() == spec.unit.strip().lower():
             return {"value": number}
