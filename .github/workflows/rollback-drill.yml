@@ -48,7 +48,7 @@ jobs:
           current=$(python3 scripts/ecs_rollback.py capture "$RUNNER_TEMP/svc-before.json")
           echo "current task definition: $current"
           echo "CURRENT_TD=$current" >> "$GITHUB_ENV"
-          prev=$(aws ecs list-task-definitions --family-prefix "$TASK_FAMILY" --sort DESC --max-items 2 --query 'taskDefinitionArns[1]' --output text)
+          prev=$(aws ecs list-task-definitions --family-prefix the-fork-ingest --sort DESC --query 'taskDefinitionArns[1]' --output text)
           if [ -z "$prev" ] || [ "$prev" = "None" ]; then
             echo "::error::no previous task-definition revision to drill against"
             exit 1
