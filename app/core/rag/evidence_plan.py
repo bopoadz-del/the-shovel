@@ -93,6 +93,8 @@ def missing_plan_items(plan: EvidencePlan, evidence_text: str) -> tuple[str, ...
     missing = []
     for item in plan.items:
         terms = _terms(item)
+        if not terms:
+            continue  # an empty plan item is not a gap; it carries no signal
         if not all(term in evidence for term in terms):
             missing.append(item)
     return tuple(missing)
