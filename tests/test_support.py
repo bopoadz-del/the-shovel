@@ -12,7 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import email as email_svc
-from app.routers import support
+import app.routers.support as support
 
 
 @pytest.mark.parametrize(
