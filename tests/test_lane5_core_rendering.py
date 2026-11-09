@@ -139,10 +139,12 @@ def _search(monkeypatch, hit, answer):
     return run_driver(probe, user_message="State the stored total.")
 
 
-def test_a_source_is_shown_by_its_title(monkeypatch):
+def test_a_source_is_shown_by_its_owner_filename(monkeypatch):
+    # Item 6 (advisor 06:12Z): a user's own document is cited by the filename
+    # its owner gave it, never a content-derived title.
     events = _search(monkeypatch, {
         "text": "The stored total is 42 m.",
-        "filename": "alpha_store_9f3a",
+        "filename": "alpha_store_9f3a.md",
         "title": "Alpha memo",
         "document_id": "alpha_store_9f3a",
         "origin": "own",
@@ -150,8 +152,8 @@ def test_a_source_is_shown_by_its_title(monkeypatch):
     }, "The stored total is 42 m.")
     names = [str(row.get("doc_name") or "") for row in (events[-1].get("sources") or [])]
     assert names
-    assert all(name == "Alpha memo" for name in names)
-    assert all("alpha_store_9f3a" not in name for name in names)
+    assert all(name == "alpha_store_9f3a.md" for name in names)
+    assert all("Alpha memo" not in name for name in names)
 
 
 def test_a_credit_line_uses_the_plain_name(monkeypatch):

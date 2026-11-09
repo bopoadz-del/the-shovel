@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from app.agents.driver import sources
+import app.agents.driver.sources as sources
 
 
 @pytest.mark.parametrize(
@@ -69,15 +69,22 @@ def test_panel_cites_owner_filename_not_title(filename):
     assert rows[0]["doc_name"] == filename
 
 
-def test_panel_library_keeps_title():
+@pytest.mark.parametrize(
+    "title, filename",
+    [
+        ("Design values metric", "design_values_metric.md"),
+        ("Formwork notes", "formwork_notes.md"),
+    ],
+)
+def test_panel_library_keeps_title(title, filename):
     hit = {
         "document_id": "g1",
-        "title": "Design values metric",
-        "filename": "design_values_metric.md",
+        "title": title,
+        "filename": filename,
         "snippet": "The design value for the metric.",
         "score": 0.9,
         "origin": "general_knowledge",
     }
     rows = sources.panel(_trail([hit]), [])
     assert len(rows) == 1
-    assert rows[0]["doc_name"] == "Design values metric"
+    assert rows[0]["doc_name"] == title
