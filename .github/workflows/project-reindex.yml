@@ -3,10 +3,19 @@ name: project-reindex
 # Ops workflow (Advisor 20:30Z): full rebuild of a project's doc_index on the
 # live deployment, from its current document list. Slow -- extracts text from
 # every document -- so it is a manual workflow_dispatch only, with a REQUIRED
-# project_id (no default). Uses the seed admin principal already held as the
-# Actions secret FORK_API_KEY (the same credential ui-battery.yml uses) as the
-# Bearer key on /v1/admin/debug/project-reindex. The run prints the HTTP status
-# and the response JSON (chunk/doc counts -- no secrets) and fails on non-2xx.
+# project_id (no default).
+#
+# Auth: /v1/admin/debug/project-reindex is admin-gated via `_require_admin`
+# (role == "admin"). Only CEREBRUM_MASTER_KEY is minted with that role, and it
+# lives in the LIVE the-fork ECS task definition -- it is NOT a repository
+# secret (a repo `FORK_API_KEY` secret does not exist; the repo holds the seed
+# admin principal only as FORK_EMAIL + FORK_PASSWORD, whose login JWT is a
+# non-admin user). Resolve the master key at run time from the live task
+# definition, exactly as ui-battery.yml does, then use it as the Bearer key.
+# ::add-mask:: before any echo keeps the value out of logs/artifacts.
+#
+# The run prints the HTTP status and the response JSON (chunk/doc counts,
+# including ocr_chunks vs total_chunks -- no secrets) and fails on non-2xx.
 
 on:
   workflow_dispatch:
@@ -27,16 +36,48 @@ jobs:
       BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
       PROJECT_ID: ${{ inputs.project_id }}
     steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                # An ECS Secrets Manager valueFrom appends :json-key:version-stage:version-id
+                # to the secret ARN when the container var is ONE key inside a JSON secret.
+                # get-secret-value wants the secret ARN alone -- the full valueFrom is an
+                # invalid secret-id (ValidationException: Invalid name). Fields 1-7 are the
+                # secret ARN; field 8, when present, is the JSON key to pull from SecretString.
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
       - name: Rebuild project doc_index
-        env:
-          FORK_API_KEY: ${{ secrets.FORK_API_KEY }}
         run: |
           set -euo pipefail
           url="${BASE_URL%/}/v1/admin/debug/project-reindex?project_id=${PROJECT_ID}"
           echo "POST ${url}"
           curl --fail-with-body --max-time 3600 \
             -X POST \
-            -H "Authorization: Bearer ${FORK_API_KEY}" \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -w "\nHTTP %{http_code}\n" \
             "${url}"

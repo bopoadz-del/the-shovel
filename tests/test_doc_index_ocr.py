@@ -307,7 +307,12 @@ async def test_ocr_provenance_flag_reaches_search_hit(fresh_db, tmp_path, monkey
         file_crypto.write_document(p, b"%PDF-1.4 x")
         docs[name] = projects_mod.add_document(pid, name, file_path=p, size=13)
 
-    doc_index.index_project(pid)
+    result = doc_index.index_project(pid)
+    # The reindex summary reports OCR-derived chunk count alongside the
+    # total: one chunk recovered by OCR (scan-a), one from the text layer
+    # (scan-b).
+    assert result["total_chunks"] == 2
+    assert result["ocr_chunks"] == 1
 
     ocr_hits = await doc_index.search_project_documents(pid, "steel beam connection")
     ocr_hit = next(h for h in ocr_hits if h["document_id"] == docs["scan-a.pdf"]["id"])
