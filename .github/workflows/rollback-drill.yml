@@ -68,8 +68,13 @@ jobs:
 
       - name: Verify recovery and live sha unchanged
         run: |
-          aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$DRILL_SERVICE" --output json > "$RUNNER_TEMP/svc-after.json"
-          python3 scripts/ecs_rollback.py verify "$RUNNER_TEMP/svc-after.json" --prior "$CURRENT_TD"
+          # Non-serving service (desired 0): there are never running tasks, so
+          # the web-specific `ecs_rollback.py verify` (which requires >0 running
+          # tasks) does not apply. Assert the task definition returned to the
+          # captured ARN, and that the client-facing live sha did not move.
+          after_td=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$DRILL_SERVICE" --query 'services[0].taskDefinition' --output text)
+          echo "service task definition after: $after_td"
+          test "$after_td" = "$CURRENT_TD"
           curl --proto '=https' -sS -o "$RUNNER_TEMP/livez-after.json" --max-time 30 "$PUBLIC_BASE_URL/livez"
           after=$(python3 scripts/read_livez_build_sha.py "$RUNNER_TEMP/livez-after.json")
           echo "live sha after: $after"
