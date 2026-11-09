@@ -7,6 +7,7 @@ name: mutation-gate
 # distinct inputs. No allowlists.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
