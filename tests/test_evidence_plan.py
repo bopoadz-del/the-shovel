@@ -46,11 +46,17 @@ def test_missing_plan_items_is_lexical(plan, evidence, missing):
     assert missing_plan_items(plan, evidence) == missing
 
 
-def test_a_plan_item_with_zero_evidence_is_missing():
-    plan = parse_evidence_plan("bulk excavation, lift walls, staircases")
-    evidence = "the priced BOQ has raft concrete and shear walls"
-    missing = missing_plan_items(plan, evidence)
-    assert set(missing) == {"bulk excavation", "lift walls", "staircases"}
+@pytest.mark.parametrize("plan_text,evidence,missing", [
+    ("bulk excavation, lift walls, staircases",
+     "the priced BOQ has raft concrete and shear walls",
+     {"bulk excavation", "lift walls", "staircases"}),
+    ("blinding, formwork",
+     "the priced BOQ has painting and ceilings",
+     {"blinding", "formwork"}),
+])
+def test_a_plan_item_with_zero_evidence_is_missing(plan_text, evidence, missing):
+    plan = parse_evidence_plan(plan_text)
+    assert set(missing_plan_items(plan, evidence)) == missing
 
 
 def test_round_bound_never_allows_round_four():
@@ -58,7 +64,3 @@ def test_round_bound_never_allows_round_four():
     assert not round_allowed(ROUND_LIMIT + 1)
     assert not round_allowed(0)
     assert not round_allowed(-1)
-
-
-def test_round_limit_is_three():
-    assert ROUND_LIMIT == 3

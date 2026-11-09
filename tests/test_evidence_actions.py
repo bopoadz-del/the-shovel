@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.rag.evidence_actions import (
     chunks_to_text,
     lexical_action,
@@ -15,21 +17,30 @@ def _chunk(text):
     return SimpleNamespace(text=text)
 
 
-def test_semantic_action_extracts_chunk_text():
-    def fake_retrieve(query, project_id, k):
-        assert query == "bulk excavation"
-        return ([_chunk("Bulk excavation"), _chunk("in all classes")], 0)
+@pytest.mark.parametrize("query,chunks,want", [
+    ("bulk excavation", ["Bulk excavation", "in all classes"],
+     "Bulk excavation\nin all classes"),
+    ("blinding", ["75 mm blinding"], "75 mm blinding"),
+])
+def test_semantic_action_extracts_chunk_text(query, chunks, want):
+    def fake_retrieve(q, project_id, k):
+        assert q == query
+        return ([_chunk(c) for c in chunks], 0)
 
     action = semantic_action(fake_retrieve, "p1")
-    assert action("bulk excavation") == "Bulk excavation\nin all classes"
+    assert action(query) == want
 
 
-def test_lexical_action_extracts_chunk_text():
-    def fake_bm25(project_id, query, k):
-        return [_chunk("75 mm blinding")]
+@pytest.mark.parametrize("query,want", [
+    ("blinding", "75 mm blinding"),
+    ("excavation", "Bulk excavation"),
+])
+def test_lexical_action_extracts_chunk_text(query, want):
+    def fake_bm25(project_id, q, k):
+        return [_chunk(want)]
 
     action = lexical_action(fake_bm25, "p1")
-    assert action("blinding") == "75 mm blinding"
+    assert action(query) == want
 
 
 def test_structural_action_returns_matching_rows_across_sheets():
@@ -49,11 +60,15 @@ def test_structural_action_returns_matching_rows_across_sheets():
     assert "shear walls" not in text
 
 
-def test_structural_action_empty_when_nothing_matches():
+@pytest.mark.parametrize("term", ["plaster", "ceilings"])
+def test_structural_action_empty_when_nothing_matches(term):
     action = structural_action({"Bill No.1": [["A1", "Bulk excavation"]]})
-    assert action("plaster") == ""
+    assert action(term) == ""
 
 
-def test_chunks_to_text_skips_empty_and_handles_non_chunks():
-    assert chunks_to_text([_chunk("a"), _chunk(""), _chunk("  ")]) == "a"
-    assert chunks_to_text([SimpleNamespace(text=None), "plain"]) == "plain"
+@pytest.mark.parametrize("chunks,want", [
+    ([_chunk("a"), _chunk(""), _chunk("  ")], "a"),
+    ([SimpleNamespace(text=None), "plain"], "plain"),
+])
+def test_chunks_to_text_skips_empty_and_handles_non_chunks(chunks, want):
+    assert chunks_to_text(chunks) == want

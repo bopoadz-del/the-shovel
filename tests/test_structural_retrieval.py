@@ -1,6 +1,8 @@
 """Tests for structural retrieval (item 2): two BOQ layouts."""
 from __future__ import annotations
 
+import pytest
+
 from app.core.rag.structural_retrieval import render_rows, rows_matching
 
 # Row-per-item sheet: one line item per row, a plain header at the top.
@@ -22,33 +24,53 @@ _SECTIONED = [
 ]
 
 
-def test_rows_matching_row_per_item_sheet():
-    rows = rows_matching(_ROW_PER_ITEM, "excavation")
-    assert len(rows) == 1
-    assert rows[0][1] == "Bulk excavation in all classes"
+@pytest.mark.parametrize("term,want", [
+    ("excavation", ["Bulk excavation in all classes"]),
+    ("blinding", ["75 mm blinding to slab"]),
+])
+def test_rows_matching_row_per_item_sheet(term, want):
+    rows = rows_matching(_ROW_PER_ITEM, term)
+    assert [r[1] for r in rows] == want
 
 
-def test_rows_matching_sectioned_sheet_returns_items_not_section_headers():
-    rows = rows_matching(_SECTIONED, "walls")
-    # "C40/50 shear walls" and "Lift walls C50" match; "Bill No.4 — Concrete"
-    # does not, so no section header is returned.
-    assert [r[1] for r in rows] == ["C40/50 shear walls", "Lift walls C50"]
+@pytest.mark.parametrize("term,want", [
+    ("walls", ["C40/50 shear walls", "Lift walls C50"]),
+    ("C50", ["Lift walls C50"]),
+])
+def test_rows_matching_sectioned_sheet_returns_items_not_section_headers(term, want):
+    rows = rows_matching(_SECTIONED, term)
+    # "Bill No.1/4 — ..." section header rows have no item term, so no header
+    # is returned.
+    assert [r[1] for r in rows] == want
 
 
-def test_rows_matching_is_case_insensitive_and_whole_word():
-    assert len(rows_matching(_ROW_PER_ITEM, "EXCAVATION")) == 1
-    # "wall" (singular) is not a substring of "walls" as a whole word.
-    assert rows_matching(_ROW_PER_ITEM, "wall") == []
+@pytest.mark.parametrize("term,want", [
+    ("EXCAVATION", 1),
+    ("BULK EXCAVATION", 1),
+])
+def test_rows_matching_is_case_insensitive(term, want):
+    assert len(rows_matching(_ROW_PER_ITEM, term)) == want
 
 
-def test_rows_matching_empty_term_or_no_match():
-    assert rows_matching(_ROW_PER_ITEM, "") == []
-    assert rows_matching(_ROW_PER_ITEM, "plaster") == []
+@pytest.mark.parametrize("term,want", [
+    ("wall", []),      # "wall" (singular) is not a whole word of "walls"
+    ("plaster", []),   # no match
+])
+def test_rows_matching_whole_word_and_no_match(term, want):
+    assert rows_matching(_ROW_PER_ITEM, term) == want
 
 
-def test_render_rows_keeps_columns_aligned():
-    text = render_rows(rows_matching(_ROW_PER_ITEM, "excavation"),
-                       _ROW_PER_ITEM[0])
+@pytest.mark.parametrize("term", ["", "   "])
+def test_rows_matching_empty_term(term):
+    assert rows_matching(_ROW_PER_ITEM, term) == []
+
+
+@pytest.mark.parametrize("term,want_first", [
+    ("excavation", "A1\tBulk excavation"),
+    ("blinding", "A2\t75 mm blinding"),
+])
+def test_render_rows_keeps_columns_aligned(term, want_first):
+    text = render_rows(rows_matching(_ROW_PER_ITEM, term), _ROW_PER_ITEM[0])
     lines = text.splitlines()
     assert lines[0] == "code\tdescription\tunit\tqty\trate"
-    assert lines[1].startswith("A1\tBulk excavation")
+    assert lines[1].startswith(want_first)
