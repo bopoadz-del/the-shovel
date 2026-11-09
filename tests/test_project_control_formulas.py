@@ -110,3 +110,46 @@ def test_manhours_scurve_agrees(planned, actual, want_cp, want_ca, want_pi):
 def test_floor_cycle_progress_agrees(comp, tot, wt, want):
     out = floor_cycle_progress(comp, tot, wt)
     assert out["weighted_progress"] == pytest.approx(want, abs=0.001)
+
+
+# Negative controls: each formula's guard must refuse invalid inputs (kills the
+# drop_rule mutants that remove the first `if`).
+
+@pytest.mark.parametrize("qty,days,rate,hours", [
+    (0.0, 15.0, 12.0, 10.0),
+    (3000.0, 0.0, 12.0, 10.0),
+])
+def test_crew_sizing_refuses_non_positive(qty, days, rate, hours):
+    assert "error" in crew_sizing(qty, days, rate, hours)
+
+
+@pytest.mark.parametrize("planned,actual,total", [
+    (50.0, 50.0, 0.0),
+    (50.0, 50.0, -1.0),
+])
+def test_progress_kpi_refuses_non_positive_total(planned, actual, total):
+    assert "error" in progress_kpi(planned, actual, total)
+
+
+@pytest.mark.parametrize("value,cost", [
+    ([], []),
+    ([100.0], []),
+])
+def test_cash_flow_refuses_bad_series(value, cost):
+    assert "error" in cash_flow(value, cost)
+
+
+@pytest.mark.parametrize("planned,actual", [
+    ([0.0], [0.0]),
+    ([], []),
+])
+def test_manhours_scurve_refuses_zero_total(planned, actual):
+    assert "error" in manhours_scurve(planned, actual)
+
+
+@pytest.mark.parametrize("comp,tot,wt", [
+    ([1.0], [1.0, 2.0], [1.0, 1.0]),
+    ([1.0], [0.0], [1.0]),
+])
+def test_floor_cycle_refuses_bad_input(comp, tot, wt):
+    assert "error" in floor_cycle_progress(comp, tot, wt)
