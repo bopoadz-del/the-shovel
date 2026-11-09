@@ -1,0 +1,77 @@
+# ECS rollback drill — exercise the rollback safeguard on a NON-SERVING task.
+#
+# Rolls `the-fork-ingest` (desired count 0 — the ingest is a job, never a
+# serving service) to the previous task-definition revision and back, then
+# verifies the service returned to the captured task definition and that the
+# client-facing web service's /livez sha did not move. This proves the
+# capture -> roll -> verify mechanics in scripts/ecs_rollback.py without ever
+# touching the serving `the-fork` web service.
+#
+# Dispatch by hand; the run quotes the before/after task ids and the live sha.
+name: rollback-drill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  DRILL_SERVICE: the-fork-ingest
+  TASK_FAMILY: the-fork
+  PUBLIC_BASE_URL: https://theshovel.ai
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Probe live sha before the drill
+        run: |
+          curl --proto '=https' -sS -o "$RUNNER_TEMP/livez-before.json" --max-time 30 "$PUBLIC_BASE_URL/livez"
+          before=$(python3 scripts/read_livez_build_sha.py "$RUNNER_TEMP/livez-before.json")
+          echo "live sha before: $before"
+          echo "BEFORE_SHA=$before" >> "$GITHUB_ENV"
+
+      - name: Capture the non-serving service's task definition
+        run: |
+          aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$DRILL_SERVICE" --output json > "$RUNNER_TEMP/svc-before.json"
+          current=$(python3 scripts/ecs_rollback.py capture "$RUNNER_TEMP/svc-before.json")
+          echo "current task definition: $current"
+          echo "CURRENT_TD=$current" >> "$GITHUB_ENV"
+          prev=$(aws ecs list-task-definitions --family-prefix "$TASK_FAMILY" --sort DESC --max-items 2 --query 'taskDefinitionArns[1]' --output text)
+          if [ -z "$prev" ] || [ "$prev" = "None" ]; then
+            echo "::error::no previous task-definition revision to drill against"
+            exit 1
+          fi
+          echo "previous task definition: $prev"
+          echo "PREV_TD=$prev" >> "$GITHUB_ENV"
+
+      - name: Roll the non-serving service to the previous task definition
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$DRILL_SERVICE" --task-definition "$PREV_TD" --force-new-deployment
+          timeout 300 aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$DRILL_SERVICE"
+
+      - name: Roll back to the captured task definition
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$DRILL_SERVICE" --task-definition "$CURRENT_TD" --force-new-deployment
+          timeout 300 aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$DRILL_SERVICE"
+
+      - name: Verify recovery and live sha unchanged
+        run: |
+          aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$DRILL_SERVICE" --output json > "$RUNNER_TEMP/svc-after.json"
+          python3 scripts/ecs_rollback.py verify "$RUNNER_TEMP/svc-after.json" --prior "$CURRENT_TD"
+          curl --proto '=https' -sS -o "$RUNNER_TEMP/livez-after.json" --max-time 30 "$PUBLIC_BASE_URL/livez"
+          after=$(python3 scripts/read_livez_build_sha.py "$RUNNER_TEMP/livez-after.json")
+          echo "live sha after: $after"
+          test "$after" = "$BEFORE_SHA"
+          echo "drill passed: service on $CURRENT_TD, live sha unchanged ($after)"
