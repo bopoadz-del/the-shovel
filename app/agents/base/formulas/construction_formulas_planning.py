@@ -198,6 +198,11 @@ def _atom(token: str, in_ratio: bool) -> Optional[Unit]:
         family, scale, needs, raw = _INDEX[key]
         if in_ratio and family == "labour effort":
             family = "time"
+        elif in_ratio and family == "working time" and not needs:
+            # "Working hours" in a ratio is plain time (hours/day); a
+            # "working day" or "working week" still names an effort unit
+            # that needs the hours-per-day / days-per-week context.
+            family = "time"
         return Unit(family, scale, 0.0, needs, raw)
     if key in _TEMPERATURE:
         scale, offset = _TEMPERATURE[key]
@@ -266,6 +271,21 @@ def _as_working(unit: Unit) -> Unit:
     return unit
 
 
+def _uncancelled_needs(
+    src_needs: Tuple[str, ...], dst_needs: Tuple[str, ...],
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """The context values a conversion still needs, after cancellation.
+
+    A value needed on both the source and the destination side divides out
+    of the conversion factor ("working days" to "days" needs the hours per
+    day on both sides, so it is not required to make the conversion). A
+    value needed on only one side still is.
+    """
+    common = set(src_needs) & set(dst_needs)
+    return (tuple(n for n in src_needs if n not in common),
+            tuple(n for n in dst_needs if n not in common))
+
+
 def convert_units(value: Any, from_unit: Any, to_unit: Any,
                   **context: Any) -> Dict[str, Any]:
     """``value`` in ``from_unit`` expressed in ``to_unit``.
@@ -299,18 +319,19 @@ def convert_units(value: Any, from_unit: Any, to_unit: Any,
         return {"error": (f"{from_unit} measures {src.dimension} and {to_unit} measures "
                           f"{dst.dimension}; they do not convert."),
                 "dimensions": [src.dimension, dst.dimension]}
-    needs = src.needs + dst.needs + crew
+    src_needs, dst_needs = _uncancelled_needs(src.needs, dst.needs)
+    needs = src_needs + dst_needs + crew
     missing = _missing_context(needs, context)
     if missing:
         return {"error": (f"Converting {from_unit} to {to_unit} needs the "
                           + " and ".join(CONVERSION_CONTEXT[m] for m in missing) + "."),
                 "needs_input": missing}
-    base = number * src.scale * _context_factor(src.needs, context) + src.offset
+    base = number * src.scale * _context_factor(src_needs, context) + src.offset
     if crew and src.dimension == "labour effort":
         base /= float(context["crew_size"])
     elif crew:
         base *= float(context["crew_size"])
-    out = (base - dst.offset) / (dst.scale * _context_factor(dst.needs, context))
+    out = (base - dst.offset) / (dst.scale * _context_factor(dst_needs, context))
     used = {name: context[name] for name in needs}
     read_as = dst.written if dst.dimension == "working time" else str(to_unit)
     return {"value_out": float(f"{out:.12g}"), "dimension": route, "context": used,
