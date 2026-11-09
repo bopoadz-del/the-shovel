@@ -42,16 +42,32 @@ def _float_env(name: str) -> float | None:
 
 
 def evaluate(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Availability + latency percentiles + breaches, given probe samples."""
+    """Availability + latency percentiles + breaches, given probe samples.
+
+    Zero samples is an explicit ``NO_SAMPLES`` verdict (the probe collected
+    nothing -- the service was unreachable or curl produced no response),
+    never a crash, so the caller still receives a report and pages on it.
+    """
+    avail_target = _float_env("SLO_AVAILABILITY")
+    p95_target = _float_env("SLO_LATENCY_P95_MS")
+    targets_configured = bool(avail_target is not None or p95_target is not None)
+
     if not samples:
-        raise ValueError("no probe samples")
+        return {
+            "samples": 0,
+            "ok": 0,
+            "availability": 0.0,
+            "latency_p50_ms": 0.0,
+            "latency_p95_ms": 0.0,
+            "targets_configured": targets_configured,
+            "breaches": [],
+            "verdict": "NO_SAMPLES",
+        }
+
     total = len(samples)
     ok = sum(1 for s in samples if int(s.get("status") or 0) == 200)
     availability = ok / total
     latencies = sorted(float(s.get("latency_ms") or 0.0) for s in samples)
-
-    avail_target = _float_env("SLO_AVAILABILITY")
-    p95_target = _float_env("SLO_LATENCY_P95_MS")
 
     breaches: List[str] = []
     if avail_target is not None and availability < avail_target:
@@ -66,7 +82,7 @@ def evaluate(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         "availability": round(availability, 5),
         "latency_p50_ms": round(_percentile(latencies, 50.0), 1),
         "latency_p95_ms": round(p95, 1),
-        "targets_configured": bool(avail_target is not None or p95_target is not None),
+        "targets_configured": targets_configured,
         "breaches": breaches,
         "verdict": "FAIL" if breaches else "PASS",
     }
@@ -97,8 +113,10 @@ def main(argv: List[str] | None = None) -> int:
             fh.write(line + "\n")
     print(line)
 
-    # No targets configured is report-only (owner hasn't set the SLO yet).
-    if result["breaches"]:
+    # No targets configured is report-only (owner hasn't set the SLO yet);
+    # zero samples pages regardless, because the probe could not reach the
+    # service at all.
+    if result["verdict"] == "NO_SAMPLES" or result["breaches"]:
         return 1
     return 0
 

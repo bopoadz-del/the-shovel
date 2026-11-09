@@ -116,3 +116,34 @@ def test_main_writes_verdict_json(monkeypatch, tmp_path, statuses):
     verdict = json.loads(out.read_text())
     assert verdict["samples"] == len(statuses)
     assert verdict["availability"] == round(sum(1 for s in statuses if s == 200) / len(statuses), 5)
+
+
+@pytest.mark.parametrize(
+    "samples",
+    [
+        [],                                            # no samples -> NO_SAMPLES
+        [{"status": 200, "latency_ms": 50.0}],        # one sample -> not NO_SAMPLES
+    ],
+)
+def test_evaluate_empty_vs_present_samples_verdict(monkeypatch, samples):
+    monkeypatch.delenv("SLO_AVAILABILITY", raising=False)
+    monkeypatch.delenv("SLO_LATENCY_P95_MS", raising=False)
+    out = slo_probe.evaluate(samples)
+    assert out["verdict"] == ("NO_SAMPLES" if not samples else "PASS")
+    assert out["samples"] == len(samples)
+
+
+def test_main_zero_samples_writes_no_samples_report_and_exits_nonzero(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.delenv("SLO_AVAILABILITY", raising=False)
+    monkeypatch.delenv("SLO_LATENCY_P95_MS", raising=False)
+    samples = tmp_path / "samples.json"
+    out = tmp_path / "report.json"
+    samples.write_text(json.dumps({"samples": []}))
+    rc = slo_probe.main(["--json", str(samples), "--out", str(out)])
+    assert rc == 1
+    verdict = json.loads(out.read_text())
+    assert verdict["verdict"] == "NO_SAMPLES"
+    assert verdict["samples"] == 0
+    assert verdict["breaches"] == []
