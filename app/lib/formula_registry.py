@@ -520,6 +520,12 @@ def _unit_rejection(spec: ParamSpec, value: Any, reason: str, **extra: Any) -> D
 # Declared units that carry no dimension: a figure in them is a plain number.
 _DIMENSIONLESS = frozenset({"count", "ratio"})
 
+#: Dimensions that measure an amount of work/material. A "count" input here
+#: means "units of work, as per the rate" (m2 of blockwork, m3 of concrete),
+#: so a stated measurement in one of these is accepted and carried through.
+#: Any other written dimension (a force, a time, a fraction, ...) is refused.
+_COUNTABLE_MEASURES = frozenset({"count", "length", "area", "volume", "mass"})
+
 
 def convert_figure(spec: ParamSpec, number: float, unit: str,
                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -531,14 +537,26 @@ def convert_figure(spec: ParamSpec, number: float, unit: str,
     shown = f"{written_number(number)} {unit}"
     declared, written = parse_unit(spec.unit), parse_unit(unit)
     dimensionless = declared is not None and declared.dimension in _DIMENSIONLESS
+    carries_measure = (
+        declared is not None and declared.dimension == "count"
+        and written is not None and written.dimension in _COUNTABLE_MEASURES
+    )
     if declared is None or (dimensionless and (written is None or written.dimension
-                                                in (declared.dimension, "fraction"))):
+                                                in (declared.dimension, "fraction")
+                                                or carries_measure)):
         # No unit of its own: a count, a ratio, a factor, or a figure in
         # whatever unit its companions use. The written number stands (an
-        # unrecognised word after a count names what is counted; a known
-        # unit of another kind, "5 m" for a count, is refused below); a
+        # unrecognised word after a count names what is counted); a count
+        # that states a measurable unit ("1,200 m3", "350 m2") carries that
+        # unit through so the answer keeps what was measured. A unit of a
+        # non-measurable kind ("5 kN" for a count) is refused below. A
         # percentage only becomes a fraction for an input whose range is a
         # fraction.
+        if carries_measure:
+            return {"value": number,
+                    "conversion": {"parameter": spec.name, "value_in": number,
+                                   "from_unit": unit, "to_unit": unit, "value_out": number,
+                                   "note": "count carries the stated unit"}}
         if (written is not None and written.dimension == "fraction"
                 and spec.hi is not None and spec.hi <= 1):
             value = number * written.scale

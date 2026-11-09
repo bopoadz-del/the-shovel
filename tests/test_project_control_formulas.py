@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.hats.planning.formulas.project_control import crew_sizing
+from app.lib import construction_formulas as cf
 
 
 @pytest.mark.parametrize("qty,days,rate,hours,want_crews,up,crew_days,mh", [
@@ -30,6 +31,23 @@ def test_crew_sizing_agrees(qty, days, rate, hours, want_crews, up, crew_days, m
 def test_crew_sizing_duration_for_crews(qty, rate, crew, days):
     out = crew_sizing(qty, 15.0, rate, 10.0, crew_size=crew)
     assert out["duration_for_crews"] == pytest.approx(days, abs=0.01)
+
+
+@pytest.mark.parametrize("qty,days,rate,want_crews,want_unit", [
+    # thousands separator in the quantity, "1,200 m3" at 8 m3/crew-day over 30 days
+    ("1,200 m3", 30, 8.0, 5.0, "m3"),
+    # decimal quantity, "350.5 m2" at 20 m2/crew-day over 10 days
+    ("350.5 m2", 10, 20.0, 1.7525, "m2"),
+])
+def test_crew_sizing_accepts_a_unit_bearing_quantity(qty, days, rate, want_crews, want_unit):
+    out = cf.run_calculation("crew_sizing", {
+        "quantity": qty, "duration_days": days, "rate_per_crew_day": rate,
+    })
+    assert out["status"] == "success", out
+    assert out["result"]["crews_required"] == pytest.approx(want_crews, abs=0.001)
+    # the stated unit is carried through, not dropped
+    conv = {c["parameter"]: c for c in out.get("conversions", [])}
+    assert conv["quantity"]["from_unit"] == want_unit, out
 
 
 from app.agents.hats.planning.formulas.project_control import progress_kpi
