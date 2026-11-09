@@ -188,24 +188,23 @@ def _construction_calc_declares_source(text: str) -> bool:
     "owner-supplied ... unverified"). Either is a source the answer may cite,
     so the gate must not treat the turn as having read nothing and strip it.
     """
-    if not text:
-        return False
     try:
-        data = json.loads(text)
+        data = json.loads(text or "")
     except (json.JSONDecodeError, TypeError, ValueError):
+        _LOG.debug(
+            "construction_calc result is not parseable JSON; no declared source",
+            exc_info=True,
+        )
         return False
-    if not isinstance(data, dict):
-        return False
-    standard = data.get("standard")
-    if isinstance(standard, str) and standard.strip() and standard.strip() != "none declared":
-        return True
-    result = data.get("result")
-    if isinstance(result, dict):
-        for key in ("provenance", "source", "reference", "standard", "code"):
-            value = result.get(key)
-            if isinstance(value, str) and value.strip():
-                return True
-    return False
+    envelope = data if isinstance(data, dict) else {}
+    standard = envelope.get("standard")
+    result = envelope.get("result")
+    provenance = result.get("provenance") if isinstance(result, dict) else None
+    declares_standard = (
+        isinstance(standard, str) and standard.strip() not in ("", "none declared")
+    )
+    declares_provenance = isinstance(provenance, str) and provenance.strip()
+    return declares_standard or declares_provenance
 
 
 @dataclass

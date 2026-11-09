@@ -39,6 +39,13 @@ def test_a_calculator_with_a_declared_standard_keeps_its_source_citation():
     assert "owner-supplied project-control template" in out, out
 
 
+def test_a_reference_table_calc_keeps_its_provenance_citation():
+    msgs = _calc_messages("productivity_benchmark", {"work_item": "blockwork walls"})
+    answer = "Blockwork: 12 m2/crew-day.\n\nSource: owner-supplied planner template, unverified."
+    out = gate(answer, None, msgs)
+    assert "owner-supplied planner template" in out, out
+
+
 def test_a_bare_calculation_still_strips_an_invented_attribution():
     msgs = _calc_messages("dewatering_uplift_check",
                           {"water_depth": 23, "raft_thickness": 2,
