@@ -13,25 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core import file_crypto
-from app.core import projects as projects_mod
-import app.core.doc_index  # noqa: F401  dotted token so CI-M selects this file
-
-
-@pytest.fixture
-def fresh_db(tmp_path, monkeypatch):
-    """Isolated DATA_DIR + fresh projects DB for each test."""
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
-    monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
-    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
-    monkeypatch.setattr(projects_mod, "_initialized", False)
-    projects_mod.init_db()
-    from app.core.rag import vector_store as _vs, embeddings as _emb
-    _emb.reset_embedder_cache()
-    _vs.reset_store_cache()
-    return tmp_path
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # _ocr_flags_for: the per-chunk mapping rule
@@ -100,7 +81,8 @@ def test_row_as_chunk_hydrates_ocr(stored_ocr):
     ([1], [True, False]),
     ([2], [False, True]),
 ])
-def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch, ocr_pages, expected):
+def test_index_project_passes_ocr_flags_to_rag(tmp_path, monkeypatch, ocr_pages, expected):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
     from app.core import doc_index
     importlib.reload(doc_index)
     from app.core.rag import retriever as retriever_mod
@@ -113,6 +95,16 @@ def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch, 
 
     monkeypatch.setattr(retriever_mod, "index_chunks", fake_index_chunks)
     monkeypatch.setattr(
+        doc_index._projects, "list_documents",
+        lambda pid: [{
+            "id": "doc-1",
+            "original_name": "scan.pdf",
+            "uploaded_at": "t",
+            "size": 13,
+            "file_path": str(tmp_path / "scan.pdf"),
+        }],
+    )
+    monkeypatch.setattr(
         doc_index, "_extract_with_meta",
         lambda fp, fn, *a, **k: ("scanned text", {"ocr_page_numbers": ocr_pages}),
     )
@@ -120,17 +112,14 @@ def test_index_project_passes_ocr_flags_to_rag(fresh_db, tmp_path, monkeypatch, 
         doc_index, "_text_chunks_with_pages",
         lambda text, meta, chunker, fn: (["chunk a", "chunk b"], [1, 2]),
     )
+    monkeypatch.setattr(doc_index, "_boq_chunks_for_document", lambda *a, **k: [])
+    monkeypatch.setattr(doc_index, "_drawing_chunks_for_document", lambda *a, **k: [])
 
-    pid = projects_mod.create_project("OCR flags to RAG")["id"]
-    p = str(tmp_path / "scan.pdf")
-    file_crypto.write_document(p, b"%PDF-1.4 scan")
-    doc = projects_mod.add_document(pid, "scan.pdf", file_path=p, size=13)
-
-    doc_index.index_project(pid)
+    doc_index.index_project("pid")
 
     assert captured, "index_chunks was never called"
     doc_id, flags = captured[0]
-    assert doc_id == doc["id"]
+    assert doc_id == "doc-1"
     assert flags[:2] == expected
 
 

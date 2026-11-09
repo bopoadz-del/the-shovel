@@ -23,7 +23,6 @@ import pytest
 
 from app.core import file_crypto
 from app.core import projects as projects_mod
-import app.core.doc_index  # noqa: F401  dotted token so CI-M selects this file
 
 
 # ────────────────────────────────────────────────────────────────────────────

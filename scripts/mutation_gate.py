@@ -136,13 +136,43 @@ def module_tokens(path: str, src_roots: Sequence[str], repo: Path | None = None)
     return [".".join(parts)] if parts else []
 
 
+def _module_refs(text: str, tok: str) -> bool:
+    """True when ``text`` references module ``tok`` by dotted name or by any
+    import form: ``import a.b.c``, ``from a.b.c import``, or the submodule
+    import ``from a.b import c`` (and ``... as alias``)."""
+    leaf = tok.split(".")[-1]
+    if tok in text:
+        return True
+    if re.search(rf"\bimport\s+{re.escape(tok)}\b", text):
+        return True
+    if re.search(rf"\bfrom\s+{re.escape(tok)}\s+import\b", text):
+        return True
+    pkg = tok.rsplit(".", 1)[0]
+    if pkg and re.search(rf"\bfrom\s+{re.escape(pkg)}\s+import\s+[^\r\n#]*\b{re.escape(leaf)}\b", text):
+        return True
+    return False
+
+
 def tests_for(path: str, fn_name: str, repo: Path, test_roots: Sequence[str], src_roots: Sequence[str]) -> list[str]:
+    """Test files that can kill a mutant of ``fn_name``.
+
+    A killer must name the function (word boundary) AND reference its module
+    (dotted path or any import form). Naming the function stops a hot module
+    (``vector_store``, ``doc_index``) from matching every file that merely
+    imports it -- which ran nearly the whole suite per mutant and blew the
+    job ceiling on a change to those modules. No killer is dropped: a test
+    that imports the module but never names the function cannot fail a
+    mutant of that function's body either way.
+    """
     toks = module_tokens(path, src_roots, repo)
+    fn_re = re.compile(rf"\b{re.escape(fn_name)}\b")
     hits = []
     for root in test_roots:
         for t in sorted((repo / root).rglob("test_*.py")):
             text = t.read_text("utf-8", "replace")
-            if any(tok and tok in text for tok in toks) and re.search(rf"\b{re.escape(fn_name)}\b", text) or any(tok and re.search(rf"import {re.escape(tok)}\b|from {re.escape(tok)} import", text) for tok in toks):
+            if not fn_re.search(text):
+                continue
+            if any(_module_refs(text, tok) for tok in toks):
                 hits.append(str(t.relative_to(repo)))
     return list(dict.fromkeys(hits))
 
