@@ -104,11 +104,11 @@ def panel(
     seen, out = set(), []
     for h in hits:
         doc_id = str(h.get("document_id") or h.get("doc_id") or "")
-        name = _hit_name(h) or doc_id
+        layer = str(h.get("origin") or h.get("layer") or "own")
+        name = _display_name(h, layer) or doc_id
         if not name or (doc_id or name) in seen:
             continue
         seen.add(doc_id or name)
-        layer = str(h.get("origin") or h.get("layer") or "own")
         score = float(h.get("score") or 0.0)
         out.append({
             "doc_id": doc_id,
@@ -165,6 +165,23 @@ def _hit_name(hit: Dict[str, Any]) -> str:
     """What a reader calls a passage's document: its title when the hit
     carries one, then its source label, then the stored file name."""
     for key in ("title", "source_label", "original_name", "filename", "doc_name"):
+        value = str(hit.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _display_name(hit: Dict[str, Any], layer: str) -> str:
+    """The name the Sources panel shows for a hit.
+
+    A user's own document keeps the name its owner gave it
+    (``original_name`` / ``filename``), never a content-derived title.
+    A curated library file (general_knowledge) is titled by its content,
+    so ``title`` wins there and ``library_title`` cleans it up afterward.
+    """
+    if layer in LIBRARY_LAYERS:
+        return _hit_name(hit)  # title first
+    for key in ("original_name", "filename", "source_label", "title", "doc_name"):
         value = str(hit.get(key) or "").strip()
         if value:
             return value
