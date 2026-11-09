@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
+      is_draft: ${{ steps.diff.outputs.is_draft }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,10 +47,18 @@ jobs:
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
+          # CI runs the full suite once per PR, on the READY state. A draft
+          # PR runs only the fast checks (fast.yml); the heavy jobs below are
+          # skipped while the PR is a draft and run once it is marked ready.
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "is_draft=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_draft=false" >> "$GITHUB_OUTPUT"
+          fi
 
   test:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
     runs-on: ubuntu-latest
     # Hard cap: a healthy run finishes far sooner; anything longer is a hang,
     # and GitHub's default cap is 6 HOURS of billed minutes per hung job.
@@ -269,7 +278,7 @@ jobs:
     # this replaces -- none skipped, none optional.
     name: test-postgres (shard ${{ matrix.shard }}/4)
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
     runs-on: ubuntu-latest
     # Same hard cap as the matrix job. This job was the 6h0m zombie in every
     # stuck run on 2026-07-05 (hung inside "Run tests (PostgreSQL)").
@@ -390,7 +399,7 @@ jobs:
     # required check) needs this job.
     name: test-timing (PostgreSQL, alone)
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -470,7 +479,7 @@ jobs:
     name: test-postgres
     runs-on: ubuntu-latest
     needs: [changes, test-postgres-shard, test-timing]
-    if: always() && needs.changes.outputs.docs_only != 'true'
+    if: always() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
     timeout-minutes: 10
     steps:
       - name: Every shard passed

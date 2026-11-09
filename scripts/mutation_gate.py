@@ -336,6 +336,31 @@ def _test_fns(src: str) -> dict[str, ast.FunctionDef]:
     return out
 
 
+def targeted_tests(repo: Path, base: str, src_roots: Sequence[str], test_roots: Sequence[str]) -> list[str]:
+    """Union of test files that reference any function changed in base...HEAD.
+
+    This is the FAST-path selection (draft PRs): run the tests that actually
+    exercise the changed code, without the full suite or the mutants. A changed
+    source function with no referencing test is simply not selected here -- the
+    ready-state mutation gate is what fails an uncovered function, not this
+    fast selector.
+    """
+    hits: set[str] = set()
+    for path, lines in sorted(changed_lines(base, repo, src_roots).items()):
+        file = repo / path
+        if not file.is_file() or is_test_file(path):
+            continue
+        try:
+            tree = ast.parse(file.read_text("utf-8"))
+        except SyntaxError:
+            # An unparsable changed file is surfaced by the ready-state gates;
+            # the fast path just has nothing to target from it.
+            continue
+        for fname in dict.fromkeys(f.name for f in functions_touching(tree, lines)):
+            hits.update(tests_for(path, fname, repo, test_roots, src_roots))
+    return sorted(hits)
+
+
 def lint_two_inputs(repo: Path, base: str, test_roots: Sequence[str]) -> list[str]:
     bad = []
     names = git("diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD", "--", *test_roots, cwd=repo).split()
@@ -363,8 +388,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--workdir", default=".", help="directory pytest runs from")
     ap.add_argument("--summary", default="")
     ap.add_argument("--pytest-arg", action="append", default=[])
+    ap.add_argument("--lint-only", action="store_true", help="run the two-input test lint and exit")
+    ap.add_argument(
+        "--print-tests", action="store_true", help="print the targeted tests for changed files and exit"
+    )
     a = ap.parse_args(argv)
     repo = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
+
+    if a.lint_only:
+        lint = lint_two_inputs(repo, a.base, a.tests)
+        print(f"Two-input test lint: {len(lint)} new single-input value tests")
+        for t in lint:
+            print(f"FAIL: {t} (needs parametrize with >= 2 distinct inputs)")
+        return 1 if lint else 0
+
+    if a.print_tests:
+        for t in targeted_tests(repo, a.base, a.src, a.tests):
+            print(t)
+        return 0
+
     results = mutation_gate(repo, a.base, a.src, a.tests, a.workdir, a.pytest_arg)
     lint = lint_two_inputs(repo, a.base, a.tests)
     red = [r for r in results if is_red(r.outcome)]
