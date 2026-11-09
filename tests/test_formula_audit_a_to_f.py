@@ -39,6 +39,7 @@ _AUDIT_A_TO_F = [
     "calculate_interim_payment",
     "calculate_payment",
     "carbon_footprint_concrete",
+    "cash_flow",
     "column_axial_capacity",
     "compaction_control",
     "composite_column_design",
@@ -58,6 +59,7 @@ _AUDIT_A_TO_F = [
     "crane_cost_estimate",
     "crane_lift_capacity",
     "crane_planning",
+    "crew_sizing",
     "critical_path_float",
     "cut_fill_balance",
     "delay_damages_daily",
@@ -1033,3 +1035,47 @@ def test_audit_fall_arrest_force():
 
     _err("fall_arrest_force",
          {"worker_mass_kg": 100, "free_fall_m": 1.8, "deceleration_distance_m": 0})
+
+
+# ── cash_flow (project-control A1) ─────────────────────────────────────────
+
+def test_audit_cash_flow():
+    """Contractor cash flow (A1): advance at month 0 recovered pro-rata,
+    retention deducted monthly and released at completion, payments lagged
+    ceil(lag/30) months.
+    Hand: V=[100,100], C=[90,90], 10% / 5% / 15d (lag 1):
+      contract 200, advance 20, retention 10;
+      certified = [100-10-5, 100-10-5+10] = [85, 95];
+      cash_in = [0, 85]; net = [-90, -5]; cum = [20-90, -70-5] = [-70, -75];
+      peak funding 75. A mismatched cost series must error.
+    """
+    r = _ok("cash_flow", {
+        "monthly_value": [100, 100], "monthly_cost": [90, 90],
+        "advance_pct": 0.10, "retention_pct": 0.05, "payment_lag_days": 15,
+    })
+    assert r["contract_value"] == pytest.approx(200.0)
+    assert r["advance_payment"] == pytest.approx(20.0)
+    assert r["retention_total"] == pytest.approx(10.0)
+    assert r["peak_funding_requirement"] == pytest.approx(75.0)
+    assert r["check_advance_recovery"] == pytest.approx(-20.0)
+    assert r["check_retention"] == pytest.approx(-10.0)
+
+    _err("cash_flow", {"monthly_value": [100], "monthly_cost": [90, 90]})
+
+
+# ── crew_sizing (project-control A4) ───────────────────────────────────────
+
+def test_audit_crew_sizing():
+    """Crew sizing (A4): crews = Q / (D * R); crew-days = Q / R;
+    man-hours = crew-days * h; fractional crews rounded UP.
+    Hand: 3000 / (15 * 12) = 16.667 -> 17 crews; 3000/12 = 250 crew-days;
+    * 10 h = 2500 man-hours. A non-positive quantity must error.
+    """
+    r = _ok("crew_sizing", {"quantity": 3000, "duration_days": 15,
+                            "rate_per_crew_day": 12})
+    assert r["crews_required"] == pytest.approx(16.667, abs=0.001)
+    assert r["crews_required_rounded_up"] == 17
+    assert r["crew_days"] == pytest.approx(250.0)
+    assert r["man_hours"] == pytest.approx(2500.0)
+
+    _err("crew_sizing", {"quantity": 0, "duration_days": 15, "rate_per_crew_day": 12})

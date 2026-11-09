@@ -12,6 +12,14 @@ import math
 from app.lib.formula_registry import Param, formula
 
 
+def _series(value) -> list:
+    """A series input as a list; a single figure becomes a one-element
+    series so a user (or a sweep) that gives one number still runs."""
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
 @formula(
     owner="planning",
     display_name="Crew sizing and productivity",
@@ -30,7 +38,7 @@ from app.lib.formula_registry import Param, formula
         "crews_required": "-",
         "crews_required_rounded_up": "-",
         "crew_days": "days",
-        "man_hours": "h",
+        "man_hours": "man-hour",
         "duration_for_crews": "days",
         "identity_check": "-",
     },
@@ -170,8 +178,8 @@ def cash_flow(
     ceil(payment_lag_days / 30) months. advance_pct / retention_pct / lag are
     inputs (10% / 5% / 15 days are only suggested defaults).
     """
-    V = [float(v) for v in (monthly_value or [])]
-    C = [float(c) for c in (monthly_cost or [])]
+    V = [float(v) for v in _series(monthly_value)]
+    C = [float(c) for c in _series(monthly_cost)]
     if not V:
         return {"error": "monthly_value must be a non-empty series."}
     if len(C) != len(V):
@@ -234,8 +242,8 @@ def cash_flow(
 def manhours_scurve(planned_mh: list, actual_mh: list) -> dict:
     """Manhours S-curve. Actual is normalised to the PLANNED total, and the
     productivity index is progress earned per manhour."""
-    planned = [float(x) for x in (planned_mh or [])]
-    actual = [float(x) for x in (actual_mh or [])]
+    planned = [float(x) for x in _series(planned_mh)]
+    actual = [float(x) for x in _series(actual_mh)]
     planned_total = sum(planned)
     if planned_total <= 0:
         return {"error": "planned_mh must sum to more than 0."}
@@ -285,9 +293,9 @@ def floor_cycle_progress(
     """Floor-cycle weighting. element_progress = completed/total per element;
     weighted_progress = SUM(element_progress * weight) / SUM(weight). Weights are
     inputs (the template used ~0.9 of an activity complete at a stage)."""
-    comp = [float(x) for x in (completed_units or [])]
-    tot = [float(x) for x in (total_units or [])]
-    wt = [float(x) for x in (weights or [])]
+    comp = [float(x) for x in _series(completed_units)]
+    tot = [float(x) for x in _series(total_units)]
+    wt = [float(x) for x in _series(weights)]
     if not (len(comp) == len(tot) == len(wt)) or not comp:
         return {"error": "completed_units, total_units and weights must be non-empty and equal length."}
     elements = []

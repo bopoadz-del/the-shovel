@@ -523,8 +523,10 @@ _DIMENSIONLESS = frozenset({"count", "ratio"})
 #: Dimensions that measure an amount of work/material. A "count" input here
 #: means "units of work, as per the rate" (m2 of blockwork, m3 of concrete),
 #: so a stated measurement in one of these is accepted and carried through.
-#: Any other written dimension (a force, a time, a fraction, ...) is refused.
-_COUNTABLE_MEASURES = frozenset({"count", "length", "area", "volume", "mass"})
+#: "count" itself is the declared dimension and is handled above without a
+#: conversion; any other written dimension (a force, a time, a fraction, ...)
+#: is refused.
+_COUNTABLE_MEASURES = frozenset({"length", "area", "volume", "mass"})
 
 
 def convert_figure(spec: ParamSpec, number: float, unit: str,
