@@ -59,6 +59,13 @@ def test_a_plan_item_with_zero_evidence_is_missing(plan_text, evidence, missing)
     assert set(missing_plan_items(plan, evidence)) == missing
 
 
+@pytest.mark.parametrize("item", ["the", "and of the"])
+def test_an_empty_term_item_is_not_a_gap(item):
+    # An item whose only words are stopwords carries no signal: not a gap.
+    plan = EvidencePlan("p", (item,))
+    assert missing_plan_items(plan, "any evidence") == ()
+
+
 def test_round_bound_never_allows_round_four():
     assert round_allowed(1) and round_allowed(2) and round_allowed(ROUND_LIMIT)
     assert not round_allowed(ROUND_LIMIT + 1)
