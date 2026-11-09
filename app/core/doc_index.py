@@ -3978,6 +3978,8 @@ def _search_project_documents_sync(
             "filename": _doc_name_for_id(doc_id),
             "chunk": _join_chunk_texts(kept),
             "score": float(kept[0].score or 0.0),
+            # OCR provenance (item 7): true when any kept chunk was OCR-derived.
+            "ocr": any(bool(getattr(c, "ocr", False)) for c in kept),
             # Where this hit actually came from: "own" | "general_knowledge"
             # | "master_corpus". `Chunk.layer` is withheld from the LLM path
             # by design (the chat runtime reads it to phrase its own
@@ -4018,6 +4020,7 @@ def _search_project_documents_sync(
             # the caller — that is exactly how the first attempt at this
             # field shipped as a silent no-op.
             "origin": item.get("origin", "own"),
+            "ocr": bool(item.get("ocr", False)),
         }
         if ocr_flag_by_doc.get(item["document_id"]):
             result_row["ocr_low_quality"] = True
