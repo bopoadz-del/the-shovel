@@ -117,6 +117,18 @@ def test_convert_figure_refuses_a_per_unit_of_another_kind(written):
     assert fr.convert_figure(_spec("currency/day"), 5000.0, written)["rejection"]["reason"] == "unknown_unit"
 
 
+@pytest.mark.parametrize("number,written", [
+    (1200.0, "m3"),
+    (350.0, "m2"),
+])
+def test_convert_figure_carries_a_unit_on_a_count(number, written):
+    """A count with a stated unit names WHAT is counted ("1,200 m3"), so the
+    number stands and the unit is carried to a companion rate's denominator."""
+    out = fr.convert_figure(_spec("count"), number, written)
+    assert out["value"] == pytest.approx(number)
+    assert out["conversion"]["from_unit"] == written
+
+
 @pytest.mark.parametrize("amount,days,total", [
     ("SAR 200 per man hour", 10, 48000.0),
     ("SAR 50 per man hour", 60, 72000.0),
