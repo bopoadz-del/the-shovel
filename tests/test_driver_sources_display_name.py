@@ -88,3 +88,29 @@ def test_panel_library_keeps_title(title, filename):
     rows = sources.panel(_trail([hit]), [])
     assert len(rows) == 1
     assert rows[0]["doc_name"] == title
+
+
+def test_panel_filters_hits_not_quoted_by_the_answer():
+    # A non-empty answer that quotes a fetched document must drop search hits
+    # it did not use. Covers the answer guard in panel() (drop_rule mutant).
+    trail = [
+        {
+            "role": "tool",
+            "name": "fetch_document",
+            "content": json.dumps(
+                {"result": {"filename": "alpha_store.md", "content": "The stored total is 42 m."}}
+            ),
+        },
+        {
+            "role": "tool",
+            "name": "search_project_documents",
+            "content": json.dumps(
+                {"result": {"results": [
+                    {"document_id": "d1", "filename": "beta_store.md",
+                     "snippet": "The contract figure is 100 m.", "score": 0.9, "origin": "own"},
+                ]}}
+            ),
+        },
+    ]
+    rows = sources.panel(trail, [], answer="The stored total is 42 m.")
+    assert [r["doc_name"] for r in rows] == ["alpha_store.md"]
