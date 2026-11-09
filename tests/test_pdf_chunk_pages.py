@@ -236,6 +236,43 @@ def test_migration_0021_adds_page_to_every_chunk_table_once(tmp_path):
     assert "page" not in {c["name"] for c in insp.get_columns("chunks_notes")}
 
 
+def test_migration_0033_adds_ocr_to_every_chunk_table_once(tmp_path):
+    import importlib.util
+    import pathlib
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    path = (pathlib.Path(__file__).resolve().parents[1]
+            / "alembic" / "versions" / "0033_chunks_ocr_flag.py")
+    spec = importlib.util.spec_from_file_location("m0033", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.revision == "0033" and mod.down_revision == "0032"
+
+    eng = sa.create_engine(f"sqlite:///{tmp_path / 'mig033.db'}")
+    with eng.begin() as conn:
+        # ``chunks`` already carries ``ocr`` (the 0001 unified schema ships
+        # it) — 0033 must leave it alone, not ADD COLUMN a duplicate.
+        conn.execute(sa.text(
+            "CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY, doc_id TEXT, "
+            "chunk_index INTEGER, text TEXT, ocr BOOLEAN NOT NULL DEFAULT FALSE)"))
+        conn.execute(sa.text(
+            "CREATE TABLE chunks_v2 (chunk_id TEXT PRIMARY KEY, doc_id TEXT, "
+            "chunk_index INTEGER, text TEXT)"))
+        conn.execute(sa.text("CREATE TABLE chunks_notes (note TEXT)"))
+    for _ in range(2):  # idempotent
+        with eng.begin() as conn:
+            ctx = MigrationContext.configure(conn)
+            with Operations.context(ctx):
+                mod.upgrade()
+    insp = sa.inspect(eng)
+    for tbl in ("chunks", "chunks_v2"):
+        assert "ocr" in {c["name"] for c in insp.get_columns(tbl)}
+    assert "ocr" not in {c["name"] for c in insp.get_columns("chunks_notes")}
+
+
 # ── citations ────────────────────────────────────────────────────────────────
 
 
