@@ -117,3 +117,5 @@ python-magic>=0.4.27
 # container builds (Render, Docker) skip it instead of failing with
 # "No matching distribution found for pywin32".
 pywin32==312; platform_system == "Windows"
+dnspython>=2.6
+

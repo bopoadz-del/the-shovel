@@ -8,6 +8,7 @@ import Landing from './pages/Landing'
 import Projects from './pages/Projects'
 import ProjectWorkspace from './pages/ProjectWorkspace'
 import AdminPage from './pages/AdminPage'
+import Support from './pages/Support'
 import { ThemeProvider } from './theme/ThemeContext'
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
             <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/welcome" element={<Landing />} />
+            <Route path="/support" element={<Support />} />
             <Route
               path="/"
               element={
