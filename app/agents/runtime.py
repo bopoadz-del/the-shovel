@@ -12646,13 +12646,18 @@ async def select_agent_for_message(
                 return sc, info
         info["reason"] = "below_routing_gate"
         if _message_has_content_term(user_message):
-            # No action matched, but the ask still names a subject: the
-            # assistant should retrieve the project's documents FIRST and
-            # answer (or ask) from the evidence, not ask into the void.
-            # Emitted as an SSE routing field AND set on the per-turn context
-            # so rag_inject (in this task's worker thread) honours it.
-            info["retrieve_first"] = True
-            retrieve_first_ctx.set(True)
+            from app.agents import driver
+            if not driver.enabled():
+                # No action matched, but the ask still names a subject: the
+                # assistant should retrieve the project's documents FIRST and
+                # answer (or ask) from the evidence, not ask into the void.
+                # Emitted as an SSE routing field AND set on the per-turn context
+                # so rag_inject (in this task's worker thread) honours it.
+                # In driver mode the model drives the turn and reaches knowledge
+                # through its own tools (no auto-injection), so retrieve-first
+                # does not apply there - never cancel/restart a driver loop.
+                info["retrieve_first"] = True
+                retrieve_first_ctx.set(True)
         return requested_agent, info
 
     if requested_agent.name not in ROUTING_GENERALISTS:
