@@ -7,6 +7,8 @@ project's own documents or asks for it.
 """
 from __future__ import annotations
 
+import re
+
 from app.lib.formula_registry import Param, formula
 
 _BENCHMARK_PROVENANCE = (
@@ -32,7 +34,23 @@ _PRODUCTIVITY_BENCHMARKS = [
     ("ceiling painting common areas", "m2", "painter", 40.0, "painting rate at the low end of the usual GCC range"),
 ]
 
-_BENCHMARK_KEYS = {item: (unit, crew, rate, flag) for item, unit, crew, rate, flag in _PRODUCTIVITY_BENCHMARKS}
+def _normalise_work_item(text: str) -> str:
+    """Canonical lookup form of a work item.
+
+    Case, punctuation, hyphens, parentheses and whitespace do not
+    distinguish one name from another, so "Blockwork (walls)" and
+    "blockwork walls" reach the same row. Applied to both the stored keys
+    and the lookup key; crew strings and flag notes stay as written.
+    """
+    s = str(text or "").lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+
+_BENCHMARK_KEYS = {
+    _normalise_work_item(item): (unit, crew, rate, flag)
+    for item, unit, crew, rate, flag in _PRODUCTIVITY_BENCHMARKS
+}
 
 
 @formula(
@@ -63,7 +81,7 @@ def productivity_benchmark(work_item: str) -> dict:
     "owner-supplied planner template, unverified", and an answer using this
     rate must say so rather than present it as a project figure.
     """
-    key = (work_item or "").strip().lower()
+    key = _normalise_work_item(work_item)
     if key not in _BENCHMARK_KEYS:
         return {
             "work_item": work_item,

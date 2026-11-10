@@ -87,6 +87,20 @@ def test_productivity_benchmark_unknown_item_is_not_invented():
     assert "no benchmark entry" in out["flag"]
 
 
+@pytest.mark.parametrize("item,want_rate", [
+    ("Blockwork (walls)", 12.0),
+    ("Internal-wall plaster", 20.0),
+    ("Ceramic tiles, floors", 40.0),
+    ("Emulsion paint, walls (final coat)", 45.0),
+])
+def test_benchmark_display_name_reaches_its_row(item, want_rate):
+    """A spec display name (parentheses, comma, hyphen, mixed case) reaches
+    the same row as its stored key: case, punctuation, hyphens, parentheses
+    and whitespace do not distinguish two names."""
+    out = productivity_benchmark(item)
+    assert out["rate_per_crew_day"] == want_rate
+
+
 from app.agents.hats.planning.formulas.project_control import cash_flow
 
 
