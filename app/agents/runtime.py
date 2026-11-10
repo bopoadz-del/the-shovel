@@ -875,6 +875,36 @@ async def _rag_inject_off_process(**kwargs: Any):
         return await asyncio.to_thread(rag_inject, **kwargs)
 
 
+def _agentic_figure_retrieval_excluded(text: str) -> bool:
+    """True when a turn is not a project-figure / published-standard ask.
+
+    The asks the deterministic paths already own — formula-style
+    calculations, exports, self-contained arithmetic and self-coding — are
+    excluded so the evidence loop never double-fetches what a locked
+    deliverable or a calculator already answered.
+    """
+    return bool(
+        _message_is_formula_style_ask(text)
+        or _asks_for_export(text)
+        or _looks_like_self_contained_calculation(text)
+        or _asks_self_coding(text)
+    )
+
+
+async def _agentic_figure_retrieval_plan_caller(
+    agent: Any,
+    question: str,
+    api_key: str,
+    project_id: str,
+    user_id: str | None,
+) -> dict[str, Any]:
+    """The plan LLM call the evidence loop uses: one tool-free synthesis."""
+    msgs = [{"role": "user", "content": question}]
+    return await agent._call_llm(
+        msgs, api_key, project_id=project_id, with_tools=False, user_id=user_id,
+    )
+
+
 async def _agentic_figure_retrieval_augment(
     agent: Any,
     user_message: str,
@@ -897,36 +927,38 @@ async def _agentic_figure_retrieval_augment(
         return rag_sys_msg
     from app.core.offload import off_loop
     from app.core.rag import route as _rag_route
-    from app.core.rag.retriever import measured_quantity_kinds, retrieve_with_filter
+    from app.core.rag.retriever import (
+        compose_priced_boq_row,
+        measured_quantity_kinds,
+        retrieve_with_filter,
+    )
     from app.core.rag.vector_store import get_store as _get_store
 
-    def _exclude(text: str) -> bool:
-        return bool(
-            _message_is_formula_style_ask(text)
-            or _asks_for_export(text)
-            or _looks_like_self_contained_calculation(text)
-            or _asks_self_coding(text)
-        )
+    # A priced figure already parseable from the first pass is answered by the
+    # existing no-LLM compose path; retrieval augmentation must not spend an
+    # LLM call on a turn the excerpts already cover.
+    if compose_priced_boq_row(user_message, rag_sys_msg.get("content", "")):
+        return rag_sys_msg
 
     if not _rag_route.wants_agentic_figure_retrieval(
         user_message,
         asks_measured_quantity=measured_quantity_kinds,
-        exclude=_exclude,
+        exclude=_agentic_figure_retrieval_excluded,
     ):
         return rag_sys_msg
 
-    async def _plan_caller(question: str) -> dict[str, Any]:
-        msgs = [{"role": "user", "content": question}]
-        return await agent._call_llm(
-            msgs, api_key, project_id=project_id, with_tools=False, user_id=user_id,
-        )
+    from functools import partial
+    plan_caller = partial(
+        _agentic_figure_retrieval_plan_caller,
+        agent, api_key=api_key, project_id=project_id, user_id=user_id,
+    )
 
     store = _get_store()
     augmented = await _rag_route.augment_figure_retrieval(
         question=user_message,
         project_id=project_id,
         first_pass_evidence=rag_sys_msg.get("content", ""),
-        plan_caller=_plan_caller,
+        plan_caller=plan_caller,
         retrieve_fn=retrieve_with_filter,
         bm25_fn=store.bm25_search,
         run_sync=off_loop,

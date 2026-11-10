@@ -103,6 +103,45 @@ async def test_route_seam_returns_zero_rounds_when_covered(plan_text, initial):
     assert outcome.missing == ()
 
 
+@pytest.mark.parametrize("plan_text,initial", [
+    ("bulk excavation, blinding", "bulk excavation 75 mm blinding to slab"),
+    ("formwork, painting", "formwork and painting quantities"),
+])
+async def test_route_seam_never_runs_the_loop_when_covered(plan_text, initial):
+    calls = []
+
+    async def _run_sync(fn, *args, **kwargs):
+        calls.append(fn.__name__)
+        return fn(*args, **kwargs)
+
+    outcome = await run_project_figure_retrieval(
+        question="what are the quantities?",
+        plan_caller=lambda q: _plan_caller(plan_text),
+        retrieve_fn=_fake_retrieve({}),
+        bm25_fn=_fake_bm25({}),
+        project_id="p",
+        first_pass_evidence=initial,
+        run_sync=_run_sync,
+    )
+    assert calls == []
+    assert outcome.rounds == 0
+
+
+@pytest.mark.parametrize("sheets", [
+    {"S1": [["Code", "Description"], ["A1", "excavation"]]},
+    {"WBS": [["item", "amount"], ["B2", "500"]]},
+])
+def test_build_actions_adds_structural_action_when_sheets_are_supplied(sheets):
+    actions = build_actions(
+        retrieve_fn=_fake_retrieve({}),
+        bm25_fn=_fake_bm25({}),
+        project_id="p",
+        sheets=sheets,
+        headers=next(iter(sheets.values())),
+    )
+    assert len(actions) == 3
+
+
 @pytest.mark.parametrize("plan_text,initial,item_fill", [
     ("bulk excavation, blinding", "bulk excavation only",
      {"blinding": "75 mm blinding to concrete"}),

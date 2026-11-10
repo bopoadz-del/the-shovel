@@ -63,6 +63,18 @@ def test_excluded_ask_does_not_trigger(message):
     )
 
 
+@pytest.mark.parametrize("message", [
+    "what is the standard rate for blockwork walls",
+    "how much productivity should I allow for wall plaster",
+])
+def test_excluded_figure_ask_does_not_trigger(message):
+    assert not wants_agentic_figure_retrieval(
+        message,
+        asks_measured_quantity=_asks_measured_false,
+        exclude=lambda t: "rate" in t.lower() or "productivity" in t.lower(),
+    )
+
+
 def _chunk(text):
     from types import SimpleNamespace
     return SimpleNamespace(text=text)
