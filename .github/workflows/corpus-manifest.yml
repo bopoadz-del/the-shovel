@@ -1,0 +1,178 @@
+# Build the P2 Drive source manifest (SPEC_CORPUS_FINAL_BUILD_10NOV) as a
+# one-off ECS task, off the laptop. Read-only: walks Drive and emits a manifest
+# JSON + gate numbers; nothing writes to the corpus.
+#
+# Runs scripts/p1a_drive_manifest.py on the existing `the-fork-ingest` task
+# definition (which already carries GDRIVE_SERVICE_ACCOUNT_JSON) by overriding
+# WORKER_COMMAND. The manifest is gzip+base64-chunked to stdout and
+# reconstructed here from CloudWatch Logs, then shipped as a CI artifact with
+# the gate numbers in the step summary (same transport as project-inventory.yml
+# + the artifact step of project-reindex.yml). No folder id is committed here.
+name: corpus-manifest
+
+on:
+  workflow_dispatch:
+    inputs:
+      folder_ids:
+        description: "Comma-separated Drive folder ids to walk (no default committed)"
+        required: true
+        type: string
+      classify_pdfs:
+        description: "Download and sample PDFs to split TEXT from SCANNED_IMAGE"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  TASK_FAMILY: the-fork-ingest
+  SERVICE_FOR_NETWORK: the-fork-ingest
+  LOG_GROUP: /ecs/the-fork-ingest
+
+jobs:
+  manifest:
+    name: build Drive manifest (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate folder ids
+        env:
+          FOLDER_IDS: ${{ inputs.folder_ids }}
+        run: |
+          set -euo pipefail
+          ids=$(printf '%s' "$FOLDER_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$')
+          [ -n "$ids" ] || { echo "::error::no folder ids provided"; exit 1; }
+          for id in $ids; do
+            case "$id" in
+              *[!A-Za-z0-9_-]*) echo "::error::invalid folder id: '$id'"; exit 1 ;;
+            esac
+          done
+          echo "folder ids accepted: $ids"
+
+      - name: Run the manifest task
+        id: run
+        env:
+          FOLDER_IDS: ${{ inputs.folder_ids }}
+          CLASSIFY: ${{ inputs.classify_pdfs }}
+        run: |
+          set -euo pipefail
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_FOR_NETWORK" \
+            --query 'services[0].networkConfiguration' --output json)
+          if [ "$netcfg" = "null" ] || [ -z "$netcfg" ]; then
+            echo "::error::no network configuration on $SERVICE_FOR_NETWORK"; exit 1
+          fi
+          container=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition.containerDefinitions[0].name' --output text)
+          cmd="python scripts/p1a_drive_manifest.py --emit-stdout --output /app/data/manifests/p1a_drive_manifest.json"
+          if [ "$CLASSIFY" = "true" ]; then cmd="$cmd --classify-pdfs"; fi
+          overrides=$(jq -cn --arg c "$container" --arg cmd "$cmd" --arg ids "$FOLDER_IDS" \
+            '{containerOverrides:[{name:$c, environment:[
+              {name:"WORKER_COMMAND",value:$cmd},
+              {name:"MANIFEST_FOLDER_IDS",value:$ids}
+            ]}]}')
+          arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_FAMILY" \
+            --launch-type FARGATE --count 1 \
+            --network-configuration "$netcfg" \
+            --overrides "$overrides" \
+            --started-by "corpus-manifest:${{ github.run_id }}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+          echo "task-id=${arn##*/}" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the task to stop
+        run: |
+          set -euo pipefail
+          arn="${{ steps.run.outputs.arn }}"
+          for i in $(seq 1 90); do
+            if aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null; then
+              break
+            fi
+            echo "still running ($i)"
+            sleep 20
+          done
+          aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].{status:lastStatus,stoppedReason:stoppedReason,exit:containers[0].exitCode}' \
+            --output table
+          code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "container exit code: $code"
+          test "$code" = "0"
+
+      - name: Reconstruct manifest from task stdout
+        env:
+          CONTAINER: ${{ steps.run.outputs.container }}
+          TASK_ID: ${{ steps.run.outputs.task-id }}
+        run: |
+          set -euo pipefail
+          stream="ecs/$CONTAINER/$TASK_ID"
+          # Fresh task => fresh log stream; read from its head. A short retry
+          # covers the flush lag between task-stop and log availability.
+          for i in $(seq 1 5); do
+            aws logs get-log-events --log-group-name "$LOG_GROUP" \
+              --log-stream-name "$stream" --start-from-head \
+              --query 'events[].message' --output text > logs.txt && \
+              grep -q '^MANIFEST_PAYLOAD_END' logs.txt && break
+            sleep 5
+          done
+          grep '^MANIFEST_GATE: ' logs.txt | head -1 | sed 's/^MANIFEST_GATE: //' > gate.json
+          awk '/^MANIFEST_PAYLOAD_BEGIN$/{f=1;next} /^MANIFEST_PAYLOAD_END$/{f=0} f' logs.txt \
+            | tr -d '\r\n' | base64 -d | gzip -d > manifest.json
+          jq '.' manifest.json > /dev/null
+          echo "manifest rows: $(jq '[.folders[].files[]] | length' manifest.json)"
+
+      - name: Gate numbers -> step summary
+        if: always()
+        run: |
+          if [ ! -s gate.json ]; then
+            echo "::warning::no gate summary captured from the task"
+            exit 0
+          fi
+          {
+            echo "## corpus-manifest gate"
+            echo '```json'
+            jq . gate.json
+            echo '```'
+            echo "- rows: $(jq -r .rows gate.json)"
+            echo "- drive_file_count: $(jq -r .drive_file_count gate.json)"
+            echo "- not_exactly_one_class: $(jq -r .not_exactly_one_class gate.json)"
+            echo "  - TEXT: $(jq -r '.classes.TEXT' gate.json)"
+            echo "  - SPREADSHEET: $(jq -r '.classes.SPREADSHEET' gate.json)"
+            echo "  - SCANNED_IMAGE: $(jq -r '.classes.SCANNED_IMAGE' gate.json)"
+            echo "  - NON_TEXT: $(jq -r '.classes.NON_TEXT' gate.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare scanned_images artifact
+        if: always()
+        run: |
+          if [ -s manifest.json ]; then
+            jq '{scanned_images: .scanned_images}' manifest.json > scanned_images.json
+          else
+            echo '{"scanned_images": []}' > scanned_images.json
+          fi
+
+      - name: Upload manifest artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-manifest
+          path: |
+            manifest.json
+            scanned_images.json
+          if-no-files-found: ignore
+          retention-days: 7

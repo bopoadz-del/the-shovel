@@ -665,6 +665,63 @@ def _quarantine_index_result(
     }
 
 
+def pdf_has_text_layer(
+    file_path: str,
+    *,
+    sample_pages: int = 5,
+) -> bool:
+    """Whether a PDF carries a digital text layer on a sampled page set.
+
+    Discovery-time companion to ``ingest_status.classify_source_document``: a
+    scanned / image-only PDF has NO text layer, so ``fitz`` ``get_text()`` is
+    empty on every sampled page. Sample a deterministic spread across the file
+    (first, last, and evenly spaced pages in between) rather than only the
+    head, so a text cover page in front of a scanned body cannot make the
+    whole file look digital. Returns True as soon as any sampled page yields
+    non-whitespace text; False only when every sampled page is empty (or the
+    file has no pages / cannot be opened).
+
+    Never raises: an unreadable PDF reports no text layer, which routes it to
+    the owner's SCANNED_IMAGE list rather than into the corpus.
+    """
+    import fitz  # PyMuPDF
+
+    try:
+        with file_crypto.open_plaintext(file_path) as readable_path:
+            doc = fitz.open(readable_path)
+            try:
+                total = int(getattr(doc, "page_count", 0) or 0)
+                for index in _sample_page_indices(total, sample_pages):
+                    if (doc[index].get_text() or "").strip():
+                        return True
+                return False
+            finally:
+                doc.close()
+    except Exception:
+        logger.warning(
+            "pdf_has_text_layer: unreadable PDF %s treated as no text layer",
+            file_path,
+        )
+        return False
+
+
+def _sample_page_indices(total: int, count: int) -> list[int]:
+    """Deterministic page spread across ``total`` pages, up to ``count``.
+
+    Always includes the first and last page when there are at least two pages;
+    evenly spaces the rest in between. Fewer pages than ``count`` returns every
+    page. Zero or negative counts return no pages.
+    """
+    if count == 1:
+        return [0] if total > 0 else []
+    if total <= 0 or count <= 0:
+        return []
+    if total <= count:
+        return list(range(total))
+    step = (total - 1) / (count - 1)
+    return sorted({min(total - 1, round(i * step)) for i in range(count)})
+
+
 def _extract_pdf(
     file_path: str,
     filename: str = "",

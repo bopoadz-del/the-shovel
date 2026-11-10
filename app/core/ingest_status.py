@@ -337,6 +337,16 @@ _SPREADSHEET_EXTS = frozenset({".xls", ".xlsx"})
 # separate F-DWG campaign, so they are marked recoverable, not terminal.
 RECOVERABLE_EXTS = frozenset({".dwg", ".dxf"})
 
+# ── source-file classification (SPEC_CORPUS_FINAL_BUILD_10NOV P2) ───────────
+# Discovery-time classes assigned to every file the Drive walk enumerates,
+# BEFORE extraction and with no knowledge of chunk counts. These are manifest
+# classes, NOT ingest_status values: a SCANNED_IMAGE is dropped from the corpus
+# (listed for the owner), never OCR-rescued and never retried.
+SOURCE_CLASS_TEXT = "TEXT"
+SOURCE_CLASS_SPREADSHEET = "SPREADSHEET"
+SOURCE_CLASS_SCANNED_IMAGE = "SCANNED_IMAGE"
+SOURCE_CLASS_NON_TEXT = "NON_TEXT"
+
 # ── density gate ─────────────────────────────────────────────────────────────
 # Calibrated on 10 known-sparse drawing sheets vs 10 known-rich text PDFs from
 # the live corpus. The measurement overturned the obvious design:
@@ -378,6 +388,41 @@ def _normalize_ext(extension: str | None) -> str:
     if ext and not ext.startswith("."):
         ext = "." + ext
     return ext
+
+
+def classify_source_document(
+    extension: str | None,
+    *,
+    has_text_layer: bool | None = None,
+) -> str:
+    """Assign exactly one discovery-time class to a source file.
+
+    Returns one of ``SOURCE_CLASS_TEXT`` / ``SOURCE_CLASS_SPREADSHEET`` /
+    ``SOURCE_CLASS_SCANNED_IMAGE`` / ``SOURCE_CLASS_NON_TEXT``. The decision
+    is made on the file's extension plus, for PDFs only, whether a sampled
+    page set carries any digital text layer. It never consults chunk counts,
+    so it can run on the Drive manifest before a single byte is extracted.
+
+    ``has_text_layer`` is only meaningful for ``.pdf``: ``False`` marks a
+    scanned/image-only PDF (no text layer) as ``SCANNED_IMAGE`` — terminal,
+    listed for the owner, never OCR-rescued. ``True`` and ``None`` both keep
+    a PDF a ``TEXT`` candidate (``None`` means "not sampled yet", the default
+    for a metadata-only walk). Every other extension is decided by the single
+    ingestibility declaration (``TEXT_BEARING_EXTS``) and the spreadsheet /
+    geospatial denylists.
+    """
+    ext = _normalize_ext(extension)
+    if ext in _SPREADSHEET_EXTS:
+        return SOURCE_CLASS_SPREADSHEET
+    if ext in _GEOSPATIAL_EXTS:
+        return SOURCE_CLASS_NON_TEXT
+    if ext == ".pdf":
+        if has_text_layer is False:
+            return SOURCE_CLASS_SCANNED_IMAGE
+        return SOURCE_CLASS_TEXT
+    if ext in TEXT_BEARING_EXTS:
+        return SOURCE_CLASS_TEXT
+    return SOURCE_CLASS_NON_TEXT
 
 
 def _is_docx_ext(extension: str | None) -> bool:
