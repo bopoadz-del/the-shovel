@@ -124,6 +124,7 @@ async def _chat_stream_impl(
         _SynthStreamError,
         _TOOL_ERROR_NUDGE_CAP, _TOOL_FORMAT_FALLBACK, _TOOL_FORMAT_RETRY_NUDGE,
         _UNINDEXED_PROJECT_MESSAGE, _apply_hat_activation, _apply_rag_context,
+        _agentic_figure_retrieval_augment,
         _build_attached_documents_note, _build_capability_answer, _build_exports_from_audit,
         _build_missing_reference_answer, _build_sources_from_audit, _chunks,
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
@@ -287,6 +288,14 @@ async def _chat_stream_impl(
         agent_name=self.name,
         history=effective_history,
     )
+    # Agentic figure retrieval: a project-figure / published-standard question
+    # whose first pass is uncovered runs the #163 plan -> actions -> coverage
+    # -> <=3 rounds loop before the answer, so a figure outside the default
+    # top-k is still fetched (never a refusal dressed as grounding).
+    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
+        _rag_sys_msg = await _agentic_figure_retrieval_augment(
+            self, user_message, project_id, api_key, user_id, _rag_sys_msg,
+        )
     # The message preparation below scans the question and the excerpts with
     # many patterns: in a worker thread, like retrieval (CI: 125-203 ms loop
     # stalls here at 15 users). Only this turn's coroutine touches `messages`.

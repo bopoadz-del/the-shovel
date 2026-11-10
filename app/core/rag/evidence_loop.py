@@ -105,12 +105,17 @@ async def run_project_figure_retrieval(
     first_pass_evidence: str,
     sheets: Mapping[str, Sequence[Sequence[str]]] | None = None,
     headers: Mapping[str, Sequence[str]] | None = None,
+    run_sync: Callable[..., Awaitable[Any]] | None = None,
 ) -> EvidenceLoopOutcome:
     """Plan, then fetch evidence over the plan with the bounded loop.
 
     ``first_pass_evidence`` is the retrieval text already in hand (round 1);
     the loop only re-queries the plan items it does not cover. An empty or
     already-covered plan skips the loop entirely and returns the first pass.
+
+    ``run_sync`` is an async executor for the synchronous fetch loop (the
+    runtime passes ``off_loop`` so embedding/SQL never blocks the event loop);
+    ``None`` runs it inline for unit tests.
     """
     response = await plan_caller(question)
     plan = parse_generated_plan(response)
@@ -127,7 +132,10 @@ async def run_project_figure_retrieval(
         sheets=sheets,
         headers=headers,
     )
-    run = run_loop(plan, actions, initial_evidence=first_pass_evidence)
+    if run_sync is None:
+        run = run_loop(plan, actions, initial_evidence=first_pass_evidence)
+    else:
+        run = await run_sync(run_loop, plan, actions, initial_evidence=first_pass_evidence)
     return EvidenceLoopOutcome(
         evidence=run.evidence,
         missing=run.missing,
