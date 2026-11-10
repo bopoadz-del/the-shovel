@@ -75,12 +75,17 @@ async def augment_figure_retrieval(
     run_sync: Callable[..., Awaitable[Any]] | None = None,
     sheets: Mapping[str, Sequence[Sequence[str]]] | None = None,
     headers: Mapping[str, Sequence[str]] | None = None,
+    outcome_sink: Callable[[Any], None] | None = None,
 ) -> str:
     """Run the evidence loop and return the merged evidence text.
 
     The loop only re-queries plan items the first pass does not cover, and
     never runs round 4. On any failure the first pass is returned unchanged:
     augmentation must not break a turn.
+
+    ``outcome_sink``, when supplied, is called once with the loop's
+    ``EvidenceLoopOutcome`` (plan items, gaps, rounds) so a caller can record
+    the evidence decision without changing what this returns.
     """
     try:
         outcome = await run_project_figure_retrieval(
@@ -94,6 +99,8 @@ async def augment_figure_retrieval(
             headers=headers,
             run_sync=run_sync,
         )
+        if outcome_sink is not None:
+            outcome_sink(outcome)
     except Exception:  # noqa: BLE001 -- augmentation must never break a turn
         # A retrieval-augmentation failure must never break the answer.
         return first_pass_evidence

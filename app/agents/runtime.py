@@ -953,6 +953,14 @@ async def _agentic_figure_retrieval_augment(
         agent, api_key=api_key, project_id=project_id, user_id=user_id,
     )
 
+    def _stash_outcome(outcome: Any) -> None:
+        # Record the evidence decision for the end-of-turn dataset logger
+        # (item 2b). One-shot per turn; the logger clears it after appending.
+        setattr(agent, "_dataset_turn", {
+            "question": user_message,
+            "evidence_plan": tuple(outcome.plan_items or ()),
+        })
+
     store = _get_store()
     augmented = await _rag_route.augment_figure_retrieval(
         question=user_message,
@@ -962,12 +970,57 @@ async def _agentic_figure_retrieval_augment(
         retrieve_fn=retrieve_with_filter,
         bm25_fn=store.bm25_search,
         run_sync=off_loop,
+        outcome_sink=_stash_outcome,
     )
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)
         merged["content"] = augmented
         return merged
     return rag_sys_msg
+
+
+def _log_dataset_turn(
+    agent: Any,
+    project_id: str,
+    answer: str,
+    sources: list[dict[str, Any]] | None,
+) -> None:
+    """Append the end-of-turn dataset record when the evidence loop ran.
+
+    Only turns whose agentic figure retrieval stashed a capture are logged;
+    every other turn is a no-op. The record holds the question, the evidence
+    plan, the ids of the cited sources, the final answer, the reduced citation
+    rows and the grounding verdict. Dataset logging must never break a turn.
+    """
+    capture = getattr(agent, "_dataset_turn", None)
+    if not capture or not project_id:
+        return
+    # One-shot: clear before any work so a failure cannot re-log this turn.
+    agent._dataset_turn = None
+    try:
+        from app.core.rag.dataset_log import (
+            DatasetRecord,
+            append_dataset_record,
+            reduced_citation,
+            verdict_from_sources,
+        )
+        rows = [reduced_citation(s) for s in (sources or []) if s]
+        ids = tuple(dict.fromkeys(
+            str(s.get("doc_id") or s.get("document_id") or s.get("id") or "")
+            for s in rows
+            if (s.get("doc_id") or s.get("document_id") or s.get("id"))
+        ))
+        record = DatasetRecord(
+            question=str(capture.get("question") or ""),
+            answer=str(answer or ""),
+            verdict=verdict_from_sources(sources),
+            evidence_plan=tuple(capture.get("evidence_plan") or ()),
+            retrieved_ids=ids,
+            citations=tuple(rows),
+        )
+        append_dataset_record(project_id, record)
+    except Exception:  # noqa: BLE001 -- dataset logging must never break a turn
+        _LOG.exception("dataset logging failed; answer is unaffected")
 
 
 async def _project_is_rag_ready_off_process(project_id: Any) -> bool:
