@@ -1233,11 +1233,61 @@ _ASK_FUNCTION_WORDS = frozenset({
 _OWN_UPLOAD_CANDIDATES = 5
 
 
+# Words that never make a message "about something" on their own: the ask's
+# function words plus bare greetings/acknowledgements and generic
+# quantity/unit words. A message whose only tokens are these carries no
+# content term to retrieve for. The strip is generic vocabulary only - no
+# list of nouns and no per-case detection.
+_ASK_NON_CONTENT_WORDS = _ASK_FUNCTION_WORDS | frozenset({
+    # question / copula / auxiliary / connector words
+    "is", "are", "was", "were", "be", "do", "did", "done", "has", "had",
+    "can", "may", "might", "must", "how", "why", "who", "whom", "whose",
+    "if", "then", "than", "so", "as", "or", "but", "not", "and", "of",
+    "to", "for", "in", "on", "at", "by", "it", "its", "we", "i", "you",
+    "he", "she", "me", "him", "her", "us", "any", "some", "more", "most",
+    "other", "every", "each", "all",
+    # greetings / acknowledgements
+    "yes", "no", "ok", "okay", "thanks", "thank", "hi", "hello", "hey",
+    "sure", "fine", "good", "great", "got", "understood", "confirmed",
+    "cheers", "regards",
+    # generic quantity / unit words (singular forms; _singular is applied)
+    "much", "many", "long", "wide", "deep", "high", "thick", "total",
+    "number", "amount", "volume", "area", "length", "width", "depth",
+    "height", "thickness", "rate", "cost", "price", "quantity", "unit",
+    "day", "week", "month", "year", "meter", "metre", "square", "cubic",
+})
+
+
 def _singular(word: str) -> str:
     for suffix in ("ies", "es", "s"):
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
             return word[: -len(suffix)] + ("y" if suffix == "ies" else "")
     return word
+
+
+def _message_has_content_term(user_message: str | None) -> bool:
+    """True when the message still names a subject after its function,
+    greeting and quantity/unit words are stripped.
+
+    The routing gate uses this on its no-action pass-through to decide
+    whether the project retrieval should run FIRST (see
+    ``select_agent_for_message`` and ``rag_inject``'s ``retrieve_first``).
+    A bare noun ("retention", "dune sand") has a content term, while a bare
+    greeting or a bare figure ("yes", "thanks", "ok", "42 m3", "how much?")
+    does not. The strip is generic vocabulary only - no list of nouns and no
+    per-case detection.
+    """
+    if not user_message or not user_message.strip():
+        return False
+    for word in re.findall(r"[a-z]+", user_message.lower()):
+        if len(word) <= 2:
+            continue
+        if (
+            word not in _ASK_NON_CONTENT_WORDS
+            and _singular(word) not in _ASK_NON_CONTENT_WORDS
+        ):
+            return True
+    return False
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -12591,6 +12641,13 @@ async def select_agent_for_message(
                 info["reason"] = "no_feature_or_formula"
                 return sc, info
         info["reason"] = "below_routing_gate"
+        if _message_has_content_term(user_message):
+            # No action matched, but the ask still names a subject: the
+            # assistant should retrieve the project's documents FIRST and
+            # answer (or ask) from the evidence, not ask into the void.
+            # Emitted as an SSE routing field for the caller to act on;
+            # rag_inject honours it via its ``retrieve_first`` flag.
+            info["retrieve_first"] = True
         return requested_agent, info
 
     if requested_agent.name not in ROUTING_GENERALISTS:

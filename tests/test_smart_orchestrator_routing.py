@@ -134,6 +134,29 @@ def test_non_generative_action_stays_on_requested_agent(registry_with_heavy, pro
 
 
 @requires_construction_kit
+def test_below_gate_bare_content_marks_retrieve_first(registry_with_heavy, project_assistant):
+    """A bare-noun ask (no verb, figure or workflow keyword) classifies to
+    no action, so the gate passes through — and, because the message still
+    names a subject, it marks ``retrieve_first`` so the assistant retrieves
+    the project's documents before answering (or asking) grounded."""
+    final, routing = _run(select_agent_for_message("dune sand", project_assistant))
+    assert final is project_assistant
+    assert routing["reason"] in ("below_routing_gate", "no-op")
+    assert routing.get("retrieve_first") is True
+
+
+@requires_construction_kit
+@pytest.mark.parametrize("msg", ["hello", "yes", "thanks"])
+def test_below_gate_no_content_term_no_retrieve_first(registry_with_heavy, project_assistant, msg):
+    """A greeting / acknowledgement has no content term, so a no-action
+    pass-through does not mark retrieve_first — small talk stays small talk."""
+    final, routing = _run(select_agent_for_message(msg, project_assistant))
+    assert final is project_assistant
+    assert routing["reason"] in ("below_routing_gate", "no-op")
+    assert "retrieve_first" not in routing
+
+
+@requires_construction_kit
 def test_no_double_redirect_when_already_heavy(registry_with_heavy, heavy_reasoning):
     """When the caller already requested heavy-reasoning, the gate must
     pass through even on a generative intent — re-routing to itself

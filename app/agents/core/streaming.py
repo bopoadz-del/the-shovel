@@ -109,6 +109,7 @@ async def _chat_stream_impl(
     conversation_id: str | None = None,
     rag_debug: bool = False,
     attached_documents: list[dict[str, Any]] | None = None,
+    retrieve_first: bool = False,
     _depth: int = 0,
     _call_stack: list[str] | None = None,
     _deadline: float | None = None,
@@ -288,6 +289,7 @@ async def _chat_stream_impl(
         user_id=user_id,
         agent_name=self.name,
         history=effective_history,
+        retrieve_first=retrieve_first,
     )
     # Agentic figure retrieval: a project-figure / published-standard question
     # whose first pass is uncovered runs the #163 plan -> actions -> coverage

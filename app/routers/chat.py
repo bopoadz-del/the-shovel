@@ -859,7 +859,7 @@ async def _predispatch_concurrent_stream(
     # lines ~518/~1269 do) so monkeypatches of app.agents.get_agent reach it;
     # select_agent_for_message is the runtime symbol the callers patch.
     from app.agents import get_agent
-    from app.agents.runtime import select_agent_for_message
+    from app.agents.runtime import _message_has_content_term, select_agent_for_message
     from app.core import projects as projects_store
     from app.core import turn_timing
     # understand_intent is the chat module global (line ~22) so test monkeypatches
@@ -915,6 +915,7 @@ async def _predispatch_concurrent_stream(
                 prompt, history=history, project_id=resolved_pid,
                 conversation_id=conversation_id, user_id=user_id,
                 attached_documents=attached_docs,
+                retrieve_first=_message_has_content_term(prompt),
             ):
                 await spec_q.put(evt)
         # No explicit CancelledError handler: it is a BaseException (Py3.8+), so

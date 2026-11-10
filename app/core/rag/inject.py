@@ -984,6 +984,7 @@ def rag_inject(
     user_id: Optional[str],
     agent_name: str,
     history: Optional[List[Dict[str, Any]]] = None,
+    retrieve_first: bool = False,
 ) -> Tuple[Optional[Dict[str, str]], Dict[str, Any]]:
     """Per-turn RAG entry point.
 
@@ -1001,7 +1002,11 @@ def rag_inject(
        normally, 2 if budget_degraded), call ``retrieve_with_filter``.
     4. If retrieved top_score < THRESHOLD or no chunks at all: return
        (None, audit_record) with ``threshold_fired=true`` so the caller can
-       still write the audit log and prepend its fallback prefix.
+       still write the audit log and prepend its fallback prefix. When
+       ``retrieve_first`` is true (the routing gate yielded no action but the
+       ask still names a subject), a below-threshold match is handed over
+       anyway -- the assistant answers (or asks) grounded instead of asking
+       into the void. The ``identifier_miss`` guard is never relaxed.
     5. Apply MAX_RAG_TOKENS cap (whole-chunk drops). Format the kept chunks
        as the system message.
     6. ``budget.consume(injected_tokens)`` BEFORE returning so concurrent
@@ -1117,13 +1122,22 @@ def rag_inject(
         "extracted_contract_ids": named_contracts,
     }
 
-    if not chunks or top_score < threshold or identifier_miss:
+    # Retrieve-first (routing gate yielded no action but the ask still names a
+    # subject): a below-threshold match is not a miss - hand the top excerpts
+    # over so the assistant answers (or asks) grounded rather than asking into
+    # the void. The identifier_miss guard is NOT relaxed: an exact reference
+    # the excerpts do not contain still refuses (hallucination fence).
+    handed_below_threshold = bool(
+        retrieve_first and chunks and not identifier_miss and top_score < threshold
+    )
+    if not chunks or identifier_miss or (top_score < threshold and not retrieve_first):
         audit_rec.update({
             "injected_k": 0,
             "injected_tokens": 0,
             "threshold_fired": True,
             "identifier_miss": identifier_miss,
             "extracted_identifiers": identifiers,
+            "retrieve_first": retrieve_first,
             "chunks": [_audit_chunk(c) for c in chunks],
         })
         _audit.write(audit_rec)
@@ -1150,6 +1164,8 @@ def rag_inject(
         "injected_tokens": total_tokens,
         "threshold_fired": False,
         "fallback_used": kept_fallback_used,
+        "retrieve_first": retrieve_first,
+        "below_threshold_handed": handed_below_threshold,
         "chunks": [_audit_chunk(c) for c in kept],
     })
     _audit.write(audit_rec)

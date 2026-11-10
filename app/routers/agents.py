@@ -270,6 +270,7 @@ async def agent_chat(name: str, req: AgentChatRequest, auth: dict = Depends(requ
         project_id=resolved_project_id,
         conversation_id=req.conversation_id,
         user_id=auth["user_id"],
+        retrieve_first=bool(routing.get("retrieve_first")),
     )
 
     # Echo conversation_id back so the client can resume the conversation.
@@ -450,6 +451,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                 conversation_id=conversation_id,
                 user_id=auth["user_id"],
                 rag_debug=rag_debug,
+                retrieve_first=bool(routing.get("retrieve_first")),
             ):
                 # Same net as /v1/chat/stream: an error naming the plumbing
                 # (provider, HTTP status, upstream body) is replaced for the user.

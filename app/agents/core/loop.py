@@ -92,6 +92,7 @@ async def _chat_impl(
     conversation_id: str | None = None,
     on_event: Callable[[str, dict[str, Any]], None | Awaitable[None]] | None = None,
     user_id: str | None = None,
+    retrieve_first: bool = False,
     _depth: int = 0,
     _call_stack: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -266,6 +267,7 @@ async def _chat_impl(
         user_id=user_id,
         agent_name=self.name,
         history=effective_history,
+        retrieve_first=retrieve_first,
     )
     # Agentic figure retrieval: a project-figure / published-standard question
     # whose first pass is uncovered runs the #163 plan -> actions -> coverage
@@ -799,6 +801,7 @@ async def chat_stream(
     conversation_id: str | None = None,
     rag_debug: bool = False,
     attached_documents: list[dict[str, Any]] | None = None,
+    retrieve_first: bool = False,
     _depth: int = 0,
     _call_stack: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -907,6 +910,7 @@ async def chat_stream(
                         attached_documents=attached_documents,
                         conversation_id=conversation_id,
                         rag_debug=rag_debug,
+                        retrieve_first=retrieve_first,
                         _depth=_depth,
                         _call_stack=_call_stack,
                         _deadline=deadline,
