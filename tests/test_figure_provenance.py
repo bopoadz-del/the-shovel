@@ -13,7 +13,11 @@ import json
 import pytest
 
 from app.agents import provenance_trail as pt
-from app.agents.citation_provenance import figure_provenance
+from app.agents.citation_provenance import (
+    EvidenceRecord,
+    _answer_cites_record,
+    figure_provenance,
+)
 from app.lib.construction_formulas import run_calculation
 
 
@@ -180,3 +184,75 @@ def test_an_unrelated_calculator_does_not_steal_a_users_figure(
     assert all(e.get("source") != pt.SOURCE_CALCULATOR for e in prov), prov
     by_fig = {e["figure"]: e for e in prov}
     assert by_fig[figure]["source"] == pt.SOURCE_USER, by_fig
+
+
+@pytest.mark.parametrize(
+    "answer,cited_id,cited_name,cited_text,other_name,other_text,figure",
+    [
+        (
+            "Per ASCE 7-16, the minimum lap is 150 mm.",
+            "d_asce", "ASCE 7-16.pdf", "Clause 5.3 laps shall be 150 mm minimum.",
+            "FIDIC Red Book 2017.pdf", "Typical lap is 150 mm for membranes.",
+            "150 mm",
+        ),
+        (
+            "Per ACI 318-19, the minimum cover is 40 mm.",
+            "d_aci", "ACI 318-19.pdf", "Minimum cover for slabs is 40 mm.",
+            "Eurocode 2.pdf", "Nominal cover is 40 mm for XC4.",
+            "40 mm",
+        ),
+    ],
+)
+def test_a_figure_is_credited_to_the_cited_chunk_not_an_uncited_one(
+    answer, cited_id, cited_name, cited_text, other_name, other_text, figure,
+):
+    """An uncited chunk holding the figure must not steal the credit (M13/R8).
+
+    Both chunks contain the figure and the OTHER one is retrieved first, so
+    the old first-match loop credited it. The answer cites the second chunk
+    by name; provenance must follow the citation, not retrieval order.
+    """
+    ctx = _excerpts(
+        ("d_other", "own", 3, other_name, other_text),
+        (cited_id, "own", 5, cited_name, cited_text),
+    )
+    _out, prov = figure_provenance(answer, ctx, _user("What is the minimum?"))
+    by_fig = {e["figure"]: e for e in prov}
+    assert figure in by_fig, by_fig
+    assert by_fig[figure]["doc_id"] == cited_id, by_fig
+    assert by_fig[figure]["source"] == pt.SOURCE_PROJECT
+
+
+@pytest.mark.parametrize(
+    "answer, chunk_index, source_name",
+    [
+        (
+            "See chunk 40 for the membrane lap width.",
+            40,
+            "Roofing Specification Rev B.pdf",
+        ),
+        (
+            "The design factor is stated in chunks 12 of the handbook.",
+            12,
+            "Waterproofing Handbook.pdf",
+        ),
+    ],
+)
+def test_a_chunk_cited_by_index_alone_credits_the_record(
+    answer, chunk_index, source_name
+):
+    """A record cited by chunk index is credited even when its document
+    name never appears in the answer.
+
+    ``_answer_cites_record`` has two citation paths: chunk index and
+    document name. A ``drop_rule`` mutant of the index path would make a
+    chunk cited only as "chunk 40" stop being credited whenever the answer
+    does not also name the document -- this pins the index branch.
+    """
+    rec = EvidenceRecord(
+        kind="retrieval",
+        text="synthetic chunk text",
+        source_name=source_name,
+        chunk_index=chunk_index,
+    )
+    assert _answer_cites_record(answer, rec) is True

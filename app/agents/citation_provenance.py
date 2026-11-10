@@ -949,6 +949,25 @@ def _line_names_source(line_low: str, name: str) -> bool:
     return False
 
 
+def _answer_cites_record(text: str, rec: EvidenceRecord) -> bool:
+    """True when the answer names this record's chunk or document.
+
+    A retrieved chunk is only the credit for a figure when the answer
+    actually cites it -- by chunk index ("chunk 40") or by the document's
+    name (whole, base name, or stem). A figure that merely appears in some
+    OTHER retrieved chunk must not be credited to that chunk; the answer's
+    own citation wins (M13 / UI R8).
+    """
+    low = (text or "").lower()
+    if rec.chunk_index is not None and re.search(
+        rf"\bchunks?\s*{rec.chunk_index}\b", low
+    ):
+        return True
+    if rec.source_name:
+        return any(form in low for form in _source_name_forms(rec.source_name))
+    return False
+
+
 def _credit_already_present(answer: str, credit: _CalculatorCredit) -> bool:
     return _fmt_credit(credit) in (answer or "")
 
@@ -1546,6 +1565,13 @@ def figure_provenance(
             if rec.kind == "user":
                 user_vals = set(_nums(rec.text))  # the latest operator turn wins
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
+        # A figure present in several retrieved chunks belongs to the chunk
+        # the answer CITES, not the first chunk that happens to contain it
+        # (an uncited chunk must not steal the credit from the cited one).
+        # When the answer cites nothing, the pool is unchanged, so a figure
+        # restated without a citation still grounds to the chunk it came from.
+        cited = [r for r in retrievals if _answer_cites_record(text, r)]
+        attrib_pool = cited + [r for r in retrievals if r not in cited]
         calc_entries: list[tuple[set[float], dict[str, Any]]] = []
         for credit in _calculator_credits(ev):
             # A figure is credited to a tool for the number it RETURNED, never
@@ -1611,7 +1637,7 @@ def figure_provenance(
                     entry = {"figure": fig, **meta}
                     break
             if entry is None:
-                for rec in retrievals:
+                for rec in attrib_pool:
                     if _match(value, _nums(rec.text)):
                         entry = _entry_for_record(rec, fig)
                         break
