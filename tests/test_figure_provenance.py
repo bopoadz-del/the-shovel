@@ -338,3 +338,39 @@ def test_a_sentence_not_naming_the_subject_caps_to_general_and_lists_competing(
     assert entry["source"] == pt.SOURCE_GENERAL
     assert entry["figure"] == figure
     assert set(entry["competing"]) == competing
+
+
+@pytest.mark.parametrize(
+    "question,answer,expected_source",
+    [
+        # The cited sentence names the asked deadline: the project tier is
+        # kept. ``competing`` is still listed (attached whenever a same-unit
+        # competitor exists, regardless of the subject test).
+        (
+            "What is the initial commencement deadline?",
+            "The initial commencement deadline is 28 days.",
+            pt.SOURCE_PROJECT,
+        ),
+        # The cited sentence names the OTHER deadline: the credit is capped
+        # to the general tier and the competitor is listed.
+        (
+            "What is the final claim deadline?",
+            "The initial commencement deadline is 28 days.",
+            pt.SOURCE_GENERAL,
+        ),
+    ],
+)
+def test_deadline_sentence_names_subject_by_majority(question, answer, expected_source):
+    """B11 majority rule: a sentence naming the asked deadline keeps the
+    project tier; the other deadline's sentence is capped and lists the
+    competitor. The subject test is at least half the content tokens, not all."""
+    chunk = (
+        "The initial commencement deadline is 28 days. "
+        "The final claim deadline is 42 days."
+    )
+    ctx = _excerpts(("d_spec", "own", 5, "Specification.pdf", chunk))
+    _out, prov = figure_provenance(answer, ctx, _user(question))
+    (entry,) = prov
+    assert entry["source"] == expected_source
+    assert entry["figure"] == "28 days"
+    assert set(entry["competing"]) == {"42 days"}
