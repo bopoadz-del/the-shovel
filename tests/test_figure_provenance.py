@@ -310,11 +310,11 @@ def test_a_sentence_naming_the_subject_keeps_the_project_tier(
             {"7 days", "42 days"},
         ),
         (
-            "The curing time is 2 hours. The mixing time is 3 hours. The drying time is 4 hours.",
-            "What is the drying time?",
-            "The mixing time is 3 hours.",
-            "3 hours",
-            {"2 hours", "4 hours"},
+            "The curing time is 2 hours. The curing depth is 150 mm. The drying time is 4 hours.",
+            "What is the curing time?",
+            "The drying time is 4 hours.",
+            "4 hours",
+            {"2 hours"},
         ),
     ],
 )

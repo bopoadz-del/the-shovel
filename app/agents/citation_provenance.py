@@ -1534,8 +1534,7 @@ def _sentence_names_subject(sentence: str | None, subject: set[str]) -> bool:
 
 
 def _entry_for_record(
-    rec: EvidenceRecord, figure: str,
-    sentence: str | None = None, competing: list[str] | None = None,
+    rec: EvidenceRecord, figure: str, sentence: str | None = None,
 ) -> dict[str, Any]:
     from app.agents.provenance_trail import SOURCE_GENERAL, SOURCE_PROJECT
 
@@ -1547,8 +1546,6 @@ def _entry_for_record(
     }
     if sentence:
         entry["sentence"] = sentence
-    if competing:
-        entry["competing"] = competing
     return entry
 
 
@@ -1725,7 +1722,6 @@ def figure_provenance(
             if entry is None:
                 for rec in attrib_pool:
                     if _match(value, _nums(rec.text)):
-                        entry = _entry_for_record(rec, fig)
                         if enforce:
                             # B11: sentence-level grounding. The chunk's own
                             # sentence for the figure is recorded, and when the
@@ -1735,10 +1731,12 @@ def figure_provenance(
                             # the competing figures listed.
                             sentence = _sentence_containing(rec.text, value)
                             competing = _competing_figures(rec.text, value, _figure_unit(m))
-                            entry["sentence"] = sentence
+                            entry = _entry_for_record(rec, fig, sentence=sentence)
                             if competing and not _sentence_names_subject(sentence, subject_tokens):
                                 entry["source"] = pt.SOURCE_GENERAL
                                 entry["competing"] = competing
+                        else:
+                            entry = _entry_for_record(rec, fig)
                         break
             if entry is None and _match(value, _rescaled(user_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
