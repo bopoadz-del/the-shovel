@@ -44,6 +44,22 @@ def _make_agent(name: str) -> Agent:
     )
 
 
+@pytest.mark.parametrize("msg,expected", [
+    ("dune sand", True),
+    ("retention", True),
+    ("defects", True),
+    ("hello", False),
+    ("yes", False),
+    ("42 m3", False),
+    ("", False),
+    (None, False),
+])
+def test_message_has_content_term(msg, expected):
+    """A content term is whatever is left after function/greeting/quantity
+    words are stripped; small talk and bare figures carry none."""
+    assert runtime_module._message_has_content_term(msg) is expected
+
+
 @pytest.fixture
 def project_assistant():
     return _make_agent("project-assistant")

@@ -859,9 +859,10 @@ async def _predispatch_concurrent_stream(
     # lines ~518/~1269 do) so monkeypatches of app.agents.get_agent reach it;
     # select_agent_for_message is the runtime symbol the callers patch.
     from app.agents import get_agent
-    from app.agents.runtime import _message_has_content_term, select_agent_for_message
+    from app.agents.runtime import select_agent_for_message
     from app.core import projects as projects_store
     from app.core import turn_timing
+    from app.core.rag.inject import retrieve_first_ctx
     # understand_intent is the chat module global (line ~22) so test monkeypatches
     # of chat.understand_intent take effect; do NOT shadow it with a local import.
 
@@ -915,7 +916,6 @@ async def _predispatch_concurrent_stream(
                 prompt, history=history, project_id=resolved_pid,
                 conversation_id=conversation_id, user_id=user_id,
                 attached_documents=attached_docs,
-                retrieve_first=_message_has_content_term(prompt),
             ):
                 await spec_q.put(evt)
         # No explicit CancelledError handler: it is a BaseException (Py3.8+), so
@@ -984,6 +984,30 @@ async def _predispatch_concurrent_stream(
     # PASS-THROUGH: the speculative stream is already running -- commit it.
     if routing:
         yield f"data: {json.dumps({'type': 'route', **routing})}\n\n"
+    # Retrieve-first: the gate yielded no action but the ask still names a
+    # subject. The speculative stream already ran WITHOUT the flag, so restart
+    # the assistant with it set (the cancelled call's tokens are accepted,
+    # exactly as on a redirect). Routed actions and small talk never carry the
+    # flag, so they keep the committed speculative stream unchanged.
+    if routing.get("retrieve_first"):
+        spec_task.cancel()
+        await asyncio.gather(spec_task, return_exceptions=True)
+        retrieve_first_ctx.set(True)
+        try:
+            async for evt in agent.chat_stream(
+                prompt, history=history, project_id=resolved_pid,
+                conversation_id=conversation_id, user_id=user_id,
+                attached_documents=attached_docs,
+            ):
+                if evt.get("type") == "token":
+                    turn_timing.first_token()
+                yield f"data: {json.dumps(evt, default=str)}\n\n"
+                await asyncio.sleep(0)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("retrieve-first assistant stream failed: %s", e)
+            _report_sse_llm_failure(str(e), path="/v1/chat/stream")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
+        return
     while True:
         evt = await spec_q.get()
         if evt is _SPEC_DONE:

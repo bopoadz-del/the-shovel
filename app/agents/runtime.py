@@ -48,7 +48,7 @@ from app.core.conversation_wbs import (
 )
 from app.core.clash_intent import message_wants_clash
 from app.core.contract_lookup_intent import message_is_contract_data_lookup
-from app.core.rag.inject import rag_inject
+from app.core.rag.inject import rag_inject, retrieve_first_ctx
 from app.lib.boq_ref_codes import strip_ref_codes
 from app.core.rag.retriever import project_is_rag_ready
 from app.dependencies import _create_block_instance, block_instances
@@ -12515,6 +12515,10 @@ async def select_agent_for_message(
         "reason": "no-op",
     }
 
+    # Reset the per-turn retrieve-first flag every routing decision so a
+    # routed or small-talk turn never inherits a prior turn's True.
+    retrieve_first_ctx.set(False)
+
     if _routing_disabled():
         info["reason"] = "routing_disabled_env"
         return requested_agent, info
@@ -12645,9 +12649,10 @@ async def select_agent_for_message(
             # No action matched, but the ask still names a subject: the
             # assistant should retrieve the project's documents FIRST and
             # answer (or ask) from the evidence, not ask into the void.
-            # Emitted as an SSE routing field for the caller to act on;
-            # rag_inject honours it via its ``retrieve_first`` flag.
+            # Emitted as an SSE routing field AND set on the per-turn context
+            # so rag_inject (in this task's worker thread) honours it.
             info["retrieve_first"] = True
+            retrieve_first_ctx.set(True)
         return requested_agent, info
 
     if requested_agent.name not in ROUTING_GENERALISTS:

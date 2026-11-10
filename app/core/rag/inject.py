@@ -13,11 +13,21 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.rag.vector_store import Chunk
 
 _LOG = logging.getLogger(__name__)
+
+
+# Per-turn flag the routing gate sets on its no-action pass-through: when the
+# message still names a subject but classified to no action, the assistant
+# should retrieve the project's documents FIRST and answer (or ask) grounded.
+# A contextvar (not a plain global) keeps it per-async-task; ``asyncio.to_thread``
+# copies the current context, so ``rag_inject`` sees it in its worker thread.
+# Default False = today's below-threshold drop behaviour.
+retrieve_first_ctx: ContextVar[bool] = ContextVar("shovel_retrieve_first", default=False)
 
 
 # A marker is repeated per excerpt, so a long engineering filename
@@ -1014,6 +1024,8 @@ def rag_inject(
     """
     if not project_id:
         return None, {}
+
+    retrieve_first = bool(retrieve_first) or retrieve_first_ctx.get()
 
     now = _dt.datetime.utcnow()
     today = now.strftime("%Y-%m-%d")
