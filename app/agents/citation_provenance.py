@@ -1548,7 +1548,13 @@ def figure_provenance(
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
         calc_entries: list[tuple[set[float], dict[str, Any]]] = []
         for credit in _calculator_credits(ev):
-            nums = set(credit.result_numbers) | set(_nums(json.dumps(credit.inputs, default=str)))
+            # A figure is credited to a tool for the number it RETURNED, never
+            # for a value it was merely GIVEN: an input came from the user or
+            # a document and is already accounted as such. Pooling the inputs
+            # let an unrelated attempt (a BOQ op the answer disavows, a probe
+            # it did not use) steal the operator's own figure into "Why this
+            # answer" (M13 / UI R6).
+            nums = set(credit.result_numbers)
             meta: dict[str, Any] = {
                 "source": pt.SOURCE_CALCULATOR, "formula": credit.calculation,
                 "inputs": _input_rows(credit.calculation, credit.inputs, user_vals,
