@@ -34,6 +34,24 @@ PROJECT_ID = "example_infra_pack"
 FOLDER_NAME = "the client project"
 
 
+def _text_pdf_bytes(text: str = "specification text layer") -> bytes:
+    """A real PDF with a digital text layer.
+
+    The p1b retry path samples a retried PDF's text layer to tell a text PDF
+    (still retried in place) from an image-only scan (terminal). The harness's
+    zero-chunk retry cohort is therefore a genuine text PDF, not arbitrary
+    bytes, so it keeps reaching the (mocked) indexer.
+    """
+    import fitz
+
+    doc = fitz.open()
+    try:
+        page = doc.new_page(width=595, height=842)
+        page.insert_text(fitz.Point(72, 72), text, fontsize=12)
+        return doc.tobytes()
+    finally:
+        doc.close()
+
 
 @pytest.fixture(autouse=True)
 def _names_follow_the_document_list(monkeypatch):
@@ -201,7 +219,7 @@ def harness(tmp_path, monkeypatch):
         gdrive_service, "walk_folder", lambda fid, **kw: (list(files), []),
     )
     monkeypatch.setattr(
-        gdrive_service, "download_file_bytes", lambda fid: (b"x" * 256, None),
+        gdrive_service, "download_file_bytes", lambda fid: (_text_pdf_bytes(), None),
     )
     monkeypatch.setattr(
         projects_mod, "get_or_create_project",

@@ -274,6 +274,8 @@ def tally_key_for_index_result(result: Dict[str, Any]) -> str:
         err = result.get("error")
         if err == "ZERO_CHUNK":
             return "zero_chunk"
+        if err == "SCANNED_IMAGE":
+            return "scanned_image"
         if err in ("SKIPPED_TOO_LARGE", "SKIPPED_MEMORY_BUDGET"):
             return "skipped_too_large"
         if err == "SKIPPED_TOO_SMALL":
@@ -306,6 +308,29 @@ def _ingest_status_from_index_result(
     n = int(result.get("rag_indexed") or result.get("total_chunks") or 0)
     ext = ist.document_extension(existing_doc) or ".docx"
     return ist.classify(chunk_count=n, extension=ext).status
+
+
+def scanned_pdf_terminal_status(
+    *,
+    extension: str | None,
+    has_text_layer: bool,
+) -> Tuple[str, str] | None:
+    """Terminal ``(ingest_status, reason)`` for an image-only PDF, else ``None``.
+
+    Reuses ``ingest_status.classify_source_document`` so the ingest retry path
+    and the P2 Drive manifest agree on what a SCANNED_IMAGE is: a PDF whose
+    sampled pages carry no digital text layer. Such a file is a terminal
+    scanned-image outcome -- never OCR-rescued, never retried -- recorded as an
+    ``UNSUPPORTED_TYPE`` with a terminal reason so ``is_open`` closes the row
+    and the next resume skips it.
+    """
+    from app.core import ingest_status as ist
+
+    if ist.classify_source_document(
+        extension, has_text_layer=has_text_layer,
+    ) != ist.SOURCE_CLASS_SCANNED_IMAGE:
+        return None
+    return ist.UNSUPPORTED_TYPE, f"scanned_image:{ist.TERMINAL}"
 
 
 def _safe_stored_name(original: str) -> str:
@@ -513,6 +538,33 @@ def _ingest_file(
         # In-place retry: the row exists from a prior pass (zero-chunk, or a
         # TEXT_SPARSE .docx stamped by an older extractor). Re-index the SAME
         # document id so chunks are replaced. No new row, no supersede.
+        # A zero-chunk/failed PDF with no digital text layer is a terminal
+        # scanned image: stamp it and skip extraction -- never OCR, never
+        # retried -- instead of re-downloading and re-extracting the same
+        # image-only bytes every pass.
+        ext = ist.document_extension(existing_doc)
+        if ext == ".pdf":
+            terminal = scanned_pdf_terminal_status(
+                extension=ext,
+                has_text_layer=doc_index.pdf_has_text_layer(str(dest)),
+            )
+            if terminal is not None:
+                status, reason = terminal
+                projects_mod.stamp_document_index(
+                    existing_doc["id"],
+                    chunk_count=0,
+                    ingest_status=status,
+                    ingest_status_reason=reason,
+                    stamp_extractor_version=False,
+                )
+                _discard_transient_copy(dest)
+                log(
+                    f"SCANNED_IMAGE terminal doc_id={existing_doc['id']} "
+                    f"drive_file_id={file_meta['id']} drive_path={rel!r} "
+                    f"mime={mime!r}"
+                )
+                return rel, {"status": "error", "error": "SCANNED_IMAGE"}
+
         projects_mod.update_document_metadata(existing_doc["id"], common_meta)
         # Index THIS download: the row's old file_path is a deleted (or stale)
         # copy from an earlier pass.
@@ -680,6 +732,29 @@ def parse_folder_ids(raw: List[str] | None) -> List[str]:
     return gdrive_service.parse_folder_ids(raw)
 
 
+def apply_env_fallbacks(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill ``--folder-id`` / ``--project-id`` from env when the flag is absent.
+
+    The ingest worker's ``WORKER_COMMAND`` is a Secrets Manager secret that
+    beats a same-name ``environment`` override, and argv-only flags cannot
+    reach the script through a run-once ECS task. ``ingest-run-once.yml``
+    therefore passes the values as ``P1B_FOLDER_IDS`` (a comma list) and
+    ``P1B_PROJECT_ID`` containerOverrides environment; this reads them only
+    when the corresponding flag was NOT given, so an explicit flag always
+    wins. Validation is unchanged -- the same ``parse_folder_ids`` /
+    ``missing_project_for_override`` path runs immediately after.
+    """
+    if args.folder_ids is None:
+        raw = (os.getenv("P1B_FOLDER_IDS") or "").strip()
+        if raw:
+            args.folder_ids = [raw]
+    if args.project_id is None:
+        raw = (os.getenv("P1B_PROJECT_ID") or "").strip()
+        if raw:
+            args.project_id = raw
+    return args
+
+
 def folder_entries_for_run(
     tier_folders: List[Dict[str, Any]],
     requested_ids: List[str],
@@ -842,6 +917,7 @@ def main() -> int:
     from app.core import ingest_sharding as sharding
 
     args = build_parser().parse_args()
+    args = apply_env_fallbacks(args)
 
     if args.supervise and not os.getenv(SUPERVISED_ENV):
         return run_under_supervisor(args)
@@ -940,6 +1016,7 @@ def main() -> int:
     global_tally = {
         "succeeded": 0,
         "zero_chunk": 0,
+        "scanned_image": 0,
         "skipped_too_large": 0,
         "skipped_too_small": 0,
         "skipped_unsupported": 0,
@@ -1001,7 +1078,8 @@ def main() -> int:
 
     def _bump_folder(folder_name: str, key: str) -> None:
         folder_tallies.setdefault(folder_name, {
-            "succeeded": 0, "zero_chunk": 0, "skipped_too_large": 0,
+            "succeeded": 0, "zero_chunk": 0, "scanned_image": 0,
+            "skipped_too_large": 0,
             "skipped_too_small": 0, "skipped_unsupported": 0,
             "skipped_empty": 0, "duplicate_sha": 0, "download_failed": 0, "errors": 0,
             "quarantined": 0, "skipped_recoverable": 0,
@@ -1145,6 +1223,7 @@ def main() -> int:
         log(
             f"[p1b-server] tier {args.tier}: {global_tally['succeeded']} succeeded, "
             f"{global_tally['zero_chunk']} zero-chunk, "
+            f"{global_tally['scanned_image']} scanned-image, "
             f"{global_tally['skipped_recoverable']} skipped-recoverable, "
             f"{global_tally['skipped_too_large']} too-large, "
             f"{global_tally['skipped_too_small']} too-small, "

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from scripts.p1b_ingest_drive_server import (
+    apply_env_fallbacks,
     build_parser,
     folder_entries_for_run,
     missing_project_for_override,
@@ -188,4 +189,41 @@ def test_missing_project_override_existing_project_is_none(project_id):
 def test_missing_project_override_missing_project_is_returned(project_id):
     rows = {"existing_other": {"id": "existing_other"}}
     assert missing_project_for_override(project_id, get_project=rows.get) == project_id
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [("envfolder_a,envfolder_b", ["envfolder_a", "envfolder_b"]), ("envfolder_c", ["envfolder_c"])],
+)
+def test_env_folder_ids_fallback_applies_when_flag_absent(monkeypatch, env_value, expected):
+    monkeypatch.setenv("P1B_FOLDER_IDS", env_value)
+    args = build_parser().parse_args(["--tier", "1", "--resume"])
+    assert args.folder_ids is None
+    apply_env_fallbacks(args)
+    assert parse_folder_ids(args.folder_ids) == expected
+
+
+@pytest.mark.parametrize("env_value", ["envfolder_a,envfolder_b", "envfolder_c"])
+def test_env_folder_ids_fallback_does_not_override_a_flag(monkeypatch, env_value):
+    monkeypatch.setenv("P1B_FOLDER_IDS", env_value)
+    args = build_parser().parse_args(["--folder-id", "flag_folder"])
+    apply_env_fallbacks(args)
+    assert parse_folder_ids(args.folder_ids) == ["flag_folder"]
+
+
+@pytest.mark.parametrize("env_value", ["retarget_a", "retarget_b"])
+def test_env_project_id_fallback_applies_when_flag_absent(monkeypatch, env_value):
+    monkeypatch.setenv("P1B_PROJECT_ID", env_value)
+    args = build_parser().parse_args(["--tier", "1", "--resume"])
+    assert args.project_id is None
+    apply_env_fallbacks(args)
+    assert args.project_id == env_value
+
+
+@pytest.mark.parametrize("env_value", ["retarget_a", "retarget_b"])
+def test_env_project_id_fallback_does_not_override_a_flag(monkeypatch, env_value):
+    monkeypatch.setenv("P1B_PROJECT_ID", env_value)
+    args = build_parser().parse_args(["--project-id", "flag_project"])
+    apply_env_fallbacks(args)
+    assert args.project_id == "flag_project"
 
