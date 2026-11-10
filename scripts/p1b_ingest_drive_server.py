@@ -753,6 +753,28 @@ def override_project_id(
     return [{**entry, "project_id": override} for entry in folder_entries]
 
 
+def missing_project_for_override(
+    project_id: str | None,
+    *,
+    get_project: Any,
+) -> str | None:
+    """Return an explicit ``--project-id`` that does not name a live project.
+
+    The priority manifest pins a placeholder project, so an ops override must
+    land on a row that already exists: ``get_or_create_project`` would
+    otherwise mint a typo'd id and silently split the corpus across projects.
+    A blank override keeps the manifest value (nothing to verify); a
+    present-but-missing id is returned so the caller can refuse the run
+    without creating anything.
+    """
+    override = (project_id or "").strip() or None
+    if override is None:
+        return None
+    if get_project(override) is None:
+        return override
+    return None
+
+
 def run_state_path(args: argparse.Namespace, *, dry_run: bool | None = None) -> Path:
     """Where this run heartbeats. Dry runs get their own file so a plan-only
     pass cannot overwrite the evidence left by a live run that died."""
@@ -879,6 +901,16 @@ def main() -> int:
         log(f"ERROR: {exc}")
         return 1
     folder_entries = override_project_id(folder_entries, args.project_id)
+    if not dry_run:
+        missing = missing_project_for_override(
+            args.project_id, get_project=projects_mod.get_project,
+        )
+        if missing is not None:
+            log(
+                f"ERROR: --project-id {missing} does not name an existing "
+                f"project; refusing to run (the override never creates one)"
+            )
+            return 1
 
     t0_global = time.monotonic()
 
