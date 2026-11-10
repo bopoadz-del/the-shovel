@@ -1525,15 +1525,15 @@ def _competing_figures(text: str, value: float, unit: str) -> list[str]:
 def _sentence_names_subject(sentence: str | None, subject: set[str]) -> bool:
     """The cited sentence names the ask's subject when it contains at least
     half of the ask's content tokens (min 1). Tokens are compared after
-    ``_singular``, the same form ``_asked_subject_tokens`` stores them in."""
+    ``_singular``, the same form ``_asked_subject_tokens`` stores them in.
+    An ask with no content tokens of length >= 4 cannot be verified, so the
+    sentence does not name it (the ambiguity stays surfaced, not hidden)."""
     from app.agents.runtime import _singular
 
     words = {_singular(w) for w in re.findall(r"[a-z]{3,}", (sentence or "").lower())}
     meaningful = [t for t in subject if len(t) >= 4]
-    if not meaningful:
-        return False
     hits = sum(1 for t in meaningful if t in words)
-    return hits * 2 >= len(meaningful)
+    return len(meaningful) > 0 and hits * 2 >= len(meaningful)
 
 
 def _entry_for_record(
