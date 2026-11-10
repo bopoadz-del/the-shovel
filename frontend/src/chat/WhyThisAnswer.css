@@ -86,6 +86,17 @@
   color: var(--text-muted, #6b7280);
   margin-top: 1px;
 }
+.why-row__sentence {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--text-muted, #6b7280);
+  margin-top: 2px;
+}
+.why-row__competing {
+  font-size: 0.78rem;
+  color: #b45309;
+  margin-top: 2px;
+}
 
 @media (prefers-color-scheme: dark) {
   .why-badge--ok { background: rgba(34, 197, 94, 0.2); color: #4ade80; }

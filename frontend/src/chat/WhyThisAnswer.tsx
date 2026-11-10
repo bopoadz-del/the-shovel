@@ -44,6 +44,10 @@ export interface ProvenanceEntry {
   doc_name?: string
   page_or_section?: string
   layer_label?: string
+  /** B11: the chunk's own sentence the figure came from, and any competing
+   *  figures the chunk states in the same unit (listed, not silently dropped). */
+  sentence?: string
+  competing?: string[]
 }
 
 interface Props {
@@ -207,20 +211,35 @@ function CalcRow({
   )
 }
 
+/** The credited tier of a document figure, in plain words. Only document
+ *  entries carry a project/general tier; the machine source values never
+ *  reach the screen. */
+const TIER: Record<string, { label: string; tone: string }> = {
+  project_document: { label: 'Project', tone: 'ok' },
+  general_knowledge: { label: 'General', tone: 'warn' },
+}
+
 function SimpleRow({ e }: { e: ProvenanceEntry }) {
   const isUser = e.source === 'user_input'
   const Icon = isUser ? MessageSquare : FileText
   const where = isUser
     ? 'From your message'
     : [e.doc_name, e.layer_label, e.page_or_section].filter(Boolean).join(' · ') || 'From a retrieved document'
+  const tier = TIER[e.source]
+  const competing = Array.isArray(e.competing) && e.competing.length > 0 ? e.competing : []
   return (
     <li className="why-row" data-source={isUser ? 'user' : 'document'}>
       <Icon className="why-row__icon" aria-hidden />
       <div className="why-row__body">
         <div className="why-row__head">
           <span className="why-row__figure">{e.figure}</span>
+          {tier && <span className={`why-badge why-badge--${tier.tone}`}>{tier.label}</span>}
         </div>
         <div className="why-row__where">{where}</div>
+        {e.sentence && <div className="why-row__sentence">{e.sentence}</div>}
+        {competing.length > 0 && (
+          <div className="why-row__competing">Also in this source: {competing.join(', ')}</div>
+        )}
       </div>
     </li>
   )
