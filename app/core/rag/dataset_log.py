@@ -25,7 +25,32 @@ from typing import Any
 _DEFAULT_DATA_DIR = "./data"
 
 #: Source layers that count as the project's own documents for the verdict.
-_PROJECT_LAYERS = frozenset({"own", "master_corpus", "project", "project_corpus"})
+#: Under the owner's one-layer ruling (07:36Z) ``master_corpus`` IS the
+#: general-knowledge corpus, so it is its own verdict class, not a project doc.
+_PROJECT_LAYERS = frozenset({"own", "project", "project_corpus"})
+
+#: Layer -> verdict class, mirroring ``app.core.rag.source_class``'s layer map
+#: in the dataset-log verdict vocabulary (``project_document`` /
+#: ``general_knowledge`` instead of ``project_corpus`` / ``knowledge_base``).
+_LAYER_VERDICT = {
+    "own": "project_document",
+    "project": "project_document",
+    "project_corpus": "project_document",
+    "master_corpus": "master_corpus",
+    "general_knowledge": "general_knowledge",
+}
+
+#: Strongest-first verdict precedence. Template is decided before layer (a
+#: template can sit in any layer), exactly as ``source_class.classify`` does;
+#: then the owner's order project > master_corpus > general_knowledge, with
+#: ``other`` last for a row no layer names.
+_VERDICT_PRECEDENCE = (
+    "template",
+    "project_document",
+    "master_corpus",
+    "general_knowledge",
+    "other",
+)
 
 #: Identity/attribution keys kept on a citation row (never chunk text).
 _CITATION_KEYS = (
@@ -88,21 +113,34 @@ def reduced_citation(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def verdict_from_sources(sources: Sequence[Mapping[str, Any]] | None) -> str:
-    """One grounding verdict from the citation rows' layers.
+def _row_verdict(row: Mapping[str, Any]) -> str:
+    """One row's class in the verdict vocabulary.
 
-    Empty rows -> ``refused``; any project-layer row -> ``project_document``;
-    a general-knowledge row (and no project row) -> ``general_knowledge``;
-    anything else -> ``other``.
+    Template is decided first (a template can sit in any layer), mirroring
+    ``source_class.classify``; the layer then maps through ``_LAYER_VERDICT``,
+    and an unrecognised or absent layer is ``other`` (never a project document).
+    """
+    if str(row.get("source_class") or "").strip() == "template":
+        return "template"
+    layer = str(row.get("layer") or row.get("origin") or "").strip()
+    return _LAYER_VERDICT.get(layer, "other")
+
+
+def verdict_from_sources(sources: Sequence[Mapping[str, Any]] | None) -> str:
+    """One grounding verdict from the citation rows.
+
+    Empty rows -> ``refused``. Each row is classed in the verdict vocabulary:
+    ``template`` (owner's template class), ``project_document`` (own/project
+    layer), ``master_corpus``, ``general_knowledge``, or ``other``. The turn
+    takes the strongest class present, in ``_VERDICT_PRECEDENCE`` order.
     """
     rows = [r for r in (sources or []) if r]
     if not rows:
         return "refused"
-    layers = {str(r.get("layer") or r.get("origin") or "own") for r in rows}
-    if layers & _PROJECT_LAYERS:
-        return "project_document"
-    if "general_knowledge" in layers:
-        return "general_knowledge"
+    classes = {_row_verdict(r) for r in rows}
+    for candidate in _VERDICT_PRECEDENCE:
+        if candidate in classes:
+            return candidate
     return "other"
 
 

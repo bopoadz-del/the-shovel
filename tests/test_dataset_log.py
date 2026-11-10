@@ -115,26 +115,97 @@ def test_verdict_refused_when_no_sources(sources):
     assert verdict_from_sources(sources) == "refused"
 
 
+@pytest.mark.parametrize("layer", ["own", "project", "project_corpus"])
+def test_verdict_project_document_for_project_layers(layer):
+    assert verdict_from_sources([{"doc_id": "d1", "layer": layer}]) == "project_document"
+
+
+@pytest.mark.parametrize("row", [
+    {"doc_id": "d1", "layer": "master_corpus"},
+    {"doc_id": "d2", "origin": "master_corpus"},
+])
+def test_verdict_master_corpus_for_master_layer(row):
+    assert verdict_from_sources([row]) == "master_corpus"
+
+
+@pytest.mark.parametrize("row", [
+    {"doc_id": "d1", "layer": "general_knowledge"},
+    {"doc_id": "d2", "origin": "general_knowledge"},
+])
+def test_verdict_general_knowledge_for_general_layer(row):
+    assert verdict_from_sources([row]) == "general_knowledge"
+
+
+@pytest.mark.parametrize("row", [
+    {"doc_id": "d1", "layer": "own", "source_class": "template"},
+    {"doc_id": "d2", "layer": "master_corpus", "source_class": "template"},
+])
+def test_verdict_template_class_wins(row):
+    assert verdict_from_sources([row]) == "template"
+
+
+@pytest.mark.parametrize("row", [
+    {"doc_id": "d1", "layer": "unexpected"},
+    {"doc_id": "d2"},
+])
+def test_verdict_other_for_unrecognised_or_absent_layer(row):
+    assert verdict_from_sources([row]) == "other"
+
+
 @pytest.mark.parametrize("mixed", [
     [
-        {"doc_id": "d1", "layer": "general_knowledge"},
-        {"doc_id": "d2", "layer": "own"},
+        {"doc_id": "d1", "layer": "own"},
+        {"doc_id": "d2", "layer": "master_corpus"},
     ],
     [
-        {"doc_id": "d3", "layer": "master_corpus"},
-        {"doc_id": "d4", "layer": "general_knowledge"},
+        {"doc_id": "d3", "layer": "project"},
+        {"doc_id": "d4", "layer": "master_corpus"},
     ],
 ])
-def test_verdict_project_document_wins_over_general(mixed):
+def test_verdict_project_beats_master_corpus(mixed):
     assert verdict_from_sources(mixed) == "project_document"
 
 
-@pytest.mark.parametrize("sources,expected", [
-    ([{"layer": "general_knowledge"}], "general_knowledge"),
-    ([{"layer": "unexpected"}], "other"),
+@pytest.mark.parametrize("mixed", [
+    [
+        {"doc_id": "d1", "layer": "master_corpus"},
+        {"doc_id": "d2", "layer": "general_knowledge"},
+    ],
+    [
+        {"doc_id": "d3", "origin": "master_corpus"},
+        {"doc_id": "d4", "origin": "general_knowledge"},
+    ],
 ])
-def test_verdict_general_and_other(sources, expected):
-    assert verdict_from_sources(sources) == expected
+def test_verdict_master_corpus_beats_general(mixed):
+    assert verdict_from_sources(mixed) == "master_corpus"
+
+
+@pytest.mark.parametrize("mixed", [
+    [
+        {"doc_id": "d1", "layer": "own"},
+        {"doc_id": "d2", "layer": "general_knowledge"},
+    ],
+    [
+        {"doc_id": "d3", "layer": "project_corpus"},
+        {"doc_id": "d4", "layer": "general_knowledge"},
+    ],
+])
+def test_verdict_project_beats_general(mixed):
+    assert verdict_from_sources(mixed) == "project_document"
+
+
+@pytest.mark.parametrize("mixed", [
+    [
+        {"doc_id": "d1", "layer": "own", "source_class": "template"},
+        {"doc_id": "d2", "layer": "own"},
+    ],
+    [
+        {"doc_id": "d3", "layer": "master_corpus", "source_class": "template"},
+        {"doc_id": "d4", "layer": "master_corpus"},
+    ],
+])
+def test_verdict_template_beats_project_and_master(mixed):
+    assert verdict_from_sources(mixed) == "template"
 
 
 @pytest.mark.parametrize("question,answer,evidence_plan", [
