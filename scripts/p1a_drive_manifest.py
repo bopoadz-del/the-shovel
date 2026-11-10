@@ -33,6 +33,8 @@ The manifest is committed before Phase 1b ingestion begins.
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import json
 import os
 import sys
@@ -47,17 +49,89 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import gdrive_service, ingest_status
 
 
-DEFAULT_FOLDERS = {
-    "example_infra_pack": "1ExampleFolderId001xxxxxxxxxxxxxx",
-}
+# Source classes a manifest row may carry (SPEC_CORPUS_FINAL_BUILD_10NOV P2).
+_VALID_CLASSES = frozenset({
+    ingest_status.SOURCE_CLASS_TEXT,
+    ingest_status.SOURCE_CLASS_SPREADSHEET,
+    ingest_status.SOURCE_CLASS_SCANNED_IMAGE,
+    ingest_status.SOURCE_CLASS_NON_TEXT,
+})
+
+# Max chars per stdout payload chunk. Kept well under the 256 KB CloudWatch
+# Logs per-event ceiling so the ECS -> CI-artifact transport survives a
+# multi-MB manifest without ever depending on log-event size behaviour.
+_STDOUT_CHUNK = 48_000
 
 
 def _project_folders() -> Dict[str, str]:
-    """Return project_id -> Drive folder_id map."""
-    parsed = gdrive_service.parse_project_folder_map()
-    if parsed:
-        return parsed
-    return dict(DEFAULT_FOLDERS)
+    """Return the configured project_id -> Drive folder_id map."""
+    return gdrive_service.parse_project_folder_map()
+
+
+def _folder_ids_from(
+    cli_folder_ids: Optional[List[str]],
+    env_value: Optional[str],
+) -> List[str]:
+    """Merge repeatable ``--folder-id`` values and ``MANIFEST_FOLDER_IDS``.
+
+    Either source may be a comma-separated list; the two are concatenated and
+    flattened (order preserved, duplicates dropped) by the shared parser.
+    """
+    raw = list(cli_folder_ids or [])
+    if env_value and env_value.strip():
+        raw.append(env_value.strip())
+    return gdrive_service.parse_folder_ids(raw)
+
+
+def _manifest_gate(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute the P2 gate numbers from a built manifest.
+
+    ``rows`` == ``drive_file_count`` when the walk produced exactly one
+    manifest row per Drive file; a mismatch means rows were dropped or
+    duplicated. ``not_exactly_one_class`` counts rows whose ``class`` is
+    missing or not one of the four source classes (0 by construction).
+    """
+    rows = 0
+    drive_file_count = 0
+    classes: Dict[str, int] = {c: 0 for c in sorted(_VALID_CLASSES)}
+    not_exactly_one_class = 0
+    for folder in manifest.get("folders", []):
+        drive_file_count += int(folder.get("total_files") or 0)
+        for row in folder.get("files", []):
+            rows += 1
+            cls = row.get("class")
+            if cls in _VALID_CLASSES:
+                classes[cls] += 1
+            else:
+                not_exactly_one_class += 1
+    return {
+        "rows": rows,
+        "drive_file_count": drive_file_count,
+        "classes": classes,
+        "not_exactly_one_class": not_exactly_one_class,
+    }
+
+
+def _manifest_payload_b64(manifest: Dict[str, Any]) -> str:
+    """Return the manifest as a gzip+base64 single-line payload."""
+    compact = json.dumps(manifest, ensure_ascii=False, separators=(",", ":"))
+    return base64.b64encode(gzip.compress(compact.encode("utf-8"))).decode("ascii")
+
+
+def _emit_stdout(manifest: Dict[str, Any]) -> None:
+    """Emit the gate summary + chunked manifest payload to stdout.
+
+    The ECS task's stdout is the only channel back to the CI runner (the
+    runner cannot reach the task's EFS volume), so the workflow reconstructs
+    the manifest from the ``MANIFEST_PAYLOAD_BEGIN`` / ``_END`` markers and
+    reads the gate numbers from the single ``MANIFEST_GATE:`` JSON line.
+    """
+    print(f"MANIFEST_GATE: {json.dumps(_manifest_gate(manifest), sort_keys=True)}")
+    payload = _manifest_payload_b64(manifest)
+    print("MANIFEST_PAYLOAD_BEGIN")
+    for i in range(0, len(payload), _STDOUT_CHUNK):
+        print(payload[i:i + _STDOUT_CHUNK])
+    print("MANIFEST_PAYLOAD_END")
 
 
 def _pdf_classify_max_mb() -> int:
@@ -185,8 +259,28 @@ def main() -> int:
                     help="Output manifest path")
     ap.add_argument("--project", action="append", default=[],
                     help="Specific project_id to include (default: all configured)")
+    ap.add_argument(
+        "--folder-id",
+        action="append",
+        default=None,
+        dest="folder_ids",
+        metavar="ID",
+        help=(
+            "Restrict this run to these Drive folder id(s). Repeat the flag or "
+            "pass comma-separated ids. Omit to walk every configured project "
+            "folder (GDRIVE_PROJECT_FOLDERS)."
+        ),
+    )
     ap.add_argument("--classify-pdfs", action="store_true",
                     help="Download and sample PDFs to split TEXT from SCANNED_IMAGE")
+    ap.add_argument(
+        "--emit-stdout",
+        action="store_true",
+        help=(
+            "Emit the gate summary and the gzip+base64 chunked manifest to "
+            "stdout for the ECS -> CI-artifact transport."
+        ),
+    )
     args = ap.parse_args()
 
     if not gdrive_service.is_configured():
@@ -196,12 +290,22 @@ def main() -> int:
         )
         return 1
 
-    folders = _project_folders()
-    if args.project:
-        folders = {k: v for k, v in folders.items() if k in args.project}
+    folder_ids = _folder_ids_from(args.folder_ids, os.getenv("MANIFEST_FOLDER_IDS"))
+    if folder_ids:
+        # Walk the requested folder ids directly; project_id is the folder id
+        # when no configured map names it.
+        folders = {fid: fid for fid in folder_ids}
+    else:
+        folders = _project_folders()
+        if args.project:
+            folders = {k: v for k, v in folders.items() if k in args.project}
 
     if not folders:
-        print("ERROR: no project folders configured.", file=sys.stderr)
+        print(
+            "ERROR: no folder ids provided (--folder-id / MANIFEST_FOLDER_IDS) "
+            "and no GDRIVE_PROJECT_FOLDERS configured.",
+            file=sys.stderr,
+        )
         return 1
 
     results: List[Dict[str, Any]] = []
@@ -243,6 +347,8 @@ def main() -> int:
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
     print(f"[p1a] manifest written to {out_path}", file=sys.stderr)
+    if args.emit_stdout:
+        _emit_stdout(manifest)
     return 0
 
 

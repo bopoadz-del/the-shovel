@@ -104,6 +104,28 @@ def parse_project_folder_map() -> Dict[str, str]:
     return out
 
 
+def parse_folder_ids(raw: List[str] | None) -> List[str]:
+    """Flatten repeatable and comma-separated Drive folder ids into one list.
+
+    Shared by the manifest (P2) and ingest (P1b) scripts so one id list can
+    arrive as ``--folder-id a,b --folder-id c`` or ``MANIFEST_FOLDER_IDS=a,b``
+    and mean the same thing. Order is preserved and duplicates are dropped;
+    blank fragments are ignored.
+    """
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: Set[str] = set()
+    for item in raw:
+        for part in str(item).split(","):
+            fid = part.strip()
+            if not fid or fid in seen:
+                continue
+            seen.add(fid)
+            out.append(fid)
+    return out
+
+
 def _load_service_account_info() -> Optional[Dict[str, Any]]:
     """Read the service-account JSON from env. Accepts either a file path or
     inline JSON content. Returns ``None`` (with a warning logged) when the

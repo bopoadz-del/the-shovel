@@ -664,18 +664,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_folder_ids(raw: List[str] | None) -> List[str]:
     """Flatten repeatable and comma-separated ``--folder-id`` values."""
-    if not raw:
-        return []
-    out: List[str] = []
-    seen: set[str] = set()
-    for item in raw:
-        for part in str(item).split(","):
-            fid = part.strip()
-            if not fid or fid in seen:
-                continue
-            seen.add(fid)
-            out.append(fid)
-    return out
+    from app.core import gdrive_service
+
+    return gdrive_service.parse_folder_ids(raw)
 
 
 def folder_entries_for_run(
