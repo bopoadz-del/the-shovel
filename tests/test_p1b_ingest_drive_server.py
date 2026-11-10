@@ -1,6 +1,6 @@
 """Unit tests for p1b server-ingest folder scoping.
 
-No live Drive, no prod DB â€” argparse + the folder-loop filter only.
+No live Drive, no prod DB — argparse + the folder-loop filter only.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import pytest
 from scripts.p1b_ingest_drive_server import (
     build_parser,
     folder_entries_for_run,
+    missing_project_for_override,
     override_project_id,
     parse_folder_ids,
 )
@@ -142,14 +143,49 @@ def test_project_id_override_blank_is_noop(blank):
 
 
 @pytest.mark.parametrize(
+    "project_id, requested_ids, expected_walk_folder_id",
+    [
+        ("retarget_a", [MISC_FOLDER_ID], MISC_FOLDER_ID),
+        ("retarget_b", [CLIENT_PARENT_ID], CLIENT_PARENT_ID),
+    ],
+)
+def test_project_id_override_preserves_walk(
+    project_id, requested_ids, expected_walk_folder_id
+):
+    walks = folder_entries_for_run(TIER1_FOLDERS, requested_ids, tier=1)
+    retargeted = override_project_id(walks, project_id)
+    assert len(retargeted) == 1
+    assert retargeted[0]["walk_folder_id"] == expected_walk_folder_id
+    assert retargeted[0]["folder_id"] == CLIENT_PARENT_ID
+    assert retargeted[0]["project_id"] == project_id
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_missing_project_override_blank_is_none(blank):
+    consulted = []
+
+    def get_project(project_id):
+        consulted.append(project_id)
+        return {"id": project_id}
+
+    assert missing_project_for_override(blank, get_project=get_project) is None
+    assert consulted == []  # a blank override never consults the DB
+
+
+@pytest.mark.parametrize(
     "project_id",
     ["retarget_a", "retarget_b"],
 )
-def test_project_id_override_preserves_subfolder_walk(project_id):
-    walks = folder_entries_for_run(TIER1_FOLDERS, [MISC_FOLDER_ID], tier=1)
-    retargeted = override_project_id(walks, project_id)
-    assert len(retargeted) == 1
-    assert retargeted[0]["walk_folder_id"] == MISC_FOLDER_ID
-    assert retargeted[0]["folder_id"] == CLIENT_PARENT_ID
-    assert retargeted[0]["project_id"] == project_id
+def test_missing_project_override_existing_project_is_none(project_id):
+    rows = {"retarget_a": {"id": "retarget_a"}, "retarget_b": {"id": "retarget_b"}}
+    assert missing_project_for_override(project_id, get_project=rows.get) is None
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["missing_a", "missing_b"],
+)
+def test_missing_project_override_missing_project_is_returned(project_id):
+    rows = {"existing_other": {"id": "existing_other"}}
+    assert missing_project_for_override(project_id, get_project=rows.get) == project_id
 
