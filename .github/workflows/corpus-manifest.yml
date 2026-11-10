@@ -129,31 +129,59 @@ jobs:
         run: |
           set -euo pipefail
           stream="ecs/$CONTAINER/$TASK_ID"
-          # Fresh task => fresh log stream; read from its head. A short retry
-          # covers the flush lag between task-stop and log availability.
-          for i in $(seq 1 5); do
-            aws logs get-log-events --log-group-name "$LOG_GROUP" \
-              --log-stream-name "$stream" --start-from-head \
-              --query 'events[].message' --output text > logs.txt || true
-            [ -s logs.txt ] && break
-            sleep 5
+          # Pull the whole log stream, paginating past any single-response
+          # cap. The awslogs -> CloudWatch hop does not preserve line
+          # boundaries (block-buffered stdout is re-chunked, and
+          # `--output text` tab-joins an array into one line), so each event
+          # message is written verbatim and the gate/payload markers are
+          # located as substrings of the flattened transport — never as whole
+          # lines.
+          : > logs.txt
+          token=""
+          prev=""
+          for i in $(seq 1 50); do
+            if [ -z "$token" ]; then
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --start-from-head \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            else
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --next-token "$token" \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            fi
+            printf '%s' "$out" | jq -r '.events[]?.message // empty' >> logs.txt
+            token=$(printf '%s' "$out" | jq -r '.nextForwardToken // empty')
+            if [ -z "$token" ] || [ "$token" = "$prev" ]; then break; fi
+            prev="$token"
           done
-          if ! grep -q '^MANIFEST_PAYLOAD_END' logs.txt; then
-            # The task never emitted a complete payload (crashed, or ran the
-            # wrong command). A failed one-off task must never be silent:
-            # surface its last 100 log lines in the step summary.
+          # Flatten the whole stream to a single whitespace-free string so a
+          # marker that spans log-event boundaries still matches as a
+          # substring (the compact gate JSON stays valid without whitespace,
+          # and base64 never carries whitespace).
+          transport=$(tr -d '[:space:]' < logs.txt)
+          if ! printf '%s' "$transport" | grep -q 'MANIFEST_PAYLOAD_END'; then
+            # The task never emitted a complete payload (crashed, ran the wrong
+            # command, or the stream was truncated). A failed one-off task must
+            # never be silent: surface its tail and fail the job so a run that
+            # cannot produce gate numbers is never reported green.
             {
               echo "## corpus-manifest task log tail (no complete payload)"
               echo '```'
-              tail -n 100 logs.txt
+              tail -c 6000 logs.txt
               echo '```'
             } | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
-          grep '^MANIFEST_GATE: ' logs.txt | head -1 | sed 's/^MANIFEST_GATE: //' > gate.json
-          awk '/^MANIFEST_PAYLOAD_BEGIN$/{f=1;next} /^MANIFEST_PAYLOAD_END$/{f=0} f' logs.txt \
-            | tr -d '\r\n' | base64 -d | gzip -d > manifest.json
+          # Gate JSON: the compact JSON emitted immediately before the BEGIN
+          # marker, extracted by substring between the two markers.
+          printf '%s' "$transport" \
+            | sed -n 's/.*MANIFEST_GATE://; s/MANIFEST_PAYLOAD_BEGIN.*//p' > gate.json
+          # Payload: gzip+base64 between BEGIN and END.
+          printf '%s' "$transport" \
+            | sed -n 's/.*MANIFEST_PAYLOAD_BEGIN//; s/MANIFEST_PAYLOAD_END.*//p' \
+            | base64 -d | gzip -d > manifest.json
           jq '.' manifest.json > /dev/null
+          jq '.' gate.json > /dev/null
           echo "manifest rows: $(jq '[.folders[].files[]] | length' manifest.json)"
 
       - name: Gate numbers -> step summary
