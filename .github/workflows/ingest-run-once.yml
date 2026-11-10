@@ -13,6 +13,21 @@
 # WORKER_COMMAND secret, same network as the retired service) and waits for
 # it to stop. When it stops, nothing restarts it. `deploy-aws.yml` keeps the
 # service's desired count at 0 so a deploy can never turn the loop back on.
+#
+# `the-fork-ingest` resolves WORKER_COMMAND from a Secrets Manager *secret*
+# (not a plain environment value), and ECS lets a resolved secret win over a
+# same-name `environment` override -- so argv-only flags cannot reach the
+# script from here. `folder_ids` / `project_id` therefore travel as
+# containerOverrides `environment` under the DISTINCT names `P1B_FOLDER_IDS`
+# (comma list) and `P1B_PROJECT_ID`, which the script reads as a fallback
+# only when the corresponding flag is absent. No folder or project id is
+# committed here.
+#
+# The run summary (counts by outcome, the `RUNSUMMARY` line the script prints
+# on its last breath) is captured from the task's CloudWatch log stream,
+# printed to the step summary and uploaded as an artifact. A failed one-off
+# task must never be silent: if no RUNSUMMARY is captured, the job fails and
+# surfaces the log tail (same rule as project-inventory.yml / corpus-manifest.yml).
 name: ingest-run-once
 
 on:
@@ -22,6 +37,17 @@ on:
         description: "Wait for the task to stop and report its exit code"
         type: boolean
         default: true
+      folder_ids:
+        description: "Comma-separated Drive folder ids to walk (no default committed)"
+        required: false
+        type: string
+      project_id:
+        description: "Project id to land the walk in (overrides the manifest tier project; no default committed)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
 
 env:
   AWS_REGION: us-west-2
@@ -33,6 +59,9 @@ jobs:
   run-once:
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -55,6 +84,9 @@ jobs:
 
       - name: Start one task
         id: start
+        env:
+          FOLDER_IDS: ${{ inputs.folder_ids }}
+          PROJECT_ID: ${{ inputs.project_id }}
         run: |
           # Network placement is read from the retired service at run time so
           # this file carries no subnet or security-group literals.
@@ -67,10 +99,30 @@ jobs:
           fi
           # The worker command carries --keep-alive (it held finished
           # containers open for the retired service). A run-once task must
-          # exit when the pass ends: switch it off for this task only.
+          # exit when the pass ends: switch it off for this task only. The
+          # folder/project selectors travel as environment fallbacks, never as
+          # argv, because WORKER_COMMAND is a secret that beats argv and a
+          # same-name environment override alike.
           container=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
             --query 'taskDefinition.containerDefinitions[0].name' --output text)
-          overrides=$(printf '{"containerOverrides":[{"name":"%s","environment":[{"name":"P1B_KEEP_ALIVE","value":"0"}]}]}' "$container")
+          # The awslogs group lives on the task definition; read it at run time
+          # so this file carries no log-group literal that could drift from the
+          # deployed task definition.
+          log_group=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group"' --output text)
+          if [ -z "$log_group" ] || [ "$log_group" = "None" ]; then
+            echo "::error::no awslogs group on $TASK_FAMILY task definition"
+            exit 1
+          fi
+          env_json=$(jq -cn \
+            --arg keep "0" \
+            --arg folder "$FOLDER_IDS" \
+            --arg project "$PROJECT_ID" \
+            '[{name:"P1B_KEEP_ALIVE",value:$keep}] +
+             (if ($folder | length) > 0 then [{name:"P1B_FOLDER_IDS",value:$folder}] else [] end) +
+             (if ($project | length) > 0 then [{name:"P1B_PROJECT_ID",value:$project}] else [] end)')
+          overrides=$(jq -cn --arg c "$container" --argjson env "$env_json" \
+            '{containerOverrides:[{name:$c, environment:$env}]}')
           arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \
             --task-definition "$TASK_FAMILY" \
             --launch-type FARGATE --count 1 \
@@ -80,8 +132,12 @@ jobs:
             --query 'tasks[0].taskArn' --output text)
           echo "task=$arn"
           echo "arn=$arn" >> "$GITHUB_OUTPUT"
+          echo "task-id=${arn##*/}" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+          echo "log-group=$log_group" >> "$GITHUB_OUTPUT"
 
       - name: Wait for it to stop and report
+        id: wait
         if: ${{ inputs.wait }}
         run: |
           arn="${{ steps.start.outputs.arn }}"
@@ -99,3 +155,89 @@ jobs:
             --query 'tasks[0].containers[0].exitCode' --output text)
           echo "container exit code: $code"
           [ "$code" = "0" ]
+
+      - name: Capture run summary from task logs
+        if: ${{ always() && inputs.wait }}
+        env:
+          CONTAINER: ${{ steps.start.outputs.container }}
+          TASK_ID: ${{ steps.start.outputs.task-id }}
+          LOG_GROUP: ${{ steps.start.outputs.log-group }}
+        run: |
+          set -euo pipefail
+          stream="ecs/$CONTAINER/$TASK_ID"
+          : > logs.txt
+          token=""
+          prev=""
+          for i in $(seq 1 50); do
+            if [ -z "$token" ]; then
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --start-from-head \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            else
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --next-token "$token" \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            fi
+            printf '%s' "$out" | jq -r '.events[]?.message // empty' >> logs.txt
+            token=$(printf '%s' "$out" | jq -r '.nextForwardToken // empty')
+            if [ -z "$token" ] || [ "$token" = "$prev" ]; then break; fi
+            prev="$token"
+          done
+          summary_line=$(grep 'RUNSUMMARY ' logs.txt | tail -n 1 || true)
+          if [ -z "$summary_line" ]; then
+            # A failed one-off task must never be silent: surface its tail and
+            # fail the job so a run that produced no summary is never green.
+            {
+              echo "## ingest-run-once task log tail (no RUNSUMMARY captured)"
+              echo '```'
+              tail -c 6000 logs.txt
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::no RUNSUMMARY captured from the ingest task"
+            exit 1
+          fi
+          printf '%s' "$summary_line" | sed -n 's/.*RUNSUMMARY //p' > run-summary.json
+          jq . run-summary.json
+
+      - name: Run summary -> step summary
+        if: ${{ always() && inputs.wait }}
+        run: |
+          if [ ! -s run-summary.json ]; then
+            echo "::warning::no run summary captured from the task"
+            exit 0
+          fi
+          {
+            echo "## ingest-run-once summary"
+            echo '```json'
+            jq . run-summary.json
+            echo '```'
+            echo "- run_id: $(jq -r .run_id run-summary.json)"
+            echo "- tier: $(jq -r .tier run-summary.json)"
+            echo "- exit_reason: $(jq -r .exit_reason run-summary.json)"
+            echo "- complete: $(jq -r .complete run-summary.json)"
+            echo "- attempted/batch: $(jq -r .accounting.attempted run-summary.json)/$(jq -r .accounting.batch run-summary.json)"
+            echo "  - succeeded: $(jq -r '.global_tally.succeeded' run-summary.json)"
+            echo "  - zero_chunk: $(jq -r '.global_tally.zero_chunk' run-summary.json)"
+            echo "  - scanned_image: $(jq -r '.global_tally.scanned_image' run-summary.json)"
+            echo "  - skipped_recoverable: $(jq -r '.global_tally.skipped_recoverable' run-summary.json)"
+            echo "  - skipped_unsupported: $(jq -r '.global_tally.skipped_unsupported' run-summary.json)"
+            echo "  - skipped_too_large: $(jq -r '.global_tally.skipped_too_large' run-summary.json)"
+            echo "  - skipped_too_small: $(jq -r '.global_tally.skipped_too_small' run-summary.json)"
+            echo "  - skipped_empty: $(jq -r '.global_tally.skipped_empty' run-summary.json)"
+            echo "  - duplicate_sha: $(jq -r '.global_tally.duplicate_sha' run-summary.json)"
+            echo "  - download_failed: $(jq -r '.global_tally.download_failed' run-summary.json)"
+            echo "  - errors: $(jq -r '.global_tally.errors' run-summary.json)"
+            echo "  - quarantined: $(jq -r '.global_tally.quarantined' run-summary.json)"
+            echo "  - already_indexed: $(jq -r '.global_tally.already_indexed' run-summary.json)"
+            echo "  - retried: $(jq -r '.global_tally.retried' run-summary.json)"
+            echo "  - now_indexed: $(jq -r '.global_tally.now_indexed' run-summary.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload run summary
+        if: ${{ always() && inputs.wait }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-run-summary
+          path: run-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
