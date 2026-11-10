@@ -13,7 +13,11 @@ import json
 import pytest
 
 from app.agents import provenance_trail as pt
-from app.agents.citation_provenance import figure_provenance
+from app.agents.citation_provenance import (
+    EvidenceRecord,
+    _answer_cites_record,
+    figure_provenance,
+)
 from app.lib.construction_formulas import run_calculation
 
 
@@ -217,3 +221,38 @@ def test_a_figure_is_credited_to_the_cited_chunk_not_an_uncited_one(
     assert figure in by_fig, by_fig
     assert by_fig[figure]["doc_id"] == cited_id, by_fig
     assert by_fig[figure]["source"] == pt.SOURCE_PROJECT
+
+
+@pytest.mark.parametrize(
+    "answer, chunk_index, source_name",
+    [
+        (
+            "See chunk 40 for the membrane lap width.",
+            40,
+            "Roofing Specification Rev B.pdf",
+        ),
+        (
+            "The design factor is stated in chunks 12 of the handbook.",
+            12,
+            "Waterproofing Handbook.pdf",
+        ),
+    ],
+)
+def test_a_chunk_cited_by_index_alone_credits_the_record(
+    answer, chunk_index, source_name
+):
+    """A record cited by chunk index is credited even when its document
+    name never appears in the answer.
+
+    ``_answer_cites_record`` has two citation paths: chunk index and
+    document name. A ``drop_rule`` mutant of the index path would make a
+    chunk cited only as "chunk 40" stop being credited whenever the answer
+    does not also name the document -- this pins the index branch.
+    """
+    rec = EvidenceRecord(
+        kind="retrieval",
+        text="synthetic chunk text",
+        source_name=source_name,
+        chunk_index=chunk_index,
+    )
+    assert _answer_cites_record(answer, rec) is True
