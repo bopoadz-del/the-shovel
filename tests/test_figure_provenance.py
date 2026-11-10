@@ -262,8 +262,10 @@ def test_a_chunk_cited_by_index_alone_credits_the_record(
     "chunk,question,answer,figure,subject_words",
     [
         (
-            "The initial setting period is 7 days. The final setting period is 28 days. "
-            "The hardening period is 42 days.",
+            (
+                "The initial setting period is 7 days. The final setting period is 28 days. "
+                "The hardening period is 42 days."
+            ),
             "What is the final setting period?",
             "The final setting period is 28 days.",
             "28 days",
@@ -302,8 +304,10 @@ def test_a_sentence_naming_the_subject_keeps_the_project_tier(
     "chunk,question,answer,figure,competing",
     [
         (
-            "The initial setting period is 7 days. The final setting period is 28 days. "
-            "The hardening period is 42 days.",
+            (
+                "The initial setting period is 7 days. The final setting period is 28 days. "
+                "The hardening period is 42 days."
+            ),
             "What is the hardening period?",
             "The final setting period is 28 days.",
             "28 days",
