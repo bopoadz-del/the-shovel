@@ -272,3 +272,95 @@ def test_admin_doc_reindex_queues_long_scan(client, fresh_db, tmp_path, monkeypa
     assert body.get("job_id")
     poll = client.get(f"/v1/admin/debug/doc-reindex/job/{body['job_id']}")
     assert poll.status_code == 200, poll.text
+
+
+# ── Zero-chunk classification (Advisor 23:15Z corpus missing-files diag) ───
+# index_project must split zero_chunk by WHY nothing indexed so an operator
+# can tell a terminal byte loss from a Drive-sourced row from a transient
+# mount/permission failure. Two inputs per decision (mutation gate).
+
+
+@pytest.mark.parametrize(
+    "filename", ["Long Form PSA.pdf", "Contract Data.pdf"],
+)
+def test_index_project_reports_confirmed_missing_bytes(
+    fresh_db, tmp_path, monkeypatch, filename
+):
+    """A user upload whose stored bytes are gone is reported under
+    missing_files (terminal byte loss), never under the drive-sourced bucket."""
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    from app.core import doc_index, projects as projects_mod
+
+    importlib.reload(doc_index)
+
+    proj = projects_mod.create_project("Missing Bytes Project")
+    doc_path = _write_txt(tmp_path, filename, b"contract body")
+    doc = projects_mod.add_document(
+        proj["id"], filename, file_path=doc_path, size=13
+    )
+    os.remove(doc_path)  # simulate the wiped container disk
+
+    result = doc_index.index_project(proj["id"])
+
+    assert result["zero_chunk"] == 1
+    assert result["missing_files_count"] == 1
+    assert result["missing_files"][0]["document_id"] == doc["id"]
+    assert result["missing_files"][0]["filename"] == filename
+    assert result["missing_files"][0]["reason"] == "enoent"
+    assert result["not_stored_count"] == 0
+    assert result["unavailable_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "filename,drive_id",
+    [("CPM Baseline.pdf", "drive-cpm-1"), ("Contract Data.pdf", "drive-cd-2")],
+)
+def test_index_project_reports_drive_sourced_as_not_stored(
+    fresh_db, monkeypatch, filename, drive_id
+):
+    """A Drive-sourced row (no local copy by design) is reported under
+    not_stored, not as a missing file the operator must re-upload."""
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    from app.core import doc_index, projects as projects_mod
+
+    importlib.reload(doc_index)
+
+    proj = projects_mod.create_project("Drive Sourced Project")
+    doc = projects_mod.add_document(
+        proj["id"], filename, file_path=None, size=0,
+        metadata={"drive_file_id": drive_id},
+    )
+
+    result = doc_index.index_project(proj["id"])
+
+    assert result["zero_chunk"] == 1
+    assert result["not_stored_count"] == 1
+    assert result["not_stored"][0]["document_id"] == doc["id"]
+    assert result["not_stored"][0]["filename"] == filename
+    assert result["not_stored"][0]["reason"] == "drive_source"
+    assert result["missing_files_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "filename", ["blank.txt", "empty_report.txt"],
+)
+def test_index_project_present_empty_file_is_plain_zero_chunk(
+    fresh_db, tmp_path, monkeypatch, filename
+):
+    """A file that is present but extracts to no text is a plain zero_chunk:
+    it is not misreported as missing or drive-sourced."""
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    from app.core import doc_index, projects as projects_mod
+
+    importlib.reload(doc_index)
+
+    proj = projects_mod.create_project("Empty Present Project")
+    doc_path = _write_txt(tmp_path, filename, b"")
+    projects_mod.add_document(proj["id"], filename, file_path=doc_path, size=0)
+
+    result = doc_index.index_project(proj["id"])
+
+    assert result["zero_chunk"] == 1
+    assert result["missing_files_count"] == 0
+    assert result["not_stored_count"] == 0
+    assert result["unavailable_count"] == 0

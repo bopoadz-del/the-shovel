@@ -56,6 +56,7 @@ from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
+from app.core import byte_store
 from app.core import file_crypto
 from app.core import projects as _projects
 from app.core.db import SessionLocal, engine, get_database_url, get_engine
@@ -2465,6 +2466,14 @@ def index_project(project_id: str) -> dict[str, Any]:
 
     documents: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    # Zero-chunk docs split by WHY nothing indexed, so an operator can tell a
+    # terminal byte loss ("File missing, re-upload") from a Drive-sourced row
+    # that never had local bytes (needs a Drive re-ingest) from a transient
+    # mount/permission failure (retry). ``list_documents`` already computed
+    # ``bytes_state``/``bytes_state_reason`` via ``document_byte_inspection``.
+    missing_files: list[dict[str, Any]] = []
+    not_stored: list[dict[str, Any]] = []
+    unavailable: list[dict[str, Any]] = []
     total_chunks = 0
     ocr_chunks = 0
     zero_chunk = 0
@@ -2511,6 +2520,18 @@ def index_project(project_id: str) -> dict[str, Any]:
             _stamp_index_ledger(
                 doc["id"], filename, 0, extract_failed=bool(meta.get("extract_failed")),
             )
+            state = doc.get("bytes_state")
+            rec: dict[str, Any] = {
+                "document_id": doc["id"],
+                "filename": filename,
+                "reason": doc.get("bytes_state_reason") or "",
+            }
+            if state == byte_store.MISSING:
+                missing_files.append(rec)
+            elif state == byte_store.UNAVAILABLE:
+                unavailable.append(rec)
+            elif state == byte_store.NOT_STORED:
+                not_stored.append(rec)
             continue
 
         fingerprint = f"{doc['uploaded_at']}:{doc['size']}"
@@ -2572,6 +2593,12 @@ def index_project(project_id: str) -> dict[str, Any]:
             "skipped_unsupported": skipped_unsupported,
             "total_chunks": 0,
             "ocr_chunks": ocr_chunks,
+            "missing_files": missing_files,
+            "missing_files_count": len(missing_files),
+            "not_stored": not_stored,
+            "not_stored_count": len(not_stored),
+            "unavailable": unavailable,
+            "unavailable_count": len(unavailable),
         }
 
     return {
@@ -2582,6 +2609,12 @@ def index_project(project_id: str) -> dict[str, Any]:
         "skipped_unsupported": skipped_unsupported,
         "total_chunks": total_chunks,
         "ocr_chunks": ocr_chunks,
+        "missing_files": missing_files,
+        "missing_files_count": len(missing_files),
+        "not_stored": not_stored,
+        "not_stored_count": len(not_stored),
+        "unavailable": unavailable,
+        "unavailable_count": len(unavailable),
     }
 
 
