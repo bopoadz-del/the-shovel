@@ -382,6 +382,67 @@ def test_rag_inject_returns_none_when_below_threshold(monkeypatch, tmp_path):
     assert audit_rec["budget_degraded"] is False
 
 
+@pytest.mark.parametrize("user_message", ["dune sand", "retention"])
+def test_rag_inject_retrieve_first_hands_over_below_threshold(monkeypatch, tmp_path, user_message):
+    """retrieve_first=True (the routing gate yielded no action on a content
+    term) folds the top excerpts even when the match scores below the
+    confidence threshold, so the assistant answers (or asks) grounded rather
+    than asking into the void."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.4")
+    monkeypatch.setenv("MAX_RAG_TOKENS", "1500")
+
+    def fake_retrieve(query, project_id, k, **kwargs):
+        from app.core.rag.vector_store import Chunk
+        return ([Chunk(chunk_id="c1", project_id=project_id, doc_id="d1",
+                       chunk_index=0, text=f"{query} loading method", score=0.30)], 0)
+
+    monkeypatch.setattr("app.core.rag.inject.retrieve_with_filter", fake_retrieve)
+    from app.core.rag.inject import rag_inject
+
+    sys_msg, audit_rec = rag_inject(
+        user_message=user_message,
+        project_id="p1",
+        conversation_id="c1",
+        user_id="u1",
+        agent_name="project-assistant",
+        retrieve_first=True,
+    )
+    assert sys_msg is not None and sys_msg["role"] == "system"
+    assert audit_rec["threshold_fired"] is False
+    assert audit_rec["injected_k"] == 1
+    assert audit_rec["below_threshold_handed"] is True
+    assert audit_rec["retrieve_first"] is True
+
+
+def test_rag_inject_retrieve_first_respects_identifier_miss(monkeypatch, tmp_path):
+    """Even with retrieve_first, an exact identifier the excerpts do not
+    contain still refuses — the hallucination fence is not relaxed by the
+    no-action retrieval-first path."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.4")
+
+    def fake_retrieve(query, project_id, k, **kwargs):
+        from app.core.rag.vector_store import Chunk
+        return ([Chunk(chunk_id="c1", project_id=project_id, doc_id="d1",
+                       chunk_index=0, text="unrelated boilerplate", score=0.30)], 0)
+
+    monkeypatch.setattr("app.core.rag.inject.retrieve_with_filter", fake_retrieve)
+    from app.core.rag.inject import rag_inject
+
+    sys_msg, audit_rec = rag_inject(
+        user_message="drawing D-1234",
+        project_id="p1",
+        conversation_id="c1",
+        user_id="u1",
+        agent_name="project-assistant",
+        retrieve_first=True,
+    )
+    assert sys_msg is None
+    assert audit_rec["identifier_miss"] is True
+    assert audit_rec["retrieve_first"] is True
+
+
 def test_rag_inject_returns_system_message_when_confident(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.4")

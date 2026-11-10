@@ -44,6 +44,22 @@ def _make_agent(name: str) -> Agent:
     )
 
 
+@pytest.mark.parametrize("msg,expected", [
+    ("dune sand", True),
+    ("retention", True),
+    ("defects", True),
+    ("hello", False),
+    ("yes", False),
+    ("42 m3", False),
+    ("", False),
+    (None, False),
+])
+def test_message_has_content_term(msg, expected):
+    """A content term is whatever is left after function/greeting/quantity
+    words are stripped; small talk and bare figures carry none."""
+    assert runtime_module._message_has_content_term(msg) is expected
+
+
 @pytest.fixture
 def project_assistant():
     return _make_agent("project-assistant")
@@ -131,6 +147,44 @@ def test_non_generative_action_stays_on_requested_agent(registry_with_heavy, pro
     # The classifier might match BOQ keywords; whichever action wins, the
     # gate must not redirect because the action isn't generative.
     assert routing["reason"] in ("below_routing_gate", "no-op")
+
+
+@requires_construction_kit
+def test_below_gate_bare_content_marks_retrieve_first(registry_with_heavy, project_assistant):
+    """A bare-noun ask (no verb, figure or workflow keyword) classifies to
+    no action, so the gate passes through — and, because the message still
+    names a subject, it marks ``retrieve_first`` so the assistant retrieves
+    the project's documents before answering (or asking) grounded."""
+    final, routing = _run(select_agent_for_message("dune sand", project_assistant))
+    assert final is project_assistant
+    assert routing["reason"] in ("below_routing_gate", "no-op")
+    assert routing.get("retrieve_first") is True
+
+
+@requires_construction_kit
+def test_below_gate_driver_mode_does_not_mark_retrieve_first(
+    registry_with_heavy, project_assistant, monkeypatch
+):
+    """In driver mode the model drives the turn and reaches knowledge through
+    its own tools (no auto-injection), so a no-action content pass-through
+    must NOT mark retrieve_first â€” cancelling and restarting a driver loop
+    is never safe."""
+    monkeypatch.setenv("DRIVER_MODE", "on")
+    final, routing = _run(select_agent_for_message("dune sand", project_assistant))
+    assert final is project_assistant
+    assert routing["reason"] in ("below_routing_gate", "no-op")
+    assert "retrieve_first" not in routing
+
+
+@requires_construction_kit
+@pytest.mark.parametrize("msg", ["hello", "yes", "thanks"])
+def test_below_gate_no_content_term_no_retrieve_first(registry_with_heavy, project_assistant, msg):
+    """A greeting / acknowledgement has no content term, so a no-action
+    pass-through does not mark retrieve_first — small talk stays small talk."""
+    final, routing = _run(select_agent_for_message(msg, project_assistant))
+    assert final is project_assistant
+    assert routing["reason"] in ("below_routing_gate", "no-op")
+    assert "retrieve_first" not in routing
 
 
 @requires_construction_kit

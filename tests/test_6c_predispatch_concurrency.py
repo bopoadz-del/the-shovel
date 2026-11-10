@@ -35,10 +35,12 @@ class _FakeAgent:
         self._raise_after = raise_after   # emit this many tokens, then raise
         self.started = False
         self.completed = False
+        self.n_calls = 0
         self.seen_pid = "<unset>"          # the project_id the helper passed in
 
     async def chat_stream(self, prompt, **kw):
         self.started = True
+        self.n_calls += 1
         self.seen_pid = kw.get("project_id", "<unset>")
         try:
             await asyncio.sleep(self._delay)
@@ -254,3 +256,30 @@ def test_a_speculative_stream_that_raises_surfaces_an_error_frame(monkeypatch, p
         attached_docs=[], document_ids=[], body={}, session_id="s", rid="r")))
     raw = "".join(f for _, f in frames)
     assert "temporarily unavailable" in raw, "speculative failure did not surface an error frame"
+
+
+@pytest.mark.parametrize("prompt", ["dune sand", "retention"])
+def test_retrieve_first_restarts_the_assistant_stream(monkeypatch, prompt):
+    # Routing marks retrieve_first (no action + a content term). The speculative
+    # stream already ran WITHOUT it, so the helper cancels it and re-runs the
+    # assistant with the retrieve-first context set. Dropping that restart would
+    # commit the (wrong) speculative stream and the grounded tokens would never
+    # reach the client -- assert the restart count and the committed answer.
+    pa = _FakeAgent("project-assistant", ["GROUNDED"], delay=0.0)
+    monkeypatch.setattr(chat, "understand_intent", _aval({"action": None}), raising=False)
+    monkeypatch.setattr(runtime, "select_agent_for_message",
+                        _aval((pa, {"requested": "project-assistant",
+                                   "final": "project-assistant", "retrieve_first": True})),
+                        raising=False)
+    monkeypatch.setattr(agents, "get_agent", lambda name: pa)
+    monkeypatch.setattr(chat, "_predefined_enabled", lambda: True)
+    monkeypatch.setattr(chat, "_predefined_workflows", lambda: set())
+    monkeypatch.setattr(chat, "_message_vetoes_predefined", lambda _p: False)
+    monkeypatch.setattr(_projects, "get_project_accessible", lambda *a, **k: {"id": "p"})
+
+    frames = asyncio.run(_collect(chat._predispatch_concurrent_stream(
+        prompt=prompt, history=[], project_id="p", user_id="u", conversation_id="c",
+        attached_docs=[], document_ids=[], body={}, session_id="s", rid="r")))
+    raw = "".join(f for _, f in frames)
+    assert "GROUNDED" in raw, "retrieve-first restart did not commit the grounded stream"
+    assert pa.n_calls == 2, "expected the speculative call plus the retrieve-first restart"
