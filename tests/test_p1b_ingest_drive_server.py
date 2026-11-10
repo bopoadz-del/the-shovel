@@ -1,4 +1,4 @@
-﻿"""Unit tests for p1b server-ingest folder scoping.
+"""Unit tests for p1b server-ingest folder scoping.
 
 No live Drive, no prod DB â€” argparse + the folder-loop filter only.
 """
