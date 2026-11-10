@@ -132,6 +132,7 @@ async def _chat_stream_impl(
         _file_tool_hint, _final_text_needs_forced_retry, _forced_retry_min_seconds, _forced_retry_nudge,
         _fulfill_answer_report, _has_unread_windows, _inline_boq_hard_excludes,
         _is_capability_request, _is_cost_shaped_query, _latest_operator_ask, _llm_config,
+        _log_dataset_turn,
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
         _looks_like_search_preamble, _looks_like_tool_markup_leak,
         _message_is_formula_style_ask, _message_wants_locked_deliverable, _normalize_tool_call_ids, _nudge_for_failed_tool,
@@ -1041,14 +1042,15 @@ async def _chat_stream_impl(
                             from app.core import agent_memory
                             (await _off_loop(agent_memory.append_message, conversation_id, "assistant", final_text,
                             ))
+                        _final_sources = (await _off_loop(_build_sources_from_audit, _rag_audit, final_text, stream_tool_results))
+                        await _off_loop(_log_dataset_turn, self, project_id, final_text, _final_sources)
                         yield {
                             "type": "end",
                             "content": final_text,
                             "iterations": iteration + 1,
                             "model": served_model,
                             "tools": list(tools_invoked),
-                            "sources": (await _off_loop(_build_sources_from_audit, _rag_audit, final_text, stream_tool_results,
-                            )),
+                            "sources": _final_sources,
                             "exports": (await _off_loop(_build_exports_from_audit, _rag_audit, final_text, stream_tool_results,
                                 conversation_id=conversation_id,
                             )),

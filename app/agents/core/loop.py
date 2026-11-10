@@ -126,6 +126,7 @@ async def _chat_impl(
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
         _final_text_needs_forced_retry, _forced_retry_nudge, _fulfill_answer_report, _has_unread_windows,
         _inline_boq_hard_excludes, _is_capability_request, _latest_operator_ask, _llm_config,
+        _log_dataset_turn,
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
         _normalize_tool_call_ids, _nudge_for_failed_tool, _off_loop, _parse_dsml_tool_calls,
         _postprocess_answer, _predispatch_file_tool, _predispatch_formula_calc,
@@ -643,13 +644,15 @@ async def _chat_impl(
                     # User turn was already persisted up front.
                     (await _off_loop(agent_memory.append_message, conversation_id, "assistant", final_text))
                 await _emit("final", {"answer": final_text})
+                _final_sources = (await _off_loop(_build_sources_from_audit, _rag_audit, final_text, tool_calls_made))
+                await _off_loop(_log_dataset_turn, self, project_id, final_text, _final_sources)
                 return {
                     "status": "success",
                     "answer": final_text,
                     "tool_calls": tool_calls_made,
                     "iterations": iteration + 1,
                     "messages": messages,
-                    "sources": (await _off_loop(_build_sources_from_audit, _rag_audit, final_text, tool_calls_made)),
+                    "sources": _final_sources,
                     "provenance": (_rag_audit or {}).get("provenance") or [],
                     "exports": (await _off_loop(_build_exports_from_audit, _rag_audit, final_text, tool_calls_made, conversation_id=conversation_id)),
                 }

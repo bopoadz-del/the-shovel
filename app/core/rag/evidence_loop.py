@@ -46,11 +46,16 @@ PlanCaller = Callable[[str], Awaitable[dict[str, Any]]]
 
 @dataclass(frozen=True)
 class EvidenceLoopOutcome:
-    """The loop's result for the route: merged evidence, gaps and round log."""
+    """The loop's result for the route: merged evidence, gaps and round log.
+
+    ``plan_items`` is the parsed plan (one phrase per item, in order); it is
+    carried so a dataset logger can record what the agent decided to fetch.
+    """
 
     evidence: str
     missing: tuple[str, ...]
     rounds: int
+    plan_items: tuple[str, ...] = ()
 
 
 def build_actions(
@@ -124,6 +129,7 @@ async def run_project_figure_retrieval(
             evidence=first_pass_evidence,
             missing=first_pass_uncovered(plan, first_pass_evidence),
             rounds=0,
+            plan_items=plan.items,
         )
     actions = build_actions(
         retrieve_fn=retrieve_fn,
@@ -140,4 +146,5 @@ async def run_project_figure_retrieval(
         evidence=run.evidence,
         missing=run.missing,
         rounds=len(run.rounds),
+        plan_items=plan.items,
     )
