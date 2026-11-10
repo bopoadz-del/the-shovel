@@ -59,10 +59,10 @@ def _install_retry_fakes(monkeypatch):
     return indexed, stamped
 
 
-@pytest.mark.parametrize("has_text_layer", [False])
-def test_scanned_pdf_is_a_terminal_outcome(has_text_layer):
+@pytest.mark.parametrize("extension", [".pdf", ".PDF"])
+def test_scanned_pdf_is_a_terminal_outcome(extension):
     status, reason = scanned_pdf_terminal_status(
-        extension=".pdf", has_text_layer=has_text_layer,
+        extension=extension, has_text_layer=False,
     )
     assert status == ist.UNSUPPORTED_TYPE
     assert reason == f"scanned_image:{ist.TERMINAL}"
@@ -82,22 +82,23 @@ def test_non_pdf_is_never_a_scanned_image_outcome(extension):
     ) is None
 
 
-def test_scanned_pdf_retry_stamps_terminal_and_skips_extraction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fid", ["drive-scan-a", "drive-scan-b"])
+def test_scanned_pdf_retry_stamps_terminal_and_skips_extraction(tmp_path, monkeypatch, fid):
     """An image-only PDF retried in place is closed as terminal, never extracted."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
     from scripts.p1b_ingest_drive_server import _ingest_file
 
     indexed, stamped = _install_retry_fakes(monkeypatch)
-    pdf = tmp_path / "scan.pdf"
+    pdf = tmp_path / f"{fid}.pdf"
     _write_text_pdf(str(pdf), [None, None])
 
     existing = {
-        "id": "doc-scan",
+        "id": f"doc-{fid}",
         "original_name": "scan.pdf",
-        "metadata": {"drive_file_id": "drive-scan", "drive_path": "Tier1/scan.pdf"},
+        "metadata": {"drive_file_id": fid, "drive_path": "Tier1/scan.pdf"},
     }
     _rel, result = _ingest_file(
-        {"id": "drive-scan", "name": "scan.pdf", "_drive_path": "Tier1/scan.pdf",
+        {"id": fid, "name": "scan.pdf", "_drive_path": "Tier1/scan.pdf",
          "mimeType": "application/pdf", "size": pdf.stat().st_size},
         "proj", tmp_path, "run-scan", _Drive(pdf.read_bytes()),
         existing_doc=existing,
@@ -107,28 +108,29 @@ def test_scanned_pdf_retry_stamps_terminal_and_skips_extraction(tmp_path, monkey
     assert result["status"] == "error"
     assert result["error"] == "SCANNED_IMAGE"
     assert len(stamped) == 1
-    assert stamped[0]["doc_id"] == "doc-scan"
+    assert stamped[0]["doc_id"] == f"doc-{fid}"
     assert stamped[0]["chunk_count"] == 0
     assert stamped[0]["ingest_status"] == ist.UNSUPPORTED_TYPE
     assert stamped[0]["ingest_status_reason"] == f"scanned_image:{ist.TERMINAL}"
 
 
-def test_text_pdf_retry_still_indexes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fid", ["drive-text-a", "drive-text-b"])
+def test_text_pdf_retry_still_indexes(tmp_path, monkeypatch, fid):
     """A PDF with a text layer retried in place is re-indexed, not stamped terminal."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
     from scripts.p1b_ingest_drive_server import _ingest_file
 
     indexed, stamped = _install_retry_fakes(monkeypatch)
-    pdf = tmp_path / "text.pdf"
+    pdf = tmp_path / f"{fid}.pdf"
     _write_text_pdf(str(pdf), ["Specification text layer"])
 
     existing = {
-        "id": "doc-text",
+        "id": f"doc-{fid}",
         "original_name": "text.pdf",
-        "metadata": {"drive_file_id": "drive-text", "drive_path": "Tier1/text.pdf"},
+        "metadata": {"drive_file_id": fid, "drive_path": "Tier1/text.pdf"},
     }
     _ingest_file(
-        {"id": "drive-text", "name": "text.pdf", "_drive_path": "Tier1/text.pdf",
+        {"id": fid, "name": "text.pdf", "_drive_path": "Tier1/text.pdf",
          "mimeType": "application/pdf", "size": pdf.stat().st_size},
         "proj", tmp_path, "run-text", _Drive(pdf.read_bytes()),
         existing_doc=existing,
@@ -136,4 +138,4 @@ def test_text_pdf_retry_still_indexes(tmp_path, monkeypatch):
 
     assert stamped == []
     assert len(indexed) == 1
-    assert indexed[0][0][1] == "doc-text"  # re-indexed the SAME row
+    assert indexed[0][0][1] == f"doc-{fid}"  # re-indexed the SAME row
