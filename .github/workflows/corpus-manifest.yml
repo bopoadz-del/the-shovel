@@ -2,12 +2,19 @@
 # one-off ECS task, off the laptop. Read-only: walks Drive and emits a manifest
 # JSON + gate numbers; nothing writes to the corpus.
 #
-# Runs scripts/p1a_drive_manifest.py on the existing `the-fork-ingest` task
-# definition (which already carries GDRIVE_SERVICE_ACCOUNT_JSON) by overriding
-# WORKER_COMMAND. The manifest is gzip+base64-chunked to stdout and
-# reconstructed here from CloudWatch Logs, then shipped as a CI artifact with
-# the gate numbers in the step summary (same transport as project-inventory.yml
-# + the artifact step of project-reindex.yml). No folder id is committed here.
+# Runs scripts/p1a_drive_manifest.py on the `the-fork` task family (the web
+# service), which carries GDRIVE_SERVICE_ACCOUNT_JSON but does NOT define
+# WORKER_COMMAND. The one-off command travels via a containerOverrides
+# `environment` override of WORKER_COMMAND — the same pattern as
+# project-inventory.yml. Do NOT target `the-fork-ingest` here: that task
+# family defines WORKER_COMMAND as a Secrets Manager *secret*, and ECS lets a
+# resolved secret win over a same-name `environment` override, so the
+# container silently ran the default p1b ingest instead of the manifest.
+#
+# The manifest is gzip+base64-chunked to stdout and reconstructed here from
+# CloudWatch Logs, then shipped as a CI artifact with the gate numbers in the
+# step summary (same transport as project-inventory.yml + the artifact step of
+# project-reindex.yml). No folder id is committed here.
 name: corpus-manifest
 
 on:
@@ -29,9 +36,9 @@ permissions:
 env:
   AWS_REGION: us-west-2
   ECS_CLUSTER: cerebrum
-  TASK_FAMILY: the-fork-ingest
-  SERVICE_FOR_NETWORK: the-fork-ingest
-  LOG_GROUP: /ecs/the-fork-ingest
+  TASK_FAMILY: the-fork
+  SERVICE_FOR_NETWORK: the-fork
+  LOG_GROUP: /ecs/the-fork
 
 jobs:
   manifest:
