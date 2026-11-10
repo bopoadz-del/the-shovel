@@ -1,0 +1,139 @@
+"""Tests for the runtime seam that folds the #163 evidence loop into a turn.
+
+The three entry points are exercised directly so a mutant of any one of them
+(a constant return, a dropped guard) fails a test that observes the real
+behaviour: a missing/empty first pass is a no-op, a priced figure already in
+the first pass skips augmentation, and an uncovered figure merges the loop's
+evidence back into the RAG context.
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from app.agents import runtime
+from app.agents.runtime import (
+    _agentic_figure_retrieval_augment,
+    _agentic_figure_retrieval_excluded,
+    _agentic_figure_retrieval_plan_caller,
+)
+
+
+class _FakeAgent:
+    def __init__(self, plan_text="bulk excavation, blinding"):
+        self.plan_text = plan_text
+        self.calls = 0
+
+    async def _call_llm(self, msgs, api_key, project_id=None, with_tools=None, user_id=None):
+        self.calls += 1
+        return {"choice": {"message": {"content": self.plan_text}}}
+
+
+@pytest.mark.parametrize("rag", [None, {"content": ""}])
+async def test_augment_noop_when_rag_missing_or_empty(rag):
+    agent = _FakeAgent()
+    result = await _agentic_figure_retrieval_augment(
+        agent, "what is the cover", "p", "k", "u", rag,
+    )
+    assert result == rag
+    assert agent.calls == 0
+
+
+@pytest.mark.parametrize("ask", [
+    "what is the quantity and amount for D599.5",
+    "what is the amount for D549.2",
+])
+async def test_augment_skips_when_priced_row_already_in_first_pass(monkeypatch, ask):
+    import app.core.rag.retriever as retriever
+
+    monkeypatch.setattr(
+        retriever, "compose_priced_boq_row",
+        lambda q, e: {"qty": "1", "rate": "2.0", "amount": "2"},
+    )
+    rag = {"content": "D599.5 breaking out 340904 m2 31.00 10568024"}
+    agent = _FakeAgent()
+    result = await _agentic_figure_retrieval_augment(
+        agent, ask, "p", "k", "u", rag,
+    )
+    assert result == rag
+    assert agent.calls == 0
+
+
+@pytest.mark.parametrize("ask", [
+    "what is the standard rate for blockwork walls",
+    "how much productivity should I allow for wall plaster",
+])
+async def test_augment_merges_recovered_evidence(monkeypatch, ask):
+    from app.core.rag import route as rag_route
+    import app.core.rag.retriever as retriever
+    import app.core.rag.vector_store as vector_store
+
+    monkeypatch.setattr(retriever, "compose_priced_boq_row", lambda q, e: None)
+    monkeypatch.setattr(
+        rag_route, "wants_agentic_figure_retrieval",
+        lambda q, asks_measured_quantity, exclude: True,
+    )
+
+    plan_calls = []
+
+    async def _spy_plan_caller(agent, question, api_key, project_id, user_id):
+        plan_calls.append(question)
+        return {"choice": {"message": {"content": "bulk excavation, blinding"}}}
+
+    monkeypatch.setattr(runtime, "_agentic_figure_retrieval_plan_caller", _spy_plan_caller)
+
+    async def _fake_augment(**kwargs):
+        plan = await kwargs["plan_caller"](kwargs["question"])
+        return kwargs["first_pass_evidence"] + "\n" + plan["choice"]["message"]["content"]
+
+    monkeypatch.setattr(rag_route, "augment_figure_retrieval", _fake_augment)
+    monkeypatch.setattr(
+        vector_store, "get_store",
+        lambda: SimpleNamespace(bm25_search=lambda pid, q, k=50: []),
+    )
+
+    rag = {"content": "bulk excavation only"}
+    agent = _FakeAgent()
+    result = await _agentic_figure_retrieval_augment(
+        agent, ask, "p", "k", "u", rag,
+    )
+    assert result["content"] != rag["content"]
+    assert "bulk excavation" in result["content"]
+    assert plan_calls == [ask]
+
+
+@pytest.mark.parametrize("flags,expected", [
+    ((True, False, False, False), True),
+    ((False, False, False, False), False),
+])
+def test_excluded_predicate(monkeypatch, flags, expected):
+    f, e, c, s = flags
+    monkeypatch.setattr(runtime, "_message_is_formula_style_ask", lambda _t: f)
+    monkeypatch.setattr(runtime, "_asks_for_export", lambda _t: e)
+    monkeypatch.setattr(runtime, "_looks_like_self_contained_calculation", lambda _t: c)
+    monkeypatch.setattr(runtime, "_asks_self_coding", lambda _t: s)
+    assert _agentic_figure_retrieval_excluded("anything") == expected
+
+
+@pytest.mark.parametrize("question", [
+    "what is the cover to reinforcement",
+    "what is the compaction density",
+])
+async def test_plan_caller_calls_llm_tool_free(question):
+    seen = {}
+
+    class _Agent:
+        async def _call_llm(self, msgs, api_key, project_id=None, with_tools=None, user_id=None):
+            seen["msgs"] = msgs
+            seen["api_key"] = api_key
+            seen["project_id"] = project_id
+            seen["with_tools"] = with_tools
+            seen["user_id"] = user_id
+            return {"choice": {"message": {"content": "plan"}}}
+
+    agent = _Agent()
+    result = await _agentic_figure_retrieval_plan_caller(agent, question, "k", "p", "u")
+    assert result == {"choice": {"message": {"content": "plan"}}}
+    assert seen["with_tools"] is False
+    assert seen["msgs"] == [{"role": "user", "content": question}]
