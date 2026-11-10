@@ -256,3 +256,81 @@ def test_a_chunk_cited_by_index_alone_credits_the_record(
         chunk_index=chunk_index,
     )
     assert _answer_cites_record(answer, rec) is True
+
+
+@pytest.mark.parametrize(
+    "chunk,question,answer,figure,subject_words",
+    [
+        (
+            "The initial setting period is 7 days. The final setting period is 28 days. "
+            "The hardening period is 42 days.",
+            "What is the final setting period?",
+            "The final setting period is 28 days.",
+            "28 days",
+            ("final", "setting"),
+        ),
+        (
+            "The curing time is 2 hours. The mixing time is 3 hours. The drying time is 4 hours.",
+            "What is the mixing time?",
+            "The mixing time is 3 hours.",
+            "3 hours",
+            ("mixing",),
+        ),
+    ],
+)
+def test_a_sentence_naming_the_subject_keeps_the_project_tier(
+    chunk, question, answer, figure, subject_words,
+):
+    """A chunk holding competing figures keeps the project tier when the
+    cited sentence names the ask's subject (B11 sentence-level grounding).
+
+    ``figure_provenance`` records the chunk's own sentence for the figure;
+    because that sentence names the subject, the credit is not capped.
+    """
+    ctx = _excerpts(("d_spec", "own", 5, "Specification.pdf", chunk))
+    _out, prov = figure_provenance(answer, ctx, _user(question))
+    (entry,) = prov
+    assert entry["source"] == pt.SOURCE_PROJECT
+    assert entry["figure"] == figure
+    assert entry["sentence"]
+    low = entry["sentence"].lower()
+    for w in subject_words:
+        assert w in low
+
+
+@pytest.mark.parametrize(
+    "chunk,question,answer,figure,competing",
+    [
+        (
+            "The initial setting period is 7 days. The final setting period is 28 days. "
+            "The hardening period is 42 days.",
+            "What is the hardening period?",
+            "The final setting period is 28 days.",
+            "28 days",
+            {"7 days", "42 days"},
+        ),
+        (
+            "The curing time is 2 hours. The mixing time is 3 hours. The drying time is 4 hours.",
+            "What is the drying time?",
+            "The mixing time is 3 hours.",
+            "3 hours",
+            {"2 hours", "4 hours"},
+        ),
+    ],
+)
+def test_a_sentence_not_naming_the_subject_caps_to_general_and_lists_competing(
+    chunk, question, answer, figure, competing,
+):
+    """A chunk holding competing figures is capped to the general tier and
+    lists the competing figures when the cited sentence names another (or no)
+    subject (B11 sentence-level grounding).
+
+    The sentence carrying the stated figure names a different subject, so the
+    ambiguity is surfaced instead of one figure being silently asserted.
+    """
+    ctx = _excerpts(("d_spec", "own", 5, "Specification.pdf", chunk))
+    _out, prov = figure_provenance(answer, ctx, _user(question))
+    (entry,) = prov
+    assert entry["source"] == pt.SOURCE_GENERAL
+    assert entry["figure"] == figure
+    assert set(entry["competing"]) == competing

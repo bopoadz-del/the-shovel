@@ -1463,15 +1463,93 @@ def _working(values: set[float]) -> set[float]:
     return out
 
 
-def _entry_for_record(rec: EvidenceRecord, figure: str) -> dict[str, Any]:
+# Generic quantity and unit words of a figure ask. Stripping them (with the
+# question's function words) leaves the subject a cited sentence must name.
+_ASK_QUANTITY_UNIT_WORDS = frozenset({
+    "day", "week", "month", "year", "hour", "minute",
+    "quantity", "amount", "number", "value", "period", "time", "rate", "price",
+    "length", "width", "depth", "height", "volume", "area", "weight", "count",
+    "mm", "cm", "km", "meter", "metre", "sqm", "cum", "kg", "tonne", "ton",
+    "percent", "percentage", "unit", "cost", "m2", "m3",
+})
+
+
+def _asked_subject_tokens(question: str) -> set[str]:
+    """The content words of a figure ask: the operator's words left after
+    stripping the question's function words and generic quantity/unit words.
+    These are the tokens a cited sentence must name when a chunk carries
+    competing figures for the asked quantity (B11). No per-case nouns."""
+    from app.agents.runtime import _ASK_FUNCTION_WORDS, _singular
+
+    out: set[str] = set()
+    for w in re.findall(r"[a-z]{3,}", (question or "").lower()):
+        s = _singular(w)
+        if w in _ASK_FUNCTION_WORDS or s in _ASK_FUNCTION_WORDS:
+            continue
+        if s in _ASK_QUANTITY_UNIT_WORDS or w in _ASK_QUANTITY_UNIT_WORDS:
+            continue
+        out.add(s)
+    return out
+
+
+def _sentence_containing(text: str, value: float) -> str | None:
+    """The sentence of a chunk whose numbers hold ``value``, else None."""
+    for sent in re.split(r"(?<=[.!?])\s+|\n+", (text or "")):
+        if sent.strip() and _match(value, _nums(sent)):
+            return sent.strip()
+    return None
+
+
+def _figure_unit(m: re.Match[str]) -> str:
+    """A figure mention's unit (or currency), singularised and lowercased."""
+    from app.agents.runtime import _singular
+
+    raw = (m.group("post") or m.group("pre") or "").strip().lower()
+    return _singular(raw) if raw else ""
+
+
+def _competing_figures(text: str, value: float, unit: str) -> list[str]:
+    """Other figures the chunk states in the same unit as ``value``."""
+    out: list[str] = []
+    for m2, v2 in _figure_mentions(text):
+        if _close(value, v2):
+            continue
+        if unit and _figure_unit(m2) != unit:
+            continue
+        shown = m2.group(0).strip()
+        if shown not in out:
+            out.append(shown)
+    return out
+
+
+def _sentence_names_subject(sentence: str | None, subject: set[str]) -> bool:
+    """The cited sentence names every content word of the ask."""
+    from app.agents.runtime import _singular
+
+    words = {_singular(w) for w in re.findall(r"[a-z]{3,}", (sentence or "").lower())}
+    meaningful = [t for t in subject if len(t) >= 4]
+    if meaningful and all(t in words for t in meaningful):
+        return True
+    return False
+
+
+def _entry_for_record(
+    rec: EvidenceRecord, figure: str,
+    sentence: str | None = None, competing: list[str] | None = None,
+) -> dict[str, Any]:
     from app.agents.provenance_trail import SOURCE_GENERAL, SOURCE_PROJECT
 
     gk = (rec.layer or "") == "general_knowledge"
-    return {
+    entry: dict[str, Any] = {
         "figure": figure, "source": SOURCE_GENERAL if gk else SOURCE_PROJECT,
         "doc_id": rec.doc_id, "doc_name": rec.source_name or None, "page": rec.page,
         "chunk_index": rec.chunk_index,
     }
+    if sentence:
+        entry["sentence"] = sentence
+    if competing:
+        entry["competing"] = competing
+    return entry
 
 
 def _input_unit(calculation: str, name: str) -> str:
@@ -1565,6 +1643,14 @@ def figure_provenance(
             if rec.kind == "user":
                 user_vals = set(_nums(rec.text))  # the latest operator turn wins
         retrievals = [r for r in ev.records if r.kind == "retrieval" and r.text]
+        # B11: the words of the ask a cited sentence must name when a chunk
+        # carries competing figures in the same unit. Derived only on the
+        # enforced (exit) path; the record path stays unchanged.
+        subject_tokens: set[str] = set()
+        if enforce:
+            from app.agents.runtime import _latest_operator_ask
+
+            subject_tokens = _asked_subject_tokens(_latest_operator_ask(messages))
         # A figure present in several retrieved chunks belongs to the chunk
         # the answer CITES, not the first chunk that happens to contain it
         # (an uncited chunk must not steal the credit from the cited one).
@@ -1640,6 +1726,19 @@ def figure_provenance(
                 for rec in attrib_pool:
                     if _match(value, _nums(rec.text)):
                         entry = _entry_for_record(rec, fig)
+                        if enforce:
+                            # B11: sentence-level grounding. The chunk's own
+                            # sentence for the figure is recorded, and when the
+                            # chunk holds competing figures in the same unit,
+                            # that sentence must name the ask's subject or the
+                            # credit is capped to the lower (general) tier with
+                            # the competing figures listed.
+                            sentence = _sentence_containing(rec.text, value)
+                            competing = _competing_figures(rec.text, value, _figure_unit(m))
+                            entry["sentence"] = sentence
+                            if competing and not _sentence_names_subject(sentence, subject_tokens):
+                                entry["source"] = pt.SOURCE_GENERAL
+                                entry["competing"] = competing
                         break
             if entry is None and _match(value, _rescaled(user_vals)):
                 entry = {"figure": fig, "source": pt.SOURCE_USER}
