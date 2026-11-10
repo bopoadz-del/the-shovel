@@ -73,6 +73,7 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
     signals the route is read from: the tool names dispatched, the retrieved
     sources' classes, the per-figure provenance, and the final answer text."""
     tools: list[str] = []
+    tool_results: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
     answer = ""
@@ -85,6 +86,12 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
             tool = evt.get("tool")
             if isinstance(tool, str) and tool:
                 tools.append(tool)
+        elif etype == "tool_result":
+            # The tool's success flag -- "ok" means the deliverable (table /
+            # tree / schedule) was produced; an error frame means it was not.
+            name = evt.get("name") or evt.get("tool")
+            if isinstance(name, str) and name:
+                tool_results.append({"name": name, "ok": bool(evt.get("ok", True))})
         elif etype == "end":
             if isinstance(evt.get("content"), str):
                 answer = evt["content"]
@@ -96,7 +103,8 @@ def turn_from_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
             # the turn emitted it; absent leaves the prose fallback to decide.
             if isinstance(evt.get("awaiting_inputs"), dict):
                 awaiting = evt["awaiting_inputs"]
-    turn = {"tools": tools, "sources": sources, "provenance": provenance, "answer": answer}
+    turn = {"tools": tools, "tool_results": tool_results,
+            "sources": sources, "provenance": provenance, "answer": answer}
     if awaiting is not None:
         turn["awaiting_inputs"] = awaiting
     return turn
@@ -218,6 +226,30 @@ def _arithmetic_was_performed(turn: dict[str, Any]) -> bool:
     return False
 
 
+def _doc_outcome(turn: dict[str, Any]) -> bool:
+    """The tool_on_document OUTCOME contract, parts 1-2 of 3 (22:12Z).
+
+    The route label is the wrong thing to grade a document operation on: the
+    same WBS answer is a LOOKUP in question-intent (the product legitimately
+    runs ``generate_wbs`` for "what is the WBS"), so the observed route lands
+    on project RAG while the deliverable was still produced. Grade the OUTCOME
+    instead: a document tool actually ran AND its result was ``ok`` -- the
+    table/tree/schedule was produced, not errored. Part 3 (the document is
+    cited) is the grounding gate's job, checked separately.
+    """
+    if not any(t in _DOC_TOOLS for t in turn.get("tools") or []):
+        return False
+    doc_results = [
+        r for r in turn.get("tool_results") or []
+        if (r.get("name") or "") in _DOC_TOOLS
+    ]
+    if not doc_results:
+        # No tool_result frame for the document tool (a legacy end event): the
+        # deliverable was produced iff the answer carried it.
+        return bool(str(turn.get("answer") or "").strip())
+    return all(bool(r.get("ok", True)) for r in doc_results)
+
+
 def classify_route(turn: dict[str, Any], question: str = "") -> str:
     """The route the turn actually took. The QUESTION'S INTENT decides first;
     sources and tools confirm. For an UNSPECIFIED question the old
@@ -317,6 +349,25 @@ def _grounded(expected: str, provenance: list[dict[str, Any]],
     if expected == ROUTE_TOOL_ON_DOC:
         return _PROV_PROJECT in kinds or "project_corpus" in (sources or [])
     return True  # no other class appears in t1.json
+
+
+def _judge(question: str, expected: str, turn: dict[str, Any]) -> dict[str, Any]:
+    """The machine judgement for one battery row, kept pure so the mutation
+    gate selects it. ``pass`` is route/outcome AND grounded; a document
+    operation's "route" is graded by its OUTCOME contract (tool ran, produced,
+    cited), not by the route label (22:12Z)."""
+    observed = classify_route(turn, question)
+    route_pass = observed == expected
+    outcome_pass = _doc_outcome(turn) if expected == ROUTE_TOOL_ON_DOC else route_pass
+    grounded = _grounded(expected, turn["provenance"],
+                         sorted(_source_classes(turn["sources"])), turn)
+    return {
+        "route_observed": observed,
+        "route_pass": route_pass,
+        "outcome_pass": outcome_pass,
+        "grounded": grounded,
+        "pass": outcome_pass and grounded,
+    }
 
 
 def _provenance_digest(provenance: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -474,21 +525,17 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
         text, expected = q.get("question", ""), q.get("route_expected", "")
         try:
             turn = turn_from_events(_stream_turn(client, base, cred, project_id, text))
-            observed = classify_route(turn, text)
-            src_classes = sorted(_source_classes(turn["sources"]))
+            judge = _judge(text, expected, turn)
             prov = _provenance_digest(turn["provenance"])
-            route_pass = observed == expected
-            # Grounding reads the RAW provenance (its "source" kinds), not the
-            # flattened digest; the turn lets an asks_for_inputs row require that
-            # the product actually asked, not just that it has no other evidence.
-            grounded = _grounded(expected, turn["provenance"], src_classes, turn)
             results.append({
-                "question": text, "route_expected": expected, "route_observed": observed,
+                "question": text, "route_expected": expected,
+                "route_observed": judge["route_observed"],
                 "answer": turn["answer"], "provenance": prov,
-                "sources": src_classes,
-                "route_pass": route_pass,
-                "grounded": grounded,
-                "pass": route_pass and grounded,
+                "sources": sorted(_source_classes(turn["sources"])),
+                "route_pass": judge["route_pass"],
+                "outcome_pass": judge["outcome_pass"],
+                "grounded": judge["grounded"],
+                "pass": judge["pass"],
                 # Per-row diagnostic (ORDERS_03NOV_0715Z): the observer's path,
                 # so grading reads the branch instead of inferring it.
                 "intent": turn.get("_intent"),
@@ -504,7 +551,8 @@ def run_battery(questions: list[dict[str, Any]], base: str, cred: str,
         except Exception as exc:  # noqa: BLE001 — one bad turn must not abort the battery
             results.append({"question": text, "route_expected": expected,
                             "route_observed": None, "error": f"{type(exc).__name__}: {exc}",
-                            "route_pass": False, "grounded": False, "pass": False})
+                            "route_pass": False, "outcome_pass": False,
+                            "grounded": False, "pass": False})
     return results
 
 
@@ -543,25 +591,29 @@ def main() -> int:
     # never the answers, which may contain the owner's figures.
     total = len(results)
     route_passed = sum(1 for r in results if r.get("route_pass"))
+    outcome_passed = sum(1 for r in results if r.get("outcome_pass"))
     grounded = sum(1 for r in results if r.get("grounded"))
     passed = sum(1 for r in results if r.get("pass"))
     for r in results:
         verdict = "PASS" if r.get("pass") else "FAIL"
-        marks = f"route={'Y' if r.get('route_pass') else 'n'} grounded={'Y' if r.get('grounded') else 'n'}"
+        marks = f"route={'Y' if r.get('route_pass') else 'n'} outcome={'Y' if r.get('outcome_pass') else 'n'} grounded={'Y' if r.get('grounded') else 'n'}"
         print(f"[{verdict}] {r.get('route_expected')} -> {r.get('route_observed')}  "
               f"[{marks}]  {r.get('question')}")
-    # R6: the headline is BOTH numbers; the gate keys on `pass` (route AND grounded).
-    # Telemetry: how many rows fell back to prose (asks) or to the bare tool
-    # list (arith) because the turn carried no authoritative state.
+    # R6: the headline is the pass number; route/outcome/grounded are the two
+    # dimensions that compose it. Telemetry: how many rows fell back to prose
+    # (asks) or to the bare tool list (arith) because the turn carried no
+    # authoritative state.
     asks_inferred = sum(1 for r in results if r.get("asks_inferred"))
     arith_inferred = sum(1 for r in results if r.get("arith_inferred"))
-    print(f"routes {route_passed}/{total}; grounded {grounded}/{total}; pass {passed}/{total}; "
+    print(f"routes {route_passed}/{total}; outcome {outcome_passed}/{total}; "
+          f"grounded {grounded}/{total}; pass {passed}/{total}; "
           f"asks_inferred {asks_inferred}/{total}; arith_inferred {arith_inferred}/{total}; "
           f"full per-question result in {result_file}")
     code = battery_exit_code(passed, total)
     if code:
         print(f"::error::battery acceptance FAILED: pass {passed}/{total} "
-              f"(routes {route_passed}/{total}, grounded {grounded}/{total}) -- red until 20/20")
+              f"(routes {route_passed}/{total}, outcome {outcome_passed}/{total}, "
+              f"grounded {grounded}/{total}) -- red until 20/20")
     return code
 
 

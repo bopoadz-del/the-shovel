@@ -18,7 +18,9 @@ from scripts.ui_battery_runner import (
     ROUTE_PROJECT_RAG,
     ROUTE_TOOL_ON_DOC,
     ROUTE_UNCLASSIFIED,
+    _doc_outcome,
     _grounded,
+    _judge,
     _pick_project,
     battery_exit_code,
     classify_intent,
@@ -198,6 +200,93 @@ def test_grounded_requires_the_route_s_own_evidence(expected, provenance, source
     assert _grounded(expected, provenance, sources) is is_grounded
 
 
+# ── tool_on_document OUTCOME contract (ORDERS_08NOV_2212Z) ────────────────────
+# A document operation is graded on the OUTCOME (a document tool ran and its
+# result was ok), not on the route label. The route label is a poor proxy: the
+# same WBS answer is a LOOKUP in question-intent, so the observed route lands on
+# project RAG while the deliverable was still produced.
+
+
+@pytest.mark.parametrize("turn,expected", [
+    # a document tool ran and its result was ok -> the deliverable was produced
+    ({"tools": ["generate_wbs"],
+      "tool_results": [{"name": "generate_wbs", "ok": True}],
+      "answer": "1. Mobilisation"}, True),
+    # the document tool ran but errored -> no deliverable
+    ({"tools": ["generate_wbs"],
+      "tool_results": [{"name": "generate_wbs", "ok": False}],
+      "answer": "could not build the schedule"}, False),
+    # no document tool ran at all
+    ({"tools": ["construction_calc"],
+      "tool_results": [{"name": "construction_calc", "ok": True}],
+      "answer": "SAR 10,000"}, False),
+    # legacy end event: no tool_result frame -> the answer decides
+    ({"tools": ["generate_wbs"], "answer": "1. Mobilisation"}, True),
+    ({"tools": ["generate_wbs"], "answer": ""}, False),
+])
+def test_doc_outcome_requires_a_doc_tool_that_produced(turn, expected):
+    assert _doc_outcome(turn) is expected
+
+
+@pytest.mark.parametrize("tool,question,answer", [
+    ("generate_wbs", "What is the WBS for the project?",
+     "1. Mobilisation\n1.1 Site setup"),
+    ("deliver_schedule", "What is the programme for the project?",
+     "1. Mobilisation (Days 1-14)"),
+])
+def test_judge_scores_tool_on_document_by_outcome_not_route(tool, question, answer):
+    # A document-operation question phrased as a lookup: the product runs the
+    # document tool, which classify_route tags as project RAG (a lookup with
+    # project sources), not tool_on_document. The row must still PASS because
+    # the OUTCOME contract holds: the tool ran, its result was ok, and the
+    # document was cited.
+    turn = {
+        "tools": [tool],
+        "tool_results": [{"name": tool, "ok": True}],
+        "sources": [{"source_class": "project_corpus"}],
+        "provenance": [],
+        "answer": answer,
+    }
+    judge = _judge(question, ROUTE_TOOL_ON_DOC, turn)
+    assert judge["route_observed"] != ROUTE_TOOL_ON_DOC
+    assert judge["route_pass"] is False
+    assert judge["outcome_pass"] is True
+    assert judge["grounded"] is True
+    assert judge["pass"] is True
+
+
+@pytest.mark.parametrize("turn", [
+    # the document tool errored -> no deliverable, even though it was cited
+    {"tools": ["generate_wbs"],
+     "tool_results": [{"name": "generate_wbs", "ok": False}],
+     "sources": [{"source_class": "project_corpus"}],
+     "provenance": [],
+     "answer": "could not build the schedule"},
+    # a non-document tool ran -> not a document operation's outcome
+    {"tools": ["construction_calc"],
+     "tool_results": [{"name": "construction_calc", "ok": True}],
+     "sources": [{"source_class": "project_corpus"}],
+     "provenance": [],
+     "answer": "1. Mobilisation"},
+])
+def test_judge_fails_tool_on_document_when_the_outcome_is_missing(turn):
+    judge = _judge("Build the WBS.", ROUTE_TOOL_ON_DOC, turn)
+    assert judge["outcome_pass"] is False
+    assert judge["pass"] is False
+
+
+def test_judge_non_doc_routes_keep_route_pass_as_outcome():
+    # A calculator row is unaffected: outcome_pass == route_pass.
+    turn = _turn(tools=["construction_calc"],
+                 sources=[{"source_class": "project_corpus"}],
+                 provenance=[{"source": "calculator"}],
+                 answer="SAR 10,000/day")
+    judge = _judge("Calculate the rate.", ROUTE_CALCULATOR, turn)
+    assert judge["route_pass"] is True
+    assert judge["outcome_pass"] is judge["route_pass"]
+    assert judge["pass"] is True
+
+
 @pytest.mark.parametrize("events,exp_tools,exp_classes,exp_answer", [
     (
         [{"type": "tool_call", "tool": "construction_calc", "args_preview": "{}"},
@@ -221,6 +310,36 @@ def test_turn_from_events_collects_the_observable_signals(events, exp_tools, exp
     assert turn["tools"] == exp_tools
     assert {s["source_class"] for s in turn["sources"]} == exp_classes
     assert turn["answer"] == exp_answer
+
+
+@pytest.mark.parametrize("events,exp_tools,exp_results", [
+    # name-keyed success flags: one ok, one errored
+    (
+        [{"type": "tool_call", "tool": "generate_wbs"},
+         {"type": "tool_result", "name": "generate_wbs", "ok": True},
+         {"type": "tool_call", "tool": "deliver_schedule"},
+         {"type": "tool_result", "name": "deliver_schedule", "ok": False, "error": "boom"},
+         {"type": "end", "content": "1. Mobilisation", "sources": [], "provenance": []}],
+        ["generate_wbs", "deliver_schedule"],
+        [{"name": "generate_wbs", "ok": True},
+         {"name": "deliver_schedule", "ok": False}],
+    ),
+    # tool-keyed fallback (no "name"): the success flag is still collected
+    (
+        [{"type": "tool_call", "tool": "fetch_document"},
+         {"type": "tool_result", "tool": "fetch_document", "ok": True},
+         {"type": "tool_call", "tool": "boq_parse"},
+         {"type": "tool_result", "name": "boq_parse", "ok": False, "error": "parse failed"},
+         {"type": "end", "content": "BOQ table", "sources": [], "provenance": []}],
+        ["fetch_document", "boq_parse"],
+        [{"name": "fetch_document", "ok": True},
+         {"name": "boq_parse", "ok": False}],
+    ),
+])
+def test_turn_from_events_collects_tool_result_success_flags(events, exp_tools, exp_results):
+    turn = turn_from_events(events)
+    assert turn["tools"] == exp_tools
+    assert turn["tool_results"] == exp_results
 
 
 @pytest.mark.parametrize("project_name,expected_id", [
