@@ -1,0 +1,45 @@
+# One-shot ops: move `the-fork-ingest` WORKER_COMMAND from the Secrets Manager
+# `secrets` block to the plain `environment` block (same value), so a
+# containerOverrides `environment` override of WORKER_COMMAND can reach the
+# worker (entrypoint.sh). The ingest service sits at desired count 0, so
+# registering a new revision rolls nothing; the next ingest-run-once dispatch
+# picks the new revision up via the family name.
+#
+# The script is the authority: it reads the value in-process, copies it across,
+# prints only the revision number + a verification line (never the value), and
+# refuses to register unless a SHA-256 of every other field is byte-identical
+# before/after (same method as the alias repoint). Dispatch from gh, then quote
+# the `VERIFY ...` line in the report.
+name: ingest-taskdef-repoint
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  repoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the one boto3 dependency the script needs
+        run: python -m pip install boto3
+
+      - name: Register the WORKER_COMMAND move (never prints the value)
+        run: python scripts/register_ingest_taskdef.py
