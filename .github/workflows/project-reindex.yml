@@ -14,8 +14,10 @@ name: project-reindex
 # definition, exactly as ui-battery.yml does, then use it as the Bearer key.
 # ::add-mask:: before any echo keeps the value out of logs/artifacts.
 #
-# The run prints the HTTP status and the response JSON (chunk/doc counts,
-# including ocr_chunks vs total_chunks -- no secrets) and fails on non-2xx.
+# The run prints the HTTP status, writes the body to response.json, jq-summarises
+# the doc/chunk counts and the three zero-chunk lists (missing_files / not_stored
+# / unavailable) into the step summary + log, uploads response.json as an
+# artifact, and fails on non-2xx.
 
 on:
   workflow_dispatch:
@@ -32,6 +34,11 @@ jobs:
     name: reindex project (live)
     runs-on: ubuntu-latest
     timeout-minutes: 65
+    # upload-artifact@v4 needs actions:write; keep contents read-only (repo
+    # convention, same as health-watch.yml's readiness job).
+    permissions:
+      contents: read
+      actions: write
     env:
       BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
       PROJECT_ID: ${{ inputs.project_id }}
@@ -79,5 +86,46 @@ jobs:
             -X POST \
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
+            -o response.json \
             -w "\nHTTP %{http_code}\n" \
             "${url}"
+
+      - name: Summarise reindex response
+        if: always()
+        run: |
+          if [ ! -s response.json ]; then
+            echo "::warning::no reindex response body was captured"
+            exit 0
+          fi
+          # .detail is the 422 ZERO_CHUNK error shape; a 200 body has the
+          # fields at the top level. Emit the counts AND the three lists so
+          # they survive in the log and the step summary (the raw body used
+          # to be dropped by Actions).
+          jq -r '
+            (.detail // .) as $r
+            | "status: \($r.status // "?")",
+              "project_id: \($r.project_id // "?")",
+              "indexed: \($r.indexed // 0)",
+              "zero_chunk: \($r.zero_chunk // 0)",
+              "total_chunks: \($r.total_chunks // 0)",
+              "ocr_chunks: \($r.ocr_chunks // 0)",
+              "skipped_unsupported: \($r.skipped_unsupported // 0)",
+              "missing_files: \($r.missing_files_count // ($r.missing_files | length // 0))",
+              "not_stored: \($r.not_stored_count // ($r.not_stored | length // 0))",
+              "unavailable: \($r.unavailable_count // ($r.unavailable | length // 0))",
+              "--- missing_files ---",
+              (($r.missing_files // []) | map("  \(.filename) (document_id=\(.document_id), reason=\(.reason))") | join("\n")),
+              "--- not_stored ---",
+              (($r.not_stored // []) | map("  \(.filename) (document_id=\(.document_id), reason=\(.reason))") | join("\n")),
+              "--- unavailable ---",
+              (($r.unavailable // []) | map("  \(.filename) (document_id=\(.document_id), reason=\(.reason))") | join("\n"))
+          ' response.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reindex response
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-reindex-response
+          path: response.json
+          if-no-files-found: ignore
+          retention-days: 7
