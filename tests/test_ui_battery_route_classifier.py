@@ -228,19 +228,26 @@ def test_doc_outcome_requires_a_doc_tool_that_produced(turn, expected):
     assert _doc_outcome(turn) is expected
 
 
-def test_judge_scores_tool_on_document_by_outcome_not_route():
-    # A WBS question phrased as a lookup: the product runs generate_wbs, which
-    # classify_route tags as project RAG (a lookup with project sources), not
-    # tool_on_document. The row must still PASS because the OUTCOME contract
-    # holds: the tool ran, its result was ok, and the document was cited.
+@pytest.mark.parametrize("tool,question,answer", [
+    ("generate_wbs", "What is the WBS for the project?",
+     "1. Mobilisation\n1.1 Site setup"),
+    ("deliver_schedule", "What is the programme for the project?",
+     "1. Mobilisation (Days 1-14)"),
+])
+def test_judge_scores_tool_on_document_by_outcome_not_route(tool, question, answer):
+    # A document-operation question phrased as a lookup: the product runs the
+    # document tool, which classify_route tags as project RAG (a lookup with
+    # project sources), not tool_on_document. The row must still PASS because
+    # the OUTCOME contract holds: the tool ran, its result was ok, and the
+    # document was cited.
     turn = {
-        "tools": ["generate_wbs"],
-        "tool_results": [{"name": "generate_wbs", "ok": True}],
+        "tools": [tool],
+        "tool_results": [{"name": tool, "ok": True}],
         "sources": [{"source_class": "project_corpus"}],
         "provenance": [],
-        "answer": "1. Mobilisation\n1.1 Site setup",
+        "answer": answer,
     }
-    judge = _judge("What is the WBS for the project?", ROUTE_TOOL_ON_DOC, turn)
+    judge = _judge(question, ROUTE_TOOL_ON_DOC, turn)
     assert judge["route_observed"] != ROUTE_TOOL_ON_DOC
     assert judge["route_pass"] is False
     assert judge["outcome_pass"] is True
@@ -305,20 +312,34 @@ def test_turn_from_events_collects_the_observable_signals(events, exp_tools, exp
     assert turn["answer"] == exp_answer
 
 
-def test_turn_from_events_collects_tool_result_success_flags():
-    events = [
-        {"type": "tool_call", "tool": "generate_wbs"},
-        {"type": "tool_result", "name": "generate_wbs", "ok": True},
-        {"type": "tool_call", "tool": "deliver_schedule"},
-        {"type": "tool_result", "name": "deliver_schedule", "ok": False, "error": "boom"},
-        {"type": "end", "content": "1. Mobilisation", "sources": [], "provenance": []},
-    ]
+@pytest.mark.parametrize("events,exp_tools,exp_results", [
+    # name-keyed success flags: one ok, one errored
+    (
+        [{"type": "tool_call", "tool": "generate_wbs"},
+         {"type": "tool_result", "name": "generate_wbs", "ok": True},
+         {"type": "tool_call", "tool": "deliver_schedule"},
+         {"type": "tool_result", "name": "deliver_schedule", "ok": False, "error": "boom"},
+         {"type": "end", "content": "1. Mobilisation", "sources": [], "provenance": []}],
+        ["generate_wbs", "deliver_schedule"],
+        [{"name": "generate_wbs", "ok": True},
+         {"name": "deliver_schedule", "ok": False}],
+    ),
+    # tool-keyed fallback (no "name"): the success flag is still collected
+    (
+        [{"type": "tool_call", "tool": "fetch_document"},
+         {"type": "tool_result", "tool": "fetch_document", "ok": True},
+         {"type": "tool_call", "tool": "boq_parse"},
+         {"type": "tool_result", "name": "boq_parse", "ok": False, "error": "parse failed"},
+         {"type": "end", "content": "BOQ table", "sources": [], "provenance": []}],
+        ["fetch_document", "boq_parse"],
+        [{"name": "fetch_document", "ok": True},
+         {"name": "boq_parse", "ok": False}],
+    ),
+])
+def test_turn_from_events_collects_tool_result_success_flags(events, exp_tools, exp_results):
     turn = turn_from_events(events)
-    assert turn["tools"] == ["generate_wbs", "deliver_schedule"]
-    assert turn["tool_results"] == [
-        {"name": "generate_wbs", "ok": True},
-        {"name": "deliver_schedule", "ok": False},
-    ]
+    assert turn["tools"] == exp_tools
+    assert turn["tool_results"] == exp_results
 
 
 @pytest.mark.parametrize("project_name,expected_id", [
