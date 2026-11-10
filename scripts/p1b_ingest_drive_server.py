@@ -618,6 +618,17 @@ def build_parser() -> argparse.ArgumentParser:
             "folder in the tier (default --tier N --resume behaviour)."
         ),
     )
+    ap.add_argument(
+        "--project-id",
+        default=None,
+        metavar="ID",
+        help=(
+            "Override the manifest tier entry's project_id for every folder "
+            "this run walks. Lets an ops run retarget the same Drive folders "
+            "into a specific project without editing the shared manifest. "
+            "Omit (or pass empty) to keep the manifest's project_id."
+        ),
+    )
     ap.add_argument("--keep-alive", action="store_true",
                     help="After the ingestion pass completes, sleep forever so a background worker stays live")
     ap.add_argument("--total-shards", type=int, default=None,
@@ -721,6 +732,25 @@ def folder_entries_for_run(
             f"--folder-id did not match any folder in tier {tier}"
         )
     return walks
+
+
+def override_project_id(
+    folder_entries: List[Dict[str, Any]],
+    project_id: str | None,
+) -> List[Dict[str, Any]]:
+    """Retarget every walk entry's project_id when the caller names one.
+
+    The priority manifest is shared across every ingest run, so an ops run
+    that must land a subset of folders in a different project cannot edit the
+    manifest in place. ``None``/blank leaves the manifest value untouched;
+    otherwise every returned entry carries the override, regardless of whether
+    it is a parent or a subfolder walk (both resolve from the same entry
+    ``project_id`` in the ingest loop).
+    """
+    override = (project_id or "").strip() or None
+    if not override:
+        return list(folder_entries)
+    return [{**entry, "project_id": override} for entry in folder_entries]
 
 
 def run_state_path(args: argparse.Namespace, *, dry_run: bool | None = None) -> Path:
@@ -848,6 +878,7 @@ def main() -> int:
     except ValueError as exc:
         log(f"ERROR: {exc}")
         return 1
+    folder_entries = override_project_id(folder_entries, args.project_id)
 
     t0_global = time.monotonic()
 

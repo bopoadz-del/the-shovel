@@ -12,6 +12,7 @@ import pytest
 from scripts.p1b_ingest_drive_server import (
     build_parser,
     folder_entries_for_run,
+    override_project_id,
     parse_folder_ids,
 )
 
@@ -51,6 +52,20 @@ def test_parser_accepts_repeatable_and_comma_separated_folder_ids():
 def test_parser_accepts_reingest_old_id():
     args = build_parser().parse_args(["--reingest", "5a1e0001"])
     assert args.reingest == "5a1e0001"
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["client_infra_pack_1", "corpus_v2"],
+)
+def test_parser_accepts_project_id_override(project_id):
+    args = build_parser().parse_args(["--tier", "1", "--project-id", project_id])
+    assert args.project_id == project_id
+
+
+def test_parser_omitting_project_id_leaves_default_unset():
+    args = build_parser().parse_args(["--tier", "1", "--resume"])
+    assert args.project_id is None
 
 
 def test_parser_omitting_folder_id_leaves_default_unset():
@@ -102,3 +117,38 @@ def test_real_tier1_misc_keeps_client_project_row():
     assert walks[0]["walk_folder_id"] == MISC_FOLDER_ID
     assert walks[0]["project_id"] == "example_infra_pack"
     assert walks[0]["folder_name"] == "the client project"
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["client_infra_pack_1", "corpus_v2"],
+)
+def test_project_id_override_applies_to_every_walk_entry(project_id):
+    entries = override_project_id(TIER1_FOLDERS, project_id)
+    assert [entry["project_id"] for entry in entries] == [project_id, project_id]
+    # Non-project fields are preserved.
+    assert entries[0]["folder_name"] == "the client project"
+    assert entries[0]["folder_id"] == CLIENT_PARENT_ID
+    assert entries[1]["folder_id"] is None
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_project_id_override_blank_is_noop(blank):
+    entries = override_project_id(TIER1_FOLDERS, blank)
+    assert [entry["project_id"] for entry in entries] == [
+        "example_infra_pack",
+        "construction_3_001",
+    ]
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["client_infra_pack_1", "corpus_v2"],
+)
+def test_project_id_override_preserves_subfolder_walk(project_id):
+    walks = folder_entries_for_run(TIER1_FOLDERS, [MISC_FOLDER_ID], tier=1)
+    retargeted = override_project_id(walks, project_id)
+    assert len(retargeted) == 1
+    assert retargeted[0]["walk_folder_id"] == MISC_FOLDER_ID
+    assert retargeted[0]["folder_id"] == CLIENT_PARENT_ID
+    assert retargeted[0]["project_id"] == project_id
