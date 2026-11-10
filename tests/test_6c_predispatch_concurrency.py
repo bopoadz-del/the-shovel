@@ -258,7 +258,8 @@ def test_a_speculative_stream_that_raises_surfaces_an_error_frame(monkeypatch, p
     assert "temporarily unavailable" in raw, "speculative failure did not surface an error frame"
 
 
-def test_retrieve_first_restarts_the_assistant_stream(monkeypatch):
+@pytest.mark.parametrize("prompt", ["dune sand", "retention"])
+def test_retrieve_first_restarts_the_assistant_stream(monkeypatch, prompt):
     # Routing marks retrieve_first (no action + a content term). The speculative
     # stream already ran WITHOUT it, so the helper cancels it and re-runs the
     # assistant with the retrieve-first context set. Dropping that restart would
@@ -277,7 +278,7 @@ def test_retrieve_first_restarts_the_assistant_stream(monkeypatch):
     monkeypatch.setattr(_projects, "get_project_accessible", lambda *a, **k: {"id": "p"})
 
     frames = asyncio.run(_collect(chat._predispatch_concurrent_stream(
-        prompt="dune sand", history=[], project_id="p", user_id="u", conversation_id="c",
+        prompt=prompt, history=[], project_id="p", user_id="u", conversation_id="c",
         attached_docs=[], document_ids=[], body={}, session_id="s", rid="r")))
     raw = "".join(f for _, f in frames)
     assert "GROUNDED" in raw, "retrieve-first restart did not commit the grounded stream"
