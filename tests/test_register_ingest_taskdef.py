@@ -37,10 +37,11 @@ def test_without_entry_removes_only_the_named_entry(name):
     assert [i["name"] for i in _without_entry(items, name)] == ["A"]
 
 
-def test_container_without_worker_drops_it_from_both_blocks():
-    stripped = _container_without_worker(_container())
-    assert [e["name"] for e in stripped["environment"]] == ["A"]
-    assert [s["name"] for s in stripped["secrets"]] == ["OTHER"]
+@pytest.mark.parametrize("other_env_name,other_secret_name", [("A", "OTHER"), ("B", "SEC2")])
+def test_container_without_worker_drops_it_from_both_blocks(other_env_name, other_secret_name):
+    stripped = _container_without_worker(_container(other_env_name=other_env_name, other_secret_name=other_secret_name))
+    assert [e["name"] for e in stripped["environment"]] == [other_env_name]
+    assert [s["name"] for s in stripped["secrets"]] == [other_secret_name]
 
 
 @pytest.mark.parametrize("other_env_name", ["A", "B"])
