@@ -1,6 +1,6 @@
-"""Unit tests for p1b server-ingest folder scoping.
+﻿"""Unit tests for p1b server-ingest folder scoping.
 
-No live Drive, no prod DB — argparse + the folder-loop filter only.
+No live Drive, no prod DB â€” argparse + the folder-loop filter only.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def test_parser_accepts_reingest_old_id():
 
 @pytest.mark.parametrize(
     "project_id",
-    ["client_infra_pack_1", "corpus_v2"],
+    ["retarget_a", "retarget_b"],
 )
 def test_parser_accepts_project_id_override(project_id):
     args = build_parser().parse_args(["--tier", "1", "--project-id", project_id])
@@ -121,7 +121,7 @@ def test_real_tier1_misc_keeps_client_project_row():
 
 @pytest.mark.parametrize(
     "project_id",
-    ["client_infra_pack_1", "corpus_v2"],
+    ["retarget_a", "retarget_b"],
 )
 def test_project_id_override_applies_to_every_walk_entry(project_id):
     entries = override_project_id(TIER1_FOLDERS, project_id)
@@ -143,7 +143,7 @@ def test_project_id_override_blank_is_noop(blank):
 
 @pytest.mark.parametrize(
     "project_id",
-    ["client_infra_pack_1", "corpus_v2"],
+    ["retarget_a", "retarget_b"],
 )
 def test_project_id_override_preserves_subfolder_walk(project_id):
     walks = folder_entries_for_run(TIER1_FOLDERS, [MISC_FOLDER_ID], tier=1)
@@ -152,3 +152,4 @@ def test_project_id_override_preserves_subfolder_walk(project_id):
     assert retargeted[0]["walk_folder_id"] == MISC_FOLDER_ID
     assert retargeted[0]["folder_id"] == CLIENT_PARENT_ID
     assert retargeted[0]["project_id"] == project_id
+
