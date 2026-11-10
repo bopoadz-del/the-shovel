@@ -368,6 +368,110 @@ def test_extract_pdf_batched_keeps_prior_pages_on_timeout(tmp_path, monkeypatch)
     assert meta.get("ocr_pages") == 5
 
 
+def test_large_pdf_is_page_batched_with_no_whole_file_skip(tmp_path, monkeypatch):
+    """A PDF above the batch threshold takes the page-batch path, not the
+    per-file child, and passes 0.0 (no whole-file skip) as its ceiling so size
+    alone can never produce zero chunks."""
+    from app.core import doc_index
+
+    pdf = str(tmp_path / "large.pdf")
+    monkeypatch.setattr(doc_index, "_pdf_should_batch", lambda p: True)
+    calls = {}
+
+    def _whole(*args, **kwargs):
+        calls["whole"] = kwargs
+        return ["chunk-a"], {"pages_read": 3}
+
+    monkeypatch.setattr(doc_index, "_produce_whole_document_chunks", _whole)
+
+    chunks, _meta = doc_index._produce_chunks_isolated(
+        pdf, "large.pdf", ".pdf", "p", "default", False,
+    )
+    assert chunks == ["chunk-a"]
+    assert calls["whole"]["max_size_mb"] == 0.0
+
+
+def test_small_pdf_stays_on_per_file_child_path(tmp_path, monkeypatch):
+    """A PDF below the batch threshold keeps the single per-file child path."""
+    from app.core import doc_index
+    import app.core.extract_isolated as extract_isolated
+
+    pdf = str(tmp_path / "small.pdf")
+    monkeypatch.setattr(doc_index, "_pdf_should_batch", lambda p: False)
+    calls = {}
+
+    def _whole(*args, **kwargs):
+        calls["whole"] = True
+        return ["bad"], {}
+
+    def _single(*args):
+        calls["single"] = True
+        return ["chunk-b"], {"pages_read": 1}
+
+    monkeypatch.setattr(doc_index, "_produce_whole_document_chunks", _whole)
+    monkeypatch.setattr(doc_index, "_produce_chunks", _single)
+    monkeypatch.setattr(doc_index, "_file_budget", lambda: (64, 30.0))
+    monkeypatch.setattr(extract_isolated, "worth_isolating", lambda p: True)
+    monkeypatch.setattr(
+        extract_isolated, "run_isolated",
+        lambda fn, args, fallback, **kw: (fn(*args), {}),
+    )
+
+    chunks, _meta = doc_index._produce_chunks_isolated(
+        pdf, "small.pdf", ".pdf", "p", "default", False,
+    )
+    assert chunks == ["chunk-b"]
+    assert "single" in calls
+    assert "whole" not in calls
+
+
+def test_whole_document_keeps_admin_ceiling(tmp_path, monkeypatch):
+    """A whole reference work keeps its own ceiling, not the no-skip default."""
+    from app.core import doc_index
+
+    pdf = str(tmp_path / "book.pdf")
+    monkeypatch.setenv("ADMIN_KNOWLEDGE_PDF_MAX_MB", "200")
+    calls = {}
+
+    def _whole(*args, **kwargs):
+        calls["whole"] = kwargs
+        return ["chunk"], {}
+
+    monkeypatch.setattr(doc_index, "_produce_whole_document_chunks", _whole)
+    doc_index._produce_chunks_isolated(
+        pdf, "book.pdf", ".pdf", "p", "default", False, whole_document=True,
+    )
+    assert calls["whole"]["max_size_mb"] == 200.0
+
+
+def test_batched_pdf_with_zero_ceiling_never_skips_on_size(tmp_path, monkeypatch):
+    """max_size_mb=0.0 extracts a >100 MB text-layer PDF in batches instead of
+    skipping it wholesale (the old PDF_MAX_SIZE_MB zero-chunk path)."""
+    from app.core import doc_index
+
+    pdf = str(tmp_path / "huge.pdf")
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: 145.0)
+    monkeypatch.setattr(doc_index, "_quarantine_meta", lambda p, n: None)
+    monkeypatch.setattr(doc_index, "_pdf_page_count", lambda p: 3)
+    monkeypatch.setenv("PDF_OCR_BATCH_PAGES", "20")
+
+    ranges = []
+
+    def _iso(fn, args, fallback, label="", **kw):
+        if fn is doc_index._extract_pdf_range_job:
+            start, end = args[2], args[3]
+            ranges.append((start, end))
+            return ("pages %d-%d text" % (start, end), {"pages_read": end - start}), {}
+        return fallback, {}
+
+    monkeypatch.setattr("app.core.extract_isolated.run_isolated", _iso)
+
+    text, meta = doc_index._extract_pdf_batched(pdf, "huge.pdf", max_size_mb=0.0)
+    assert ranges == [(0, 3)]
+    assert "pages 0-3 text" in text
+    assert not meta.get("skipped_too_large")
+
+
 def test_chunker_for_boq_filename_is_finer():
     from app.core.doc_index import _chunker_for_document
 
