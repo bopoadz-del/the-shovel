@@ -129,6 +129,30 @@ async def test_augment_folds_in_recovered_evidence(plan_text, initial, item_fill
     assert "blinding" in out or "painting" in out
 
 
+@pytest.mark.parametrize("plan_text,initial,expected_items", [
+    ("bulk excavation, blinding", "bulk excavation 75 mm blinding to slab", ("bulk excavation", "blinding")),
+    ("formwork, painting", "formwork and painting quantities", ("formwork", "painting")),
+])
+async def test_augment_calls_outcome_sink_once(plan_text, initial, expected_items):
+    seen = []
+
+    def _sink(outcome):
+        seen.append(outcome)
+
+    out = await augment_figure_retrieval(
+        question="what are the quantities",
+        project_id="p",
+        first_pass_evidence=initial,
+        plan_caller=lambda q: _plan_caller(plan_text),
+        retrieve_fn=_fake_retrieve({}),
+        bm25_fn=_fake_bm25({}),
+        outcome_sink=_sink,
+    )
+    assert out == initial
+    assert len(seen) == 1
+    assert seen[0].plan_items == expected_items
+
+
 @pytest.mark.parametrize("plan_text,initial,item_fill", [
     ("bulk excavation, blinding", "bulk excavation only", {"blinding": "75 mm blinding to concrete"}),
     ("formwork, painting", "formwork only", {"painting": "painting to all walls"}),

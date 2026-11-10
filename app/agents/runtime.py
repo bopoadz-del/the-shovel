@@ -953,14 +953,6 @@ async def _agentic_figure_retrieval_augment(
         agent, api_key=api_key, project_id=project_id, user_id=user_id,
     )
 
-    def _stash_outcome(outcome: Any) -> None:
-        # Record the evidence decision for the end-of-turn dataset logger
-        # (item 2b). One-shot per turn; the logger clears it after appending.
-        setattr(agent, "_dataset_turn", {
-            "question": user_message,
-            "evidence_plan": tuple(outcome.plan_items or ()),
-        })
-
     store = _get_store()
     augmented = await _rag_route.augment_figure_retrieval(
         question=user_message,
@@ -970,13 +962,26 @@ async def _agentic_figure_retrieval_augment(
         retrieve_fn=retrieve_with_filter,
         bm25_fn=store.bm25_search,
         run_sync=off_loop,
-        outcome_sink=_stash_outcome,
+        outcome_sink=partial(_stash_dataset_outcome, agent, user_message),
     )
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)
         merged["content"] = augmented
         return merged
     return rag_sys_msg
+
+
+def _stash_dataset_outcome(agent: Any, question: str, outcome: Any) -> None:
+    """Record the evidence decision for the end-of-turn dataset logger.
+
+    One-shot per turn; the logger clears it after appending. Promoted out of
+    the retrieval-augment closure so the store is directly testable (a dropped
+    store is caught by the mutation gate).
+    """
+    setattr(agent, "_dataset_turn", {
+        "question": question,
+        "evidence_plan": tuple(outcome.plan_items or ()),
+    })
 
 
 def _log_dataset_turn(

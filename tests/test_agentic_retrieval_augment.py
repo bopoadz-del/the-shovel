@@ -17,6 +17,7 @@ from app.agents.runtime import (
     _agentic_figure_retrieval_augment,
     _agentic_figure_retrieval_excluded,
     _agentic_figure_retrieval_plan_caller,
+    _stash_dataset_outcome,
 )
 
 
@@ -114,6 +115,20 @@ def test_excluded_predicate(monkeypatch, flags, expected):
     monkeypatch.setattr(runtime, "_looks_like_self_contained_calculation", lambda _t: c)
     monkeypatch.setattr(runtime, "_asks_self_coding", lambda _t: s)
     assert _agentic_figure_retrieval_excluded("anything") == expected
+
+
+@pytest.mark.parametrize("question,plan_items", [
+    ("what is the cover to reinforcement", ("cover row", "concrete row")),
+    ("what is the compaction density", ("compaction row",)),
+])
+def test_stash_dataset_outcome_records_question_and_plan(question, plan_items):
+    agent = SimpleNamespace()
+    outcome = SimpleNamespace(plan_items=plan_items)
+    _stash_dataset_outcome(agent, question, outcome)
+    assert agent._dataset_turn == {
+        "question": question,
+        "evidence_plan": plan_items,
+    }
 
 
 @pytest.mark.parametrize("question", [
