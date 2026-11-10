@@ -113,10 +113,13 @@ def test_unreadable_pdf_reports_no_text_layer(tmp_path, monkeypatch):
     [
         (0, 5, []),
         (5, 0, []),
+        (0, 1, []),
+        (5, 1, [0]),
         (3, 5, [0, 1, 2]),
         (1, 5, [0]),
         (1, 1, [0]),
         (10, 3, [0, 4, 9]),
+        (10, 2, [0, 9]),
     ],
 )
 def test_sample_page_indices_spread(total, count, expected):

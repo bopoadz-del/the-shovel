@@ -712,12 +712,12 @@ def _sample_page_indices(total: int, count: int) -> list[int]:
     evenly spaces the rest in between. Fewer pages than ``count`` returns every
     page. Zero or negative counts return no pages.
     """
+    if count == 1:
+        return [0] if total > 0 else []
     if total <= 0 or count <= 0:
         return []
     if total <= count:
         return list(range(total))
-    if count == 1:
-        return [0]
     step = (total - 1) / (count - 1)
     return sorted({min(total - 1, round(i * step)) for i in range(count)})
 
