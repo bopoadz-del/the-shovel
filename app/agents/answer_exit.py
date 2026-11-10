@@ -1650,16 +1650,36 @@ def _apply_answer_tier(env: dict[str, Any]) -> dict[str, Any]:
     API, exports and every client see at most MEDIUM on a general-only
     answer. The cap is on the envelope the client renders -- nothing here
     trusts a client to soften it.
+
+    B11: a figure credited to a chunk that ALSO held a competing figure in
+    the same unit is capped to the general tier by ``figure_provenance`` (its
+    entry reads ``source: general_knowledge``). The answer-tier banner
+    reflects that cap -- the lowest credited tier among the answer's figures
+    lowers ``tier`` -- while the confidence cap above stays retrieval-driven:
+    the SourcesList confidence is a retrieval judgement, not a figure one.
     """
     try:
+        from app.agents.provenance_trail import SOURCE_GENERAL
         from app.agents.runtime import _answer_tier  # local import, like loop.py
+
         rows = env.get("sources")
-        tier = _answer_tier(rows if isinstance(rows, list) else [])
-        env["tier"] = tier
-        if tier == "general" and isinstance(rows, list):
+        retrieval_tier = _answer_tier(rows if isinstance(rows, list) else [])
+        # Confidence stays keyed to the retrieval tier: only a general-only
+        # (no own-layer source) answer caps its source rows at Medium.
+        if retrieval_tier == "general" and isinstance(rows, list):
             for row in rows:
                 if isinstance(row, dict) and row.get("confidence") == "High":
                     row["confidence"] = _GENERAL_TIER_CONFIDENCE_CEILING
+        # The banner tier also reflects figure credit: any figure credited to
+        # general_knowledge (a KB chunk, or a project chunk whose competing
+        # figure capped it) lowers the banner even when the retrieval mix is
+        # project-scoped.
+        tier = retrieval_tier
+        for entry in env.get("provenance") or []:
+            if isinstance(entry, dict) and entry.get("source") == SOURCE_GENERAL:
+                tier = "general"
+                break
+        env["tier"] = tier
     except Exception:  # noqa: BLE001 -- the exit must never break an answer
         _LOG.exception("answer_exit: M4 tier/cap check failed; envelope passed through")
     return env

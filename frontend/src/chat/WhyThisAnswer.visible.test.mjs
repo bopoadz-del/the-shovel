@@ -195,6 +195,40 @@ test('a user figure reads "From your message", a document figure names the file'
   assert.doesNotMatch(text, KEY_VALUE)
 })
 
+test('a document figure shows its credited tier, sentence, and competing figures when present', () => {
+  const html = render([
+    {
+      figure: '28 days',
+      source: 'project_document',
+      doc_name: 'FIDIC Red Book.pdf',
+      page_or_section: 'cl. 8.1',
+      sentence: 'The commencement deadline is 28 days.',
+      competing: ['42 days', '7 days'],
+    },
+    {
+      figure: '7 days',
+      source: 'general_knowledge',
+      doc_name: 'DD-2023-118.pdf',
+      page_or_section: 'p. 2',
+      sentence: 'The notice deadline is 7 days.',
+    },
+  ])
+  const text = visibleText(html)
+  // The credited tier reads in plain words, never the machine source value.
+  assert.match(text, /Project/)
+  assert.match(text, /General/)
+  assert.doesNotMatch(text, /project_document/)
+  assert.doesNotMatch(text, /general_knowledge/)
+  // The chunk's own sentence is shown for each figure.
+  assert.match(text, /The commencement deadline is 28 days\./)
+  assert.match(text, /The notice deadline is 7 days\./)
+  // Competing figures are listed only for the entry that carries them.
+  assert.equal(text.split('Also in this source').length, 2)
+  assert.match(text, /Also in this source: 42 days, 7 days/)
+  assert.doesNotMatch(text, SNAKE)
+  assert.doesNotMatch(text, KEY_VALUE)
+})
+
 test('streaming with nothing yet shows the waiting line; empty + done renders nothing', () => {
   assert.match(visibleText(render([], { streaming: true })), /appears once the answer completes/i)
   assert.equal(render([], { streaming: false }), '')

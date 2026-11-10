@@ -162,3 +162,45 @@ def test_general_only_non_stream_result_is_general_and_capped(rows):
     assert result["tier"] == "general"
     assert all(row.get("confidence") != "High" for row in result["sources"])
     assert result["sources"][0]["confidence"] == "Medium"
+
+
+@pytest.mark.parametrize(
+    "provenance,expected_tier",
+    [
+        # A figure capped to general_knowledge (its chunk held a competing
+        # figure) lowers the banner to general even though the retrieval
+        # source is an own project chunk.
+        (
+            [{"figure": "28 days", "source": "general_knowledge",
+              "competing": ["42 days"]}],
+            "general",
+        ),
+        # An answer whose figures are all project-credited keeps the project
+        # banner.
+        (
+            [{"figure": "28 days", "source": "project_document",
+              "sentence": "The deadline is 28 days."}],
+            "project",
+        ),
+    ],
+)
+def test_answer_tier_reflects_a_capped_figure(provenance, expected_tier):
+    """B11: the answer-tier banner reflects the lowest credited tier among
+    the answer's figures; the source-row confidence stays retrieval-driven."""
+    rows = [
+        {
+            "doc_name": "Spec.pdf",
+            "doc_id": "doc_1",
+            "layer": "own",
+            "confidence": "High",
+            "score": 0.9,
+            "page_or_section": "p. 4",
+        }
+    ]
+    event = check_end_event({"type": "end", "content": "Answer.",
+                              "sources": rows, "provenance": provenance})
+
+    assert event["tier"] == expected_tier
+    # The figure judgement never caps the retrieval confidence: HIGH survives
+    # a project-cited answer even when one of its figures was capped.
+    assert event["sources"][0]["confidence"] == "High"
