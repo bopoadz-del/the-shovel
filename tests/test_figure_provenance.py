@@ -134,3 +134,49 @@ def test_the_assistant_message_stores_its_provenance(tmp_path, monkeypatch):
     pt.LAST_PROVENANCE.set(None)
     assert msg["provenance"] == entries
     assert agent_memory.append_message(conv["id"], "user", "thanks")["provenance"] is None
+
+
+@pytest.mark.parametrize(
+    "answer,question,figure,params",
+    [
+        (
+            "That design strength of 35 MPa is not in the project documents.",
+            "What is the design strength for fck = 35 MPa and γc = 1.5?",
+            "35 MPa",
+            {"length_m": 3.0, "width_m": 2.0, "depth_m": 35},
+        ),
+        (
+            "The trench is 6 m deep; I cannot run that excavation without a width.",
+            "How much do I dig for a 6 m trench?",
+            "6 m",
+            {"length_m": 6.0, "width_m": 2.0, "depth_m": 3.0},
+        ),
+    ],
+)
+def test_an_unrelated_calculator_does_not_steal_a_users_figure(
+    answer, question, figure, params,
+):
+    """A tool whose result the answer never uses is not a source (M13).
+
+    The calculator is given a value equal to the answer's figure, but it
+    returns a different number the answer does not state. Under the old pool
+    (result ∪ inputs) the figure was credited to that unrelated tool and
+    surfaced in "Why this answer"; the figure came from the operator's own
+    words and must stay user_input.
+    """
+    result = run_calculation("excavation_volume", params)
+    messages = [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "t1", "type": "function",
+            "function": {"name": "construction_calc",
+                         "arguments": json.dumps({"calculation": "excavation_volume",
+                                                  "params": params})}}]},
+        {"role": "tool", "tool_call_id": "t1", "name": "construction_calc",
+         "content": json.dumps(result)},
+    ]
+    _out, prov = figure_provenance(answer, None, messages, enforce=False)
+    assert prov, prov
+    assert all(e.get("source") != pt.SOURCE_CALCULATOR for e in prov), prov
+    by_fig = {e["figure"]: e for e in prov}
+    assert by_fig[figure]["source"] == pt.SOURCE_USER, by_fig
