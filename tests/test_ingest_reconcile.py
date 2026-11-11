@@ -11,8 +11,10 @@ import pytest
 
 from app.core import ingest_status as ist
 from app.core.ingest_reconcile import (
+    _tally_p3_counts,
     apply_tombstones,
     coverage_truth,
+    p3_reconcile_dry_run,
     plan_as_dict,
     plan_reconcile,
     resume_source_changed,
@@ -327,3 +329,196 @@ def test_gdrive_list_fields_request_md5_not_etag():
     src = Path("app/core/gdrive_service.py").read_text(encoding="utf-8")
     assert "md5Checksum" in src
     assert "etag" not in src.lower()
+
+def _p3_doc(
+    doc_id: str,
+    *,
+    name: str = "doc.pdf",
+    status: str = ist.INDEXED,
+    chunks: int = 0,
+    has_file: bool = True,
+    bytes_state: str = "present",
+    superseded_by: str | None = None,
+    retrieval_visible: bool = True,
+    content_sha256: str | None = None,
+    drive_md5: str | None = None,
+) -> dict:
+    return {
+        "id": doc_id,
+        "original_name": name,
+        "ingest_status": status,
+        "chunk_count": chunks,
+        "has_file": has_file,
+        "bytes_state": bytes_state,
+        "superseded_by": superseded_by,
+        "retrieval_visible": retrieval_visible,
+        "content_sha256": content_sha256,
+        "drive_md5": drive_md5,
+    }
+
+
+@pytest.mark.parametrize(
+    "name,chunks",
+    [("boq.xlsx", 40), ("tracker.csv", 3)],
+)
+def test_p3_spreadsheet_doc_counts_chunks_from_store(name, chunks):
+    # Rule (a): chunk rows come from the store map, not the cached column.
+    out = _tally_p3_counts([_p3_doc("s1", name=name, chunks=0)], {"s1": chunks})
+    ss = out["spreadsheets"]
+    assert ss["documents"] == 1
+    assert ss["with_chunks"] == 1
+    assert ss["chunks"] == chunks
+    ext = "." + name.rsplit(".", 1)[1]
+    assert ss["by_extension"][ext]["chunks"] == chunks
+
+
+@pytest.mark.parametrize("name", ["empty.xls", "blank.xlsm"])
+def test_p3_spreadsheet_zero_chunk_is_counted_not_with_chunks(name):
+    # Rule (a): a zero-chunk spreadsheet is still a removal candidate.
+    out = _tally_p3_counts(
+        [_p3_doc("s1", name=name, status=ist.ZERO_CHUNK, chunks=0)], {}
+    )
+    ss = out["spreadsheets"]
+    assert ss["documents"] == 1
+    assert ss["with_chunks"] == 0
+    assert ss["chunks"] == 0
+    assert ss["by_status"][ist.ZERO_CHUNK] == 1
+
+
+@pytest.mark.parametrize(
+    "doc,expected",
+    [
+        (_p3_doc("d1", superseded_by="d2"),
+         {"superseded_by_set": 1, "retrieval_invisible": 0}),
+        (_p3_doc("d2", retrieval_visible=False),
+         {"superseded_by_set": 0, "retrieval_invisible": 1}),
+        (_p3_doc("d3", superseded_by="d4", retrieval_visible=False),
+         {"superseded_by_set": 1, "retrieval_invisible": 1}),
+    ],
+)
+def test_p3_superseded_and_invisible_counted(doc, expected):
+    # Rule (b) part 1: superseded_by and retrieval_visible are independent.
+    assert _tally_p3_counts([doc], {})["superseded"] == expected
+
+
+@pytest.mark.parametrize(
+    "docs,sha_expected,md5_expected",
+    [
+        (
+            [_p3_doc("a1", content_sha256="shaA", drive_md5="md5A"),
+             _p3_doc("a2", content_sha256="shaA", drive_md5="md5A")],
+            {"groups": 1, "duplicate_docs": 1},
+            {"groups": 1, "duplicate_docs": 1},
+        ),
+        (
+            [_p3_doc("b1", content_sha256="shaB"),
+             _p3_doc("b2", content_sha256="shaB"),
+             _p3_doc("b3", content_sha256="shaB")],
+            {"groups": 1, "duplicate_docs": 2},
+            {"groups": 0, "duplicate_docs": 0},
+        ),
+    ],
+)
+def test_p3_exact_duplicate_groups_by_sha_and_md5(docs, sha_expected, md5_expected):
+    # Rule (b) part 2: duplicate_docs = sum(count-1) per group key.
+    out = _tally_p3_counts(docs, {})
+    assert out["duplicates"]["content_sha256"] == sha_expected
+    assert out["duplicates"]["drive_md5"] == md5_expected
+
+
+@pytest.mark.parametrize(
+    "doc,is_ghost",
+    [
+        (_p3_doc("g1", has_file=False, bytes_state="not_stored", chunks=0,
+                 status=ist.EXTRACT_FAILED), True),
+        (_p3_doc("g2", has_file=False, bytes_state="missing", chunks=0,
+                 status=ist.ZERO_CHUNK), True),
+        (_p3_doc("keep1", has_file=False, bytes_state="not_stored", chunks=5), False),
+        (_p3_doc("keep2", has_file=True, bytes_state="present", chunks=0), False),
+    ],
+)
+def test_p3_ghost_needs_no_source_and_no_chunks(doc, is_ghost):
+    # Rule (c): a row is a ghost only when bytes are gone AND chunks are zero.
+    out = _tally_p3_counts([doc], {})
+    assert out["ghosts"]["total"] == (1 if is_ghost else 0)
+
+def _seed_chunk_rows(project_id: str, doc_id: str, count: int) -> None:
+    """Insert ``count`` rows into the ACTIVE namespaced chunk table.
+
+    The dry-run reads live chunk-row counts, not the cached ``chunk_count``
+    column; a test must seed the store so a bypassed chunk-count query is
+    observable. Reuses whatever width the namespace was already opened at.
+    """
+    import os
+    from datetime import datetime, timezone
+
+    import numpy as np
+    from app.core.db import SessionLocal, engine
+    from app.core.models import (
+        EMBEDDING_DIM,
+        make_rag_chunk_class,
+        rag_chunk_class_for,
+    )
+    from app.core.rag.vector_store import ensure_table
+
+    ns = (os.getenv("RAG_VECTOR_NAMESPACE", "v2") or "").strip()
+    cls = rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+    ensure_table(cls.__table__, bind=engine)
+    dim = int(cls.embedding_identity["dim"])
+    vec = np.zeros(dim, dtype=np.float32)
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        for i in range(count):
+            session.add(cls(
+                chunk_id=f"{doc_id}-{i}",
+                project_id=project_id,
+                doc_id=doc_id,
+                chunk_index=i,
+                text=f"row {i}",
+                embedding=vec,
+                created_at=now,
+            ))
+        session.commit()
+
+
+@pytest.mark.parametrize(
+    "name,chunks",
+    [("boq.xlsx", 4), ("tracker.csv", 2)],
+)
+def test_p3_reconcile_dry_run_queryable(monkeypatch, tmp_path, name, chunks):
+    # The endpoint's loader is covered end-to-end on SQLite, and the project
+    # filter is exercised against a second project's spreadsheet so a dropped
+    # filter changes the count (kills the project-filter mutant).
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("P3", user_id="system", project_id="p3proj")
+    doc = pm.add_document("p3proj", name, size=10)
+    # Cached column is stale (0); the store holds ``chunks`` rows. The dry-run
+    # must report the store, so a bypassed chunk-count query (falling back to
+    # the cached column) changes the assertion.
+    pm.stamp_document_index(doc["id"], chunk_count=0, ingest_status=ist.INDEXED)
+    _seed_chunk_rows("p3proj", doc["id"], chunks)
+    pm.create_project("Other", user_id="system", project_id="otherproj")
+    pm.add_document("otherproj", "other_boq.xlsx", size=10)
+
+    report = p3_reconcile_dry_run(project_id="p3proj")
+    assert report["project_id"] == "p3proj"
+    assert report["spreadsheets"]["documents"] == 1
+    assert report["spreadsheets"]["chunks"] == chunks
+
+
+@pytest.mark.parametrize("name", ["boq.xlsx", "tracker.csv"])
+def test_p3_dry_run_endpoint_returns_counts(monkeypatch, tmp_path, name):
+    # The admin route hands back the tally dict (constant-return -> None must
+    # fail), and the project filter is honoured.
+    from app.routers.admin import admin_corpus_p3_dry_run
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("EP", user_id="system", project_id="eproj")
+    pm.add_document("eproj", name, size=10)
+
+    result = admin_corpus_p3_dry_run(
+        project_id="eproj", auth={"user_id": "admin", "role": "admin"},
+    )
+    assert isinstance(result, dict)
+    assert result["project_id"] == "eproj"
+    assert result["spreadsheets"]["documents"] == 1

@@ -27,7 +27,7 @@ def _write_text_pdf(path, pages: list[str | None]) -> None:
         doc.close()
 
 
-@pytest.mark.parametrize("ext", [".xls", ".xlsx"])
+@pytest.mark.parametrize("ext", [".xls", ".xlsx", ".xlsm", ".xlsb", ".csv"])
 def test_spreadsheets_are_their_own_class(ext):
     assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_SPREADSHEET
 

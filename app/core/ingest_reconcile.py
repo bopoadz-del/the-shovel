@@ -28,6 +28,7 @@ from app.core.ingest_status import (
     ALL_STATUSES,
     INDEXED,
     OCR_DEGRADED,
+    SPREADSHEET_EXTS,
     TEXT_SPARSE,
     TOMBSTONED,
     UNVERIFIED,
@@ -582,6 +583,171 @@ def coverage_truth(
         "project_id": project_id,
         "office": office,
     }
+
+
+def _tally_p3_counts(
+    docs: Sequence[Mapping[str, Any]],
+    chunk_counts: Mapping[str, int],
+) -> dict[str, Any]:
+    """Read-only P3 reconcile dry-run tally. Pure: no I/O.
+
+    Three owner/curator rules (SPEC_CORPUS_DECISIONS_v1):
+      (a) spreadsheet-extension rows are removed from the chunk store;
+      (b) superseded revisions per document-code family + exact duplicates;
+      (c) ghosts: rows with no local bytes, no Drive pointer and no chunks.
+
+    ``chunk_counts`` is the live chunk-row count per doc id (the cached
+    ``chunk_count`` column can drift); callers may fall back to it.
+    """
+    ss_by_ext: dict[str, dict[str, int]] = {}
+    ss_by_status: dict[str, int] = {}
+    ss_documents = 0
+    ss_with_chunks = 0
+    ss_chunks = 0
+
+    superseded = 0
+    retrieval_invisible = 0
+    sha_groups: dict[str, int] = {}
+    md5_groups: dict[str, int] = {}
+
+    ghosts = 0
+    ghost_by_status: dict[str, int] = {}
+    ghost_by_bytes_state: dict[str, int] = {}
+
+    for doc in docs:
+        did = str(doc.get("id") or "")
+        chunks = int(
+            chunk_counts.get(did, doc.get("chunk_count") or 0) or 0
+        )
+        ext = document_extension(doc)
+        status = str(doc.get("ingest_status") or UNVERIFIED)
+
+        # (a) spreadsheets in the chunk store
+        if ext in SPREADSHEET_EXTS:
+            ss_documents += 1
+            bucket = ss_by_ext.setdefault(
+                ext, {"documents": 0, "with_chunks": 0, "chunks": 0}
+            )
+            bucket["documents"] += 1
+            bucket["chunks"] += chunks
+            if chunks > 0:
+                bucket["with_chunks"] += 1
+                ss_with_chunks += 1
+            ss_chunks += chunks
+            ss_by_status[status] = ss_by_status.get(status, 0) + 1
+
+        # (b) superseded + exact duplicates
+        if doc.get("superseded_by"):
+            superseded += 1
+        if doc.get("retrieval_visible") is False:
+            retrieval_invisible += 1
+        sha = doc.get("content_sha256")
+        if sha:
+            sha_groups[sha] = sha_groups.get(sha, 0) + 1
+        md5 = doc.get("drive_md5")
+        if md5:
+            md5_groups[md5] = md5_groups.get(md5, 0) + 1
+
+        # (c) ghosts
+        if doc.get("has_file") is not True and chunks == 0:
+            ghosts += 1
+            ghost_by_status[status] = ghost_by_status.get(status, 0) + 1
+            bs = str(doc.get("bytes_state") or "")
+            ghost_by_bytes_state[bs] = ghost_by_bytes_state.get(bs, 0) + 1
+
+    def _dup_stats(groups: Mapping[str, int]) -> dict[str, int]:
+        duplicate_docs = 0
+        group_count = 0
+        for n in groups.values():
+            if n > 1:
+                group_count += 1
+                duplicate_docs += n - 1
+        return {"groups": group_count, "duplicate_docs": duplicate_docs}
+
+    return {
+        "spreadsheets": {
+            "extensions": sorted(SPREADSHEET_EXTS),
+            "documents": ss_documents,
+            "with_chunks": ss_with_chunks,
+            "chunks": ss_chunks,
+            "by_extension": ss_by_ext,
+            "by_status": ss_by_status,
+        },
+        "superseded": {
+            "superseded_by_set": superseded,
+            "retrieval_invisible": retrieval_invisible,
+        },
+        "duplicates": {
+            "content_sha256": _dup_stats(sha_groups),
+            "drive_md5": _dup_stats(md5_groups),
+        },
+        "ghosts": {
+            "total": ghosts,
+            "by_status": ghost_by_status,
+            "by_bytes_state": ghost_by_bytes_state,
+        },
+    }
+
+
+def p3_reconcile_dry_run(*, project_id: str | None = None) -> dict[str, Any]:
+    """Read-only P3 reconcile dry-run counts. Never deletes, never re-indexes.
+
+    Loads the documents ledger plus live chunk-row counts and hands them to
+    :func:`_tally_p3_counts`. No writes to documents or chunks.
+    """
+    from sqlalchemy import select, text
+    from app.core import projects as projects_mod
+    from app.core.db import SessionLocal
+    from app.core.models import Document, rag_chunk_table_name
+
+    chunks_table = rag_chunk_table_name(
+        os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()
+    )
+    params: dict[str, Any] = {"pid": project_id} if project_id else {}
+
+    with SessionLocal() as session:
+        stmt = select(Document)
+        if project_id:
+            stmt = stmt.where(Document.project_id == project_id)
+        docs = [
+            projects_mod._document_as_dict(d)
+            for d in session.scalars(stmt).all()
+        ]
+
+        chunk_counts: dict[str, int] = {}
+        try:
+            if project_id:
+                rows = session.execute(
+                    text(
+                        f"""
+                        SELECT c.doc_id, COUNT(*)
+                        FROM {chunks_table} c
+                        JOIN documents d ON c.doc_id = d.id
+                        WHERE d.project_id = :pid
+                        GROUP BY c.doc_id
+                        """
+                    ),
+                    params,
+                ).all()
+            else:
+                rows = session.execute(
+                    text(
+                        f"""
+                        SELECT doc_id, COUNT(*)
+                        FROM {chunks_table}
+                        GROUP BY doc_id
+                        """
+                    )
+                ).all()
+            chunk_counts = {str(r[0]): int(r[1] or 0) for r in rows if r[0]}
+        except Exception:
+            session.rollback()
+            chunk_counts = {}
+
+    counts = _tally_p3_counts(docs, chunk_counts)
+    counts["project_id"] = project_id
+    counts["chunks_table"] = chunks_table
+    return counts
 
 
 def plan_as_dict(plan: ReconcilePlan) -> dict[str, Any]:

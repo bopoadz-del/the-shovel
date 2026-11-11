@@ -2042,6 +2042,28 @@ def admin_corpus_coverage(
     return _corpus_coverage(project_id)
 
 
+@router.get("/v1/admin/corpus/p3-dry-run")
+def admin_corpus_p3_dry_run(
+    project_id: Optional[str] = Query(None),
+    auth: dict = Depends(require_api_key),
+):
+    """Read-only P3 reconcile dry-run counts (SPEC_CORPUS_DECISIONS_v1).
+
+    Counts only, for the three reconcile rules:
+      (a) spreadsheet-extension rows present in the chunk store + their chunks;
+      (b) superseded revisions (``superseded_by``) and exact duplicates
+          (``content_sha256`` / ``drive_md5`` collisions);
+      (c) ghosts: rows with no local bytes, no Drive pointer and no chunks.
+
+    Nothing is deleted, tombstoned or re-indexed here; the removal is a
+    separate, explicitly-ordered ops task.
+    """
+    _require_admin(auth)
+    from app.core.ingest_reconcile import p3_reconcile_dry_run
+
+    return p3_reconcile_dry_run(project_id=project_id)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PR A — admin-approved projects from Drive
 #
