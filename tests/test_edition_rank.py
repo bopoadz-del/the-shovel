@@ -57,6 +57,13 @@ def test_extract_edition_standards_returns_empty(query):
     ("ISO 9001 audits", "", "ISO 9001", "2015", False),           # code, no year
     ("ISO 14001:2008 audits", "", "ISO 9001", "2015", False),     # different code + year
     ("Regional Standard 2019 rules", "", "Regional Standard", "2017", True),  # non-acronym standard
+    # A stray date elsewhere must not demote a candidate that names the asked
+    # edition (order 13:18Z, 11 Nov).
+    ("ACME 2017 conditions; the contract was signed and dated 2023.", "", "ACME", "2017", False),
+    # A project code in the filename is not the standard's edition: the text's
+    # edition decides (same order).
+    ("ACME 1999 conditions.", "PRJ-2023-001_ACME_conditions.pdf", "ACME", "2017", True),
+    ("ACME 2017 conditions.", "PRJ-2023-001_ACME_conditions.pdf", "ACME", "2017", False),
 ])
 def test_candidate_conflicts(text, source_name, standard, edition, expected):
     assert er.candidate_conflicts(text, source_name, standard, edition) is expected

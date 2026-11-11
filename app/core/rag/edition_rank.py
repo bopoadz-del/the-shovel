@@ -121,13 +121,19 @@ def _standard_pattern(standard: str) -> re.Pattern:
 
 
 def _edition_tokens(blob: str) -> List[str]:
-    """Edition tokens (years + explicit edition/version values) in a candidate."""
+    """Edition tokens (years + explicit edition/version values) in a blob."""
     out: List[str] = []
     for match in _YEAR_RE.finditer(blob):
         out.append(match.group(0))
     for match in _EDITION_VALUE_RE.finditer(blob):
         out.append(match.group(1))
     return out
+
+
+def _adjacent_edition_tokens(blob: str, start: int, end: int) -> List[str]:
+    """Edition tokens within _STANDARD_WINDOW of a standard occurrence's span."""
+    window = blob[max(0, start - _STANDARD_WINDOW):end + _STANDARD_WINDOW]
+    return _edition_tokens(window)
 
 
 def candidate_conflicts(
@@ -137,15 +143,33 @@ def candidate_conflicts(
     edition: str,
 ) -> bool:
     """True when the candidate carries the SAME standard with a DIFFERENT
-    edition. A candidate with no edition token is unaffected (False)."""
+    edition ADJACENT to an occurrence of the standard name, and no occurrence
+    of the standard has the asked edition adjacent.
+
+    A year token far from the standard (a signing date, a project code in a
+    filename) does not make the candidate conflict; only an edition token that
+    actually qualifies an occurrence of the standard does. A candidate with no
+    edition token, or one where a matching occurrence exists, is unaffected
+    (False).
+    """
     joined = "\n".join(part for part in (text, source_name) if part)
-    if not _standard_pattern(standard).search(joined):
+    pattern = _standard_pattern(standard)
+    occurrences = list(pattern.finditer(joined))
+    if not occurrences:
         return False
     edition_lower = (edition or "").lower()
-    return any(
-        token and token.lower() != edition_lower
-        for token in _edition_tokens(joined)
-    )
+    any_conflicting = False
+    for occurrence in occurrences:
+        adjacent = _adjacent_edition_tokens(
+            joined, occurrence.start(), occurrence.end())
+        if not adjacent:
+            continue
+        if any(token.lower() == edition_lower for token in adjacent):
+            # This occurrence names the asked edition, so the candidate is not
+            # in conflict regardless of any other stray year token elsewhere.
+            return False
+        any_conflicting = True
+    return any_conflicting
 
 
 def apply_edition_conflict_demotion(
