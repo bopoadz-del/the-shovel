@@ -11,6 +11,7 @@ exception must not abort the main thread) are kept below.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -26,9 +27,10 @@ class _FakeDrive:
         self.payload = payload
         self.calls: List[str] = []
 
-    def download_file_bytes(self, fid):
+    def download_file_to_path(self, fid, dest):
         self.calls.append(fid)
-        return self.payload, None
+        Path(dest).write_bytes(self.payload)
+        return len(self.payload), hashlib.sha256(self.payload).hexdigest(), None
 
 
 def _install_ingest_fakes(monkeypatch, added: List[Dict[str, Any]], seen: List[Dict[str, Any]]):

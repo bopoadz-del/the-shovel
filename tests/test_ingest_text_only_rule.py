@@ -14,6 +14,7 @@ The Drive ingest discovery filter is covered in test_p1b_ingest_accounting.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import shutil
 import zipfile
@@ -283,9 +284,10 @@ def test_a_compressed_file_is_never_ingested_opened_or_accepted(client, tmp_path
     downloads: list = []
 
     class _Drive:
-        def download_file_bytes(self, fid):
+        def download_file_to_path(self, fid, dest):
             downloads.append(fid)
-            return blob, None
+            Path(dest).write_bytes(blob)
+            return len(blob), hashlib.sha256(blob).hexdigest(), None
 
     _rel, result = _ingest_file(
         {"id": "drive-z", "name": "pack.zip", "_drive_path": "T/pack.zip",
