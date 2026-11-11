@@ -34,6 +34,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -qq
+
       - name: Install system deps
         run: |
           sudo apt-get update -qq
@@ -44,6 +50,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-browser.txt pytest-timeout
+
+      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -qq
 
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
