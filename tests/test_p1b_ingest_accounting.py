@@ -543,7 +543,8 @@ def _write_two_folder_manifest(harness, project_ids) -> None:
     )
 
 
-def test_two_folders_same_project_acquire_the_lock_once(harness, monkeypatch):
+@pytest.mark.parametrize("project_id", ["same_project_a", "same_project_b"])
+def test_two_folders_same_project_acquire_the_lock_once(harness, monkeypatch, project_id):
     """Two walk entries landing in ONE project must not self-deadlock.
 
     ``--project-id`` retargets every folder to one project; the run would
@@ -551,17 +552,21 @@ def test_two_folders_same_project_acquire_the_lock_once(harness, monkeypatch):
     own still-held lock when the second folder re-acquired it.
     """
     acquired = _lock_acquisitions(monkeypatch)
-    _write_two_folder_manifest(harness, [PROJECT_ID, PROJECT_ID])
+    _write_two_folder_manifest(harness, [project_id, project_id])
     assert harness.run() == 0
-    assert acquired == [(1, PROJECT_ID)]
+    assert acquired == [(1, project_id)]
 
 
-def test_two_folders_different_projects_acquire_both_locks(harness, monkeypatch):
+@pytest.mark.parametrize(
+    "project_ids",
+    [("project_a", "project_b"), ("project_c", "project_d")],
+)
+def test_two_folders_different_projects_acquire_both_locks(harness, monkeypatch, project_ids):
     """Distinct projects still take one lock each (the guard stays on)."""
     acquired = _lock_acquisitions(monkeypatch)
-    _write_two_folder_manifest(harness, ["project_a", "project_b"])
+    _write_two_folder_manifest(harness, list(project_ids))
     assert harness.run() == 0
-    assert sorted(acquired) == [(1, "project_a"), (1, "project_b")]
+    assert sorted(acquired) == sorted((1, pid) for pid in project_ids)
 
 
 def test_advisory_lock_keys_are_stable_signed_int32(harness):
