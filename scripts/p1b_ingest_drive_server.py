@@ -768,10 +768,9 @@ def reextract_requested(doc: Mapping[str, Any], reextract_exts: frozenset[str]) 
 
     Pure decision over the documents row and the parsed set, so the resume
     loop can route a matching already-indexed document into the in-place
-    re-index path instead of the skip set. An empty set is always False.
+    re-index path instead of the skip set. Membership in an empty set is
+    always False, so a missing/empty value is a no-op.
     """
-    if not reextract_exts:
-        return False
     from app.core import ingest_status as ist
 
     return ist.document_extension(doc) in reextract_exts

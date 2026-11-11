@@ -73,6 +73,7 @@ def test_parser_reextract_exts_defaults_empty():
     "raw, expected",
     [
         ("", frozenset()),
+        (None, frozenset()),
         ("xlsx", frozenset({".xlsx"})),
         ("XLSX,.csv", frozenset({".xlsx", ".csv"})),
         ("xls, xlsm, csv ", frozenset({".xls", ".xlsm", ".csv"})),
