@@ -460,3 +460,43 @@ def test_subject_score_is_zero_when_no_token_is_verifiable(sentence, subject):
     verifiable length scores 0.0 rather than dividing by zero, so weak
     grounding is surfaced instead of hidden."""
     assert _subject_score(sentence, subject) == 0.0
+
+
+@pytest.mark.parametrize(
+    "chunk,question,answer,surfaced_figure,stated_figure",
+    [
+        (
+            "The contract notice period is 28 days. "
+            "The contractor execution period is 42 days.",
+            "What is the contract execution period?",
+            "The contract notice period is 28 days.",
+            "42 days",
+            "28 days",
+        ),
+        (
+            "The commence notice is 14 days. "
+            "The commencement date is 28 days.",
+            "What is the commence date?",
+            "The commence notice is 14 days.",
+            "28 days",
+            "14 days",
+        ),
+    ],
+)
+def test_a_derived_form_of_the_subject_names_it_and_surfaces_the_competitor(
+    chunk, question, answer, surfaced_figure, stated_figure,
+):
+    """B11: a sentence word that is a derived form of the ask's subject token
+    ("contractor" for "contract", "commencement" for "commence") still names
+    it. When the stated figure's sentence names the subject only by the base
+    form while a competitor's sentence names it by the derived form, the
+    competitor scores strictly higher and is surfaced; exact-token matching
+    would tie them and silently keep the weaker figure."""
+    ctx = _excerpts(("d_spec", "own", 5, "Specification.pdf", chunk))
+    out, prov = figure_provenance(answer, ctx, _user(question))
+    (entry,) = prov
+    assert entry["figure"] == stated_figure
+    assert entry["source"] == pt.SOURCE_GENERAL
+    assert surfaced_figure in out
+    assert "clause's figure" in out
+    assert out.startswith(answer)
