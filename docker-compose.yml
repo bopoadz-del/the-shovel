@@ -51,6 +51,11 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - UVICORN_WORKERS=2
       - PYTHONUNBUFFERED=1
+      # The startup guard refuses to boot without a JWT signing key in every
+      # non-test profile. Local compose is not a durable deployment: pass a key
+      # via .env or the environment; the compose-health CI job supplies a random
+      # one so a fresh clone can still boot. No key value lives in this repo.
+      - SECRET_KEY=${SECRET_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,6 +90,9 @@ services:
       - DATABASE_URL=postgresql+psycopg://thefork:thefork@postgres:5432/thefork
       - REDIS_URL=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
+      # The worker runs the same startup guard as the web process, so it needs
+      # the same signing key (see the cerebrum-blocks service).
+      - SECRET_KEY=${SECRET_KEY:-}
     depends_on:
       - postgres
       - redis

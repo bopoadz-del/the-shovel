@@ -4,6 +4,7 @@ import pytest
 import os
 import uuid
 import sys
+import secrets
 
 # Add app to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +32,12 @@ os.environ["RATE_LIMIT_PER_MINUTE"] = "0"
 # setdefault so a shard that wants to exercise production behaviour can set its
 # own ENV and keep it.
 os.environ.setdefault("ENV", "test")
+
+# The startup guard requires a JWT signing key in every non-test profile;
+# tests that deliberately boot under development/production need one, while
+# tests that assert the fail-closed path delete it via monkeypatch.delenv.
+# Generate per-process so no key value is committed anywhere.
+os.environ.setdefault("SECRET_KEY", "test-" + secrets.token_hex(16))
 
 # Isolate the suite's DATA_DIR so tests never write to the live ./data/ — the
 # projects store, doc index, agent memory, and upload dir all derive their

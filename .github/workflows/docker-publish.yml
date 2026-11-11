@@ -166,6 +166,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
 
+      - name: A random signing key for the ephemeral compose stack
+        # The web process and the worker both run the startup guard, which
+        # requires a JWT signing key in every non-test profile. This stack is
+        # ephemeral (not a durable deployment), so a random key is correct and
+        # must not be committed: no key value lives in the repo.
+        run: echo "SECRET_KEY=dev-$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
       - name: docker compose up
         # Image is already loaded as cerebrum-blocks:local (shared by app +
         # worker). --no-build keeps this step off a second Hub prefetch.

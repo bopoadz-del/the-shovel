@@ -112,63 +112,72 @@ def _bootstrap_first_user() -> None:
 
 
 def _validate_startup_env() -> None:
-    """Fail fast on missing security config when ENV is explicitly production.
+    """Fail fast on missing security config.
 
-    SECRET_KEY is required: without it the JWT signing secret is generated
-    per-process, so tokens are invalidated on every restart and differ across
-    scaled instances. DATA_ENCRYPTION_KEY is required in production so
-    uploaded documents are never stored as plaintext. The construction kit
-    must be loaded from THIS repo (CEREBRUM_VIRGIN=false and
-    CEREBRUM_DOMAIN_KITS=construction) — do not pull kits from the store.
+    SECRET_KEY is required everywhere except the test profile: without it the
+    JWT signing secret falls back to a per-container file, and a
+    force-new-deployment regenerates that file, signing every user out on each
+    deploy (and differing across scaled instances). The test suite runs under
+    the test profile (ENV=test/testing) and issues its own short-lived tokens,
+    so it may boot without a durable key. DATA_ENCRYPTION_KEY is additionally
+    required in production so uploaded documents are never stored as plaintext.
+    The construction kit must be loaded from THIS repo (CEREBRUM_VIRGIN=false
+    and CEREBRUM_DOMAIN_KITS=construction) — do not pull kits from the store.
     """
     from app.core import byte_store
 
     env = os.getenv("ENV", os.getenv("ENVIRONMENT", "")).strip().lower()
-    if env not in ("prod", "production"):
-        # Still rejects an efs backend whose mount is not real. local is a no-op.
+    if env in ("test", "testing"):
+        # The test profile may run with an ephemeral signing secret; it never
+        # serves signed-in users across a deploy. Still rejects an efs backend
+        # whose mount is not real (local is a no-op).
         byte_store.enforce_startup_guard()
         return
     if not os.getenv("SECRET_KEY"):
         raise RuntimeError(
-            "SECRET_KEY is required when ENV=production — without it the JWT "
-            "signing secret is regenerated per process, invalidating all "
-            "tokens on restart. Set SECRET_KEY in the environment."
+            "SECRET_KEY is required whenever the app is not running under the "
+            "test profile (ENV=test/testing) — without it the JWT signing "
+            "secret falls back to a per-container file, so a "
+            "force-new-deployment regenerates it and signs every user out. "
+            "Set SECRET_KEY in the environment from the secret store, never "
+            "a file on the container."
         )
-    if not os.getenv("DATABASE_URL"):
-        raise RuntimeError(
-            "DATABASE_URL is required when ENV=production — without it the app "
-            "silently falls back to sqlite:///{DATA_DIR}/the_fork.db, stranding "
-            "the Postgres corpus (the 'empty SQLite' incident: the app read an "
-            "empty local DB while the whole corpus sat in Postgres). Set "
-            "DATABASE_URL to the Postgres connection string."
-        )
-    if not os.getenv("DATA_ENCRYPTION_KEY"):
-        raise RuntimeError(
-            "DATA_ENCRYPTION_KEY is required when ENV=production — without it "
-            "uploaded documents are stored unencrypted at rest. Set "
-            "DATA_ENCRYPTION_KEY in the environment."
-        )
-    virgin = os.getenv("CEREBRUM_VIRGIN", "true").strip().lower()
-    kits = {
-        k.strip()
-        for k in os.getenv("CEREBRUM_DOMAIN_KITS", "").split(",")
-        if k.strip()
-    }
-    if virgin not in ("0", "false", "no") or "construction" not in kits:
-        raise RuntimeError(
-            "Production Fork requires CEREBRUM_VIRGIN=false and "
-            "CEREBRUM_DOMAIN_KITS=construction (this repo's construction kit)."
-        )
-    from app.blocks import BLOCK_REGISTRY
-    if "construction" not in BLOCK_REGISTRY:
-        raise RuntimeError(
-            "Production boot failed: construction kit/container is missing "
-            "from BLOCK_REGISTRY. Pin CEREBRUM_DOMAIN_KITS=construction and "
-            "ensure this repo's construction container loaded."
-        )
-    # After the other production checks, so a missing secret still fails
-    # first. The storage guard is off until REQUIRE_DURABLE_DOCUMENT_STORE
-    # is set — the live task has no durable volume yet.
+    if env in ("prod", "production"):
+        if not os.getenv("DATABASE_URL"):
+            raise RuntimeError(
+                "DATABASE_URL is required when ENV=production — without it the app "
+                "silently falls back to sqlite:///{DATA_DIR}/the_fork.db, stranding "
+                "the Postgres corpus (the 'empty SQLite' incident: the app read an "
+                "empty local DB while the whole corpus sat in Postgres). Set "
+                "DATABASE_URL to the Postgres connection string."
+            )
+        if not os.getenv("DATA_ENCRYPTION_KEY"):
+            raise RuntimeError(
+                "DATA_ENCRYPTION_KEY is required when ENV=production — without it "
+                "uploaded documents are stored unencrypted at rest. Set "
+                "DATA_ENCRYPTION_KEY in the environment."
+            )
+        virgin = os.getenv("CEREBRUM_VIRGIN", "true").strip().lower()
+        kits = {
+            k.strip()
+            for k in os.getenv("CEREBRUM_DOMAIN_KITS", "").split(",")
+            if k.strip()
+        }
+        if virgin not in ("0", "false", "no") or "construction" not in kits:
+            raise RuntimeError(
+                "Production Fork requires CEREBRUM_VIRGIN=false and "
+                "CEREBRUM_DOMAIN_KITS=construction (this repo's construction kit)."
+            )
+        from app.blocks import BLOCK_REGISTRY
+        if "construction" not in BLOCK_REGISTRY:
+            raise RuntimeError(
+                "Production boot failed: construction kit/container is missing "
+                "from BLOCK_REGISTRY. Pin CEREBRUM_DOMAIN_KITS=construction and "
+                "ensure this repo's construction container loaded."
+            )
+    # After the security checks, so a missing secret still fails first. The
+    # storage guard is off until REQUIRE_DURABLE_DOCUMENT_STORE is set — the
+    # live task has no durable volume yet.
     byte_store.enforce_startup_guard()
 
 
