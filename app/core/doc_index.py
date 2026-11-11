@@ -1371,7 +1371,7 @@ def _strip_nul(text: str, meta: dict[str, Any]) -> str:
 
 def _extract_with_meta(
     file_path: str, filename: str, force_ocr: bool = False,
-    *, whole_document: bool = False,
+    *, whole_document: bool = False, max_size_mb: float | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Extract plaintext from a document, plus a small metadata dict.
 
@@ -1402,9 +1402,12 @@ def _extract_with_meta(
         # A whole reference work: always isolated page batches (memory is
         # released between batches), under its own size ceiling rather than
         # the live-upload one, so a long book is read whole, not skipped.
+        # ``max_size_mb`` overrides the whole-document default so a caller
+        # can batch a large ordinary PDF with NO whole-file skip (0.0).
+        ceiling = admin_knowledge_pdf_max_mb() if max_size_mb is None else max_size_mb
         text, meta = _extract_pdf_batched(
             file_path, filename, force_ocr=force_ocr,
-            max_size_mb=admin_knowledge_pdf_max_mb(),
+            max_size_mb=ceiling,
         )
         return _strip_nul(text, meta), meta
 
@@ -3312,6 +3315,8 @@ def _produce_whole_document_chunks(
     project_id: str,
     chunker: str,
     force_ocr: bool,
+    *,
+    max_size_mb: float | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """``_produce_chunks`` for a whole reference work.
 
@@ -3324,6 +3329,7 @@ def _produce_whole_document_chunks(
 
     text, meta = _extract_with_meta(
         file_path, filename, force_ocr=force_ocr, whole_document=True,
+        max_size_mb=max_size_mb,
     )
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
@@ -3392,10 +3398,16 @@ def _produce_chunks_isolated(
     """
     from app.core.extract_isolated import run_isolated, worth_isolating
 
-    if whole_document:
-        # Whole reference works isolate per page batch, not per file.
+    if whole_document or (ext == ".pdf" and _pdf_should_batch(file_path)):
+        # Whole reference works AND large ordinary PDFs isolate per page batch,
+        # not per file. A child cannot fork again, so batching inside the
+        # per-file child would share one address space across the whole book.
+        # A large text-layer PDF therefore extracts in bounded page batches and
+        # has no whole-file skip: size alone must never produce zero chunks.
+        max_size_mb = admin_knowledge_pdf_max_mb() if whole_document else 0.0
         return _produce_whole_document_chunks(
             file_path, filename, ext, project_id, chunker, force_ocr,
+            max_size_mb=max_size_mb,
         )
     if not worth_isolating(file_path):
         return _produce_chunks(file_path, filename, ext, project_id, chunker, force_ocr)
