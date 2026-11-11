@@ -27,6 +27,7 @@ as "not configured" and continues without crashing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -731,3 +732,63 @@ def download_file_bytes(file_id: str) -> Tuple[Optional[bytes], Optional[str]]:
             return resp.content, None
     except Exception as exc:  # noqa: BLE001
         return None, f"{type(exc).__name__}: {exc}"
+
+
+# Stream the body in fixed-size chunks so a multi-hundred-MB PDF never has to
+# fit in one in-memory buffer. The chunk size is a memory bound, not a format
+# assumption: any body, any size, flows through the same bounded window.
+_DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
+
+def download_file_to_path(
+    file_id: str, dest_path: str | os.PathLike,
+) -> Tuple[Optional[int], Optional[str], Optional[str]]:
+    """Download one Drive file straight to ``dest_path`` in bounded memory.
+
+    Returns ``(bytes_written, sha256_hex, error)``. The response body is
+    streamed in fixed-size chunks to disk while the digest is computed
+    incrementally, so the whole file is never resident in RAM -- the parent
+    no longer competes with the forked extraction child for memory. On any
+    failure the partial file is removed and ``(None, None, error)`` is
+    returned.
+    """
+    fid = (file_id or "").strip()
+    if not is_valid_drive_file_id(fid):
+        return None, None, "invalid drive file id"
+    token = _mint_access_token()
+    if not token:
+        return None, None, "service account unavailable"
+    try:
+        import httpx
+    except ImportError:
+        return None, None, "httpx not available"
+
+    dest = Path(dest_path)
+    hasher = hashlib.sha256()
+    written = 0
+    try:
+        with httpx.Client(timeout=120) as client:
+            with client.stream(
+                "GET",
+                f"{_DRIVE_API}/files/{fid}",
+                headers={"Authorization": f"Bearer {token}"},
+                # Shared-drive corpus files 404 without supportsAllDrives.
+                params={"alt": "media", "supportsAllDrives": "true"},
+            ) as resp:
+                if resp.status_code != 200:
+                    return None, None, f"Drive download returned {resp.status_code}"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with open(dest, "wb") as fh:
+                    for chunk in resp.iter_bytes(chunk_size=_DOWNLOAD_CHUNK_SIZE):
+                        if not chunk:
+                            continue
+                        fh.write(chunk)
+                        hasher.update(chunk)
+                        written += len(chunk)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None, None, f"{type(exc).__name__}: {exc}"
+    return written, hasher.hexdigest(), None

@@ -10,6 +10,9 @@ layer) and one text PDF (text layer).
 """
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 import pytest
 
 from app.core import ingest_status as ist
@@ -36,8 +39,9 @@ class _Drive:
     def __init__(self, payload: bytes) -> None:
         self.payload = payload
 
-    def download_file_bytes(self, fid):
-        return self.payload, None
+    def download_file_to_path(self, fid, dest):
+        Path(dest).write_bytes(self.payload)
+        return len(self.payload), hashlib.sha256(self.payload).hexdigest(), None
 
 
 def _install_retry_fakes(monkeypatch):

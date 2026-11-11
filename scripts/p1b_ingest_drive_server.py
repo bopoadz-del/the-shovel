@@ -341,20 +341,22 @@ def _safe_stored_name(original: str) -> str:
     return f"{safe}{ext}"
 
 
-def _transient_copy(raw_bytes: bytes, stored_name: str) -> Path:
-    """Write the one copy the extractors read, on this task's ephemeral disk.
+def _transient_dest(stored_name: str) -> Path:
+    """Reserve the one transient copy path the extractors will read.
 
-    Plaintext, because it is never stored: it lives for one file's indexing
-    and is then deleted (``_discard_transient_copy``). The decrypted-temp
-    prefix makes the plaintext sweeper reap it if the process dies first.
+    Creates the empty file only; the streamed Drive download writes it in
+    bounded chunks (``gdrive_service.download_file_to_path``). The
+    decrypted-temp prefix makes the plaintext sweeper reap it if the process
+    dies first.
     """
     import tempfile
 
     from app.core import file_crypto
 
-    fd, path = tempfile.mkstemp(prefix=file_crypto.DECRYPTED_TEMP_PREFIX, suffix="_" + stored_name)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(raw_bytes)
+    fd, path = tempfile.mkstemp(
+        prefix=file_crypto.DECRYPTED_TEMP_PREFIX, suffix="_" + stored_name,
+    )
+    os.close(fd)
     return Path(path)
 
 
@@ -473,21 +475,38 @@ def _ingest_file(
             "size_mb": round(size / (1024 * 1024), 1),
         }
 
-    # Download from Drive.
-    raw_bytes, dl_err = gdrive_service.download_file_bytes(file_meta["id"])
+    stored_name = f"{hashlib.sha256(rel.encode()).hexdigest()[:8]}_{_safe_stored_name(Path(rel).name)}"
+    # NO ARCHIVE (owner ruling, docs/INGEST_EXCLUSION_RULE.md): the platform
+    # keeps no copy of an original. Google Drive is the source of truth and the
+    # chunks are what the RAG needs. The extractors read one TRANSIENT copy on
+    # this task's own ephemeral disk (never the shared data volume), deleted
+    # as soon as the file is indexed. It carries the decrypted-temp prefix, so
+    # the plaintext sweeper reaps it if the process dies first.
+    dest = _transient_dest(stored_name)
+
+    # Download from Drive, streamed straight to the transient file. Extraction
+    # is the memory peak on this box (app/core/extract_isolated measured one
+    # 4.4 MB PDF taking the live instance from 790 MB to 3.9 GB of 4 GB), so
+    # the download must never hold a multi-hundred-MB file whole in RAM: the
+    # response body flows to disk in bounded chunks while sha256 is computed
+    # incrementally. Every reader from here on works off the path.
+    downloaded_bytes, content_sha, dl_err = gdrive_service.download_file_to_path(
+        file_meta["id"], dest,
+    )
     if dl_err:
+        _discard_transient_copy(dest)
         return rel, {
             "status": "error",
             "error": f"DOWNLOAD_FAILED: {dl_err}",
         }
 
-    if not raw_bytes:
+    if not downloaded_bytes:
+        _discard_transient_copy(dest)
         return rel, {
             "status": "error",
             "error": "SKIPPED_EMPTY",
         }
 
-    content_sha = hashlib.sha256(raw_bytes).hexdigest()
     existing_by_sha = projects_mod.find_document_by_sha(project_id, content_sha)
     reingest_of = projects_mod.scoped_reingest_of(
         reingest_of, content_sha, existing_by_sha,
@@ -498,27 +517,13 @@ def _ingest_file(
         projects_mod.record_source_alias(
             existing_by_sha["id"], file_meta["id"], source_content_token(file_meta),
         )
+        _discard_transient_copy(dest)
         return rel, {
             "status": "error",
             "error": "DUPLICATE_SHA",
             "existing_id": existing_by_sha["id"],
             "content_sha256": content_sha,
         }
-    stored_name = f"{hashlib.sha256(rel.encode()).hexdigest()[:8]}_{_safe_stored_name(Path(rel).name)}"
-    # NO ARCHIVE (owner ruling, docs/INGEST_EXCLUSION_RULE.md): the platform
-    # keeps no copy of an original. Google Drive is the source of truth and the
-    # chunks are what the RAG needs. The extractors read one TRANSIENT copy on
-    # this task's own ephemeral disk (never the shared data volume), deleted
-    # as soon as the file is indexed. It carries the decrypted-temp prefix, so
-    # the plaintext sweeper reaps it if the process dies first.
-    dest = _transient_copy(raw_bytes, stored_name)
-
-    # Release the payload BEFORE indexing. Extraction is the memory peak on
-    # this box (app/core/extract_isolated measured one 4.4 MB PDF taking the
-    # live instance from 790 MB to 3.9 GB of 4 GB); every reader from here on
-    # works off the path.
-    downloaded_bytes = len(raw_bytes)
-    del raw_bytes
 
     from app.core.ingest_reconcile import source_content_token
 

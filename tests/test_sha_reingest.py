@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -103,8 +104,9 @@ def test_p1b_ingest_file_refuses_duplicate_sha(monkeypatch, tmp_path):
     )
 
     class _Drive:
-        def download_file_bytes(self, _fid):
-            return body, None
+        def download_file_to_path(self, _fid, dest):
+            Path(dest).write_bytes(body)
+            return len(body), hashlib.sha256(body).hexdigest(), None
 
 
     _rel, result = _ingest_file(

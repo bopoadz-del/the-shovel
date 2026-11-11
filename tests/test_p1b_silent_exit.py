@@ -20,6 +20,7 @@ never labelled complete.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -607,50 +608,37 @@ def test_supervise_is_skipped_inside_the_supervised_child(monkeypatch, tmp_path)
 # ── memory headroom ────────────────────────────────────────────────────────
 
 
-class _WeakPayload(bytearray):
-    """A byte payload that can be weak-referenced, so a test can prove the
-    ingest really let go of it. ``bytes`` subclasses cannot hold a weakref;
-    ``bytearray`` ones can, and every consumer in ``_ingest_file`` (sha256,
-    the transient-copy write, ``len``) takes either."""
-
-
-def test_ingest_releases_the_downloaded_payload_before_indexing(tmp_path, monkeypatch):
-    """Extraction is the memory peak; holding the whole download through it was
-    up to two multi-hundred-MB buffers of pure waste on a 4 GB box."""
-    import weakref
-
+@pytest.mark.parametrize(
+    "body", [b"%PDF-1.4 " + b"x" * 4096, b"%PDF-1.4 " + b"y" * 2048],
+)
+def test_ingest_streams_the_download_never_buffering_it(tmp_path, monkeypatch, body):
+    """Extraction is the memory peak, so the download must be streamed to the
+    transient path via ``download_file_to_path``. The fake below exposes NO
+    ``download_file_bytes`` seam, so a regression back to whole-file buffering
+    fails immediately."""
     from scripts.p1b_ingest_drive_server import _ingest_file
-
-    # The payload is handed over exactly once, so after the download the
-    # ingest's own local is the only strong reference left to it.
-    box = [_WeakPayload(b"%PDF-1.4 " + b"x" * 4096)]
-    ref = weakref.ref(box[0])
-    alive_during_index: List[bool] = []
 
     monkeypatch.setattr(
         "app.core.projects.add_document", lambda **_k: {"id": "doc-1"},
     )
 
     def _index(_pid, _did, **_k):
-        alive_during_index.append(ref() is not None)
         return {"status": "ok", "rag_indexed": 5}
 
     monkeypatch.setattr("app.core.doc_index.index_document", _index)
 
     class _Drive:
-        def download_file_bytes(self, _fid):
-            return box.pop(), None
+        def download_file_to_path(self, _fid, dest):
+            Path(dest).write_bytes(body)
+            return len(body), hashlib.sha256(body).hexdigest(), None
 
     _, result = _ingest_file(
         {"id": "drive-1", "name": "big.pdf", "_drive_path": "Tier1/big.pdf",
-         "mimeType": "application/pdf", "size": 4105},
+         "mimeType": "application/pdf", "size": len(body)},
         "proj", tmp_path, "run-mem", _Drive(),
     )
 
     assert result["rag_indexed"] == 5
-    assert alive_during_index == [False], (
-        "the downloaded payload was still resident during index_document"
-    )
 
 
 def test_verification_line_still_reports_the_downloaded_size(tmp_path, monkeypatch, capsys):
@@ -669,8 +657,9 @@ def test_verification_line_still_reports_the_downloaded_size(tmp_path, monkeypat
     )
 
     class _Drive:
-        def download_file_bytes(self, _fid):
-            return b"1234567890", None
+        def download_file_to_path(self, _fid, dest):
+            Path(dest).write_bytes(b"1234567890")
+            return 10, hashlib.sha256(b"1234567890").hexdigest(), None
 
     _ingest_file(
         {"id": "drive-2", "name": "retry.pdf", "_drive_path": "Tier1/retry.pdf",

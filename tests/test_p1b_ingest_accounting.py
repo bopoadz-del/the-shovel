@@ -18,6 +18,7 @@ The contract under test:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -28,6 +29,24 @@ from typing import Any, Dict, List
 import pytest
 
 from scripts import p1b_ingest_drive_server as p1b
+
+
+def _patch_stream_download(monkeypatch, gdrive_service, bytes_for_fid):
+    """Patch ``download_file_to_path`` to write the returned payload to ``dest``.
+
+    ``bytes_for_fid`` may return either ``bytes`` or the legacy
+    ``(bytes, err)`` ``download_file_bytes`` shape, so existing fixtures keep
+    working. Returns ``(bytes_written, sha256_hex, error)`` like the real
+    streamed download.
+    """
+    def _download_to_path(fid, dest):
+        out = bytes_for_fid(fid)
+        data = out[0] if isinstance(out, tuple) else out
+        Path(dest).write_bytes(data)
+        return len(data), hashlib.sha256(data).hexdigest(), None
+
+    monkeypatch.setattr(gdrive_service, "download_file_to_path", _download_to_path)
+
 
 CLIENT_FOLDER_ID = "folder-client-1"
 PROJECT_ID = "example_infra_pack"
@@ -218,9 +237,7 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(
         gdrive_service, "walk_folder", lambda fid, **kw: (list(files), []),
     )
-    monkeypatch.setattr(
-        gdrive_service, "download_file_bytes", lambda fid: (_text_pdf_bytes(), None),
-    )
+    _patch_stream_download(monkeypatch, gdrive_service, lambda fid: _text_pdf_bytes())
     monkeypatch.setattr(
         projects_mod, "get_or_create_project",
         lambda name, **kw: ({"id": kw.get("project_id") or name}, False),
@@ -806,7 +823,7 @@ def test_second_resume_makes_zero_downloads_for_known_duplicates(harness, monkey
         assert doc_id == canonical["id"]
         canonical["metadata"].setdefault("source_aliases", {})[source_file_id] = token or ""
 
-    monkeypatch.setattr(gdrive_service, "download_file_bytes", _download)
+    _patch_stream_download(monkeypatch, gdrive_service, _download)
     monkeypatch.setattr(projects_mod, "find_document_by_sha", _find_by_sha)
     monkeypatch.setattr(projects_mod, "record_source_alias", _record_alias)
 
@@ -836,7 +853,7 @@ def test_duplicate_whose_source_changed_is_downloaded_again(harness, monkeypatch
         downloads[f] = downloads.get(f, 0) + 1
         return f"unique {f}".encode() * 16, None
 
-    monkeypatch.setattr(gdrive_service, "download_file_bytes", _download)
+    _patch_stream_download(monkeypatch, gdrive_service, _download)
     harness.run()
     assert downloads.get(fid) == 1
 
@@ -874,7 +891,7 @@ def test_file_over_the_memory_budget_is_recorded_not_downloaded_then_skipped(har
         row["ingest_status"] = "EXTRACT_FAILED"
         row["ingest_status_reason"] = kw.get("reason_override")
 
-    monkeypatch.setattr(gdrive_service, "download_file_bytes", _download)
+    _patch_stream_download(monkeypatch, gdrive_service, _download)
     monkeypatch.setattr(projects_mod, "add_document", _add_document)
     monkeypatch.setattr(projects_mod, "record_ingest_attempt", _attempt)
     monkeypatch.setattr(doc_index, "_stamp_index_ledger", _stamp)
@@ -921,7 +938,7 @@ def test_excluded_formats_are_never_assigned_downloaded_or_recorded(harness, mon
         rows.append((kw.get("metadata") or {}).get("drive_file_id"))
         return {"id": f"new-{len(rows):03d}"}
 
-    monkeypatch.setattr(gdrive_service, "download_file_bytes", _download)
+    _patch_stream_download(monkeypatch, gdrive_service, _download)
     monkeypatch.setattr(projects_mod, "add_document", _add_document)
 
     for _ in range(2):  # the run, then a resume
@@ -954,7 +971,7 @@ def test_zero_byte_drive_files_are_never_downloaded(harness, monkeypatch):
         downloads[fid] = downloads.get(fid, 0) + 1
         return b"x" * 256, None
 
-    monkeypatch.setattr(gdrive_service, "download_file_bytes", _download)
+    _patch_stream_download(monkeypatch, gdrive_service, _download)
     for _ in range(2):
         assert harness.run() == 0
         acc = harness.report()["accounting"]
