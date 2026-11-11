@@ -2520,9 +2520,16 @@ def index_project(project_id: str) -> dict[str, Any]:
       ``"unsupported_type"``
     - supported extension → extract text → chunk → store entry
 
+    A Drive-sourced row (``bytes_state=not_stored``) has no local bytes to
+    re-extract, so it is skipped: its existing entry and chunks are preserved
+    rather than wiped by the zero-chunk stamp (``EXTRACT_FAILED`` deletes
+    chunks), and it is counted ``skipped_not_stored`` in the summary.
+
     Persists the result as JSON and returns a summary dict.
     """
     docs = _projects.list_documents(project_id)
+    # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
+    prior = _entries_of(_load_index(project_id))
 
     documents: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -2537,6 +2544,7 @@ def index_project(project_id: str) -> dict[str, Any]:
     total_chunks = 0
     ocr_chunks = 0
     zero_chunk = 0
+    skipped_not_stored = 0
 
     for doc in docs:
         filename = doc.get("original_name", "")
@@ -2550,6 +2558,29 @@ def index_project(project_id: str) -> dict[str, Any]:
                 "reason": _unsupported_skip_reason(ext),
                 "fingerprint": fingerprint,
             })
+            continue
+
+        state = doc.get("bytes_state")
+        if state == byte_store.NOT_STORED:
+            # Drive-sourced (or otherwise never-locally-stored) rows have no
+            # bytes to re-extract. Never stamp a NO_CHUNK status for them:
+            # ZERO_CHUNK / EXTRACT_FAILED delete the doc's chunks. Skip the
+            # row, carry the existing entry forward when one exists, and count
+            # it ``skipped_not_stored`` so a rebuild on a Drive-sourced
+            # project never wipes its retrieval index.
+            rec: dict[str, Any] = {
+                "document_id": doc["id"],
+                "filename": filename,
+                "reason": doc.get("bytes_state_reason") or "",
+            }
+            not_stored.append(rec)
+            prior_entry = prior.get(str(doc["id"]))
+            if prior_entry is not None and prior_entry[0] == _KIND_DOCUMENT:
+                entry = dict(prior_entry[1])
+                rec["kept"] = True
+                documents.append(entry)
+                total_chunks += int(entry.get("chunk_count") or 0)
+            skipped_not_stored += 1
             continue
 
         file_path = doc.get("file_path") or ""
@@ -2657,6 +2688,7 @@ def index_project(project_id: str) -> dict[str, Any]:
             "missing_files_count": len(missing_files),
             "not_stored": not_stored,
             "not_stored_count": len(not_stored),
+            "skipped_not_stored": skipped_not_stored,
             "unavailable": unavailable,
             "unavailable_count": len(unavailable),
         }
@@ -2673,6 +2705,7 @@ def index_project(project_id: str) -> dict[str, Any]:
         "missing_files_count": len(missing_files),
         "not_stored": not_stored,
         "not_stored_count": len(not_stored),
+        "skipped_not_stored": skipped_not_stored,
         "unavailable": unavailable,
         "unavailable_count": len(unavailable),
     }
