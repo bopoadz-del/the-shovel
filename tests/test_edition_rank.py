@@ -50,12 +50,13 @@ def test_extract_edition_standards_returns_empty(query):
     ("ACME 1999 notice is 28 days.", "", "ACME", "2017", True),   # conflicting year
     ("ACME 2017 notice is 14 days.", "", "ACME", "2017", False),  # matching year
     ("ACME notice is 28 days.", "", "ACME", "2017", False),       # no edition -> unaffected
-    ("Other org notice is 28 days.", "", "ACME", "2017", False),  # different standard
+    ("Other org 1999 notice", "", "ACME", "2017", False),         # different standard + year
     ("", "ACME_1999_conditions.pdf", "ACME", "2017", True),       # edition in filename
     ("", "ACME_2017_conditions.pdf", "ACME", "2017", False),      # matching filename
     ("ISO 9001:2008 audits", "", "ISO 9001", "2015", True),       # code + conflicting year
     ("ISO 9001 audits", "", "ISO 9001", "2015", False),           # code, no year
-    ("ISO 14001 audits", "", "ISO 9001", "2015", False),          # different code
+    ("ISO 14001:2008 audits", "", "ISO 9001", "2015", False),     # different code + year
+    ("Regional Standard 2019 rules", "", "Regional Standard", "2017", True),  # non-acronym standard
 ])
 def test_candidate_conflicts(text, source_name, standard, edition, expected):
     assert er.candidate_conflicts(text, source_name, standard, edition) is expected
@@ -89,6 +90,28 @@ def _install(monkeypatch, chunks, names):
               "RAG_LAYERED"):
         monkeypatch.delenv(v, raising=False)
     return ret
+
+
+@pytest.mark.parametrize("query,conflict_text,match_text,conflict_name,match_name", [
+    ("Under ACME 2017, what is the notice period?",
+     "ACME 1999 notice is 28 days.", "ACME 2017 notice is 14 days.",
+     "ACME_1999_conditions.pdf", "ACME_2017_conditions.pdf"),
+    ("ZZZ 51B 2019 watch duration?",
+     "ZZZ 51B 2005 watch is 60 min.", "ZZZ 51B 2019 watch is 30 min.",
+     "ZZZ_51B_2005.pdf", "ZZZ_51B_2019.pdf"),
+])
+def test_apply_edition_conflict_demotion_demotes_only_conflicting(
+    query, conflict_text, match_text, conflict_name, match_name,
+):
+    # Direct unit: a conflicting-edition candidate is demoted, a matching one
+    # is not, and a query with no edition pair leaves every candidate alone.
+    conflict = _chunk("c", 0.80, conflict_text)
+    match = _chunk("m", 0.80, match_text)
+    scored = [(0.80, conflict), (0.80, match)]
+    names = {"doc-c": conflict_name, "doc-m": match_name}
+    er.apply_edition_conflict_demotion(query, scored, names)
+    assert conflict.score == round(0.80 - er.EDITION_CONFLICT_PENALTY, 6)
+    assert match.score == 0.80
 
 
 @pytest.mark.parametrize("query", [

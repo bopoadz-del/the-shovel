@@ -154,10 +154,9 @@ def apply_edition_conflict_demotion(
     name_by_id: Dict[str, str],
 ) -> None:
     """In-place: demote candidates that carry a conflicting edition of a
-    standard the ask named, below matching / no-edition candidates."""
+    standard the ask named, below matching / no-edition candidates. A query
+    with no edition pair is a no-op: the inner loop never fires."""
     pairs = extract_edition_standards(query)
-    if not pairs:
-        return
     for i, (score, chunk) in enumerate(scored):
         name = (
             name_by_id.get(chunk.doc_id, "")
