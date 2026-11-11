@@ -480,13 +480,14 @@ def test_plan_ghost_tombstones_selects_only_ghosts(doc, planned):
     assert [a.doc_id for a in actions] == ([doc["id"]] if planned else [])
 
 
-def test_apply_ghost_tombstones_dry_run_then_execute(monkeypatch, tmp_path):
+@pytest.mark.parametrize("ghost_status", [ist.EXTRACT_FAILED, ist.ZERO_CHUNK])
+def test_apply_ghost_tombstones_dry_run_then_execute(monkeypatch, tmp_path, ghost_status):
     pm = _reload_projects(monkeypatch, tmp_path)
     pm.create_project("Ghost", user_id="system")
     proj = pm.list_projects("system")[0]
     doc = pm.add_document(proj["id"], "ghost.pdf", size=1)
     pm.stamp_document_index(
-        doc["id"], chunk_count=0, ingest_status=ist.EXTRACT_FAILED,
+        doc["id"], chunk_count=0, ingest_status=ghost_status,
     )
     view = pm.get_document(doc["id"])
     assert view["has_file"] is False  # no bytes, no Drive pointer
@@ -504,9 +505,8 @@ def test_apply_ghost_tombstones_dry_run_then_execute(monkeypatch, tmp_path):
     assert got["ingest_status_reason"] == "ghost"
 
 
-def test_ghost_tombstone_never_deletes_chunks(monkeypatch, tmp_path):
-    import os
-
+@pytest.mark.parametrize("seed_chunks", [2, 3])
+def test_ghost_tombstone_never_deletes_chunks(monkeypatch, tmp_path, seed_chunks):
     from sqlalchemy import text
     from app.core.db import SessionLocal
     from app.core.models import rag_chunk_table_name
@@ -516,8 +516,10 @@ def test_ghost_tombstone_never_deletes_chunks(monkeypatch, tmp_path):
     pm.create_project("Keep", user_id="system")
     proj = pm.list_projects("system")[0]
     doc = pm.add_document(proj["id"], "keep.pdf", size=1)
-    pm.stamp_document_index(doc["id"], chunk_count=2, ingest_status=ist.INDEXED)
-    _seed_chunk_rows(proj["id"], doc["id"], 2)
+    pm.stamp_document_index(
+        doc["id"], chunk_count=seed_chunks, ingest_status=ist.INDEXED,
+    )
+    _seed_chunk_rows(proj["id"], doc["id"], seed_chunks)
 
     pm.tombstone_document_ghost(doc["id"])
     got = pm.get_document(doc["id"])
@@ -531,17 +533,18 @@ def test_ghost_tombstone_never_deletes_chunks(monkeypatch, tmp_path):
             text(f"SELECT COUNT(*) FROM {table} WHERE doc_id = :d"),
             {"d": doc["id"]},
         ).scalar() or 0)
-    assert remaining == 2
+    assert remaining == seed_chunks
 
 
-def test_p3_ghost_tombstone_endpoint_plan_and_execute(monkeypatch, tmp_path):
+@pytest.mark.parametrize("ghost_status", [ist.EXTRACT_FAILED, ist.ZERO_CHUNK])
+def test_p3_ghost_tombstone_endpoint_plan_and_execute(monkeypatch, tmp_path, ghost_status):
     from app.routers.admin import admin_corpus_ghost_tombstone
 
     pm = _reload_projects(monkeypatch, tmp_path)
     pm.create_project("EG", user_id="system", project_id="egproj")
     doc = pm.add_document("egproj", "ghost.pdf", size=1)
     pm.stamp_document_index(
-        doc["id"], chunk_count=0, ingest_status=ist.EXTRACT_FAILED,
+        doc["id"], chunk_count=0, ingest_status=ghost_status,
     )
 
     plan = admin_corpus_ghost_tombstone(
