@@ -585,6 +585,13 @@ def coverage_truth(
     }
 
 
+def is_ghost(doc: Mapping[str, Any], chunks: int) -> bool:
+    """Rule (c): a row is a ghost only when it has no recoverable bytes and
+    no chunks. Shared by the dry-run tally and the tombstone write path so the
+    two can never drift apart."""
+    return doc.get("has_file") is not True and chunks <= 0
+
+
 def _tally_p3_counts(
     docs: Sequence[Mapping[str, Any]],
     chunk_counts: Mapping[str, int],
@@ -649,7 +656,7 @@ def _tally_p3_counts(
             md5_groups[md5] = md5_groups.get(md5, 0) + 1
 
         # (c) ghosts
-        if doc.get("has_file") is not True and chunks == 0:
+        if is_ghost(doc, chunks):
             ghosts += 1
             ghost_by_status[status] = ghost_by_status.get(status, 0) + 1
             bs = str(doc.get("bytes_state") or "")
@@ -689,65 +696,154 @@ def _tally_p3_counts(
     }
 
 
+def _load_p3_docs_and_chunk_counts(
+    session,
+    project_id: str | None,
+    chunks_table: str,
+) -> tuple[list[Mapping[str, Any]], dict[str, int]]:
+    """Load the documents ledger and live chunk-row counts for a P3 pass.
+
+    Read-only. ``chunk_counts`` is the live chunk-row count per doc id (the
+    cached ``chunk_count`` column can drift); callers fall back to it.
+    """
+    from sqlalchemy import select, text
+    from app.core import projects as projects_mod
+    from app.core.models import Document
+
+    stmt = select(Document)
+    if project_id:
+        stmt = stmt.where(Document.project_id == project_id)
+    docs = [
+        projects_mod._document_as_dict(d)
+        for d in session.scalars(stmt).all()
+    ]
+
+    params: dict[str, Any] = {"pid": project_id} if project_id else {}
+    chunk_counts: dict[str, int] = {}
+    try:
+        if project_id:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT c.doc_id, COUNT(*)
+                    FROM {chunks_table} c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE d.project_id = :pid
+                    GROUP BY c.doc_id
+                    """
+                ),
+                params,
+            ).all()
+        else:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT doc_id, COUNT(*)
+                    FROM {chunks_table}
+                    GROUP BY doc_id
+                    """
+                )
+            ).all()
+        chunk_counts = {str(r[0]): int(r[1] or 0) for r in rows if r[0]}
+    except Exception:
+        session.rollback()
+        chunk_counts = {}
+    return docs, chunk_counts
+
+
+def plan_ghost_tombstones(
+    docs: Sequence[Mapping[str, Any]],
+    chunk_counts: Mapping[str, int],
+) -> list[ReconcileAction]:
+    """Rows the ghost rule selects, excluding already-TOMBSTONED rows.
+
+    Pure planner: computes the same set as dry-run rule (c), so the operator
+    can confirm the count before the write path runs.
+    """
+    out: list[ReconcileAction] = []
+    for doc in docs:
+        did = str(doc.get("id") or "")
+        if not did:
+            continue
+        if (doc.get("ingest_status") or "") == TOMBSTONED:
+            continue
+        chunks = int(
+            chunk_counts.get(did, doc.get("chunk_count") or 0) or 0
+        )
+        if is_ghost(doc, chunks):
+            out.append(ReconcileAction(doc_id=did, reason="ghost"))
+    return out
+
+
+def apply_ghost_tombstones(
+    actions: Sequence[ReconcileAction],
+    *,
+    execute: bool,
+) -> int:
+    """Hide ghost rows. Never deletes chunks or documents."""
+    if not execute:
+        return 0
+    from app.core import projects as projects_mod
+
+    applied = 0
+    for action in actions:
+        if projects_mod.tombstone_document_ghost(action.doc_id):
+            applied += 1
+    return applied
+
+
 def p3_reconcile_dry_run(*, project_id: str | None = None) -> dict[str, Any]:
     """Read-only P3 reconcile dry-run counts. Never deletes, never re-indexes.
 
     Loads the documents ledger plus live chunk-row counts and hands them to
     :func:`_tally_p3_counts`. No writes to documents or chunks.
     """
-    from sqlalchemy import select, text
-    from app.core import projects as projects_mod
     from app.core.db import SessionLocal
-    from app.core.models import Document, rag_chunk_table_name
+    from app.core.models import rag_chunk_table_name
 
     chunks_table = rag_chunk_table_name(
         os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()
     )
-    params: dict[str, Any] = {"pid": project_id} if project_id else {}
-
     with SessionLocal() as session:
-        stmt = select(Document)
-        if project_id:
-            stmt = stmt.where(Document.project_id == project_id)
-        docs = [
-            projects_mod._document_as_dict(d)
-            for d in session.scalars(stmt).all()
-        ]
-
-        chunk_counts: dict[str, int] = {}
-        try:
-            if project_id:
-                rows = session.execute(
-                    text(
-                        f"""
-                        SELECT c.doc_id, COUNT(*)
-                        FROM {chunks_table} c
-                        JOIN documents d ON c.doc_id = d.id
-                        WHERE d.project_id = :pid
-                        GROUP BY c.doc_id
-                        """
-                    ),
-                    params,
-                ).all()
-            else:
-                rows = session.execute(
-                    text(
-                        f"""
-                        SELECT doc_id, COUNT(*)
-                        FROM {chunks_table}
-                        GROUP BY doc_id
-                        """
-                    )
-                ).all()
-            chunk_counts = {str(r[0]): int(r[1] or 0) for r in rows if r[0]}
-        except Exception:
-            session.rollback()
-            chunk_counts = {}
+        docs, chunk_counts = _load_p3_docs_and_chunk_counts(
+            session, project_id, chunks_table,
+        )
 
     counts = _tally_p3_counts(docs, chunk_counts)
     counts["project_id"] = project_id
     counts["chunks_table"] = chunks_table
     return counts
+
+
+def p3_ghost_tombstone(
+    *, project_id: str | None = None, execute: bool = False,
+) -> dict[str, Any]:
+    """Plan and (opt-in) apply ghost tombstones for one project.
+
+    ``ghost_count`` is the dry-run rule-(c) count an operator confirms before
+    passing ``execute=true``. Applying hides the row and sets ``TOMBSTONED``;
+    it never deletes chunks or documents. Idempotent: a second execute hides
+    nothing new.
+    """
+    from app.core.db import SessionLocal
+    from app.core.models import rag_chunk_table_name
+
+    chunks_table = rag_chunk_table_name(
+        os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()
+    )
+    with SessionLocal() as session:
+        docs, chunk_counts = _load_p3_docs_and_chunk_counts(
+            session, project_id, chunks_table,
+        )
+    actions = plan_ghost_tombstones(docs, chunk_counts)
+    applied = apply_ghost_tombstones(actions, execute=execute)
+    return {
+        "project_id": project_id,
+        "chunks_table": chunks_table,
+        "ghost_count": len(actions),
+        "applied": applied,
+        "dry_run": not execute,
+    }
 
 
 def plan_as_dict(plan: ReconcilePlan) -> dict[str, Any]:
