@@ -14,6 +14,7 @@ from app.core.ingest_reconcile import (
     _tally_p3_counts,
     apply_tombstones,
     coverage_truth,
+    p3_reconcile_dry_run,
     plan_as_dict,
     plan_reconcile,
     resume_source_changed,
@@ -440,3 +441,23 @@ def test_p3_ghost_needs_no_source_and_no_chunks(doc, is_ghost):
     # Rule (c): a row is a ghost only when bytes are gone AND chunks are zero.
     out = _tally_p3_counts([doc], {})
     assert out["ghosts"]["total"] == (1 if is_ghost else 0)
+
+@pytest.mark.parametrize(
+    "name,chunks",
+    [("boq.xlsx", 4), ("tracker.csv", 2)],
+)
+def test_p3_reconcile_dry_run_queryable(monkeypatch, tmp_path, name, chunks):
+    # The endpoint's loader is covered end-to-end on SQLite, and the project
+    # filter is exercised against a second project's spreadsheet so a dropped
+    # filter changes the count (kills the project-filter mutant).
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("P3", user_id="system", project_id="p3proj")
+    doc = pm.add_document("p3proj", name, size=10)
+    pm.stamp_document_index(doc["id"], chunk_count=chunks, ingest_status=ist.INDEXED)
+    pm.create_project("Other", user_id="system", project_id="otherproj")
+    pm.add_document("otherproj", "other_boq.xlsx", size=10)
+
+    report = p3_reconcile_dry_run(project_id="p3proj")
+    assert report["project_id"] == "p3proj"
+    assert report["spreadsheets"]["documents"] == 1
+    assert report["spreadsheets"]["chunks"] == chunks
