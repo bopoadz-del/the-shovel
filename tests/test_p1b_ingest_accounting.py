@@ -18,6 +18,7 @@ The contract under test:
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -495,6 +496,72 @@ def test_run_lock_conflict_aborts_before_any_ingest(harness, monkeypatch, capsys
     assert report["exit_reason"] == "aborted_run_lock_unavailable"
     assert report["run_complete"] is False
     assert "refusing to start a second concurrent run" in capsys.readouterr().err
+
+
+def _lock_acquisitions(monkeypatch) -> List[tuple]:
+    """Record acquisitions under an exclusive session-scoped lock mock.
+
+    Mirrors the real lock: a second acquisition of the same
+    ``(tier, project_id)`` on a fresh session raises, and the first stays
+    held until its context exits (the run's lifecycle flush). Returns the
+    recorded ``(tier, project_id)`` keys for the test to assert on.
+    """
+    held = set()
+    acquired: List[tuple] = []
+
+    @contextlib.contextmanager
+    def _lock(tier, project_id):
+        key = (tier, project_id)
+        if key in held:
+            raise p1b.RunLockUnavailable(
+                f"another ingest run holds the lock for tier={tier} "
+                f"project_id={project_id}"
+            )
+        held.add(key)
+        acquired.append(key)
+        try:
+            yield "acquired"
+        finally:
+            held.discard(key)
+
+    monkeypatch.setattr(p1b, "run_advisory_lock", _lock)
+    return acquired
+
+
+def _write_two_folder_manifest(harness, project_ids) -> None:
+    folders = [
+        {
+            "project_id": pid,
+            "folder_name": f"folder-{i}",
+            "folder_id": f"folder-id-{i}",
+        }
+        for i, pid in enumerate(project_ids)
+    ]
+    harness.manifest_path.write_text(
+        json.dumps({"tiers": {"1": {"folders": folders}}}),
+        encoding="utf-8",
+    )
+
+
+def test_two_folders_same_project_acquire_the_lock_once(harness, monkeypatch):
+    """Two walk entries landing in ONE project must not self-deadlock.
+
+    ``--project-id`` retargets every folder to one project; the run would
+    hold the advisory lock from the first folder and then block against its
+    own still-held lock when the second folder re-acquired it.
+    """
+    acquired = _lock_acquisitions(monkeypatch)
+    _write_two_folder_manifest(harness, [PROJECT_ID, PROJECT_ID])
+    assert harness.run() == 0
+    assert acquired == [(1, PROJECT_ID)]
+
+
+def test_two_folders_different_projects_acquire_both_locks(harness, monkeypatch):
+    """Distinct projects still take one lock each (the guard stays on)."""
+    acquired = _lock_acquisitions(monkeypatch)
+    _write_two_folder_manifest(harness, ["project_a", "project_b"])
+    assert harness.run() == 0
+    assert sorted(acquired) == [(1, "project_a"), (1, "project_b")]
 
 
 def test_advisory_lock_keys_are_stable_signed_int32(harness):

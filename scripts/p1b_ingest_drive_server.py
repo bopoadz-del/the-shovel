@@ -1075,11 +1075,16 @@ def main() -> int:
     folder_accounting: List[Dict[str, Any]] = []
     walk_error_messages: List[str] = []
     skipped_no_folder_id_folders: List[Dict[str, Any]] = []
-    # Advisory locks are entered per folder and released by the lifecycle
-    # flush. A process that dies without unwinding cannot wedge the next run
-    # either: the locks are session-scoped, so Postgres drops them with the
-    # connection.
+    # Advisory locks are entered ONCE PER PROJECT and released by the
+    # lifecycle flush. A single run may walk several folders that all land in
+    # one project (``--project-id`` retargets every walk entry); the lock is
+    # session-scoped, so re-acquiring the same ``(tier, project_id)`` from a
+    # fresh session would block against the run's own still-held lock. Later
+    # folders reuse the held lock instead. A process that dies without
+    # unwinding cannot wedge the next run either: the locks are
+    # session-scoped, so Postgres drops them with the connection.
     run_locks = contextlib.ExitStack()
+    locked_project_ids: set[str] = set()
 
     def _bump_folder(folder_name: str, key: str) -> None:
         folder_tallies.setdefault(folder_name, {
@@ -1361,7 +1366,9 @@ def main() -> int:
             )
 
             try:
-                run_locks.enter_context(run_advisory_lock(args.tier, project_id))
+                if project_id not in locked_project_ids:
+                    run_locks.enter_context(run_advisory_lock(args.tier, project_id))
+                    locked_project_ids.add(project_id)
             except RunLockUnavailable as exc:
                 log(f"ERROR: {exc}; refusing to start a second concurrent run")
                 run.finish("aborted_run_lock_unavailable", complete=False)
