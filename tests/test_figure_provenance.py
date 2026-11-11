@@ -16,6 +16,7 @@ from app.agents import provenance_trail as pt
 from app.agents.citation_provenance import (
     EvidenceRecord,
     _answer_cites_record,
+    _subject_score,
     figure_provenance,
 )
 from app.lib.construction_formulas import run_calculation
@@ -374,3 +375,88 @@ def test_deadline_sentence_names_subject_by_majority(question, answer, expected_
     assert entry["source"] == expected_source
     assert entry["figure"] == "28 days"
     assert set(entry["competing"]) == {"42 days"}
+
+
+@pytest.mark.parametrize(
+    "chunk,question,answer,expected_score",
+    [
+        # The cited sentence names the whole ask: full score, project tier kept.
+        (
+            "The initial setting period is 7 days. The final setting period is 28 days.",
+            "What is the final setting period?",
+            "The final setting period is 28 days.",
+            1.0,
+        ),
+        # The cited sentence names none of the ask: score 0.0, capped and
+        # the competitor is surfaced.
+        (
+            "The curing time is 2 hours. The drying time is 4 hours.",
+            "What is the curing time?",
+            "The drying time is 4 hours.",
+            0.0,
+        ),
+    ],
+)
+def test_chunk_credited_entries_record_the_subject_score(
+    chunk, question, answer, expected_score,
+):
+    """B11 score: every chunk-credited figure records the share of the ask's
+    content tokens its sentence names, not only when competitors exist."""
+    ctx = _excerpts(("d_spec", "own", 5, "Specification.pdf", chunk))
+    _out, prov = figure_provenance(answer, ctx, _user(question))
+    (entry,) = prov
+    assert entry["subject_score"] == expected_score
+
+
+@pytest.mark.parametrize(
+    "chunk,question,answer,surfaced_figure,stated_figure",
+    [
+        (
+            "The curing time is 2 hours. The drying time is 4 hours.",
+            "What is the curing time?",
+            "The drying time is 4 hours.",
+            "2 hours",
+            "4 hours",
+        ),
+        (
+            "The initial commencement deadline is 28 days. "
+            "The final claim deadline is 42 days.",
+            "What is the final claim deadline?",
+            "The initial commencement deadline is 28 days.",
+            "42 days",
+            "28 days",
+        ),
+    ],
+)
+def test_a_strictly_better_named_competitor_is_surfaced_in_the_answer(
+    chunk, question, answer, surfaced_figure, stated_figure,
+):
+    """B11: when a competing figure's sentence names the ask's subject
+    strictly better than the stated figure's, the answer appends one line in
+    the product's voice naming that figure and its sentence as the clause's
+    figure -- the stated figure keeps its citation and the tier is capped."""
+    ctx = _excerpts(("d_spec", "own", 5, "Specification.pdf", chunk))
+    out, prov = figure_provenance(answer, ctx, _user(question))
+    (entry,) = prov
+    assert entry["source"] == pt.SOURCE_GENERAL
+    assert entry["figure"] == stated_figure
+    assert surfaced_figure in out
+    assert "clause's figure" in out
+    assert out.startswith(answer)
+
+
+@pytest.mark.parametrize(
+    "sentence,subject",
+    [
+        # No content token is at least 4 letters, so nothing is verifiable:
+        # the score is 0.0 (the ambiguity stays surfaced), never a division
+        # by an empty denominator.
+        ("The max lap is 150 mm.", {"max", "lap", "the"}),
+        ("The dry mix is 200 mm.", {"dry", "mix", "the"}),
+    ],
+)
+def test_subject_score_is_zero_when_no_token_is_verifiable(sentence, subject):
+    """B11 score: an ask whose content tokens are all shorter than the
+    verifiable length scores 0.0 rather than dividing by zero, so weak
+    grounding is surfaced instead of hidden."""
+    assert _subject_score(sentence, subject) == 0.0

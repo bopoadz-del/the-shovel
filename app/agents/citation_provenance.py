@@ -1508,32 +1508,42 @@ def _figure_unit(m: re.Match[str]) -> str:
     return _singular(raw) if raw else ""
 
 
-def _competing_figures(text: str, value: float, unit: str) -> list[str]:
-    """Other figures the chunk states in the same unit as ``value``."""
-    out: list[str] = []
+def _competing_figure_sentences(
+    text: str, value: float, unit: str, subject: set[str],
+) -> list[tuple[str, str, float]]:
+    """Each competing figure in ``text`` (same unit, not the stated ``value``)
+    as ``(shown figure, its sentence, that sentence's subject score)``, in
+    first-appearance order and deduped by shown text."""
+    out: list[tuple[str, str, float]] = []
+    seen: set[str] = set()
     for m2, v2 in _figure_mentions(text):
         if _close(value, v2):
             continue
         if unit and _figure_unit(m2) != unit:
             continue
         shown = m2.group(0).strip()
-        if shown not in out:
-            out.append(shown)
+        if shown in seen:
+            continue
+        seen.add(shown)
+        sentence = _sentence_containing(text, v2) or ""
+        out.append((shown, sentence, _subject_score(sentence, subject)))
     return out
 
 
-def _sentence_names_subject(sentence: str | None, subject: set[str]) -> bool:
-    """The cited sentence names the ask's subject when it contains at least
-    half of the ask's content tokens (min 1). Tokens are compared after
-    ``_singular``, the same form ``_asked_subject_tokens`` stores them in.
-    An ask with no content tokens of length >= 4 cannot be verified, so the
-    sentence does not name it (the ambiguity stays surfaced, not hidden)."""
+def _subject_score(sentence: str | None, subject: set[str]) -> float:
+    """The share of the ask's content tokens the cited sentence names, in
+    [0, 1], compared after ``_singular`` -- the same form
+    ``_asked_subject_tokens`` stores them in. Only tokens of length >= 4 are
+    verifiable; an ask with none scores 0.0 so the ambiguity stays surfaced,
+    not hidden (B11)."""
     from app.agents.runtime import _singular
 
     words = {_singular(w) for w in re.findall(r"[a-z]{3,}", (sentence or "").lower())}
     meaningful = [t for t in subject if len(t) >= 4]
+    if not meaningful:
+        return 0.0
     hits = sum(1 for t in meaningful if t in words)
-    return len(meaningful) > 0 and hits * 2 >= len(meaningful)
+    return hits / len(meaningful)
 
 
 def _entry_for_record(
@@ -1706,6 +1716,8 @@ def figure_provenance(
 
         entries: list[dict[str, Any]] = []
         bad: list[re.Match] = []
+        appended_lines: list[str] = []
+        appended_seen: set[str] = set()
         for m, value in _figure_mentions(text):
             fig = m.group(0).strip()
             entry: dict[str, Any] | None = None
@@ -1727,18 +1739,37 @@ def figure_provenance(
                     if _match(value, _nums(rec.text)):
                         if enforce:
                             # B11: sentence-level grounding. The chunk's own
-                            # sentence for the figure is recorded, and when the
-                            # chunk holds competing figures in the same unit,
-                            # that sentence must name the ask's subject or the
-                            # credit is capped to the lower (general) tier with
-                            # the competing figures listed.
+                            # sentence for the figure is recorded with its
+                            # subject score -- the share of the ask's content
+                            # tokens it names -- kept on every chunk-credited
+                            # entry. A chunk holding competing figures in the
+                            # same unit caps the credit to the general tier
+                            # when that sentence names the subject only weakly,
+                            # and when a competing figure's sentence names it
+                            # strictly better, the answer gains one line
+                            # surfacing that figure as the clause's figure
+                            # instead of silently headlining the wrong one.
                             sentence = _sentence_containing(rec.text, value)
-                            competing = _competing_figures(rec.text, value, _figure_unit(m))
+                            score = _subject_score(sentence, subject_tokens)
+                            details = _competing_figure_sentences(
+                                rec.text, value, _figure_unit(m), subject_tokens)
+                            competing = [shown for shown, _sent, _sc in details]
                             entry = _entry_for_record(rec, fig, sentence=sentence)
+                            entry["subject_score"] = score
                             if competing:
                                 entry["competing"] = competing
-                                if not _sentence_names_subject(sentence, subject_tokens):
+                                best = max(details, key=lambda d: d[2])
+                                surfaced = best[2] > score
+                                if score < 0.5 or surfaced:
                                     entry["source"] = pt.SOURCE_GENERAL
+                                if surfaced:
+                                    line = (
+                                        f"Note: the clause's figure is {best[0]}"
+                                        f" — {best[1]}"
+                                    )
+                                    if line not in appended_seen:
+                                        appended_seen.add(line)
+                                        appended_lines.append(line)
                         else:
                             entry = _entry_for_record(rec, fig)
                         break
@@ -1759,6 +1790,8 @@ def figure_provenance(
             out = out[:start].rstrip(" ,;") + out[end:]
         if bad:
             _LOG.info("figure_provenance: removed %d figure(s) with no source", len(bad))
+        if appended_lines:
+            out = (out.rstrip() + "\n\n" + "\n\n".join(appended_lines)).strip()
         return out, [e for e in entries if e.get("source")]
     except Exception:  # noqa: BLE001 -- a gate must never break an answer
         _LOG.exception("figure_provenance failed; passing answer through")
