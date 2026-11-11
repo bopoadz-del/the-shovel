@@ -29,6 +29,7 @@ from app.core.rag import layers
 from app.lib.boq_ref_codes import find_ref_codes
 from app.core.rag import revision as _revision
 from app.core.rag import reranker as _reranker
+from app.core.rag import edition_rank as _edition_rank
 
 import os
 import re
@@ -9426,6 +9427,7 @@ def _lexical_only_retrieve(query: str, project_id: str, k: int) -> tuple:
     _apply_schedule_register_boost(query, scored_lex)
     _apply_pcg_value_boost(query, scored_lex)
     _apply_commencement_date_boost(query, scored_lex)
+    _edition_rank.apply_edition_conflict_demotion(query, scored_lex, name_by_id)
     _apply_rate_only_boost(query, scored_lex)
     _apply_priced_boq_boost(query, scored_lex)
     _apply_part_summary_boost(query, scored_lex)
@@ -10089,6 +10091,7 @@ def retrieve_with_filter(
     _apply_schedule_register_boost(query, scored)
     _apply_pcg_value_boost(query, scored)
     _apply_commencement_date_boost(query, scored)
+    _edition_rank.apply_edition_conflict_demotion(query, scored, name_by_id)
     _apply_rate_only_boost(query, scored)
     _apply_priced_boq_boost(query, scored)
     _apply_part_summary_boost(query, scored)
