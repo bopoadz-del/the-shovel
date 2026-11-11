@@ -569,6 +569,44 @@ def test_p3_ghost_tombstone_endpoint_plan_and_execute(monkeypatch, tmp_path, gho
     assert got["retrieval_visible"] is False
 
 
+@pytest.mark.parametrize("execute", [False, True])
+def test_p3_ghost_tombstone_loader_reports_and_applies(monkeypatch, tmp_path, execute):
+    from app.core.ingest_reconcile import p3_ghost_tombstone
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("LG", user_id="system", project_id="lgproj")
+    doc = pm.add_document("lgproj", "ghost.pdf", size=1)
+    pm.stamp_document_index(
+        doc["id"], chunk_count=0, ingest_status=ist.EXTRACT_FAILED,
+    )
+
+    result = p3_ghost_tombstone(project_id="lgproj", execute=execute)
+    assert result["project_id"] == "lgproj"
+    assert result["ghost_count"] == 1
+    assert result["applied"] == (1 if execute else 0)
+    assert result["dry_run"] is (not execute)
+    got = pm.get_document(doc["id"])
+    assert got["ingest_status"] == (TOMBSTONED if execute else ist.EXTRACT_FAILED)
+
+
+@pytest.mark.parametrize("empty_id", ["", None])
+def test_ghost_tombstone_empty_id_is_noop(monkeypatch, tmp_path, empty_id):
+    # The empty-id guard must return before touching the store: no DB init,
+    # no session. Removing the guard would run _ensure_db -> init_db.
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm._initialized = False
+    init_calls = []
+    real_init = pm.init_db
+
+    def spy_init():
+        init_calls.append(1)
+        return real_init()
+
+    monkeypatch.setattr(pm, "init_db", spy_init)
+    assert pm.tombstone_document_ghost(empty_id) is None
+    assert init_calls == []
+
+
 def _seed_chunk_rows(project_id: str, doc_id: str, count: int) -> None:
     """Insert ``count`` rows into the ACTIVE namespaced chunk table.
 
