@@ -541,11 +541,6 @@ def test_development_does_not_enforce_the_rollout_flag(sample, tmp_path, monkeyp
     monkeypatch.setenv("DOCUMENT_BYTE_STORE", "local")
     monkeypatch.setenv("REQUIRE_DURABLE_DOCUMENT_STORE", "1")
     monkeypatch.setenv("DOCUMENT_STORE_ROOT", str(tmp_path))
-    # Development is a non-test profile, so the startup guard now also
-    # requires a signing key (see test_startup_guard.py). The rollout flag
-    # itself stays off outside production; provide a stub key so only that
-    # is asserted here.
-    monkeypatch.setenv("SECRET_KEY", ENV_SECRET_06)
     for env_name in ("development", "testing"):
         monkeypatch.setenv("ENV", env_name)
         assert byte_store.enforce_startup_guard() == "local"
