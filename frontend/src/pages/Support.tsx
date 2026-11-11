@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
+import { useSupportEmail } from '../lib/support'
 import './support.css'
 
 /* Public support form. Posts to the unauthenticated /v1/support endpoint;
  * the app-wide rate limiter guards abuse. */
 export default function Support() {
+  const supportEmail = useSupportEmail()
   const [message, setMessage] = useState('')
   const [contact, setContact] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
@@ -41,6 +43,12 @@ export default function Support() {
         <p>
           Tell us what you need help with and we will get back to you by email.
         </p>
+        {supportEmail ? (
+          <p className="support-direct">
+            Or email us directly at{' '}
+            <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+          </p>
+        ) : null}
         {state === 'sent' ? (
           <p className="support-ok" role="status">
             Sent — thank you. We will reply to the email you gave (or to your

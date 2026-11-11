@@ -17,6 +17,7 @@ import { Plus, LogOut, Download, RotateCcw, Settings, MessageSquare, Pencil, Lif
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiGet, ApiError } from '../lib/api'
+import { useSupportEmail } from '../lib/support'
 import { renameTitleError, sessionListTitle } from '../chat/session'
 import './LeftPanel.css'
 
@@ -125,6 +126,7 @@ export default function LeftPanel({
   onRenameConversation,
 }: Props) {
   const { logout, user, loading: authLoading } = useAuth()
+  const supportEmail = useSupportEmail()
   const [state, setState] = useState<LoadState>({ tag: 'loading' })
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
@@ -371,6 +373,15 @@ export default function LeftPanel({
           <LifeBuoy size={14} />
           <span>Support</span>
         </Link>
+        {supportEmail ? (
+          <a
+            href={`mailto:${supportEmail}`}
+            className="left-panel__support-email"
+            title={`Email support at ${supportEmail}`}
+          >
+            {supportEmail}
+          </a>
+        ) : null}
         {user?.role === 'admin' ? (
           <Link to="/admin" className="left-panel__admin">
             <Settings size={14} />
