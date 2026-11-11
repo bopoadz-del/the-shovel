@@ -329,8 +329,10 @@ _GEOSPATIAL_EXTS = frozenset({".kmz", ".kml"})
 # documents, and previews render them), but they are never CHUNKED into the
 # RAG (owner ruling 2026-11-06). Same mechanism as the kmz denylist above:
 # checked in ``classify`` before the evidence-beats-policy check, so an
-# already-chunked spreadsheet cannot slip back in as INDEXED.
-_SPREADSHEET_EXTS = frozenset({".xls", ".xlsx"})
+# already-chunked spreadsheet cannot slip back in as INDEXED. The full set is
+# the owner's reconcile ruling (SPEC_CORPUS_DECISIONS_v1): every spreadsheet
+# shape -- .xls/.xlsx/.xlsm/.xlsb/.csv -- stays out of the RAG.
+SPREADSHEET_EXTS = frozenset({".xls", ".xlsx", ".xlsm", ".xlsb", ".csv"})
 
 # Formats whose text lives in a convertible source rather than the file we hold.
 # ``.dwg`` carries real TEXT/MTEXT/ATTRIB entities; recovering them is the
@@ -412,7 +414,7 @@ def classify_source_document(
     geospatial denylists.
     """
     ext = _normalize_ext(extension)
-    if ext in _SPREADSHEET_EXTS:
+    if ext in SPREADSHEET_EXTS:
         return SOURCE_CLASS_SPREADSHEET
     if ext in _GEOSPATIAL_EXTS:
         return SOURCE_CLASS_NON_TEXT
@@ -662,7 +664,7 @@ def classify(
     # enters the RAG. This guard runs before evidence-beats-policy for the
     # same reason the kmz guard does: the extractors read .xls/.xlsx rows
     # fine, and "produced chunks" must not re-admit them as INDEXED.
-    if ext in _SPREADSHEET_EXTS:
+    if ext in SPREADSHEET_EXTS:
         return Classification(UNSUPPORTED_TYPE, f"{ext.lstrip('.')}:{TERMINAL}", ext)
 
     # EVIDENCE BEATS POLICY. A document that produced chunks yielded text, and
