@@ -867,6 +867,15 @@ async def _rag_inject_off_process(**kwargs: Any):
     from app.core import turn_timing
     from app.core.rag import retrieval_worker
 
+    # ``retrieve_first`` is the routing gate's per-turn decision, carried on a
+    # ContextVar. A ContextVar crosses threads (asyncio.to_thread copies the
+    # caller's context) but NOT the retrieval worker process (spawn re-imports
+    # the module with its defaults). Materialise the flag as a plain kwarg
+    # HERE, in the caller's task, so it travels with the kwargs into whichever
+    # worker runs rag_inject. This is the one choke point every call site goes
+    # through, so no caller has to remember the flag.
+    kwargs["retrieve_first"] = bool(kwargs.get("retrieve_first")) or retrieve_first_ctx.get()
+
     with turn_timing.stage("retrieval"):
         if retrieval_worker.enabled():
             from app.core.privileges import caller_role

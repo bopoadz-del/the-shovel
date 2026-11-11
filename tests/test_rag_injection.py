@@ -443,6 +443,47 @@ def test_rag_inject_retrieve_first_respects_identifier_miss(monkeypatch, tmp_pat
     assert audit_rec["retrieve_first"] is True
 
 
+@pytest.mark.parametrize("flag", [True, False])
+@pytest.mark.parametrize("worker_process", [True, False])
+def test_rag_inject_off_process_materialises_retrieve_first(monkeypatch, flag, worker_process):
+    """The routing gate's retrieve_first contextvar must reach rag_inject as
+    an explicit kwarg through BOTH the thread fallback and the worker-process
+    path. A ContextVar crosses threads (asyncio.to_thread copies the caller's
+    context) but not a spawned process, so _rag_inject_off_process
+    materialises the flag in the caller's task before offloading."""
+    import asyncio
+
+    import app.agents.runtime as runtime_mod
+    import app.core.rag.retrieval_worker as rw
+
+    thread_kwargs: dict = {}
+
+    def fake_rag_inject(**kwargs):
+        thread_kwargs.update(kwargs)
+        return (None, {})
+
+    process_kwargs: dict = {}
+
+    async def fake_worker_call(job, kwargs, caller_role):
+        process_kwargs.update(kwargs)
+        return (None, {})
+
+    monkeypatch.setattr(runtime_mod, "rag_inject", fake_rag_inject)
+    monkeypatch.setattr(rw, "enabled", lambda: worker_process)
+    monkeypatch.setattr(rw, "call", fake_worker_call)
+    runtime_mod.retrieve_first_ctx.set(flag)
+
+    asyncio.run(runtime_mod._rag_inject_off_process(
+        user_message="dune sand", project_id="p1",
+        conversation_id="c1", user_id="u1", agent_name="project-assistant",
+    ))
+
+    if worker_process:
+        assert process_kwargs["retrieve_first"] is flag
+    else:
+        assert thread_kwargs["retrieve_first"] is flag
+
+
 def test_rag_inject_returns_system_message_when_confident(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.4")
