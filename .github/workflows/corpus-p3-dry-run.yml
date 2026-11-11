@@ -1,0 +1,119 @@
+name: corpus-p3-dry-run
+
+# Ops workflow (Advisor 03:15Z, 11 Nov): read the P3 reconcile dry-run counts
+# for one project from the live deployment, BEFORE the removal ops task runs.
+#
+# The endpoint GET /v1/admin/corpus/p3-dry-run is admin-gated via
+# `_require_admin` (role == "admin"). Only CEREBRUM_MASTER_KEY is minted with
+# that role, and it lives in the LIVE the-fork ECS task definition -- it is
+# NOT a repository secret. Resolve the master key at run time from the live
+# task definition (exactly as project-reindex.yml / ui-battery.yml do), then
+# use it as the Bearer key. ::add-mask:: before any echo keeps the value out
+# of logs/artifacts.
+#
+# Read-only: the endpoint never deletes, tombstoned or re-indexes; this
+# workflow only GETs and prints the per-rule counts. project_id is a required
+# input with NO default committed -- the project is supplied by the operator,
+# never hardcoded here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project whose P3 reconcile dry-run counts to read (no default committed)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    name: P3 dry-run counts (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
+      - name: Read P3 dry-run counts
+        run: |
+          set -euo pipefail
+          url="${BASE_URL%/}/v1/admin/corpus/p3-dry-run?project_id=${PROJECT_ID}"
+          echo "GET ${url}"
+          curl --fail-with-body --max-time 300 \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
+            -H "Accept: application/json" \
+            -o response.json \
+            -w "\nHTTP %{http_code}\n" \
+            "${url}"
+
+      - name: Summarise per-rule counts
+        if: always()
+        run: |
+          if [ ! -s response.json ]; then
+            echo "::warning::no dry-run response body was captured"
+            exit 0
+          fi
+          jq -r '
+            "project_id: \(.project_id // "?")",
+            "chunks_table: \(.chunks_table // "?")",
+            "--- R1 spreadsheets ---",
+            "  documents: \(.spreadsheets.documents // 0)",
+            "  with_chunks: \(.spreadsheets.with_chunks // 0)",
+            "  chunks: \(.spreadsheets.chunks // 0)",
+            "  by_extension: \(.spreadsheets.by_extension // {} | tostring)",
+            "  by_status: \(.spreadsheets.by_status // {} | tostring)",
+            "--- R2 superseded revisions ---",
+            "  superseded_by_set: \(.superseded.superseded_by_set // 0)",
+            "  retrieval_invisible: \(.superseded.retrieval_invisible // 0)",
+            "--- R3 exact duplicates ---",
+            "  content_sha256.groups: \(.duplicates.content_sha256.groups // 0)",
+            "  content_sha256.duplicate_docs: \(.duplicates.content_sha256.duplicate_docs // 0)",
+            "  drive_md5.groups: \(.duplicates.drive_md5.groups // 0)",
+            "  drive_md5.duplicate_docs: \(.duplicates.drive_md5.duplicate_docs // 0)",
+            "--- R4 + ghosts ---",
+            "  total: \(.ghosts.total // 0)",
+            "  by_status: \(.ghosts.by_status // {} | tostring)",
+            "  by_bytes_state: \(.ghosts.by_bytes_state // {} | tostring)"
+          ' response.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dry-run response
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-p3-dry-run-response
+          path: response.json
+          if-no-files-found: ignore
+          retention-days: 7
