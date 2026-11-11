@@ -58,7 +58,7 @@ def live_app(tmp_path_factory):
     port = _free_port()
     env = os.environ.copy()
     env.update({
-        "ENV": "development",
+        "ENV": "test",
         "DATA_DIR": str(data_dir),
         "PYTHONIOENCODING": "utf-8",
         "RAG_EMBEDDING_MODEL": "fake",

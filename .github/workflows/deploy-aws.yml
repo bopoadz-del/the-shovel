@@ -111,9 +111,12 @@ jobs:
           docker push "$IMAGE:$DEPLOY_SHA"
           docker push "$IMAGE:latest"
 
-      - name: The web task carries the email settings sign-up needs
+      - name: The web task carries the signing key and email settings
         # Sign-up sends its confirmation email only with these three; without
         # them the deploy would ship a site where nobody can confirm an account.
+        # SECRET_KEY is the durable JWT signing secret: the app refuses to boot
+        # without it (see app/main.py startup guard) because a per-container
+        # fallback would sign every user out on each force-new-deployment.
         # Names only -- no value is read.
         run: |
           td=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services the-fork \
@@ -121,14 +124,14 @@ jobs:
           names=$(aws ecs describe-task-definition --task-definition "$td" \
             --query 'taskDefinition.containerDefinitions[0].[environment[].name, secrets[].name][]' --output text)
           missing=""
-          for want in PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM; do
+          for want in SECRET_KEY PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM; do
             echo "$names" | tr '\t' '\n' | grep -qx "$want" || missing="$missing $want"
           done
           if [ -n "$missing" ]; then
-            echo "::error title=Deploy stopped: email settings missing::the web task definition lacks:$missing"
+            echo "::error title=Deploy stopped: required task-definition names missing::the web task definition lacks:$missing"
             exit 1
           fi
-          echo "email settings present: PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM"
+          echo "required names present: SECRET_KEY PUBLIC_BASE_URL RESEND_API_KEY EMAIL_FROM"
 
       - name: Record the serving web task definition
         run: |
