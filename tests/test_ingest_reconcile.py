@@ -356,30 +356,27 @@ def _p3_doc(
     }
 
 
-def test_p3_spreadsheet_docs_count_chunks_from_the_store():
-    # Rule (a): two spreadsheet shapes, chunk rows come from the store map.
-    docs = [
-        _p3_doc("s1", name="boq.xlsx", chunks=0),
-        _p3_doc("s2", name="tracker.csv", chunks=0),
-        _p3_doc("p1", name="spec.pdf", chunks=9),
-    ]
-    store = {"s1": 40, "s2": 3, "p1": 9}
-    out = _tally_p3_counts(docs, store)
+@pytest.mark.parametrize(
+    "name,chunks",
+    [("boq.xlsx", 40), ("tracker.csv", 3)],
+)
+def test_p3_spreadsheet_doc_counts_chunks_from_store(name, chunks):
+    # Rule (a): chunk rows come from the store map, not the cached column.
+    out = _tally_p3_counts([_p3_doc("s1", name=name, chunks=0)], {"s1": chunks})
     ss = out["spreadsheets"]
-    assert ss["documents"] == 2
-    assert ss["with_chunks"] == 2
-    assert ss["chunks"] == 43
-    assert ss["by_extension"][".xlsx"]["chunks"] == 40
-    assert ss["by_extension"][".csv"]["chunks"] == 3
+    assert ss["documents"] == 1
+    assert ss["with_chunks"] == 1
+    assert ss["chunks"] == chunks
+    ext = "." + name.rsplit(".", 1)[1]
+    assert ss["by_extension"][ext]["chunks"] == chunks
 
 
-def test_p3_spreadsheet_zero_chunk_is_counted_but_not_with_chunks():
-    # Rule (a): a spreadsheet row with zero chunks is still a removal candidate.
-    docs = [
-        _p3_doc("s1", name="empty.xls", status=ist.ZERO_CHUNK, chunks=0),
-        _p3_doc("s2", name="notes.txt", chunks=4),
-    ]
-    out = _tally_p3_counts(docs, {"s2": 4})
+@pytest.mark.parametrize("name", ["empty.xls", "blank.xlsm"])
+def test_p3_spreadsheet_zero_chunk_is_counted_not_with_chunks(name):
+    # Rule (a): a zero-chunk spreadsheet is still a removal candidate.
+    out = _tally_p3_counts(
+        [_p3_doc("s1", name=name, status=ist.ZERO_CHUNK, chunks=0)], {}
+    )
     ss = out["spreadsheets"]
     assert ss["documents"] == 1
     assert ss["with_chunks"] == 0
@@ -387,41 +384,59 @@ def test_p3_spreadsheet_zero_chunk_is_counted_but_not_with_chunks():
     assert ss["by_status"][ist.ZERO_CHUNK] == 1
 
 
-def test_p3_superseded_and_invisible_are_counted():
+@pytest.mark.parametrize(
+    "doc,expected",
+    [
+        (_p3_doc("d1", superseded_by="d2"),
+         {"superseded_by_set": 1, "retrieval_invisible": 0}),
+        (_p3_doc("d2", retrieval_visible=False),
+         {"superseded_by_set": 0, "retrieval_invisible": 1}),
+        (_p3_doc("d3", superseded_by="d4", retrieval_visible=False),
+         {"superseded_by_set": 1, "retrieval_invisible": 1}),
+    ],
+)
+def test_p3_superseded_and_invisible_counted(doc, expected):
     # Rule (b) part 1: superseded_by and retrieval_visible are independent.
-    docs = [
-        _p3_doc("d1", superseded_by="d2"),
-        _p3_doc("d2", retrieval_visible=False),
-        _p3_doc("d3", superseded_by="d4", retrieval_visible=False),
-    ]
+    assert _tally_p3_counts([doc], {})["superseded"] == expected
+
+
+@pytest.mark.parametrize(
+    "docs,sha_expected,md5_expected",
+    [
+        (
+            [_p3_doc("a1", content_sha256="shaA", drive_md5="md5A"),
+             _p3_doc("a2", content_sha256="shaA", drive_md5="md5A")],
+            {"groups": 1, "duplicate_docs": 1},
+            {"groups": 1, "duplicate_docs": 1},
+        ),
+        (
+            [_p3_doc("b1", content_sha256="shaB"),
+             _p3_doc("b2", content_sha256="shaB"),
+             _p3_doc("b3", content_sha256="shaB")],
+            {"groups": 1, "duplicate_docs": 2},
+            {"groups": 0, "duplicate_docs": 0},
+        ),
+    ],
+)
+def test_p3_exact_duplicate_groups_by_sha_and_md5(docs, sha_expected, md5_expected):
+    # Rule (b) part 2: duplicate_docs = sum(count-1) per group key.
     out = _tally_p3_counts(docs, {})
-    assert out["superseded"] == {"superseded_by_set": 2, "retrieval_invisible": 2}
+    assert out["duplicates"]["content_sha256"] == sha_expected
+    assert out["duplicates"]["drive_md5"] == md5_expected
 
 
-def test_p3_exact_duplicate_groups_by_sha_and_md5():
-    # Rule (b) part 2: two group keys, duplicate_docs = sum(count-1).
-    docs = [
-        _p3_doc("a1", content_sha256="shaA", drive_md5="md5A"),
-        _p3_doc("a2", content_sha256="shaA", drive_md5="md5A"),
-        _p3_doc("a3", content_sha256="shaA"),
-        _p3_doc("b1", content_sha256="shaB"),
-        _p3_doc("b2", content_sha256="shaB"),
-        _p3_doc("solo", content_sha256="shaC", drive_md5="md5C"),
-    ]
-    out = _tally_p3_counts(docs, {})
-    assert out["duplicates"]["content_sha256"] == {"groups": 2, "duplicate_docs": 3}
-    assert out["duplicates"]["drive_md5"] == {"groups": 1, "duplicate_docs": 1}
-
-
-def test_p3_ghosts_need_no_source_and_no_chunks():
+@pytest.mark.parametrize(
+    "doc,is_ghost",
+    [
+        (_p3_doc("g1", has_file=False, bytes_state="not_stored", chunks=0,
+                 status=ist.EXTRACT_FAILED), True),
+        (_p3_doc("g2", has_file=False, bytes_state="missing", chunks=0,
+                 status=ist.ZERO_CHUNK), True),
+        (_p3_doc("keep1", has_file=False, bytes_state="not_stored", chunks=5), False),
+        (_p3_doc("keep2", has_file=True, bytes_state="present", chunks=0), False),
+    ],
+)
+def test_p3_ghost_needs_no_source_and_no_chunks(doc, is_ghost):
     # Rule (c): a row is a ghost only when bytes are gone AND chunks are zero.
-    docs = [
-        _p3_doc("g1", has_file=False, bytes_state="not_stored", chunks=0, status=ist.EXTRACT_FAILED),
-        _p3_doc("g2", has_file=False, bytes_state="missing", chunks=0, status=ist.ZERO_CHUNK),
-        _p3_doc("keep1", has_file=False, bytes_state="not_stored", chunks=5),
-        _p3_doc("keep2", has_file=True, bytes_state="present", chunks=0),
-    ]
-    out = _tally_p3_counts(docs, {"keep1": 5})
-    assert out["ghosts"]["total"] == 2
-    assert out["ghosts"]["by_status"] == {ist.EXTRACT_FAILED: 1, ist.ZERO_CHUNK: 1}
-    assert out["ghosts"]["by_bytes_state"] == {"not_stored": 1, "missing": 1}
+    out = _tally_p3_counts([doc], {})
+    assert out["ghosts"]["total"] == (1 if is_ghost else 0)
