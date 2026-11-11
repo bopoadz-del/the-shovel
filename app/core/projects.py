@@ -1649,6 +1649,30 @@ def tombstone_document(doc_id: str) -> Optional[Dict[str, Any]]:
     return get_document(doc_id)
 
 
+def tombstone_document_ghost(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Hide a ghost row without touching its chunks. Keeps the row.
+
+    A ghost already holds zero chunks, so this is deliberately a NO-delete
+    write: it sets ``TOMBSTONED`` + hidden and never calls
+    ``delete_document_chunks``. Idempotent: an already-TOMBSTONED row is
+    returned unchanged.
+    """
+    if not doc_id:
+        return None
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            document = session.get(Document, doc_id)
+            if document is None:
+                return None
+            if getattr(document, "ingest_status", None) != TOMBSTONED:
+                document.ingest_status = TOMBSTONED
+                document.ingest_status_reason = "ghost"
+                document.retrieval_visible = False
+                session.commit()
+    return get_document(doc_id)
+
+
 def update_document_metadata(doc_id: str, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Merge ``metadata`` into the document's existing metadata_ column.
 
