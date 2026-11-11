@@ -2814,8 +2814,12 @@ def _boq_summary_chunks(result: dict[str, Any]) -> list[str]:
         desc = (item.get("description") or item.get("item_key") or "item").strip()
         unit = (item.get("unit") or "").strip()
         unit_str = f" {unit}" if unit else ""
+        section = (item.get("section") or "").strip()
+        bill_prefix = (
+            f" [bill {section}]" if section and section.lower() != "general" else ""
+        )
         out.append(
-            f"BOQ line item{src_prefix} — {desc}: total quantity "
+            f"BOQ line item{bill_prefix}{src_prefix} — {desc}: total quantity "
             f"{item.get('quantity')}{unit_str}, unit price (rate) "
             f"{item.get('unit_cost')}, total price (amount) "
             f"{item.get('total_cost')} {currency}".strip()

@@ -1220,6 +1220,46 @@ def test_boq_line_item_chunk_carries_five_fields_and_source():
     assert "total price" in c and "525000" in c, f"total price missing: {c}"
 
 
+def test_boq_line_item_chunk_carries_bill_section():
+    """A line item's bill/section (already parsed by the processor) must be
+    carried on its chunk so a 'quantity of X in bill Y' ask can scope to the
+    bill. The 'General' fallback is NOT a bill, so it is not printed."""
+    from app.core.doc_index import _boq_summary_chunks
+
+    base = {
+        "status": "success",
+        "currency": "SAR",
+        "total_cost": 1000,
+        "source_name": "Priced BOQ",
+    }
+
+    # Input 1: a real bill/section -> surfaced on the item chunk.
+    scoped = _boq_summary_chunks({
+        **base,
+        "line_items": [{
+            "description": "Excavation to reduced level",
+            "quantity": 1200, "unit": "m3", "unit_cost": 25,
+            "total_cost": 30000, "section": "BILL NO.2 - SITE WORKS",
+        }],
+    })
+    scoped_items = [c for c in scoped if c.lower().startswith("boq line item")]
+    assert scoped_items and "bill bill no.2 - site works" in scoped_items[0].lower(), \
+        f"bill section not carried: {scoped_items}"
+
+    # Input 2: the processor's 'General' default is not a bill -> not printed.
+    general = _boq_summary_chunks({
+        **base,
+        "line_items": [{
+            "description": "Concrete blinding",
+            "quantity": 300, "unit": "m2", "unit_cost": 45,
+            "total_cost": 13500, "section": "General",
+        }],
+    })
+    general_items = [c for c in general if c.lower().startswith("boq line item")]
+    assert general_items and "[bill" not in general_items[0].lower(), \
+        f"'General' must not print as a bill: {general_items}"
+
+
 def test_boq_no_software_aggregate_but_has_terminology_chunk():
     """No blanket software 'aggregate total' chunk — summing OCR'd line items is
     wrong (units are mixed and often mis-read: excavation/backfill/concrete are

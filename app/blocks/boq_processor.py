@@ -201,7 +201,7 @@ class BOQProcessorBlock(UniversalBlock):
         "unit": ["unit", "uom", "u/m", "unit_of_measure", "measure"],
         "rate": ["rate", "unit_cost", "unit_price", "price", "unit_rate", "cost_per_unit", "cost/unit"],
         "total": ["total", "total_cost", "amount", "line_total", "extended_price", "cost", "value"],
-        "section": ["section", "division", "trade", "category", "csi_div", "package", "work_package"],
+        "section": ["section", "division", "trade", "category", "csi_div", "package", "work_package", "bill", "bill_no", "bill_number"],
     }
 
     async def process(self, input_data: Any, params: Dict = None) -> Dict:
