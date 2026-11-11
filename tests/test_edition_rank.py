@@ -82,7 +82,7 @@ def _install(monkeypatch, chunks, names):
     monkeypatch.setattr(ret, "_doc_name_for_id",
                         lambda _id: names.get(_id, ""), raising=False)
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
-    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "curated_kb")
+    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
     monkeypatch.delenv("MASTER_CORPUS_SOURCE_PROJECT_ID", raising=False)
     for v in ("RAG_GK_SCORE_MARGIN", "RAG_OWN_DOC_BOOST", "RAG_GK_TOPK_CAP",
               "RAG_GK_LEXICAL_FOLD", "RAG_AUTHORITY_WEIGHT", "RAG_LAYER_WEIGHT",
