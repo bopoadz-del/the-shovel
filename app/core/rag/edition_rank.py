@@ -154,22 +154,22 @@ def candidate_conflicts(
     """
     joined = "\n".join(part for part in (text, source_name) if part)
     pattern = _standard_pattern(standard)
-    occurrences = list(pattern.finditer(joined))
-    if not occurrences:
-        return False
     edition_lower = (edition or "").lower()
-    any_conflicting = False
-    for occurrence in occurrences:
+    matched = False
+    conflicting = False
+    for occurrence in pattern.finditer(joined):
         adjacent = _adjacent_edition_tokens(
             joined, occurrence.start(), occurrence.end())
         if not adjacent:
             continue
         if any(token.lower() == edition_lower for token in adjacent):
-            # This occurrence names the asked edition, so the candidate is not
-            # in conflict regardless of any other stray year token elsewhere.
-            return False
-        any_conflicting = True
-    return any_conflicting
+            # This occurrence names the asked edition; a matching occurrence
+            # means the candidate is not in conflict regardless of any other
+            # stray year token elsewhere.
+            matched = True
+        else:
+            conflicting = True
+    return conflicting and not matched
 
 
 def apply_edition_conflict_demotion(
