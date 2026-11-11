@@ -442,6 +442,45 @@ def test_p3_ghost_needs_no_source_and_no_chunks(doc, is_ghost):
     out = _tally_p3_counts([doc], {})
     assert out["ghosts"]["total"] == (1 if is_ghost else 0)
 
+def _seed_chunk_rows(project_id: str, doc_id: str, count: int) -> None:
+    """Insert ``count`` rows into the ACTIVE namespaced chunk table.
+
+    The dry-run reads live chunk-row counts, not the cached ``chunk_count``
+    column; a test must seed the store so a bypassed chunk-count query is
+    observable. Reuses whatever width the namespace was already opened at.
+    """
+    import os
+    from datetime import datetime, timezone
+
+    import numpy as np
+    from app.core.db import SessionLocal, engine
+    from app.core.models import (
+        EMBEDDING_DIM,
+        make_rag_chunk_class,
+        rag_chunk_class_for,
+    )
+    from app.core.rag.vector_store import ensure_table
+
+    ns = (os.getenv("RAG_VECTOR_NAMESPACE", "v2") or "").strip()
+    cls = rag_chunk_class_for(ns) or make_rag_chunk_class(ns, EMBEDDING_DIM, "test")
+    ensure_table(cls.__table__, bind=engine)
+    dim = int(cls.embedding_identity["dim"])
+    vec = np.zeros(dim, dtype=np.float32)
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        for i in range(count):
+            session.add(cls(
+                chunk_id=f"{doc_id}-{i}",
+                project_id=project_id,
+                doc_id=doc_id,
+                chunk_index=i,
+                text=f"row {i}",
+                embedding=vec,
+                created_at=now,
+            ))
+        session.commit()
+
+
 @pytest.mark.parametrize(
     "name,chunks",
     [("boq.xlsx", 4), ("tracker.csv", 2)],
@@ -453,7 +492,11 @@ def test_p3_reconcile_dry_run_queryable(monkeypatch, tmp_path, name, chunks):
     pm = _reload_projects(monkeypatch, tmp_path)
     pm.create_project("P3", user_id="system", project_id="p3proj")
     doc = pm.add_document("p3proj", name, size=10)
-    pm.stamp_document_index(doc["id"], chunk_count=chunks, ingest_status=ist.INDEXED)
+    # Cached column is stale (0); the store holds ``chunks`` rows. The dry-run
+    # must report the store, so a bypassed chunk-count query (falling back to
+    # the cached column) changes the assertion.
+    pm.stamp_document_index(doc["id"], chunk_count=0, ingest_status=ist.INDEXED)
+    _seed_chunk_rows("p3proj", doc["id"], chunks)
     pm.create_project("Other", user_id="system", project_id="otherproj")
     pm.add_document("otherproj", "other_boq.xlsx", size=10)
 
@@ -461,3 +504,21 @@ def test_p3_reconcile_dry_run_queryable(monkeypatch, tmp_path, name, chunks):
     assert report["project_id"] == "p3proj"
     assert report["spreadsheets"]["documents"] == 1
     assert report["spreadsheets"]["chunks"] == chunks
+
+
+@pytest.mark.parametrize("name", ["boq.xlsx", "tracker.csv"])
+def test_p3_dry_run_endpoint_returns_counts(monkeypatch, tmp_path, name):
+    # The admin route hands back the tally dict (constant-return -> None must
+    # fail), and the project filter is honoured.
+    from app.routers.admin import admin_corpus_p3_dry_run
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("EP", user_id="system", project_id="eproj")
+    pm.add_document("eproj", name, size=10)
+
+    result = admin_corpus_p3_dry_run(
+        project_id="eproj", auth={"user_id": "admin", "role": "admin"},
+    )
+    assert isinstance(result, dict)
+    assert result["project_id"] == "eproj"
+    assert result["spreadsheets"]["documents"] == 1
