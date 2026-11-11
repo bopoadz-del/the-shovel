@@ -70,10 +70,11 @@ def fake_client(monkeypatch):
 VALID_ID = "1234567890abcdef"
 
 
-def test_streams_to_path_and_hashes_incrementally(tmp_path, fake_client):
-    """Success: two chunks land on disk in order with the right size+digest."""
-    body = b"hello " + b"world"
-    fake_client["install"](_Resp([b"hello ", b"world"]))
+@pytest.mark.parametrize("chunks", [[b"hello ", b"world"], [b"abc", b"defghij"]])
+def test_streams_to_path_and_hashes_incrementally(tmp_path, fake_client, chunks):
+    """Success: chunks land on disk in order with the right size+digest."""
+    body = b"".join(chunks)
+    fake_client["install"](_Resp(chunks))
 
     dest = tmp_path / "out.bin"
     size, sha, err = gdrive_service.download_file_to_path(VALID_ID, dest)
@@ -88,42 +89,46 @@ def test_streams_to_path_and_hashes_incrementally(tmp_path, fake_client):
     assert args[2]["params"] == {"alt": "media", "supportsAllDrives": "true"}
 
 
-def test_invalid_file_id_is_rejected_without_a_token(tmp_path, monkeypatch):
+@pytest.mark.parametrize("bad_id", ["not a drive id", "short"])
+def test_invalid_file_id_is_rejected_without_a_token(tmp_path, monkeypatch, bad_id):
     """An id that is not a Drive id fails before any token is minted."""
     minted = []
     monkeypatch.setattr(gdrive_service, "_mint_access_token", lambda: minted.append(1) or "tok")
 
-    size, sha, err = gdrive_service.download_file_to_path("not a drive id", tmp_path / "x")
+    size, sha, err = gdrive_service.download_file_to_path(bad_id, tmp_path / "x")
 
     assert (size, sha) == (None, None)
     assert err == "invalid drive file id"
     assert minted == []
 
 
-def test_missing_token_returns_service_unavailable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("file_id", ["1234567890abcdef", "ABCDEFGHIJ_12345"])
+def test_missing_token_returns_service_unavailable(tmp_path, monkeypatch, file_id):
     monkeypatch.setattr(gdrive_service, "_mint_access_token", lambda: None)
 
-    size, sha, err = gdrive_service.download_file_to_path(VALID_ID, tmp_path / "x")
+    size, sha, err = gdrive_service.download_file_to_path(file_id, tmp_path / "x")
 
     assert (size, sha) == (None, None)
     assert err == "service account unavailable"
 
 
-def test_non_200_status_returns_error_and_leaves_no_file(tmp_path, fake_client):
-    fake_client["install"](_Resp([b"partial"], status_code=404))
+@pytest.mark.parametrize("status", [404, 500])
+def test_non_200_status_returns_error_and_leaves_no_file(tmp_path, fake_client, status):
+    fake_client["install"](_Resp([b"partial"], status_code=status))
 
     dest = tmp_path / "out.bin"
     size, sha, err = gdrive_service.download_file_to_path(VALID_ID, dest)
 
     assert (size, sha) == (None, None)
-    assert err == "Drive download returned 404"
+    assert err == f"Drive download returned {status}"
     assert not dest.exists()
 
 
-def test_stream_error_removes_the_partial_file(tmp_path, fake_client):
+@pytest.mark.parametrize("msg", ["connection dropped", "read timed out"])
+def test_stream_error_removes_the_partial_file(tmp_path, fake_client, msg):
     def _chunks():
         yield b"partial"
-        raise RuntimeError("connection dropped")
+        raise RuntimeError(msg)
 
     fake_client["install"](_Resp(_chunks()))
 
@@ -131,12 +136,13 @@ def test_stream_error_removes_the_partial_file(tmp_path, fake_client):
     size, sha, err = gdrive_service.download_file_to_path(VALID_ID, dest)
 
     assert (size, sha) == (None, None)
-    assert err == "RuntimeError: connection dropped"
+    assert err == f"RuntimeError: {msg}"
     assert not dest.exists()
 
 
-def test_empty_body_yields_zero_size_and_the_empty_digest(tmp_path, fake_client):
-    fake_client["install"](_Resp([]))
+@pytest.mark.parametrize("chunks", [[], [b""]])
+def test_empty_body_yields_zero_size_and_the_empty_digest(tmp_path, fake_client, chunks):
+    fake_client["install"](_Resp(chunks))
 
     dest = tmp_path / "out.bin"
     size, sha, err = gdrive_service.download_file_to_path(VALID_ID, dest)

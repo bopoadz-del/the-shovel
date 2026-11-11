@@ -608,14 +608,16 @@ def test_supervise_is_skipped_inside_the_supervised_child(monkeypatch, tmp_path)
 # ── memory headroom ────────────────────────────────────────────────────────
 
 
-def test_ingest_streams_the_download_never_buffering_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "body", [b"%PDF-1.4 " + b"x" * 4096, b"%PDF-1.4 " + b"y" * 2048],
+)
+def test_ingest_streams_the_download_never_buffering_it(tmp_path, monkeypatch, body):
     """Extraction is the memory peak, so the download must be streamed to the
     transient path via ``download_file_to_path``. The fake below exposes NO
     ``download_file_bytes`` seam, so a regression back to whole-file buffering
     fails immediately."""
     from scripts.p1b_ingest_drive_server import _ingest_file
 
-    body = b"%PDF-1.4 " + b"x" * 4096
     monkeypatch.setattr(
         "app.core.projects.add_document", lambda **_k: {"id": "doc-1"},
     )
@@ -632,7 +634,7 @@ def test_ingest_streams_the_download_never_buffering_it(tmp_path, monkeypatch):
 
     _, result = _ingest_file(
         {"id": "drive-1", "name": "big.pdf", "_drive_path": "Tier1/big.pdf",
-         "mimeType": "application/pdf", "size": 4105},
+         "mimeType": "application/pdf", "size": len(body)},
         "proj", tmp_path, "run-mem", _Drive(),
     )
 
