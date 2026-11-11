@@ -11,6 +11,10 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
+from app.core.rag.evidence_budget import (
+    CONTEXT_TRUNCATED_NOTE,
+    cap_evidence_text,
+)
 from app.core.rag.evidence_plan import (
     ROUND_LIMIT,
     EvidencePlan,
@@ -70,5 +74,13 @@ def gather_evidence(
         rounds.append(RoundRecord(number=number, queried_items=missing,
                                   missing_after=new_missing))
         missing = new_missing
-    return EvidenceRun(plan=plan, evidence="\n".join(parts), missing=missing,
+    combined = "\n".join(parts)
+    # Whole-turn safety net: the merged evidence (first pass + every fetched
+    # round) must never exceed the injection budget, even if a single action's
+    # own budget was raised or bypassed. Keep the front (relevance order) and
+    # record the truncation so the answer says the table was sampled.
+    combined, truncated = cap_evidence_text(combined)
+    if truncated:
+        combined = combined.rstrip() + CONTEXT_TRUNCATED_NOTE
+    return EvidenceRun(plan=plan, evidence=combined, missing=missing,
                        rounds=rounds)
