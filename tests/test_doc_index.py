@@ -368,13 +368,14 @@ def test_extract_pdf_batched_keeps_prior_pages_on_timeout(tmp_path, monkeypatch)
     assert meta.get("ocr_pages") == 5
 
 
-def test_large_pdf_is_page_batched_with_no_whole_file_skip(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pdf_name", ["large.pdf", "oversized.pdf"])
+def test_large_pdf_is_page_batched_with_no_whole_file_skip(tmp_path, monkeypatch, pdf_name):
     """A PDF above the batch threshold takes the page-batch path, not the
     per-file child, and passes 0.0 (no whole-file skip) as its ceiling so size
     alone can never produce zero chunks."""
     from app.core import doc_index
 
-    pdf = str(tmp_path / "large.pdf")
+    pdf = str(tmp_path / pdf_name)
     monkeypatch.setattr(doc_index, "_pdf_should_batch", lambda p: True)
     calls = {}
 
@@ -385,18 +386,19 @@ def test_large_pdf_is_page_batched_with_no_whole_file_skip(tmp_path, monkeypatch
     monkeypatch.setattr(doc_index, "_produce_whole_document_chunks", _whole)
 
     chunks, _meta = doc_index._produce_chunks_isolated(
-        pdf, "large.pdf", ".pdf", "p", "default", False,
+        pdf, pdf_name, ".pdf", "p", "default", False,
     )
     assert chunks == ["chunk-a"]
     assert calls["whole"]["max_size_mb"] == 0.0
 
 
-def test_small_pdf_stays_on_per_file_child_path(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pdf_name", ["small.pdf", "tiny.pdf"])
+def test_small_pdf_stays_on_per_file_child_path(tmp_path, monkeypatch, pdf_name):
     """A PDF below the batch threshold keeps the single per-file child path."""
     from app.core import doc_index
     import app.core.extract_isolated as extract_isolated
 
-    pdf = str(tmp_path / "small.pdf")
+    pdf = str(tmp_path / pdf_name)
     monkeypatch.setattr(doc_index, "_pdf_should_batch", lambda p: False)
     calls = {}
 
@@ -418,19 +420,20 @@ def test_small_pdf_stays_on_per_file_child_path(tmp_path, monkeypatch):
     )
 
     chunks, _meta = doc_index._produce_chunks_isolated(
-        pdf, "small.pdf", ".pdf", "p", "default", False,
+        pdf, pdf_name, ".pdf", "p", "default", False,
     )
     assert chunks == ["chunk-b"]
     assert "single" in calls
     assert "whole" not in calls
 
 
-def test_whole_document_keeps_admin_ceiling(tmp_path, monkeypatch):
+@pytest.mark.parametrize("ceiling_mb", [200.0, 350.0])
+def test_whole_document_keeps_admin_ceiling(tmp_path, monkeypatch, ceiling_mb):
     """A whole reference work keeps its own ceiling, not the no-skip default."""
     from app.core import doc_index
 
     pdf = str(tmp_path / "book.pdf")
-    monkeypatch.setenv("ADMIN_KNOWLEDGE_PDF_MAX_MB", "200")
+    monkeypatch.setenv("ADMIN_KNOWLEDGE_PDF_MAX_MB", str(ceiling_mb))
     calls = {}
 
     def _whole(*args, **kwargs):
@@ -441,16 +444,17 @@ def test_whole_document_keeps_admin_ceiling(tmp_path, monkeypatch):
     doc_index._produce_chunks_isolated(
         pdf, "book.pdf", ".pdf", "p", "default", False, whole_document=True,
     )
-    assert calls["whole"]["max_size_mb"] == 200.0
+    assert calls["whole"]["max_size_mb"] == ceiling_mb
 
 
-def test_batched_pdf_with_zero_ceiling_never_skips_on_size(tmp_path, monkeypatch):
+@pytest.mark.parametrize("size_mb", [145.0, 210.0])
+def test_batched_pdf_with_zero_ceiling_never_skips_on_size(tmp_path, monkeypatch, size_mb):
     """max_size_mb=0.0 extracts a >100 MB text-layer PDF in batches instead of
     skipping it wholesale (the old PDF_MAX_SIZE_MB zero-chunk path)."""
     from app.core import doc_index
 
     pdf = str(tmp_path / "huge.pdf")
-    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: 145.0)
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: size_mb)
     monkeypatch.setattr(doc_index, "_quarantine_meta", lambda p, n: None)
     monkeypatch.setattr(doc_index, "_pdf_page_count", lambda p: 3)
     monkeypatch.setenv("PDF_OCR_BATCH_PAGES", "20")
