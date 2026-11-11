@@ -16,6 +16,7 @@ from app.agents import provenance_trail as pt
 from app.agents.citation_provenance import (
     EvidenceRecord,
     _answer_cites_record,
+    _subject_score,
     figure_provenance,
 )
 from app.lib.construction_formulas import run_calculation
@@ -442,3 +443,20 @@ def test_a_strictly_better_named_competitor_is_surfaced_in_the_answer(
     assert surfaced_figure in out
     assert "clause's figure" in out
     assert out.startswith(answer)
+
+
+@pytest.mark.parametrize(
+    "sentence,subject",
+    [
+        # No content token is at least 4 letters, so nothing is verifiable:
+        # the score is 0.0 (the ambiguity stays surfaced), never a division
+        # by an empty denominator.
+        ("The max lap is 150 mm.", {"max", "lap", "the"}),
+        ("The dry mix is 200 mm.", {"dry", "mix", "the"}),
+    ],
+)
+def test_subject_score_is_zero_when_no_token_is_verifiable(sentence, subject):
+    """B11 score: an ask whose content tokens are all shorter than the
+    verifiable length scores 0.0 rather than dividing by zero, so weak
+    grounding is surfaced instead of hidden."""
+    assert _subject_score(sentence, subject) == 0.0
