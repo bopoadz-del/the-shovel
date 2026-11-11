@@ -13,13 +13,17 @@ from app.core import ingest_status as ist
 from app.core.ingest_reconcile import (
     _tally_p3_counts,
     apply_ghost_tombstones,
+    apply_spreadsheet_chunk_purge,
     apply_tombstones,
     coverage_truth,
+    is_chunked_spreadsheet,
     is_ghost,
     p3_reconcile_dry_run,
+    p3_spreadsheet_purge,
     plan_as_dict,
     plan_ghost_tombstones,
     plan_reconcile,
+    plan_spreadsheet_chunk_purge,
     resume_source_changed,
     should_skip_resume,
     source_content_token,
@@ -687,3 +691,133 @@ def test_p3_dry_run_endpoint_returns_counts(monkeypatch, tmp_path, name):
     assert isinstance(result, dict)
     assert result["project_id"] == "eproj"
     assert result["spreadsheets"]["documents"] == 1
+
+
+@pytest.mark.parametrize(
+    "name,chunks,expected",
+    [
+        ("boq.xlsx", 4, True),
+        ("tracker.csv", 2, True),
+        ("pricing.xlsm", 1, True),
+        ("legacy.xls", 1, True),
+        ("model.xlsb", 1, True),
+        ("notes.pdf", 4, False),
+        ("empty.xlsx", 0, False),
+        ("noext", 3, False),
+    ],
+)
+def test_is_chunked_spreadsheet(name, chunks, expected):
+    # The rule is extension-shaped, not name-shaped: every spreadsheet
+    # extension counts, no non-spreadsheet does, and zero chunks never does.
+    assert is_chunked_spreadsheet({"original_name": name}, chunks) is expected
+
+
+@pytest.mark.parametrize("name", ["boq.xlsx", "tracker.csv"])
+def test_plan_spreadsheet_chunk_purge_selects_only_chunked_spreadsheets(name):
+    docs = [
+        {"id": "ss", "original_name": name, "chunk_count": 0},
+        {"id": "pdf", "original_name": "notes.pdf", "chunk_count": 5},
+        {"id": "empty", "original_name": "empty.xlsx", "chunk_count": 0},
+    ]
+    chunk_counts = {"ss": 4, "pdf": 5, "empty": 0}
+    actions = plan_spreadsheet_chunk_purge(docs, chunk_counts)
+    assert [a.doc_id for a in actions] == ["ss"]
+    assert all(a.reason == "spreadsheet_chunks" for a in actions)
+
+
+@pytest.mark.parametrize("name", ["boq.xlsx", "tracker.csv"])
+def test_strip_spreadsheet_chunks_removes_chunks_keeps_doc(monkeypatch, tmp_path, name):
+    # The purge deletes chunk rows and zeroes the count, but the document row
+    # survives with visibility untouched: a spreadsheet is a working document,
+    # just never a RAG source.
+    from sqlalchemy import text
+    from app.core.db import SessionLocal
+    from app.core.models import rag_chunk_table_name
+    from app.core.rag.vector_store import _rag_vector_namespace
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("SP", user_id="system", project_id="spproj")
+    doc = pm.add_document("spproj", name, size=10)
+    pm.stamp_document_index(doc["id"], chunk_count=3, ingest_status=ist.INDEXED)
+    _seed_chunk_rows("spproj", doc["id"], 3)
+
+    got = pm.strip_spreadsheet_chunks(doc["id"])
+    assert got["chunk_count"] == 0
+    assert got["retrieval_visible"] is True
+    assert got["ingest_status"] == ist.INDEXED  # ledger untouched by the purge
+
+    table = rag_chunk_table_name(_rag_vector_namespace())
+    with SessionLocal() as session:
+        remaining = int(session.execute(
+            text(f"SELECT COUNT(*) FROM {table} WHERE doc_id = :d"),
+            {"d": doc["id"]},
+        ).scalar() or 0)
+    assert remaining == 0
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_apply_spreadsheet_chunk_purge_gates_on_execute(monkeypatch, tmp_path, execute):
+    # The write path must not delete until execute=true; the planner counts the
+    # same set either way.
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("AP", user_id="system", project_id="approj")
+    doc = pm.add_document("approj", "boq.xlsx", size=10)
+    pm.stamp_document_index(doc["id"], chunk_count=2, ingest_status=ist.INDEXED)
+    _seed_chunk_rows("approj", doc["id"], 2)
+    view = pm.get_document(doc["id"])
+
+    actions = plan_spreadsheet_chunk_purge([view], {doc["id"]: 2})
+    assert len(actions) == 1
+    applied = apply_spreadsheet_chunk_purge(actions, execute=execute)
+    assert applied == (1 if execute else 0)
+    assert pm.get_document(doc["id"])["chunk_count"] == (0 if execute else 2)
+
+
+@pytest.mark.parametrize("name", ["boq.xlsx", "tracker.csv"])
+def test_p3_spreadsheet_purge_endpoint_plan_and_execute(monkeypatch, tmp_path, name):
+    from app.routers.admin import admin_corpus_spreadsheet_purge
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("ES", user_id="system", project_id="esproj")
+    doc = pm.add_document("esproj", name, size=10)
+    pm.stamp_document_index(doc["id"], chunk_count=3, ingest_status=ist.INDEXED)
+    _seed_chunk_rows("esproj", doc["id"], 3)
+
+    plan = admin_corpus_spreadsheet_purge(
+        project_id="esproj", execute=False,
+        auth={"user_id": "admin", "role": "admin"},
+    )
+    assert plan["project_id"] == "esproj"
+    assert plan["dry_run"] is True
+    assert plan["spreadsheet_chunk_count"] == 1
+    assert plan["applied"] == 0
+    assert pm.get_document(doc["id"])["chunk_count"] == 3
+
+    done = admin_corpus_spreadsheet_purge(
+        project_id="esproj", execute=True,
+        auth={"user_id": "admin", "role": "admin"},
+    )
+    assert done["spreadsheet_chunk_count"] == 1
+    assert done["applied"] == 1
+    assert done["dry_run"] is False
+    got = pm.get_document(doc["id"])
+    assert got["chunk_count"] == 0
+    assert got["retrieval_visible"] is True
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_p3_spreadsheet_purge_loader_reports_and_applies(monkeypatch, tmp_path, execute):
+    from app.core.ingest_reconcile import p3_spreadsheet_purge
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("LS", user_id="system", project_id="lsproj")
+    doc = pm.add_document("lsproj", "boq.xlsx", size=10)
+    pm.stamp_document_index(doc["id"], chunk_count=2, ingest_status=ist.INDEXED)
+    _seed_chunk_rows("lsproj", doc["id"], 2)
+
+    result = p3_spreadsheet_purge(project_id="lsproj", execute=execute)
+    assert result["project_id"] == "lsproj"
+    assert result["spreadsheet_chunk_count"] == 1
+    assert result["applied"] == (1 if execute else 0)
+    assert result["dry_run"] is (not execute)
+    assert pm.get_document(doc["id"])["chunk_count"] == (0 if execute else 2)

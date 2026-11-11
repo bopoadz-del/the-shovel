@@ -592,6 +592,17 @@ def is_ghost(doc: Mapping[str, Any], chunks: int) -> bool:
     return doc.get("has_file") is not True and chunks <= 0
 
 
+def is_chunked_spreadsheet(doc: Mapping[str, Any], chunks: int) -> bool:
+    """Rule (a): a spreadsheet-extension row still holding chunks in the store.
+
+    Spreadsheets are never chunked (owner ruling 2026-11-06); any chunk rows a
+    spreadsheet-extension document still carries are legacy and removed. Shared
+    by the dry-run tally and the spreadsheet purge write path so the two can
+    never drift apart.
+    """
+    return document_extension(doc) in SPREADSHEET_EXTS and chunks > 0
+
+
 def _tally_p3_counts(
     docs: Sequence[Mapping[str, Any]],
     chunk_counts: Mapping[str, int],
@@ -637,7 +648,7 @@ def _tally_p3_counts(
             )
             bucket["documents"] += 1
             bucket["chunks"] += chunks
-            if chunks > 0:
+            if is_chunked_spreadsheet(doc, chunks):
                 bucket["with_chunks"] += 1
                 ss_with_chunks += 1
             ss_chunks += chunks
@@ -841,6 +852,81 @@ def p3_ghost_tombstone(
         "project_id": project_id,
         "chunks_table": chunks_table,
         "ghost_count": len(actions),
+        "applied": applied,
+        "dry_run": not execute,
+    }
+
+
+def plan_spreadsheet_chunk_purge(
+    docs: Sequence[Mapping[str, Any]],
+    chunk_counts: Mapping[str, int],
+) -> list[ReconcileAction]:
+    """Rows the spreadsheet rule selects: spreadsheet-extension documents
+    still holding chunks in the chunk store.
+
+    Pure planner: computes the same set as dry-run rule (a) ``with_chunks``,
+    so the operator can confirm the count before the write path runs. A second
+    pass selects nothing because a purged row falls back to zero chunks.
+    """
+    out: list[ReconcileAction] = []
+    for doc in docs:
+        did = str(doc.get("id") or "")
+        if not did:
+            continue
+        chunks = int(
+            chunk_counts.get(did, doc.get("chunk_count") or 0) or 0
+        )
+        if is_chunked_spreadsheet(doc, chunks):
+            out.append(ReconcileAction(doc_id=did, reason="spreadsheet_chunks"))
+    return out
+
+
+def apply_spreadsheet_chunk_purge(
+    actions: Sequence[ReconcileAction],
+    *,
+    execute: bool,
+) -> int:
+    """Remove spreadsheet chunks from the chunk store. Never deletes a document
+    and never hides it: a spreadsheet stays a working document, it just leaves
+    the RAG."""
+    if not execute:
+        return 0
+    from app.core import projects as projects_mod
+
+    applied = 0
+    for action in actions:
+        if projects_mod.strip_spreadsheet_chunks(action.doc_id):
+            applied += 1
+    return applied
+
+
+def p3_spreadsheet_purge(
+    *, project_id: str | None = None, execute: bool = False,
+) -> dict[str, Any]:
+    """Plan and (opt-in) apply the spreadsheet chunk purge for one project.
+
+    ``spreadsheet_chunk_count`` is the dry-run rule-(a) ``with_chunks`` count an
+    operator confirms before passing ``execute=true``. Applying deletes the
+    spreadsheet's chunk rows and zeroes its ``chunk_count``; it never deletes
+    the document row and never flips ``retrieval_visible``. Idempotent: a
+    second execute removes nothing new.
+    """
+    from app.core.db import SessionLocal
+    from app.core.models import rag_chunk_table_name
+
+    chunks_table = rag_chunk_table_name(
+        os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()
+    )
+    with SessionLocal() as session:
+        docs, chunk_counts = _load_p3_docs_and_chunk_counts(
+            session, project_id, chunks_table,
+        )
+    actions = plan_spreadsheet_chunk_purge(docs, chunk_counts)
+    applied = apply_spreadsheet_chunk_purge(actions, execute=execute)
+    return {
+        "project_id": project_id,
+        "chunks_table": chunks_table,
+        "spreadsheet_chunk_count": len(actions),
         "applied": applied,
         "dry_run": not execute,
     }

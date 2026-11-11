@@ -2089,6 +2089,32 @@ def admin_corpus_ghost_tombstone(
     return p3_ghost_tombstone(project_id=project_id, execute=execute)
 
 
+@router.post("/v1/admin/corpus/spreadsheet-purge")
+def admin_corpus_spreadsheet_purge(
+    project_id: Optional[str] = Query(None),
+    execute: bool = Query(
+        False,
+        description="When true, remove spreadsheet chunk rows from the chunk "
+                    "store; otherwise return a read-only plan.",
+    ),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) apply the P3 spreadsheet purge for one project.
+
+    A spreadsheet is rule (a) from the p3-dry-run: a spreadsheet-extension row
+    still holding chunks in the chunk store. The response always reports
+    ``spreadsheet_chunk_count`` (the dry-run ``with_chunks`` count) so an
+    operator can confirm it before passing ``execute=true``.
+
+    Applying deletes the spreadsheet's chunk rows and zeroes its chunk count;
+    documents are never deleted and never hidden. Idempotent.
+    """
+    _require_admin(auth)
+    from app.core.ingest_reconcile import p3_spreadsheet_purge
+
+    return p3_spreadsheet_purge(project_id=project_id, execute=execute)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PR A — admin-approved projects from Drive
 #

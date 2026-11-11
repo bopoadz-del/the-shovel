@@ -1673,6 +1673,30 @@ def tombstone_document_ghost(doc_id: str) -> Optional[Dict[str, Any]]:
     return get_document(doc_id)
 
 
+def strip_spreadsheet_chunks(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Remove a spreadsheet's chunks from the chunk store; keep the row.
+
+    Spreadsheets are never chunked (owner ruling 2026-11-06); this purges the
+    legacy chunk rows a spreadsheet-extension document still carries and zeroes
+    its ``chunk_count``. It never deletes the document row and never flips
+    ``retrieval_visible``: a spreadsheet stays a working document (the BOQ
+    calculators and previews read it), it just leaves the RAG. Idempotent: a
+    row already at zero chunks is returned unchanged.
+    """
+    if not doc_id:
+        return None
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            document = session.get(Document, doc_id)
+            if document is None:
+                return None
+            delete_document_chunks(session, doc_id)
+            document.chunk_count = 0
+            session.commit()
+    return get_document(doc_id)
+
+
 def update_document_metadata(doc_id: str, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Merge ``metadata`` into the document's existing metadata_ column.
 
