@@ -47,7 +47,7 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -727,7 +727,54 @@ def build_parser() -> argparse.ArgumentParser:
             "refused. Hard delete is never used."
         ),
     )
+    ap.add_argument(
+        "--reextract-exts",
+        default="",
+        metavar="EXTS",
+        help=(
+            "Comma-separated file extensions (e.g. xlsx,xls,xlsm,csv) to "
+            "re-download and re-chunk even when already indexed. Each "
+            "matching document is re-indexed in place (same row, same id) "
+            "so its chunks are replaced atomically; nothing is deleted or "
+            "superseded. Used to re-shape chunks after an extractor change. "
+            "Extensions not listed are untouched by resume skip logic."
+        ),
+    )
     return ap
+
+
+def parse_reextract_exts(raw: str | None) -> frozenset[str]:
+    """Normalize ``--reextract-exts`` into a lowercase ``.ext`` set.
+
+    Each comma-separated token is lowercased and given a leading dot when
+    absent (``XLSX`` and ``xlsx`` both become ``.xlsx``). Blank tokens are
+    dropped. An empty/absent value yields an empty set, which is a no-op.
+    """
+    if not raw:
+        return frozenset()
+    exts: set[str] = set()
+    for part in str(raw).split(","):
+        ext = part.strip().lower()
+        if not ext:
+            continue
+        if not ext.startswith("."):
+            ext = "." + ext
+        exts.add(ext)
+    return frozenset(exts)
+
+
+def reextract_requested(doc: Mapping[str, Any], reextract_exts: frozenset[str]) -> bool:
+    """True when a settled document's extension is in the re-extract set.
+
+    Pure decision over the documents row and the parsed set, so the resume
+    loop can route a matching already-indexed document into the in-place
+    re-index path instead of the skip set. An empty set is always False.
+    """
+    if not reextract_exts:
+        return False
+    from app.core import ingest_status as ist
+
+    return ist.document_extension(doc) in reextract_exts
 
 
 def parse_folder_ids(raw: List[str] | None) -> List[str]:
@@ -923,6 +970,7 @@ def main() -> int:
 
     args = build_parser().parse_args()
     args = apply_env_fallbacks(args)
+    reextract_exts = parse_reextract_exts(args.reextract_exts)
 
     if args.supervise and not os.getenv(SUPERVISED_ENV):
         return run_under_supervisor(args)
@@ -1035,6 +1083,7 @@ def main() -> int:
         "stale_extractor_open": 0,
         "retried": 0,
         "now_indexed": 0,
+        "reextract": 0,
     }
     results: List[Dict[str, Any]] = []
 
@@ -1066,6 +1115,7 @@ def main() -> int:
         "stale_extractor_open": 0,
         "retried": 0,
         "now_indexed": 0,
+        "reextract": 0,
         # Pending admin-knowledge documents this run found / indexed / could
         # not index (run_knowledge_phase). A second run finds none pending.
         "knowledge_pending": knowledge_tally["pending"],
@@ -1350,6 +1400,7 @@ def main() -> int:
         already_indexed: set[str] = set()
         retry_doc_by_fid: Dict[str, Dict[str, Any]] = {}
         folder_stale_open = 0
+        folder_reextract = 0
         project_id: str | None = None
         if not dry_run:
             preferred_id = (project_id_for_folder or "").strip() or None
@@ -1453,6 +1504,19 @@ def main() -> int:
                     doc, chunks, drive_by_id.get(fid),
                     parseable_exts=_doc_index._SUPPORTED_EXTS,
                 ):
+                    # A settled document whose extension is in the re-extract
+                    # set is NOT skipped: it is re-downloaded and re-indexed
+                    # in place so its chunks are replaced atomically (same
+                    # row, same id). Only when the Drive file is still
+                    # present — a missing file has no bytes to re-extract.
+                    if (
+                        fid in drive_by_id
+                        and reextract_requested(doc, reextract_exts)
+                    ):
+                        if fid not in retry_doc_by_fid:
+                            retry_doc_by_fid[fid] = dict(doc)
+                            folder_reextract += 1
+                        continue
                     already_indexed.add(fid)
                     continue
                 if chunks > 0:
@@ -1486,6 +1550,9 @@ def main() -> int:
             if folder_stale_open:
                 accounting["stale_extractor_open"] += folder_stale_open
                 global_tally["stale_extractor_open"] += folder_stale_open
+            if folder_reextract:
+                accounting["reextract"] += folder_reextract
+                global_tally["reextract"] += folder_reextract
 
         # Drop unsupported before sharding so every worker sees the same
         # supported universe and sha256 assignment stays partition-complete.
@@ -1584,6 +1651,7 @@ def main() -> int:
             "stale_extractor_open": folder_stale_open,
             "retried": 0,
             "now_indexed": 0,
+            "reextract": folder_reextract,
             "walk_errors": len(walk_errors),
         }
         folder_accounting.append(folder_record)
