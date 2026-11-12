@@ -10,10 +10,12 @@ that scopes them land in different chunks, so a "quantity of X in bill Y" or
 ``_spreadsheet_row_chunks`` is the general fix: each data row becomes one
 chunk carrying the sheet name, the most recent bill/section heading inherited
 from above, and the row's own cells labelled with their column names. These
-tests use two distinct synthetic layouts (no live names) to pin the mechanism.
+tests parametrise over two distinct synthetic layouts each (no live names) to
+pin the mechanism.
 """
 from __future__ import annotations
 
+import pytest
 from openpyxl import Workbook
 
 from app.core import doc_index
@@ -35,12 +37,21 @@ def _write_xlsx(path: str, sheets: list[tuple[str, list[list]]]) -> str:
     return path
 
 
-def test_single_sheet_multiple_bills_inherit_heading(tmp_path):
+@pytest.mark.parametrize(
+    "second_bill",
+    [
+        # (heading, item description, qty, unit, rate, amount)
+        ("BILL NO.2 - SUBSTRUCTURE", "Reinforced concrete in raft", 950, "m3", 380, 361000),
+        ("BILL NO.2 - DRAINAGE", "Reinforced concrete in culvert", 620, "m3", 410, 254200),
+    ],
+)
+def test_single_sheet_multiple_bills_inherit_heading(tmp_path, second_bill):
     """Layout 1: one sheet, two bills, the second re-prints its header row.
 
     Every measured row must carry the sheet name and the bill heading that
     scopes it — not the earlier bill's heading and not the repeated header.
     """
+    heading, item, qty, unit, rate, amount = second_bill
     path = _write_xlsx(str(tmp_path / "priced_bill.xlsx"), [(
         "Bill 1 - Site Works",
         [
@@ -48,9 +59,9 @@ def test_single_sheet_multiple_bills_inherit_heading(tmp_path):
             ["Item", "Description", "Qty", "Unit", "Rate", "Amount"],
             ["A.1", "Excavation to reduced level", 1200, "m3", 25, 30000],
             ["A.2", "Concrete blinding 75mm", 300, "m2", 45, 13500],
-            ["BILL NO.2 - SUBSTRUCTURE"],
+            [heading],
             ["Item", "Description", "Qty", "Unit", "Rate", "Amount"],
-            ["B.1", "Reinforced concrete in raft", 950, "m3", 380, 361000],
+            ["B.1", item, qty, unit, rate, amount],
         ],
     )])
 
@@ -64,23 +75,32 @@ def test_single_sheet_multiple_bills_inherit_heading(tmp_path):
     assert "Quantity: 1200" in excavation
     assert "Rate: 25" in excavation
 
-    raft = next(c for c in chunks if "raft" in c)
+    second = next(c for c in chunks if item in c)
     # The second bill's heading is inherited, not the first bill's.
-    assert "Bill: BILL NO.2 - SUBSTRUCTURE" in raft
-    assert "BILL NO.1" not in raft
-    assert "Quantity: 950" in raft
-    assert "Rate: 380" in raft
+    assert f"Bill: {heading}" in second
+    assert "BILL NO.1" not in second
+    assert f"Quantity: {qty}" in second
+    assert f"Rate: {rate}" in second
 
     # No chunk re-prints the repeated header row as if it were an item.
     assert not any("Item: Description" in c for c in chunks)
 
 
-def test_title_block_and_multiple_sheets_inherit_heading(tmp_path):
+@pytest.mark.parametrize(
+    "second_sheet",
+    [
+        # (bill heading, item description, qty, rate)
+        ("BILL NO.5 - FINISHES", "Wall tiling", 1200, 55),
+        ("BILL NO.6 - PAINTING", "Emulsion to walls", 540, 12),
+    ],
+)
+def test_title_block_and_multiple_sheets_inherit_heading(tmp_path, second_sheet):
     """Layout 2: a title-block banner above the header, and a second sheet.
 
     The banner rows above the header are skipped; the bill heading still
     scopes the rows beneath it, and each sheet keeps its own name.
     """
+    sheet2_bill, sheet2_item, sheet2_qty, sheet2_rate = second_sheet
     path = _write_xlsx(str(tmp_path / "schedule_of_works.xlsx"), [
         (
             "Sheet1",
@@ -96,9 +116,9 @@ def test_title_block_and_multiple_sheets_inherit_heading(tmp_path):
         (
             "Sheet2",
             [
-                ["BILL NO.5 - FINISHES"],
+                [sheet2_bill],
                 ["Item", "Description", "Qty", "Unit", "Rate", "Amount"],
-                ["F1", "Wall tiling", 1200, "m2", 55, 66000],
+                ["F1", sheet2_item, sheet2_qty, "m2", sheet2_rate, 66000],
             ],
         ),
     ])
@@ -114,11 +134,11 @@ def test_title_block_and_multiple_sheets_inherit_heading(tmp_path):
     assert "Bill: BILL NO.4 - APARTMENTS" in shear
     assert "Quantity: 3533" in shear
 
-    tiling = next(c for c in chunks if "Wall tiling" in c)
-    assert "Sheet: Sheet2" in tiling
-    assert "Bill: BILL NO.5 - FINISHES" in tiling
-    assert "Quantity: 1200" in tiling
-    assert "Rate: 55" in tiling
+    second = next(c for c in chunks if sheet2_item in c)
+    assert "Sheet: Sheet2" in second
+    assert f"Bill: {sheet2_bill}" in second
+    assert f"Quantity: {sheet2_qty}" in second
+    assert f"Rate: {sheet2_rate}" in second
 
 
 def test_wired_into_structured_chunks(tmp_path):
@@ -143,34 +163,62 @@ def test_wired_into_structured_chunks(tmp_path):
     ), structured
 
 
-def test_parse_failure_yields_empty_not_exception(tmp_path):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"this is not a zip file",
+        b"<html>not a spreadsheet</html>",
+    ],
+)
+def test_parse_failure_yields_empty_not_exception(tmp_path, payload):
     """A non-spreadsheet payload (or a broken one) degrades to [], never raises."""
     not_a_sheet = tmp_path / "not_really.xlsx"
-    not_a_sheet.write_bytes(b"this is not a zip file")
+    not_a_sheet.write_bytes(payload)
 
     assert doc_index._spreadsheet_row_chunks(
         str(not_a_sheet), "not_really.xlsx", ".xlsx"
     ) == []
 
 
-def test_non_spreadsheet_extensions_are_ignored():
-    assert doc_index._spreadsheet_row_chunks("x.pdf", "x.pdf", ".pdf") == []
+@pytest.mark.parametrize("ext", [".pdf", ".png", ".txt"])
+def test_non_spreadsheet_extensions_are_ignored(ext):
+    filename = f"x{ext}"
+    assert doc_index._spreadsheet_row_chunks(filename, filename, ext) == []
 
 
-def test_csv_rows_are_chunked_without_sheet_name(tmp_path):
+@pytest.mark.parametrize(
+    "csv_lines, first_item, first_qty, first_rate",
+    [
+        (
+            (
+                "Supply ductile iron pipe,240,lm,180,43200\n"
+                "Manhole type M1,12,no,1500,18000\n"
+            ),
+            "ductile iron pipe", 240, 180,
+        ),
+        (
+            (
+                "Handrail,88,lm,95,8360\n"
+                "Kerb edging,300,lm,22,6600\n"
+            ),
+            "Handrail", 88, 95,
+        ),
+    ],
+)
+def test_csv_rows_are_chunked_without_sheet_name(
+    tmp_path, csv_lines, first_item, first_qty, first_rate
+):
     """CSV has no sheet name; the row chunks still label each measured column."""
     path = tmp_path / "rates.csv"
     path.write_text(
-        "Description,Quantity,Unit,Rate,Amount\n"
-        "Supply ductile iron pipe,240,lm,180,43200\n"
-        "Manhole type M1,12,no,1500,18000\n",
+        "Description,Quantity,Unit,Rate,Amount\n" + csv_lines,
         encoding="utf-8",
     )
 
     chunks = doc_index._spreadsheet_row_chunks(str(path), "rates.csv", ".csv")
 
     assert len(chunks) == 2, chunks
-    pipe = next(c for c in chunks if "ductile iron pipe" in c)
-    assert "Sheet:" not in pipe
-    assert "Quantity: 240" in pipe
-    assert "Rate: 180" in pipe
+    first = next(c for c in chunks if first_item in c)
+    assert "Sheet:" not in first
+    assert f"Quantity: {first_qty}" in first
+    assert f"Rate: {first_rate}" in first
