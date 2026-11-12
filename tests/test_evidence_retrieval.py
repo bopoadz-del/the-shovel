@@ -27,6 +27,7 @@ def test_a_plan_covered_on_first_pass_needs_no_requery(plan_text, evidence):
     run = gather_evidence(plan, [_action(evidence)], initial_evidence=evidence)
     assert run.missing == ()
     assert run.rounds == []
+    assert run.stop_reason == "covered"
 
 
 @pytest.mark.parametrize("plan_text,initial,action_result,missing_item", [
@@ -44,6 +45,7 @@ def test_a_missing_item_triggers_a_second_round_that_covers_it(
     assert [r.number for r in run.rounds] == [1]
     assert run.rounds[0].queried_items == (missing_item,)
     assert run.rounds[0].missing_after == ()
+    assert run.stop_reason == "covered"
 
 
 @pytest.mark.parametrize("plan_text,missing", [
