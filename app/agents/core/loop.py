@@ -129,6 +129,7 @@ async def _chat_impl(
         _log_dataset_turn,
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
         _normalize_tool_call_ids, _nudge_for_failed_tool, _off_loop, _parse_dsml_tool_calls,
+        _supersede_tool_failure_with_evidence,
         _postprocess_answer, _predispatch_file_tool, _predispatch_formula_calc,
         _predispatch_look_ahead, _predispatch_remaining_deliverables,
         _predispatch_resource_histogram, _predispatch_wbs_duration_override,
@@ -731,6 +732,13 @@ async def _chat_impl(
             })
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
+            # S-A6: see streaming.py -- evidence in the turn supersedes a
+            # file-level tool failure about the same document.
+            elif (_superseded := await _off_loop(
+                    _supersede_tool_failure_with_evidence, tc, tool_result, messages)) is not None:
+                if error_nudges < _TOOL_ERROR_NUDGE_CAP:
+                    error_nudges += 1
+                    pending_nudges.append({"role": "user", "content": _superseded})
             elif (_tool_result_errored(tool_result)
                   and error_nudges < _TOOL_ERROR_NUDGE_CAP):
                 error_nudges += 1

@@ -2528,6 +2528,126 @@ def _tool_result_errored(tool_result: Any) -> bool:
     return False
 
 
+# S-A6: a raw-file tool (fetch / table parser) can fail or half-read a
+# document -- "not found", "no extractable text", a ``partial`` "likely
+# scanned" page dump -- while that same document's indexed excerpts are
+# already in this turn's reference context. The tool's file-level claim then
+# became the answer ("file not found" on a bill with hundreds of indexed
+# chunks), and the generic error nudge even told the model to retry the file
+# tool. Evidence in the turn outranks a file-level tool failure about it.
+_EVIDENCE_SUPERSEDES_TOOL_NUDGE = (
+    "That tool result for {doc} is SUPERSEDED by evidence: this document's "
+    "indexed excerpts are already in the reference context of this turn. "
+    "Answer from the reference context -- state what those excerpts show and "
+    "cite them. Do not describe the document as missing, unreadable, scanned "
+    "or without tables, and do not call a file tool on it again."
+)
+# Argument / result fields through which any tool names the document it acts on.
+_DOC_REF_KEYS = frozenset({"document_id", "doc_id", "filename", "file_name", "file_path"})
+
+
+def _turn_evidence_docs(messages: list[dict[str, Any]] | None) -> dict[str, str]:
+    """``doc_id -> src name`` for every retrieval-marked excerpt in this
+    turn's context (system / tool messages carrying ``[doc_id=… chunk=…]``
+    markers). A user message is not evidence even if it quotes a marker."""
+    from app.agents.citation_provenance import _MARKER_RE, _MARKER_SRC_RE
+
+    out: dict[str, str] = {}
+    for m in messages or []:
+        if not isinstance(m, dict) or m.get("role") not in ("system", "tool"):
+            continue
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        for mk in _MARKER_RE.finditer(content):
+            src = _MARKER_SRC_RE.search(mk.group("attrs"))
+            name = src.group(1).strip() if src else ""
+            if name or mk.group("doc") not in out:
+                out[mk.group("doc")] = name
+    return out
+
+
+def _tool_doc_refs(tool_call: dict[str, Any] | None, tool_result: Any) -> list[str]:
+    """Every document reference (id, filename, path) in the tool's arguments
+    and in its result, at any nesting depth."""
+    raw = ((tool_call or {}).get("function") or {}).get("arguments")
+    try:
+        args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        args = {}
+    refs: list[str] = []
+    stack: list[Any] = [args, tool_result.get("result") if isinstance(tool_result, dict) else None]
+    while stack:
+        node = stack.pop()
+        for k, v in (node.items() if isinstance(node, dict) else ()):
+            if k in _DOC_REF_KEYS and isinstance(v, str) and v.strip():
+                refs.append(v.strip())
+            else:
+                stack.append(v)
+    return refs
+
+
+def _evidence_doc_for_ref(ref: str, evidence: dict[str, str]) -> str | None:
+    """The evidence doc_id a tool's document reference points at, or None.
+
+    Matches the doc_id exactly, or the reference's basename against the
+    marker's ``src=`` name. A stored upload may carry a prefix before the
+    original name (``<stamp>_<name>``); a long ``src=`` is truncated with
+    ``…`` and every kept part must then appear, the last one as the tail."""
+    if ref in evidence:
+        return ref
+    base = ref.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for doc_id, src in evidence.items():
+        parts = [p.strip() for p in src.lower().split("…") if p.strip()]
+        if not parts:
+            continue
+        if len(parts) > 1 or src.startswith("…"):
+            hit = base.endswith(parts[-1]) and all(p in base for p in parts)
+        else:
+            hit = base == parts[0] or base.endswith(tuple(sep + parts[0] for sep in "_- "))
+        if hit:
+            return doc_id
+    return None
+
+
+def _tool_failed_at_file_level(tool_result: Any) -> bool:
+    """True when the tool errored or returned a ``partial`` read. An input
+    question (``needs_input`` / ``missing``) is not a file-level failure: only
+    the user can answer it, so it keeps its own nudge."""
+    node = tool_result.get("result") if isinstance(tool_result, dict) else None
+    for _ in range(4):
+        if not isinstance(node, dict):
+            break
+        if node.get("status") == "needs_input" or node.get("needs_input") or node.get("missing"):
+            return False
+        if node.get("status") == "partial":
+            return True
+        node = node.get("result")
+    return _tool_result_errored(tool_result)
+
+
+def _supersede_tool_failure_with_evidence(
+    tool_call: dict[str, Any] | None,
+    tool_result: Any,
+    messages: list[dict[str, Any]] | None,
+) -> str | None:
+    """S-A6: the nudge for a tool's file-level failure on a document that
+    has evidence in this turn, or None when the existing error path applies.
+
+    Keyed only on "this document has retrieval evidence in this turn": the
+    tool name and the filename play no part. The result is marked
+    ``superseded_by_evidence`` (the doc_id) so later stages can see it."""
+    if not _tool_failed_at_file_level(tool_result):
+        return None
+    evidence = _turn_evidence_docs(messages)
+    for ref in _tool_doc_refs(tool_call, tool_result):
+        doc_id = _evidence_doc_for_ref(ref, evidence)
+        if doc_id is not None:
+            tool_result["superseded_by_evidence"] = doc_id
+            return _EVIDENCE_SUPERSEDES_TOOL_NUDGE.format(doc=evidence[doc_id] or doc_id)
+    return None
+
+
 _EMPTY_ROUTER_NUDGE = (
     "The router matched NO action. If the request is a computation (volume, "
     "quantity, capacity, EVM, any arithmetic), you MUST now call the "
