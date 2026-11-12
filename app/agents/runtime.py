@@ -9584,9 +9584,9 @@ def _provenance_credits_injected_project(
     from app.agents.provenance_trail import SOURCE_PROJECT
 
     entries = (audit_rec or {}).get("provenance") or []
+    # An empty injected set makes every membership test False, so no
+    # separate empty-set early return is needed.
     injected = {c.get("doc_id") for c in chunks or [] if c.get("doc_id")}
-    if not injected:
-        return False
     return any(
         isinstance(e, dict)
         and e.get("source") == SOURCE_PROJECT
