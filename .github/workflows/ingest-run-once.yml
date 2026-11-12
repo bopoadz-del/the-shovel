@@ -17,9 +17,10 @@
 # `the-fork-ingest` resolves WORKER_COMMAND from a Secrets Manager *secret*
 # (not a plain environment value), and ECS lets a resolved secret win over a
 # same-name `environment` override -- so argv-only flags cannot reach the
-# script from here. `folder_ids` / `project_id` therefore travel as
-# containerOverrides `environment` under the DISTINCT names `P1B_FOLDER_IDS`
-# (comma list) and `P1B_PROJECT_ID`, which the script reads as a fallback
+# script from here. `folder_ids` / `project_id` / `reextract_exts` therefore
+# travel as containerOverrides `environment` under the DISTINCT names
+# `P1B_FOLDER_IDS` (comma list), `P1B_PROJECT_ID` and `P1B_REEXTRACT_EXTS`
+# (comma list of extensions), which the script reads as a fallback
 # only when the corresponding flag is absent. No folder or project id is
 # committed here.
 #
@@ -43,6 +44,10 @@ on:
         type: string
       project_id:
         description: "Project id to land the walk in (overrides the manifest tier project; no default committed)"
+        required: false
+        type: string
+      reextract_exts:
+        description: "Comma-separated extensions to re-download and re-chunk even when already indexed (e.g. xlsx,csv); empty = none"
         required: false
         type: string
 
@@ -87,6 +92,7 @@ jobs:
         env:
           FOLDER_IDS: ${{ inputs.folder_ids }}
           PROJECT_ID: ${{ inputs.project_id }}
+          REEXTRACT_EXTS: ${{ inputs.reextract_exts }}
         run: |
           # Network placement is read from the retired service at run time so
           # this file carries no subnet or security-group literals.
@@ -118,9 +124,11 @@ jobs:
             --arg keep "0" \
             --arg folder "$FOLDER_IDS" \
             --arg project "$PROJECT_ID" \
+            --arg reextract "$REEXTRACT_EXTS" \
             '[{name:"P1B_KEEP_ALIVE",value:$keep}] +
              (if ($folder | length) > 0 then [{name:"P1B_FOLDER_IDS",value:$folder}] else [] end) +
-             (if ($project | length) > 0 then [{name:"P1B_PROJECT_ID",value:$project}] else [] end)')
+             (if ($project | length) > 0 then [{name:"P1B_PROJECT_ID",value:$project}] else [] end) +
+             (if ($reextract | length) > 0 then [{name:"P1B_REEXTRACT_EXTS",value:$reextract}] else [] end)')
           overrides=$(jq -cn --arg c "$container" --argjson env "$env_json" \
             '{containerOverrides:[{name:$c, environment:$env}]}')
           arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \

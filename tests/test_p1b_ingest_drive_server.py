@@ -270,3 +270,33 @@ def test_env_project_id_fallback_does_not_override_a_flag(monkeypatch, env_value
     apply_env_fallbacks(args)
     assert args.project_id == "flag_project"
 
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [
+        ("xlsx,CSV", frozenset({".xlsx", ".csv"})),
+        (".docx", frozenset({".docx"})),
+    ],
+)
+def test_env_reextract_exts_fallback_applies_when_flag_absent(monkeypatch, env_value, expected):
+    monkeypatch.setenv("P1B_REEXTRACT_EXTS", env_value)
+    args = build_parser().parse_args(["--tier", "1", "--resume"])
+    assert args.reextract_exts is None
+    apply_env_fallbacks(args)
+    assert parse_reextract_exts(args.reextract_exts) == expected
+
+
+@pytest.mark.parametrize("env_value", ["xlsx,csv", ".pdf"])
+def test_env_reextract_exts_fallback_does_not_override_a_flag(monkeypatch, env_value):
+    monkeypatch.setenv("P1B_REEXTRACT_EXTS", env_value)
+    args = build_parser().parse_args(["--reextract-exts", "xlsm"])
+    apply_env_fallbacks(args)
+    assert parse_reextract_exts(args.reextract_exts) == frozenset({".xlsm"})
+
+
+@pytest.mark.parametrize("env_value", ["", "   "])
+def test_env_reextract_exts_blank_env_is_a_no_op(monkeypatch, env_value):
+    monkeypatch.setenv("P1B_REEXTRACT_EXTS", env_value)
+    args = build_parser().parse_args(["--tier", "1", "--resume"])
+    apply_env_fallbacks(args)
+    assert parse_reextract_exts(args.reextract_exts) == frozenset()

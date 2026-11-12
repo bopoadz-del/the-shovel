@@ -729,7 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--reextract-exts",
-        default="",
+        default=None,
         metavar="EXTS",
         help=(
             "Comma-separated file extensions (e.g. xlsx,xls,xlsm,csv) to "
@@ -737,7 +737,8 @@ def build_parser() -> argparse.ArgumentParser:
             "matching document is re-indexed in place (same row, same id) "
             "so its chunks are replaced atomically; nothing is deleted or "
             "superseded. Used to re-shape chunks after an extractor change. "
-            "Extensions not listed are untouched by resume skip logic."
+            "Extensions not listed are untouched by resume skip logic. "
+            "Falls back to P1B_REEXTRACT_EXTS when the flag is absent."
         ),
     )
     return ap
@@ -784,16 +785,18 @@ def parse_folder_ids(raw: List[str] | None) -> List[str]:
 
 
 def apply_env_fallbacks(args: argparse.Namespace) -> argparse.Namespace:
-    """Fill ``--folder-id`` / ``--project-id`` from env when the flag is absent.
+    """Fill ``--folder-id`` / ``--project-id`` / ``--reextract-exts`` from env when absent.
 
     The ingest worker's ``WORKER_COMMAND`` is a Secrets Manager secret that
     beats a same-name ``environment`` override, and argv-only flags cannot
     reach the script through a run-once ECS task. ``ingest-run-once.yml``
-    therefore passes the values as ``P1B_FOLDER_IDS`` (a comma list) and
-    ``P1B_PROJECT_ID`` containerOverrides environment; this reads them only
+    therefore passes the values as ``P1B_FOLDER_IDS`` (a comma list),
+    ``P1B_PROJECT_ID`` and ``P1B_REEXTRACT_EXTS`` (a comma list of
+    extensions) containerOverrides environment; this reads them only
     when the corresponding flag was NOT given, so an explicit flag always
     wins. Validation is unchanged -- the same ``parse_folder_ids`` /
-    ``missing_project_for_override`` path runs immediately after.
+    ``missing_project_for_override`` / ``parse_reextract_exts`` path runs
+    immediately after.
     """
     if args.folder_ids is None:
         raw = (os.getenv("P1B_FOLDER_IDS") or "").strip()
@@ -803,6 +806,10 @@ def apply_env_fallbacks(args: argparse.Namespace) -> argparse.Namespace:
         raw = (os.getenv("P1B_PROJECT_ID") or "").strip()
         if raw:
             args.project_id = raw
+    if getattr(args, "reextract_exts", None) is None:
+        raw = (os.getenv("P1B_REEXTRACT_EXTS") or "").strip()
+        if raw:
+            args.reextract_exts = raw
     return args
 
 
