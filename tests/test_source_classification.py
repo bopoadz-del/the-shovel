@@ -27,9 +27,18 @@ def _write_text_pdf(path, pages: list[str | None]) -> None:
         doc.close()
 
 
-@pytest.mark.parametrize("ext", [".xls", ".xlsx", ".xlsm", ".xlsb", ".csv"])
-def test_spreadsheets_are_their_own_class(ext):
-    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_SPREADSHEET
+@pytest.mark.parametrize("ext", [".xls", ".xlsx", ".csv"])
+def test_extractable_spreadsheets_are_text(ext):
+    """2026-11-06 spreadsheet class reversed 2026-11-11: a spreadsheet with a
+    text extractor is a TEXT candidate, not a separate excluded class."""
+    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_TEXT
+
+
+@pytest.mark.parametrize("ext", [".xlsm", ".xlsb"])
+def test_spreadsheets_without_an_extractor_are_non_text(ext):
+    """The same single ingestibility declaration decides: no extractor, no TEXT."""
+    assert ext not in ist.TEXT_BEARING_EXTS
+    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_NON_TEXT
 
 
 @pytest.mark.parametrize("ext", [".kmz", ".kml"])

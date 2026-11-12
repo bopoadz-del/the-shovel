@@ -121,24 +121,24 @@ def test_kmz_is_never_indexed_even_with_chunks(ext):
 
 
 @pytest.mark.parametrize("ext", [".xlsx", "xlsx", ".xls", "xls"])
-def test_spreadsheets_are_never_indexed_even_with_chunks(ext):
-    """Owner ruling 2026-11-06: spreadsheets stay uploadable (BOQ
-    calculators, previews) but are never chunked into the RAG. The
-    extractors read .xls/.xlsx rows fine, so without this denylist an
-    already-chunked spreadsheet would fall through evidence-beats-policy
-    and register as INDEXED."""
+def test_spreadsheets_with_chunks_are_indexed_by_evidence(ext):
+    """The 2026-11-06 spreadsheet exclusion was reversed 2026-11-11:
+    spreadsheets stay in the RAG, row-chunked. A spreadsheet that produced
+    chunks rides evidence-beats-policy to INDEXED like any text type."""
     c = ist.classify(chunk_count=12, extension=ext)
-    assert c.status == ist.UNSUPPORTED_TYPE
-    assert c.reason == f"{ext.lstrip('.')}:terminal"
-    assert not c.is_open
+    assert c.status == ist.INDEXED
+    assert c.reason is None
 
 
 @pytest.mark.parametrize("ext", [".xlsx", "xlsx", ".xls", "xls"])
-def test_spreadsheets_with_no_chunks_are_unsupported_and_closed(ext):
+def test_spreadsheets_with_no_chunks_are_not_indexed(ext):
+    """No chunks is no evidence: a text-bearing spreadsheet that produced
+    nothing is ZERO_CHUNK (open, retryable), never INDEXED and never the old
+    blanket terminal close."""
     c = ist.classify(chunk_count=0, extension=ext)
-    assert c.status == ist.UNSUPPORTED_TYPE
-    assert c.reason == f"{ext.lstrip('.')}:terminal"
-    assert not c.is_open
+    assert c.status == ist.ZERO_CHUNK
+    assert c.status not in ist.INDEXED_STATUSES
+    assert c.is_open
 
 
 def test_zip_with_chunks_is_still_indexed_not_over_reached():

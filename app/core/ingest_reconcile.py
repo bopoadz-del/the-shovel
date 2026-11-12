@@ -815,7 +815,11 @@ def _tally_p3_counts(
     """Read-only P3 reconcile dry-run tally. Pure: no I/O.
 
     Three owner/curator rules (SPEC_CORPUS_DECISIONS_v1):
-      (a) spreadsheet-extension rows are removed from the chunk store;
+      (a) spreadsheet-extension rows are removed from the chunk store --
+          REVERSED 2026-11-11 23:15Z: spreadsheets stay in the RAG,
+          row-chunked (#207). The tally is kept as a population report
+          (how many spreadsheets, how many hold chunks); it no longer
+          names rows to remove;
       (b) superseded revisions per document-code family (derived by stripping
           the trailing revision token, not only the already-set flag) + exact
           duplicates;
