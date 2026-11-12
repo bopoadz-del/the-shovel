@@ -46,6 +46,15 @@ def test_geospatial_containers_are_non_text(ext):
     assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_NON_TEXT
 
 
+@pytest.mark.parametrize("ext", [".kmz", ".kml"])
+def test_geospatial_denylist_beats_a_text_extractor(ext, monkeypatch):
+    """The geospatial exclusion is an explicit denylist, not an absence from
+    ``TEXT_BEARING_EXTS``: KML is XML, so an extractor may claim it one day.
+    Even then the source class stays NON_TEXT."""
+    monkeypatch.setattr(ist, "TEXT_BEARING_EXTS", ist.TEXT_BEARING_EXTS | {ext})
+    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_NON_TEXT
+
+
 @pytest.mark.parametrize("ext", [".docx", ".pptx", ".txt"])
 def test_text_bearing_non_pdf_formats_are_text(ext):
     assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_TEXT
