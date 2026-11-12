@@ -9570,6 +9570,31 @@ def _answer_tier(sources: list[dict[str, Any]]) -> str:
     return "general"
 
 
+def _provenance_credits_injected_project(
+    audit_rec: dict[str, Any] | None, chunks: list[dict[str, Any]],
+) -> bool:
+    """True when this turn's figure provenance credits at least one figure
+    to a project document whose chunks were injected for this turn.
+
+    ``audit_rec["provenance"]`` is written by ``_record_figure_provenance``
+    for the answer being finished; an entry is ``project_document`` only
+    when the figure was matched to an evidence record. Requiring the doc to
+    be among ``chunks`` keeps the credit tied to this turn's injected set.
+    """
+    from app.agents.provenance_trail import SOURCE_PROJECT
+
+    entries = (audit_rec or {}).get("provenance") or []
+    injected = {c.get("doc_id") for c in chunks or [] if c.get("doc_id")}
+    if not injected:
+        return False
+    return any(
+        isinstance(e, dict)
+        and e.get("source") == SOURCE_PROJECT
+        and e.get("doc_id") in injected
+        for e in entries
+    )
+
+
 def _build_sources_from_audit(
     audit_rec: dict[str, Any],
     final_text: str = "",
@@ -9642,8 +9667,15 @@ def _build_sources_from_audit(
         chunks = grounded
 
     # If the assistant explicitly declined to answer, don't fabricate a
-    # sources panel from low-score fallback chunks.
-    if _answer_is_caveat(final_text):
+    # sources panel from low-score fallback chunks. The test is on the
+    # answer's claim, not on any clause in it: when this turn's provenance
+    # credits a figure to an injected project chunk, the answer stated
+    # project evidence, and a limitation it adds ("...so I cannot convert
+    # the percentage") does not turn it into a decline (S-R2). A pure
+    # decline states no such figure and still returns no sources.
+    if _answer_is_caveat(final_text) and not _provenance_credits_injected_project(
+        audit_rec, chunks,
+    ):
         return _finish([calc_row] if calc_row else [])
 
     try:
