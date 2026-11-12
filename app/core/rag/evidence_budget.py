@@ -30,13 +30,14 @@ CONTEXT_TRUNCATED_NOTE = (
 
 def _env_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
     try:
         value = int(raw)
     except ValueError:
+        # Unset, empty, whitespace-only and non-numeric all mean "default".
         return default
-    return value if value > 0 else default
+    if value <= 0:
+        return default
+    return value
 
 
 def max_total_tokens() -> int:

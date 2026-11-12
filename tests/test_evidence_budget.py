@@ -109,6 +109,69 @@ def test_merge_total_cap_appends_note(monkeypatch, plan_text, fill):
     assert eb.CONTEXT_TRUNCATED_NOTE in run.evidence
 
 
+# ── per-function budget guards (kill the CI-M mutants) ───────────────────
+@pytest.mark.parametrize("score,expected", [
+    (1.5, 1.5),
+    (3, 3.0),
+    (True, 0.0),
+    (None, 0.0),
+    ("high", 0.0),
+])
+def test_chunk_score_ranks_only_numeric_scores(score, expected):
+    assert eb._chunk_score(SimpleNamespace(score=score)) == expected
+
+
+@pytest.mark.parametrize("doc_id", ["doc-a", "doc-b"])
+def test_chunk_doc_id_reads_the_doc_id(doc_id):
+    assert eb._chunk_doc_id(SimpleNamespace(doc_id=doc_id)) == doc_id
+    assert eb._chunk_doc_id(SimpleNamespace()) == ""
+
+
+@pytest.mark.parametrize("raw,default,expected", [
+    ("", 7, 7),
+    ("3", 7, 3),
+    ("0", 7, 7),
+    ("-2", 7, 7),
+    ("abc", 7, 7),
+])
+def test_env_int_parses_and_guards(monkeypatch, raw, default, expected):
+    monkeypatch.setenv("TST_ENV_INT", raw)
+    assert eb._env_int("TST_ENV_INT", default) == expected
+
+
+@pytest.mark.parametrize("text,cap,expected_body,expected_truncated", [
+    ("x" * 40, 100, "x" * 40, False),
+    ("y" * 200, 10, "y" * 40, True),
+])
+def test_cap_evidence_text_keeps_the_front(text, cap, expected_body, expected_truncated):
+    out, truncated = eb.cap_evidence_text(text, max_tokens=cap)
+    assert out == expected_body
+    assert truncated == expected_truncated
+
+
+@pytest.mark.parametrize("count,per_doc,expected", [
+    (2, 10, 1),
+    (3, 20, 2),
+])
+def test_per_doc_cap_binds_before_total(count, per_doc, expected):
+    # Each chunk is 40 chars ≈ 10 tokens, all under one document id.
+    chunks = [_chunk("x" * 40, score=float(count - i)) for i in range(count)]
+    kept, _dropped = eb.cap_chunks(chunks, total_tokens=1000, per_doc_tokens=per_doc)
+    assert len(kept) == expected
+
+
+@pytest.mark.parametrize("strings,total", [
+    (["A" * 200, "B" * 200], 10),
+    (["C" * 300, "D" * 300], 20),
+])
+def test_plain_string_input_is_budgeted_as_one_text(strings, total):
+    from app.core.rag.evidence_actions import _budgeted_text
+    text = _budgeted_text(strings, total_tokens=total)
+    body = text[: -len(eb.CONTEXT_TRUNCATED_NOTE)]
+    assert eb.CONTEXT_TRUNCATED_NOTE in text
+    assert body == strings[0][: total * 4]
+
+
 # ── readiness: request-shaped 4xx must not poison serving ────────────────
 @pytest.mark.parametrize("http_status", [400, 413])
 def test_request_shaped_4xx_does_not_poison_serving(http_status):

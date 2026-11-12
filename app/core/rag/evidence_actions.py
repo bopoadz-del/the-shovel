@@ -44,10 +44,10 @@ def _budgeted_text(chunks, *, total_tokens=None, per_doc_tokens=None) -> str:
     ``text``/``score``/``doc_id``; a plain string list still passes through.
     """
     raw = list(chunks or [])
-    if not raw:
-        return ""
-    # Plain strings carry no score/doc_id: budget on the concatenation only.
-    if all(isinstance(c, str) for c in raw):
+    # Plain strings (and the empty case) carry no score/doc_id: budget the
+    # concatenation as one text, so no single fetch can inject a whole
+    # document and the empty result is still the empty string.
+    if not raw or all(isinstance(c, str) for c in raw):
         text = chunks_to_text(raw)
         from app.core.rag.evidence_budget import cap_evidence_text
         text, truncated = cap_evidence_text(
