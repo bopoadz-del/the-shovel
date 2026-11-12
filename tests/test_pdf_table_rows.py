@@ -49,33 +49,38 @@ def _page_tables(path):
         return out
 
 
-def test_open_table_across_page_break_keeps_every_row(tmp_path):
-    header = ("Activity", "Average", "Minimum")
-    first = [(f"Area {n}", str(37 * n), str(11 * n)) for n in range(1, 5)]
-    second = [(f"Area {n}", str(37 * n), str(11 * n)) for n in range(5, 9)]
-    pdf = tmp_path / "open_table.pdf"
-    _build_pdf(pdf, [(header, first), (("", "", ""), second)])
-
-    page1, page2 = _page_tables(pdf)
-    lines1 = page1.splitlines()
-    lines2 = page2.splitlines()
-
-    assert lines1[0] == "Activity | Average | Minimum"
-    for label, avg, mn in first:
-        assert f"{label} | {avg} | {mn}" in lines1
-    for label, avg, mn in second:
-        assert f"{label} | {avg} | {mn}" in lines2
-    # No body row survives only as a newline-joined fragment.
-    assert not any("\n" in ln for ln in lines1 + lines2)
+_HEADER = ("Activity", "Average", "Minimum")
+_AREAS = [(f"Area {n}", str(37 * n), str(11 * n)) for n in range(1, 9)]
 
 
-def test_single_row_table_is_unchanged(tmp_path):
-    pdf = tmp_path / "one_row.pdf"
-    _build_pdf(pdf, [(("Item", "Qty", "Unit"), [("Concrete C40", "945", "m3")])])
+def _pipe(rows):
+    return [" | ".join(r) for r in rows]
 
-    (page1,) = _page_tables(pdf)
 
-    assert page1.splitlines() == ["Item | Qty | Unit", "Concrete C40 | 945 | m3"]
+@pytest.mark.parametrize(
+    ("pages", "expected"),
+    [
+        # Open 8-row table split 4/4 across a page break; the continuation
+        # page has no header. Every row survives, aligned, on its own page.
+        (
+            [(_HEADER, _AREAS[:4]), (("", "", ""), _AREAS[4:])],
+            [_pipe([_HEADER, *_AREAS[:4]]), _pipe(_AREAS[4:])],
+        ),
+        # A single-row table: header + its one row, as before.
+        (
+            [(("Item", "Qty", "Unit"), [("Concrete C40", "945", "m3")])],
+            [["Item | Qty | Unit", "Concrete C40 | 945 | m3"]],
+        ),
+    ],
+    ids=["open_table_across_page_break", "single_row_table"],
+)
+def test_pdf_table_rows_survive_extraction(tmp_path, pages, expected):
+    pdf = tmp_path / "table.pdf"
+    _build_pdf(pdf, pages)
+
+    got = [md.splitlines() for md in _page_tables(pdf)]
+
+    assert got == expected
 
 
 @pytest.mark.parametrize(
