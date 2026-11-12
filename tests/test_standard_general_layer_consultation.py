@@ -116,17 +116,23 @@ def test_absence_note_is_empty_without_a_named_standard(ask):
     assert absence_note(ask, chunks) == ""
 
 
-def test_absence_note_respects_the_gate(monkeypatch):
-    """With the gate off, even a named-standard ask gets no steering."""
-    monkeypatch.setattr(named_standard_attribution, "gate_enabled", lambda: False)
-    ask = "Per NFPA 51B, how long must a fire watch be maintained after hot work?"
-    chunks = [
-        _chunk(
-            "proj",
-            "proj1",
+@pytest.mark.parametrize(
+    "ask,text",
+    [
+        (
+            "Per NFPA 51B, how long must a fire watch be maintained after hot work?",
             "Project hot-work permit. A fire watch shall be maintained "
             "for 30 minutes after hot work is complete.",
-            source_name="project-hot-work-permit.txt",
-        )
-    ]
+        ),
+        (
+            "Per ACI 305, what is the maximum temperature of fresh concrete?",
+            "Project concrete specification. The maximum temperature of fresh "
+            "concrete at delivery is 32\u00b0C.",
+        ),
+    ],
+)
+def test_absence_note_respects_the_gate(monkeypatch, ask, text):
+    """With the gate off, even a named-standard ask gets no steering."""
+    monkeypatch.setattr(named_standard_attribution, "gate_enabled", lambda: False)
+    chunks = [_chunk("proj", "proj1", text, source_name="x.txt")]
     assert absence_note(ask, chunks) == ""
