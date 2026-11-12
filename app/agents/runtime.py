@@ -4492,7 +4492,20 @@ def _looks_like_self_contained_calculation(text: str) -> bool:
     # row, not a volume calculator. Do not elect construction_calc.
     if _message_wants_inline_boq(text):
         return False
-    if not text or not _CALC_VERB_RE.search(text):
+    if not text:
+        return False
+    # A total/cost ask carrying quantity × unit rate operands ("890 m at 310")
+    # is a self-contained multiplication even without a calc verb — the
+    # total/cost words are the verb.
+    try:
+        from app.lib.construction_formulas_commercial import (
+            query_is_quantity_times_rate,
+        )
+        if query_is_quantity_times_rate(text):
+            return True
+    except Exception:  # noqa: BLE001 — routing must still classify
+        _LOG.debug("quantity-times-rate check skipped", exc_info=True)
+    if not _CALC_VERB_RE.search(text):
         return False
     if _ARITH_EXPR_RE.search(text):
         return True
@@ -12243,11 +12256,16 @@ def _formula_predispatch_instruction(calc_name: str | None, result: Any) -> str:
     question names the inputs it needs by their labels.
     """
     ok = bool(isinstance(result, dict) and result.get("ok"))
-    if calc_name and ok:
-        return ("construction_calc has already been run. Answer from that "
-                "result. Do not answer from Master Corpus excerpts.")
     inner = result.get("result") if isinstance(result, dict) else None
     inner = inner if isinstance(inner, dict) else {}
+    # A deterministic run is a run even without a registered name: the
+    # self-contained-arithmetic fallback returns calculation="arithmetic"
+    # (operands from the ask) and must be answered from that result, never
+    # recomputed by the model.
+    ran_calculation = bool(calc_name or str(inner.get("calculation") or "").strip())
+    if ran_calculation and ok:
+        return ("construction_calc has already been run. Answer from that "
+                "result. Do not answer from Master Corpus excerpts.")
     question = str(inner.get("question") or "").strip()
     if inner.get("status") == "not_run" and str(inner.get("reason") or "").strip():
         return str(inner["reason"]).strip()

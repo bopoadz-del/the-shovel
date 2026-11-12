@@ -1428,6 +1428,64 @@ _WASTE_PCT_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*%\s*waste")
 
 _CONTINGENCY_PCT_RE = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*%\s*contingenc")
 
+# A total/cost ask that carries both operands of a quantity × unit rate
+# multiplication ("Total cost of storm water pipe (890 m at 310)?"). The
+# calculator block multiplies them; the model never does the arithmetic.
+_QTY_AT_RATE_RE = re.compile(
+    r"\b(\d[\d,]*(?:\.\d+)?)\s*([a-z][a-z0-9²³]{0,5})?\s+(?:at|@)\s+"
+    r"(?:[A-Z]{2,4}\s*)?(\d[\d,]*(?:\.\d+)?)\s*(?=$|[);.,?]|\s+(?:per|/))",
+    re.IGNORECASE,
+)
+
+_COST_TOTAL_SIGNAL_RE = re.compile(
+    r"\b(?:total|cost|price|charge|extension|worth)\b",
+    re.IGNORECASE,
+)
+
+# A verification / comparison ask ("does 12 ha at SAR 2,500/ha equal the
+# stated D110 amount?") is a document lookup, not a fresh multiplication: the
+# product is checked against a stated figure rather than requested.
+_VERIFY_COMPARE_RE = re.compile(
+    r"\b(?:verify|check|confirm|reconcile|match(?:es|ing)?|equal(?:s)?|compare)\b",
+    re.IGNORECASE,
+)
+
+
+def query_is_quantity_times_rate(query: str) -> bool:
+    """True for a total/cost ask that carries quantity × unit rate operands.
+
+    "Total cost of storm water pipe (890 m at 310)?" is arithmetic on the
+    two figures the operator supplied, not a document lookup — the ask names
+    a total/cost AND writes a quantity joined to a bare rate by "at"/"@".
+    "890 m at 310 mm" is a dimension, not a rate, and is refused by the
+    lookahead in ``_QTY_AT_RATE_RE``. A verification against a stated figure
+    ("does 12 ha at 2,500 equal the stated amount?") is excluded.
+    """
+    raw = query or ""
+    if not raw or not _COST_TOTAL_SIGNAL_RE.search(raw):
+        return False
+    if _VERIFY_COMPARE_RE.search(raw):
+        return False
+    return bool(_QTY_AT_RATE_RE.search(raw))
+
+
+def quantity_times_rate_from_ask(text: str) -> tuple[float, float] | None:
+    """(quantity, unit_rate) parsed from a "quantity at rate" ask, else None.
+
+    Both operands come from the ask itself; nothing is defaulted.
+    """
+    if not query_is_quantity_times_rate(text):
+        return None
+    match = _QTY_AT_RATE_RE.search(text or "")
+    if match is None:
+        return None
+    quantity = float(match.group(1).replace(",", ""))
+    unit_rate = float(match.group(3).replace(",", ""))
+    if quantity <= 0 or unit_rate < 0:
+        return None
+    return quantity, unit_rate
+
+
 def query_asks_user_priced_takeoff(query: str) -> bool:
     """True for concrete take-off + an operator-instructed unit rate."""
     q = query or ""
