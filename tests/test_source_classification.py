@@ -27,13 +27,31 @@ def _write_text_pdf(path, pages: list[str | None]) -> None:
         doc.close()
 
 
-@pytest.mark.parametrize("ext", [".xls", ".xlsx", ".xlsm", ".xlsb", ".csv"])
-def test_spreadsheets_are_their_own_class(ext):
-    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_SPREADSHEET
+@pytest.mark.parametrize("ext", [".xls", ".xlsx", ".csv"])
+def test_extractable_spreadsheets_are_text(ext):
+    """2026-11-06 spreadsheet class reversed 2026-11-11: a spreadsheet with a
+    text extractor is a TEXT candidate, not a separate excluded class."""
+    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_TEXT
+
+
+@pytest.mark.parametrize("ext", [".xlsm", ".xlsb"])
+def test_spreadsheets_without_an_extractor_are_non_text(ext):
+    """The same single ingestibility declaration decides: no extractor, no TEXT."""
+    assert ext not in ist.TEXT_BEARING_EXTS
+    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_NON_TEXT
 
 
 @pytest.mark.parametrize("ext", [".kmz", ".kml"])
 def test_geospatial_containers_are_non_text(ext):
+    assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_NON_TEXT
+
+
+@pytest.mark.parametrize("ext", [".kmz", ".kml"])
+def test_geospatial_denylist_beats_a_text_extractor(ext, monkeypatch):
+    """The geospatial exclusion is an explicit denylist, not an absence from
+    ``TEXT_BEARING_EXTS``: KML is XML, so an extractor may claim it one day.
+    Even then the source class stays NON_TEXT."""
+    monkeypatch.setattr(ist, "TEXT_BEARING_EXTS", ist.TEXT_BEARING_EXTS | {ext})
     assert ist.classify_source_document(ext) == ist.SOURCE_CLASS_NON_TEXT
 
 

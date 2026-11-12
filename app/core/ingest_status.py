@@ -325,13 +325,19 @@ TEXT_BEARING_EXTS = _text_extractors.formats()
 # chunk_count, because evidence-beats-policy (the ordering that protected
 # .dwg/.dxf) would otherwise let an already-chunked .kmz back in as INDEXED.
 _GEOSPATIAL_EXTS = frozenset({".kmz", ".kml"})
-# Spreadsheets stay UPLOADABLE (the BOQ calculators price .xls/.xlsx working
-# documents, and previews render them), but they are never CHUNKED into the
-# RAG (owner ruling 2026-11-06). Same mechanism as the kmz denylist above:
-# checked in ``classify`` before the evidence-beats-policy check, so an
-# already-chunked spreadsheet cannot slip back in as INDEXED. The full set is
-# the owner's reconcile ruling (SPEC_CORPUS_DECISIONS_v1): every spreadsheet
-# shape -- .xls/.xlsx/.xlsm/.xlsb/.csv -- stays out of the RAG.
+# Spreadsheet extensions. HISTORY: the owner ruling of 2026-11-06
+# (SPEC_CORPUS_DECISIONS_v1) kept every spreadsheet shape out of the RAG, via
+# a guard in ``classify`` / ``classify_source_document`` that ran before
+# evidence-beats-policy. That ruling was REVERSED on 2026-11-11 23:15Z:
+# spreadsheets stay in the RAG, row-chunked by ``doc_index``'s
+# ``_spreadsheet_row_chunks`` (#207), because a priced bill keeps its figures
+# in rows. The guard is gone; a spreadsheet now rides evidence-beats-policy
+# like every text-bearing type (chunks -> INDEXED, none -> ZERO_CHUNK /
+# UNSUPPORTED_TYPE by the normal rules). While the guard stood, every
+# spreadsheet was stamped UNSUPPORTED_TYPE terminal and ``stamp_document_index``
+# deleted its chunks. This set is still read by the reconcile spreadsheet tally
+# (``ingest_reconcile``), which reports the spreadsheet population; it no
+# longer gates classification.
 SPREADSHEET_EXTS = frozenset({".xls", ".xlsx", ".xlsm", ".xlsb", ".csv"})
 
 # Formats whose text lives in a convertible source rather than the file we hold.
@@ -410,12 +416,13 @@ def classify_source_document(
     listed for the owner, never OCR-rescued. ``True`` and ``None`` both keep
     a PDF a ``TEXT`` candidate (``None`` means "not sampled yet", the default
     for a metadata-only walk). Every other extension is decided by the single
-    ingestibility declaration (``TEXT_BEARING_EXTS``) and the spreadsheet /
-    geospatial denylists.
+    ingestibility declaration (``TEXT_BEARING_EXTS``) and the geospatial
+    denylist. Spreadsheets are no longer a separate class (the 2026-11-06
+    exclusion was reversed 2026-11-11, see ``SPREADSHEET_EXTS``): an
+    extractable spreadsheet is ``TEXT``. ``SOURCE_CLASS_SPREADSHEET`` remains a
+    valid manifest value so manifests written before the reversal still read.
     """
     ext = _normalize_ext(extension)
-    if ext in SPREADSHEET_EXTS:
-        return SOURCE_CLASS_SPREADSHEET
     if ext in _GEOSPATIAL_EXTS:
         return SOURCE_CLASS_NON_TEXT
     if ext == ".pdf":
@@ -658,14 +665,9 @@ def classify(
     if ext in _GEOSPATIAL_EXTS:
         return Classification(UNSUPPORTED_TYPE, f"{ext.lstrip('.')}:{TERMINAL}", ext)
 
-    # SPREADSHEETS ARE NEVER CHUNKED, regardless of chunk_count (owner ruling
-    # 2026-11-06). They remain accepted project documents -- the BOQ
-    # calculators and previews read them -- but nothing spreadsheet-shaped
-    # enters the RAG. This guard runs before evidence-beats-policy for the
-    # same reason the kmz guard does: the extractors read .xls/.xlsx rows
-    # fine, and "produced chunks" must not re-admit them as INDEXED.
-    if ext in SPREADSHEET_EXTS:
-        return Classification(UNSUPPORTED_TYPE, f"{ext.lstrip('.')}:{TERMINAL}", ext)
+    # Spreadsheets have NO guard here (2026-11-06 exclusion reversed
+    # 2026-11-11, see ``SPREADSHEET_EXTS``): their row chunks are retrievable
+    # text, so they take the evidence path below like every other type.
 
     # EVIDENCE BEATS POLICY. A document that produced chunks yielded text, and
     # no extension list may overrule that. Ordering this the other way round
