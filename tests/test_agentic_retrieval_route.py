@@ -54,6 +54,79 @@ def test_non_figure_ask_does_not_trigger(message):
 
 
 @pytest.mark.parametrize("message", [
+    "what is the billed area of the ground floor screed",
+    "what is the total length of kerbs measured in the bill",
+])
+def test_dimension_noun_ask_without_rate_word_triggers(message):
+    # No rate/value/quantity word: the dimension noun alone names the figure.
+    assert wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false, exclude=_never_exclude,
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "how much is the sum carried to collection for the external works bill",
+    "what is the amount brought forward on the last page of the drainage bill",
+])
+def test_bill_total_noun_ask_triggers(message):
+    assert wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false, exclude=_never_exclude,
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "what is billed for the 150 mm pipe bedding in m3",
+    "what does the bill carry for gully connections, 14 no.",
+])
+def test_unit_token_ask_triggers(message):
+    assert wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false, exclude=_never_exclude,
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "how do I measure the area of a sloping roof and what drawings show it",
+    "how should we work out how many m2 of formwork a column needs",
+])
+def test_procedural_dimension_ask_does_not_trigger(message):
+    assert not wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false, exclude=_never_exclude,
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "is the billed area of the podium slab larger than the tower slab",
+    "does the drainage bill have a total on every page",
+])
+def test_yes_no_dimension_ask_does_not_trigger(message):
+    assert not wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false, exclude=_never_exclude,
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "what don't we know about the site access",
+    "what is in the t-beam detail note",
+])
+def test_bare_letter_is_not_a_unit(message):
+    assert not wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false, exclude=_never_exclude,
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "what is the billed area of the ground floor screed",
+    "what is the total of the external works bill",
+])
+def test_excluded_dimension_ask_does_not_trigger(message):
+    # ``exclude`` is unchanged and still wins over the new clause.
+    assert not wants_agentic_figure_retrieval(
+        message, asks_measured_quantity=_asks_measured_false,
+        exclude=lambda t: "billed" in t or "bill" in t,
+    )
+
+
+@pytest.mark.parametrize("message", [
     "calculate the volume of a 3m x 2m x 1m trench",
     "please calculate 5 plus 7",
 ])
