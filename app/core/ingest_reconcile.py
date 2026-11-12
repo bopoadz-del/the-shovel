@@ -710,6 +710,7 @@ class FamilySupersessionPlan:
     canonical: dict[str, str] = field(default_factory=dict)
     candidates: list[FamilySupersessionAction] = field(default_factory=list)
     already_superseded: int = 0
+    skipped_unparseable: int = 0
     summaries: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -723,24 +724,24 @@ def plan_family_supersession(
     superseded candidate. A family whose members all share one rank (two
     identical base codes) is left alone — that is an exact duplicate, which is
     a different rule. Members already carrying ``superseded_by`` are reported
-    as already-superseded, never re-selected.
+    as already-superseded, never re-selected. Documents whose name yields no
+    code family are counted in ``skipped_unparseable`` and never grouped.
     """
+    plan = FamilySupersessionPlan()
     groups: dict[
         tuple[str, str], list[tuple[tuple[int, Any], str, Mapping[str, Any]]]
     ] = {}
     for doc in docs:
         name = str(doc.get("original_name") or "")
-        if not name:
-            continue
         project = str(doc.get("project_id") or "")
         family, revision = parse_document_code(name, _document_path(doc))
         if not family:
+            plan.skipped_unparseable += 1
             continue
         scheme = revision.scheme if revision else "base"
         rank = revision.rank if revision else (_SCHEME_RANK["base"], 0)
         groups.setdefault((project, family), []).append((rank, scheme, doc))
 
-    plan = FamilySupersessionPlan()
     for (project, family), members in groups.items():
         if len(members) < 2:
             continue

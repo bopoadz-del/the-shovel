@@ -11,6 +11,8 @@ import pytest
 
 from app.core import ingest_status as ist
 from app.core.ingest_reconcile import (
+    CodeRevision,
+    _document_path,
     _tally_p3_counts,
     apply_ghost_tombstones,
     apply_tombstones,
@@ -750,6 +752,55 @@ def test_parse_document_code_transmittal_folder_marker(name, path, expected):
     assert rev is not None
     assert rev.scheme == "transmittal"
     assert rev.value == expected
+
+
+@pytest.mark.parametrize(
+    "scheme,value,expected",
+    [
+        ("base", 0, (0, 0)),
+        ("transmittal", 2, (1, 2)),
+        ("number", 5, (2, 5)),
+        ("letter", "A", (3, "A")),
+    ],
+)
+def test_code_revision_rank_order(scheme, value, expected):
+    assert CodeRevision(scheme, value).rank == expected
+
+
+@pytest.mark.parametrize(
+    "doc,expected",
+    [
+        ({"metadata": {"drive_path": "/a/b.pdf"}}, "/a/b.pdf"),
+        ({"metadata": {"local_drive_path": "/c/d.pdf"}}, "/c/d.pdf"),
+        ({"metadata": {}, "file_path": "/e/f.pdf"}, "/e/f.pdf"),
+    ],
+)
+def test_document_path_prefers_metadata_then_file_path(doc, expected):
+    assert _document_path(doc) == expected
+
+
+@pytest.mark.parametrize(
+    "meta",
+    ["opaque", ["a", "b"]],
+)
+def test_document_path_ignores_non_mapping_metadata(meta):
+    doc = {"metadata": meta, "file_path": "/tmp/x.pdf"}
+    assert _document_path(doc) == "/tmp/x.pdf"
+
+
+@pytest.mark.parametrize("name", ["", "---"])
+def test_parse_document_code_empty_name_yields_no_family(name):
+    family, rev = parse_document_code(name)
+    assert family == ""
+    assert rev is None
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_plan_family_supersession_counts_unparseable(name):
+    docs = [_family_doc("d0", name), _family_doc("d1", name)]
+    plan = plan_family_supersession(docs)
+    assert plan.skipped_unparseable == 2
+    assert plan.candidates == []
 
 
 def _family_doc(doc_id, name, *, project_id="p", superseded_by=None):
