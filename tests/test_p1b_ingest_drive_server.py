@@ -16,6 +16,8 @@ from scripts.p1b_ingest_drive_server import (
     missing_project_for_override,
     override_project_id,
     parse_folder_ids,
+    parse_reextract_exts,
+    reextract_requested,
 )
 
 CLIENT_PARENT_ID = "1ExampleFolderId001xxxxxxxxxxxxxx"
@@ -54,6 +56,47 @@ def test_parser_accepts_repeatable_and_comma_separated_folder_ids():
 def test_parser_accepts_reingest_old_id():
     args = build_parser().parse_args(["--reingest", "5a1e0001"])
     assert args.reingest == "5a1e0001"
+
+
+@pytest.mark.parametrize("raw", ["xlsx,xls,xlsm,csv", "csv,xlsx"])
+def test_parser_accepts_reextract_exts(raw):
+    args = build_parser().parse_args(["--reextract-exts", raw])
+    assert args.reextract_exts == raw
+
+
+def test_parser_reextract_exts_defaults_empty():
+    args = build_parser().parse_args(["--tier", "1", "--resume"])
+    assert not args.reextract_exts
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("", frozenset()),
+        (None, frozenset()),
+        ("xlsx", frozenset({".xlsx"})),
+        ("XLSX,.csv", frozenset({".xlsx", ".csv"})),
+        ("xls, xlsm, csv ", frozenset({".xls", ".xlsm", ".csv"})),
+        (".XLS,.XLSX", frozenset({".xls", ".xlsx"})),
+    ],
+)
+def test_parse_reextract_exts_normalizes(raw, expected):
+    assert parse_reextract_exts(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "original_name, reextract_exts, expected",
+    [
+        ("priced_boq.xlsx", frozenset({".xlsx"}), True),
+        ("rates.xlsm", frozenset({".xlsm"}), True),
+        ("priced_boq.xlsx", frozenset({".xls"}), False),
+        ("drawing.pdf", frozenset({".xlsx", ".csv"}), False),
+        ("priced_boq.xlsx", frozenset(), False),
+    ],
+)
+def test_reextract_requested_two_input(original_name, reextract_exts, expected):
+    doc = {"original_name": original_name}
+    assert reextract_requested(doc, reextract_exts) is expected
 
 
 @pytest.mark.parametrize(
