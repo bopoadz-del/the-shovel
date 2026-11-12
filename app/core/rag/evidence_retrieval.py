@@ -40,6 +40,27 @@ class EvidenceRun:
     evidence: str
     missing: tuple[str, ...]
     rounds: list[RoundRecord] = field(default_factory=list)
+    #: Why the loop stopped: ``covered`` (nothing missing), ``no_new_evidence``
+    #: (no still-missing item can yield a line not already held) or
+    #: ``round_limit`` (``max_rounds`` exhausted while items still yielded).
+    stop_reason: str = ""
+
+
+_NOTE_LINES = frozenset(
+    line.strip() for line in CONTEXT_TRUNCATED_NOTE.splitlines() if line.strip()
+)
+
+
+def _evidence_lines(text: str) -> set[str]:
+    """The evidence lines of ``text`` (chunks/rows are newline-joined).
+
+    The budget's truncation note is bookkeeping, not evidence, so it never
+    counts as something a round fetched.
+    """
+    return {
+        line.strip() for line in (text or "").splitlines()
+        if line.strip() and line.strip() not in _NOTE_LINES
+    }
 
 
 def gather_evidence(
@@ -55,25 +76,46 @@ def gather_evidence(
     and the returned text is appended, then coverage is re-checked. The loop
     stops when nothing is missing, when a round fetches nothing new, or when
     ``max_rounds`` is exhausted — round ``max_rounds + 1`` never runs.
+
+    "Nothing new" is measured against the evidence lines already held. The
+    actions are deterministic over a fixed index, so an item whose actions
+    returned no line not already held would return the same again: it is not
+    re-queried in later rounds (it stays in ``missing``). When no missing
+    item is left to query, the loop ends with ``stop_reason="no_new_evidence"``.
     """
     parts = [initial_evidence] if (initial_evidence or "").strip() else []
     missing = missing_plan_items(plan, initial_evidence or "")
     rounds: list[RoundRecord] = []
+    held = _evidence_lines(initial_evidence or "")
+    exhausted: set[str] = set()
     for number in range(1, max_rounds + 1):
-        if not missing:
+        queried = tuple(item for item in missing if item not in exhausted)
+        if not queried:
             break
         fetched: list[str] = []
-        for item in missing:
+        for item in queried:
+            item_new = False
             for action in actions:
                 text = (action(item) or "").strip()
                 if text:
                     fetched.append(text)
+                    lines = _evidence_lines(text)
+                    item_new = item_new or bool(lines - held)
+                    held |= lines
+            if not item_new:
+                exhausted.add(item)
         parts.extend(fetched)
         combined = "\n".join(parts)
         new_missing = missing_plan_items(plan, combined)
-        rounds.append(RoundRecord(number=number, queried_items=missing,
+        rounds.append(RoundRecord(number=number, queried_items=queried,
                                   missing_after=new_missing))
         missing = new_missing
+    if not missing:
+        stop_reason = "covered"
+    elif all(item in exhausted for item in missing):
+        stop_reason = "no_new_evidence"
+    else:
+        stop_reason = "round_limit"
     combined = "\n".join(parts)
     # Whole-turn safety net: the merged evidence (first pass + every fetched
     # round) must never exceed the injection budget, even if a single action's
@@ -83,4 +125,4 @@ def gather_evidence(
     if truncated:
         combined = combined.rstrip() + CONTEXT_TRUNCATED_NOTE
     return EvidenceRun(plan=plan, evidence=combined, missing=missing,
-                       rounds=rounds)
+                       rounds=rounds, stop_reason=stop_reason)

@@ -76,14 +76,54 @@ def test_an_uncovered_plan_runs_the_loop_and_recovers(plan_text, initial, rounds
 ])
 def test_round_four_never_runs(plan_text, missing):
     plan = parse_evidence_plan(plan_text)
+    counter = iter(range(10_000))
+
+    def _fresh_retrieve(query, project_id, k=5):
+        return [_chunk(f"unrelated sheet row {next(counter)}")], 0
+
     actions = build_actions(
-        retrieve_fn=_fake_retrieve({}),
-        bm25_fn=_fake_bm25({"anything": "unrelated sheet rows"}),
+        retrieve_fn=_fresh_retrieve,
+        bm25_fn=_fake_bm25({}),
         project_id="p",
     )
     run = run_loop(plan, actions, initial_evidence="raft concrete")
     assert [r.number for r in run.rounds] == [1, 2, 3]
     assert run.missing == missing
+    assert run.stop_reason == "round_limit"
+
+
+@pytest.mark.parametrize("plan_text,missing", [
+    ("bulk excavation, lift walls", ("bulk excavation", "lift walls")),
+    ("formwork, staircases", ("formwork", "staircases")),
+])
+def test_a_repeating_round_stops_the_loop(plan_text, missing):
+    plan = parse_evidence_plan(plan_text)
+    actions = build_actions(
+        retrieve_fn=lambda q, p, k=5: ([_chunk("unrelated sheet rows")], 0),
+        bm25_fn=_fake_bm25({}),
+        project_id="p",
+    )
+    run = run_loop(plan, actions, initial_evidence="raft concrete")
+    # Round 2 repeats round 1's chunk, so round 3 never runs.
+    assert [r.number for r in run.rounds] == [1, 2]
+    assert run.missing == missing
+    assert run.stop_reason == "no_new_evidence"
+
+
+@pytest.mark.parametrize("plan_text", ["bulk excavation, lift walls", "formwork, staircases"])
+async def test_the_trace_names_why_the_loop_stopped(plan_text, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="app.core.rag.evidence_loop")
+    outcome = await run_project_figure_retrieval(
+        question="what are the quantities?",
+        plan_caller=lambda q: _plan_caller(plan_text),
+        retrieve_fn=_fake_retrieve({}),
+        bm25_fn=_fake_bm25({}),
+        project_id="p",
+        first_pass_evidence="raft concrete",
+    )
+    assert outcome.rounds == 1
+    assert any("reason=no_new_evidence" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.parametrize("plan_text,initial", [
