@@ -18,11 +18,13 @@ Nothing here names a project, an item or a column.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from app.core.rag.evidence_actions import (
+    bill_rows_action,
     lexical_action,
     semantic_action,
     structural_action,
@@ -38,6 +40,8 @@ from app.core.rag.evidence_retrieval import (
     gather_evidence,
 )
 from app.core.rag.plan_generation import parse_generated_plan
+
+logger = logging.getLogger(__name__)
 
 #: The plan call takes a question and returns the ``_call_llm``-style response
 #: dict the pure parser already accepts.
@@ -72,11 +76,16 @@ def build_actions(
     and returns ``(chunks, noise_filtered)``. ``bm25_fn`` matches
     ``store.bm25_search(project_id, query, k=...)``. ``sheets``/``headers``
     are the WBS ``XLSXDocument.sheets`` shape; a structural action is only
-    built when sheets are supplied.
+    built when sheets are supplied. The bill-rows action scopes the same
+    lexical primitive to documents whose chunks print priced rows, so a long
+    PDF bill's rows are not crowded out of the global ranking.
     """
+    from app.core.rag.retriever import priced_row_count
+
     actions: list[RetrievalAction] = [
         semantic_action(retrieve_fn, project_id),
         lexical_action(bm25_fn, project_id),
+        bill_rows_action(bm25_fn, project_id, row_count=priced_row_count),
     ]
     if sheets is not None:
         actions.append(structural_action(sheets, headers))
@@ -125,6 +134,11 @@ async def run_project_figure_retrieval(
     response = await plan_caller(question)
     plan = parse_generated_plan(response)
     if not plan.items or not first_pass_uncovered(plan, first_pass_evidence):
+        logger.info(
+            "rag_evidence_loop_trace project=%s plan_items=%d rounds=0 "
+            "reason=%s", project_id, len(plan.items),
+            "empty_plan" if not plan.items else "first_pass_covered",
+        )
         return EvidenceLoopOutcome(
             evidence=first_pass_evidence,
             missing=first_pass_uncovered(plan, first_pass_evidence),
@@ -142,6 +156,11 @@ async def run_project_figure_retrieval(
         run = run_loop(plan, actions, initial_evidence=first_pass_evidence)
     else:
         run = await run_sync(run_loop, plan, actions, initial_evidence=first_pass_evidence)
+    logger.info(
+        "rag_evidence_loop_trace project=%s plan_items=%d rounds=%d "
+        "actions=%d missing=%d", project_id, len(plan.items), len(run.rounds),
+        len(actions), len(run.missing),
+    )
     return EvidenceLoopOutcome(
         evidence=run.evidence,
         missing=run.missing,

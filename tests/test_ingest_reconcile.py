@@ -12,10 +12,13 @@ import pytest
 from app.core import ingest_status as ist
 from app.core.ingest_reconcile import (
     _tally_p3_counts,
+    apply_ghost_tombstones,
     apply_tombstones,
     coverage_truth,
+    is_ghost,
     p3_reconcile_dry_run,
     plan_as_dict,
+    plan_ghost_tombstones,
     plan_reconcile,
     resume_source_changed,
     should_skip_resume,
@@ -441,6 +444,168 @@ def test_p3_ghost_needs_no_source_and_no_chunks(doc, is_ghost):
     # Rule (c): a row is a ghost only when bytes are gone AND chunks are zero.
     out = _tally_p3_counts([doc], {})
     assert out["ghosts"]["total"] == (1 if is_ghost else 0)
+
+
+@pytest.mark.parametrize(
+    "has_file,chunks,expected",
+    [
+        (False, 0, True),
+        (False, 3, False),
+        (True, 0, False),
+        (True, 2, False),
+    ],
+)
+def test_is_ghost_shared_predicate(has_file, chunks, expected):
+    # The dry-run tally and the tombstone planner must share one rule.
+    assert is_ghost(_p3_doc("d", has_file=has_file, chunks=chunks), chunks) is expected
+
+
+@pytest.mark.parametrize(
+    "doc,planned",
+    [
+        (_p3_doc("g1", has_file=False, bytes_state="not_stored", chunks=0,
+                 status=ist.EXTRACT_FAILED), True),
+        (_p3_doc("g2", has_file=False, bytes_state="missing", chunks=0,
+                 status=ist.ZERO_CHUNK), True),
+        (_p3_doc("k1", has_file=False, bytes_state="not_stored", chunks=5), False),
+        (_p3_doc("k2", has_file=True, bytes_state="present", chunks=0), False),
+        (_p3_doc("k3", has_file=False, bytes_state="not_stored", chunks=0,
+                 status=TOMBSTONED), False),
+        ({"id": "", "ingest_status": ist.EXTRACT_FAILED, "chunk_count": 0,
+          "has_file": False}, False),
+    ],
+)
+def test_plan_ghost_tombstones_selects_only_ghosts(doc, planned):
+    actions = plan_ghost_tombstones([doc], {})
+    assert [a.doc_id for a in actions] == ([doc["id"]] if planned else [])
+
+
+@pytest.mark.parametrize("ghost_status", [ist.EXTRACT_FAILED, ist.ZERO_CHUNK])
+def test_apply_ghost_tombstones_dry_run_then_execute(monkeypatch, tmp_path, ghost_status):
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("Ghost", user_id="system")
+    proj = pm.list_projects("system")[0]
+    doc = pm.add_document(proj["id"], "ghost.pdf", size=1)
+    pm.stamp_document_index(
+        doc["id"], chunk_count=0, ingest_status=ghost_status,
+    )
+    view = pm.get_document(doc["id"])
+    assert view["has_file"] is False  # no bytes, no Drive pointer
+
+    actions = plan_ghost_tombstones([view], {})
+    assert [a.doc_id for a in actions] == [doc["id"]]
+
+    assert apply_ghost_tombstones(actions, execute=False) == 0
+    assert pm.get_document(doc["id"])["ingest_status"] != TOMBSTONED
+
+    assert apply_ghost_tombstones(actions, execute=True) == 1
+    got = pm.get_document(doc["id"])
+    assert got["ingest_status"] == TOMBSTONED
+    assert got["retrieval_visible"] is False
+    assert got["ingest_status_reason"] == "ghost"
+
+
+@pytest.mark.parametrize("seed_chunks", [2, 3])
+def test_ghost_tombstone_never_deletes_chunks(monkeypatch, tmp_path, seed_chunks):
+    from sqlalchemy import text
+    from app.core.db import SessionLocal
+    from app.core.models import rag_chunk_table_name
+    from app.core.rag.vector_store import _rag_vector_namespace
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("Keep", user_id="system")
+    proj = pm.list_projects("system")[0]
+    doc = pm.add_document(proj["id"], "keep.pdf", size=1)
+    pm.stamp_document_index(
+        doc["id"], chunk_count=seed_chunks, ingest_status=ist.INDEXED,
+    )
+    _seed_chunk_rows(proj["id"], doc["id"], seed_chunks)
+
+    pm.tombstone_document_ghost(doc["id"])
+    got = pm.get_document(doc["id"])
+    assert got["ingest_status"] == TOMBSTONED
+    assert got["retrieval_visible"] is False
+
+    # NO-delete write: the chunk rows survive.
+    table = rag_chunk_table_name(_rag_vector_namespace())
+    with SessionLocal() as session:
+        remaining = int(session.execute(
+            text(f"SELECT COUNT(*) FROM {table} WHERE doc_id = :d"),
+            {"d": doc["id"]},
+        ).scalar() or 0)
+    assert remaining == seed_chunks
+
+
+@pytest.mark.parametrize("ghost_status", [ist.EXTRACT_FAILED, ist.ZERO_CHUNK])
+def test_p3_ghost_tombstone_endpoint_plan_and_execute(monkeypatch, tmp_path, ghost_status):
+    from app.routers.admin import admin_corpus_ghost_tombstone
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("EG", user_id="system", project_id="egproj")
+    doc = pm.add_document("egproj", "ghost.pdf", size=1)
+    pm.stamp_document_index(
+        doc["id"], chunk_count=0, ingest_status=ghost_status,
+    )
+
+    plan = admin_corpus_ghost_tombstone(
+        project_id="egproj", execute=False,
+        auth={"user_id": "admin", "role": "admin"},
+    )
+    assert plan["project_id"] == "egproj"
+    assert plan["dry_run"] is True
+    assert plan["ghost_count"] == 1
+    assert plan["applied"] == 0
+    assert pm.get_document(doc["id"])["ingest_status"] != TOMBSTONED
+
+    done = admin_corpus_ghost_tombstone(
+        project_id="egproj", execute=True,
+        auth={"user_id": "admin", "role": "admin"},
+    )
+    assert done["ghost_count"] == 1
+    assert done["applied"] == 1
+    assert done["dry_run"] is False
+    got = pm.get_document(doc["id"])
+    assert got["ingest_status"] == TOMBSTONED
+    assert got["retrieval_visible"] is False
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_p3_ghost_tombstone_loader_reports_and_applies(monkeypatch, tmp_path, execute):
+    from app.core.ingest_reconcile import p3_ghost_tombstone
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("LG", user_id="system", project_id="lgproj")
+    doc = pm.add_document("lgproj", "ghost.pdf", size=1)
+    pm.stamp_document_index(
+        doc["id"], chunk_count=0, ingest_status=ist.EXTRACT_FAILED,
+    )
+
+    result = p3_ghost_tombstone(project_id="lgproj", execute=execute)
+    assert result["project_id"] == "lgproj"
+    assert result["ghost_count"] == 1
+    assert result["applied"] == (1 if execute else 0)
+    assert result["dry_run"] is (not execute)
+    got = pm.get_document(doc["id"])
+    assert got["ingest_status"] == (TOMBSTONED if execute else ist.EXTRACT_FAILED)
+
+
+@pytest.mark.parametrize("empty_id", ["", None])
+def test_ghost_tombstone_empty_id_is_noop(monkeypatch, tmp_path, empty_id):
+    # The empty-id guard must return before touching the store: no DB init,
+    # no session. Removing the guard would run _ensure_db -> init_db.
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm._initialized = False
+    init_calls = []
+    real_init = pm.init_db
+
+    def spy_init():
+        init_calls.append(1)
+        return real_init()
+
+    monkeypatch.setattr(pm, "init_db", spy_init)
+    assert pm.tombstone_document_ghost(empty_id) is None
+    assert init_calls == []
+
 
 def _seed_chunk_rows(project_id: str, doc_id: str, count: int) -> None:
     """Insert ``count`` rows into the ACTIVE namespaced chunk table.

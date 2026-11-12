@@ -36,6 +36,17 @@ class SupportRequest(BaseModel):
     )
 
 
+@router.get("/v1/support")
+async def support_info() -> dict:
+    """The support contact address the UI renders (the single config source).
+
+    Public so the signed-out footer, help page and error surfaces can name
+    the same address the submit route emails, without a second constant in
+    the client bundle.
+    """
+    return {"support_email": support_address()}
+
+
 @router.post("/v1/support")
 async def submit_support(req: SupportRequest) -> dict:
     """Email the support request to SUPPORT_EMAIL.

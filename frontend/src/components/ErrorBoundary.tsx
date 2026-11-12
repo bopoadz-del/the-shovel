@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { supportEmail } from '../lib/support'
 
 interface Props {
   children: ReactNode
@@ -6,6 +7,7 @@ interface Props {
 
 interface State {
   hasError: boolean
+  supportEmail: string
 }
 
 /**
@@ -15,15 +17,18 @@ interface State {
  * fallback, and offers a reload — it never surfaces the raw error text.
  */
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false }
+  state: State = { hasError: false, supportEmail: '' }
 
-  static getDerivedStateFromError(): State {
+  static getDerivedStateFromError(): Partial<State> {
     return { hasError: true }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Log for diagnostics; do NOT show raw error/stack to the user.
     console.error('Unhandled render error:', error, info.componentStack)
+    void supportEmail().then((email) => {
+      if (this.state.hasError) this.setState({ supportEmail: email })
+    })
   }
 
   handleReload = (): void => {
@@ -62,6 +67,18 @@ export default class ErrorBoundary extends Component<Props, State> {
           The page hit an unexpected error. Reloading usually fixes it; your work
           on the server is not affected.
         </span>
+        {this.state.supportEmail ? (
+          <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+            If this keeps happening, email{' '}
+            <a
+              href={`mailto:${this.state.supportEmail}`}
+              style={{ color: 'var(--accent, #c2603f)', textDecoration: 'underline' }}
+            >
+              {this.state.supportEmail}
+            </a>
+            .
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={this.handleReload}

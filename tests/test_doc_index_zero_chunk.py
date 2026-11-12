@@ -333,7 +333,8 @@ def test_index_project_reports_drive_sourced_as_not_stored(
 
     result = doc_index.index_project(proj["id"])
 
-    assert result["zero_chunk"] == 1
+    assert result["zero_chunk"] == 0
+    assert result["skipped_not_stored"] == 1
     assert result["not_stored_count"] == 1
     assert result["not_stored"][0]["document_id"] == doc["id"]
     assert result["not_stored"][0]["filename"] == filename
@@ -364,3 +365,107 @@ def test_index_project_present_empty_file_is_plain_zero_chunk(
     assert result["missing_files_count"] == 0
     assert result["not_stored_count"] == 0
     assert result["unavailable_count"] == 0
+
+
+# ── Rebuild: not_stored rows are skipped, stored failures still wipe ────────
+# A rebuild must not wipe retrieval for Drive-sourced rows it cannot
+# re-extract (no local bytes): their entry and chunks survive, counted
+# ``skipped_not_stored``. A stored doc whose extraction fails still deletes
+# its chunks, exactly as today. Two inputs per decision (mutation gate).
+
+
+@pytest.mark.parametrize(
+    "filename,drive_id",
+    [("cpm_baseline.txt", "drive-keep-1"), ("contract_data.txt", "drive-keep-2")],
+)
+def test_index_project_keeps_prior_chunks_when_drive_sourced(
+    fresh_db, tmp_path, monkeypatch, filename, drive_id
+):
+    """A row that becomes Drive-sourced after indexing keeps its entry and
+    chunks (kept=True under not_stored), counted skipped_not_stored, never
+    wiped as a zero_chunk."""
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    from app.core import doc_index, projects as projects_mod
+
+    importlib.reload(doc_index)
+    from app.core.rag import retriever as _rag
+    from app.core.rag.vector_store import get_store, reset_store_cache
+
+    reset_store_cache()
+
+    proj = projects_mod.create_project("Keep Drive Project")
+    pid = proj["id"]
+    doc_path = _write_txt(tmp_path, filename, b"baseline schedule text")
+    doc = projects_mod.add_document(pid, filename, file_path=doc_path, size=21)
+
+    first = doc_index.index_project(pid)
+    assert first["indexed"] == 1
+    assert first["total_chunks"] >= 1
+
+    store = get_store(dim=_rag.get_embedder().dim)
+    assert store.count_by_doc(pid).get(doc["id"], 0) >= 1
+
+    # The row becomes Drive-sourced (no retained local copy) after the fact.
+    projects_mod.update_document_metadata(doc["id"], {"drive_file_id": drive_id})
+
+    result = doc_index.index_project(pid)
+
+    assert result["indexed"] == 1
+    assert result["zero_chunk"] == 0
+    assert result["skipped_not_stored"] == 1
+    assert result["not_stored_count"] == 1
+    assert result["not_stored"][0]["kept"] is True
+    assert result["not_stored"][0]["reason"] == "drive_source"
+    assert result["missing_files_count"] == 0
+
+    saved = doc_index._load_index(pid)
+    assert len(saved["documents"]) == 1
+    assert saved["documents"][0]["chunk_count"] >= 1
+    assert store.count_by_doc(pid).get(doc["id"], 0) >= 1
+
+
+@pytest.mark.parametrize(
+    "filename", ["spec_a.txt", "spec_b.txt"],
+)
+def test_index_project_deletes_chunks_when_stored_doc_fails_extraction(
+    fresh_db, tmp_path, monkeypatch, filename
+):
+    """A stored doc whose extraction fails keeps today's behaviour: the
+    rebuild deletes its chunks. The skipped_not_stored path is only for rows
+    with no local bytes, never for a failed re-extraction."""
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    from app.core import doc_index, projects as projects_mod
+
+    importlib.reload(doc_index)
+    from app.core.rag import retriever as _rag
+    from app.core.rag.vector_store import get_store, reset_store_cache
+
+    reset_store_cache()
+
+    proj = projects_mod.create_project("Fail Stored Project")
+    pid = proj["id"]
+    doc_path = _write_txt(tmp_path, filename, b"real contract body text")
+    doc = projects_mod.add_document(pid, filename, file_path=doc_path, size=23)
+
+    first = doc_index.index_project(pid)
+    assert first["indexed"] == 1
+    assert first["total_chunks"] >= 1
+
+    store = get_store(dim=_rag.get_embedder().dim)
+    assert store.count_by_doc(pid).get(doc["id"], 0) >= 1
+
+    # The stored bytes are present but extraction now fails.
+    def fail_extract(*_a, **_k):
+        return "", {"extract_failed": "ValueError"}
+
+    monkeypatch.setattr(doc_index, "_extract_with_meta", fail_extract)
+
+    result = doc_index.index_project(pid)
+
+    assert result["indexed"] == 0
+    assert result["zero_chunk"] == 1
+    assert result["skipped_not_stored"] == 0
+    assert result["missing_files_count"] == 0
+    assert result["not_stored_count"] == 0
+    # Chunks deleted, exactly as today.
+    assert store.count_by_doc(pid).get(doc["id"], 0) == 0

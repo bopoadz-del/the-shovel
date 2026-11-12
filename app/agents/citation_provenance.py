@@ -1533,16 +1533,19 @@ def _competing_figure_sentences(
 def _subject_score(sentence: str | None, subject: set[str]) -> float:
     """The share of the ask's content tokens the cited sentence names, in
     [0, 1], compared after ``_singular`` -- the same form
-    ``_asked_subject_tokens`` stores them in. Only tokens of length >= 4 are
+    ``_asked_subject_tokens`` stores them in. A sentence word names a token
+    when it is the token, its plural, or a derived form whose base is the
+    token (prefix, min length 4): "builder" names "build", "worker"
+    names "work". Only tokens of length >= 4 are
     verifiable; an ask with none scores 0.0 so the ambiguity stays surfaced,
     not hidden (B11)."""
-    from app.agents.runtime import _singular
+    from app.agents.runtime import _singular, _token_is_noun
 
     words = {_singular(w) for w in re.findall(r"[a-z]{3,}", (sentence or "").lower())}
     meaningful = [t for t in subject if len(t) >= 4]
     if not meaningful:
         return 0.0
-    hits = sum(1 for t in meaningful if t in words)
+    hits = sum(1 for t in meaningful if any(_token_is_noun(t, w) for w in words))
     return hits / len(meaningful)
 
 

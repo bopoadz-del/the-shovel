@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.rag.evidence_budget import CONTEXT_TRUNCATED_NOTE
 from app.core.rag.evidence_plan import parse_evidence_plan
 from app.core.rag.evidence_retrieval import gather_evidence
 
@@ -82,3 +83,14 @@ def test_the_loop_is_bounded_even_when_fetching_nothing(plan_text, missing):
     # It still runs at most ROUND_LIMIT rounds, never more.
     assert [r.number for r in run.rounds] == [1, 2, 3]
     assert run.missing == missing
+
+
+@pytest.mark.parametrize("plan_text,fill", [
+    ("bulk excavation", "A" * 4000),
+    ("formwork", "B" * 4000),
+])
+def test_truncation_note_survives_the_whole_turn_merge(monkeypatch, plan_text, fill):
+    monkeypatch.setenv("AGENTIC_EVIDENCE_MAX_TOKENS", "2")
+    plan = parse_evidence_plan(plan_text)
+    run = gather_evidence(plan, [_action(fill)], initial_evidence="first pass " * 50)
+    assert CONTEXT_TRUNCATED_NOTE in run.evidence

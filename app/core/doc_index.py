@@ -2520,9 +2520,16 @@ def index_project(project_id: str) -> dict[str, Any]:
       ``"unsupported_type"``
     - supported extension → extract text → chunk → store entry
 
+    A Drive-sourced row (``bytes_state=not_stored``) has no local bytes to
+    re-extract, so it is skipped: its existing entry and chunks are preserved
+    rather than wiped by the zero-chunk stamp (``EXTRACT_FAILED`` deletes
+    chunks), and it is counted ``skipped_not_stored`` in the summary.
+
     Persists the result as JSON and returns a summary dict.
     """
     docs = _projects.list_documents(project_id)
+    # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
+    prior = _entries_of(_load_index(project_id))
 
     documents: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -2537,6 +2544,7 @@ def index_project(project_id: str) -> dict[str, Any]:
     total_chunks = 0
     ocr_chunks = 0
     zero_chunk = 0
+    skipped_not_stored = 0
 
     for doc in docs:
         filename = doc.get("original_name", "")
@@ -2550,6 +2558,29 @@ def index_project(project_id: str) -> dict[str, Any]:
                 "reason": _unsupported_skip_reason(ext),
                 "fingerprint": fingerprint,
             })
+            continue
+
+        state = doc.get("bytes_state")
+        if state == byte_store.NOT_STORED:
+            # Drive-sourced (or otherwise never-locally-stored) rows have no
+            # bytes to re-extract. Never stamp a NO_CHUNK status for them:
+            # ZERO_CHUNK / EXTRACT_FAILED delete the doc's chunks. Skip the
+            # row, carry the existing entry forward when one exists, and count
+            # it ``skipped_not_stored`` so a rebuild on a Drive-sourced
+            # project never wipes its retrieval index.
+            rec: dict[str, Any] = {
+                "document_id": doc["id"],
+                "filename": filename,
+                "reason": doc.get("bytes_state_reason") or "",
+            }
+            not_stored.append(rec)
+            prior_entry = prior.get(str(doc["id"]))
+            if prior_entry is not None and prior_entry[0] == _KIND_DOCUMENT:
+                entry = dict(prior_entry[1])
+                rec["kept"] = True
+                documents.append(entry)
+                total_chunks += int(entry.get("chunk_count") or 0)
+            skipped_not_stored += 1
             continue
 
         file_path = doc.get("file_path") or ""
@@ -2657,6 +2688,7 @@ def index_project(project_id: str) -> dict[str, Any]:
             "missing_files_count": len(missing_files),
             "not_stored": not_stored,
             "not_stored_count": len(not_stored),
+            "skipped_not_stored": skipped_not_stored,
             "unavailable": unavailable,
             "unavailable_count": len(unavailable),
         }
@@ -2673,6 +2705,7 @@ def index_project(project_id: str) -> dict[str, Any]:
         "missing_files_count": len(missing_files),
         "not_stored": not_stored,
         "not_stored_count": len(not_stored),
+        "skipped_not_stored": skipped_not_stored,
         "unavailable": unavailable,
         "unavailable_count": len(unavailable),
     }
@@ -2781,8 +2814,12 @@ def _boq_summary_chunks(result: dict[str, Any]) -> list[str]:
         desc = (item.get("description") or item.get("item_key") or "item").strip()
         unit = (item.get("unit") or "").strip()
         unit_str = f" {unit}" if unit else ""
+        section = (item.get("section") or "").strip()
+        bill_prefix = (
+            f" [bill {section}]" if section and section.lower() != "general" else ""
+        )
         out.append(
-            f"BOQ line item{src_prefix} — {desc}: total quantity "
+            f"BOQ line item{bill_prefix}{src_prefix} — {desc}: total quantity "
             f"{item.get('quantity')}{unit_str}, unit price (rate) "
             f"{item.get('unit_cost')}, total price (amount) "
             f"{item.get('total_cost')} {currency}".strip()
@@ -2848,6 +2885,178 @@ def _boq_chunks_for_document(
         if _BOQ_NAME_RE.search(filename or ""):
             return [_boq_no_total_guard(filename)]
         return []
+
+
+# ── Spreadsheet rows → RAG (inherited headers) ───────────────────────────────
+#
+# ``_xlsx``/``_xls``/``_csv`` flatten every sheet into pipe-joined rows WITHOUT
+# the sheet name and WITHOUT the bill/section heading that sits above the
+# items, so the prose chunker splits a bill into fragments where the item
+# description, its figures and the bill number that scopes them land in
+# different chunks. A lexical match on the item or the bill number then misses
+# the row that holds the figure, and billed-quantity / unit-rate questions
+# surface unrelated content.
+#
+# This emits ONE chunk per data row instead: the sheet name, the most recent
+# bill/section heading above the row (inherited into every row under it), and
+# the row's own cells labelled with their detected column names. A query that
+# names the bill or the item therefore hits the row that states the figure.
+# Pure and side-effect free; a parse failure yields [] and never blocks
+# indexing.
+
+_SPREADSHEET_EXTS = frozenset({".xlsx", ".xls", ".csv"})
+
+# A row whose measured columns are all empty becomes inherited "Bill:" context
+# rather than a chunk, so a bare description-only row (a bill banner, a
+# section title, a subtotal) scopes every measured row that follows it.
+
+
+def _spreadsheet_sheets(
+    file_path: str, ext: str,
+) -> list[tuple[str, list[list[str]]]]:
+    """``(sheet_name, rows)`` for every sheet, cells as trimmed strings."""
+    if ext == ".csv":
+        import csv as _csv
+
+        with file_crypto.open_plaintext(file_path) as plain_path:
+            with open(plain_path, "r", newline="", encoding="utf-8", errors="replace") as fh:
+                rows = [[c.strip() for c in row] for row in _csv.reader(fh)]
+        return [("", rows)]
+    if ext == ".xlsx":
+        import openpyxl
+
+        with file_crypto.open_plaintext(file_path) as readable:
+            wb = openpyxl.load_workbook(readable, data_only=True)
+            return [
+                (
+                    name,
+                    [
+                        [("" if c is None else str(c).strip()) for c in row]
+                        for row in ws.iter_rows(values_only=True)
+                    ],
+                )
+                for name, ws in ((n, wb[n]) for n in wb.sheetnames)
+            ]
+    # .xls (legacy BIFF)
+    import xlrd
+
+    book = xlrd.open_workbook(file_contents=file_crypto.read_document(file_path))
+    out: list[tuple[str, list[list[str]]]] = []
+    for sheet in book.sheets():
+        rows = [
+            [str(sheet.cell_value(r, c)).strip() for c in range(sheet.ncols)]
+            for r in range(sheet.nrows)
+        ]
+        out.append((sheet.name, rows))
+    return out
+
+
+def _spreadsheet_header_row(
+    rows: list[list[str]], block,
+) -> tuple[int, dict[str, int]] | None:
+    """Index of the column-header row and a ``field -> column index`` map.
+
+    Reuses the BOQ processor's column aliasing (the single source of truth for
+    what a description/quantity/rate/amount column is named) so this can never
+    drift from the parse path. ``None`` when no header is found in the first 60
+    rows (matching the parse path's banner-row scan).
+    """
+    limit = min(60, len(rows))
+    for i in range(limit):
+        cells = rows[i]
+        resolved = block._resolve_columns(cells)
+        if "description" not in resolved or len(resolved) < 2:
+            continue
+        colmap: dict[str, int] = {}
+        for field, col in resolved.items():
+            try:
+                colmap[field] = cells.index(col)
+            except ValueError:
+                continue
+        if "description" in colmap:
+            return i, colmap
+    return None
+
+
+def _spreadsheet_heading_above(rows: list[list[str]]) -> str:
+    """The last banner-style row above the header (a lone label with letters)."""
+    label = ""
+    for row in rows:
+        cells = [c for c in row if c != ""]
+        if len(cells) == 1 and re.search(r"[A-Za-z]", cells[0]):
+            label = cells[0]
+    return label
+
+
+def _spreadsheet_row_chunks(
+    file_path: str, filename: str, ext: str,
+) -> list[str]:
+    """One retrievable chunk per measured spreadsheet row, headers inherited."""
+    if ext not in _SPREADSHEET_EXTS or not file_path:
+        return []
+    try:
+        from app.blocks.boq_processor import BOQProcessorBlock
+
+        block = BOQProcessorBlock()
+        sheets = _spreadsheet_sheets(file_path, ext)
+    except Exception as exc:  # noqa: BLE001 — never block indexing on a sheet
+        _logging.getLogger(__name__).warning(
+            "spreadsheet row wiring skipped for %s: %s", filename, exc
+        )
+        return []
+    chunks: list[str] = []
+    for sheet_name, rows in sheets:
+        found = _spreadsheet_header_row(rows, block)
+        if found is None:
+            continue
+        hdr_idx, colmap = found
+        desc_idx = colmap.get("description")
+        figure_idxs = [
+            colmap[f] for f in ("quantity", "rate", "total", "unit") if f in colmap
+        ]
+        header_cells = list(rows[hdr_idx])
+        while header_cells and header_cells[-1] == "":
+            header_cells.pop()
+        heading = _spreadsheet_heading_above(rows[:hdr_idx])
+        for row in rows[hdr_idx + 1:]:
+            cells = list(row)
+            while cells and cells[-1] == "":
+                cells.pop()
+            if not any(cells):
+                continue
+            # A repeated column-header row (each later bill in a sheet re-prints
+            # it) is structure, not a measured row.
+            if cells == header_cells:
+                continue
+            desc = cells[desc_idx].strip() if desc_idx is not None and desc_idx < len(cells) else ""
+            has_figure = any(
+                i < len(cells) and cells[i] != "" for i in figure_idxs
+            )
+            if not desc or not has_figure:
+                # A bill/section/subtotal marker (label with no measured item
+                # description, or a description-only row). It becomes inherited
+                # context for the measured rows that follow.
+                label = " | ".join(c for c in cells if c != "")
+                if label:
+                    heading = label
+                continue
+            parts: list[str] = []
+            if sheet_name:
+                parts.append(f"Sheet: {sheet_name}")
+            if heading:
+                parts.append(f"Bill: {heading}")
+            parts.append(f"Item: {desc}")
+            for field, label in (
+                ("quantity", "Quantity"),
+                ("unit", "Unit"),
+                ("rate", "Rate"),
+                ("total", "Amount"),
+            ):
+                idx = colmap.get(field)
+                if idx is not None and idx < len(cells) and cells[idx] != "":
+                    parts.append(f"{label}: {cells[idx]}")
+            chunks.append("; ".join(parts))
+    return chunks
 
 
 # ── Drawing tables → RAG ─────────────────────────────────────────────────────
@@ -3299,10 +3508,14 @@ def _text_chunks_with_pages(
 def _structured_chunks(
     file_path: str, filename: str, ext: str, project_id: str,
 ) -> list[str]:
-    """The table stages: computed BOQ totals and drawing schedules."""
+    """The table stages: BOQ totals, spreadsheet rows, and drawing schedules."""
     # BOQ → RAG: append the computed total + line items so the package
     # value is answerable from the corpus (the raw text never holds the sum).
     chunks = _boq_chunks_for_document(file_path, filename, ext, project_id)
+    # Spreadsheet → RAG: one chunk per measured row with the sheet name and
+    # the bill/section heading inherited into it, so a billed-quantity or
+    # unit-rate ask finds the row that states the figure.
+    chunks += _spreadsheet_row_chunks(file_path, filename, ext)
     # Drawing → RAG: mirrors index_project above. A drawing's schedules
     # live in its tables, and the raw text layer loses their structure.
     return chunks + _drawing_chunks_for_document(file_path, filename, ext, project_id)

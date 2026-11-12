@@ -25,6 +25,11 @@ EVIDENCE_PLAN_PROMPT = (
 )
 
 
+def evidence_plan_request(question: str) -> str:
+    """The plan call's user message: the instruction, then the question."""
+    return EVIDENCE_PLAN_PROMPT + "\n\nQuestion: " + (question or "").strip()
+
+
 def extract_plan_text(response: dict[str, Any]) -> str:
     """The model's plan text out of a ``_call_llm``-style response dict.
 

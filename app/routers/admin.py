@@ -2064,6 +2064,31 @@ def admin_corpus_p3_dry_run(
     return p3_reconcile_dry_run(project_id=project_id)
 
 
+@router.post("/v1/admin/corpus/ghost-tombstone")
+def admin_corpus_ghost_tombstone(
+    project_id: Optional[str] = Query(None),
+    execute: bool = Query(
+        False,
+        description="When true, hide ghost rows (TOMBSTONED + hidden); "
+                    "otherwise return a read-only plan.",
+    ),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) apply the P3 ghost tombstone for one project.
+
+    A ghost is rule (c) from the p3-dry-run: a row with no recoverable bytes
+    and no chunks. The response always reports ``ghost_count`` (the dry-run
+    count) so an operator can confirm it before passing ``execute=true``.
+
+    Applying hides the row and sets ``TOMBSTONED``; chunks and documents are
+    never deleted. Idempotent.
+    """
+    _require_admin(auth)
+    from app.core.ingest_reconcile import p3_ghost_tombstone
+
+    return p3_ghost_tombstone(project_id=project_id, execute=execute)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PR A — admin-approved projects from Drive
 #

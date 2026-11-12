@@ -754,8 +754,20 @@ def _slab_calculator_note(query: str) -> str:
     )
 
 
+#: The explicit refusal when neither the project documents nor the general
+#: knowledge library carries a named standard's requirement.
+_GENERAL_LIBRARY_ABSENT_PHRASE = "not in your documents or the general library"
+
+
 def absence_note(query: str, chunks) -> str:
-    """Steering line for the RAG system message. Empty when it does not apply."""
+    """Steering line for the RAG system message. Empty when it does not apply.
+
+    A named standard absent from the retrieved project excerpts must not end
+    in a refusal dressed as grounding or a project figure silently wearing the
+    standard's name: the general knowledge library is the next layer to
+    consult, and the answer is credited there (General tier) or refused in
+    both layers' own words. Nothing here names a particular code or figure.
+    """
     if not gate_enabled():
         return ""
     computed = _slab_calculator_note(query)
@@ -771,12 +783,15 @@ def absence_note(query: str, chunks) -> str:
     names = ", ".join(standard.display for standard in missing)
     return (
         "NAMED STANDARD ABSENT — the question names "
-        f"{names} and no retrieved excerpt is that document "
+        f"{names}, and no retrieved excerpt is that document "
         "(its name is not in a filename and not in a knowledge-base "
-        "excerpt). Do not state what it requires. Do not attribute any "
-        "figure below to it. If you mention a figure from a project "
-        "document, label it as a project requirement only, and say the "
-        "named document is not in the retrieved excerpts.\n"
+        "excerpt). The general knowledge library may still carry it: "
+        f"search it (search_general_knowledge) for {names}. If a library "
+        f"passage states what {names} require, answer from that passage "
+        "and credit it as general knowledge (General tier); never present "
+        "a project document's figure as the standard's requirement. If "
+        f"the library has nothing on {names}, say exactly: "
+        f'"{_GENERAL_LIBRARY_ABSENT_PHRASE}".\n'
     )
 
 

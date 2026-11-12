@@ -124,3 +124,23 @@ async def test_a_boq_with_a_title_block_above_the_header_still_parses(tmp_path):
     assert len(items) == 3, f"title block swallowed the bill: {len(items)} items"
     descs = " ".join(str(i.get("description")) for i in items)
     assert "Shear wall" in descs and "Staircase" in descs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("col", ["Bill No.", "bill_number"])
+async def test_bill_column_resolves_to_section(tmp_path, col):
+    """A BOQ whose bills live in their own column (rather than banner rows)
+    must carry that column as each line item's section, so a 'quantity of X in
+    bill Y' ask scopes to the bill for BOTH the banner and the column layout."""
+    import csv as _csv
+    path = str(tmp_path / "billed.csv")
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow([col, "Description", "Quantity", "Unit", "Rate", "Amount"])
+        w.writerow(["2", "Excavation", 1200, "m3", 25, 30000])
+        w.writerow(["3", "Concrete", 300, "m2", 45, 13500])
+
+    res = await BOQProcessorBlock().process({"file_path": path}, {})
+    assert res.get("status") == "success", res.get("error")
+    sections = {i.get("section") for i in res.get("line_items") or []}
+    assert sections == {"2", "3"}, sections

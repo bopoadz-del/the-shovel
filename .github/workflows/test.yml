@@ -59,7 +59,6 @@ jobs:
 
   test:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
     runs-on: ubuntu-latest
     # Hard cap: a healthy run finishes far sooner; anything longer is a hang,
     # and GitHub's default cap is 6 HOURS of billed minutes per hung job.
@@ -76,6 +75,7 @@ jobs:
     name: test (${{ matrix.profile }})
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         with:
           # diff-cover (per-PR coverage gate below) does a three-dot
           # diff (origin/<base>...HEAD) which needs the merge base.
@@ -87,16 +87,26 @@ jobs:
           fetch-depth: 0
 
       - name: A random development key for this run
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
         # source, and none repeats between runs.
         run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         with:
           python-version: "3.11"
           cache: pip
 
+      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -qq
+
       - name: Install system deps for OCR + PDF
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
         # Each attempt now times out and is retried; the step itself is capped.
         timeout-minutes: 10
@@ -115,6 +125,7 @@ jobs:
           exit 1
 
       - name: Install Python deps
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -128,9 +139,11 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov pytest-timeout diff-cover pytest-xdist
 
       - name: Security scan
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         run: python scripts/security_scan.py
 
       - name: Run the timing tests (first, no coverage instrumentation)
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # Same assertions, same limits; only the coverage tracer is off, so
         # the measurement is the event loop's, not the tracer's lock. Run
         # before the suite: after it, the runner's state from the whole
@@ -143,6 +156,7 @@ jobs:
           CEREBRUM_DOMAIN_KITS: ${{ matrix.cerebrum_domain_kits }}
 
       - name: Run tests
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # --cov-fail-under is a regression FLOOR (current coverage ~57%);
         # the global gate fails the job if coverage drops below it or if no
         # tests collect. The diff-cover step below catches the orthogonal
@@ -179,6 +193,7 @@ jobs:
           RAG_EMBEDDING_MODEL: fake
 
       - name: Run the serial tests (timing under their own load)
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # These measure the event loop under a simulated load, so they run
         # alone, not beside xdist workers competing for the runner's cores.
         # Coverage appends to the parallel run's and every report is written
@@ -208,7 +223,7 @@ jobs:
         # a build that is behaving correctly. The production-like profile is
         # the one that mirrors the deployed configuration, so it is the one
         # whose dead functions actually matter.
-        if: matrix.cerebrum_virgin == 'false'
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true' && matrix.cerebrum_virgin == 'false'
         run: python scripts/audit_dead_functions.py coverage.json
 
       - name: Mutation probes (decision code)
@@ -219,7 +234,7 @@ jobs:
         # Production-like profile only, same reason the dead-function audit is:
         # the virgin profile does not load the construction container, so some
         # targets are not importable there.
-        if: matrix.cerebrum_virgin == 'false'
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true' && matrix.cerebrum_virgin == 'false'
         env:
           ENV: testing
           DATA_DIR: ${{ runner.temp }}/mutation-data
@@ -239,7 +254,7 @@ jobs:
         # the rollout plan this gate is enforced — a PR whose newly-changed
         # lines are <50% covered fails, keeping new code from ratcheting
         # coverage down during the pilot.
-        if: github.event_name == 'pull_request'
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true' && github.event_name == 'pull_request'
         continue-on-error: false
         run: |
           # The summary must print even when the gate FAILS -- that is the
@@ -262,7 +277,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload diff-cover report
-        if: github.event_name == 'pull_request' && always()
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true' && github.event_name == 'pull_request' && always()
         uses: actions/upload-artifact@v4
         with:
           name: diff-cover-report
@@ -279,7 +294,6 @@ jobs:
     # this replaces -- none skipped, none optional.
     name: test-postgres (shard ${{ matrix.shard }}/4)
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
     runs-on: ubuntu-latest
     # Same hard cap as the matrix job. This job was the 6h0m zombie in every
     # stuck run on 2026-07-05 (hung inside "Run tests (PostgreSQL)").
@@ -311,18 +325,29 @@ jobs:
       PYTEST_USE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
 
       - name: A random development key for this run
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # The app and the tests read CEREBRUM_DEV_KEY; no value is in the
         # source, and none repeats between runs.
         run: echo "CEREBRUM_DEV_KEY=dev-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         with:
           python-version: "3.11"
           cache: pip
 
+      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -qq
+
       - name: Install system deps for OCR + PDF
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
         # Each attempt now times out and is retried; the step itself is capped.
         timeout-minutes: 10
@@ -341,15 +366,18 @@ jobs:
           exit 1
 
       - name: Install Python deps
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout pytest-xdist pytest-split
 
       - name: Apply Alembic schema
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         run: alembic upgrade head
 
       - name: Run tests (PostgreSQL, shard ${{ matrix.shard }}/4)
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # --timeout: see the matrix job note — a hung test must fail loudly,
         # not park the job at GitHub's 6-hour cap. --dist loadfile keeps each
         # test file on one worker (module-scoped fixtures). The durations
@@ -367,7 +395,7 @@ jobs:
           COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
 
       - name: Run the serial tests (shard 1, alone)
-        if: matrix.shard == 1
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true' && matrix.shard == 1
         run: |
           rc=0
           pytest tests/ --ignore=tests/browser -v --tb=short --timeout=120 -m "serial and not timing" --cov=app --cov-append --cov-report= || rc=$?
@@ -381,7 +409,7 @@ jobs:
           COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
 
       - name: Keep this shard's coverage and durations
-        if: always()
+        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true' && always()
         uses: actions/upload-artifact@v4
         with:
           name: test-postgres-shard-${{ matrix.shard }}
@@ -436,6 +464,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+
+      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -qq
 
       - name: Install system deps for OCR + PDF
         # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).

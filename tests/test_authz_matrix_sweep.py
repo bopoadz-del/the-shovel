@@ -204,6 +204,8 @@ _PUBLIC_ROUTES = {
     # In-app support form is public by design (a signed-out visitor must be
     # able to reach help); the app-wide rate limiter guards abuse.
     ("POST", "/v1/support"),
+    # Public support contact address, same exposure as the POST form above.
+    ("GET", "/v1/support"),
     ("GET", "/v1/drive/callback"),
     # Catalog / liveness extras that currently have no Depends. Adding a
     # guard later is fine; adding a *new* unlisted unguarded path is not.

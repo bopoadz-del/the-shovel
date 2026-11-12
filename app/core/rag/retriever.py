@@ -29,6 +29,7 @@ from app.core.rag import layers
 from app.lib.boq_ref_codes import find_ref_codes
 from app.core.rag import revision as _revision
 from app.core.rag import reranker as _reranker
+from app.core.rag import edition_rank as _edition_rank
 
 import os
 import re
@@ -7714,6 +7715,45 @@ def _priced_boq_triples(blob: str):
 
 
 
+def _consistent_priced_triple(cand) -> Optional[tuple]:
+    """``(qty, rate, amount)`` when the triple multiplies out, else None.
+
+    The same check ``_parse_priced_cesmm_window`` applies inline: a regex hit
+    that does not multiply out, or prints a zero figure, is three numbers that
+    happened to sit together.
+    """
+    figures = tuple(
+        _parse_boq_number(cand.group(name)) for name in ("qty", "rate", "amount")
+    )
+    if any(f is None or f <= 0 for f in figures):
+        return None
+    c_qty, c_rate, c_amount = figures
+    if abs(c_qty * c_rate - c_amount) > max(1.0, 0.015 * c_amount):
+        return None
+    return figures
+
+
+def priced_row_count(text: str) -> int:
+    """How many priced rows ``text`` prints: qty, unit, rate and amount whose
+    arithmetic holds (qty x rate = amount), in either column order.
+
+    A content signal, not a name: a priced bill prints such rows on every
+    page, while a specification, a drawing or a forecast sheet almost never
+    prints three numbers that multiply out. Overlapping matches of the two
+    column orders over the same row count once.
+    """
+    blob = _normalize_retrieval_ws((text or "").replace("|", " "))
+    spans: List[tuple] = []
+    for cand in _priced_boq_triples(blob):
+        if _consistent_priced_triple(cand) is None:
+            continue
+        lo, hi = cand.span()
+        if any(lo < s_hi and s_lo < hi for s_lo, s_hi in spans):
+            continue
+        spans.append((lo, hi))
+    return len(spans)
+
+
 def _plain_boq_number(value: float) -> str:
     if abs(value - round(value)) < 1e-9:
         return str(int(round(value)))
@@ -10089,6 +10129,7 @@ def retrieve_with_filter(
     _apply_schedule_register_boost(query, scored)
     _apply_pcg_value_boost(query, scored)
     _apply_commencement_date_boost(query, scored)
+    _edition_rank.apply_edition_conflict_demotion(query, scored, name_by_id)
     _apply_rate_only_boost(query, scored)
     _apply_priced_boq_boost(query, scored)
     _apply_part_summary_boost(query, scored)
