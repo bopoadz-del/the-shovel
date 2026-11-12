@@ -20,7 +20,7 @@ Nothing here names a project, a work item or a column.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from app.core.rag.evidence_loop import run_project_figure_retrieval
@@ -76,6 +76,7 @@ async def augment_figure_retrieval(
     sheets: Mapping[str, Sequence[Sequence[str]]] | None = None,
     headers: Mapping[str, Sequence[str]] | None = None,
     outcome_sink: Callable[[Any], None] | None = None,
+    typed_bills: Callable[[str], Iterable[str]] | None = None,
 ) -> str:
     """Run the evidence loop and return the merged evidence text.
 
@@ -98,6 +99,7 @@ async def augment_figure_retrieval(
             sheets=sheets,
             headers=headers,
             run_sync=run_sync,
+            typed_bills=typed_bills,
         )
         if outcome_sink is not None:
             outcome_sink(outcome)

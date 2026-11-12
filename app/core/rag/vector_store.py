@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 from pgvector.sqlalchemy import Vector
@@ -126,6 +126,26 @@ def _sanitize_fts5_query(query: str) -> str:
 # Words websearch_to_tsquery reads as OPERATORS. Passing them through as if
 # they were search terms changes the meaning of the query.
 _WEBSEARCH_OPERATORS = frozenset({"or", "and", "not"})
+
+
+def _doc_scope(
+    doc_ids: Optional[Iterable[str]],
+) -> Tuple[Optional[str], Dict[str, str]]:
+    """``AND c.doc_id IN (...)`` with one bound parameter per document id.
+
+    ``None`` -> ``("", {})`` (no restriction). An empty collection ->
+    ``(None, {})``: a filter that can match nothing, which the caller answers
+    with ``[]`` instead of a query. Ids are bound, never interpolated, and
+    deduplicated in a fixed order so equal sets build equal statements.
+    """
+    if doc_ids is None:
+        return "", {}
+    ids = sorted({str(d) for d in doc_ids if d})
+    if not ids:
+        return None, {}
+    params = {f"bm25_doc_{i}": doc_id for i, doc_id in enumerate(ids)}
+    placeholders = ", ".join(f":{name}" for name in params)
+    return f" AND c.doc_id IN ({placeholders})", params
 
 
 def _sanitize_websearch_query(query: str) -> str:
@@ -2143,6 +2163,7 @@ class VectorStore:
         project_id: str,
         query: str,
         k: int = 50,
+        doc_ids: Optional[Iterable[str]] = None,
     ) -> List[Chunk]:
         """Top-``k`` chunks for ``project_id`` ranked by BM25.
 
@@ -2160,16 +2181,25 @@ class VectorStore:
 
         Returned chunks carry ``score`` set to the BM25 rank value for
         debug; the RRF fuser uses positional rank, not ``.score``.
+
+        ``doc_ids`` (optional) restricts the ranking to those documents, so a
+        caller can rank one document set without the rest of the project
+        crowding it out of the top-``k``. ``None`` means no restriction; an
+        empty collection matches nothing and returns ``[]`` without a query.
         """
         if not query or not query.strip():
             return []
+        scope_sql, scope_params = _doc_scope(doc_ids)
+        if scope_sql is None:
+            return []
 
         if self._use_pgvector:
-            return self._bm25_postgres(project_id, query, k)
-        return self._bm25_sqlite(project_id, query, k)
+            return self._bm25_postgres(project_id, query, k, scope_sql, scope_params)
+        return self._bm25_sqlite(project_id, query, k, scope_sql, scope_params)
 
     def _bm25_postgres(
-        self, project_id: str, query: str, k: int
+        self, project_id: str, query: str, k: int,
+        scope_sql: str = "", scope_params: Optional[Dict[str, str]] = None,
     ) -> List[Chunk]:
         """ts_rank + GIN over a BAG-OF-WORDS tsquery.
 
@@ -2190,7 +2220,8 @@ class VectorStore:
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql("c")
                     rows = self._bm25_postgres_rows(
-                        session, project_id, safe_query, int(k), vis,
+                        session, project_id, safe_query, int(k), vis + scope_sql,
+                        scope_params,
                     )
         except SQLAlchemyError as e:
             # Deliberately broader than OperationalError. A missing
@@ -2239,8 +2270,10 @@ class VectorStore:
 
     def _bm25_postgres_rows(
         self, session: Session, project_id: str, safe_query: str, k: int, vis: str,
+        scope_params: Optional[Dict[str, str]] = None,
     ) -> list:
-        params = {"q": safe_query, "project_id": project_id, "k": k}
+        scope_params = dict(scope_params or {})
+        params = {"q": safe_query, "project_id": project_id, "k": k, **scope_params}
         tsq = session.execute(
             text("SELECT websearch_to_tsquery('english', :q)::text"), {"q": safe_query},
         ).scalar()
@@ -2251,7 +2284,12 @@ class VectorStore:
             return []
         # Keyed on the normalised tsquery: query wordings that reduce to the
         # same tsquery rank the same rows.
-        key = ("bm25", self._table_name, project_id, tsq, k, vis)
+        # ``vis`` carries the document scope's placeholders, not its values,
+        # so the bound document ids are part of the key too.
+        key = (
+            "bm25", self._table_name, project_id, tsq, k, vis,
+            tuple(sorted(scope_params.items())),
+        )
         hit = _memo_get(key)
         if hit is not _MISS:
             return hit
@@ -2332,7 +2370,8 @@ class VectorStore:
         return freq
 
     def _bm25_sqlite(
-        self, project_id: str, query: str, k: int
+        self, project_id: str, query: str, k: int,
+        scope_sql: str = "", scope_params: Optional[Dict[str, str]] = None,
     ) -> List[Chunk]:
         """FTS5 MATCH joined to chunks by rowid (external-content shape).
         FTS5's ``rank`` is a negated BM25 — lower = better — so ASC."""
@@ -2356,14 +2395,17 @@ class VectorStore:
                         JOIN {table} c ON c.rowid = {fts_table}.rowid
                         WHERE {fts_table} MATCH :q
                           AND c.project_id = :project_id
-                          {vis}
+                          {vis}{scope_sql}
                         ORDER BY {fts_table}.rank
                         LIMIT :k
                         """
                     )
                     rows = session.execute(
                         sql,
-                        {"q": safe_query, "project_id": project_id, "k": k},
+                        {
+                            "q": safe_query, "project_id": project_id, "k": k,
+                            **(scope_params or {}),
+                        },
                     ).all()
         except OperationalError as e:
             # FTS5 raises on malformed MATCH input. Treat as "no matches."

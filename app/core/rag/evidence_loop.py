@@ -19,7 +19,7 @@ Nothing here names a project, an item or a column.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +69,7 @@ def build_actions(
     project_id: str,
     sheets: Mapping[str, Sequence[Sequence[str]]] | None = None,
     headers: Mapping[str, Sequence[str]] | None = None,
+    typed_bills: Callable[[str], Iterable[str]] | None = None,
 ) -> list[RetrievalAction]:
     """The three retrieval actions over the real primitives.
 
@@ -78,14 +79,18 @@ def build_actions(
     are the WBS ``XLSXDocument.sheets`` shape; a structural action is only
     built when sheets are supplied. The bill-rows action scopes the same
     lexical primitive to documents whose chunks print priced rows, so a long
-    PDF bill's rows are not crowded out of the global ranking.
+    PDF bill's rows are not crowded out of the global ranking;
+    typed_bills(project_id) (optional) names the documents the ingest
+    typed as a bill, which that action ranks the item inside and prefers.
     """
     from app.core.rag.retriever import priced_row_count
 
     actions: list[RetrievalAction] = [
         semantic_action(retrieve_fn, project_id),
         lexical_action(bm25_fn, project_id),
-        bill_rows_action(bm25_fn, project_id, row_count=priced_row_count),
+        bill_rows_action(
+            bm25_fn, project_id, row_count=priced_row_count, typed_bills=typed_bills,
+        ),
     ]
     if sheets is not None:
         actions.append(structural_action(sheets, headers))
@@ -120,6 +125,7 @@ async def run_project_figure_retrieval(
     sheets: Mapping[str, Sequence[Sequence[str]]] | None = None,
     headers: Mapping[str, Sequence[str]] | None = None,
     run_sync: Callable[..., Awaitable[Any]] | None = None,
+    typed_bills: Callable[[str], Iterable[str]] | None = None,
 ) -> EvidenceLoopOutcome:
     """Plan, then fetch evidence over the plan with the bounded loop.
 
@@ -151,6 +157,7 @@ async def run_project_figure_retrieval(
         project_id=project_id,
         sheets=sheets,
         headers=headers,
+        typed_bills=typed_bills,
     )
     if run_sync is None:
         run = run_loop(plan, actions, initial_evidence=first_pass_evidence)

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import partial
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from app.core.rag.evidence_budget import (
     CONTEXT_TRUNCATED_NOTE,
@@ -39,7 +39,9 @@ def chunks_to_text(chunks) -> str:
     return "\n".join(chunk_text(c) for c in chunks if chunk_text(c).strip())
 
 
-def _budgeted_text(chunks, *, total_tokens=None, per_doc_tokens=None) -> str:
+def _budgeted_text(
+    chunks, *, total_tokens=None, per_doc_tokens=None, presorted=False,
+) -> str:
     """Highest-scoring chunks, budgeted, joined into one evidence string.
 
     Applies the same per-document + total token budget the loop's merged
@@ -63,6 +65,7 @@ def _budgeted_text(chunks, *, total_tokens=None, per_doc_tokens=None) -> str:
         raw,
         total_tokens=total_tokens if total_tokens is not None else max_total_tokens(),
         per_doc_tokens=per_doc_tokens if per_doc_tokens is not None else max_tokens_per_doc(),
+        presorted=presorted,
     )
     text = chunks_to_text(kept)
     return text + (CONTEXT_TRUNCATED_NOTE if dropped else "")
@@ -140,23 +143,119 @@ def bill_document_ids(chunks, *, row_count: Callable[[str], int]) -> set[str]:
     candidate chunks print at least one such row. Nothing here reads a
     filename, a title or a project.
     """
+    rows_by_doc, _ = _priced_rows_by_doc(chunks, row_count)
+    return {doc_id for doc_id, rows in rows_by_doc.items() if rows > 0}
+
+
+def _priced_rows_by_doc(chunks, row_count: Callable[[str], int]):
+    """``({doc: priced rows}, {doc: candidate chunks})`` over ``chunks``."""
     rows_by_doc: dict[str, int] = {}
+    chunks_by_doc: dict[str, int] = {}
     for chunk in chunks or ():
         doc_id = getattr(chunk, "doc_id", "") or ""
         if not doc_id:
             continue
         rows_by_doc[doc_id] = rows_by_doc.get(doc_id, 0) + row_count(chunk_text(chunk))
-    return {doc_id for doc_id, rows in rows_by_doc.items() if rows > 0}
+        chunks_by_doc[doc_id] = chunks_by_doc.get(doc_id, 0) + 1
+    return rows_by_doc, chunks_by_doc
+
+
+def rank_bill_documents(
+    chunks,
+    *,
+    row_count: Callable[[str], int],
+    typed_bills: Iterable[str] = (),
+) -> list[str]:
+    """Candidate bill documents in ``chunks``, best first.
+
+    Kept: every document whose candidate chunks print a priced row, plus every
+    document in ``typed_bills`` (the ingest's own bill classification) that
+    has a candidate chunk. Order:
+
+    1. documents that print priced rows before documents that print none;
+    2. among those, a typed bill before an untyped document;
+    3. then priced rows per candidate chunk (density), highest first;
+    4. ties keep first-seen order (the lexical rank of the pool).
+
+    So a document that prints one priced row among many unpriced chunks
+    ranks below a bill whose candidate chunks are mostly priced rows.
+    """
+    typed = {str(d) for d in (typed_bills or ()) if d}
+    rows_by_doc, chunks_by_doc = _priced_rows_by_doc(chunks, row_count)
+    kept = [d for d in chunks_by_doc if rows_by_doc[d] > 0 or d in typed]
+
+    def _key(doc_id: str):
+        rows = rows_by_doc[doc_id]
+        return (rows <= 0, doc_id not in typed, -(rows / chunks_by_doc[doc_id]))
+
+    # ``sorted`` is stable: equal keys keep the pool's first-seen order.
+    return sorted(kept, key=_key)
+
+
+def _chunk_identity(chunk):
+    chunk_id = getattr(chunk, "chunk_id", None)
+    return ("id", chunk_id) if chunk_id else ("obj", id(chunk))
+
+
+def _merge_pools(*pools) -> list:
+    """Concatenate chunk pools; the first occurrence of a chunk wins."""
+    seen: set = set()
+    out: list = []
+    for pool in pools:
+        for chunk in pool or ():
+            ident = _chunk_identity(chunk)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            out.append(chunk)
+    return out
+
+
+class _TypedBillCache:
+    """The project's typed bill ids, looked up once per action instance.
+
+    The action runs once per uncovered plan item per round; the documents
+    table does not change inside one loop. A failed lookup means "no typed
+    bill known" (logged), so the action falls back to the lexical pool.
+    """
+
+    def __init__(self, lookup: Callable[[str], Iterable[str]]):
+        self._lookup = lookup
+        self._ids: frozenset[str] | None = None
+
+    def __call__(self, project_id: str) -> frozenset[str]:
+        if self._ids is None:
+            try:
+                self._ids = frozenset(
+                    str(d) for d in (self._lookup(project_id) or ()) if d
+                )
+            except Exception:  # noqa: BLE001 -- a lookup failure must not break the loop
+                logger.warning(
+                    "bill_rows typed-bill lookup failed project=%s; "
+                    "ranking the lexical pool only", project_id, exc_info=True,
+                )
+                self._ids = frozenset()
+        return self._ids
 
 
 def _bill_rows_retrieve(
     bm25_fn, project_id: str, k: int, row_count: Callable[[str], int], item: str,
+    *, typed_bills: Callable[[str], Iterable[str]] | None = None,
 ) -> str:
     pool = list(bm25_fn(project_id, item, k=k) or ())
-    bills = bill_document_ids(pool, row_count=row_count)
-    scoped = [c for c in pool if (getattr(c, "doc_id", "") or "") in bills]
-    _trace("bill_rows", item, scoped)
-    return _budgeted_text(scoped)
+    typed = frozenset(typed_bills(project_id)) if typed_bills is not None else frozenset()
+    if typed:
+        # Rank the item inside the typed bills alone, so the rest of the
+        # project cannot crowd the bill's own rows out of the top-k.
+        scoped = list(bm25_fn(project_id, item, k=k, doc_ids=sorted(typed)) or ())
+        pool = _merge_pools(scoped, pool)
+    ranked = rank_bill_documents(pool, row_count=row_count, typed_bills=typed)
+    order = {doc_id: i for i, doc_id in enumerate(ranked)}
+    handed = [c for c in pool if (getattr(c, "doc_id", "") or "") in order]
+    # Stable: inside one document the pool's lexical order is kept.
+    handed.sort(key=lambda c: order[getattr(c, "doc_id", "") or ""])
+    _trace("bill_rows", item, handed)
+    return _budgeted_text(handed, presorted=True)
 
 
 def bill_rows_action(
@@ -165,17 +264,29 @@ def bill_rows_action(
     *,
     row_count: Callable[[str], int],
     k: int | None = None,
+    typed_bills: Callable[[str], Iterable[str]] | None = None,
 ) -> RetrievalAction:
     """Document-scoped lexical: the item's rows in the project's bills.
 
     The global lexical/semantic rankings let a long priced bill lose every
     item to drawings and specifications that merely mention it. This action
-    takes a deeper lexical pool for the item, keeps only the documents whose
+    takes a deeper lexical pool for the item, keeps the documents whose
     candidate chunks print priced rows (``row_count``: qty x rate = amount),
-    and hands those chunks in under the same per-document + total budget.
+    ranks them by priced rows per candidate chunk, and hands their chunks in
+    that order under the same per-document + total budget.
+
+    ``typed_bills(project_id)``, when supplied, returns the ids of the
+    documents the ingest classified as a bill (``documents.doc_type``). When
+    it returns any, the item is also ranked inside those documents alone
+    (``bm25_fn(..., doc_ids=...)``) and a typed bill that prints priced rows
+    ranks ahead of an untyped one. When it returns none, or is not supplied,
+    the pool is the plain lexical pool ranked by density only.
     """
     depth = bill_pool_k() if k is None else int(k)
-    return partial(_bill_rows_retrieve, bm25_fn, project_id, depth, row_count)
+    cache = _TypedBillCache(typed_bills) if typed_bills is not None else None
+    return partial(
+        _bill_rows_retrieve, bm25_fn, project_id, depth, row_count, typed_bills=cache,
+    )
 
 
 def _rows_for_item(

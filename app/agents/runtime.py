@@ -922,6 +922,24 @@ async def _agentic_figure_retrieval_plan_caller(
     )
 
 
+def _typed_bill_doc_ids(project_id: str) -> list[str]:
+    """Ids of the project's documents the ingest typed as a bill.
+
+    Read from documents.doc_type (one narrow query); the evidence loop's
+    bill-rows action ranks plan items inside these and prefers them. An
+    empty list means the project has no typed bill and the action keeps its
+    plain lexical pool.
+    """
+    from app.core import projects as _projects
+
+    return [
+        d["id"]
+        for d in (_projects.list_document_names(project_id) or [])
+        if d.get("id")
+        and (d.get("doc_type") or "").strip().lower() == _projects.DOC_TYPE_BILL
+    ]
+
+
 async def _agentic_figure_retrieval_augment(
     agent: Any,
     user_message: str,
@@ -980,6 +998,7 @@ async def _agentic_figure_retrieval_augment(
         bm25_fn=store.bm25_search,
         run_sync=off_loop,
         outcome_sink=partial(_stash_dataset_outcome, agent, user_message),
+        typed_bills=_typed_bill_doc_ids,
     )
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)

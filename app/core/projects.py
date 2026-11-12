@@ -550,6 +550,10 @@ def _ensure_db() -> None:
 
 # ── classification ──────────────────────────────────────────────────────────
 
+#: The documents.doc_type the ingest gives a bill of quantities.
+DOC_TYPE_BILL = "boq"
+
+
 def classify_doc_type(filename: str) -> str:
     """Coarse document-type guess from the filename (display only)."""
     n = (filename or "").lower()
@@ -561,7 +565,7 @@ def classify_doc_type(filename: str) -> str:
     if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
         return "photo"
     if "boq" in n or "bill of quant" in n:
-        return "boq"
+        return DOC_TYPE_BILL
     if "contract" in n or "agreement" in n:
         return "contract"
     if "spec" in n:
