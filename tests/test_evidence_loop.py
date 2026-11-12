@@ -139,7 +139,12 @@ def test_build_actions_adds_structural_action_when_sheets_are_supplied(sheets):
         sheets=sheets,
         headers=next(iter(sheets.values())),
     )
-    assert len(actions) == 3
+    without = build_actions(
+        retrieve_fn=_fake_retrieve({}),
+        bm25_fn=_fake_bm25({}),
+        project_id="p",
+    )
+    assert len(actions) == len(without) + 1
 
 
 @pytest.mark.parametrize("plan_text,initial,item_fill", [

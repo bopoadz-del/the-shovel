@@ -907,8 +907,16 @@ async def _agentic_figure_retrieval_plan_caller(
     project_id: str,
     user_id: str | None,
 ) -> dict[str, Any]:
-    """The plan LLM call the evidence loop uses: one tool-free synthesis."""
-    msgs = [{"role": "user", "content": question}]
+    """The plan LLM call the evidence loop uses: one tool-free synthesis.
+
+    The model is given ``EVIDENCE_PLAN_PROMPT`` with the question, so it
+    returns a plan (the items / rows / clauses to fetch), not an answer. A
+    bare question returned the model's unretrieved answer, whose sentences
+    then became the loop's search phrases.
+    """
+    from app.core.rag.plan_generation import evidence_plan_request
+
+    msgs = [{"role": "user", "content": evidence_plan_request(question)}]
     return await agent._call_llm(
         msgs, api_key, project_id=project_id, with_tools=False, user_id=user_id,
     )

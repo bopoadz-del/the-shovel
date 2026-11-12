@@ -7715,6 +7715,47 @@ def _priced_boq_triples(blob: str):
 
 
 
+def _consistent_priced_triple(cand) -> Optional[tuple]:
+    """``(qty, rate, amount)`` when the triple multiplies out, else None.
+
+    The arithmetic IS the test: a regex hit that does not multiply out is
+    three numbers that happened to sit together.
+    """
+    c_qty = _parse_boq_number(cand.group("qty"))
+    c_rate = _parse_boq_number(cand.group("rate"))
+    c_amount = _parse_boq_number(cand.group("amount"))
+    if c_qty is None or c_rate is None or c_amount is None:
+        return None
+    if c_qty <= 0 or c_rate <= 0 or c_amount <= 0:
+        return None
+    if abs(c_qty * c_rate - c_amount) > max(1.0, 0.015 * c_amount):
+        return None
+    return c_qty, c_rate, c_amount
+
+
+def priced_row_count(text: str) -> int:
+    """How many priced rows ``text`` prints: qty, unit, rate and amount whose
+    arithmetic holds (qty x rate = amount), in either column order.
+
+    A content signal, not a name: a priced bill prints such rows on every
+    page, while a specification, a drawing or a forecast sheet almost never
+    prints three numbers that multiply out. Overlapping matches of the two
+    column orders over the same row count once.
+    """
+    blob = _normalize_retrieval_ws((text or "").replace("|", " "))
+    if not blob:
+        return 0
+    spans: List[tuple] = []
+    for cand in _priced_boq_triples(blob):
+        if _consistent_priced_triple(cand) is None:
+            continue
+        lo, hi = cand.span()
+        if any(lo < s_hi and s_lo < hi for s_lo, s_hi in spans):
+            continue
+        spans.append((lo, hi))
+    return len(spans)
+
+
 def _plain_boq_number(value: float) -> str:
     if abs(value - round(value)) < 1e-9:
         return str(int(round(value)))
@@ -7754,16 +7795,10 @@ def _parse_priced_cesmm_window(window: str, code: str) -> Optional[Dict[str, Any
     # arithmetic IS the test: a regex hit that does not multiply out is three
     # numbers that happened to sit together.
     for cand in _priced_boq_triples(blob):
-        c_qty = _parse_boq_number(cand.group("qty"))
-        c_rate = _parse_boq_number(cand.group("rate"))
-        c_amount = _parse_boq_number(cand.group("amount"))
-        if c_qty is None or c_rate is None or c_amount is None:
+        figures = _consistent_priced_triple(cand)
+        if figures is None:
             continue
-        if c_qty <= 0 or c_rate <= 0 or c_amount <= 0:
-            continue
-        if abs(c_qty * c_rate - c_amount) > max(1.0, 0.015 * c_amount):
-            continue
-        match, qty, rate, amount = cand, c_qty, c_rate, c_amount
+        match, (qty, rate, amount) = cand, figures
         break
     if match is None:
         return None
