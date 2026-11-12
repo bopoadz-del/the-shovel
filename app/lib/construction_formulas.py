@@ -2926,24 +2926,19 @@ def _eval_arithmetic_ast(node) -> float:
     raise ValueError(f"disallowed node: {type(node).__name__}")
 
 
-_ARITH_ALLOWED_NODES = (
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Load,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod,
-    ast.USub, ast.UAdd, ast.FloorDiv,
-)
-
-
 def _safe_arithmetic_value(expr: str) -> float | None:
-    """Deterministic value of a pure-arithmetic expression, else None."""
+    """Deterministic value of a pure-arithmetic expression, else None.
+
+    Validation is single-sourced in ``_eval_arithmetic_ast``: it only ever
+    evaluates Constant / UnaryOp / BinOp nodes with whitelisted operators and
+    raises on anything else (``ast.parse`` runs in ``eval`` mode, never
+    ``eval``/``exec``). An empty or unparsable expression returns None here.
+    """
     expr = (expr or "").strip().replace(",", "")
-    if not expr:
-        return None
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError:
         logger.debug("arithmetic expression did not parse: %r", expr)
-        return None
-    if any(not isinstance(node, _ARITH_ALLOWED_NODES) for node in ast.walk(tree)):
         return None
     try:
         value = float(_eval_arithmetic_ast(tree))
