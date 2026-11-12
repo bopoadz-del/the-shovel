@@ -13,6 +13,8 @@ provenance recorder; synthetic documents and figures only.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.agents.runtime import _build_sources_from_audit, _record_figure_provenance
 
 _PROJECT_ID = "7c1d0b2e"
@@ -61,33 +63,51 @@ def _finish_turn(answer: str) -> list[dict]:
     return _build_sources_from_audit(audit, answer, [])
 
 
-def test_grounded_answer_with_a_limitation_keeps_its_sources():
-    answer = (
-        "Delay damages are 0.07% of the Accepted Contract Amount per day, capped "
-        "at 8% of the Accepted Contract Amount (Sub-Clause 8.8). The excerpt does "
-        "not state the Accepted Contract Amount itself, so I cannot convert the "
-        "percentage into a money figure."
-    )
+_GROUNDED_WITH_CAVEAT = (
+    "Delay damages are 0.07% of the Accepted Contract Amount per day, capped "
+    "at 8% of the Accepted Contract Amount (Sub-Clause 8.8). The excerpt does "
+    "not state the Accepted Contract Amount itself, so I cannot convert the "
+    "percentage into a money figure."
+)
+_PURE_DECLINE = (
+    "I cannot find the delay damages rate in the project documents, so I "
+    "cannot state it in money."
+)
+
+
+@pytest.mark.parametrize(
+    "answer,expected_docs",
+    [
+        (_GROUNDED_WITH_CAVEAT, {_DOC_ID}),
+        (_PURE_DECLINE, set()),
+    ],
+    ids=["grounded-plus-caveat", "pure-decline"],
+)
+def test_sources_follow_the_answers_claim_not_a_caveat_clause(answer, expected_docs):
+    """Both answers carry a caveat phrase ("i cannot"). Only the one whose
+    provenance credits a figure to the injected project chunk keeps sources."""
     sources = _finish_turn(answer)
-    assert sources, "a grounded answer with a caveat clause must keep its sources"
-    assert {s["doc_id"] for s in sources} == {_DOC_ID}
-    assert {s.get("source_class") for s in sources} == {"project_corpus"}
+    assert {s["doc_id"] for s in sources} == expected_docs
+    if expected_docs:
+        assert {s.get("source_class") for s in sources} == {"project_corpus"}
 
 
-def test_pure_decline_still_records_no_sources():
-    answer = (
-        "I cannot find the delay damages rate in the project documents, so I "
-        "cannot state it in money."
-    )
-    assert _finish_turn(answer) == []
-
-
-def test_project_credit_for_a_document_not_injected_does_not_lift_a_decline():
-    """The credit must point at this turn's injected set: a provenance entry
-    for some other document does not make a caveat answer grounded here."""
+@pytest.mark.parametrize(
+    "credited_doc,expected_docs",
+    [
+        (_DOC_ID, {_DOC_ID}),
+        ("d_elsewhere", set()),
+    ],
+    ids=["credit-in-injected-set", "credit-outside-injected-set"],
+)
+def test_only_a_credit_to_this_turns_injected_set_lifts_a_caveat(credited_doc, expected_docs):
+    """A project_document credit counts only when it points at a document
+    injected this turn; a credit for some other document does not make a
+    caveat answer grounded here."""
     audit = _audit()
     audit["provenance"] = [{
-        "figure": "0.07%", "source": "project_document", "doc_id": "d_elsewhere",
+        "figure": "0.07%", "source": "project_document", "doc_id": credited_doc,
     }]
-    answer = "I cannot confirm the delay damages rate from these excerpts."
-    assert _build_sources_from_audit(audit, answer, []) == []
+    answer = "Delay damages are 0.07% per day; I cannot confirm the money amount."
+    sources = _build_sources_from_audit(audit, answer, [])
+    assert {s["doc_id"] for s in sources} == expected_docs
