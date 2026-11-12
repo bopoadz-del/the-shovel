@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.rag.evidence_actions import (
+    _bill_rows_retrieve,
     bill_document_ids,
     bill_rows_action,
     lexical_action,
@@ -102,6 +103,7 @@ def test_priced_rows_mark_the_bill_and_not_drawings_or_specs(bill_shape):
 
 @pytest.mark.parametrize("text", [
     "Clause 4.10 cover 50 mm, 3 m 12.00 40.00 lap length",
+    "Provisional item 0 m 5.00 0.00",
     "Forecast 2026 m3 1200 1300 1400",
     "",
 ])
@@ -184,7 +186,7 @@ def test_bill_rows_respects_the_per_document_cap(monkeypatch, bill_shape):
 def test_bill_rows_logs_the_handed_documents(caplog, item):
     corpus = _noise(5, item) + _pdf_bill(_ROWS)
     with caplog.at_level(logging.INFO, logger="app.core.rag.evidence_actions"):
-        bill_rows_action(_bm25(corpus), "p", row_count=priced_row_count)(item)
+        _bill_rows_retrieve(_bm25(corpus), "p", 200, priced_row_count, item)
     lines = [r.getMessage() for r in caplog.records
              if "rag_evidence_action_trace action=bill_rows" in r.getMessage()]
     assert lines and "bill-pdf" in lines[0]
@@ -227,3 +229,14 @@ def test_a_chunk_without_a_document_never_marks_a_bill(doc_id):
     priced = _pdf_bill(_ROWS)[0].text
     chunks = [SimpleNamespace(doc_id=doc_id, text=priced, score=1.0)]
     assert bill_document_ids(chunks, row_count=priced_row_count) == set()
+
+
+@pytest.mark.parametrize("bill_shape,item,figure", [
+    (_pdf_bill, "precast kerb", "35,700.00"),
+    (_xlsx_bill, "granular sub-base", "45260.00"),
+])
+def test_bill_rows_retrieve_hands_only_bill_chunks(bill_shape, item, figure):
+    corpus = _noise(60, item) + bill_shape(_ROWS)
+    handed = _bill_rows_retrieve(_bm25(corpus), "p", 200, priced_row_count, item)
+    assert figure in handed
+    assert "Section 3." not in handed
