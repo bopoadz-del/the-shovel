@@ -19,6 +19,7 @@ from app.agents.runtime import (
     _agentic_figure_retrieval_plan_caller,
     _stash_dataset_outcome,
 )
+from app.core.rag.plan_generation import EVIDENCE_PLAN_PROMPT, evidence_plan_request
 
 
 class _FakeAgent:
@@ -151,4 +152,8 @@ async def test_plan_caller_calls_llm_tool_free(question):
     result = await _agentic_figure_retrieval_plan_caller(agent, question, "k", "p", "u")
     assert result == {"choice": {"message": {"content": "plan"}}}
     assert seen["with_tools"] is False
-    assert seen["msgs"] == [{"role": "user", "content": question}]
+    # The plan call carries the plan instruction and the question, so the
+    # model returns what to fetch, not an unretrieved answer.
+    assert seen["msgs"] == [{"role": "user", "content": evidence_plan_request(question)}]
+    assert question in seen["msgs"][0]["content"]
+    assert EVIDENCE_PLAN_PROMPT in seen["msgs"][0]["content"]
