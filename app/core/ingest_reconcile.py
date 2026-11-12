@@ -21,6 +21,7 @@ Orphan chunks are reported only — no purge.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Collection, Iterable, Mapping, Sequence
 
@@ -592,6 +593,221 @@ def is_ghost(doc: Mapping[str, Any], chunks: int) -> bool:
     return doc.get("has_file") is not True and chunks <= 0
 
 
+# ── R2 — document-code family + revision parsing ─────────────────────────
+# SPEC_CORPUS_DECISIONS_v1 rule (b): superseded revisions per document-code
+# family, latest kept. The family is the filename stem with its trailing
+# revision token stripped. A revision token is one of:
+#   * a short letter run (-A/-B/…)
+#   * a numeric run (-01/-05/…)
+#   * an explicit R/Rev/V marker (R followed by a number, Rev02, v20)
+# Transmittal copies carry the same code with no filename revision; their
+# revision comes from the transmittal folder marker in the Drive path.
+
+_SPLIT_CODE = re.compile(r"[\s_.\-]+")
+_REV_MARKER = re.compile(r"^(?:rev|r|v)\s*[-_.]?\s*(\d+)$", re.IGNORECASE)
+_LETTER_TOKEN = re.compile(r"^[a-z]{1,2}$", re.IGNORECASE)
+_NUMERIC_TOKEN = re.compile(r"^\d+$")
+_TRANSMITTAL_COMPONENT = re.compile(
+    r"^(?:transmittals?|tr)[\s\-_.]*(\d+)$", re.IGNORECASE,
+)
+
+#: Revision-scheme precedence for "keep the highest": letters outrank
+#: numbers, which outrank transmittals, which outrank a bare code.
+_SCHEME_RANK = {"base": 0, "transmittal": 1, "number": 2, "letter": 3}
+
+
+@dataclass(frozen=True)
+class CodeRevision:
+    scheme: str
+    value: Any  # letter -> str, number/transmittal -> int
+
+    @property
+    def rank(self) -> tuple[int, Any]:
+        return (_SCHEME_RANK[self.scheme], self.value)
+
+
+def _document_path(doc: Mapping[str, Any]) -> str:
+    """Drive path for a documents row, from metadata then ``file_path``."""
+    meta = doc.get("metadata") or {}
+    if not isinstance(meta, Mapping):
+        meta = {}
+    for key in ("drive_path", "local_drive_path"):
+        value = meta.get(key)
+        if value:
+            return str(value)
+    return str(doc.get("file_path") or "")
+
+
+def _transmittal_rank(path: str) -> int | None:
+    """Transmittal number from a Drive path folder marker, or None.
+
+    Matches ``Transmittal 001`` / ``Transmittal-01`` / ``TR-42`` style folder
+    components. A bare ``Transmittal`` without a number carries no order.
+    """
+    for part in re.split(r"[\\/]+", str(path or "")):
+        m = _TRANSMITTAL_COMPONENT.match(part.strip())
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def parse_document_code(
+    name: str,
+    path: str = "",
+) -> tuple[str, CodeRevision | None]:
+    """Split a document name into ``(family, revision)``.
+
+    The family is the filename stem (extension stripped) with a trailing
+    revision token removed and its separators normalised to ``-``. A trailing
+    numeric token is a revision only when the remaining code still carries a
+    numeric component, so ``SPEC-001`` stays a code while ``SPEC-001-01`` is
+    ``SPEC-001`` revision 01. When the name holds no revision, a transmittal
+    folder marker supplies it.
+    """
+    stem = os.path.splitext(os.path.basename(str(name or "")))[0]
+    tokens = [t for t in _SPLIT_CODE.split(stem) if t]
+    if not tokens:
+        return "", None
+
+    family_tokens = list(tokens)
+    revision: CodeRevision | None = None
+
+    last = tokens[-1]
+    marker = _REV_MARKER.match(last)
+    if marker:
+        revision = CodeRevision("number", int(marker.group(1)))
+    elif _LETTER_TOKEN.match(last):
+        revision = CodeRevision("letter", last.upper())
+    elif _NUMERIC_TOKEN.match(last):
+        rest = tokens[:-1]
+        if any(_NUMERIC_TOKEN.match(t) for t in rest):
+            revision = CodeRevision("number", int(last))
+
+    if revision is not None:
+        family_tokens = tokens[:-1]
+
+    family = "-".join(family_tokens).upper()
+
+    if revision is None:
+        t = _transmittal_rank(path)
+        if t is not None:
+            revision = CodeRevision("transmittal", t)
+
+    return family, revision
+
+
+@dataclass
+class FamilySupersessionAction:
+    doc_id: str
+    superseded_by: str
+    family: str
+    scheme: str = "base"
+    reason: str = "family_superseded"
+
+
+@dataclass
+class FamilySupersessionPlan:
+    canonical: dict[str, str] = field(default_factory=dict)
+    candidates: list[FamilySupersessionAction] = field(default_factory=list)
+    already_superseded: int = 0
+    skipped_unparseable: int = 0
+    summaries: list[dict[str, Any]] = field(default_factory=list)
+
+
+def plan_family_supersession(
+    docs: Sequence[Mapping[str, Any]],
+) -> FamilySupersessionPlan:
+    """Rule (b): select superseded revisions per document-code family.
+
+    Documents are grouped by (project, code family). Within a family the
+    highest-revision member is canonical and every strictly-lower member is a
+    superseded candidate. A family whose members all share one rank (two
+    identical base codes) is left alone — that is an exact duplicate, which is
+    a different rule. Members already carrying ``superseded_by`` are reported
+    as already-superseded, never re-selected. Documents whose name yields no
+    code family are counted in ``skipped_unparseable`` and never grouped.
+    """
+    plan = FamilySupersessionPlan()
+    groups: dict[
+        tuple[str, str], list[tuple[tuple[int, Any], str, Mapping[str, Any]]]
+    ] = {}
+    for doc in docs:
+        name = str(doc.get("original_name") or "")
+        project = str(doc.get("project_id") or "")
+        family, revision = parse_document_code(name, _document_path(doc))
+        if not family:
+            plan.skipped_unparseable += 1
+            continue
+        scheme = revision.scheme if revision else "base"
+        rank = revision.rank if revision else (_SCHEME_RANK["base"], 0)
+        groups.setdefault((project, family), []).append((rank, scheme, doc))
+
+    for (project, family), members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda m: (m[0], str(m[2].get("id") or "")))
+        canonical_rank, _scheme, canonical_doc = members[-1]
+        canonical_id = str(canonical_doc.get("id") or "")
+        family_candidates: list[FamilySupersessionAction] = []
+        family_already = 0
+        for rank, scheme, doc in members[:-1]:
+            doc_id = str(doc.get("id") or "")
+            if not doc_id:
+                continue
+            if doc.get("superseded_by"):
+                family_already += 1
+                continue
+            if rank < canonical_rank:
+                family_candidates.append(
+                    FamilySupersessionAction(
+                        doc_id=doc_id,
+                        superseded_by=canonical_id,
+                        family=family,
+                        scheme=scheme,
+                    )
+                )
+        if not family_candidates:
+            continue
+        plan.candidates.extend(family_candidates)
+        plan.already_superseded += family_already
+        plan.canonical[f"{project}\x00{family}"] = canonical_id
+        plan.summaries.append({
+            "project_id": project,
+            "family": family,
+            "members": len(members),
+            "candidates": len(family_candidates),
+            "canonical_doc_id": canonical_id,
+        })
+    return plan
+
+
+def _tally_family_supersession(
+    docs: Sequence[Mapping[str, Any]],
+    chunk_counts: Mapping[str, int],
+) -> dict[str, Any]:
+    """Rule (b2) dry-run counts: families, candidates, and their chunks.
+
+    Chunks are the live chunk rows held by fresh superseded candidates;
+    already-superseded rows are excluded because they belong to an earlier
+    decision, not this one.
+    """
+    plan = plan_family_supersession(docs)
+    chunks = 0
+    by_scheme: dict[str, int] = {"letter": 0, "number": 0, "transmittal": 0, "base": 0}
+    for action in plan.candidates:
+        chunks += int(chunk_counts.get(action.doc_id, 0) or 0)
+        by_scheme[action.scheme] = by_scheme.get(action.scheme, 0) + 1
+    return {
+        "families": len(plan.summaries),
+        "members_in_families": sum(s["members"] for s in plan.summaries),
+        "superseded_candidates": len(plan.candidates),
+        "already_superseded": plan.already_superseded,
+        "canonical_kept": len(plan.summaries),
+        "chunks": chunks,
+        "by_scheme": by_scheme,
+    }
+
+
 def _tally_p3_counts(
     docs: Sequence[Mapping[str, Any]],
     chunk_counts: Mapping[str, int],
@@ -600,7 +816,9 @@ def _tally_p3_counts(
 
     Three owner/curator rules (SPEC_CORPUS_DECISIONS_v1):
       (a) spreadsheet-extension rows are removed from the chunk store;
-      (b) superseded revisions per document-code family + exact duplicates;
+      (b) superseded revisions per document-code family (derived by stripping
+          the trailing revision token, not only the already-set flag) + exact
+          duplicates;
       (c) ghosts: rows with no local bytes, no Drive pointer and no chunks.
 
     ``chunk_counts`` is the live chunk-row count per doc id (the cached
@@ -688,6 +906,7 @@ def _tally_p3_counts(
             "content_sha256": _dup_stats(sha_groups),
             "drive_md5": _dup_stats(md5_groups),
         },
+        "family_supersession": _tally_family_supersession(docs, chunk_counts),
         "ghosts": {
             "total": ghosts,
             "by_status": ghost_by_status,

@@ -11,13 +11,17 @@ import pytest
 
 from app.core import ingest_status as ist
 from app.core.ingest_reconcile import (
+    CodeRevision,
+    _document_path,
     _tally_p3_counts,
     apply_ghost_tombstones,
     apply_tombstones,
     coverage_truth,
     is_ghost,
+    parse_document_code,
     p3_reconcile_dry_run,
     plan_as_dict,
+    plan_family_supersession,
     plan_ghost_tombstones,
     plan_reconcile,
     resume_source_changed,
@@ -345,9 +349,11 @@ def _p3_doc(
     retrieval_visible: bool = True,
     content_sha256: str | None = None,
     drive_md5: str | None = None,
+    project_id: str = "",
 ) -> dict:
     return {
         "id": doc_id,
+        "project_id": project_id,
         "original_name": name,
         "ingest_status": status,
         "chunk_count": chunks,
@@ -687,3 +693,220 @@ def test_p3_dry_run_endpoint_returns_counts(monkeypatch, tmp_path, name):
     assert isinstance(result, dict)
     assert result["project_id"] == "eproj"
     assert result["spreadsheets"]["documents"] == 1
+
+
+# ── R2 — document-code family + revision parsing ─────────────────────────
+
+
+def _family_rev(parsed):
+    family, rev = parsed
+    if rev is None:
+        return family, None
+    return family, (rev.scheme, rev.value)
+
+
+@pytest.mark.parametrize(
+    "name,path,expected",
+    [
+        # two code shapes × letter revisions
+        ("SPEC-001-A.pdf", "", ("SPEC-001", ("letter", "A"))),
+        ("DWG-101-B.pdf", "", ("DWG-101", ("letter", "B"))),
+        # numeric revisions
+        ("SPEC-001-01.pdf", "", ("SPEC-001", ("number", 1))),
+        ("DWG-101-05.pdf", "", ("DWG-101", ("number", 5))),
+        # explicit R/Rev/V markers
+        ("ABC-R1.pdf", "", ("ABC", ("number", 1))),
+        ("ABC-Rev02.pdf", "", ("ABC", ("number", 2))),
+        ("ABC-v20.pdf", "", ("ABC", ("number", 20))),
+    ],
+)
+def test_parse_document_code_strips_revision_token(name, path, expected):
+    assert _family_rev(parse_document_code(name, path)) == expected
+
+
+@pytest.mark.parametrize(
+    "name,expected_family",
+    [
+        ("SPEC-001.pdf", "SPEC-001"),
+        ("DOC-05.pdf", "DOC-05"),
+    ],
+)
+def test_parse_document_code_keeps_bare_code_number(name, expected_family):
+    # A trailing number with no numeric code component before it is the code,
+    # not a revision, so both inputs stay whole.
+    family, rev = parse_document_code(name)
+    assert family == expected_family
+    assert rev is None
+
+
+@pytest.mark.parametrize(
+    "name,path,expected",
+    [
+        ("SPEC-001.pdf", "Folder/Transmittal 002/SPEC-001.pdf", 2),
+        ("SPEC-001.pdf", "Folder/TR-05/SPEC-001.pdf", 5),
+    ],
+)
+def test_parse_document_code_transmittal_folder_marker(name, path, expected):
+    family, rev = parse_document_code(name, path)
+    assert family == "SPEC-001"
+    assert rev is not None
+    assert rev.scheme == "transmittal"
+    assert rev.value == expected
+
+
+@pytest.mark.parametrize(
+    "scheme,value,expected",
+    [
+        ("base", 0, (0, 0)),
+        ("transmittal", 2, (1, 2)),
+        ("number", 5, (2, 5)),
+        ("letter", "A", (3, "A")),
+    ],
+)
+def test_code_revision_rank_order(scheme, value, expected):
+    assert CodeRevision(scheme, value).rank == expected
+
+
+@pytest.mark.parametrize(
+    "doc,expected",
+    [
+        ({"metadata": {"drive_path": "/a/b.pdf"}}, "/a/b.pdf"),
+        ({"metadata": {"local_drive_path": "/c/d.pdf"}}, "/c/d.pdf"),
+        ({"metadata": {}, "file_path": "/e/f.pdf"}, "/e/f.pdf"),
+    ],
+)
+def test_document_path_prefers_metadata_then_file_path(doc, expected):
+    assert _document_path(doc) == expected
+
+
+@pytest.mark.parametrize(
+    "meta",
+    ["opaque", ["a", "b"]],
+)
+def test_document_path_ignores_non_mapping_metadata(meta):
+    doc = {"metadata": meta, "file_path": "/tmp/x.pdf"}
+    assert _document_path(doc) == "/tmp/x.pdf"
+
+
+@pytest.mark.parametrize("name", ["", "---"])
+def test_parse_document_code_empty_name_yields_no_family(name):
+    family, rev = parse_document_code(name)
+    assert family == ""
+    assert rev is None
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_plan_family_supersession_counts_unparseable(name):
+    docs = [_family_doc("d0", name), _family_doc("d1", name)]
+    plan = plan_family_supersession(docs)
+    assert plan.skipped_unparseable == 2
+    assert plan.candidates == []
+
+
+def _family_doc(doc_id, name, *, project_id="p", superseded_by=None):
+    return {
+        "id": doc_id,
+        "project_id": project_id,
+        "original_name": name,
+        "superseded_by": superseded_by,
+    }
+
+
+@pytest.mark.parametrize(
+    "names,family,canonical_id,candidate_ids",
+    [
+        (
+            ["SPEC-001-A.pdf", "SPEC-001-B.pdf", "SPEC-001-C.pdf"],
+            "SPEC-001", "d2", ["d0", "d1"],
+        ),
+        (
+            ["DWG-101-01.pdf", "DWG-101-05.pdf"],
+            "DWG-101", "d1", ["d0"],
+        ),
+    ],
+)
+def test_plan_family_supersession_keeps_highest_revision(
+    names, family, canonical_id, candidate_ids
+):
+    docs = [_family_doc(f"d{i}", n) for i, n in enumerate(names)]
+    plan = plan_family_supersession(docs)
+    assert len(plan.summaries) == 1
+    assert plan.summaries[0]["family"] == family
+    assert plan.summaries[0]["canonical_doc_id"] == canonical_id
+    assert [a.doc_id for a in plan.candidates] == candidate_ids
+    assert {a.superseded_by for a in plan.candidates} == {canonical_id}
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["SPEC-001.pdf", "SPEC-001.pdf"],
+        ["BOQ-Final.pdf", "BOQ-Final.pdf"],
+    ],
+)
+def test_plan_family_supersession_leaves_all_base_duplicates(names):
+    docs = [_family_doc(f"d{i}", n) for i, n in enumerate(names)]
+    plan = plan_family_supersession(docs)
+    assert plan.summaries == []
+    assert plan.candidates == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["SPEC-001-A.pdf", "SPEC-001-B.pdf"],
+)
+def test_plan_family_supersession_isolates_projects(name):
+    # Same code family in two projects is never one family.
+    docs = [
+        _family_doc("a1", name, project_id="p1"),
+        _family_doc("a2", name, project_id="p2"),
+    ]
+    plan = plan_family_supersession(docs)
+    assert plan.summaries == []
+    assert plan.candidates == []
+
+
+@pytest.mark.parametrize(
+    "superseded_name,candidate_id",
+    [
+        ("SPEC-001-B.pdf", "d0"),  # middle member already superseded
+        ("SPEC-001-A.pdf", "d1"),  # lowest member already superseded
+    ],
+)
+def test_plan_family_supersession_skips_already_superseded_member(
+    superseded_name, candidate_id
+):
+    docs = [
+        _family_doc("d0", "SPEC-001-A.pdf"),
+        _family_doc("d1", "SPEC-001-B.pdf"),
+        _family_doc("d2", "SPEC-001-C.pdf"),
+    ]
+    for d in docs:
+        if d["original_name"] == superseded_name:
+            d["superseded_by"] = "d2"
+    plan = plan_family_supersession(docs)
+    assert [a.doc_id for a in plan.candidates] == [candidate_id]
+    assert plan.already_superseded == 1
+
+
+@pytest.mark.parametrize(
+    "chunk_counts,expected_chunks",
+    [
+        ({"d0": 3, "d1": 5}, 8),
+        ({"d0": 0, "d1": 7}, 7),
+    ],
+)
+def test_p3_tally_family_supersession_counts_and_chunks(
+    chunk_counts, expected_chunks
+):
+    docs = [
+        _p3_doc("d0", name="SPEC-001-A.pdf", project_id="p"),
+        _p3_doc("d1", name="SPEC-001-B.pdf", project_id="p"),
+        _p3_doc("d2", name="SPEC-001-C.pdf", project_id="p"),
+    ]
+    fam = _tally_p3_counts(docs, chunk_counts)["family_supersession"]
+    assert fam["families"] == 1
+    assert fam["superseded_candidates"] == 2
+    assert fam["canonical_kept"] == 1
+    assert fam["chunks"] == expected_chunks
+    assert fam["by_scheme"]["letter"] == 2
