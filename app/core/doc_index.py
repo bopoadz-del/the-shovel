@@ -495,9 +495,36 @@ def _pdf_tables_markdown(plumber_page) -> str:
     for tbl in tables:
         for row in tbl or []:
             cells = [str(c).strip() if c is not None else "" for c in row]
-            if any(cells):
-                rows.append(" | ".join(cells))
+            for unfolded in _unfold_table_row(cells):
+                if any(unfolded):
+                    rows.append(" | ".join(unfolded))
     return "\n".join(rows)
+
+
+def _unfold_table_row(cells: list[str]) -> list[list[str]]:
+    """Split one folded pdfplumber row back into the rows it holds.
+
+    A table ruled only at its top, under its header and at its bottom (the
+    usual "open" layout) has no horizontal edge between body rows, so
+    ``extract_tables`` returns the whole body as ONE row whose cells hold
+    every row's value joined by newlines. Joined as-is, the body collapses
+    into the header plus a single garbled row and the values pair with the
+    wrong labels. When every non-empty cell (at least two) carries the same
+    number k > 1 of lines, the cells are line-aligned columns: emit k rows,
+    line i of each cell in row i. Any other shape (one wrapped cell, or cells
+    with differing line counts) is a genuine multi-line cell and is returned
+    as one row, unchanged."""
+    split = [c.split("\n") if c else [] for c in cells]
+    counts = {len(lines) for lines in split if lines}
+    filled = sum(1 for lines in split if lines)
+    if filled >= 2 and len(counts) == 1:
+        k = next(iter(counts))
+        if k > 1:
+            return [
+                [lines[i].strip() if lines else "" for lines in split]
+                for i in range(k)
+            ]
+    return [cells]
 
 
 _OOM_MARKERS = (
