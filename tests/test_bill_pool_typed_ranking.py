@@ -40,7 +40,7 @@ def _unpriced(doc_id, desc, score=1.0):
     return _c(doc_id, f"{desc} forecast 2026 delivery by phase, see note 4.", score)
 
 
-# ── density ranking ──────────────────────────────────────────────────────
+# -- density ranking ------------------------------------------------------
 
 def _dense_and_sparse(dense, sparse):
     """``dense``: 3 of 3 chunks priced; ``sparse``: 1 of 4 priced."""
@@ -58,35 +58,44 @@ def test_denser_priced_document_ranks_first_whatever_its_name(dense, sparse):
     assert ranked == [dense, sparse]
 
 
-def test_unpriced_untyped_document_is_not_a_bill():
-    pool = [_unpriced("notes", "Membrane"), _priced("bill", "Membrane", 5, 2.0)]
-    assert rank_bill_documents(pool, row_count=priced_row_count) == ["bill"]
+@pytest.mark.parametrize("notes,bill", [("notes", "bill"), ("doc-x", "doc-y")])
+def test_unpriced_untyped_document_is_not_a_bill(notes, bill):
+    pool = [_unpriced(notes, "Membrane"), _priced(bill, "Membrane", 5, 2.0)]
+    assert rank_bill_documents(pool, row_count=priced_row_count) == [bill]
 
 
-# ── typed-bill preference ────────────────────────────────────────────────
+# -- typed-bill preference ------------------------------------------------
 
-def test_typed_bill_ranks_before_a_denser_untyped_priced_document():
+def _typed_vs_denser_sheet():
     # "typed" prints 1 priced row in 2 chunks (density 0.5); "sheet" 3 in 3.
-    pool = [
+    return [
         _priced("sheet", "Membrane", 10, 4.0), _priced("sheet", "Kerb", 3, 2.0),
         _priced("sheet", "Sub-base", 7, 3.0),
         _unpriced("typed", "Membrane"), _priced("typed", "Membrane", 120, 6.5),
     ]
-    with_type = rank_bill_documents(pool, row_count=priced_row_count, typed_bills={"typed"})
-    without = rank_bill_documents(pool, row_count=priced_row_count, typed_bills=())
-    assert with_type == ["typed", "sheet"]
-    assert without == ["sheet", "typed"]
 
 
-def test_typed_bill_without_priced_rows_is_kept_but_ranks_after_priced_documents():
+@pytest.mark.parametrize("typed,expected", [
+    ({"typed"}, ["typed", "sheet"]),   # project with a typed bill
+    ((), ["sheet", "typed"]),          # project without one: density decides
+])
+def test_typed_bill_ranks_before_a_denser_untyped_priced_document(typed, expected):
+    ranked = rank_bill_documents(
+        _typed_vs_denser_sheet(), row_count=priced_row_count, typed_bills=typed,
+    )
+    assert ranked == expected
+
+
+@pytest.mark.parametrize("typed,expected", [
+    ({"typed"}, ["sheet", "typed"]),   # kept, after the priced document
+    ((), ["sheet"]),                   # untyped and unpriced: not a bill
+])
+def test_typed_bill_without_priced_rows_ranks_after_priced_documents(typed, expected):
     pool = [_unpriced("typed", "Preamble"), _priced("sheet", "Membrane", 10, 4.0)]
-    assert rank_bill_documents(pool, row_count=priced_row_count, typed_bills={"typed"}) == [
-        "sheet", "typed",
-    ]
-    assert rank_bill_documents(pool, row_count=priced_row_count, typed_bills=()) == ["sheet"]
+    assert rank_bill_documents(pool, row_count=priced_row_count, typed_bills=typed) == expected
 
 
-# ── the action: a typed bill crowded out of the global pool ──────────────
+# -- the action: a typed bill crowded out of the global pool --------------
 
 def _fake_bm25(corpus, calls):
     """Fake ``store.bm25_search``: word overlap, by score, optional doc filter."""
@@ -110,81 +119,88 @@ def _crowded_corpus():
     return forecast + bill
 
 
-def test_typed_bill_crowded_out_of_the_pool_is_ranked_in_and_handed_first():
-    corpus = _crowded_corpus()
+_BILL_FIGURE = "21060.00"      # 3120 x 6.75, the typed bill's row
+_FORECAST_FIGURE = "6.00"      # 4 x 1.50, the spreadsheet's one priced line
+
+
+@pytest.mark.parametrize("typed,bill_handed,calls_expected", [
+    (frozenset({"typed-bill"}), True, [None, ("typed-bill",)]),  # typed bill
+    (frozenset(), False, [None]),                                # no typed bill
+])
+def test_typed_bill_crowded_out_of_the_pool_is_ranked_in_and_handed_first(
+    typed, bill_handed, calls_expected,
+):
     calls: list = []
     handed = _bill_rows_retrieve(
-        _fake_bm25(corpus, calls), "p", 7, priced_row_count, "geotextile membrane",
-        typed_bills=lambda _pid: frozenset({"typed-bill"}),
+        _fake_bm25(_crowded_corpus(), calls), "p", 7, priced_row_count,
+        "geotextile membrane", typed_bills=lambda _pid: typed,
     )
-    assert "21060.00" in handed
-    assert handed.index("21060.00") < handed.index("6.00")
-    assert calls == [None, ("typed-bill",)]
+    assert (_BILL_FIGURE in handed) is bill_handed
+    assert _FORECAST_FIGURE in handed
+    if bill_handed:
+        assert handed.index(_BILL_FIGURE) < handed.index(_FORECAST_FIGURE)
+    assert calls == calls_expected
 
 
-def test_project_without_a_typed_bill_keeps_the_plain_pool():
+@pytest.mark.parametrize("missing", ["no-such-doc", "another-absent-doc"])
+def test_a_doc_filter_that_matches_nothing_leaves_the_pool_unchanged(missing):
     corpus = _crowded_corpus()
-    calls: list = []
-    handed = _bill_rows_retrieve(
-        _fake_bm25(corpus, calls), "p", 7, priced_row_count, "geotextile membrane",
-        typed_bills=lambda _pid: frozenset(),
-    )
-    assert "21060.00" not in handed  # k=7: the bill is outside the plain pool
-    assert "6.00" in handed
-    assert calls == [None]
-
-
-def test_a_doc_filter_that_matches_nothing_leaves_the_pool_unchanged():
-    corpus = _crowded_corpus()
-    plain_calls: list = []
     plain = _bill_rows_retrieve(
-        _fake_bm25(corpus, plain_calls), "p", 7, priced_row_count, "geotextile membrane",
+        _fake_bm25(corpus, []), "p", 7, priced_row_count, "geotextile membrane",
     )
     calls: list = []
     filtered = _bill_rows_retrieve(
         _fake_bm25(corpus, calls), "p", 7, priced_row_count, "geotextile membrane",
-        typed_bills=lambda _pid: frozenset({"no-such-doc"}),
+        typed_bills=lambda _pid: frozenset({missing}),
     )
     assert filtered == plain
-    assert calls == [None, ("no-such-doc",)]
+    assert calls == [None, (missing,)]
 
 
-def test_typed_lookup_runs_once_per_action_and_a_failure_falls_back():
-    corpus = _crowded_corpus()
-    seen: list = []
-
+def _ok_lookup(seen):
     def _lookup(pid):
         seen.append(pid)
         return ["typed-bill"]
+    return _lookup
 
+
+def _broken_lookup(seen):
+    def _lookup(pid):
+        seen.append(pid)
+        raise RuntimeError("documents table unavailable")
+    return _lookup
+
+
+@pytest.mark.parametrize("make_lookup,bill_handed", [
+    (_ok_lookup, True),        # lookup works: typed bill ranked in
+    (_broken_lookup, False),   # lookup fails: plain pool, no exception
+])
+def test_typed_lookup_runs_once_per_action_and_a_failure_falls_back(make_lookup, bill_handed):
+    seen: list = []
     action = bill_rows_action(
-        _fake_bm25(corpus, []), "p", row_count=priced_row_count, k=7, typed_bills=_lookup,
+        _fake_bm25(_crowded_corpus(), []), "p", row_count=priced_row_count, k=7,
+        typed_bills=make_lookup(seen),
     )
-    assert "21060.00" in action("geotextile membrane")
-    assert "21060.00" in action("membrane geotextile")
+    first = action("geotextile membrane")
+    second = action("membrane geotextile")
+    assert (_BILL_FIGURE in first) is bill_handed
+    assert (_BILL_FIGURE in second) is bill_handed
+    assert _FORECAST_FIGURE in first
     assert seen == ["p"]
 
-    def _broken(_pid):
-        raise RuntimeError("documents table unavailable")
 
-    broken = bill_rows_action(
-        _fake_bm25(corpus, []), "p", row_count=priced_row_count, k=7, typed_bills=_broken,
-    )
-    assert "21060.00" not in broken("geotextile membrane")
-    assert "6.00" in broken("geotextile membrane")
+# -- cap_chunks keeps a caller's ranking when told to ---------------------
 
-
-# ── cap_chunks keeps a caller's ranking when told to ─────────────────────
-
-def test_presorted_keeps_the_given_order_and_default_sorts_by_score():
+@pytest.mark.parametrize("presorted,expected", [(True, ["a", "b"]), (False, ["b", "a"])])
+def test_presorted_keeps_the_given_order_and_default_sorts_by_score(presorted, expected):
     low, high = _c("a", "alpha", score=0.1), _c("b", "beta", score=0.9)
-    kept, _ = cap_chunks([low, high], total_tokens=1000, per_doc_tokens=1000, presorted=True)
-    assert [c.doc_id for c in kept] == ["a", "b"]
-    kept, _ = cap_chunks([low, high], total_tokens=1000, per_doc_tokens=1000)
-    assert [c.doc_id for c in kept] == ["b", "a"]
+    kept, _ = cap_chunks(
+        [low, high], total_tokens=1000, per_doc_tokens=1000, presorted=presorted,
+    )
+    assert [c.doc_id for c in kept] == expected
 
 
-# ── bm25_search doc_ids on the SQLite backend (real FTS5) ────────────────
+# -- bm25_search doc_ids on the SQLite backend (real FTS5) ----------------
 
 @pytest.fixture
 def sqlite_store(monkeypatch):
@@ -208,14 +224,14 @@ def sqlite_store(monkeypatch):
     reset_embedder_cache()
 
 
-def test_sqlite_doc_ids_filter_restricts_and_none_does_not(sqlite_store):
-    everything = {c.doc_id for c in sqlite_store.bm25_search("proj", "geotextile membrane", k=10)}
-    scoped = {
-        c.doc_id
-        for c in sqlite_store.bm25_search("proj", "geotextile membrane", k=10, doc_ids=["bill"])
-    }
-    assert everything == {"bill", "spec", "draw"}
-    assert scoped == {"bill"}
+@pytest.mark.parametrize("doc_ids,expected", [
+    (None, {"bill", "spec", "draw"}),       # no filter
+    (["bill"], {"bill"}),                   # filter that matches one document
+    (["spec", "draw"], {"spec", "draw"}),   # filter that matches two
+])
+def test_sqlite_doc_ids_filter_restricts_and_none_does_not(sqlite_store, doc_ids, expected):
+    got = sqlite_store.bm25_search("proj", "geotextile membrane", k=10, doc_ids=doc_ids)
+    assert {c.doc_id for c in got} == expected
 
 
 @pytest.mark.parametrize("doc_ids", [[], ["no-such-doc"]])
@@ -223,14 +239,18 @@ def test_sqlite_doc_ids_filter_that_matches_nothing_returns_empty(sqlite_store, 
     assert sqlite_store.bm25_search("proj", "geotextile membrane", k=10, doc_ids=doc_ids) == []
 
 
-# ── bm25 doc scope on the PostgreSQL statement path (no database) ────────
+# -- bm25 doc scope on the PostgreSQL statement path (no database) --------
 
-def test_doc_scope_binds_ids_and_empty_scope_matches_nothing():
-    assert vs._doc_scope(None) == ("", {})
-    assert vs._doc_scope([]) == (None, {})
-    sql, params = vs._doc_scope(["d2", "d1", "d2"])
-    assert sql == " AND c.doc_id IN (:bm25_doc_0, :bm25_doc_1)"
-    assert params == {"bm25_doc_0": "d1", "bm25_doc_1": "d2"}
+@pytest.mark.parametrize("doc_ids,expected", [
+    (None, ("", {})),
+    ([], (None, {})),
+    (
+        ["d2", "d1", "d2"],
+        (" AND c.doc_id IN (:bm25_doc_0, :bm25_doc_1)", {"bm25_doc_0": "d1", "bm25_doc_1": "d2"}),
+    ),
+])
+def test_doc_scope_binds_ids_and_empty_scope_matches_nothing(doc_ids, expected):
+    assert vs._doc_scope(doc_ids) == expected
 
 
 class _PgSession:
@@ -245,29 +265,29 @@ class _PgSession:
         return SimpleNamespace(all=lambda: [SimpleNamespace(chunk_id=params.get("bm25_doc_0"))])
 
 
-def test_postgres_scope_reaches_the_statement_and_the_turn_memo_key():
+@pytest.mark.parametrize("first,second", [("bill-a", "bill-b"), ("doc-x", "doc-y")])
+def test_postgres_scope_reaches_the_statement_and_the_turn_memo_key(first, second):
     store = object.__new__(vs.VectorStore)
     store._table_name = "chunks_test"
     session = _PgSession()
+    scope = " AND c.doc_id IN (:bm25_doc_0)"
     token = vs.start_turn_memo()
     try:
-        a = store._bm25_postgres_rows(
-            session, "p", "geotextile", 5, " AND c.doc_id IN (:bm25_doc_0)",
-            {"bm25_doc_0": "bill-a"},
-        )
-        b = store._bm25_postgres_rows(
-            session, "p", "geotextile", 5, " AND c.doc_id IN (:bm25_doc_0)",
-            {"bm25_doc_0": "bill-b"},
+        a = store._bm25_postgres_rows(session, "p", "geotextile", 5, scope, {"bm25_doc_0": first})
+        b = store._bm25_postgres_rows(session, "p", "geotextile", 5, scope, {"bm25_doc_0": second})
+        again = store._bm25_postgres_rows(
+            session, "p", "geotextile", 5, scope, {"bm25_doc_0": first},
         )
     finally:
         vs.end_turn_memo(token)
-    assert [r.chunk_id for r in a] == ["bill-a"]
-    assert [r.chunk_id for r in b] == ["bill-b"]
-    assert len(session.full_params) == 2
-    assert all("c.doc_id IN (:bm25_doc_0)" in sql for sql, _ in session.full_params)
+    assert [r.chunk_id for r in a] == [first]
+    assert [r.chunk_id for r in b] == [second]
+    assert [r.chunk_id for r in again] == [first]
+    assert len(session.full_params) == 2  # the repeat is a memo hit
+    assert all(scope in sql for sql, _ in session.full_params)
 
 
-# ── the runtime's typed-bill lookup reads documents.doc_type ─────────────
+# -- the runtime's typed-bill lookup reads documents.doc_type -------------
 
 @pytest.mark.parametrize("docs,expected", [
     (
