@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.runtime import _answer_tier
+from app.core.rag import named_standard_attribution
 from app.core.rag.inject import format_chunks_as_system_message
 from app.core.rag.named_standard_attribution import (
     _GENERAL_LIBRARY_ABSENT_PHRASE,
@@ -102,7 +103,30 @@ def test_standard_absent_everywhere_directs_consultation_and_refusal(
     assert _GENERAL_LIBRARY_ABSENT_PHRASE in content, content
 
 
-def test_absence_note_is_empty_without_a_named_standard():
+@pytest.mark.parametrize(
+    "ask",
+    [
+        "How long must the fire watch be maintained?",
+        "What is the maximum temperature of fresh concrete?",
+    ],
+)
+def test_absence_note_is_empty_without_a_named_standard(ask):
     """A plain project ask never inherits the named-standard steering."""
     chunks = [_chunk("proj", "proj1", "A project figure.", source_name="x.txt")]
-    assert absence_note("How long must the fire watch be maintained?", chunks) == ""
+    assert absence_note(ask, chunks) == ""
+
+
+def test_absence_note_respects_the_gate(monkeypatch):
+    """With the gate off, even a named-standard ask gets no steering."""
+    monkeypatch.setattr(named_standard_attribution, "gate_enabled", lambda: False)
+    ask = "Per NFPA 51B, how long must a fire watch be maintained after hot work?"
+    chunks = [
+        _chunk(
+            "proj",
+            "proj1",
+            "Project hot-work permit. A fire watch shall be maintained "
+            "for 30 minutes after hot work is complete.",
+            source_name="project-hot-work-permit.txt",
+        )
+    ]
+    assert absence_note(ask, chunks) == ""
