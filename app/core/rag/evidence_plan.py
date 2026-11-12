@@ -57,12 +57,21 @@ def parse_evidence_plan(text: str) -> EvidencePlan:
     plain line may itself be a comma-separated list of needs, which is split
     so a plan item maps to one thing to check. Markers and empty lines are
     dropped.
+
+    When the plan is a list (any line carries a bullet or number marker),
+    only the list entries are items: a plain line around the list is prose
+    (a preamble or a closing remark), not a thing to look up. A line ending
+    in ":" introduces what follows and is never an item.
     """
-    lines = []
+    entries: list[tuple[bool, str]] = []
     for raw in (text or "").splitlines():
         item = _strip_marker(raw)
-        if item:
-            lines.append(item)
+        if not item or item.endswith(":"):
+            continue
+        entries.append((item != raw.strip(), item))
+    if any(marked for marked, _ in entries):
+        entries = [(marked, item) for marked, item in entries if marked]
+    lines = [item for _, item in entries]
     # A single line whose needs are comma-separated is one item per comma.
     if len(lines) == 1 and "," in lines[0]:
         lines = [part.strip() for part in lines[0].split(",") if part.strip()]
