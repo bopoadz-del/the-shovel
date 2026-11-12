@@ -189,3 +189,41 @@ def test_bill_rows_logs_the_handed_documents(caplog, item):
              if "rag_evidence_action_trace action=bill_rows" in r.getMessage()]
     assert lines and "bill-pdf" in lines[0]
     assert "spec-vol" not in lines[0]
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("", 200), ("abc", 200), ("0", 200), ("-5", 200), ("75", 75), ("400", 400),
+])
+def test_bill_pool_depth_reads_env_with_a_safe_default(monkeypatch, raw, want):
+    from app.core.rag.evidence_actions import bill_pool_k
+    monkeypatch.setenv("AGENTIC_BILL_POOL_K", raw)
+    assert bill_pool_k() == want
+
+
+@pytest.mark.parametrize("depth", [3, 7])
+def test_bill_rows_pool_depth_is_what_the_lexical_call_gets(monkeypatch, depth):
+    seen = []
+
+    def _search(project_id, query, k=50):
+        seen.append(k)
+        return []
+
+    monkeypatch.setenv("AGENTIC_BILL_POOL_K", str(depth))
+    assert bill_rows_action(_search, "p", row_count=priced_row_count)("kerb") == ""
+    assert seen == [depth]
+
+
+@pytest.mark.parametrize("docs,want", [
+    (["a", "a", "b", "", "a"], ["a", "b"]),
+    (["x", "", "x"], ["x"]),
+])
+def test_handed_docs_are_distinct_in_order(docs, want):
+    from app.core.rag.evidence_actions import _handed_docs
+    assert _handed_docs([_c(d, "t", 1.0) for d in docs]) == want
+
+
+@pytest.mark.parametrize("doc_id", ["", None])
+def test_a_chunk_without_a_document_never_marks_a_bill(doc_id):
+    priced = _pdf_bill(_ROWS)[0].text
+    chunks = [SimpleNamespace(doc_id=doc_id, text=priced, score=1.0)]
+    assert bill_document_ids(chunks, row_count=priced_row_count) == set()

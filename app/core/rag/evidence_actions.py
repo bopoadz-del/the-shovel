@@ -156,8 +156,6 @@ def _bill_rows_retrieve(
     bills = bill_document_ids(pool, row_count=row_count)
     scoped = [c for c in pool if (getattr(c, "doc_id", "") or "") in bills]
     _trace("bill_rows", item, scoped)
-    if not scoped:
-        return ""
     return _budgeted_text(scoped)
 
 

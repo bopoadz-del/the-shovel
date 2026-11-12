@@ -7743,8 +7743,6 @@ def priced_row_count(text: str) -> int:
     column orders over the same row count once.
     """
     blob = _normalize_retrieval_ws((text or "").replace("|", " "))
-    if not blob:
-        return 0
     spans: List[tuple] = []
     for cand in _priced_boq_triples(blob):
         if _consistent_priced_triple(cand) is None:
