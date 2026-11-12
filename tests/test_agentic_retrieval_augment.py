@@ -63,6 +63,76 @@ async def test_augment_skips_when_priced_row_already_in_first_pass(monkeypatch, 
 
 
 @pytest.mark.parametrize("ask", [
+    "what is the part summary total for page x/1/1 of the roads bill",
+    "what does page y/2/4 of the drainage bill total",
+])
+async def test_augment_skips_when_part_summary_total_already_in_first_pass(
+    monkeypatch, ask,
+):
+    from app.core.rag import retriever
+
+    monkeypatch.setattr(retriever, "compose_priced_boq_row", lambda q, e: None)
+    monkeypatch.setattr(retriever, "query_asks_for_part_summary_total", lambda q: True)
+    monkeypatch.setattr(
+        retriever, "compose_part_summary_total",
+        lambda q, e: {"page": "p", "total": "1,234.00"},
+    )
+    rag = {"content": "PART SUMMARY page total 1,234.00"}
+    agent = _FakeAgent()
+    result = await _agentic_figure_retrieval_augment(
+        agent, ask, "p", "k", "u", rag,
+    )
+    assert result == rag
+    assert agent.calls == 0
+
+
+@pytest.mark.parametrize("ask", [
+    "what is the combined total of pages x/1/1 and x/1/2",
+    "what do pages y/2/1 and y/2/2 total together",
+])
+async def test_augment_skips_when_combined_part_summary_already_in_first_pass(
+    monkeypatch, ask,
+):
+    from app.core.rag import retriever
+
+    monkeypatch.setattr(retriever, "compose_priced_boq_row", lambda q, e: None)
+    monkeypatch.setattr(retriever, "query_asks_for_part_summary_total", lambda q: False)
+    monkeypatch.setattr(retriever, "query_asks_combined_part_summary", lambda q: True)
+    monkeypatch.setattr(
+        retriever, "compose_combined_part_summary_total",
+        lambda q, e: {"pages": ["a", "b"], "total": "2,000.00"},
+    )
+    rag = {"content": "PART SUMMARY 1,000.00 ... PART SUMMARY 1,000.00"}
+    agent = _FakeAgent()
+    result = await _agentic_figure_retrieval_augment(
+        agent, ask, "p", "k", "u", rag,
+    )
+    assert result == rag
+    assert agent.calls == 0
+
+
+@pytest.mark.parametrize("asks_page,asks_combined", [(True, False), (False, True)])
+def test_composer_is_consulted_only_for_its_ask_shape(
+    monkeypatch, asks_page, asks_combined,
+):
+    # The ask shape gates each composer: an ask of neither shape does not
+    # skip the loop even if a composer would parse something.
+    from app.core.rag import retriever
+
+    monkeypatch.setattr(retriever, "compose_priced_boq_row", lambda q, e: None)
+    monkeypatch.setattr(retriever, "query_asks_for_part_summary_total", lambda q: asks_page)
+    monkeypatch.setattr(retriever, "query_asks_combined_part_summary", lambda q: asks_combined)
+    monkeypatch.setattr(retriever, "compose_part_summary_total", lambda q, e: {"t": "1"})
+    monkeypatch.setattr(
+        retriever, "compose_combined_part_summary_total", lambda q, e: {"t": "2"},
+    )
+    assert runtime._first_pass_composes_figure("what is the total", "x") is True
+    monkeypatch.setattr(retriever, "query_asks_for_part_summary_total", lambda q: False)
+    monkeypatch.setattr(retriever, "query_asks_combined_part_summary", lambda q: False)
+    assert runtime._first_pass_composes_figure("what is the total", "x") is False
+
+
+@pytest.mark.parametrize("ask", [
     "what is the standard rate for blockwork walls",
     "how much productivity should I allow for wall plaster",
 ])

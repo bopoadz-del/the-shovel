@@ -922,6 +922,32 @@ async def _agentic_figure_retrieval_plan_caller(
     )
 
 
+def _first_pass_composes_figure(user_message: str, evidence: str) -> bool:
+    """True when a deterministic (no-LLM) excerpt composer already answers the
+    ask from ``evidence``: a priced bill row, a page Part Summary total, or a
+    combined Part Summary total. Each composer is consulted only for the ask
+    shape it serves, exactly as the short-circuit paths consult it.
+    """
+    from app.core.rag.retriever import (
+        compose_combined_part_summary_total,
+        compose_part_summary_total,
+        compose_priced_boq_row,
+        query_asks_combined_part_summary,
+        query_asks_for_part_summary_total,
+    )
+
+    if compose_priced_boq_row(user_message, evidence):
+        return True
+    if query_asks_for_part_summary_total(user_message) and compose_part_summary_total(
+        user_message, evidence,
+    ):
+        return True
+    return bool(
+        query_asks_combined_part_summary(user_message)
+        and compose_combined_part_summary_total(user_message, evidence)
+    )
+
+
 async def _agentic_figure_retrieval_augment(
     agent: Any,
     user_message: str,
@@ -945,16 +971,15 @@ async def _agentic_figure_retrieval_augment(
     from app.core.offload import off_loop
     from app.core.rag import route as _rag_route
     from app.core.rag.retriever import (
-        compose_priced_boq_row,
         measured_quantity_kinds,
         retrieve_with_filter,
     )
     from app.core.rag.vector_store import get_store as _get_store
 
-    # A priced figure already parseable from the first pass is answered by the
-    # existing no-LLM compose path; retrieval augmentation must not spend an
+    # A figure already parseable from the first pass is answered by one of the
+    # existing no-LLM compose paths; retrieval augmentation must not spend an
     # LLM call on a turn the excerpts already cover.
-    if compose_priced_boq_row(user_message, rag_sys_msg.get("content", "")):
+    if _first_pass_composes_figure(user_message, rag_sys_msg.get("content", "")):
         return rag_sys_msg
 
     if not _rag_route.wants_agentic_figure_retrieval(

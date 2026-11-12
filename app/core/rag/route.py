@@ -41,6 +41,29 @@ _FIGURE_NOUN_RE = re.compile(
     r"thickness|density|level|levels)\b"
 )
 
+# A measured dimension, or a quantity / bill total, named as the thing asked
+# for: "what is the billed area of", "how much is the total of". General
+# measurement vocabulary only.
+_DIMENSION_OR_TOTAL_NOUN_RE = re.compile(
+    r"(?i)\b(?:area|areas|length|lengths|volume|volumes|weight|weights|mass|"
+    r"tonnage|height|width|depth|perimeter|total|totals|subtotal|amount|"
+    r"amounts|sum|number|count|cost|costs|price|prices)\b"
+)
+
+# An SI or trade measurement unit, only where it reads as a unit: after a
+# number ("250 m2", "12 no.") or after "in"/"per" ("in m3", "per lm"). A bare
+# letter elsewhere ("don't", "a t-beam") is not a unit.
+_UNIT_TOKEN_RE = re.compile(
+    r"(?i)(?:\d\s*|\b(?:in|per)\s+)"
+    r"(?:m|m2|m3|m²|m³|lm|kg|t|nr|no\.|sqm|cum)(?![\w.\-])"
+)
+
+# A procedural question ("how do I measure the area") asks for a method,
+# not a figure, even when it names a dimension.
+_PROCEDURAL_RE = re.compile(
+    r"(?i)^\s*how\s+(?:do|does|did|can|could|should|would|to)\b"
+)
+
 
 def wants_agentic_figure_retrieval(
     user_message: str,
@@ -52,6 +75,11 @@ def wants_agentic_figure_retrieval(
     value/rate/standard named by an interrogative) and the caller's own
     exclusions (self-contained calculation, export, deliverable) do not apply.
 
+    A value interrogative that names a measured dimension (area, length,
+    volume ...), a quantity or bill total (total, amount, count, cost ...) or
+    a measurement unit after a number ("250 m2", "in m3") is a figure ask
+    too. A procedural "how do I ..." ask stays out of that second clause.
+
     ``asks_measured_quantity`` is the runtime's measured-quantity detector
     (cover / compaction / illuminance); ``exclude`` is the runtime's set of
     "not a retrieval ask" checks. Both are injected so this stays pure.
@@ -61,7 +89,15 @@ def wants_agentic_figure_retrieval(
         return False
     if asks_measured_quantity(text):
         return True
-    return bool(_ASK_VALUE_RE.search(text) and _FIGURE_NOUN_RE.search(text))
+    if not _ASK_VALUE_RE.search(text):
+        return False
+    if _FIGURE_NOUN_RE.search(text):
+        return True
+    if _PROCEDURAL_RE.search(text):
+        return False
+    return bool(
+        _DIMENSION_OR_TOTAL_NOUN_RE.search(text) or _UNIT_TOKEN_RE.search(text)
+    )
 
 
 async def augment_figure_retrieval(
