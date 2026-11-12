@@ -29,6 +29,7 @@ import json
 
 import logging
 
+import ast
 import contextvars
 import re
 
@@ -2888,6 +2889,132 @@ def _named_but_blank(name: str, blank: Tuple[str, ...], params: Dict[str, Any],
             and _is_blank(params.get(key)) and key not in missing]
 
 
+def _eval_arithmetic_ast(node) -> float:
+    """Walk a vetted arithmetic AST; no ``eval``/``exec``."""
+    if isinstance(node, ast.Expression):
+        return _eval_arithmetic_ast(node.body)
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("non-numeric constant")
+        return float(value)
+    if isinstance(node, ast.UnaryOp):
+        value = _eval_arithmetic_ast(node.operand)
+        if isinstance(node.op, ast.UAdd):
+            return value
+        if isinstance(node.op, ast.USub):
+            return -value
+        raise ValueError("disallowed unary operator")
+    if isinstance(node, ast.BinOp):
+        left = _eval_arithmetic_ast(node.left)
+        right = _eval_arithmetic_ast(node.right)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        if isinstance(node.op, ast.FloorDiv):
+            return left // right
+        if isinstance(node.op, ast.Mod):
+            return left % right
+        if isinstance(node.op, ast.Pow):
+            return left ** right
+        raise ValueError("disallowed binary operator")
+    raise ValueError(f"disallowed node: {type(node).__name__}")
+
+
+_ARITH_ALLOWED_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Load,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod,
+    ast.USub, ast.UAdd, ast.FloorDiv,
+)
+
+
+def _safe_arithmetic_value(expr: str) -> float | None:
+    """Deterministic value of a pure-arithmetic expression, else None."""
+    expr = (expr or "").strip().replace(",", "")
+    if not expr:
+        return None
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        logger.debug("arithmetic expression did not parse: %r", expr)
+        return None
+    if any(not isinstance(node, _ARITH_ALLOWED_NODES) for node in ast.walk(tree)):
+        return None
+    try:
+        value = float(_eval_arithmetic_ast(tree))
+    except Exception:
+        logger.debug("arithmetic expression did not evaluate: %r", expr, exc_info=True)
+        return None
+    # Float dust ("(18.4-16)*2850" -> 6839.999999999996) is rounded to the
+    # short form the operator actually wrote.
+    return float(format(value, ".12g"))
+
+
+#: A plain arithmetic ask whose operands live in the ask itself ("890 × 310",
+#: "(18.4 - 16) * 2850") must be evaluated by this deterministic library,
+#: never by the model. The turn already passed a formula-style-ask gate (calc
+#: verb + self-supplied figures); here the calculator evaluates the expression
+#: so the answer cites the tool result instead of the model doing its own
+#: arithmetic.
+_ARITH_VERB_RE = re.compile(
+    r"\b(?:calculate|compute|work\s+out|how\s+many|how\s+much|multiply|times|product|evaluate)\b",
+    re.IGNORECASE,
+)
+
+_ARITH_OP_NORMALISE = (
+    ("×", "*"), ("·", "*"), ("∙", "*"), ("÷", "/"),
+    ("−", "-"), ("–", "-"), ("—", "-"),
+)
+
+
+def _normalise_arithmetic(text: str) -> str:
+    out = text or ""
+    for src, dst in _ARITH_OP_NORMALISE:
+        out = out.replace(src, dst)
+    # "x"/"X" between digits is multiplication ("890 x 310", "890x310"),
+    # never a letter or a document marker.
+    out = re.sub(r"(?<=\d)\s*[xX]\s*(?=\d)", "*", out)
+    return out
+
+
+# One operand (optionally signed, optionally parenthesised), then one or more
+# ``operator operand`` continuations. After normalisation the operators are
+# [+-*/]; the leading sign stays inside the operand so "a - b" is a
+# subtraction, not "a" then "-b" glued by the continuation.
+_ARITH_EXPRESSION_RE = re.compile(
+    r"(?<![0-9A-Za-z_.])"
+    r"\(?\s*[-+]?\d[\d,]*(?:\.\d+)?\s*\)?"
+    r"(?:\s*[-+*/]\s*\(?\s*[-+]?\d[\d,]*(?:\.\d+)?\s*\)?)+"
+)
+
+
+def self_contained_arithmetic(ask: str) -> tuple[str, float] | None:
+    """(expression, value) when the ask carries its own arithmetic operands.
+
+    A self-contained arithmetic ask ("calculate 890 × 310") is evaluated here
+    so the model never performs the multiplication. Returns None when the ask
+    has no calc verb or no two-figure arithmetic expression.
+    """
+    raw = (ask or "").strip()
+    if not raw or not _ARITH_VERB_RE.search(raw):
+        return None
+    norm = _normalise_arithmetic(raw)
+    for match in _ARITH_EXPRESSION_RE.finditer(norm):
+        expr = match.group(0).strip()
+        # A hyphenated date ("2023-11-12") is not arithmetic.
+        if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", expr):
+            continue
+        value = _safe_arithmetic_value(expr)
+        if value is not None:
+            return expr, value
+    return None
+
+
 def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run one whitelisted deterministic calculator by name with keyword params.
 
@@ -2989,6 +3116,52 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             name = recovered
             fn = CALCULATORS.get(name)
     if fn is None:
+        # A self-contained arithmetic ask carries its own operands ("890 × 310",
+        # "(18.4 - 16) * 2850"). Evaluate it here — arithmetic must never be
+        # done by the model — and hand back the value to cite as calculated.
+        ask = _with_current_ask(_ask_blob(params) if isinstance(params, dict) else "")
+        arithmetic = self_contained_arithmetic(ask)
+        if arithmetic is not None:
+            expr, value = arithmetic
+            return {
+                "status": "success",
+                "calculation": "arithmetic",
+                "expression": expr,
+                "result": value,
+                "note": (
+                    f"Deterministic arithmetic from the figures in the request: "
+                    f"{expr} = {value:g}. No document was consulted."
+                ),
+            }
+        # A total/cost ask that carries a quantity and a unit rate
+        # ("890 m at 310") is a self-contained multiplication: the calculator
+        # block multiplies them, the model never does the arithmetic.
+        try:
+            from app.lib.construction_formulas_commercial import (
+                quantity_times_rate_from_ask,
+            )
+            qty_rate = quantity_times_rate_from_ask(ask)
+        except Exception:  # noqa: BLE001 — never break an unknown-name calc
+            logger.warning(
+                "swallowed %s in quantity_times_rate_from_ask() — continuing",
+                "Exception", exc_info=True,
+            )
+            qty_rate = None
+        if qty_rate is not None:
+            quantity, unit_rate = qty_rate
+            total = quantity * unit_rate
+            return {
+                "status": "success",
+                "calculation": "arithmetic",
+                "quantity": quantity,
+                "unit_rate": unit_rate,
+                "result": {"total_cost": round(total, 2)},
+                "note": (
+                    f"Deterministic quantity × unit rate from the figures in "
+                    f"the request: {quantity:g} × {unit_rate:g} = {total:g}. "
+                    "No document was consulted."
+                ),
+            }
         return {
             "status": "error",
             "error": f"Unknown calculation '{name}'.",
