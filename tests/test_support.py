@@ -30,6 +30,19 @@ def test_support_address(monkeypatch, env_value, expected):
 
 
 @pytest.mark.parametrize(
+    "env_value, expected",
+    [
+        ("help@example.com", "help@example.com"),   # owner-set wins
+        ("", "support@theshovel.ai"),               # unset -> default
+    ],
+)
+async def test_support_info(monkeypatch, env_value, expected):
+    monkeypatch.setenv("SUPPORT_EMAIL", env_value)
+    out = await support.support_info()
+    assert out == {"support_email": expected}
+
+
+@pytest.mark.parametrize(
     "env_value, expected_domain",
     [
         ("support@theshovel.ai", "theshovel.ai"),

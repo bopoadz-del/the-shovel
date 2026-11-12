@@ -139,6 +139,21 @@
   color: var(--text-primary);
 }
 
+.left-panel__support-email {
+  display: block;
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: var(--text-muted, var(--text-secondary));
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.left-panel__support-email:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
 .left-panel__signout {
   display: flex;
   align-items: center;

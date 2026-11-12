@@ -7,6 +7,11 @@ WBS generation, and cost analysis.
 
 Deployed on AWS ECS.
 
+Support: [support@theshovel.ai](mailto:support@theshovel.ai). The in-app
+support form (footer → Support) emails the same address; it is read from the
+single `SUPPORT_EMAIL` config value (default `support@theshovel.ai`, see
+[.env.example](.env.example)).
+
 ---
 
 ## Where this sits
