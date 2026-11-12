@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
-from functools import partial
+from functools import lru_cache, partial
 from typing import Callable, Iterable, Mapping, Sequence
 
 from app.core.rag.evidence_budget import (
@@ -183,13 +183,21 @@ def rank_bill_documents(
     typed = {str(d) for d in (typed_bills or ()) if d}
     rows_by_doc, chunks_by_doc = _priced_rows_by_doc(chunks, row_count)
     kept = [d for d in chunks_by_doc if rows_by_doc[d] > 0 or d in typed]
-
-    def _key(doc_id: str):
-        rows = rows_by_doc[doc_id]
-        return (rows <= 0, doc_id not in typed, -(rows / chunks_by_doc[doc_id]))
-
     # ``sorted`` is stable: equal keys keep the pool's first-seen order.
-    return sorted(kept, key=_key)
+    return sorted(
+        kept,
+        key=lambda d: bill_rank_key(rows_by_doc[d], chunks_by_doc[d], d in typed),
+    )
+
+
+def bill_rank_key(priced_rows: int, candidate_chunks: int, typed: bool) -> tuple:
+    """Sort key of one candidate bill document (smaller sorts first).
+
+    Prints priced rows, then typed as a bill, then priced rows per candidate
+    chunk (highest first).
+    """
+    density = priced_rows / candidate_chunks if candidate_chunks > 0 else 0.0
+    return (priced_rows <= 0, not typed, -density)
 
 
 def _chunk_identity(chunk):
@@ -211,31 +219,22 @@ def _merge_pools(*pools) -> list:
     return out
 
 
-class _TypedBillCache:
-    """The project's typed bill ids, looked up once per action instance.
+def typed_bill_ids(
+    lookup: Callable[[str], Iterable[str]], project_id: str,
+) -> frozenset[str]:
+    """The project's typed bill ids from ``lookup``; empty when it fails.
 
-    The action runs once per uncovered plan item per round; the documents
-    table does not change inside one loop. A failed lookup means "no typed
-    bill known" (logged), so the action falls back to the lexical pool.
+    A failed lookup means "no typed bill known" (logged), so the action falls
+    back to the plain lexical pool instead of breaking the loop.
     """
-
-    def __init__(self, lookup: Callable[[str], Iterable[str]]):
-        self._lookup = lookup
-        self._ids: frozenset[str] | None = None
-
-    def __call__(self, project_id: str) -> frozenset[str]:
-        if self._ids is None:
-            try:
-                self._ids = frozenset(
-                    str(d) for d in (self._lookup(project_id) or ()) if d
-                )
-            except Exception:  # noqa: BLE001 -- a lookup failure must not break the loop
-                logger.warning(
-                    "bill_rows typed-bill lookup failed project=%s; "
-                    "ranking the lexical pool only", project_id, exc_info=True,
-                )
-                self._ids = frozenset()
-        return self._ids
+    try:
+        return frozenset(str(d) for d in (lookup(project_id) or ()) if d)
+    except Exception:  # noqa: BLE001 -- a lookup failure must not break the loop
+        logger.warning(
+            "bill_rows typed-bill lookup failed project=%s; "
+            "ranking the lexical pool only", project_id, exc_info=True,
+        )
+        return frozenset()
 
 
 def _bill_rows_retrieve(
@@ -283,7 +282,12 @@ def bill_rows_action(
     the pool is the plain lexical pool ranked by density only.
     """
     depth = bill_pool_k() if k is None else int(k)
-    cache = _TypedBillCache(typed_bills) if typed_bills is not None else None
+    # The action runs once per uncovered plan item per round and the
+    # documents table does not change inside one loop: look up once.
+    cache = (
+        lru_cache(maxsize=None)(partial(typed_bill_ids, typed_bills))
+        if typed_bills is not None else None
+    )
     return partial(
         _bill_rows_retrieve, bm25_fn, project_id, depth, row_count, typed_bills=cache,
     )

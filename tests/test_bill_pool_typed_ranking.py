@@ -16,10 +16,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.rag import vector_store as vs
+from app.core.projects import DOC_TYPE_BILL, classify_doc_type
 from app.core.rag.evidence_actions import (
     _bill_rows_retrieve,
+    _merge_pools,
+    bill_rank_key,
     bill_rows_action,
     rank_bill_documents,
+    typed_bill_ids,
 )
 from app.core.rag.evidence_budget import cap_chunks
 from app.core.rag.retriever import priced_row_count
@@ -64,7 +68,52 @@ def test_unpriced_untyped_document_is_not_a_bill(notes, bill):
     assert rank_bill_documents(pool, row_count=priced_row_count) == [bill]
 
 
+@pytest.mark.parametrize("better,worse", [
+    ((3, 3, False), (1, 4, False)),   # denser first
+    ((1, 2, True), (3, 3, False)),    # typed before untyped, both priced
+    ((1, 9, False), (0, 1, True)),    # any priced row before none, typed or not
+])
+def test_bill_rank_key_orders_priced_then_typed_then_density(better, worse):
+    assert bill_rank_key(*better) < bill_rank_key(*worse)
+
+
 # -- typed-bill preference ------------------------------------------------
+
+@pytest.mark.parametrize("lookup,expected", [
+    (lambda _pid: ["b1", "", "b2"], frozenset({"b1", "b2"})),
+    (lambda _pid: None, frozenset()),
+])
+def test_typed_bill_ids_reads_the_lookup(lookup, expected):
+    assert typed_bill_ids(lookup, "p") == expected
+
+
+@pytest.mark.parametrize("error", [RuntimeError("db down"), KeyError("doc_type")])
+def test_typed_bill_ids_failure_means_no_typed_bill(error):
+    def _raise(_pid):
+        raise error
+    assert typed_bill_ids(_raise, "p") == frozenset()
+
+
+@pytest.mark.parametrize("filename,expected", [
+    ("Bill of Quantities rev 2.pdf", DOC_TYPE_BILL),
+    ("BOQ_civil.xlsx", DOC_TYPE_BILL),
+    ("Outline spec.docx", "specification"),
+])
+def test_classify_doc_type_names_bills_with_the_shared_constant(filename, expected):
+    assert classify_doc_type(filename) == expected
+
+
+@pytest.mark.parametrize("ids_a,ids_b,expected", [
+    (["c1", "c2"], ["c2", "c3"], ["c1", "c2", "c3"]),
+    (["x"], ["x", "x", "y"], ["x", "y"]),
+])
+def test_merge_pools_keeps_the_first_occurrence_of_each_chunk(ids_a, ids_b, expected):
+    pool_a = [_c("d", f"text {i}", chunk_id=i) for i in ids_a]
+    pool_b = [_c("d", f"text {i}", chunk_id=i) for i in ids_b]
+    merged = _merge_pools(pool_a, pool_b)
+    assert [c.chunk_id for c in merged] == expected
+    assert merged[0] is pool_a[0]
+
 
 def _typed_vs_denser_sheet():
     # "typed" prints 1 priced row in 2 chunks (density 0.5); "sheet" 3 in 3.
