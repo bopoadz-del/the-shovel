@@ -78,10 +78,13 @@ def cap_chunks(
     *,
     total_tokens: int | None = None,
     per_doc_tokens: int | None = None,
+    presorted: bool = False,
 ) -> tuple[list[Any], int]:
     """Keep the highest-scoring chunks, whole, under per-doc + total caps.
 
-    Returns ``(kept, dropped_count)``. ``kept`` is in descending score order.
+    Returns ``(kept, dropped_count)``. ``kept`` is in descending score order,
+    or in the given order when ``presorted`` (the caller already ranked the
+    chunks on a signal other than ``score``).
     A chunk is included or excluded whole; every chunk of a single document is
     bounded by ``per_doc_tokens`` while the union is bounded by
     ``total_tokens``. Caps default to the module's configured env values.
@@ -90,7 +93,7 @@ def cap_chunks(
     per_doc = (
         max_tokens_per_doc() if per_doc_tokens is None else int(per_doc_tokens)
     )
-    ordered = sorted(chunks, key=_chunk_score, reverse=True)
+    ordered = list(chunks) if presorted else sorted(chunks, key=_chunk_score, reverse=True)
     per_doc_used: dict = {}
     kept: list[Any] = []
     used = 0
