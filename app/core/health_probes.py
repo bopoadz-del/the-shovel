@@ -42,6 +42,20 @@ def record_provider_result(
     raises — telemetry must not break a turn."""
     global _LAST_SERVED_AT
     try:
+        # A request-shaped 4xx (bad request, context length, unsupported
+        # shape, …) is a property of the REQUEST, not of the provider: it must
+        # not flip a provider to a non-serving state and poison readiness
+        # until the next real success. Billing/rate (402/429) and server
+        # errors (5xx) still do, because those mean the provider itself is
+        # unavailable. No name or per-case branch: the classification is on
+        # the status code class alone.
+        if (
+            status == "error"
+            and http_status is not None
+            and 400 <= int(http_status) < 500
+            and int(http_status) not in (402, 429)
+        ):
+            return
         now = time.time()
         with _PROVIDER_LOCK:
             _PROVIDER_LAST[str(provider or "unknown")] = {

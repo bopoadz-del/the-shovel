@@ -12,6 +12,12 @@ from __future__ import annotations
 from functools import partial
 from typing import Callable, Mapping, Sequence
 
+from app.core.rag.evidence_budget import (
+    CONTEXT_TRUNCATED_NOTE,
+    cap_chunks,
+    max_tokens_per_doc,
+    max_total_tokens,
+)
 from app.core.rag.evidence_retrieval import RetrievalAction
 from app.core.rag.structural_retrieval import render_rows, rows_matching
 
@@ -29,9 +35,38 @@ def chunks_to_text(chunks) -> str:
     return "\n".join(chunk_text(c) for c in chunks if chunk_text(c).strip())
 
 
+def _budgeted_text(chunks, *, total_tokens=None, per_doc_tokens=None) -> str:
+    """Highest-scoring chunks, budgeted, joined into one evidence string.
+
+    Applies the same per-document + total token budget the loop's merged
+    output respects, so no single fetch action can inject a whole document.
+    ``chunks`` may hold ``Chunk`` objects or lightweight fakes carrying
+    ``text``/``score``/``doc_id``; a plain string list still passes through.
+    """
+    raw = list(chunks or [])
+    # Plain strings (and the empty case) carry no score/doc_id: budget the
+    # concatenation as one text, so no single fetch can inject a whole
+    # document and the empty result is still the empty string.
+    if not raw or all(isinstance(c, str) for c in raw):
+        text = chunks_to_text(raw)
+        from app.core.rag.evidence_budget import cap_evidence_text
+        text, truncated = cap_evidence_text(
+            text,
+            max_tokens=total_tokens if total_tokens is not None else max_total_tokens(),
+        )
+        return text + (CONTEXT_TRUNCATED_NOTE if truncated else "")
+    kept, dropped = cap_chunks(
+        raw,
+        total_tokens=total_tokens if total_tokens is not None else max_total_tokens(),
+        per_doc_tokens=per_doc_tokens if per_doc_tokens is not None else max_tokens_per_doc(),
+    )
+    text = chunks_to_text(kept)
+    return text + (CONTEXT_TRUNCATED_NOTE if dropped else "")
+
+
 def _semantic_retrieve(retrieve_fn, project_id: str, k: int, item: str) -> str:
     chunks, _ = retrieve_fn(item, project_id, k=k)
-    return chunks_to_text(chunks)
+    return _budgeted_text(chunks)
 
 
 def semantic_action(
@@ -44,7 +79,7 @@ def semantic_action(
 
 
 def _lexical_retrieve(bm25_fn, project_id: str, k: int, item: str) -> str:
-    return chunks_to_text(bm25_fn(project_id, item, k=k))
+    return _budgeted_text(bm25_fn(project_id, item, k=k))
 
 
 def lexical_action(
