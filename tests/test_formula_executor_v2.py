@@ -32,15 +32,19 @@ def test_prompt_allows_numpy_sympy_pint():
     assert "pint" in p
 
 
-def test_prompt_does_not_allow_scipy():
+def test_prompt_allows_scipy_numeric_subpackages_only():
+    # Owner ruling 13 Nov (S-M1): generated formulas may use SciPy's numeric
+    # methods. The prompt names the subpackages the sandbox admits and never
+    # the file/network ones.
     p = build_codegen_prompt("compute volume", {})
-    # SciPy must remain blocked; it may appear only in the explicit denial.
-    assert "scipy" in p.lower()
-    # The allowed-import line must not list scipy.
     allowed_line = next(
         line for line in p.splitlines() if "MAY import ONLY" in line
     )
-    assert "scipy" not in allowed_line
+    assert "`scipy`" in allowed_line
+    for sub in ("optimize", "interpolate", "integrate"):
+        assert f"scipy.{sub}" in p
+    for denied in ("scipy.io", "scipy.datasets"):
+        assert denied not in p
 
 
 def test_prompt_includes_retry_context_when_given():
@@ -196,10 +200,18 @@ async def test_v2_runs_generated_sympy_code():
 from app.core.sandbox import run_sandboxed
 
 
-def test_sandbox_rejects_scipy_import():
-    out = run_sandboxed("import scipy\nresult = 1")
+@pytest.mark.parametrize(
+    "code, module",
+    [("import scipy.io\nresult = 1", "scipy.io"),
+     ("from scipy import datasets\nresult = 1", "scipy.datasets")],
+)
+def test_sandbox_rejects_scipy_file_and_network_subpackages(code, module):
+    # SciPy's numeric subpackages are allowed (S-M1); its file and network
+    # subpackages stay blocked.
+    out = run_sandboxed(code)
     assert out.success is False
-    assert "scipy" in (out.error or "").lower()
+    assert out.error_type == "ImportError"
+    assert module in (out.error or "")
 
 
 # --------------------------------------------------------------------------

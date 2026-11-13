@@ -350,7 +350,9 @@ safetensors==0.8.0
 scikit-learn==1.9.0
     # via -r requirements.in
 scipy==1.17.1
-    # via scikit-learn
+    # via
+    #   -r requirements.in
+    #   scikit-learn
 sentry-sdk[fastapi]==2.62.0
     # via -r requirements.in
 shapely==2.1.2

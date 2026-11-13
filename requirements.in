@@ -36,6 +36,10 @@ ddgs>=1.0.0
 pillow>=12.3.0
 
 numpy>=1.24.0
+# Numeric methods for generated formulas (root finding, optimisation,
+# interpolation, integration, ODE solvers): formula_executor_v2's sandbox
+# imports it. Already present via scikit-learn; named here as a direct need.
+scipy>=1.11
 
 # OCR
 pytesseract>=0.3.10
