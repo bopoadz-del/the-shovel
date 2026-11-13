@@ -3140,6 +3140,8 @@ def _spreadsheet_row_chunks(
     """One retrievable chunk per measured spreadsheet row, headers inherited."""
     if ext not in _SPREADSHEET_EXTS or not file_path:
         return []
+    from app.core import chunk_noise
+
     try:
         from app.blocks.boq_processor import BOQProcessorBlock
 
@@ -3173,6 +3175,10 @@ def _spreadsheet_row_chunks(
             # A repeated column-header row (each later bill in a sheet re-prints
             # it) is structure, not a measured row.
             if cells == header_cells:
+                continue
+            # A row whose every cell is blank or zero (a template's formula
+            # rows) measures nothing (RQ-1).
+            if chunk_noise.is_empty_row(" | ".join(cells)):
                 continue
             desc = cells[desc_idx].strip() if desc_idx is not None and desc_idx < len(cells) else ""
             has_figure = any(
@@ -3715,9 +3721,31 @@ def _text_chunks_with_pages(
     text: str, meta: dict[str, Any], chunker: str, filename: str,
 ) -> tuple[list[str], list[int | None]]:
     """Chunk extracted text; give each chunk the page its text starts on."""
+    from app.core import chunk_noise
+
     page_starts = meta.pop("page_starts", None)
+    refused: dict[str, int] = {}
+    if os.path.splitext(filename or "")[1].lower() in _SPREADSHEET_EXTS:
+        # Row-wise sheet text: an all-blank/zero row or a re-printed header
+        # row is structure, not content (RQ-1). Sheets carry no page starts,
+        # so editing the text cannot misplace a page.
+        text, refused = chunk_noise.clean_table_text(text)
     chunks = chunk_extracted_document(text, chunker=chunker, filename=filename)
-    return chunks, chunk_start_pages(text, page_starts, chunks)
+    pages = chunk_start_pages(text, page_starts, chunks)
+    chunks, pages, dropped = chunk_noise.refuse_chunks(chunks, pages)
+    _record_refused(meta, refused, dropped)
+    return chunks, pages
+
+
+def _record_refused(meta: dict[str, Any], *counts: dict[str, int]) -> None:
+    """Add per-reason noise refusals to ``meta["noise_refused"]``."""
+    total: dict[str, int] = dict(meta.get("noise_refused") or {})
+    for part in counts:
+        for reason, n in (part or {}).items():
+            if n:
+                total[reason] = total.get(reason, 0) + n
+    if total:
+        meta["noise_refused"] = total
 
 
 def _structured_chunks(
@@ -3748,6 +3776,9 @@ def _structured_stage(
     chunks = chunks + _drawing_chunks_for_document(
         file_path, filename, ext, project_id, attrs,
     )
+    from app.core import chunk_noise
+
+    chunks, _, _ = chunk_noise.refuse_chunks(chunks)
     return chunks, attrs
 
 
