@@ -275,6 +275,7 @@ async def _chat_impl(
     if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
         _rag_sys_msg = await _agentic_figure_retrieval_augment(
             self, user_message, project_id, api_key, user_id, _rag_sys_msg,
+            audit_rec=_rag_audit,
         )
     if _rag_sys_msg and _rag_sys_msg.get("content"):
         _apply_rag_context(
