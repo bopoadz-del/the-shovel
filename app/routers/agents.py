@@ -117,10 +117,12 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
             # rag search (PR #586). Master-corpus-only was the leftover that
             # 404'd New chat on a shared general-knowledge project for every non-owner.
             # Row-only check: listing documents here walked the whole corpus.
+            if not _shared_grant_applies(project_id) and not store.can_access_project(
+                project_id, user_id=auth["user_id"]
+            ):
+                continue  # master-corpus source: owner-only, whatever its origin
             if store.can_access_project(
-                project_id,
-                user_id=auth["user_id"],
-                include_admin_approved=_shared_grant_applies(project_id),
+                project_id, user_id=auth["user_id"], include_admin_approved=True
             ):
                 accessible = project_id
                 break
@@ -142,10 +144,12 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
     if stored_pid is None:
         # No ownership binding at all — do not serve it.
         raise HTTPException(404, "Conversation not found")
+    if not _shared_grant_applies(stored_pid) and not store.can_access_project(
+        stored_pid, user_id=user_id
+    ):
+        raise HTTPException(404, "Conversation not found")
     if not store.can_access_project(
-        stored_pid,
-        user_id=user_id,
-        include_admin_approved=_shared_grant_applies(stored_pid),
+        stored_pid, user_id=user_id, include_admin_approved=True
     ):
         raise HTTPException(404, "Conversation not found")
     if conv.get("owner_id") and conv.get("owner_id") != user_id:
