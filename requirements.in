@@ -22,9 +22,10 @@ requests>=2.25.0
 
 # Web Scraping
 beautifulsoup4>=4.12.0
-# CVE-2026-85999 / CVE-2026-86000 fixed in soupsieve 2.9. Floor the
-# transitive pin so a later pip-compile cannot walk it back to 2.8.4.
-soupsieve>=2.9
+# CVE-2026-85999 / CVE-2026-86000 fixed in soupsieve 2.9; CVE-2026-126192
+# fixed in 2.10.0 and CVE-2026-126190 in 4.0.0. Floor the transitive pin so a
+# later pip-compile cannot walk it back below 4.0.0.
+soupsieve>=4.0.0
 # CVE-2026-63374 / CVE-2026-64847 fixed in anyio 4.14.2. Transitive (httpx,
 # starlette, mcp, sse-starlette, anthropic), so floored here for the same
 # reason as soupsieve: a later pip-compile must not walk it back to 4.13.0.
