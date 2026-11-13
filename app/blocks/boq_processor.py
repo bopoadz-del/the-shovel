@@ -89,6 +89,33 @@ class _ParseBudgetExceeded(Exception):
     pass
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _no_table_observation(pages_read: int, tables_seen: int, pages_with_text: int) -> str:
+    """One sentence naming what the PDF table parser saw when it found no
+    usable BOQ table. Observations only: the parser cannot tell how a file
+    was produced, so the sentence never guesses at it."""
+    if tables_seen:
+        tables = (
+            f"found {_plural(tables_seen, 'table')}, none with a header row, "
+            f"two or more columns and a data row"
+        )
+    else:
+        tables = "found no table"
+    text = (
+        f"{_plural(pages_with_text, 'page')} of {pages_read} "
+        f"{'carries' if pages_with_text == 1 else 'carry'} a text layer"
+        if pages_with_text
+        else "no page carries a text layer"
+    )
+    return (
+        f"The PDF table parser read {_plural(pages_read, 'page')}, "
+        f"{tables}; {text}."
+    )
+
+
 def _resolve_via_project(project_id: str, raw: str) -> str:
     """Map a bare filename to the project's stored absolute file_path.
 
@@ -463,10 +490,15 @@ class BOQProcessorBlock(UniversalBlock):
         # turned a partial-parse into a wrong client deliverable.
         pages_skipped = 0
         pages_skipped_reasons: List[Dict[str, Any]] = []
+        # What the parser saw, so a no-table result reports observations
+        # (pages read, raw tables found) instead of a guess about the file.
+        pages_read = 0
+        tables_seen = 0
 
         with pdfplumber.open(file_path) as pdf:
             for page_index, page in enumerate(pdf.pages, 1):
                 check_budget(page_index)
+                pages_read += 1
                 try:
                     tables = page.extract_tables() or []
                 except Exception as exc:
@@ -486,6 +518,7 @@ class BOQProcessorBlock(UniversalBlock):
                     # Release the page's parsed layout now: pdfplumber keeps it
                     # otherwise (43 MB/page on the live bill -> 1 MB/page).
                     page.close()
+                tables_seen += len(tables)
                 for tbl in tables:
                     if not tbl or len(tbl) < 2:
                         continue
@@ -517,10 +550,10 @@ class BOQProcessorBlock(UniversalBlock):
                     page_table_count += 1
 
         if not groups:
-            # pdfplumber found no tabular structure. This is normal for scanned
-            # BOQ PDFs where OCR captured the text but page layout doesn't yield
-            # a clean table grid. Return per-page text so the caller (typically
-            # an LLM agent) can extract line items from the raw OCR text.
+            # pdfplumber found no usable table grid. Return per-page text so
+            # the caller (typically an LLM agent) can extract line items from
+            # it, and say what was seen -- the parser cannot tell how the file
+            # was produced, so it does not guess.
             page_texts: List[Dict[str, Any]] = []
             with pdfplumber.open(file_path) as pdf:
                 for i, page in enumerate(pdf.pages, 1):
@@ -544,28 +577,36 @@ class BOQProcessorBlock(UniversalBlock):
                         page.close()
                     if t:
                         page_texts.append({"page": i, "text": t})
+            seen = _no_table_observation(pages_read, tables_seen, len(page_texts))
+            observed = {
+                "pages_read": pages_read,
+                "tables_seen": tables_seen,
+                "pages_with_text": len(page_texts),
+            }
             if page_texts:
                 return {
                     "status": "partial",
                     "source_format": "pdf",
                     "note": (
-                        "PDF has no clean tabular structure (likely scanned). "
-                        "Returning raw page text — pass to an LLM for BOQ line-item extraction."
+                        f"{seen} Returning the page text for BOQ line-item "
+                        f"extraction."
                     ),
                     "page_count": len(page_texts),
                     "page_texts": page_texts,
                     "pages_skipped": pages_skipped,
                     "pages_skipped_reasons": pages_skipped_reasons,
+                    **observed,
                 }
             return {
                 "status": "error",
                 "error": (
-                    "No extractable tables or text found in this PDF. The file "
-                    "may be a pure-image scan that hasn't been OCR'd. Run OCR "
-                    "first or re-upload as .xlsx/.csv."
+                    f"{seen} There is nothing to extract line items from: "
+                    f"upload the .xlsx/.csv version of this BOQ, or a PDF "
+                    f"with a text layer."
                 ),
                 "pages_skipped": pages_skipped,
                 "pages_skipped_reasons": pages_skipped_reasons,
+                **observed,
             }
 
         # Pick the largest group as the BOQ; other groups (smaller summary
