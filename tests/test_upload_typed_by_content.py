@@ -27,10 +27,12 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
 def _ooxml(folder: str) -> bytes:
+    # A fixed entry timestamp keeps the bytes (and so the parametrize ids)
+    # identical across xdist workers; ZipFile.writestr(str, ...) stamps "now".
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("[Content_Types].xml", "<Types/>")
-        z.writestr(f"{folder}/document.xml", "<x/>")
+        for arc, body in (("[Content_Types].xml", "<Types/>"), (f"{folder}/document.xml", "<x/>")):
+            z.writestr(zipfile.ZipInfo(arc, date_time=(2020, 1, 1, 0, 0, 0)), body)
     return buf.getvalue()
 
 
@@ -133,6 +135,21 @@ def test_document_upload_is_typed_by_content(client, multipart_name, display_nam
     )
     assert r.status_code == 201, r.text
     assert r.json()["document"]["original_name"] == stored
+
+
+@pytest.mark.parametrize("display_name", ["..", "folder/"])
+def test_display_name_with_no_file_part_is_refused(client, display_name):
+    # The user's name wins over the multipart name, so a display name that is
+    # only a path or a dot-segment must be refused as a filename, not typed.
+    pid = _project(client, "Invalid display name")
+    r = client.post(
+        f"/v1/projects/{pid}/documents",
+        files={"file": ("spec.pdf", PDF, "application/pdf")},
+        data={"display_name": display_name},
+        headers=H,
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == "Invalid filename"
 
 
 @pytest.mark.parametrize(
