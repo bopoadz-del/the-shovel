@@ -368,6 +368,44 @@ ITEM_ROWS_NOTE = (
 )
 
 
+#: Leads a bill's evidence when the ingest recorded no verified overall total
+#: for it (``doc_index.boq_total_status``). It states what the parser
+#: observed, never a guess at how the document was produced.
+BILL_TOTAL_NOTE = (
+    "[bill total status: {document} has no verified overall total -- the "
+    "parser did not cross-check its rows against a total the bill states "
+    "(observed: {reason}). Do not state an overall contract or BOQ total for "
+    "this bill. A sum computed from listed rows is still stated as computed "
+    "from those rows.]"
+)
+
+
+def _total_status_text(total_status, doc_ids) -> str:
+    """One ``BILL_TOTAL_NOTE`` per handed bill whose total is unverified.
+
+    ``total_status(doc_id)`` returns the document's BOQ verified-total
+    attribute (optionally with a ``document`` display name) or None. None
+    (never staged as a BOQ) and ``verified: True`` add nothing; a failed read
+    adds nothing and is logged, so the loop never breaks on it.
+    """
+    if total_status is None:
+        return ""
+    lines: list[str] = []
+    for doc_id in doc_ids:
+        try:
+            attr = total_status(doc_id)
+        except Exception:  # noqa: BLE001 -- a status read must not break the loop
+            logger.warning("bill total-status read failed doc=%s", doc_id, exc_info=True)
+            continue
+        if not isinstance(attr, Mapping) or attr.get("verified") is not False:
+            continue
+        lines.append(BILL_TOTAL_NOTE.format(
+            document=str(attr.get("document") or doc_id),
+            reason=str(attr.get("reason") or "unrecorded").replace("_", " "),
+        ))
+    return "\n".join(lines)
+
+
 def _item_rows_text(maps, named, item: str, row_segments) -> tuple[str, dict]:
     """The item's complete row list over every bill read, and its counts.
 
@@ -400,6 +438,7 @@ def _bill_rows_retrieve(
     section_maps: Callable[[frozenset], Mapping] | None = None,
     ask: str = "",
     row_segments: Callable[[str], Sequence[str]] | None = None,
+    total_status: Callable[[str], Mapping | None] | None = None,
 ) -> str:
     pool = list(bm25_fn(project_id, item, k=k) or ())
     typed = frozenset(typed_bills(project_id)) if typed_bills is not None else frozenset()
@@ -437,7 +476,8 @@ def _bill_rows_retrieve(
             row_counts,
         )
     chunks_text = _budgeted_text(handed, presorted=True)
-    return "\n".join(t for t in (rows_text, chunks_text) if t)
+    status_text = _total_status_text(total_status, _handed_docs(handed))
+    return "\n".join(t for t in (status_text, rows_text, chunks_text) if t)
 
 
 def bill_rows_action(
@@ -450,6 +490,7 @@ def bill_rows_action(
     bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
     ask: str = "",
     row_segments: Callable[[str], Sequence[str]] | None = None,
+    total_status: Callable[[str], Mapping | None] | None = None,
 ) -> RetrievalAction:
     """Document-scoped lexical: the item's rows in the project's bills.
 
@@ -485,6 +526,12 @@ def bill_rows_action(
     bill with no headings), not ranked and not cut by the chunk budget, which
     applies to the chunks that follow it.
 
+    ``total_status(doc_id)``, when supplied, reads a handed bill's BOQ
+    verified-total attribute (``doc_index.boq_total_status``). Every handed
+    bill recorded as unverified leads the evidence with ``BILL_TOTAL_NOTE``:
+    no overall total is claimed for it. Unverified is never read as a cause
+    (it does not mean scanned); a bill with no attribute adds nothing.
+
     Each item is fetched once per ask: a later round reuses the result.
     """
     depth = bill_pool_k() if k is None else int(k)
@@ -502,6 +549,9 @@ def bill_rows_action(
         _bill_rows_retrieve, bm25_fn, project_id, depth, row_count,
         typed_bills=cache, section_maps=maps, ask=ask or "",
         row_segments=row_segments,
+        total_status=(
+            lru_cache(maxsize=None)(total_status) if total_status is not None else None
+        ),
     ))
 
 

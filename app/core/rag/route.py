@@ -114,6 +114,7 @@ async def augment_figure_retrieval(
     outcome_sink: Callable[[Any], None] | None = None,
     typed_bills: Callable[[str], Iterable[str]] | None = None,
     bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
+    bill_total_status: Callable[[str], Mapping | None] | None = None,
 ) -> str:
     """Run the evidence loop and return the merged evidence text.
 
@@ -138,6 +139,7 @@ async def augment_figure_retrieval(
             run_sync=run_sync,
             typed_bills=typed_bills,
             bill_chunks=bill_chunks,
+            bill_total_status=bill_total_status,
         )
         if outcome_sink is not None:
             outcome_sink(outcome)

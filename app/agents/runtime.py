@@ -940,6 +940,25 @@ def _typed_bill_doc_ids(project_id: str) -> list[str]:
     ]
 
 
+def _bill_total_status(doc_id: str) -> dict[str, Any] | None:
+    """A bill's BOQ verified-total attribute, with its display name, or None.
+
+    Read from documents.metadata through ``doc_index.boq_total_status`` (the
+    attribute the ingest records instead of a warning chunk). The bill-rows
+    action leads an unverified bill's evidence with a "do not claim an
+    overall total" note; None (never staged as a BOQ) adds nothing.
+    """
+    from app.core import doc_index as _doc_index
+    from app.core import projects as _projects
+
+    document = _projects.get_document(doc_id)
+    attr = _doc_index.boq_total_status(document)
+    if attr is None:
+        return None
+    attr.setdefault("document", (document or {}).get("original_name") or doc_id)
+    return attr
+
+
 def _first_pass_composes_figure(user_message: str, evidence: str) -> bool:
     """True when a deterministic (no-LLM) excerpt composer already answers the
     ask from ``evidence``: a priced bill row, a page Part Summary total, or a
@@ -1030,6 +1049,7 @@ async def _agentic_figure_retrieval_augment(
             partial(store.chunks_for_docs, all_rows=True)
             if hasattr(store, "chunks_for_docs") else None
         ),
+        bill_total_status=_bill_total_status,
     )
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)

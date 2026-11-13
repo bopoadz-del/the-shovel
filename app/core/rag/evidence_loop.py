@@ -72,6 +72,7 @@ def build_actions(
     typed_bills: Callable[[str], Iterable[str]] | None = None,
     bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
     question: str = "",
+    bill_total_status: Callable[[str], Mapping | None] | None = None,
 ) -> list[RetrievalAction]:
     """The three retrieval actions over the real primitives.
 
@@ -86,7 +87,9 @@ def build_actions(
     typed as a bill, which that action ranks the item inside and prefers.
     ``bill_chunks(project_id, doc_ids)`` (optional) returns every chunk of
     those bills, from which the action reads each bill's sections; the
-    ``question`` is where an ask names one.
+    ``question`` is where an ask names one. ``bill_total_status(doc_id)``
+    (optional) reads a bill's verified-total attribute, so an unverified bill
+    is handed with a "do not claim an overall total" note.
     """
     from app.core.rag.retriever import priced_row_count, priced_row_segments
 
@@ -96,6 +99,7 @@ def build_actions(
         bill_rows_action(
             bm25_fn, project_id, row_count=priced_row_count, typed_bills=typed_bills,
             bill_chunks=bill_chunks, ask=question, row_segments=priced_row_segments,
+            total_status=bill_total_status,
         ),
     ]
     if sheets is not None:
@@ -133,6 +137,7 @@ async def run_project_figure_retrieval(
     run_sync: Callable[..., Awaitable[Any]] | None = None,
     typed_bills: Callable[[str], Iterable[str]] | None = None,
     bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
+    bill_total_status: Callable[[str], Mapping | None] | None = None,
 ) -> EvidenceLoopOutcome:
     """Plan, then fetch evidence over the plan with the bounded loop.
 
@@ -167,6 +172,7 @@ async def run_project_figure_retrieval(
         typed_bills=typed_bills,
         bill_chunks=bill_chunks,
         question=question,
+        bill_total_status=bill_total_status,
     )
     if run_sync is None:
         run = run_loop(plan, actions, initial_evidence=first_pass_evidence)
