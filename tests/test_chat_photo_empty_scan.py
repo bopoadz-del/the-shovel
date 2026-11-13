@@ -115,14 +115,60 @@ def test_empty_note_only_when_nothing_else_was_observed(client, monkeypatch, sca
     assert _observations(client, monkeypatch, scan) == expected
 
 
-def test_below_floor_detections_count_as_nothing_recognisable(client, monkeypatch):
-    weak = {"safety_qaqc": [{"class": "ladder", "confidence": 0.01}], "safety_qaqc_ran": True}
-    strong = {"safety_qaqc": [{"class": "ladder", "confidence": 0.40}], "safety_qaqc_ran": True}
-    assert _observations(client, monkeypatch, weak) == ["none detected"]
-    assert _observations(client, monkeypatch, strong) == ["ladder detected"]
+@pytest.mark.parametrize(
+    "confidence,expected",
+    [(0.01, ["none detected"]), (0.40, ["ladder detected"])],
+)
+def test_below_floor_detections_count_as_nothing_recognisable(
+    client, monkeypatch, confidence, expected,
+):
+    scan = {"safety_qaqc": [{"class": "ladder", "confidence": confidence}],
+            "safety_qaqc_ran": True}
+    assert _observations(client, monkeypatch, scan) == expected
 
 
-def test_unit_empty_scan_observation_two_inputs():
-    assert chat_photos._empty_scan_observation({"safety_qaqc_ran": True}) == "none detected"
-    assert chat_photos._empty_scan_observation({"safety_qaqc_ran": "yes"}) == (
-        "photo detector unavailable -- image not scanned")
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"safety_qaqc_ran": True}, "none detected"),
+        ({"safety_qaqc_ran": "yes"}, "photo detector unavailable -- image not scanned"),
+    ],
+)
+def test_unit_empty_scan_observation_two_inputs(body, expected):
+    assert chat_photos._empty_scan_observation(body) == expected
+
+
+class _EmptyDetector:
+    def detect(self, path, conf_threshold=0.25):
+        return []
+
+
+@pytest.mark.parametrize(
+    "detector,ran",
+    [(_EmptyDetector(), True), (None, False)],
+)
+def test_image_block_reports_whether_the_safety_scan_ran(tmp_path, monkeypatch, detector, ran):
+    import asyncio
+    import random
+
+    from PIL import Image
+
+    from app.blocks import image as image_mod
+    from app.blocks import safety_world_detector
+
+    rng = random.Random(7)
+    img = Image.new("RGB", (96, 96))
+    img.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                 for _ in range(96 * 96)])
+    path = tmp_path / "scan.png"
+    img.save(path)
+
+    monkeypatch.setattr(safety_world_detector, "default_detector", lambda: detector)
+    monkeypatch.setattr(image_mod, "_yolo_available", lambda: False)
+    monkeypatch.setattr(image_mod, "_tesseract_ocr", lambda p: ("", 0.0))
+
+    out = asyncio.run(image_mod.ImageBlock().process(
+        str(path), {"mode": "safety_qaqc", "safety_qaqc_conf": 0.05}))
+    assert out.get("status") == "success", out
+    assert out["safety_qaqc"] == []
+    assert out["safety_qaqc_ran"] is ran
