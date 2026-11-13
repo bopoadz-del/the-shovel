@@ -96,14 +96,14 @@ class TestInterimPayment:
         assert result["retention_amount"] == 90000.0
         assert result["net_payment"] == 810000.0
 
-    def test_missing_retention_is_an_error_naming_the_input(self):
+    @pytest.mark.parametrize("gross", [900000, 250000])
+    def test_missing_retention_is_an_error_naming_the_input(self, gross):
         """Retention has no default: a call without it is refused by name."""
         with pytest.raises(TypeError, match="retention_percent"):
-            calculate_interim_payment(900000)
-        for gross in (900000, 250000):
-            result = calculate_interim_payment(gross, None)
-            assert "retention_percent" in result["error"]
-            assert result["missing"] == ["retention_percent"]
+            calculate_interim_payment(gross)
+        result = calculate_interim_payment(gross, None)
+        assert "retention_percent" in result["error"]
+        assert result["missing"] == ["retention_percent"]
 
     def test_zero_retention(self):
         result = calculate_interim_payment(500000, 0)
