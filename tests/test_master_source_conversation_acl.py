@@ -46,7 +46,7 @@ def world(client, monkeypatch):
             name=f"PS1 {pid}", user_id=owner_id, is_approved=True,
             project_id=pid, origin="system_seed",
         )
-    yield {"owner": owner_h, "stranger": stranger_h, "ids": ids}
+    yield {"owner": owner_h, "owner_id": owner_id, "stranger": stranger_h, "ids": ids}
     for pid in ids.values():
         store.delete_project(pid)
 
@@ -90,19 +90,25 @@ def test_shared_grant_applies_to_every_id_but_the_master_source(monkeypatch, pro
 
 
 @pytest.mark.filterwarnings("error::sqlalchemy.exc.SAWarning")
-@pytest.mark.parametrize("bound, owner_status", [(True, 200), (False, 404)])
-def test_stored_conversation_without_a_project_binding_is_never_served(
-    client, world, bound, owner_status,
-):
-    """A non-ws row with no project_id has no ownership binding: 404 even to
-    the user who would own the project, refused BEFORE any project lookup
-    (``session.get(Project, None)`` is a NULL-primary-key SAWarning, run here
-    as an error); a bound row stays readable."""
+@pytest.mark.parametrize("bound", [True, False])
+def test_stored_conversation_without_a_project_binding_is_never_served(world, bound):
+    """``_enforce_conversation_access``: a non-ws row with no project_id has no
+    ownership binding, so it is refused (404) even to the user who would own
+    the project, BEFORE any project lookup (``session.get(Project, None)`` is a
+    NULL-primary-key SAWarning, run here as an error). A bound row passes."""
+    from fastapi import HTTPException
+
+    from app.routers.agents import _enforce_conversation_access
+
     cid = f"ps1-bind-{uuid.uuid4().hex[:8]}"
     am.get_or_create_conversation(
         cid, "project-assistant",
         project_id=world["ids"]["general"] if bound else None,
     )
-    am.append_message(cid, "user", "binding note")
-    owner = client.get(f"/v1/agents/conversations/{cid}/messages", headers=world["owner"])
-    assert owner.status_code == owner_status, owner.text
+    auth = {"user_id": world["owner_id"]}
+    if bound:
+        assert _enforce_conversation_access(cid, auth) is None
+    else:
+        with pytest.raises(HTTPException) as refused:
+            _enforce_conversation_access(cid, auth)
+        assert refused.value.status_code == 404
