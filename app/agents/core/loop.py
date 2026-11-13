@@ -732,17 +732,13 @@ async def _chat_impl(
             })
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
-            # S-A6: see streaming.py -- evidence in the turn supersedes a
-            # file-level tool failure about the same document.
-            elif (_superseded := await _off_loop(
-                    _supersede_tool_failure_with_evidence, tc, tool_result, messages)) is not None:
-                if error_nudges < _TOOL_ERROR_NUDGE_CAP:
-                    error_nudges += 1
-                    pending_nudges.append({"role": "user", "content": _superseded})
-            elif (_tool_result_errored(tool_result)
-                  and error_nudges < _TOOL_ERROR_NUDGE_CAP):
+            elif ((_superseded := await _off_loop(
+                    _supersede_tool_failure_with_evidence, tc, tool_result, messages)) is not None
+                  or _tool_result_errored(tool_result)) and error_nudges < _TOOL_ERROR_NUDGE_CAP:
+                # S-A6: evidence in this turn supersedes a file-level failure on the same document.
                 error_nudges += 1
-                pending_nudges.append({"role": "user", "content": _nudge_for_failed_tool(
+                pending_nudges.append({"role": "user", "content": _superseded if _superseded is not None
+                                       else _nudge_for_failed_tool(
                     tool_result, self, project_id=project_id, messages=messages) + (await _off_loop(_file_tool_hint, messages, project_id, self.allowed_blocks))})
         messages.extend(pending_nudges)
 
