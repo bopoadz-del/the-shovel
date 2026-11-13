@@ -70,6 +70,18 @@ def _predefined_may_intercept(requested_agent_name: str) -> bool:
     return requested_agent_name in _PREDEFINED_GENERALISTS
 
 
+def _shared_grant_applies(project_id: str) -> bool:
+    """Whether a conversation on ``project_id`` may use the shared-platform grant.
+
+    The physical master-corpus SOURCE id is owner-only whatever origin its
+    project row carries: only the alias is shared, and the alias reaches the
+    source through ``get_project_accessible``'s remap. A source row stamped
+    ``system_seed`` (a boot seed, a restore, a test wipe) must not open the
+    whole corpus's conversations to every signed-in user.
+    """
+    return project_id != store.MASTER_CORPUS_SOURCE_PROJECT_ID
+
+
 def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
     """Authoritative access check for a conversation, on both read and write.
 
@@ -82,8 +94,9 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
       platform-shared row (``admin_drive_approved``, boot-seeded
       ``system_seed``, or an id in ``RAG_GENERAL_KNOWLEDGE_PROJECTS``).
       Covers both "project doesn't exist" and "private project belongs to
-      someone else". The physical master-corpus source id stays owner-only;
-      only the alias is shared. A row that does not exist yet may be
+      someone else". The physical master-corpus source id stays owner-only
+      whatever its row's origin (``_shared_grant_applies``); only the alias
+      is shared. A row that does not exist yet may be
       created. A row that exists is served only to its writer; a NULL
       owner (written before owner tracking) is served only to the project
       row owner.
@@ -104,6 +117,10 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
             # rag search (PR #586). Master-corpus-only was the leftover that
             # 404'd New chat on a shared general-knowledge project for every non-owner.
             # Row-only check: listing documents here walked the whole corpus.
+            if not _shared_grant_applies(project_id) and not store.can_access_project(
+                project_id, user_id=auth["user_id"]
+            ):
+                continue  # master-corpus source: owner-only, whatever its origin
             if store.can_access_project(
                 project_id, user_id=auth["user_id"], include_admin_approved=True
             ):
@@ -126,6 +143,10 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
     stored_pid = conv.get("project_id")
     if stored_pid is None:
         # No ownership binding at all — do not serve it.
+        raise HTTPException(404, "Conversation not found")
+    if not _shared_grant_applies(stored_pid) and not store.can_access_project(
+        stored_pid, user_id=user_id
+    ):
         raise HTTPException(404, "Conversation not found")
     if not store.can_access_project(
         stored_pid, user_id=user_id, include_admin_approved=True
