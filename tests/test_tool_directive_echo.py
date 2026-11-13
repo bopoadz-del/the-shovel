@@ -151,3 +151,23 @@ def test_sanitize_final_text_empties_a_directive_only_answer(rows, cap):
 )
 def test_directive_words_split_identifiers_and_mask_figures(text, expected):
     assert _directive_words(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("role", "counts"),
+    [("tool", True), ("assistant", False)],
+)
+def test_only_a_tool_message_carries_directives(role, counts):
+    """An envelope-shaped JSON quoted in a non-tool message is not the platform speaking."""
+    env = _fetch_envelope(400, 3000)
+    note = json.loads(env)["note"]
+    messages = [{"role": role, "content": env}]
+    assert (note in _tool_directive_texts(messages)) is counts
+    assert (_strip_tool_directive_echo(note, messages) == "") is counts
+
+
+@pytest.mark.parametrize("empty", [None, ""])
+def test_empty_answer_passes_through_without_raising(empty):
+    messages = [_tool_msg(_fetch_envelope(400, 3000))]
+    assert _strip_tool_directive_echo(empty, messages) == empty
+    assert _sanitize_final_text(empty, messages=messages) == ""
