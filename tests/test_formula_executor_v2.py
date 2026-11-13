@@ -200,15 +200,18 @@ async def test_v2_runs_generated_sympy_code():
 from app.core.sandbox import run_sandboxed
 
 
-def test_sandbox_rejects_scipy_file_and_network_subpackages():
+@pytest.mark.parametrize(
+    "code, module",
+    [("import scipy.io\nresult = 1", "scipy.io"),
+     ("from scipy import datasets\nresult = 1", "scipy.datasets")],
+)
+def test_sandbox_rejects_scipy_file_and_network_subpackages(code, module):
     # SciPy's numeric subpackages are allowed (S-M1); its file and network
     # subpackages stay blocked.
-    for code in ("import scipy.io\nresult = 1",
-                 "from scipy import datasets\nresult = 1"):
-        out = run_sandboxed(code)
-        assert out.success is False
-        assert out.error_type == "ImportError"
-        assert "scipy" in (out.error or "").lower()
+    out = run_sandboxed(code)
+    assert out.success is False
+    assert out.error_type == "ImportError"
+    assert module in (out.error or "")
 
 
 # --------------------------------------------------------------------------

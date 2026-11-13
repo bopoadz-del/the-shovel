@@ -70,26 +70,36 @@ result = {
 """
 
 
-def test_s_curve_interpolation_reproduces_linear_progress_exactly():
-    weeks = [0.0, 4.0, 8.0, 12.0, 16.0]
-    pct = [0.0, 25.0, 50.0, 75.0, 100.0]
-    out = run_sandboxed(_S_CURVE, state={"weeks": weeks, "cumulative_pct": pct, "query_week": 10.0})
+@pytest.mark.parametrize(
+    "weeks, query",
+    [([0.0, 4.0, 8.0, 12.0, 16.0], 10.0), ([0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0], 7.5)],
+)
+def test_s_curve_interpolation_reproduces_linear_progress_exactly(weeks, query):
+    # Steady progress: cumulative % rises linearly from 0 to 100.
+    pct = [100.0 * w / weeks[-1] for w in weeks]
+    out = run_sandboxed(_S_CURVE, state={"weeks": weeks, "cumulative_pct": pct, "query_week": query})
     assert out.success, out.error
-    # PCHIP reproduces linear data exactly: 10 weeks of 16 at a steady rate.
-    assert out.result["at_query"] == pytest.approx(62.5, abs=1e-9)
+    # PCHIP reproduces linear data exactly.
+    assert out.result["at_query"] == pytest.approx(100.0 * query / weeks[-1], abs=1e-9)
     assert out.result["at_knots"] == pytest.approx(pct, abs=1e-9)
 
 
-def test_s_curve_interpolation_is_monotone_on_an_s_shaped_dataset():
-    weeks = [0.0, 2.0, 5.0, 9.0, 12.0, 14.0]
-    pct = [0.0, 3.0, 20.0, 70.0, 94.0, 100.0]
-    query = 7.0
+@pytest.mark.parametrize(
+    "weeks, pct, query",
+    [
+        ([0.0, 2.0, 5.0, 9.0, 12.0, 14.0], [0.0, 3.0, 20.0, 70.0, 94.0, 100.0], 7.0),
+        ([0.0, 4.0, 6.0, 10.0, 16.0, 20.0, 22.0], [0.0, 1.5, 8.0, 41.0, 88.0, 99.0, 100.0], 13.0),
+    ],
+)
+def test_s_curve_interpolation_is_monotone_on_an_s_shaped_dataset(weeks, pct, query):
     out = run_sandboxed(_S_CURVE, state={"weeks": weeks, "cumulative_pct": pct, "query_week": query})
     assert out.success, out.error
     assert out.result["at_knots"] == pytest.approx(pct, abs=1e-9)
     grid = out.result["grid"]
     assert all(b >= a - 1e-12 for a, b in zip(grid, grid[1:]))  # cumulative never falls
-    assert 20.0 < out.result["at_query"] < 70.0  # bracketed by the knots at weeks 5 and 9
+    # Bracketed by the knots either side of the query week.
+    i = next(k for k, w in enumerate(weeks) if w > query)
+    assert pct[i - 1] < out.result["at_query"] < pct[i]
 
 
 # --------------------------------------------------------------------------
@@ -164,17 +174,22 @@ def test_scipy_file_and_network_subpackages_are_blocked_every_way(sub):
         assert f"scipy.{sub}" in out.error
 
 
-def test_attribute_walk_from_a_dotted_entry_reaches_only_that_entry():
-    # `import app.lib.pm_computations` binds `app`; the walk to the entry
-    # works, a sibling module under the same parent does not.
-    ok = run_sandboxed(
-        "import app.lib.pm_computations\n"
-        "result = app.lib.pm_computations.compute_cpm is not None"
-    )
+@pytest.mark.parametrize(
+    "entry, member, sibling",
+    [
+        ("app.lib.pm_computations", "compute_cpm", "app.core"),
+        ("app.schemas.cpm", "CPMInput", "app.prompts"),
+    ],
+)
+def test_attribute_walk_from_a_dotted_entry_reaches_only_that_entry(entry, member, sibling):
+    # `import app.x.y` binds `app`; the walk to the entry works, a module
+    # beside it under the same root does not.
+    ok = run_sandboxed(f"import {entry}\nresult = {entry}.{member} is not None")
     assert ok.success and ok.result is True, ok.error
-    blocked = run_sandboxed("import app.lib.pm_computations\nresult = app.core")
+    blocked = run_sandboxed(f"import {entry}\nresult = {sibling}")
     assert blocked.success is False
     assert blocked.error_type == "ImportError"
+    assert sibling in blocked.error
 
 
 def test_every_module_the_prompt_advertises_is_importable():
