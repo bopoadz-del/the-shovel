@@ -147,6 +147,21 @@ def _other_observations(detections: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def _empty_scan_observation(body: Dict[str, Any]) -> str:
+    """The one observation for a photo whose scan produced none.
+
+    An empty list made the composer emit a bare ``[attached: NAME]`` marker,
+    which the answer path cannot tell from a file it never saw, so the reply
+    said the image could not be read. Say what the scan established instead:
+    it ran and saw nothing recognisable, or it did not run and why.
+    """
+    if body.get("safety_qaqc_error"):
+        return "photo detector failed on this image -- no observations"
+    if body.get("safety_qaqc_ran") is True:
+        return "none detected"
+    return "photo detector unavailable -- image not scanned"
+
+
 @router.post("/v1/chat/analyze-photo")
 async def analyze_chat_photo(
     file: UploadFile = File(...),
@@ -204,6 +219,8 @@ async def analyze_chat_photo(
         people = _people_observation(person_count, observations)
         if people:
             observations.insert(0, people)
+        if not observations:
+            observations.append(_empty_scan_observation(body))
 
         # Strongest-class summary for any caller that wants the raw top list.
         # Truncated to 8 entries; sorted by confidence descending.

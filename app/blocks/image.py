@@ -477,6 +477,7 @@ class ImageBlock(UniversalBlock):
                 result["detection_error"] = detection_error
             if params.get("mode") == "safety_qaqc":
                 result["safety_qaqc"] = safety_qaqc
+                result["safety_qaqc_ran"] = safety_qaqc_used
                 if safety_qaqc_error:
                     result["safety_qaqc_error"] = safety_qaqc_error
             return result
