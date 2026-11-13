@@ -97,10 +97,11 @@ def source_path(metadata: Mapping[str, Any] | None) -> str:
     return ""
 
 
-def role_for_path(path: str, table: Mapping[str, str] | None = None) -> str | None:
+def role_for_path(path: str | None, table: Mapping[str, str] | None = None) -> str | None:
     """Role of the nearest enclosing folder named in the table, else None.
 
     The last path segment is the file itself and is never read as a folder.
+    A document with no source path (``None``) has no folder role.
     """
     table = folder_role_table() if table is None else table
     if not table or not path:

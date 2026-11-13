@@ -93,8 +93,12 @@ def test_table_file_override(tmp_path, monkeypatch, body, expected):
     assert folder_role_table() == expected
 
 
-def test_shipped_table_only_names_known_roles():
-    # The default config file is loaded and every entry survives validation.
+@pytest.mark.parametrize("via_env", [False, True])
+def test_shipped_table_only_names_known_roles(monkeypatch, via_env):
+    # The shipped config file, read by default or named through
+    # DOC_ROLE_FOLDERS_FILE, loads and every entry survives validation.
+    if via_env:
+        monkeypatch.setenv("DOC_ROLE_FOLDERS_FILE", doc_typing._default_table_file())
     raw = doc_typing._raw_table()
     assert raw, "config/doc_role_folders.yaml should ship a table"
     assert len(folder_role_table()) == len(raw)
@@ -134,6 +138,15 @@ def test_nearest_folder_wins(path, expected):
     ("Root/  FOLDER   A /x.pdf", "contract"),
 ])
 def test_folder_match_ignores_case_and_spacing(path, expected):
+    assert role_for_path(path, _T) == expected
+
+
+@pytest.mark.parametrize("path,expected", [
+    (None, None),
+    ("Root/Folder A/x.pdf", "contract"),
+])
+def test_missing_path_has_no_role(path, expected):
+    # A document with no source path gets no folder role; it does not raise.
     assert role_for_path(path, _T) == expected
 
 
