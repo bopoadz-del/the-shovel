@@ -1,0 +1,154 @@
+name: corpus-ghost-tombstone
+
+# Ops workflow (Advisor 20:20Z, 11 Nov; queue item after the family dry-run):
+# run POST /v1/admin/corpus/ghost-tombstone (#204) on the live deployment.
+#
+# The route is admin-gated (`_require_admin`). Only CEREBRUM_MASTER_KEY has
+# that role, and it lives in the LIVE the-fork ECS task definition, not in the
+# repository secrets. It is resolved at run time exactly as
+# corpus-p3-dry-run.yml does, and masked before any echo.
+#
+# Safety, in order:
+#   1. A plan call (execute=false) runs first, ALWAYS. It reports ghost_count
+#      and writes nothing.
+#   2. The write call runs only when the operator passed execute=true AND the
+#      plan's ghost_count equals the operator's expected_ghost_count (the
+#      count the earlier dry-run printed). If the counts differ, the job fails
+#      before any write, and the step summary shows both numbers.
+#   3. After a write, a second plan call reads back ghost_count. It must be 0,
+#      because the planner skips rows that are already TOMBSTONED. Anything
+#      else fails the job.
+# The route never deletes chunks or documents. It hides the row and sets
+# TOMBSTONED, and it is idempotent. project_id and expected_ghost_count have
+# NO committed default: the operator supplies both.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project whose ghost rows to plan / tombstone (no default committed)"
+        required: true
+      expected_ghost_count:
+        description: "ghost_count the operator confirmed from the dry-run; the write runs only if the live plan equals it"
+        required: true
+      execute:
+        description: "false = plan only (default). true = tombstone, guarded by expected_ghost_count"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  tombstone:
+    name: Ghost tombstone (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+      EXPECTED: ${{ inputs.expected_ghost_count }}
+      EXECUTE: ${{ inputs.execute }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
+      - name: Plan (execute=false, always)
+        run: |
+          set -euo pipefail
+          url="${BASE_URL%/}/v1/admin/corpus/ghost-tombstone?project_id=${PROJECT_ID}&execute=false"
+          echo "POST ${url}"
+          curl --fail-with-body --max-time 300 -X POST \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
+            -H "Accept: application/json" \
+            -o plan.json -w "\nHTTP %{http_code}\n" "${url}"
+          planned=$(jq -r '.ghost_count' plan.json)
+          {
+            echo "### Plan (execute=false)"
+            echo "- project_id: ${PROJECT_ID}"
+            echo "- ghost_count (live plan): ${planned}"
+            echo "- expected_ghost_count (operator): ${EXPECTED}"
+            echo "- dry_run: $(jq -r '.dry_run' plan.json), applied: $(jq -r '.applied' plan.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PLANNED=${planned}" >> "$GITHUB_ENV"
+
+      - name: Refuse the write when the plan differs from the expected count
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          case "$EXPECTED" in ''|*[!0-9]*) echo "::error::expected_ghost_count must be a non-negative integer, got '${EXPECTED}'"; exit 1 ;; esac
+          if [ "$PLANNED" != "$EXPECTED" ]; then
+            echo "::error::live plan ghost_count=${PLANNED} != expected_ghost_count=${EXPECTED}; no write was made"
+            echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Tombstone (execute=true)
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          url="${BASE_URL%/}/v1/admin/corpus/ghost-tombstone?project_id=${PROJECT_ID}&execute=true"
+          echo "POST ${url}"
+          curl --fail-with-body --max-time 600 -X POST \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
+            -H "Accept: application/json" \
+            -o applied.json -w "\nHTTP %{http_code}\n" "${url}"
+          {
+            echo "### Write (execute=true)"
+            echo "- ghost_count: $(jq -r '.ghost_count' applied.json)"
+            echo "- applied: $(jq -r '.applied' applied.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Read back (execute=false), must be 0
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          url="${BASE_URL%/}/v1/admin/corpus/ghost-tombstone?project_id=${PROJECT_ID}&execute=false"
+          curl --fail-with-body --max-time 300 -X POST \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
+            -H "Accept: application/json" \
+            -o readback.json -w "\nHTTP %{http_code}\n" "${url}"
+          left=$(jq -r '.ghost_count' readback.json)
+          echo "### Read back: ghost_count=${left}" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$left" = "0" ] || { echo "::error::read-back ghost_count=${left}, expected 0"; exit 1; }
+
+      - name: Upload responses
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-ghost-tombstone-response
+          path: |
+            plan.json
+            applied.json
+            readback.json
+          if-no-files-found: ignore
+          retention-days: 7
