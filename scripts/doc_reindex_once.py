@@ -1,0 +1,203 @@
+"""Re-index ONE existing document from its Drive original, inside the ingest task.
+
+Run by ``.github/workflows/doc-reindex-once.yml`` through the ingest worker:
+``p1b_ingest_drive_server.main`` hands over to :func:`main_from_env` when
+``DOC_REINDEX_DOCUMENT_ID`` is set. The ingest worker's ``WORKER_COMMAND`` is
+a Secrets Manager secret that beats argv and a same-name environment
+override, so the selectors travel as distinct environment names:
+
+* ``DOC_REINDEX_PROJECT_ID`` / ``DOC_REINDEX_DOCUMENT_ID`` (both required)
+* ``DOC_REINDEX_FORCE_OCR`` (``1``/``true`` -> OCR empty-text pages under the
+  force page budget; default on)
+* ``DOC_REINDEX_HEADING_RE`` (optional regex; matching lines of the new
+  chunks are listed in ``chunk_index`` order -- the caller chooses the
+  pattern, nothing is committed here)
+
+The container store keeps no copy of a Drive original, so the bytes are
+downloaded by the row's ``drive_file_id`` to a transient path, the row's
+``file_path`` is pointed at it, and ``index_document(force_ocr=...,
+stamp_as_indexed=True)`` runs. ``index_document`` swaps chunks only on a
+successful extraction (#229), so a failed run leaves the existing chunks in
+place. The transient copy is deleted on every exit.
+
+The last line is ``REINDEXSUMMARY <json>`` with the before/after
+``chunk_count``, ``ingest_status``, ``pages_in_file``, ``pages_ocrd`` and the
+heading lines found.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+SUMMARY_PREFIX = "REINDEXSUMMARY "
+DOC_FIELDS = ("chunk_count", "ingest_status", "pages_in_file", "pages_ocrd")
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+
+
+@dataclass
+class Deps:
+    """The I/O this run needs; production wires the real modules."""
+
+    get_document: Callable[[str], Optional[Dict[str, Any]]]
+    drive_file_id_of: Callable[[Dict[str, Any]], str]
+    download: Callable[[str], Tuple[Optional[bytes], Optional[str]]]
+    write_transient: Callable[[bytes, str], Path]
+    discard_transient: Callable[[Path], None]
+    set_file_path: Callable[[str, str], Any]
+    index_document: Callable[..., Dict[str, Any]]
+    chunk_texts: Callable[[str, str], List[str]]
+    log: Callable[[str], None] = field(default=print)
+
+
+def doc_state(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The four fields the report compares, from one document row."""
+    doc = doc or {}
+    return {k: doc.get(k) for k in DOC_FIELDS}
+
+
+def heading_lines(texts: List[str], pattern: Optional[str]) -> List[str]:
+    """Lines of ``texts`` matching ``pattern``, first-seen order, no repeats."""
+    if not pattern:
+        return []
+    rx = re.compile(pattern)
+    seen: set[str] = set()
+    out: List[str] = []
+    for text in texts:
+        for line in (text or "").splitlines():
+            line = " ".join(line.split())
+            if line and rx.search(line) and line not in seen:
+                seen.add(line)
+                out.append(line)
+    return out
+
+
+def parse_flag(raw: Optional[str], *, default: bool) -> bool:
+    value = (raw or "").strip().lower()
+    if not value:
+        return default
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    raise ValueError(f"not a boolean: {raw!r}")
+
+
+def reindex_one(
+    project_id: str,
+    document_id: str,
+    *,
+    force_ocr: bool,
+    heading_re: Optional[str],
+    deps: Deps,
+) -> Dict[str, Any]:
+    """Re-index one document from its Drive original; never raises on I/O."""
+    report: Dict[str, Any] = {
+        "project_id": project_id,
+        "document_id": document_id,
+        "force_ocr": force_ocr,
+        "ok": False,
+    }
+    if heading_re:
+        re.compile(heading_re)  # a bad pattern fails before any work
+    doc = deps.get_document(document_id)
+    if doc is None:
+        report["error"] = "document not found"
+        return report
+    if doc.get("project_id") != project_id:
+        report["error"] = "document does not belong to project"
+        return report
+    report["filename"] = doc.get("original_name") or ""
+    report["before"] = doc_state(doc)
+    drive_id = (deps.drive_file_id_of(doc) or "").strip()
+    if not drive_id:
+        report["error"] = "document has no drive_file_id"
+        return report
+    raw, err = deps.download(drive_id)
+    if err or not raw:
+        report["error"] = f"DOWNLOAD_FAILED: {err or 'empty download'}"
+        return report
+    report["downloaded_bytes"] = len(raw)
+    path = deps.write_transient(raw, report["filename"] or document_id)
+    try:
+        deps.set_file_path(document_id, str(path))
+        result = deps.index_document(
+            project_id, document_id, force_ocr=force_ocr, stamp_as_indexed=True,
+        )
+    except Exception as exc:  # report it; the swap keeps the old chunks
+        result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        deps.discard_transient(path)
+    report["index_result"] = {
+        k: result.get(k) for k in ("status", "error", "indexed", "rag_indexed")
+        if k in result
+    }
+    report["after"] = doc_state(deps.get_document(document_id))
+    report["headings"] = heading_lines(
+        deps.chunk_texts(project_id, document_id), heading_re,
+    )
+    report["ok"] = not result.get("error") and result.get("status") != "error"
+    if not report["ok"]:
+        report["error"] = result.get("error") or "index_document reported an error"
+    return report
+
+
+def production_deps() -> Deps:
+    from app.core import doc_index, gdrive_service, projects as projects_mod
+    from app.core.rag import vector_store as _vs
+    from scripts import p1b_ingest_drive_server as p1b
+
+    def _chunk_texts(project_id: str, document_id: str) -> List[str]:
+        return _vs.get_store().doc_chunk_texts(project_id, [document_id]).get(document_id, [])
+
+    def _write(raw: bytes, name: str) -> Path:
+        return p1b._transient_copy(raw, p1b._safe_stored_name(name))  # noqa: SLF001
+
+    return Deps(
+        get_document=projects_mod.get_document,
+        drive_file_id_of=lambda d: projects_mod.extract_document_source_pointers(d)["drive_file_id"],
+        download=gdrive_service.download_file_bytes,
+        write_transient=_write,
+        discard_transient=p1b._discard_transient_copy,  # noqa: SLF001
+        set_file_path=projects_mod.set_document_file_path,
+        index_document=doc_index.index_document,
+        chunk_texts=_chunk_texts,
+        log=p1b.log,
+    )
+
+
+def main_from_env(env: Optional[Dict[str, str]] = None, deps: Optional[Deps] = None) -> int:
+    env = dict(os.environ if env is None else env)
+    project_id = (env.get("DOC_REINDEX_PROJECT_ID") or "").strip()
+    document_id = (env.get("DOC_REINDEX_DOCUMENT_ID") or "").strip()
+    out = deps.log if deps else print
+    if not project_id or not document_id:
+        out("ERROR: DOC_REINDEX_PROJECT_ID and DOC_REINDEX_DOCUMENT_ID are both required")
+        return 2
+    try:
+        force_ocr = parse_flag(env.get("DOC_REINDEX_FORCE_OCR"), default=True)
+        heading_re = env.get("DOC_REINDEX_HEADING_RE") or None
+        if heading_re:
+            re.compile(heading_re)
+    except (ValueError, re.error) as exc:
+        out(f"ERROR: {exc}")
+        return 2
+    deps = deps or production_deps()
+    report = reindex_one(
+        project_id, document_id, force_ocr=force_ocr, heading_re=heading_re, deps=deps,
+    )
+    deps.log(SUMMARY_PREFIX + json.dumps(report, sort_keys=True, default=str))
+    return 0 if report["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main_from_env())

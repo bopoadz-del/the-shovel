@@ -974,6 +974,13 @@ def main() -> int:
     from app.core import ingest_lifecycle as lifecycle
     from app.core import ingest_sharding as sharding
 
+    # doc-reindex-once.yml runs this worker for ONE existing document; its
+    # selectors arrive as environment because WORKER_COMMAND is a secret.
+    if (os.getenv("DOC_REINDEX_DOCUMENT_ID") or "").strip():
+        from scripts import doc_reindex_once
+
+        return doc_reindex_once.main_from_env()
+
     args = build_parser().parse_args()
     args = apply_env_fallbacks(args)
     reextract_exts = parse_reextract_exts(args.reextract_exts)
