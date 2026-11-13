@@ -1,0 +1,137 @@
+name: doc-typing-backfill
+
+# Ops workflow (Advisor 19:50Z and 22:40Z, 13 Nov, RQ-3): run
+# POST /v1/admin/corpus/doc-typing on the live deployment.
+# Same shape as noise-chunk-purge.yml / document-exclude.yml.
+#
+# Safety, in order:
+#   1. A plan call (execute=false) runs first, ALWAYS. It prints the counts per
+#      new doc_type and per new doc_role, every change (doc_id, column, old,
+#      new), the documents touched and plan_hash. It writes nothing.
+#   2. The write runs only when the operator passed execute=true AND an
+#      expected_plan_hash equal to the live plan's (from an earlier plan run).
+#      The route recomputes the plan and checks the hash again server-side.
+#   3. The write fills only columns still at their default ('document' /
+#      'other'), compare-and-set per row; a row changed since the plan is
+#      skipped and listed. No row or chunk is deleted. A plan after the write
+#      must report total=0.
+# project_id and expected_plan_hash have NO committed default.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project to plan (no default committed)"
+        required: true
+      expected_plan_hash:
+        description: "plan_hash from an earlier plan run; the write runs only if the live plan equals it"
+        required: false
+        default: ""
+      execute:
+        description: "false = plan only (default). true = apply the planned fills"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Doc type and role backfill (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+      EXPECTED: ${{ inputs.expected_plan_hash }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
+      - name: Plan (execute=false, always)
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/corpus/doc-typing?project_id=$(enc "$PROJECT_ID")&execute=false"
+          echo "POST ${url}"
+          curl --fail-with-body --max-time 600 -X POST -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" -H "Accept: application/json" -o plan.json -w "HTTP %{http_code}\n" "${url}"
+          jq '.plan | del(.changes, .documents)' plan.json
+          echo "changes (doc_id column old -> new):"
+          jq -r '.plan.changes[] | "\(.doc_id) \(.column) \(.old) -> \(.new)"' plan.json
+          {
+            echo "### Plan (execute=false)"
+            echo "- documents scanned: $(jq -r '.plan.documents_scanned' plan.json)"
+            echo "- doc_type fills per type: $(jq -c '.plan.counts.doc_type' plan.json)"
+            echo "- doc_role fills per role: $(jq -c '.plan.counts.doc_role' plan.json)"
+            echo "- total column fills: $(jq -r '.plan.total' plan.json) on $(jq -r '.plan.documents | length' plan.json) documents"
+            echo "- plan_hash (live): $(jq -r '.plan.plan_hash' plan.json)"
+            echo "- expected_plan_hash (operator): ${EXPECTED}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PLANNED=$(jq -r '.plan.plan_hash' plan.json)" >> "$GITHUB_ENV"
+
+      - name: Refuse the write when the plan differs from the expected hash
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          if [ "$PLANNED" != "$EXPECTED" ]; then
+            echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}; no write was made"
+            echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Backfill (execute=true)
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/corpus/doc-typing?project_id=$(enc "$PROJECT_ID")&execute=true&plan_hash=$(enc "$EXPECTED")"
+          curl --fail-with-body --max-time 1200 -X POST -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" -H "Accept: application/json" -o applied.json -w "HTTP %{http_code}\n" "${url}"
+          jq 'del(.plan.changes, .plan.documents)' applied.json
+          [ "$(jq -r '.executed' applied.json)" = "true" ] || { echo "::error::write refused: $(jq -r '.refused' applied.json)"; exit 1; }
+          url="${BASE_URL%/}/v1/admin/corpus/doc-typing?project_id=$(enc "$PROJECT_ID")&execute=false"
+          curl --fail-with-body --max-time 600 -X POST -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" -H "Accept: application/json" -o after.json -w "HTTP %{http_code}\n" "${url}"
+          {
+            echo "### Write (execute=true)"
+            echo "- updated: $(jq -r '.updated' applied.json) of planned $(jq -r '.plan.total' applied.json)"
+            echo "- skipped (changed since the plan): $(jq -r '.skipped | length' applied.json)"
+            echo "- plan after write: $(jq -c '.plan.counts' after.json) total: $(jq -r '.plan.total' after.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$(jq -r '.plan.total' after.json)" = "0" ] || { echo "::error::fills remain after the write"; exit 1; }
+
+      - name: Upload responses
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc-typing-backfill-response
+          path: |
+            plan.json
+            applied.json
+            after.json
+          if-no-files-found: ignore
+          retention-days: 7

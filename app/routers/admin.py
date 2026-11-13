@@ -1754,6 +1754,37 @@ def admin_repair_document_sizes(
     return {"status": "ok", **result}
 
 
+@router.post("/v1/admin/corpus/doc-typing")
+def admin_corpus_doc_typing(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = apply the planned fills"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) fill doc_type / doc_role on existing rows (RQ-3).
+
+    The plan (always computed, never writes) gives counts per new type and per
+    new role and every change as (doc_id, column, old, new), with a
+    ``plan_hash``. Only a column still at its default is filled. ``execute=true``
+    writes only when ``plan_hash`` equals the live plan's; each write is
+    compare-and-set on the planned old value.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.doc_typing_backfill import doc_typing_backfill
+
+    out = doc_typing_backfill(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.doc_typing_backfilled",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            updated=out["updated"],
+            counts=out["plan"]["counts"],
+        )
+    return out
+
+
 class _DeleteDocsRequest(BaseModel):
     doc_ids: List[str]
     # Safety scope: every doc must belong to this project_id or it is skipped.
