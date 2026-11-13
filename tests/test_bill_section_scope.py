@@ -334,3 +334,34 @@ def test_build_actions_carries_the_question_to_the_bill_action(question, kept, e
     )
     bill_text = actions[2]("ductile iron pipe rate")
     assert kept in bill_text and excluded not in bill_text
+
+
+@pytest.mark.parametrize("doc_ids", [[], [None, ""]])
+def test_bill_section_maps_does_not_read_the_store_for_no_document(doc_ids):
+    calls: list = []
+
+    def fetch(project_id, ids):
+        calls.append(ids)
+        return []
+
+    assert bill_section_maps(fetch, "p1", doc_ids) == {}
+    assert calls == []
+
+
+@pytest.mark.parametrize(("ask", "kept", "excluded"), [
+    ("Rate for ductile iron pipe in Bill No. 2?", "85.00", "92.00"),
+    ("ductile iron pipe rate in the pumping station bill", "92.00", "85.00"),
+])
+def test_named_section_keeps_bills_that_print_no_heading(ask, kept, excluded):
+    """A second priced document with no section map is kept as it was:
+    only a mapped bill is cut to the named section."""
+    other = [_chunk("rate-sheet", 0, _row(
+        "Ductile iron pipe 300mm diameter laid in trench", "m", 10, 77))]
+    corpus = _sectioned_bill() + other + _spec()
+    action = bill_rows_action(
+        _bm25_over(corpus), "p1", row_count=priced_row_count,
+        typed_bills=lambda _pid: [BILL], bill_chunks=_fetch_over(corpus), ask=ask,
+    )
+    text = action("ductile iron pipe rate")
+    assert kept in text and "77.00" in text
+    assert excluded not in text
