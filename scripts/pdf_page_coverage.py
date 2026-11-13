@@ -15,9 +15,17 @@ the way ingest does (``file_crypto.open_plaintext`` + PyMuPDF) and prints:
   page count, largest page side).
 
 Nothing here OCRs a page, re-extracts a document or writes to the database:
-the SQL is one parameterised SELECT and each page is read with
-``page.get_text()`` only. Ids arrive in ``COVERAGE_DOC_IDS`` (comma or space
-separated); no document identifier lives in this repository.
+the SQL is parameterised SELECTs and each page is read with
+``page.get_text()`` only. Documents are chosen by ``COVERAGE_DOC_IDS`` (comma
+or space separated ids or prefixes) and/or ``COVERAGE_DRIVE_PATH`` (a
+case-insensitive substring of ``metadata->>'drive_path'``, wildcards escaped);
+no document identifier or path lives in this repository.
+
+Per document it also prints the stored failure evidence (the ledger reason,
+the parsed ``attempts_exhausted`` mark and the failure keys of the metadata)
+and, once per run, the extraction budgets read from the product helpers, so
+"why does this file hold 0 chunks" is answered from the row and the gate,
+not from a guess.
 """
 from __future__ import annotations
 
@@ -33,12 +41,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
 
-# Read-only. The prefix is a bind parameter; ``LIKE`` on the string id.
-_DOC_SQL = (
+# Read-only. The pattern is a bind parameter in both selectors.
+_COLS = (
     "SELECT id, project_id, original_name, size, file_path, ingest_status, "
-    "chunk_count, pages_in_file, pages_ocrd FROM documents "
-    "WHERE id LIKE :p ORDER BY id"
+    "chunk_count, pages_in_file, pages_ocrd, ingest_status_reason, metadata "
+    "FROM documents "
 )
+# ``LIKE`` on the string id (prefix; the id is validated by parse_ids).
+_DOC_SQL = _COLS + "WHERE id LIKE :p ORDER BY id"
+# Case-insensitive substring of the Drive path; ``like_contains`` escapes
+# ``%``, ``_`` and the escape character ``!``. ``->>`` reads JSON text on
+# Postgres (JSON/JSONB) and SQLite alike.
+_PATH_SQL = (
+    _COLS + "WHERE lower(metadata->>'drive_path') LIKE :p ESCAPE '!' "
+    "ORDER BY original_name, id"
+)
+# Metadata keys that carry failure evidence (matched on the key name).
+_FAIL_KEY_RE = re.compile(r"error|fail|skip|reason|attempt|truncat|timeout|oom|limit", re.IGNORECASE)
+_MAX_VALUE_CHARS = 300
 
 # Bounded output: at most this many chars-by-range rows per document.
 _MAX_RANGE_ROWS = 25
@@ -59,6 +79,74 @@ def parse_ids(raw: str) -> list[str]:
         if tok not in out:
             out.append(tok)
     return out
+
+
+def like_contains(raw: str) -> str:
+    """A LIKE pattern matching ``raw`` as a case-insensitive substring, with
+    the pattern characters escaped (escape char ``!``) so the input is always
+    literal. Raises ValueError on a blank input, which would select every
+    document."""
+    sub = (raw or "").strip()
+    if not sub:
+        raise ValueError("drive path substring is blank")
+    esc = sub.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return f"%{esc}%"
+
+
+def _metadata(raw: Any) -> dict[str, Any]:
+    from app.core.projects import coerce_document_metadata
+
+    return coerce_document_metadata(raw)
+
+
+def terminal_meaning(reason: str | None) -> str | None:
+    """What the ``attempts_exhausted`` mark in ``reason`` means under the
+    product's own retry rule; None when the row carries no such mark."""
+    from app.core import ingest_status as st
+
+    m = re.search(re.escape(st.ATTEMPTS_MARK) + r"([^:|]+):(\d+):(\w+)", reason or "")
+    if not m:
+        return None
+    version, n, tail = m.group(1), int(m.group(2)), m.group(3)
+    if version == st.EXTRACTOR_VERSION:
+        after = ("this IS the current extractor: the row stays closed until its "
+                 "source bytes change or EXTRACTOR_VERSION is bumped")
+    else:
+        after = f"the current extractor is {st.EXTRACTOR_VERSION}, so the mark no longer closes the row"
+    return (f"closed after {n} attempt(s) by extractor {version} ({tail}); "
+            f"INGEST_MAX_ATTEMPTS now {st.max_attempts()}; {after}")
+
+
+def failure_evidence(reason: str | None, meta: dict[str, Any]) -> list[str]:
+    """The stored evidence of why a row holds what it holds."""
+    lines = [f"   reason: {reason or '-'}"]
+    meaning = terminal_meaning(reason)
+    if meaning:
+        lines.append(f"   terminal: {meaning}")
+    if meta.get("drive_path"):
+        lines.append(f"   drive_path: {str(meta['drive_path'])[:_MAX_VALUE_CHARS]}")
+    for key in sorted(k for k in meta if _FAIL_KEY_RE.search(str(k))):
+        lines.append(f"   meta.{key}: {str(meta[key])[:_MAX_VALUE_CHARS]}")
+    return lines
+
+
+def budgets() -> dict[str, Any]:
+    """The extraction budgets that apply to every file, read from the product
+    helpers (call-time env) so the report cannot drift from ingest."""
+    from app.core import doc_index as di
+    from app.core import extract_isolated as iso
+    from app.core import ingest_status as st
+
+    file_mem, file_timeout = di._file_budget()
+    return {
+        "pdf_max_size_mb": di.pdf_max_size_mb(),
+        "file_mem_mb": file_mem,
+        "file_timeout_s": file_timeout,
+        "extract_child_mem_mb": iso._MEM_MB,
+        "extract_child_timeout_s": iso._TIMEOUT_S,
+        "max_attempts": st.max_attempts(),
+        "extractor_version": st.EXTRACTOR_VERSION,
+    }
 
 
 def _runs(pages: Iterable[int]) -> list[tuple[int, int]]:
@@ -175,12 +263,19 @@ def read_page_chars(file_path: str) -> tuple[list[int], float, str | None]:
 
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
            max_side: float, error: str | None) -> list[str]:
-    did, pid, name, size, _fpath, status, nchunks, pif, pocr = doc_row
+    did, pid, name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
     lines = [
         f"== doc {did} | project {pid} | {name}",
         (f"   db: size={size} ingest_status={status} chunks={nchunks} "
          f"pages_in_file={pif} pages_ocrd={pocr}"),
     ]
+    lines.extend(failure_evidence(reason, _metadata(meta)))
+    if gates and gates["skipped_too_large"]:
+        lines.append(
+            f"   SIZE GATE: {gates['size_mb']} MB > pdf_max_size_mb="
+            f"{gates['pdf_max_size_mb']}: ingest skips the whole PDF, "
+            "its text pages included"
+        )
     if gates:
         lines.append(
             "   gates: size_mb={size_mb} skipped_too_large={skipped_too_large} "
@@ -217,6 +312,8 @@ def diagnose(doc_row: tuple) -> list[str]:
     _did, _pid, name, _size, fpath, *_ = doc_row
     if not fpath or not os.path.exists(fpath):
         return render(doc_row, None, None, 0.0, f"file not on this filesystem: {fpath!r}")
+    if os.path.splitext(name or fpath)[1].lower() != ".pdf":
+        return render(doc_row, None, None, 0.0, "not a PDF: page read skipped")
     try:
         gates = ingest_gates(fpath, name or "")
         chars, max_side, error = read_page_chars(fpath)
@@ -227,17 +324,29 @@ def diagnose(doc_row: tuple) -> list[str]:
 
 
 def main() -> int:
+    raw_path = os.environ.get("COVERAGE_DRIVE_PATH", "")
     try:
         ids = parse_ids(os.environ.get("COVERAGE_DOC_IDS", ""))
+        path_pattern = like_contains(raw_path) if raw_path.strip() else None
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    if not ids:
-        sys.stderr.write("COVERAGE_DOC_IDS is required\n")
+    if not ids and path_pattern is None:
+        sys.stderr.write("COVERAGE_DOC_IDS or COVERAGE_DRIVE_PATH is required\n")
         return 2
     from app.core.db import SessionLocal
 
+    print("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()), flush=True)
     failed = 0
+    if path_pattern is not None:
+        with SessionLocal() as s:
+            rows = s.execute(text(_PATH_SQL), {"p": path_pattern}).all()
+        print(f"== drive path selector: {len(rows)} documents", flush=True)
+        if not rows:
+            failed += 1
+        for row in rows:
+            for line in diagnose(tuple(row)):
+                print(line, flush=True)
     for prefix in ids:
         with SessionLocal() as s:
             rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
