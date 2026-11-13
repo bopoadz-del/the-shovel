@@ -275,3 +275,81 @@ def test_answer_head_must_match_the_stored_answer(store, memory, head, status, r
     })
     assert resp.status_code == status, resp.text
     assert len(store.rows("ml_feedback")) == rows
+
+
+# ── the handler and the kind rule, called directly ──────────────────────
+
+@pytest.mark.parametrize("caller, want", [("owner", "recorded"), ("intruder", 404)])
+def test_submit_answer_feedback_handler(store, memory, caller, want):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from app.routers.feedback import AnswerFeedbackRequest, submit_answer_feedback
+
+    stored = _seed(memory, "conv-d", "proj-d", "owner", [("Direct answer.", PROV_ONE_DOC)])
+    req = AnswerFeedbackRequest(project_id="proj-d", conversation_id="conv-d", kind="correct")
+    auth = {"user_id": caller, "role": "user"}
+    if want == 404:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(submit_answer_feedback(req, auth))
+        assert exc.value.status_code == 404
+        assert store.rows("ml_feedback") == []
+    else:
+        out = asyncio.run(submit_answer_feedback(req, auth))
+        assert (out.status, out.message_id) == (want, stored[0]["id"])
+        assert store.rows("ml_feedback")[0]["cited_ids"] == ["gk-7"]
+
+
+@pytest.mark.parametrize("kind, fields, ok", [
+    ("wrong_figure", {"correct_value": 2.0, "unit": "t"}, True),
+    ("correct", {"unit": "t"}, False),
+    ("missing", {"note": "the DNP"}, True),
+    ("wrong_figure", {"note": "the DNP"}, False),
+])
+def test_fields_match_kind(kind, fields, ok):
+    from app.routers.feedback import AnswerFeedbackKind, AnswerFeedbackRequest
+
+    req = AnswerFeedbackRequest.model_construct(
+        project_id="p", conversation_id="c", message_index=-1, kind=AnswerFeedbackKind(kind),
+        correct_value=fields.get("correct_value"), unit=fields.get("unit"), note=fields.get("note"),
+        answer_head=None,
+    )
+    if ok:
+        assert req._fields_match_kind() is req
+    else:
+        with pytest.raises(ValueError, match="not accepted"):
+            req._fields_match_kind()
+
+
+# ── the dataset adapter never forwards a blank question ─────────────────
+
+@pytest.mark.parametrize("question, forwarded", [("   ", 0), ("", 0), ("What is the DNP?", 1)])
+def test_forward_to_ml_loop_skips_a_blank_question(tmp_path, monkeypatch, question, forwarded):
+    import app.blocks.ml_loop as block_mod
+    from app.core.rag.dataset_log import DatasetRecord, append_dataset_record
+
+    calls = []
+    monkeypatch.setattr(block_mod, "record", lambda op, payload: calls.append((op, payload)) or {})
+    append_dataset_record("proj-q", DatasetRecord(question=question, answer="a", verdict="refused"),
+                          base=tmp_path)
+    assert len(calls) == forwarded
+    if forwarded:
+        assert calls[0][0] == "record_turn"
+        assert calls[0][1]["question"] == question
+
+
+# ── the conversation owner still needs the project grant ────────────────
+
+@pytest.mark.parametrize("cid", ["conv-grant", "ws-proj-g-1700000000002"])
+@pytest.mark.parametrize("granted, status", [(True, 200), (False, 404)])
+def test_owner_without_the_project_grant_is_refused(store, memory, monkeypatch, cid, granted, status):
+    from app.core import projects as projects_store
+
+    _seed(memory, cid, "proj-g", "owner", [("An answer.", None)])
+    monkeypatch.setattr(projects_store, "can_access_project", lambda *_a, **_k: granted)
+    resp = _client("owner").post("/v1/feedback/answer", json={
+        "project_id": "proj-g", "conversation_id": cid, "kind": "correct",
+    })
+    assert resp.status_code == status, resp.text
+    assert len(store.rows("ml_feedback")) == (1 if granted else 0)
