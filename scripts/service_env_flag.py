@@ -20,6 +20,27 @@ Safety, in order:
   5. `update-service --force-new-deployment`, wait for services-stable, then
      read the value back again and search the new tasks' CloudWatch stream
      for the startup line that proves the flag took, when the key has one.
+
+Map mode (P-H1c, `--map true`) is for an allowlisted key that the live task
+definition does not map at all.
+  - It copies the LIVE task definition: the revision the service runs, not
+    the latest registered one.
+  - The copy gets exactly one new `secrets` entry,
+    `<key> <- <the secret ARN the container already maps from>:<key>::`.
+  - Refused when the key is already mapped in any form (nothing is
+    re-registered).
+  - Refused when the live revision and the latest registered revision of the
+    family differ in anything but the revision, because that means infra was
+    changed by hand.
+  - Refused when the container maps from no secret, or from more than one.
+  - The one-entry diff is printed before anything is registered. Plan mode
+    registers nothing.
+  - Execute registers the revision, writes the key, rolls the service ONTO
+    that revision, and waits for services-stable. It then checks that the
+    service runs that revision, reads the value back and proves it as above.
+deploy-aws rolls with --force-new-deployment and no --task-definition, so the
+service stays on the registered revision and the entry survives later
+deploys.
 """
 from __future__ import annotations
 
@@ -122,6 +143,72 @@ def find_mapping(task_definition: dict, key: str) -> Mapping:
                 secret_id, json_key, pinned = parse_value_from(sec.get("valueFrom", ""))
                 return Mapping("secret", name, secret_id, json_key, pinned)
     return Mapping("absent")
+
+
+# The task-definition fields `register-task-definition` accepts. Everything
+# else that describe returns is metadata ECS assigns (arn, revision, status,
+# registeredAt/By, requiresAttributes, compatibilities).
+REGISTER_FIELDS = (
+    "family", "taskRoleArn", "executionRoleArn", "networkMode",
+    "containerDefinitions", "volumes", "placementConstraints",
+    "requiresCompatibilities", "cpu", "memory", "pidMode", "ipcMode",
+    "proxyConfiguration", "inferenceAccelerators", "ephemeralStorage",
+    "runtimePlatform", "enableFaultInjection",
+)
+
+
+def register_input(task_definition: dict) -> dict:
+    """The registerable spec of a described task definition."""
+    return {k: task_definition[k] for k in REGISTER_FIELDS if k in task_definition}
+
+
+def refuse_if_drifted(live: dict, latest: dict) -> None:
+    """Refuse when the latest registered revision differs from the live one
+    in anything but its revision. That means someone registered a different
+    definition by hand, and copying the live one would silently discard or
+    race that change. Only the differing field names are printed, never a
+    value."""
+    a, b = register_input(live), register_input(latest)
+    differ = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+    if differ:
+        raise Refused(
+            f"the live task definition (revision {live.get('revision')}) and the latest "
+            f"registered revision ({latest.get('revision')}) differ in {differ}; "
+            "infra was changed outside this workflow, stop and report")
+
+
+def add_secret_entry(task_definition: dict, key: str) -> tuple[dict, str, dict]:
+    """Return (register input with one entry added, container name, entry).
+
+    The entry maps `key` from the one secret ARN that the container already
+    maps its JSON keys from. The returned spec is a deep copy; the caller's
+    task definition is not mutated."""
+    if find_mapping(task_definition, key).where != "absent":
+        raise Refused(f"{key} is already mapped in the live task definition; nothing to register")
+    spec = json.loads(json.dumps(register_input(task_definition)))
+    holders = [c for c in spec.get("containerDefinitions") or [] if c.get("secrets")]
+    if len(holders) != 1:
+        raise Refused(f"expected exactly one container mapping secrets, found {len(holders)}")
+    container = holders[0]
+    arns = set()
+    for sec in container["secrets"]:
+        secret_id, json_key, pinned = parse_value_from(sec.get("valueFrom", ""))
+        if json_key and not pinned:
+            arns.add(secret_id)
+    if len(arns) != 1:
+        raise Refused(f"expected the container to map JSON keys from one secret, found {len(arns)}")
+    entry = {"name": key, "valueFrom": f"{arns.pop()}:{key}::"}
+    container["secrets"].append(entry)
+    return spec, container.get("name", ""), entry
+
+
+def describe_entry(container: str, entry: dict) -> str:
+    """The one-entry diff line, with the account id masked."""
+    parts = entry["valueFrom"].split(":")
+    if len(parts) > 4:
+        parts[4] = "***"
+    return (f"+ containerDefinitions[{container}].secrets: "
+            f"name={entry['name']} valueFrom={':'.join(parts)}")
 
 
 def refuse_unless_writable(mapping: Mapping) -> None:
@@ -228,7 +315,8 @@ def _find_proof(clients: Clients, group: str, streams: list[str], pattern: str,
 
 def run(key: str, value: str, execute: bool, clients_factory: Callable[[], Clients],
         cluster: str, service: str, out=print, sleep: Callable[[float], None] = time.sleep,
-        now: Callable[[], float] = time.time, log_attempts: int = 20) -> int:
+        now: Callable[[], float] = time.time, log_attempts: int = 20,
+        map_key: bool = False) -> int:
     try:
         value = validate_request(key, value)
     except Refused as exc:
@@ -240,8 +328,19 @@ def run(key: str, value: str, execute: bool, clients_factory: Callable[[], Clien
     out(f"mapped_in_task_definition={mapping.where}"
         + (f" container={mapping.container} json_key={mapping.json_key} pinned={mapping.pinned}"
            if mapping.where == "secret" else ""))
+    new_spec = None
     try:
-        refuse_unless_writable(mapping)
+        if map_key:
+            latest = clients.ecs.describe_task_definition(
+                taskDefinition=td["family"])["taskDefinition"]
+            refuse_if_drifted(td, latest)
+            new_spec, container, entry = add_secret_entry(td, key)
+            out(f"map: copy of live revision {td.get('revision')}, one entry added:")
+            out(describe_entry(container, entry))
+            secret_id, _, _ = parse_value_from(entry["valueFrom"])
+            mapping = Mapping("secret", container, secret_id, key, False)
+        else:
+            refuse_unless_writable(mapping)
     except Refused as exc:
         out(f"key={key} <not read>")
         out(f"REFUSED: {exc}")
@@ -249,8 +348,15 @@ def run(key: str, value: str, execute: bool, clients_factory: Callable[[], Clien
     current = read_value(_secret_string(clients, mapping.secret_id), mapping.json_key)
     out(f"plan: {key}={current} (requested {value})")
     if not execute:
-        out("execute=false: nothing written")
+        out("execute=false: nothing registered or written" if map_key
+            else "execute=false: nothing written")
         return 0
+
+    new_arn = ""
+    if new_spec is not None:
+        registered = clients.ecs.register_task_definition(**new_spec)["taskDefinition"]
+        new_arn = registered["taskDefinitionArn"]
+        out(f"registered: {new_arn.rsplit('/', 1)[-1]}")
 
     new_string = rewrite(_secret_string(clients, mapping.secret_id), mapping.json_key, value)
     clients.secrets.put_secret_value(SecretId=mapping.secret_id, SecretString=new_string)
@@ -261,12 +367,22 @@ def run(key: str, value: str, execute: bool, clients_factory: Callable[[], Clien
         return 1
 
     since = now()
-    clients.ecs.update_service(cluster=cluster, service=service, forceNewDeployment=True)
+    roll = {"taskDefinition": new_arn} if new_arn else {}
+    clients.ecs.update_service(cluster=cluster, service=service, forceNewDeployment=True, **roll)
     clients.ecs.get_waiter("services_stable").wait(
         cluster=cluster, services=[service], WaiterConfig={"Delay": 15, "MaxAttempts": 40})
     out("rollout: services-stable")
 
     td_after = _live_task_definition(clients, cluster, service)
+    if new_arn:
+        revision = new_arn.rsplit("/", 1)[-1]
+        if td_after.get("taskDefinitionArn") != new_arn:
+            out(f"FAILED: the service does not run the registered revision {revision}")
+            return 1
+        if find_mapping(td_after, key).json_key != key:
+            out(f"FAILED: the live task definition does not map {key}")
+            return 1
+        out(f"live task definition maps {key}: {revision}")
     after = read_value(_secret_string(clients, mapping.secret_id), mapping.json_key)
     out(f"post-rollout read-back: {key}={after}")
     if after != value:
@@ -315,10 +431,23 @@ class AwsCli:
     def describe_task_definition(self, taskDefinition):
         return self._call("ecs", "describe-task-definition", "--task-definition", taskDefinition)
 
-    def update_service(self, cluster, service, forceNewDeployment):
+    def update_service(self, cluster, service, forceNewDeployment, taskDefinition=None):
         flag = "--force-new-deployment" if forceNewDeployment else "--no-force-new-deployment"
-        self._call("ecs", "update-service", "--cluster", cluster, "--service", service, flag,
-                   parse=False)
+        pin = ("--task-definition", taskDefinition) if taskDefinition else ()
+        self._call("ecs", "update-service", "--cluster", cluster, "--service", service,
+                   *pin, flag, parse=False)
+
+    def register_task_definition(self, **spec):
+        # Passed through a 0600 temp file, not argv, because the spec carries
+        # the container environment. stdout is parsed, never printed.
+        fd, path = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                json.dump(spec, fh, ensure_ascii=False)
+            return self._call("ecs", "register-task-definition", "--cli-input-json",
+                              f"file://{path}", env={"AWS_CLI_FILE_ENCODING": "UTF-8"})
+        finally:
+            os.unlink(path)
 
     def get_waiter(self, name):
         cli = self
@@ -372,13 +501,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--key", required=True)
     ap.add_argument("--value", required=True)
     ap.add_argument("--execute", default="false")
+    ap.add_argument("--map", default="false",
+                    help="true = add the key's secrets entry to a copy of the live task definition")
     ap.add_argument("--cluster", default="cerebrum")
     ap.add_argument("--service", default="the-fork")
     ap.add_argument("--region", default="us-west-2")
     args = ap.parse_args(argv)
     execute = str(args.execute).strip().lower() == "true"
+    map_key = str(args.map).strip().lower() == "true"
     return run(args.key, args.value, execute, _cli_clients(args.region),
-               args.cluster, args.service)
+               args.cluster, args.service, map_key=map_key)
 
 
 if __name__ == "__main__":
