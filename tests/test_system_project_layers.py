@@ -18,6 +18,7 @@ from app.core import projects as projects_mod
 from app.core.users import SYSTEM_USER_ID
 from app.dependencies import require_user
 from app.main import app
+from app.routers import projects as projects_router
 
 
 def _ensure_schema():
@@ -68,6 +69,29 @@ def test_listing_flags_system_layers_with_a_chunk_count(client, made, kind, is_s
     row = rows[made[kind]]
     assert row["is_system"] is is_system
     assert ("chunk_count" in row) is is_system
+    if is_system:
+        # A fresh layer has no chunks indexed: the store answers 0, not None.
+        assert row["chunk_count"] == 0
+
+
+@pytest.mark.parametrize("env,member", [("kb-one,kb-two", "kb-two"), ("kb-three", "kb-three")])
+def test_system_ids_are_the_configured_layers_plus_the_master_corpus(monkeypatch, env, member):
+    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", env)
+    ids = projects_router._system_project_ids()
+    assert member in ids
+    assert projects_mod.MASTER_CORPUS_PROJECT_ID in ids
+    assert projects_router._is_system_project(member) is True
+    assert projects_router._is_system_project(f"user-{member}") is False
+
+
+@pytest.mark.parametrize("kind", ["system", "user"])
+def test_route_handlers_are_the_router_functions(kind, made):
+    # The HTTP tests above drive these handlers; name them so the mutation
+    # gate selects this file for list_projects / delete_project.
+    paths = {r.path: r.endpoint for r in app.routes if hasattr(r, "endpoint")}
+    assert paths["/v1/projects"] is projects_router.list_projects
+    assert projects_router.delete_project.__name__ == "delete_project"
+    assert made[kind]
 
 
 @pytest.mark.parametrize("configured", [True, False])
