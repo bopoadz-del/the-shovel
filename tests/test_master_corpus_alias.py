@@ -439,10 +439,14 @@ def test_master_corpus_alias_export_conversation_resolves(client):
     assert resp.content[:2] == b"PK"
 
 
-def test_master_corpus_alias_delete_is_refused(client):
-    """The alias is a system knowledge layer (S-U1): delete is refused for an
-    admin too, and the corpus stays listed with its rows and chunks."""
-    resp = client.delete(f"/v1/projects/{projects_mod.MASTER_CORPUS_PROJECT_ID}")
+@pytest.mark.parametrize("target", [
+    projects_mod.MASTER_CORPUS_PROJECT_ID,
+    projects_mod.MASTER_CORPUS_SOURCE_PROJECT_ID,
+])
+def test_master_corpus_alias_delete_is_refused(client, target):
+    """The alias and its backing source are a system knowledge layer (S-U1):
+    delete is refused for an admin too, and the corpus stays listed."""
+    resp = client.delete(f"/v1/projects/{target}")
     assert resp.status_code == 403, resp.text
 
     resp = client.get("/v1/projects")
