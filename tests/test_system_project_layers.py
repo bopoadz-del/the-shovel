@@ -1,8 +1,8 @@
 """S-U1: system knowledge layers are not user projects.
 
 The ids the retriever treats as general knowledge (``RAG_GENERAL_KNOWLEDGE_
-PROJECTS``) and the master-corpus alias are listed with ``is_system`` and a
-chunk count, and the delete route refuses them for every caller. A user's
+PROJECTS``) are listed with ``is_system`` and a chunk count; the delete route refuses
+them and the master-corpus alias (which stays a project card) for every caller. A user's
 own project keeps ``is_system`` False and stays deletable.
 
 Each test builds its own projects and runs on two inputs.
@@ -75,21 +75,39 @@ def test_listing_flags_system_layers_with_a_chunk_count(client, made, kind, is_s
 
 
 @pytest.mark.parametrize("env,member", [("kb-one,kb-two", "kb-two"), ("kb-three", "kb-three")])
-def test_system_ids_are_the_configured_layers_plus_the_master_corpus(monkeypatch, env, member):
+def test_a_general_knowledge_id_is_a_layer(monkeypatch, env, member):
     monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", env)
-    ids = projects_router._system_project_ids()
-    assert member in ids
-    assert projects_mod.MASTER_CORPUS_PROJECT_ID in ids
+    assert member in projects_router._system_project_ids()
     assert projects_router._is_system_project(member) is True
+    assert projects_router._is_undeletable_project(member) is True
     assert projects_router._is_system_project(f"user-{member}") is False
+    assert projects_router._is_undeletable_project(f"user-{member}") is False
+
+
+@pytest.mark.parametrize("target", [
+    projects_mod.MASTER_CORPUS_PROJECT_ID,
+    projects_mod.MASTER_CORPUS_SOURCE_PROJECT_ID,
+])
+def test_the_master_corpus_is_a_project_not_a_layer(monkeypatch, target):
+    # The client's Master Corpus stays a project card (not partitioned out),
+    # yet no caller may delete it.
+    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "kb-elsewhere")
+    assert target not in projects_router._system_project_ids()
+    assert projects_router._is_system_project(target) is False
+    assert projects_router._is_undeletable_project(target) is True
 
 
 @pytest.mark.parametrize("kind", ["system", "user"])
 def test_route_handlers_are_the_router_functions(kind, made):
     # The HTTP tests above drive these handlers; name them so the mutation
     # gate selects this file for list_projects / delete_project.
+    # Compared by name, not identity: another test may reload the module.
     paths = {r.path: r.endpoint for r in app.routes if hasattr(r, "endpoint")}
-    assert paths["/v1/projects"] is projects_router.list_projects
+    listed = paths["/v1/projects"]
+    assert (listed.__module__, listed.__qualname__) == (
+        projects_router.list_projects.__module__,
+        projects_router.list_projects.__qualname__,
+    )
     assert projects_router.delete_project.__name__ == "delete_project"
     assert made[kind]
 

@@ -451,5 +451,7 @@ def test_master_corpus_alias_delete_is_refused(client, target):
 
     resp = client.get("/v1/projects")
     assert resp.status_code == 200
-    ids = {p["id"] for p in resp.json()["projects"]}
-    assert projects_mod.MASTER_CORPUS_PROJECT_ID in ids
+    rows = {p["id"]: p for p in resp.json()["projects"]}
+    assert projects_mod.MASTER_CORPUS_PROJECT_ID in rows
+    # The client's corpus is a project card, not a knowledge layer.
+    assert rows[projects_mod.MASTER_CORPUS_PROJECT_ID].get("is_system") is False

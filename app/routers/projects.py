@@ -268,23 +268,30 @@ async def create_project_from_drive(
 
 
 def _system_project_ids() -> frozenset[str]:
-    """Ids of the system knowledge layers: not user projects.
+    """Ids of the general-knowledge layers: not user projects.
 
     The retriever's configured general-knowledge ids (searched on every turn
-    through ``search_general_knowledge``) plus the master-corpus alias and
-    its backing source. Configuration decides membership; no id is named here.
+    through ``search_general_knowledge``). The master corpus is NOT one: it is
+    the client's project and stays a project card. Configuration decides
+    membership; no id is named here.
     """
     from app.core.rag.retriever import _general_knowledge_project_ids
 
-    ids = set(_general_knowledge_project_ids())
-    ids.update((store.MASTER_CORPUS_PROJECT_ID, store.MASTER_CORPUS_SOURCE_PROJECT_ID))
-    return frozenset(i for i in ids if i)
+    return frozenset(i for i in _general_knowledge_project_ids() if i)
 
 
 def _is_system_project(project_id: str) -> bool:
-    """True when ``project_id`` (or what its alias resolves to) is a system layer."""
-    ids = _system_project_ids()
-    return project_id in ids or (store._master_corpus_source(project_id) or project_id) in ids
+    """True when ``project_id`` is a general-knowledge layer (listing partition)."""
+    return project_id in _system_project_ids()
+
+
+def _is_undeletable_project(project_id: str) -> bool:
+    """True for ids no caller may delete: the general-knowledge layers and
+    the master-corpus alias with its backing source."""
+    if _is_system_project(project_id):
+        return True
+    master = {store.MASTER_CORPUS_PROJECT_ID, store.MASTER_CORPUS_SOURCE_PROJECT_ID}
+    return project_id in master or (store._master_corpus_source(project_id) or project_id) in master
 
 
 def _layer_chunk_count(project_id: str) -> Optional[int]:
@@ -799,11 +806,11 @@ async def download_document(
 async def delete_project(project_id: str, auth: dict = Depends(require_user)):
     """Delete a project: its document records, facts, AND files on disk.
 
-    A system knowledge layer (``_system_project_ids``: the general-knowledge
-    ids and the master-corpus alias) is not a user project and is refused for
-    every caller, admin included.
+    A general-knowledge layer and the master corpus (alias and backing
+    source) are refused for every caller, admin included
+    (``_is_undeletable_project``).
     """
-    if _is_system_project(project_id):
+    if _is_undeletable_project(project_id):
         raise HTTPException(403, "System knowledge layers cannot be deleted")
     resolved_id = store._master_corpus_source(project_id) or project_id
     # Admins see every project in the list, so they must be able to load (and
