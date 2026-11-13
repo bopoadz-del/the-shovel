@@ -127,7 +127,11 @@ def reindex_one(
         report["error"] = f"DOWNLOAD_FAILED: {err or 'empty download'}"
         return report
     report["downloaded_bytes"] = len(raw)
-    path = deps.write_transient(raw, report["filename"] or document_id)
+    try:
+        path = deps.write_transient(raw, report["filename"] or document_id)
+    except Exception as exc:  # report it; nothing was pointed or indexed
+        report["error"] = f"TRANSIENT_WRITE_FAILED: {type(exc).__name__}: {exc}"
+        return report
     try:
         deps.set_file_path(document_id, str(path))
         result = deps.index_document(
@@ -151,6 +155,25 @@ def reindex_one(
     return report
 
 
+def write_transient_copy(raw: bytes, name: str) -> Path:
+    """Write ``raw`` to one transient copy the extractors can read.
+
+    The path comes from the ingest worker's own reservation
+    (``_transient_dest``): decrypted-temp prefix, so the plaintext sweeper
+    reaps it if the process dies, and the stored name keeps the extension the
+    extractor dispatches on. A failed write leaves no file behind.
+    """
+    from scripts import p1b_ingest_drive_server as p1b
+
+    dest = p1b._transient_dest(p1b._safe_stored_name(name))  # noqa: SLF001
+    try:
+        dest.write_bytes(raw)
+    except BaseException:
+        p1b._discard_transient_copy(dest)  # noqa: SLF001
+        raise
+    return dest
+
+
 def production_deps() -> Deps:
     from app.core import doc_index, gdrive_service, projects as projects_mod
     from app.core.rag import vector_store as _vs
@@ -159,14 +182,11 @@ def production_deps() -> Deps:
     def _chunk_texts(project_id: str, document_id: str) -> List[str]:
         return _vs.get_store().doc_chunk_texts(project_id, [document_id]).get(document_id, [])
 
-    def _write(raw: bytes, name: str) -> Path:
-        return p1b._transient_copy(raw, p1b._safe_stored_name(name))  # noqa: SLF001
-
     return Deps(
         get_document=projects_mod.get_document,
         drive_file_id_of=lambda d: projects_mod.extract_document_source_pointers(d)["drive_file_id"],
         download=gdrive_service.download_file_bytes,
-        write_transient=_write,
+        write_transient=write_transient_copy,
         discard_transient=p1b._discard_transient_copy,  # noqa: SLF001
         set_file_path=projects_mod.set_document_file_path,
         index_document=doc_index.index_document,
