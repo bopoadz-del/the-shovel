@@ -2190,6 +2190,37 @@ def admin_corpus_legacy_guard_chunks(
     )
 
 
+@router.post("/v1/admin/corpus/noise-chunks")
+def admin_corpus_noise_chunks(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = delete the planned chunks"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) delete noise chunks: empty rows, header repeats, guard sentences.
+
+    The plan (always computed, never writes) lists the chunk ids and counts
+    per class and a ``plan_hash`` over them. ``execute=true`` deletes only
+    when ``plan_hash`` equals the live plan's; otherwise ``refused`` says why
+    and nothing changes. Documents are never deleted; each touched document's
+    chunk_count and ingest status are re-derived.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.noise_chunk_purge import noise_chunk_purge
+
+    out = noise_chunk_purge(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.noise_chunks_purged",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            deleted=out["deleted"],
+            counts=out["plan"]["counts"],
+        )
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PR A — admin-approved projects from Drive
 #
