@@ -3916,6 +3916,21 @@ def _index_document(
     if doc is None:
         return {"project_id": project_id, "indexed": 0, "error": "document not found"}
 
+    # An owner-excluded document is never indexed again, whichever entry
+    # point (Drive worker, doc-reindex-once, project rebuild) asked.
+    from app.core.ingest_status import is_excluded as _is_excluded
+
+    if _is_excluded(doc):
+        return {
+            "status": "skipped",
+            "excluded": True,
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": doc.get("original_name", ""),
+            "indexed": 0,
+            "total_chunks": 0,
+        }
+
     filename = doc.get("original_name", "")
     ext = _ext_of(filename)
     fingerprint = f"{doc.get('uploaded_at', '')}:{doc.get('size', 0)}"

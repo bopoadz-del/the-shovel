@@ -87,6 +87,23 @@ ALL_STATUSES = frozenset(
 # pages -- the document is partially read, not chunk-less.
 NO_CHUNK_STATUSES = ALL_STATUSES - INDEXED_STATUSES - {UNVERIFIED, PARTIAL_OCR}
 
+# OWNER EXCLUSION. A document whose metadata carries ``excluded`` (written
+# by ``projects.exclude_document``: ``{"by", "at", "reason"}``) is never
+# ingested, indexed, retrieved or listed again. The row is KEPT as the record
+# of the decision; its chunks are deleted. One rule, read from the attribute
+# by every entry point -- never a document id in code.
+EXCLUDED_KEY = "excluded"
+OWNER_EXCLUDED_REASON = "owner_excluded"
+
+
+def is_excluded(doc: Any) -> bool:
+    """True when ``doc`` (a document dict) carries an owner exclusion."""
+    if not isinstance(doc, dict):
+        return False
+    meta = doc.get("metadata")
+    return isinstance(meta, dict) and bool(meta.get(EXCLUDED_KEY))
+
+
 # Extractor family stamped on INDEXED rows after the content-control fix.
 # #550 / 8535199: Word SDT + deduped text boxes. Bump the suffix when the
 # extract walk changes again; do not invent a hash that is not this family.

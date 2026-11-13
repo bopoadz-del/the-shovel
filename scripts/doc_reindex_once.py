@@ -118,6 +118,11 @@ def reindex_one(
         return report
     report["filename"] = doc.get("original_name") or ""
     report["before"] = doc_state(doc)
+    from app.core.ingest_status import is_excluded
+
+    if is_excluded(doc):
+        report["error"] = "document is excluded by owner decision; not re-indexed"
+        return report
     drive_id = (deps.drive_file_id_of(doc) or "").strip()
     if not drive_id:
         report["error"] = "document has no drive_file_id"
