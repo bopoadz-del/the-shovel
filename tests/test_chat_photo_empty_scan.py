@@ -172,3 +172,28 @@ def test_image_block_reports_whether_the_safety_scan_ran(tmp_path, monkeypatch, 
     assert out.get("status") == "success", out
     assert out["safety_qaqc"] == []
     assert out["safety_qaqc_ran"] is ran
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_image_block_returns_the_source_error_for_a_missing_file(tmp_path, monkeypatch, exists):
+    """A source that cannot be resolved ends the scan with its error; a real
+    file is scanned. (The empty-scan note relies on the block's answer.)"""
+    import asyncio
+
+    from PIL import Image
+
+    from app.blocks import image as image_mod
+    from app.blocks import safety_world_detector
+
+    path = tmp_path / "maybe.png"
+    if exists:
+        Image.new("RGB", (64, 64), (120, 80, 40)).save(path)
+    monkeypatch.setattr(safety_world_detector, "default_detector", lambda: None)
+    monkeypatch.setattr(image_mod, "_yolo_available", lambda: False)
+    monkeypatch.setattr(image_mod, "_tesseract_ocr", lambda p: ("", 0.0))
+
+    out = asyncio.run(image_mod.ImageBlock().process(str(path), {"mode": "safety_qaqc"}))
+    if exists:
+        assert out.get("safety_qaqc_ran") is False, out
+    else:
+        assert out == {"status": "error", "error": "Provide a valid file path or URL"}
