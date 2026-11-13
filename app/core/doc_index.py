@@ -263,6 +263,24 @@ def _pdf_hits_size_gate(file_path: str, filename: str) -> bool:
     return any(gate > 0 and size_mb > gate for gate in gates)
 
 
+def _extract_for_profile(
+    file_path: str, filename: str, profile: str,
+) -> tuple[str, dict[str, Any]]:
+    """``_extract_with_meta`` under the gates of ``profile``.
+
+    Under ``corpus_build`` a PDF that any size gate touches is read in
+    isolated page batches with no whole-file ceiling and no size-based OCR
+    skip; every other document extracts exactly as a user upload does.
+    """
+    corpus_build = _checked_profile(profile) == PROFILE_CORPUS_BUILD
+    if corpus_build and _ext_of(filename) == ".pdf" and _pdf_hits_size_gate(file_path, filename):
+        return _extract_with_meta(
+            file_path, filename,
+            whole_document=True, max_size_mb=0.0, ocr_size_gate=False,
+        )
+    return _extract_with_meta(file_path, filename)
+
+
 # How many leading letters/digits of a chunk are matched against the extracted
 # text to find the page the chunk starts on (``chunk_start_pages``).
 _DEFAULT_CHUNK_PAGE_PROBE_CHARS = 48
@@ -2567,8 +2585,14 @@ def _unsupported_skip_reason(ext: str) -> str:
     return "unsupported_type"
 
 
-def index_project(project_id: str) -> dict[str, Any]:
+def index_project(
+    project_id: str, *, profile: str = PROFILE_USER_UPLOAD,
+) -> dict[str, Any]:
     """Build (or rebuild) the full text index for ``project_id``.
+
+    ``profile`` picks the extraction gates (see ``PROFILE_CORPUS_BUILD``); a
+    document whose text stage fell short is stamped TEXT_SPARSE with the
+    reason, so its table chunks alone never read as a fully indexed body.
 
     For each document:
     - unsupported extension → record under ``skipped`` with reason
@@ -2582,6 +2606,7 @@ def index_project(project_id: str) -> dict[str, Any]:
 
     Persists the result as JSON and returns a summary dict.
     """
+    _checked_profile(profile)
     docs = _projects.list_documents(project_id)
     # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
     prior = _entries_of(_load_index(project_id))
@@ -2639,11 +2664,12 @@ def index_project(project_id: str) -> dict[str, Any]:
             continue
 
         file_path = doc.get("file_path") or ""
-        text, meta = _extract_with_meta(file_path, filename)
+        text, meta = _extract_for_profile(file_path, filename, profile)
         meta = dict(meta or {})
         chunks, pages = _text_chunks_with_pages(
             text, meta, _chunker_for_document(filename), filename,
         )
+        text_chunk_count = len(chunks)
         # BOQ → RAG: mirror index_document so the package total + line items
         # are retrievable regardless of which indexing path ran.
         doc_attrs: dict[str, Any] = {}
@@ -2663,6 +2689,7 @@ def index_project(project_id: str) -> dict[str, Any]:
             chunks = chunks + drawing_chunks
         meta["chunk_pages"] = pages + [None] * (len(chunks) - len(pages))
         chunks = _normalize_cesmm_in_chunks(chunks)
+        _record_stage_split(meta, text_chunk_count, len(chunks) - text_chunk_count)
 
         if not chunks:
             # A file that yields no text is never recorded as indexed: the
@@ -2695,6 +2722,12 @@ def index_project(project_id: str) -> dict[str, Any]:
         }
         if meta.get("ocr_low_quality"):
             entry["ocr_low_quality"] = True
+        shortfall = _text_stage_shortfall(meta)
+        if shortfall:
+            entry["text_stage_shortfall"] = shortfall
+            _stamp_index_ledger(
+                doc["id"], filename, len(chunks), text_stage_shortfall=shortfall,
+            )
         documents.append(entry)
         total_chunks += len(chunks)
         ocr_flags = _ocr_flags_for(chunks, meta)

@@ -203,3 +203,128 @@ def test_stage_split_is_recorded(text_n, table_n):
     meta: dict = {}
     doc_index._record_stage_split(meta, text_n, table_n)
     assert meta == {"text_chunks": text_n, "table_chunks": table_n}
+
+
+def _index_project_run(monkeypatch, tmp_path, name, profile, extract_meta, table_chunks):
+    """Run ``index_project`` over one stored document; capture what it chose."""
+    from app.core import projects as projects_mod
+    from app.core.rag import retriever as rag_retriever
+
+    doc = {
+        "id": "doc-1", "original_name": name, "file_path": str(tmp_path / name),
+        "uploaded_at": "2026-11-13T00:00:00Z", "size": 1, "bytes_state": "present",
+    }
+    seen: dict = {"extract": None, "stamps": [], "written": None}
+
+    def _extract(file_path, filename, force_ocr=False, **kw):
+        seen["extract"] = kw
+        return "body text " * 50, dict(extract_meta)
+
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: [doc])
+    monkeypatch.setattr(doc_index, "_load_index", lambda pid: None)
+    monkeypatch.setattr(doc_index, "_write_index", lambda pid, data: seen.update(written=data))
+    monkeypatch.setattr(doc_index, "_extract_with_meta", _extract)
+    monkeypatch.setattr(
+        doc_index, "_boq_chunks_for_document", lambda *a: [f"row {i}" for i in range(table_chunks)],
+    )
+    monkeypatch.setattr(doc_index, "_drawing_chunks_for_document", lambda *a: [])
+    monkeypatch.setattr(doc_index, "_record_document_attributes", lambda *a: None)
+    monkeypatch.setattr(rag_retriever, "available", lambda: False)
+    monkeypatch.setattr(
+        doc_index, "_stamp_index_ledger",
+        lambda doc_id, filename, n, **kw: seen["stamps"].append((n, kw)),
+    )
+    result = doc_index.index_project("p", profile=profile)
+    return result, seen
+
+
+@pytest.mark.parametrize("size_mb", [45.0, 186.0])
+def test_index_project_corpus_build_batches_a_gated_pdf(tmp_path, monkeypatch, size_mb):
+    """The admin rebuild-all under corpus_build reads an over-gate PDF in page
+    batches with no ceiling and no OCR size skip; as a user upload it keeps
+    today's gates (plain per-file extraction)."""
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: size_mb)
+    monkeypatch.setenv("PDF_BATCH_MIN_MB", "20")
+    monkeypatch.setenv("PDF_OCR_MAX_SIZE_MB", "32")
+
+    _r, corpus = _index_project_run(
+        monkeypatch, tmp_path, "set.pdf", doc_index.PROFILE_CORPUS_BUILD, {}, 0,
+    )
+    assert corpus["extract"] == {
+        "whole_document": True, "max_size_mb": 0.0, "ocr_size_gate": False,
+    }
+
+    _r, upload = _index_project_run(
+        monkeypatch, tmp_path, "set.pdf", doc_index.PROFILE_USER_UPLOAD, {}, 0,
+    )
+    assert upload["extract"] == {}
+
+
+@pytest.mark.parametrize(("name", "size_mb"), [("small.pdf", 3.0), ("schedule.xlsx", 186.0)])
+def test_index_project_corpus_build_leaves_ungated_documents_alone(
+    tmp_path, monkeypatch, name, size_mb,
+):
+    """An ungated PDF, or any non-PDF however large, extracts as before."""
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: size_mb)
+    monkeypatch.setenv("PDF_BATCH_MIN_MB", "20")
+    monkeypatch.setenv("PDF_MAX_SIZE_MB", "100")
+    monkeypatch.setenv("PDF_OCR_MAX_SIZE_MB", "32")
+
+    _r, seen = _index_project_run(
+        monkeypatch, tmp_path, name, doc_index.PROFILE_CORPUS_BUILD, {}, 0,
+    )
+    assert seen["extract"] == {}
+
+
+@pytest.mark.parametrize(
+    ("extract_meta", "reason"),
+    [
+        ({"extract_partial": True, "extract_failed": None, "pages_read": 40},
+         "text_stage_partial"),
+        ({"skipped_too_large": True, "size_mb": 186.0},
+         "text_stage_skipped_over_size_ceiling"),
+    ],
+)
+def test_index_project_shortfall_keeps_chunks_and_stamps_text_sparse(
+    tmp_path, monkeypatch, extract_meta, reason,
+):
+    """A batch that failed after earlier batches were read (or a skipped text
+    stage): the document keeps its chunks, its entry names the reason, and
+    the ledger gets the shortfall, never INDEXED and never ZERO_CHUNK."""
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: 3.0)
+    result, seen = _index_project_run(
+        monkeypatch, tmp_path, "volume.pdf", doc_index.PROFILE_CORPUS_BUILD,
+        extract_meta, 7,
+    )
+    assert result["indexed"] == 1
+    entry = seen["written"]["documents"][0]
+    assert entry["text_stage_shortfall"] == reason
+    assert entry["chunk_count"] > 7
+    [(n, kw)] = seen["stamps"]
+    assert n == entry["chunk_count"]
+    assert kw["text_stage_shortfall"] == reason
+    assert not kw.get("stamp_as_indexed")
+
+
+@pytest.mark.parametrize("extract_meta", [{}, {"pages_read": 297}])
+def test_index_project_full_read_is_not_restamped(tmp_path, monkeypatch, extract_meta):
+    """No shortfall: index_project leaves the ledger alone, as before."""
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: 3.0)
+    result, seen = _index_project_run(
+        monkeypatch, tmp_path, "volume.pdf", doc_index.PROFILE_CORPUS_BUILD,
+        extract_meta, 2,
+    )
+    assert result["indexed"] == 1
+    assert "text_stage_shortfall" not in seen["written"]["documents"][0]
+    assert seen["stamps"] == []
+
+
+@pytest.mark.parametrize("profile", ["corpus", ""])
+def test_index_project_refuses_unknown_profile(monkeypatch, profile):
+    from app.core import projects as projects_mod
+
+    listed: list = []
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: listed.append(pid) or [])
+    with pytest.raises(ValueError):
+        doc_index.index_project("p", profile=profile)
+    assert listed == []

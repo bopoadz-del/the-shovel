@@ -730,7 +730,9 @@ def admin_project_reindex(
     """
     _require_admin(auth)
     from app.core import doc_index as _doc_index
-    result = _doc_index.index_project(project_id)
+    result = _doc_index.index_project(
+        project_id, profile=_doc_index.PROFILE_CORPUS_BUILD,
+    )
     if result.get("status") == "error":
         raise HTTPException(status_code=422, detail=result)
     return result
