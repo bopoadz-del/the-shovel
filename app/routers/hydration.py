@@ -3,8 +3,9 @@
 - ``GET  /v1/hydration/latest?scope=global``
 - ``GET  /v1/hydration/latest?scope=project&project_id=<id>``
 - ``GET  /v1/hydration/history?scope=...&project_id=...&limit=20``
-- ``POST /v1/hydration/run`` — admin-triggered manual pass. Body may include
-  ``target_date`` (YYYY-MM-DD) and ``project_ids`` (list) to force-reprocess.
+- ``POST /v1/hydration/run[?project_id=<id>]`` — admin-triggered manual pass.
+  Body may include ``target_date`` (YYYY-MM-DD) and ``project_ids`` (list) to
+  force-reprocess. Returns the run id and the pass's model-usage line.
 
 All endpoints require the standard API-key dependency.
 """
@@ -81,6 +82,7 @@ async def hydration_history(
 @router.post("/v1/hydration/run")
 async def hydration_run(
     request: HydrationRunRequest,
+    project_id: Optional[str] = Query(None),
     auth: dict = Depends(require_api_key),
 ):
     """Manually trigger a hydration pass. Useful for one-off backfills and
@@ -89,6 +91,12 @@ async def hydration_run(
     The standalone hydration block was retired — hydration is now an
     operation on ``learning_engine``. This route stays at ``/v1/hydration/*``
     for operator familiarity but dispatches into the merged surface.
+
+    ``?project_id=`` runs the pass for that one project (the same as a
+    one-item ``project_ids`` body). The result carries ``run_id`` (the pass's
+    global row), ``project_run_ids``, ``usage`` (model calls and the
+    provider-reported prompt / completion tokens) and ``cost_line``, the same
+    ``hydration_run ...`` line the pass writes to the log.
     """
     _require_admin(auth)
     from app.blocks import BLOCK_REGISTRY
@@ -103,6 +111,9 @@ async def hydration_run(
     payload: Dict[str, Any] = {"operation": "hydrate"}
     if request.target_date:
         payload["target_date"] = request.target_date
-    if request.project_ids:
-        payload["project_ids"] = request.project_ids
+    project_ids = list(request.project_ids or [])
+    if project_id and project_id not in project_ids:
+        project_ids.append(project_id)
+    if project_ids:
+        payload["project_ids"] = project_ids
     return await block.execute(payload, {})
