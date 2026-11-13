@@ -222,3 +222,37 @@ def test_admin_route_rejects_non_admin(monkeypatch, tmp_path, role):
             auth={"user_id": "u", "role": role},
         )
     assert len(_texts_of(did)) == 1
+
+
+# A guard chunk can outlive its ledger row (the documents row was removed but
+# the chunk was not). It is still purged; restamp has no ledger row to touch
+# and must skip it rather than fail the whole execute after the delete.
+@pytest.mark.parametrize("with_real_doc", [False, True], ids=["orphan_only", "orphan_and_doc"])
+def test_execute_purges_guard_chunk_without_ledger_row(
+    monkeypatch, tmp_path, with_real_doc,
+):
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("G", user_id="system", project_id="gproj")
+    orphan = "no-ledger-row-doc"
+    _seed("gproj", orphan, [_guard_text("Gone.pdf")])
+    expected_docs = {orphan}
+    real = None
+    if with_real_doc:
+        real = _doc(pm, "gproj", "Bill C.pdf", [
+            _guard_text("Bill C.pdf"), "| 2.1 | Kerb | m | 40 | 12.00 | 480.00 |",
+        ])
+        expected_docs.add(real)
+
+    plan = p3_legacy_guard_chunk_purge(project_id="gproj")
+    assert plan["guard_chunk_count"] == len(expected_docs)
+    assert set(plan["documents"]) == expected_docs
+
+    done = p3_legacy_guard_chunk_purge(
+        project_id="gproj", execute=True, expected_count=len(expected_docs),
+    )
+    assert done["refused"] is None
+    assert done["deleted"] == len(expected_docs)
+    assert _texts_of(orphan) == []
+    restamped = {r["doc_id"] for r in done["restamped"]}
+    assert orphan not in restamped
+    assert restamped == ({real} if real else set())
