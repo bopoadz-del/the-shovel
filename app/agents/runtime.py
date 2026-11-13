@@ -4106,9 +4106,8 @@ def _sanitize_final_text(
     5. If that fallback would hide a ``validation_pipeline`` verdict, graft it.
     6. Return empty string if nothing usable remains.
     """
-    if not text:
-        cleaned = ""
-    else:
+    cleaned = ""
+    if text:
         cleaned = _strip_dsml(text).strip()
         cleaned = _strip_answer_routing_preamble(cleaned)
         cleaned = _strip_reasoning_blocks(cleaned)
