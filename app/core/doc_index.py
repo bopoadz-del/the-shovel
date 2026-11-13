@@ -3186,6 +3186,32 @@ def _looks_like_drawing(filename: str, ext: str) -> bool:
     return ext == ".pdf" and bool(_DRAWING_NAME_RE.search(filename or ""))
 
 
+# A recovered table earns a chunk only when it carries structure: at least
+# two non-empty lines (a header line counts as one) holding at least two
+# non-empty cells between them. `find_tables` on a dense drawing sheet also
+# boxes isolated level tags and stray label fragments ("SL +655.713",
+# "EER | -01"); as one-line "tables" they are noise that crowds real
+# schedules out of retrieval, and their text is already in the text stage.
+_DRAWING_TABLE_MIN_LINES = 2
+_DRAWING_TABLE_MIN_CELLS = 2
+
+
+def _drawing_table_has_content(table: dict[str, Any]) -> bool:
+    """True when a recovered table meets the minimum-content rule above."""
+    lines = [table.get("header") or []] + list(table.get("rows") or [])
+    filled_lines = 0
+    filled_cells = 0
+    for line in lines:
+        cells = sum(1 for cell in line if str(cell or "").strip())
+        if cells:
+            filled_lines += 1
+            filled_cells += cells
+    return (
+        filled_lines >= _DRAWING_TABLE_MIN_LINES
+        and filled_cells >= _DRAWING_TABLE_MIN_CELLS
+    )
+
+
 def _drawing_table_chunks(tables: list[dict[str, Any]], source: str) -> list[str]:
     """Serialise recovered drawing tables into retrievable chunks.
 
@@ -3216,7 +3242,7 @@ def _drawing_table_chunks(tables: list[dict[str, Any]], source: str) -> list[str
     for table in tables:
         rows = table.get("rows") or []
         header = table.get("header") or []
-        if not rows and not header:
+        if not _drawing_table_has_content(table):
             continue
         kind = table.get("kind", "unclassified")
         label = _KIND_WORDS.get(kind, _KIND_WORDS["unclassified"])
