@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.core import upload_limits as ul
 from app.main import app
-from app.routers import chat_photos
+from app.routers import chat_photos, projects
 from tests._dev_key import DEV_KEY
 
 H = {"Authorization": "Bearer " + DEV_KEY}
@@ -51,6 +51,21 @@ def _project(client, name):
     r = client.post("/v1/projects", json={"name": name, "client": "ACME"}, headers=H)
     assert r.status_code == 201, r.text
     return r.json()["id"]
+
+
+def _route_path(endpoint):
+    """The routed path of ``endpoint``, read from the app, never typed here."""
+    for route in app.routes:
+        routed = getattr(route, "endpoint", None)
+        if routed is not None and (routed.__module__, routed.__qualname__) == (
+            endpoint.__module__, endpoint.__qualname__,
+        ):
+            return route.path
+    raise AssertionError(f"{endpoint.__qualname__} is not routed")
+
+
+def _documents_path(pid):
+    return _route_path(projects.add_document).format(project_id=pid)
 
 
 @pytest.mark.parametrize(
@@ -128,7 +143,7 @@ def test_document_upload_is_typed_by_content(client, multipart_name, display_nam
     pid = _project(client, "Typed by content")
     form = {"display_name": display_name} if display_name else {}
     r = client.post(
-        f"/v1/projects/{pid}/documents",
+        _documents_path(pid),
         files={"file": (multipart_name, data, "application/octet-stream")},
         data=form,
         headers=H,
@@ -143,7 +158,7 @@ def test_display_name_with_no_file_part_is_refused(client, display_name):
     # only a path or a dot-segment must be refused as a filename, not typed.
     pid = _project(client, "Invalid display name")
     r = client.post(
-        f"/v1/projects/{pid}/documents",
+        _documents_path(pid),
         files={"file": ("spec.pdf", PDF, "application/pdf")},
         data={"display_name": display_name},
         headers=H,
@@ -162,7 +177,7 @@ def test_display_name_with_no_file_part_is_refused(client, display_name):
 def test_unprovable_or_excluded_upload_names_the_cause(client, name, data, detail):
     pid = _project(client, "Refused by content")
     r = client.post(
-        f"/v1/projects/{pid}/documents",
+        _documents_path(pid),
         files={"file": (name, data, "application/octet-stream")},
         headers=H,
     )
@@ -178,7 +193,7 @@ def test_oversize_upload_gets_the_size_message(client, monkeypatch, name, data):
     pid = _project(client, "Oversize")
     monkeypatch.setenv("MAX_DOC_UPLOAD_SIZE", "64")
     r = client.post(
-        f"/v1/projects/{pid}/documents",
+        _documents_path(pid),
         files={"file": (name, data + b"\x00" * 128, "application/octet-stream")},
         headers=H,
     )
@@ -201,16 +216,6 @@ def test_photo_route_types_by_content(client, name, data, detail):
     )
     assert r.status_code == 400, r.text
     assert r.json()["detail"].startswith(detail)
-
-
-def _photo_path():
-    for route in app.routes:
-        endpoint = getattr(route, "endpoint", None)
-        if endpoint is not None and (endpoint.__module__, endpoint.__qualname__) == (
-            chat_photos.__name__, chat_photos.analyze_chat_photo.__qualname__,
-        ):
-            return route.path
-    raise AssertionError("analyze_chat_photo is not routed")
 
 
 class _CountingImageBlock:
@@ -241,7 +246,7 @@ def test_extensionless_photo_is_analysed_by_content(
     monkeypatch.setattr("app.dependencies.get_block_instance", lambda name: block)
     form = {"display_name": display_name} if display_name else {}
     r = client.post(
-        _photo_path(),
+        _route_path(chat_photos.analyze_chat_photo),
         files={"file": (multipart_name, data, "application/octet-stream")},
         data=form,
         headers=H,
