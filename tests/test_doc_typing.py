@@ -65,6 +65,72 @@ def test_type_for_reads_content_when_given(content, expected):
     assert type_for("scan_0042.pdf", content) == expected
 
 
+# ── parity: every case the retired filename chain typed, the table still types
+# The chain in ``classify_doc_type`` was removed in RQ-3. Each row is one
+# branch of that chain; a failure here means the table lost coverage and the
+# table is fixed, not this list.
+
+_RETIRED_CHAIN_CASES = [
+    # extension and scheduler-name branch -> schedule
+    ("baseline.xer", "schedule"),
+    ("baseline.mpp", "schedule"),
+    ("Primavera export.xlsx", "schedule"),
+    ("P6 update 12.xlsx", "schedule"),
+    # .ifc -> bim
+    ("model.ifc", "bim"),
+    # the five image extensions -> photo
+    ("img_01.jpg", "photo"),
+    ("img_01.jpeg", "photo"),
+    ("img_01.png", "photo"),
+    ("img_01.gif", "photo"),
+    ("img_01.webp", "photo"),
+    # bill branch -> the bill type
+    ("Tender BOQ rev 1.xlsx", "BILL"),
+    ("Bill of Quant v2.pdf", "BILL"),
+    # contract / agreement -> contract
+    ("Main Contract.pdf", "contract"),
+    ("Service Agreement.pdf", "contract"),
+    # spec -> specification
+    ("Spec Section 03 30 00.pdf", "specification"),
+    # drawing name or .dwg -> drawing
+    ("Drawing Register.pdf", "drawing"),
+    ("plan_L02.dwg", "drawing"),
+    # schedule / programme -> schedule
+    ("Schedule rev 3.pdf", "schedule"),
+    ("Programme rev 3.pdf", "schedule"),
+    ("Program rev 3.pdf", "schedule"),
+]
+
+
+@pytest.mark.parametrize("name,expected", _RETIRED_CHAIN_CASES)
+def test_table_types_every_case_the_retired_chain_typed(name, expected):
+    from app.core.projects import DOC_TYPE_BILL, classify_doc_type
+    want = DOC_TYPE_BILL if expected == "BILL" else expected
+    assert classify_doc_type(name) == want
+
+
+@pytest.mark.parametrize("name,is_bill", [
+    ("Bill of Quantities.pdf", True),
+    ("notes.txt", False),
+])
+def test_bill_type_name_is_the_bill_rows_constant(name, is_bill):
+    # The bill-rows action selects documents by ``DOC_TYPE_BILL``; the table's
+    # bill type must carry exactly that name.
+    from app.core.projects import DOC_TYPE_BILL
+    assert (type_for(name) == DOC_TYPE_BILL) is is_bill
+
+
+@pytest.mark.parametrize("name,is_bill", [
+    ("Bill.pdf", True),
+    ("Bill No 4 - Finishes.xlsx", True),
+    ("Billing Summary.pdf", False),
+    ("Feasibility Study.pdf", False),
+])
+def test_bill_keyword_is_a_word_not_letters_inside_a_word(name, is_bill):
+    from app.core.projects import DOC_TYPE_BILL
+    assert (type_for(name) == DOC_TYPE_BILL) is is_bill
+
+
 # ── folder table ───────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("role,kept", [("tender", True), ("not_a_role", False)])
