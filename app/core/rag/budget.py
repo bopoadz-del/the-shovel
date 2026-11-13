@@ -4,7 +4,9 @@ Layered on top of the per-turn ``MAX_RAG_TOKENS`` cap and the
 ``RAG_CONFIDENCE_THRESHOLD`` short-circuit so RAG token spend has
 three independent degradation paths. When the day's consumed sum
 reaches the budget INCLUSIVELY (``consumed >= budget``), the
-injector degrades to ``K=2`` for the remaining turns of the day.
+injector hands a smaller CHARACTER budget of excerpts for the remaining
+turns of the day (``handed_set.char_budget(degraded=True)``); the
+retrieval depth is unchanged.
 
 Day rollover is implicit: callers pass ``day=utc.strftime("%Y-%m-%d")``
 and a fresh row materialises on the first read of a new date.

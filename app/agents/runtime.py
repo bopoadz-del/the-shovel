@@ -1038,6 +1038,19 @@ def _bill_led_rag_msg(
     return {**rag_sys_msg, "content": led}
 
 
+def _wants_source_coverage_plan(user_message: str, first_pass: str) -> bool:
+    """A document ask that is not a figure ask still gets the evidence
+    loop's plan when the first pass covers fewer sources than the kinds of
+    document the question names (S-R5 c). The runtime's own "not a
+    retrieval ask" exclusions apply first, exactly as for a figure ask."""
+    from app.core.rag.handed_set import wants_source_coverage_retrieval
+
+    text = (user_message or "").strip()
+    if not text or _agentic_figure_retrieval_excluded(text):
+        return False
+    return wants_source_coverage_retrieval(text, first_pass)
+
+
 async def _agentic_figure_retrieval_augment(
     agent: Any,
     user_message: str,
@@ -1080,6 +1093,8 @@ async def _agentic_figure_retrieval_augment(
         user_message,
         asks_measured_quantity=measured_quantity_kinds,
         exclude=_agentic_figure_retrieval_excluded,
+    ) and not _wants_source_coverage_plan(
+        user_message, rag_sys_msg.get("content", ""),
     ):
         return rag_sys_msg
 
