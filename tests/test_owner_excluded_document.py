@@ -289,3 +289,14 @@ def test_route_refuses_unknown_document_other_project_and_non_admin(world, case,
         _route(**kw)
     assert refused.value.status_code == status
     assert sum(_counts(store, pid).values()) == TOTAL  # nothing written on any refusal
+
+
+@pytest.mark.parametrize("offset", [1, 2])
+def test_documents_list_without_a_limit_is_every_document_whatever_the_offset(world, offset):
+    """``limit=None`` is the legacy "all docs" listing: an offset only pages a
+    LIMITED query, it never silently drops rows from the full list."""
+    projects, _store, _emb, pid, docs = world
+    listed = [d["id"] for d in projects.list_documents(pid, offset=offset)]
+    assert sorted(listed) == sorted(docs.values())
+    paged = [d["id"] for d in projects.list_documents(pid, limit=1, offset=offset)]
+    assert paged == [listed[offset]]
