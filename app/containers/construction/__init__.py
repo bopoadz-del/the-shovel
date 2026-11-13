@@ -351,7 +351,13 @@ class ConstructionContainer(
         activities = schedule_data.get("activities", [])
     
         if not activities:
-            return {"critical_path": [], "project_duration_days": 0, "average_float": 0}
+            # Same near-critical contract as a non-empty schedule: None when
+            # no band was supplied, an empty list when one was.
+            return {"critical_path": [], "project_duration_days": 0, "average_float": 0,
+                    "near_critical_count": (None if near_critical_band_days is None else 0),
+                    "near_critical_activities": (
+                        None if near_critical_band_days is None else []),
+                    "near_critical_band_days": near_critical_band_days}
     
         critical_activities = [a for a in activities if a.get("total_float", 999) <= 0.1]
     

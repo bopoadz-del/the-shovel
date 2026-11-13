@@ -216,8 +216,47 @@ def test_container_cpm_band_decides_membership(band, expected):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", [0, "later"])
 async def test_parse_primavera_schedule_bad_band_is_an_error(tmp_path, bad):
-    res = await _container().parse_primavera_schedule(
-        {"file_path": _xer(tmp_path, {"L1": 40})},
+    from app.containers.construction.schedule import ConstructionScheduleMixin
+    res = await ConstructionScheduleMixin.parse_primavera_schedule(
+        _container(), {"file_path": _xer(tmp_path, {"L1": 40})},
         {"near_critical_band_days": bad})
     assert res["status"] == "error"
     assert "near_critical_band_days" in res["error"]
+
+
+# -- guards in the functions this slice touched -------------------------------
+
+@pytest.mark.parametrize("band,near", [(None, None), (3, [])])
+def test_container_cpm_empty_schedule_keeps_the_band_contract(band, near):
+    out = _container()._calculate_cpm({"activities": []}, band)
+    assert out == {
+        "critical_path": [], "project_duration_days": 0, "average_float": 0,
+        "near_critical_count": None if near is None else 0,
+        "near_critical_activities": near,
+        "near_critical_band_days": band,
+    }
+
+
+@pytest.mark.parametrize("ids", [["A", "A"], ["X", "Y", "X"]])
+def test_compute_cpm_refuses_duplicate_activity_ids(ids):
+    acts = [Activity(id=i, duration=1) for i in ids]
+    with pytest.raises(ValueError, match="Duplicate activity ids"):
+        compute_cpm(CPMInput(activities=acts, near_critical_band_days=2))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [{}, {"file_path": ""}])
+async def test_primavera_parser_without_a_file_names_what_is_missing(data):
+    res = await PrimaveraParserBlock().process(
+        data, {"near_critical_band_days": 2})
+    assert res["status"] == "error"
+    assert "No file_path provided" in res["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [{}, {"file_path": ""}])
+async def test_parse_primavera_schedule_without_a_file_names_what_is_missing(data):
+    from app.containers.construction.schedule import ConstructionScheduleMixin
+    res = await ConstructionScheduleMixin.parse_primavera_schedule(
+        _container(), data, {"near_critical_band_days": 2})
+    assert res == {"status": "error", "error": "No schedule file provided"}
