@@ -1,0 +1,87 @@
+name: service-env-flag
+
+# Ops workflow (P-H1, Advisor 06:40Z 13 Nov; owner order: turn the nightly
+# hydration pass back on through a reviewed workflow).
+#
+# Flips ONE non-credential flag in the live the-fork service env. The live
+# task definition maps service env vars from the Secrets Manager JSON
+# (valueFrom <secret-arn>:<json-key>::), and deploy-aws reuses that task
+# definition with --force-new-deployment. So a flag is changed by rewriting
+# that one JSON key and forcing a new deployment.
+#
+# All logic is in scripts/service_env_flag.py (unit-tested in
+# tests/test_service_env_flag.py):
+#   1. `key` must be on the script's ALLOWLIST and `value` must fit its kind,
+#      or the job fails before any AWS read.
+#   2. Plan (execute=false, default) prints only `KEY=<current value>` and
+#      how the key is mapped in the live task definition. No other field of
+#      the secret is ever printed.
+#   3. Execute refuses an unmapped / plain-env / version-pinned key, writes
+#      the one key back from Python (json.dumps ensure_ascii=False, UTF-8,
+#      no BOM), reads it back, forces a new deployment, waits for
+#      services-stable, reads it back again, and for hydration flags finds
+#      the scheduler's startup line in a NEW task's CloudWatch stream.
+#
+# Shares the deploy-aws concurrency group so a flag roll and a deploy never
+# overlap.
+
+on:
+  workflow_dispatch:
+    inputs:
+      key:
+        description: "Flag name (must be on the allowlist in scripts/service_env_flag.py)"
+        required: true
+      value:
+        description: "New value (true/false for booleans, an integer for hours and page caps)"
+        required: true
+      execute:
+        description: "false = plan only (default). true = write, roll the service, prove it took"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  flag:
+    name: Service env flag (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FLAG_KEY: ${{ inputs.key }}
+      FLAG_VALUE: ${{ inputs.value }}
+      FLAG_EXECUTE: ${{ inputs.execute }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install boto3
+        run: python -m pip install --quiet boto3==1.35.36
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Plan / execute
+        run: |
+          python scripts/service_env_flag.py \
+            --key "$FLAG_KEY" --value "$FLAG_VALUE" --execute "$FLAG_EXECUTE" \
+            --cluster cerebrum --service the-fork --region us-west-2 \
+            | tee flag.log
+          rc=${PIPESTATUS[0]}
+          {
+            echo "### service-env-flag (execute=${FLAG_EXECUTE})"
+            echo '```'
+            cat flag.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
