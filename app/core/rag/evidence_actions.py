@@ -14,6 +14,13 @@ import os
 from functools import lru_cache, partial
 from typing import Callable, Iterable, Mapping, Sequence
 
+from app.core.rag.bill_sections import (
+    in_named_span,
+    named_sections,
+    section_label,
+    section_map,
+)
+from app.core.rag.bill_sections import words as section_words
 from app.core.rag.evidence_budget import (
     CONTEXT_TRUNCATED_NOTE,
     cap_chunks,
@@ -237,9 +244,118 @@ def typed_bill_ids(
         return frozenset()
 
 
+class _SectionTagged:
+    """A chunk whose text leads with the bill section it belongs to.
+
+    Carries the attributes the ranking and the budget read, so a tagged
+    chunk ranks, dedups and budgets like the chunk it wraps.
+    """
+
+    __slots__ = ("chunk_id", "chunk_index", "doc_id", "score", "text")
+
+    def __init__(self, chunk, label: str):
+        self.doc_id = getattr(chunk, "doc_id", "") or ""
+        self.chunk_id = getattr(chunk, "chunk_id", None)
+        self.chunk_index = getattr(chunk, "chunk_index", None)
+        self.score = getattr(chunk, "score", None)
+        self.text = f"{label}\n{chunk_text(chunk)}"
+
+
+def bill_section_maps(
+    fetch: Callable[[str, list[str]], Sequence], project_id: str, doc_ids,
+) -> dict[str, tuple[list, list]]:
+    """``{doc_id: (section map, chunks)}`` for the bills that print headings.
+
+    ``fetch(project_id, doc_ids)`` returns every chunk of those documents
+    (each with ``doc_id``/``chunk_index``/``text``). A failed fetch means
+    "no section known" (logged): the action then ranks as it did before.
+    """
+    ids = sorted(str(d) for d in (doc_ids or ()) if d)
+    if not ids:
+        return {}
+    try:
+        chunks = list(fetch(project_id, ids) or ())
+    except Exception:  # noqa: BLE001 -- a fetch failure must not break the loop
+        logger.warning(
+            "bill_rows section-map fetch failed project=%s; ranking without "
+            "sections", project_id, exc_info=True,
+        )
+        return {}
+    by_doc: dict[str, list] = {}
+    for chunk in chunks:
+        if getattr(chunk, "chunk_index", None) is None:
+            continue
+        by_doc.setdefault(getattr(chunk, "doc_id", "") or "", []).append(chunk)
+    out: dict[str, tuple[list, list]] = {}
+    for doc_id, doc_chunks in by_doc.items():
+        sections = section_map(
+            (int(c.chunk_index), chunk_text(c)) for c in doc_chunks
+        )
+        if doc_id and sections:
+            out[doc_id] = (sections, doc_chunks)
+    return out
+
+
+def _named_by_doc(maps, item: str, ask: str) -> dict[str, set[str]]:
+    """``{doc_id: section numbers}`` the plan item (else the ask) names."""
+    named: dict[str, set[str]] = {}
+    for doc_id, (sections, _chunks) in maps.items():
+        numbers = named_sections(item, sections) or named_sections(ask, sections)
+        if numbers:
+            named[doc_id] = numbers
+    return named
+
+
+def _scope_to_named_sections(pool, maps, named, item: str, row_count) -> list:
+    """The pool with every mapped bill cut to the sections the ask names.
+
+    A mapped bill's chunks outside the named spans are excluded; a mapped
+    bill with no named section is excluded whole (its rows belong to other
+    sections). A document with no section map is kept as it was. A named
+    section's own priced chunks that print an item word join the pool after
+    its lexical hits, so the section's rows are not lost to the document-wide
+    top-k.
+    """
+    def inside(chunk) -> bool:
+        doc_id = getattr(chunk, "doc_id", "") or ""
+        if doc_id not in maps:
+            return True
+        return in_named_span(
+            getattr(chunk, "chunk_index", None), maps[doc_id][0],
+            named.get(doc_id, ()),
+        )
+
+    scoped = [c for c in pool if inside(c)]
+    item_words = section_words(item)
+    extra = []
+    for doc_id, numbers in named.items():
+        sections, doc_chunks = maps[doc_id]
+        for chunk in doc_chunks:
+            if not in_named_span(chunk.chunk_index, sections, numbers):
+                continue
+            text = chunk_text(chunk)
+            if item_words & section_words(text) and row_count(text) > 0:
+                extra.append(chunk)
+    return _merge_pools(scoped, extra)
+
+
+def _tag_sections(chunks, maps) -> list:
+    """Every chunk of a mapped bill, its text led by its section label."""
+    out = []
+    for chunk in chunks:
+        doc_id = getattr(chunk, "doc_id", "") or ""
+        label = ""
+        if doc_id in maps:
+            label = section_label(getattr(chunk, "chunk_index", None), maps[doc_id][0])
+        out.append(_SectionTagged(chunk, label) if label else chunk)
+    return out
+
+
 def _bill_rows_retrieve(
     bm25_fn, project_id: str, k: int, row_count: Callable[[str], int], item: str,
     *, typed_bills: Callable[[str], Iterable[str]] | None = None,
+    section_maps: Callable[[frozenset], Mapping] | None = None,
+    ask: str = "",
 ) -> str:
     pool = list(bm25_fn(project_id, item, k=k) or ())
     typed = frozenset(typed_bills(project_id)) if typed_bills is not None else frozenset()
@@ -248,12 +364,29 @@ def _bill_rows_retrieve(
         # project cannot crowd the bill's own rows out of the top-k.
         scoped = list(bm25_fn(project_id, item, k=k, doc_ids=sorted(typed)) or ())
         pool = _merge_pools(scoped, pool)
+    if not any(row_count(chunk_text(c)) > 0 for c in pool):
+        # No candidate chunk prints a priced row: the item is not a bill
+        # item (a clause, a drawing, a contract datum). Semantic and lexical
+        # carry it; handing the bill's unpriced pages only spends budget.
+        _trace("bill_rows", item, ())
+        return ""
+    maps = section_maps(typed) if (section_maps is not None and typed) else {}
+    named = _named_by_doc(maps, item, ask) if maps else {}
+    if named:
+        pool = _scope_to_named_sections(pool, maps, named, item, row_count)
     ranked = rank_bill_documents(pool, row_count=row_count, typed_bills=typed)
     order = {doc_id: i for i, doc_id in enumerate(ranked)}
     handed = [c for c in pool if (getattr(c, "doc_id", "") or "") in order]
     # Stable: inside one document the pool's lexical order is kept.
     handed.sort(key=lambda c: order[getattr(c, "doc_id", "") or ""])
+    if maps:
+        handed = _tag_sections(handed, maps)
     _trace("bill_rows", item, handed)
+    if named:
+        logger.info(
+            "rag_bill_section_trace item=%r sections=%s",
+            (item or "")[:120], {d: sorted(n) for d, n in named.items()},
+        )
     return _budgeted_text(handed, presorted=True)
 
 
@@ -264,6 +397,8 @@ def bill_rows_action(
     row_count: Callable[[str], int],
     k: int | None = None,
     typed_bills: Callable[[str], Iterable[str]] | None = None,
+    bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
+    ask: str = "",
 ) -> RetrievalAction:
     """Document-scoped lexical: the item's rows in the project's bills.
 
@@ -280,6 +415,19 @@ def bill_rows_action(
     (``bm25_fn(..., doc_ids=...)``) and a typed bill that prints priced rows
     ranks ahead of an untyped one. When it returns none, or is not supplied,
     the pool is the plain lexical pool ranked by density only.
+
+    An item whose pool prints no priced row at all is not a bill item (a
+    clause, a drawing, a contract datum): the action hands nothing and
+    semantic/lexical carry it.
+
+    ``bill_chunks(project_id, doc_ids)``, when supplied, returns every chunk
+    of the typed bills; each bill's section map is read from them
+    (``bill_sections.section_map``). When the plan item, else the ``ask``,
+    names a section, a mapped bill's rows are restricted to that section's
+    span before ranking. Either way every handed chunk of a mapped bill leads
+    with its section label. A bill that prints no heading ranks as before.
+
+    Each item is fetched once per ask: a later round reuses the result.
     """
     depth = bill_pool_k() if k is None else int(k)
     # The action runs once per uncovered plan item per round and the
@@ -288,9 +436,14 @@ def bill_rows_action(
         lru_cache(maxsize=None)(partial(typed_bill_ids, typed_bills))
         if typed_bills is not None else None
     )
-    return partial(
-        _bill_rows_retrieve, bm25_fn, project_id, depth, row_count, typed_bills=cache,
+    maps = (
+        lru_cache(maxsize=None)(partial(bill_section_maps, bill_chunks, project_id))
+        if bill_chunks is not None else None
     )
+    return lru_cache(maxsize=None)(partial(
+        _bill_rows_retrieve, bm25_fn, project_id, depth, row_count,
+        typed_bills=cache, section_maps=maps, ask=ask or "",
+    ))
 
 
 def _rows_for_item(

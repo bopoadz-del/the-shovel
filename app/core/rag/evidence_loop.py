@@ -70,6 +70,8 @@ def build_actions(
     sheets: Mapping[str, Sequence[Sequence[str]]] | None = None,
     headers: Mapping[str, Sequence[str]] | None = None,
     typed_bills: Callable[[str], Iterable[str]] | None = None,
+    bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
+    question: str = "",
 ) -> list[RetrievalAction]:
     """The three retrieval actions over the real primitives.
 
@@ -82,6 +84,9 @@ def build_actions(
     PDF bill's rows are not crowded out of the global ranking;
     typed_bills(project_id) (optional) names the documents the ingest
     typed as a bill, which that action ranks the item inside and prefers.
+    ``bill_chunks(project_id, doc_ids)`` (optional) returns every chunk of
+    those bills, from which the action reads each bill's sections; the
+    ``question`` is where an ask names one.
     """
     from app.core.rag.retriever import priced_row_count
 
@@ -90,6 +95,7 @@ def build_actions(
         lexical_action(bm25_fn, project_id),
         bill_rows_action(
             bm25_fn, project_id, row_count=priced_row_count, typed_bills=typed_bills,
+            bill_chunks=bill_chunks, ask=question,
         ),
     ]
     if sheets is not None:
@@ -126,6 +132,7 @@ async def run_project_figure_retrieval(
     headers: Mapping[str, Sequence[str]] | None = None,
     run_sync: Callable[..., Awaitable[Any]] | None = None,
     typed_bills: Callable[[str], Iterable[str]] | None = None,
+    bill_chunks: Callable[[str, list[str]], Sequence] | None = None,
 ) -> EvidenceLoopOutcome:
     """Plan, then fetch evidence over the plan with the bounded loop.
 
@@ -158,6 +165,8 @@ async def run_project_figure_retrieval(
         sheets=sheets,
         headers=headers,
         typed_bills=typed_bills,
+        bill_chunks=bill_chunks,
+        question=question,
     )
     if run_sync is None:
         run = run_loop(plan, actions, initial_evidence=first_pass_evidence)
