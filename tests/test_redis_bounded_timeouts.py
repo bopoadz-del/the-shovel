@@ -208,3 +208,30 @@ def test_session_store_boot_ping_is_bounded(monkeypatch, server):
     assert fell_back is (not server.answer)
     expected = ss.RedisSessionStore if server.answer else ss.InMemorySessionStore
     assert type(store) is expected
+
+
+@pytest.mark.parametrize("server", [False, True], indirect=True, ids=["hung", "working"])
+def test_sync_client_caches_only_a_live_client(monkeypatch, server):
+    """A live client is built once and reused; a lost one is retried.
+
+    Without the cache every caller would open a new pool and ping again;
+    caching the loss would keep the fallback after Redis comes back.
+    """
+    monkeypatch.setenv("REDIS_URL", server.url)
+    built: list = []
+    real_from_url = rc.redis.from_url
+
+    def _counting_from_url(*args, **kwargs):
+        client = real_from_url(*args, **kwargs)
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(rc.redis, "from_url", _counting_from_url)
+    first, _ = _within_ceiling(rc.get_sync_redis_client)
+    second, _ = _within_ceiling(rc.get_sync_redis_client)
+    if server.answer:
+        assert first is not None and second is first
+        assert len(built) == 1
+    else:
+        assert first is None and second is None
+        assert len(built) == 2
