@@ -31,8 +31,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.core import upload_limits
 from app.dependencies import require_user
 
 router = APIRouter()
@@ -149,13 +150,14 @@ def _other_observations(detections: List[Dict[str, Any]]) -> List[str]:
 @router.post("/v1/chat/analyze-photo")
 async def analyze_chat_photo(
     file: UploadFile = File(...),
+    display_name: Optional[str] = Form(None),
     auth: dict = Depends(require_user),
 ) -> Dict[str, Any]:
-    original_name = (file.filename or "photo.jpg").strip() or "photo.jpg"
-    original_name = os.path.basename(original_name.replace("\\", "/"))
+    original_name = upload_limits.upload_display_name(display_name, file.filename) or "photo.jpg"
+    original_name = upload_limits.typed_upload_name(original_name, file.file)
     _, ext = os.path.splitext(original_name.lower())
     if ext not in _IMAGE_EXTS:
-        raise HTTPException(400, f"Not an image extension: {ext or '<none>'}")
+        raise HTTPException(400, f"Not an image: {upload_limits.describe_ext(ext)}")
 
     data = await file.read()
     if len(data) > _MAX_PHOTO_BYTES:

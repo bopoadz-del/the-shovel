@@ -1010,6 +1010,7 @@ async def add_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     role: Optional[str] = Form(None),
+    display_name: Optional[str] = Form(None),
     auth: dict = Depends(require_user),
 ):
     """Attach a document to a project.
@@ -1017,6 +1018,10 @@ async def add_document(
     This STORES and CLASSIFIES the file — it runs no pipeline, no blocks, no
     analysis. Attaching a file is not the same as asking for analysis; run a
     block explicitly (via /v1/execute) when you actually want results.
+
+    ``display_name`` is the user's own file name when the client sent an
+    ASCII-safe stand-in as the multipart filename; the type is proven from
+    the content when the name has no extension or a contradicting one.
     """
     # Anyone who can OPEN the project can add documents to it (shared pilot
     # projects + admin access) — see _owned_or_404's 2026-07-25 note.
@@ -1025,10 +1030,10 @@ async def add_document(
         role=auth.get("role", "user"), doc_limit=0,
     )
 
-    original_name = (file.filename or "unknown").strip()
+    original_name = upload_limits.upload_display_name(display_name, file.filename)
     if not original_name or original_name in (".", ".."):
         raise HTTPException(400, "Invalid filename")
-    original_name = os.path.basename(original_name.replace("\\", "/"))
+    original_name = upload_limits.typed_upload_name(original_name, file.file)
     _, ext = os.path.splitext(original_name.lower())
     from app.core import compressed
 
@@ -1037,7 +1042,8 @@ async def add_document(
     if ext not in ALLOWED_DOC_EXTENSIONS:
         raise HTTPException(
             upload_limits.UNSUPPORTED_TYPE_STATUS,
-            f"File type '{ext}' is not ingestible: the knowledge base takes text "
+            f"File type '{upload_limits.describe_ext(ext)}' is not ingestible: "
+            f"the knowledge base takes text "
             f"formats only (docs/INGEST_EXCLUSION_RULE.md). Drawings, photos, "
             f"video and CAD can still be attached to a chat for the session.",
         )

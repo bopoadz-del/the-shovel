@@ -17,6 +17,7 @@ import {
   Plus, Paperclip, Camera, Mic, MicOff, RotateCcw, ArrowUp, Cloud, Bot, X,
 } from 'lucide-react'
 import { getToken } from '../lib/token'
+import { asciiUploadName, isImageUpload, unreadableFileMessage } from './uploadName'
 import './ChatComposer.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8000'
@@ -220,15 +221,35 @@ export default function ChatComposer({
       return
     }
     setAttachStatus(`Uploading ${file.name} (${formatBytes(file.size)})…`)
+    // Read the bytes before sending. A file shared from another app on a
+    // phone can be unreadable to the browser; fetch() then reports only
+    // "Failed to fetch". Reading first names that cause on its own.
+    let bytes: ArrayBuffer
+    try {
+      bytes = await file.arrayBuffer()
+    } catch {
+      setAttachStatus(unreadableFileMessage(file.name))
+      setUploading(false)
+      return
+    }
     try {
       const token = getToken() || ''
       const fd = new FormData()
-      fd.append('file', file)
+      // The multipart filename is an ASCII stand-in (a non-ASCII, emoji or
+      // extension-less name is what a share sheet produces); the user's own
+      // name travels as display_name and the server types it by content.
+      fd.append(
+        'file',
+        new Blob([bytes], { type: file.type || 'application/octet-stream' }),
+        asciiUploadName(file.name),
+      )
+      fd.append('display_name', file.name)
       // Photos attached via chat are question-context, not corpus
       // material — route them to /v1/chat/analyze-photo so we don't
       // require project ownership (shared admin-approved projects
       // would 404 the documents endpoint).
-      const isImage = /\.(jpe?g|png|webp|tiff?|bmp|gif)$/i.test(file.name)
+      const head = new Uint8Array(bytes.slice(0, 16))
+      const isImage = isImageUpload(file.name, file.type, head)
       const endpoint = isImage
         ? `${API_BASE}/v1/chat/analyze-photo`
         : `${API_BASE}/v1/projects/${projectId}/documents`

@@ -59,6 +59,93 @@ PROJECT_DOCUMENT_EXTENSIONS = _ingestible_extensions()
 #: One status for "this format is not accepted here", with or without a project.
 UNSUPPORTED_TYPE_STATUS = 415
 
+# Leading bytes that prove a format whatever the upload is called. A phone's
+# share sheet names a shared document after its sender ("Document from <name>")
+# with no extension, and a renamed file can carry the wrong one; the type is
+# then read from the content, never guessed from the name.
+_SNIFF_HEAD = 1024
+_LEADING_SIGNATURES = (
+    (b"%PDF-", ".pdf"),
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"II*\x00", ".tif"),
+    (b"MM\x00*", ".tif"),
+)
+# An Office Open XML package is a zip whose parts live under one folder.
+_OOXML_PART_PREFIXES = (("word/", ".docx"), ("xl/", ".xlsx"), ("ppt/", ".pptx"))
+# Spellings of one format: a ``.jpeg`` holding JPEG bytes is not mis-named.
+_SAME_FORMAT = {".jpeg": ".jpg", ".tiff": ".tif"}
+
+
+def sniff_extension(fileobj) -> str | None:
+    """The extension the content of ``fileobj`` proves, or None when the bytes
+    prove nothing (plain text, CSV, an unknown binary). Leaves it rewound."""
+    fileobj.seek(0)
+    head = fileobj.read(_SNIFF_HEAD)
+    fileobj.seek(0)
+    lead = head.lstrip(b"\xef\xbb\xbf \t\r\n")
+    for signature, ext in _LEADING_SIGNATURES:
+        if lead.startswith(signature):
+            return ext
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head.startswith(b"PK\x03\x04"):
+        return _ooxml_extension(fileobj)
+    return None
+
+
+def _ooxml_extension(fileobj) -> str | None:
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(fileobj) as package:
+            names = package.namelist()
+    except (zipfile.BadZipFile, OSError, ValueError):
+        names = []
+    finally:
+        fileobj.seek(0)
+    for prefix, ext in _OOXML_PART_PREFIXES:
+        if any(name.startswith(prefix) for name in names):
+            return ext
+    return None
+
+
+def upload_display_name(display_name: str | None, multipart_name: str | None) -> str:
+    """The user's file name for an upload, path parts dropped.
+
+    A client that cannot carry a non-ASCII name safely in the multipart
+    ``filename`` sends an ASCII stand-in there and the real name in a
+    ``display_name`` form field; the real name wins when it is present.
+    """
+    name = (display_name or "").strip() or (multipart_name or "").strip()
+    return os.path.basename(name.replace("\\", "/")).strip()
+
+
+def describe_ext(ext: str) -> str:
+    """``ext`` for an error message; a missing one is named as missing."""
+    return ext or "no extension, and the content is not a recognised format"
+
+
+def typed_upload_name(name: str, fileobj) -> str:
+    """``name`` with the extension the upload's content proves.
+
+    The name is kept as the user gave it when the content proves nothing or
+    agrees with it. A missing or unknown suffix (``Document from X``,
+    ``Report v1.2``) gets the proven extension appended; a known extension the
+    content contradicts is replaced by the proven one.
+    """
+    proven = sniff_extension(fileobj)
+    stem, ext = os.path.splitext(name)
+    ext = ext.lower()
+    if proven is None or _SAME_FORMAT.get(ext, ext) == proven:
+        return name
+    if ext in ALLOWED_UPLOAD_EXTENSIONS:
+        return stem + proven
+    return name + proven
+
+
 # 50 MB. Deliberately NOT 10 MB: this platform's real inputs are drawing sets
 # and BIM models. The pilot corpus contains a 345 MB PDF, so operators loading
 # real project documents must raise MAX_DOC_UPLOAD_SIZE (and the reverse proxy's
