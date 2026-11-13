@@ -219,6 +219,20 @@ def test_dataset_log_does_not_forward_an_empty_question(tmp_path, store, blank, 
     assert [r["question"] for r in store.rows("ml_turns")] == [real]
 
 
+@pytest.mark.parametrize("blank, real", [("   ", "a real question"), ("\t\n", "second real one")])
+def test_dataset_log_never_calls_the_block_for_an_empty_question(tmp_path, monkeypatch, blank, real):
+    """The adapter itself drops a blank question; it is never handed to the block."""
+    from app.core.rag.dataset_log import DatasetRecord, append_dataset_record
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(ml_loop_mod, "record",
+                        lambda op, payload: calls.append((op, payload["question"])) or {})
+    for q in (blank, real):
+        append_dataset_record("p", DatasetRecord(question=q, answer="a", verdict="refused"),
+                              base=tmp_path)
+    assert calls == [("record_turn", real)]
+
+
 # ── adapter: learning_engine -> record_correction / record_route_correction ─
 
 def _engine(tmp_path):
@@ -273,6 +287,20 @@ def test_learning_engine_forwards_corrected_routes(tmp_path, store, text, action
     assert [(r["message"], r["correct_action"], r["original_action"]) for r in rows] == [
         (text, action, original)
     ]
+
+
+@pytest.mark.parametrize("data", [
+    # no project: a corrected route with nowhere to land
+    {"category": "routing_decisions",
+     "observation": _route_obs("draw the gantt", "generate_schedule", True, "qto")},
+    # no observation
+    {"project_id": "proj-r", "category": "routing_decisions"},
+])
+def test_learning_engine_pattern_without_project_or_observation_is_refused(tmp_path, store, data):
+    le = _engine(tmp_path)
+    result = le._record_pattern(dict(data, source="feedback_route"), {})
+    assert result["status"] == "error"
+    assert store.counts()["ml_route_corrections"] == 0
 
 
 @pytest.mark.parametrize("category, corrected", [
