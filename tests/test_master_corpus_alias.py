@@ -439,15 +439,13 @@ def test_master_corpus_alias_export_conversation_resolves(client):
     assert resp.content[:2] == b"PK"
 
 
-def test_master_corpus_alias_delete_project_resolves(client):
-    """Deleting the alias resolves to the source corpus and SOFT-archives it
-    (hidden from listings) — the row + RAG chunks are preserved, not deleted."""
+def test_master_corpus_alias_delete_is_refused(client):
+    """The alias is a system knowledge layer (S-U1): delete is refused for an
+    admin too, and the corpus stays listed with its rows and chunks."""
     resp = client.delete(f"/v1/projects/{projects_mod.MASTER_CORPUS_PROJECT_ID}")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "archived"
+    assert resp.status_code == 403, resp.text
 
-    # Alias should no longer be listed (the backing source is archived).
     resp = client.get("/v1/projects")
     assert resp.status_code == 200
     ids = {p["id"] for p in resp.json()["projects"]}
-    assert projects_mod.MASTER_CORPUS_PROJECT_ID not in ids
+    assert projects_mod.MASTER_CORPUS_PROJECT_ID in ids

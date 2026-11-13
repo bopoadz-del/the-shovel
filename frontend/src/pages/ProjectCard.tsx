@@ -15,6 +15,9 @@ export interface Project {
   origin?: string
   document_count?: number
   is_master_corpus?: boolean
+  // Server-flagged system knowledge layer (not a user project); see KnowledgeLayers.
+  is_system?: boolean
+  chunk_count?: number | null
 }
 
 interface ProjectCardProps {

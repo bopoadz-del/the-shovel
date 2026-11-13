@@ -3,6 +3,8 @@ import AppHeader from '../components/AppHeader'
 import { apiGet } from '../lib/api'
 import ProjectCard, { type Project } from './ProjectCard'
 import NewProjectModal from './NewProjectModal'
+import KnowledgeLayers from './KnowledgeLayers'
+import { partitionProjects } from './partitionProjects'
 import './pages.css'
 import './projects.css'
 
@@ -105,44 +107,40 @@ export default function Projects() {
           </div>
         )}
 
-        {state.tag === 'loaded' && state.projects.length === 0 && (
-          <div className="projects-state">
-            <div className="empty-mark" aria-hidden="true">◫</div>
-            <p className="projects-state__message">
-              No projects yet. Create your first project to start tracking
-              documents, readiness, and progress.
-            </p>
-            <button
-              className="btn btn--primary"
-              type="button"
-              onClick={() => setShowModal(true)}
-            >
-              + Create first project
-            </button>
-          </div>
-        )}
-
-        {state.tag === 'loaded' && state.projects.length > 0 && (
-          <>
-            {state.projects.some((p) => p.is_master_corpus) && (
-              <div className="pilot-banner" role="note">
-                <strong>Pilot tip:</strong> Ask questions inside{' '}
-                <em>Master Corpus</em> and filter by package in
-                your prompt, e.g. “Answer only from the client project documents.”
-                Individual project shells are still being indexed.
-              </div>
-            )}
-            <div className="projects-grid">
-              {state.projects.map((project) => (
-                <ProjectCard
-                  key={project.id}
-                  project={project}
-                  onDelete={() => void loadProjects()}
-                />
-              ))}
-            </div>
-          </>
-        )}
+        {state.tag === 'loaded' && (() => {
+          const { userProjects, layers } = partitionProjects(state.projects)
+          return (
+            <>
+              {userProjects.length === 0 ? (
+                <div className="projects-state">
+                  <div className="empty-mark" aria-hidden="true">◫</div>
+                  <p className="projects-state__message">
+                    No projects yet. Create your first project to start tracking
+                    documents, readiness, and progress.
+                  </p>
+                  <button
+                    className="btn btn--primary"
+                    type="button"
+                    onClick={() => setShowModal(true)}
+                  >
+                    + Create first project
+                  </button>
+                </div>
+              ) : (
+                <div className="projects-grid">
+                  {userProjects.map((project) => (
+                    <ProjectCard
+                      key={project.id}
+                      project={project}
+                      onDelete={() => void loadProjects()}
+                    />
+                  ))}
+                </div>
+              )}
+              <KnowledgeLayers layers={layers} />
+            </>
+          )
+        })()}
       </main>
 
       {showModal && (
