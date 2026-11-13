@@ -2089,6 +2089,36 @@ def admin_corpus_ghost_tombstone(
     return p3_ghost_tombstone(project_id=project_id, execute=execute)
 
 
+@router.post("/v1/admin/corpus/legacy-guard-chunks")
+def admin_corpus_legacy_guard_chunks(
+    project_id: Optional[str] = Query(None),
+    execute: bool = Query(
+        False,
+        description="When true, delete the planned guard-prose chunks; "
+                    "otherwise return a read-only plan.",
+    ),
+    expected_count: Optional[int] = Query(
+        None, ge=0,
+        description="Required with execute=true: the guard_chunk_count the "
+                    "operator confirmed from the plan. Any mismatch refuses.",
+    ),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) delete chunks the retired BOQ total guard wrote as prose.
+
+    The response always reports ``guard_chunk_count``. A write happens only
+    with ``execute=true`` AND ``expected_count`` equal to the live plan;
+    otherwise ``refused`` says why and nothing is deleted. Documents are never
+    deleted; touched documents get their chunk_count and status re-derived.
+    """
+    _require_admin(auth)
+    from app.core.ingest_reconcile import p3_legacy_guard_chunk_purge
+
+    return p3_legacy_guard_chunk_purge(
+        project_id=project_id, execute=execute, expected_count=expected_count,
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PR A — admin-approved projects from Drive
 #

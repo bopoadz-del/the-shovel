@@ -1069,6 +1069,172 @@ def p3_ghost_tombstone(
     }
 
 
+# ── Legacy guard prose stored as chunk text: one-time cleanup ────────────────
+#
+# Previously ``doc_index._boq_chunks_for_document`` wrote a warning sentence
+# as chunk 0 of a BOQ-named file whose total it could not compute. That prose
+# was embedded and FTS-indexed like document content, so it ranked for every
+# "total" ask. The writer is gone and the fact is now a document attribute
+# (``documents.metadata.boq_total``). This removes the chunks the old writer
+# left behind. The match is the old writer's own fixed lead-in (a mechanism
+# artefact, not document content), anchored at the start of the chunk text.
+LEGACY_TOTAL_GUARD_PREFIX = "VERIFIED-TOTAL GUARD for "
+
+
+def _guard_chunk_tables(session) -> list[str]:
+    """Active namespace table plus the retired legacy table, when present."""
+    from sqlalchemy import inspect as _inspect
+
+    from app.core.models import rag_chunk_table_name
+
+    existing = set(_inspect(session.get_bind()).get_table_names())
+    wanted = {
+        rag_chunk_table_name(os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip()),
+        rag_chunk_table_name(""),
+    }
+    return sorted(t for t in wanted if t in existing)
+
+
+def _guard_like_pattern() -> str:
+    """LIKE pattern anchoring the lead-in at the start, wildcards escaped."""
+    escaped = LEGACY_TOTAL_GUARD_PREFIX.replace("%", r"\%").replace("_", r"\_")
+    return escaped + "%"
+
+
+def plan_legacy_guard_chunks(
+    session, project_id: str | None,
+) -> list[dict[str, Any]]:
+    """Every stored chunk whose text starts with the legacy guard lead-in.
+
+    Read-only. Returns ``{"table", "chunk_id", "doc_id", "chunk_index"}`` rows.
+    LIKE is only a pre-filter (SQLite's is case-insensitive, PostgreSQL's is
+    not); the exact, case-sensitive prefix is confirmed here so both backends
+    plan the same set.
+    """
+    from sqlalchemy import text
+
+    pattern = _guard_like_pattern()
+    out: list[dict[str, Any]] = []
+    for table in _guard_chunk_tables(session):
+        sql = (
+            f"SELECT chunk_id, doc_id, chunk_index, text FROM {table} "
+            "WHERE text LIKE :pat ESCAPE '\\'"
+        )
+        params: dict[str, Any] = {"pat": pattern}
+        if project_id:
+            sql += " AND project_id = :pid"
+            params["pid"] = project_id
+        for row in session.execute(text(sql), params).all():
+            if not str(row[3] or "").startswith(LEGACY_TOTAL_GUARD_PREFIX):
+                continue
+            out.append({
+                "table": table,
+                "chunk_id": str(row[0]),
+                "doc_id": str(row[1]),
+                "chunk_index": int(row[2]),
+            })
+    return out
+
+
+def _restamp_after_purge(doc_ids: Iterable[str]) -> list[dict[str, Any]]:
+    """Recount each touched document's chunks and re-classify its ledger row.
+
+    A document whose only chunks were guard prose ends at 0 chunks; its
+    ingest status is re-derived by ``ingest_status.classify`` rather than
+    left reading as indexed. The extractor stamp is not advanced: nothing
+    was re-extracted.
+    """
+    from app.core import ingest_status as ist
+    from app.core import projects as projects_mod
+    from app.core.db import SessionLocal
+    from app.core.models import Document
+    from sqlalchemy import text
+
+    out: list[dict[str, Any]] = []
+    with SessionLocal() as session:
+        tables = _guard_chunk_tables(session)
+        for did in sorted(set(doc_ids)):
+            doc = session.get(Document, did)
+            if doc is None:
+                continue
+            real = 0
+            for table in tables:
+                real += int(session.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE doc_id = :d"),
+                    {"d": did},
+                ).scalar() or 0)
+            ext = os.path.splitext(doc.original_name or "")[1]
+            out.append({"doc_id": did, "chunk_count": real, "ext": ext})
+    for row in out:
+        classified = ist.classify(chunk_count=row["chunk_count"], extension=row["ext"])
+        projects_mod.stamp_document_index(
+            row["doc_id"],
+            chunk_count=row["chunk_count"],
+            ingest_status=classified.status,
+            ingest_status_reason=classified.reason,
+            stamp_extractor_version=False,
+        )
+        row["ingest_status"] = classified.status
+    return out
+
+
+def p3_legacy_guard_chunk_purge(
+    *,
+    project_id: str | None = None,
+    execute: bool = False,
+    expected_count: int | None = None,
+) -> dict[str, Any]:
+    """Plan and (opt-in) delete legacy guard-prose chunks.
+
+    The plan always runs and reports ``guard_chunk_count``. ``execute=True``
+    deletes only when ``expected_count`` equals that planned count; any
+    mismatch (or a missing ``expected_count``) refuses before a write, so an
+    operator can never delete more than the plan they confirmed. Only the
+    planned ``chunk_id`` rows are deleted, and only while their text still
+    starts with the lead-in. Documents are never deleted; each touched
+    document's ``chunk_count`` and ingest status are re-derived afterwards.
+    Idempotent: a second execute plans 0.
+    """
+    from app.core.db import SessionLocal
+    from sqlalchemy import text
+
+    with SessionLocal() as session:
+        planned = plan_legacy_guard_chunks(session, project_id)
+    result: dict[str, Any] = {
+        "project_id": project_id,
+        "guard_chunk_count": len(planned),
+        "documents": sorted({p["doc_id"] for p in planned}),
+        "expected_count": expected_count,
+        "deleted": 0,
+        "restamped": [],
+        "refused": None,
+        "dry_run": not execute,
+    }
+    if not execute:
+        return result
+    if expected_count is None or int(expected_count) != len(planned):
+        result["refused"] = (
+            f"planned {len(planned)} != expected {expected_count}; nothing deleted"
+        )
+        return result
+
+    pattern = _guard_like_pattern()
+    deleted = 0
+    with SessionLocal() as session:
+        for p in planned:
+            deleted += int(session.execute(
+                text(
+                    f"DELETE FROM {p['table']} WHERE chunk_id = :cid "
+                    "AND text LIKE :pat ESCAPE '\\'"
+                ),
+                {"cid": p["chunk_id"], "pat": pattern},
+            ).rowcount or 0)
+        session.commit()
+    result["deleted"] = deleted
+    result["restamped"] = _restamp_after_purge(p["doc_id"] for p in planned)
+    return result
+
+
 def plan_as_dict(plan: ReconcilePlan) -> dict[str, Any]:
     def _act(a: ReconcileAction) -> dict[str, Any]:
         return {
