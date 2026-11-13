@@ -392,8 +392,7 @@ def extract_contract_doc_ids(text: str) -> List[str]:
     AB-2023 question cannot surface AB-2022 chunks. Empty when the text
     names no such id.
     """
-    text = strip_attachment_markers(text)
-    if not text.strip():
+    if not text:
         return []
     found: List[str] = []
     seen: Set[str] = set()

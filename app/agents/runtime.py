@@ -3221,6 +3221,25 @@ def _build_reference_miss_note(identifiers: list[str]) -> str:
     )
 
 
+
+def _pin_reference_miss(
+    messages: list[dict[str, Any]],
+    user_message: str,
+    attached_documents: list[dict[str, Any]] | None,
+    audit_rec: dict[str, Any] | None,
+    rag_sys_msg: dict[str, str] | None,
+) -> None:
+    """For a turn that carries attachment evidence (S-A8), append the
+    reference-miss note to ``messages`` when retrieval missed a reference
+    the turn also names. The turn then goes to the model, not the refusal."""
+    if not _turn_has_attachment_content(user_message, attached_documents):
+        return
+    note = _build_reference_miss_note(
+        _rag_miss_identifiers(audit_rec, rag_sys_msg, user_message))
+    if note:
+        messages.append({"role": "system", "content": note})
+
+
 def _should_short_circuit_rag_miss(
     audit_rec: dict[str, Any] | None,
     rag_sys_msg: dict[str, str] | None,

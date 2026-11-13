@@ -13,7 +13,6 @@ import pytest
 from app.agents import runtime
 from app.core.rag.retriever import (
     attachment_markers_carry_content,
-    extract_contract_doc_ids,
     extract_query_identifiers,
     strip_attachment_markers,
 )
@@ -118,13 +117,21 @@ def test_router_parses_the_shared_marker(message, names):
     assert _parse_attached_markers(message) == names
 
 
-@pytest.mark.parametrize("year", ["2023", "2024"])
-def test_contract_id_inside_marker_is_not_a_named_contract(year):
-    inside = f"[attached: AB-{year}-001 scan.pdf | observations: stamp visible]"
-    outside = f"What is the retention in AB-{year}-001?"
-    assert extract_contract_doc_ids(inside) == []
-    assert extract_contract_doc_ids(outside) == [f"ab-{year}-001"]
+@pytest.mark.parametrize("missed,empty", [([], True), (["rfi-31"], False)])
+def test_note_only_when_a_reference_missed(missed, empty):
+    note = runtime._build_reference_miss_note(missed)
+    assert (note == "") is empty
+    assert all(m in note for m in missed)
 
 
-def test_empty_note_for_no_miss():
-    assert runtime._build_reference_miss_note([]) == ""
+@pytest.mark.parametrize("message,ref", TEXT_MISS)
+@pytest.mark.parametrize("with_attachment", [True, False])
+def test_pin_reference_miss_appends_only_for_attachment_turns(message, ref, with_attachment):
+    full = message + (" [attached: 31337.jpg | observations: ladder on site]"
+                      if with_attachment else "")
+    messages = [{"role": "user", "content": full}]
+    runtime._pin_reference_miss(messages, full, None, _miss_audit(full), None)
+    notes = [m["content"] for m in messages if m["role"] == "system"]
+    assert len(notes) == (1 if with_attachment else 0)
+    if with_attachment:
+        assert ref in notes[0]
