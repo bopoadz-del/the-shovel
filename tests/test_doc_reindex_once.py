@@ -233,3 +233,45 @@ def test_p1b_main_hands_over_only_when_document_id_is_set(monkeypatch, value, ha
         rc = None
     assert calls == (["reindex"] if hands_over else ["walk"])
     assert (rc == 7) is hands_over
+
+
+# --- the transient write: production helper and failure reporting -------
+
+@pytest.mark.parametrize("name,payload", [
+    ("Vol 1 bill.pdf", b"%PDF-1.7 first"),
+    ("drawing sheet (rev B).dwg.pdf", b"second payload, longer"),
+])
+def test_production_transient_copy_holds_the_bytes_and_keeps_the_extension(name, payload):
+    from app.core import file_crypto
+
+    path = dro.write_transient_copy(payload, name)
+    try:
+        assert path.read_bytes() == payload
+        assert path.name.startswith(file_crypto.DECRYPTED_TEMP_PREFIX)
+        assert path.suffix == Path(name).suffix
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_production_deps_wire_only_callables_that_exist():
+    deps = dro.production_deps()
+    for field_name in dro.Deps.__dataclass_fields__:
+        assert callable(getattr(deps, field_name)), field_name
+    assert deps.write_transient is dro.write_transient_copy
+
+
+@pytest.mark.parametrize("exc", [OSError("disk full"), AttributeError("no helper")])
+def test_transient_write_failure_is_reported_not_raised(tmp_path, exc):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"bytes"}, old_chunks=["keep"])
+    deps = w.deps(tmp_path)
+
+    def broken(raw: bytes, name: str) -> Path:
+        raise exc
+
+    deps.write_transient = broken
+    rep = dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=deps)
+    assert rep["ok"] is False
+    assert rep["error"].startswith("TRANSIENT_WRITE_FAILED: " + type(exc).__name__)
+    assert w.index_calls == [] and w.paths_discarded == []
+    assert w.docs["d1"]["file_path"] == "/gone/old.pdf"
+    assert w.chunks == ["keep"]
