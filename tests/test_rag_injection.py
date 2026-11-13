@@ -517,26 +517,36 @@ def test_rag_inject_returns_system_message_when_confident(monkeypatch, tmp_path)
     assert audit_rec["budget_remaining"] >= 0
 
 
-def test_rag_inject_degrades_to_k2_when_budget_exhausted(monkeypatch, tmp_path):
+@pytest.mark.parametrize("burn,degraded_budget,expected_handed", [
+    (100, "1200", 3),   # budget spent: the degraded CHARACTER budget bounds the set
+    (0, "1200", 10),    # budget left: the normal budget hands the whole pool
+])
+def test_rag_inject_budget_degrade_is_a_char_budget_not_k2(
+    monkeypatch, tmp_path, burn, degraded_budget, expected_handed,
+):
+    """S-R5: the spent daily budget used to collapse the depth to k=2 (every
+    live ask handed exactly two chunks). The depth now stays the turn's k
+    (pooled wider for diversity) and the degrade is a smaller character
+    budget on what is handed."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("RAG_DAILY_TOKEN_BUDGET", "100")
     monkeypatch.setenv("RAG_K", "5")
     monkeypatch.setenv("MAX_RAG_TOKENS", "10000")  # don't let cap interfere
     monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.0")
+    monkeypatch.setenv("RAG_DEGRADED_CHAR_BUDGET", degraded_budget)
 
-    # Burn the budget first.
     from app.core.rag import budget
     import datetime as _dt
     today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
-    budget.consume(day=today, tokens=100)  # consumed == 100 == budget
+    budget.consume(day=today, tokens=burn)
 
     seen_k = {"value": None}
     def fake_retrieve(query, project_id, k, **kwargs):
         seen_k["value"] = k
         from app.core.rag.vector_store import Chunk
         return ([
-            Chunk(chunk_id=f"c{i}", project_id=project_id, doc_id="d1",
-                  chunk_index=i, text="x", score=0.9)
+            Chunk(chunk_id=f"c{i}", project_id=project_id, doc_id=f"d{i}",
+                  chunk_index=i, text=f"excerpt {i} " + "y" * 390, score=0.9 - i * 0.01)
             for i in range(k)
         ], 0)
 
@@ -550,8 +560,9 @@ def test_rag_inject_degrades_to_k2_when_budget_exhausted(monkeypatch, tmp_path):
         user_id="u1",
         agent_name="project-assistant",
     )
-    assert seen_k["value"] == 2  # K degraded to 2
-    assert audit_rec["budget_degraded"] is True
+    assert seen_k["value"] == 10  # depth is never collapsed to 2
+    assert audit_rec["budget_degraded"] is bool(burn)
+    assert audit_rec["injected_k"] == expected_handed
 
 
 def test_rag_inject_runs_for_any_agent_when_project_id_present(monkeypatch, tmp_path):

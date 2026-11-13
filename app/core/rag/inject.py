@@ -724,6 +724,7 @@ def _drop_master_corpus_for_formula_fixture(
 
 from app.core.rag import audit as _audit
 from app.core.rag import budget as _budget
+from app.core.rag import handed_set as _handed_set
 
 
 # ── follow-up query context (RAG_FOLLOWUP_CONTEXT, default OFF) ──────────────
@@ -923,8 +924,13 @@ def _emit_retrieval_trace(
     threshold_fired: bool,
     identifier_miss: bool,
     top_score: float,
+    k_info: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Write the trace line. Best-effort: a logging failure never costs a turn."""
+    """Write the trace line. Best-effort: a logging failure never costs a turn.
+
+    ``k_info`` carries requested_k, effective_k, the pool depth, whether the
+    day's token budget was spent, and the handed set's allotment (character
+    budget, characters handed, per-layer counts, families)."""
     if not retrieval_trace_enabled():
         return
     try:
@@ -948,6 +954,7 @@ def _emit_retrieval_trace(
             "agent": agent_name,
             "retrieved_k": len(retrieved),
             "handed_k": len(handed),
+            **dict(k_info or {}),
             "threshold_fired": threshold_fired,
             "identifier_miss": identifier_miss,
             "lexical": lexical,
@@ -1008,8 +1015,11 @@ def rag_inject(
        when the smart orchestrator routes a message to ``heavy-reasoning`` or
        another agent. ``agent_name`` is still recorded in the audit log for
        observability only.
-    3. Otherwise: snapshot the budget for today, derive ``effective_k`` (5
-       normally, 2 if budget_degraded), call ``retrieve_with_filter``.
+    3. Otherwise: snapshot the budget for today, derive ``effective_k`` (the
+       turn's k), call ``retrieve_with_filter`` for a pool of
+       ``handed_set.pool_k(effective_k)``; the handed set is chosen from it
+       by ``handed_set.select_handed`` (diverse across documents, bounded by
+       a character budget that is smaller when budget_degraded).
     4. If retrieved top_score < THRESHOLD or no chunks at all: return
        (None, audit_record) with ``threshold_fired=true`` so the caller can
        still write the audit log and prepend its fallback prefix. When
@@ -1033,10 +1043,14 @@ def rag_inject(
     requested_k = int(os.getenv("RAG_K", "5"))
 
     budget_state = _budget.snapshot(day=today)
-    effective_k = (
-        2 if budget_state["degraded"]
-        else rag_retrieval_k(user_message, requested_k)
-    )
+    # The day's budget no longer collapses the depth to two chunks (S-R5:
+    # every ask handed exactly two, mostly of one document). Depth stays the
+    # turn's k; the degrade is a smaller CHARACTER budget on the handed set
+    # (handed_set.char_budget), so the cost guard holds and several sources
+    # still fit. The pool is wider than k so the set can be diverse.
+    budget_degraded = bool(budget_state["degraded"])
+    effective_k = rag_retrieval_k(user_message, requested_k)
+    retrieval_pool_k = _handed_set.pool_k(effective_k)
 
     # A short follow-up ("layers thickness ?") cannot retrieve on its own —
     # see build_retrieval_query. Flag-gated; returns user_message untouched
@@ -1048,7 +1062,7 @@ def rag_inject(
     )
 
     chunks, noise_filtered = retrieve_with_filter(
-        retrieval_query, project_id, k=effective_k,
+        retrieval_query, project_id, k=retrieval_pool_k,
         operator_text=user_message,
     )
     chunks = _drop_master_corpus_for_formula_fixture(
@@ -1126,6 +1140,7 @@ def rag_inject(
         "retrieval_query_preview": (retrieval_query or "")[:200],
         "followup_context_applied": retrieval_query != (user_message or ""),
         "requested_k": requested_k,
+        "effective_k": effective_k,
         "noise_filtered_count": noise_filtered,
         "top_score": top_score,
         "budget_remaining": budget_state["remaining"],
@@ -1158,10 +1173,15 @@ def rag_inject(
             conversation_id=conversation_id, agent_name=agent_name,
             retrieved=chunks, handed=[], threshold_fired=True,
             identifier_miss=identifier_miss, top_score=top_score,
+            k_info={"requested_k": requested_k, "effective_k": effective_k,
+                    "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded},
         )
         return None, audit_rec
 
-    kept, total_tokens = apply_token_cap(chunks, query=user_message or "")
+    handed_pool, allotment = _handed_set.select_handed(
+        chunks, k=effective_k, degraded=budget_degraded,
+    )
+    kept, total_tokens = apply_token_cap(handed_pool, query=user_message or "")
     sys_msg = format_chunks_as_system_message(
         kept, total_candidates=len(chunks), query=user_message or "",
     )
@@ -1186,6 +1206,9 @@ def rag_inject(
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,
+        k_info={"requested_k": requested_k, "effective_k": effective_k,
+                "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
+                "allotment": allotment},
     )
     _budget.consume(day=today, tokens=total_tokens)
     return sys_msg, audit_rec
