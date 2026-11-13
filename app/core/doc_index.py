@@ -2694,13 +2694,16 @@ def index_project(
         # Drawing → RAG: same mirroring rule as the BOQ hook. Both indexing
         # paths must append these or a schedule is retrievable after one kind
         # of ingest and invisible after the other.
+        drawing_pages: list[int | None] = []
         drawing_chunks = _drawing_chunks_for_document(
-            file_path, filename, ext, project_id, doc_attrs,
+            file_path, filename, ext, project_id, doc_attrs, drawing_pages,
         )
         _record_document_attributes(doc["id"], doc_attrs)
+        pages = pages + [None] * (len(chunks) - len(pages))
         if drawing_chunks:
             chunks = chunks + drawing_chunks
-        meta["chunk_pages"] = pages + [None] * (len(chunks) - len(pages))
+            pages = pages + _aligned_pages(drawing_pages, len(drawing_chunks))
+        meta["chunk_pages"] = pages
         chunks = _normalize_cesmm_in_chunks(chunks)
         _record_stage_split(meta, text_chunk_count, len(chunks) - text_chunk_count)
 
@@ -3360,8 +3363,13 @@ def _drawing_chunks_for_document(
     ext: str,
     project_id: str,
     attrs: dict[str, Any] | None = None,
+    pages: list[int | None] | None = None,
 ) -> list[str]:
     """Return schedule + title-block chunks for a drawing, or [] otherwise.
+
+    When ``pages`` is given, it receives the 1-based page each returned chunk
+    was read from, one entry per chunk in the same order: the stage reads the
+    sheet page by page, so a table chunk's page is known, not inferred.
 
     When ``attrs`` is given, what the stage saw (pages read, pages with a
     text layer, schedule tables read) is written into it under
@@ -3382,6 +3390,7 @@ def _drawing_chunks_for_document(
 
         container = ConstructionContainer()
         out: list[str] = []
+        out_pages: list[int | None] = []
         source = ""
         pages_read = 0
         pages_with_text = 0
@@ -3412,12 +3421,14 @@ def _drawing_chunks_for_document(
                                 f"DRAWING TITLE BLOCK — {filename}. "
                                 f"Sheet identity: {named}."
                             )
+                            out_pages.append(page_num + 1)
                     table_chunks = _drawing_table_chunks(
                         container._extract_tables_advanced(page),
                         source or os.path.splitext(filename or "")[0],
                     )
                     tables_read += len(table_chunks)
                     out.extend(table_chunks)
+                    out_pages.extend([page_num + 1] * len(table_chunks))
         # Named like a drawing and opened: what was seen (pages, text layer,
         # schedule tables) is a document attribute. A sheet with no schedule
         # gets no chunk; the counts say what the stage observed.
@@ -3425,6 +3436,8 @@ def _drawing_chunks_for_document(
             attrs[DRAWING_SCHEDULE_META_KEY] = _drawing_schedule_attribute(
                 pages_read, pages_with_text, tables_read,
             )
+        if pages is not None:
+            pages.extend(out_pages)
         return out
     except Exception as exc:
         log.warning(
@@ -3718,9 +3731,11 @@ def _produce_chunks(
     text, meta = _extract_with_meta(file_path, filename, force_ocr=force_ocr)
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
-    structured, attrs = _structured_stage(file_path, filename, ext, project_id)
+    structured, attrs, structured_pages = _structured_stage(
+        file_path, filename, ext, project_id,
+    )
     _record_stage_split(meta, len(chunks), len(structured))
-    meta["chunk_pages"] = pages + [None] * len(structured)
+    meta["chunk_pages"] = pages + _aligned_pages(structured_pages, len(structured))
     if attrs:
         meta["document_attributes"] = attrs
     return _normalize_cesmm_in_chunks(chunks + structured), meta
@@ -3764,13 +3779,27 @@ def _structured_chunks(
     return _structured_stage(file_path, filename, ext, project_id)[0]
 
 
+def _aligned_pages(pages: list[int | None], n: int) -> list[int | None]:
+    """``pages`` as exactly one entry per chunk; unknown when they disagree.
+
+    A stage that reports a page list of the wrong length gives no usable
+    attribution, so every one of its ``n`` chunks gets None, never a shifted page.
+    """
+    if len(pages) != n:
+        return [None] * n
+    return list(pages)
+
+
 def _structured_stage(
     file_path: str, filename: str, ext: str, project_id: str,
-) -> tuple[list[str], dict[str, Any]]:
-    """The table stages: ``(chunks, document_attributes)``.
+) -> tuple[list[str], dict[str, Any], list[int | None]]:
+    """The table stages: ``(chunks, document_attributes, chunk_pages)``.
 
     The attributes are document-level facts (the BOQ verified-total status)
     that belong on ``documents.metadata``, not in the chunk store.
+    ``chunk_pages`` holds one entry per chunk: the 1-based page a stage that
+    reads page by page took the chunk from, None for stages with no page
+    (BOQ totals and spreadsheet rows are sheets and summaries, not pages).
     """
     attrs: dict[str, Any] = {}
     # BOQ → RAG: append the computed total + line items so the package
@@ -3780,15 +3809,21 @@ def _structured_stage(
     # the bill/section heading inherited into it, so a billed-quantity or
     # unit-rate ask finds the row that states the figure.
     chunks += _spreadsheet_row_chunks(file_path, filename, ext)
+    pages: list[int | None] = [None] * len(chunks)
     # Drawing → RAG: mirrors index_project above. A drawing's schedules
     # live in its tables, and the raw text layer loses their structure.
-    chunks = chunks + _drawing_chunks_for_document(
-        file_path, filename, ext, project_id, attrs,
+    drawing_pages: list[int | None] = []
+    drawing = _drawing_chunks_for_document(
+        file_path, filename, ext, project_id, attrs, drawing_pages,
     )
+    chunks = chunks + drawing
+    pages = pages + _aligned_pages(drawing_pages, len(drawing))
     from app.core import chunk_noise
 
-    chunks, _, _ = chunk_noise.refuse_chunks(chunks)
-    return chunks, attrs
+    # Refuse noise with the pages in step, so a dropped chunk takes its
+    # own page with it and never shifts the pages of the chunks after it.
+    chunks, pages, _ = chunk_noise.refuse_chunks(chunks, pages)
+    return chunks, attrs, pages
 
 
 def _produce_whole_document_chunks(
@@ -3819,10 +3854,10 @@ def _produce_whole_document_chunks(
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
     del text
     mem_mb, timeout_s = _file_budget()
-    (structured, attrs), diag = run_isolated(
+    (structured, attrs, structured_pages), diag = run_isolated(
         _structured_stage,
         (file_path, filename, ext, project_id),
-        fallback=([], {}),
+        fallback=([], {}, []),
         label=f"table stages of {filename}",
         mem_mb=mem_mb,
         timeout_s=timeout_s,
@@ -3834,7 +3869,9 @@ def _produce_whole_document_chunks(
         )
     structured = list(structured or [])
     _record_stage_split(meta, len(chunks), len(structured))
-    meta["chunk_pages"] = pages + [None] * len(structured)
+    meta["chunk_pages"] = pages + _aligned_pages(
+        list(structured_pages or []), len(structured),
+    )
     if attrs:
         meta["document_attributes"] = dict(attrs)
     return _normalize_cesmm_in_chunks(chunks + structured), meta
