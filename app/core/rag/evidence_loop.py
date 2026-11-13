@@ -88,14 +88,14 @@ def build_actions(
     those bills, from which the action reads each bill's sections; the
     ``question`` is where an ask names one.
     """
-    from app.core.rag.retriever import priced_row_count
+    from app.core.rag.retriever import priced_row_count, priced_row_segments
 
     actions: list[RetrievalAction] = [
         semantic_action(retrieve_fn, project_id),
         lexical_action(bm25_fn, project_id),
         bill_rows_action(
             bm25_fn, project_id, row_count=priced_row_count, typed_bills=typed_bills,
-            bill_chunks=bill_chunks, ask=question,
+            bill_chunks=bill_chunks, ask=question, row_segments=priced_row_segments,
         ),
     ]
     if sheets is not None:

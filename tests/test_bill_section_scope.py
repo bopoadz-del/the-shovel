@@ -4,8 +4,9 @@ Every test builds its own synthetic bill. The bill prints the same item words
 (a pipe, steel bars) in two or more of its sections at different rates, so a
 document-wide lexical ranking cannot tell which section's row answers an ask.
 An ask that names a section must get only that section's rows; an ask that
-names none must see which section each row belongs to; a bill that prints no
-heading must rank exactly as before.
+names none must get EVERY row of the item across the whole bill, each
+labelled with its section, so the model can sum them (owner ruling 03:48Z);
+a bill that prints no heading gives its rows labelled "section unknown".
 """
 from __future__ import annotations
 
@@ -16,20 +17,23 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.rag.bill_sections import (
+    UNKNOWN_SECTION,
     BillSection,
     in_named_span,
+    item_rows,
     named_sections,
     section_label,
     section_map,
     words,
 )
 from app.core.rag.evidence_actions import (
+    ITEM_ROWS_NOTE,
     _bill_rows_retrieve,
     bill_rows_action,
     bill_section_maps,
 )
 from app.core.rag.evidence_loop import build_actions
-from app.core.rag.retriever import priced_row_count
+from app.core.rag.retriever import priced_row_count, priced_row_segments
 
 BILL = "bill-doc"
 SPEC = "spec-doc"
@@ -109,13 +113,14 @@ def _fetch_over(chunks):
     return fetch
 
 
-def _action(bill, *, ask, sections=True, calls=None):
+def _action(bill, *, ask, sections=True, calls=None, rows=True):
     corpus = bill + _spec()
     return bill_rows_action(
         _bm25_over(corpus, calls), "p1", row_count=priced_row_count,
         typed_bills=lambda _pid: [BILL],
         bill_chunks=_fetch_over(corpus) if sections else None,
         ask=ask,
+        row_segments=priced_row_segments if rows else None,
     )
 
 
@@ -244,9 +249,9 @@ def test_ask_without_section_tags_every_row_with_its_section(ask):
     "Rate for ductile iron pipe in Bill No. 2?",
     "ductile iron pipe rate in the pumping station bill",
 ])
-def test_bill_without_headings_ranks_as_before(ask):
+def test_bill_without_headings_ranks_its_chunks_as_before(ask):
     bill = _sectioned_bill(headings=False)
-    with_sections = _action(bill, ask=ask)("ductile iron pipe rate")
+    with_sections = _action(bill, ask=ask, rows=False)("ductile iron pipe rate")
     without = _action(bill, ask=ask, sections=False)("ductile iron pipe rate")
     assert with_sections == without
     assert "85.00" in without and "92.00" in without
@@ -270,18 +275,18 @@ def test_failed_section_fetch_ranks_as_before(item):
     assert action(item) == plain(item)
 
 
-@pytest.mark.parametrize(("doc_ids", "mapped"), [
-    ([BILL], {BILL}),
-    ([SPEC], set()),          # no heading: no map
-    ([], set()),              # nothing asked for
+@pytest.mark.parametrize(("doc_ids", "numbers"), [
+    ([BILL], {BILL: ["1", "2", "3", "4"]}),
+    ([SPEC], {SPEC: []}),     # no heading: read, with an empty map
+    ([], {}),                 # nothing asked for
 ])
-def test_bill_section_maps_keeps_documents_that_print_headings(doc_ids, mapped):
+def test_bill_section_maps_reads_every_fetched_bill(doc_ids, numbers):
     corpus = _sectioned_bill() + _spec()
     maps = bill_section_maps(_fetch_over(corpus), "p1", doc_ids)
-    assert set(maps) == mapped
-    for sections, chunks in maps.values():
-        assert [s.number for s in sections] == ["1", "2", "3", "4"]
-        assert len(chunks) == 8
+    assert {d: [s.number for s in m[0]] for d, m in maps.items()} == numbers
+    assert {d: len(m[1]) for d, m in maps.items()} == {
+        d: len([c for c in corpus if c.doc_id == d]) for d in numbers
+    }
 
 
 @pytest.mark.parametrize("item", [
@@ -365,3 +370,207 @@ def test_named_section_keeps_bills_that_print_no_heading(ask, kept, excluded):
     text = action("ductile iron pipe rate")
     assert kept in text and "77.00" in text
     assert excluded not in text
+
+
+# --- Owner ruling 03:48Z: an item recurs across sections with no billed sum.
+# With no section named the action hands EVERY row of the item, labelled;
+# with a section named, only that section's rows.
+
+RECUR = "recur-doc"
+
+
+def _recurring_bill(*, item, other, headings=True, style=HEADING_STYLES[0]):
+    """Three sections each billing ``item`` once (different qty / rate), no
+    summary and no total for the item; ``other`` is billed in section 2 only.
+    Chunk 1 prints section 1's last row, then section 2's heading and row."""
+    def h(n, title):
+        return f"{style.format(n=n)}\n{title}\n" if headings else ""
+
+    texts = [
+        h(1, "SITEWORKS") + _row(f"A1 {item} in trench", "m", 300, 45),
+        _row("A2 Excavation in soft material", "m3", 900, 12) + "\n"
+        + h(2, "BUILDINGS") + _row(f"B1 {item} in ducts", "m", 75, 52),
+        _row(f"B2 {other}", "m", 40, 180),
+        h(3, "EXTERNAL WORKS") + _row(f"C1 {item} under roads", "m", 120, 61),
+    ]
+    return [_chunk(RECUR, i, t) for i, t in enumerate(texts)]
+
+
+def _recur_action(bill, ask):
+    return bill_rows_action(
+        _bm25_over(bill), "p1", row_count=priced_row_count,
+        typed_bills=lambda _pid: [RECUR], bill_chunks=_fetch_over(bill),
+        ask=ask, row_segments=priced_row_segments,
+    )
+
+
+def _row_lines(text):
+    """The labelled row lines of the action's complete row list."""
+    head, _, rest = text.partition("listed here.]\n")
+    assert head and rest, "no item row list in the evidence"
+    return [
+        ln for ln in rest.splitlines()
+        if ln.startswith("[") and "] " in ln and ln[-1].isdigit()
+    ]
+
+
+def _amount(line):
+    return float(line.rsplit(" ", 1)[1].replace(",", ""))
+
+
+def _label(line):
+    return line.split("] ", 1)[0] + "]"
+
+
+ITEMS = (
+    ("uPVC potable water pipe 110mm", "Galvanised steel handrail"),
+    ("HDPE irrigation main 63mm", "Precast concrete kerb"),
+)
+
+
+@pytest.mark.parametrize(("item", "other"), ITEMS)
+def test_total_ask_gets_every_section_row_and_their_sum(item, other):
+    bill = _recurring_bill(item=item, other=other)
+    text = _recur_action(bill, f"What is the total length of {item}?")(
+        f"total quantity of {item}")
+    lines = _row_lines(text)
+    assert [_label(ln) for ln in lines] == [
+        "[Bill No. 1 - SITEWORKS]", "[Bill No. 2 - BUILDINGS]",
+        "[Bill No. 3 - EXTERNAL WORKS]",
+    ]
+    assert sum(_amount(ln) for ln in lines) == 300 * 45 + 75 * 52 + 120 * 61
+    assert ITEM_ROWS_NOTE.split("{item}")[0] in text
+    assert "(3 rows, not sampled)" in text
+    assert "overall contract or BOQ total" in text
+
+
+@pytest.mark.parametrize(("item", "other"), ITEMS)
+def test_section_ask_gets_only_that_sections_row(item, other):
+    bill = _recurring_bill(item=item, other=other)
+    text = _recur_action(bill, f"How much {item} is in Bill No. 2?")(item)
+    lines = _row_lines(text)
+    assert len(lines) == 1
+    assert _label(lines[0]) == "[Bill No. 2 - BUILDINGS]"
+    assert _amount(lines[0]) == 75 * 52
+
+
+@pytest.mark.parametrize(("item", "other"), ITEMS)
+def test_item_in_one_section_gets_one_row(item, other):
+    bill = _recurring_bill(item=item, other=other)
+    lines = _row_lines(_recur_action(bill, f"total {other}?")(other))
+    assert len(lines) == 1
+    assert _label(lines[0]) == "[Bill No. 2 - BUILDINGS]"
+    assert _amount(lines[0]) == 40 * 180
+
+
+@pytest.mark.parametrize(("item", "other"), ITEMS)
+def test_bill_without_headings_labels_every_row_unknown(item, other):
+    bill = _recurring_bill(item=item, other=other, headings=False)
+    lines = _row_lines(_recur_action(bill, f"total {item}")(item))
+    assert [_label(ln) for ln in lines] == [UNKNOWN_SECTION] * 3
+    assert sorted(_amount(ln) for ln in lines) == sorted(
+        [300 * 45, 75 * 52, 120 * 61])
+
+
+@pytest.mark.parametrize("style", HEADING_STYLES)
+def test_row_above_a_new_heading_stays_in_the_old_section(style):
+    bill = _recurring_bill(item="potable water pipe", other="kerb", style=style)
+    sections = section_map((c.chunk_index, c.text) for c in bill)
+    rows = item_rows(
+        [(c.chunk_index, c.text) for c in bill], sections, "excavation soft",
+        row_segments=priced_row_segments,
+    )
+    assert len(rows) == 1
+    assert _label(rows[0]) == "[Bill No. 1 - SITEWORKS]"
+
+
+@pytest.mark.parametrize(("item", "expected"), [
+    ("potable water pipework", 3),              # "pipework" covers "pipe"
+    ("total amount of potable water pipe", 3),  # column words never match
+])
+def test_item_words_fold_prefixes_and_ignore_column_words(item, expected):
+    bill = _recurring_bill(item="uPVC potable water pipe", other="kerb")
+    rows = item_rows(
+        [(c.chunk_index, c.text) for c in bill],
+        section_map((c.chunk_index, c.text) for c in bill), item,
+        row_segments=priced_row_segments,
+    )
+    assert len(rows) == expected
+
+
+@pytest.mark.parametrize("item", ["bar", "zinc chromate primer"])
+def test_item_the_bill_does_not_print_gets_no_row(item):
+    bill = _recurring_bill(item="barrier cable", other="kerb")
+    rows = item_rows(
+        [(c.chunk_index, c.text) for c in bill],
+        section_map((c.chunk_index, c.text) for c in bill), item,
+        row_segments=priced_row_segments,
+    )
+    assert rows == []
+
+
+@pytest.mark.parametrize("copies", [2, 3])
+def test_a_row_printed_by_overlapping_chunks_is_listed_once(copies):
+    bill = _recurring_bill(item="potable water pipe", other="kerb")
+    last = bill[-1]
+    bill += [
+        _chunk(RECUR, last.chunk_index + i, last.text.split("\n", 2)[2])
+        for i in range(1, copies)
+    ]
+    lines = _row_lines(_recur_action(bill, "total potable water pipe")(
+        "potable water pipe"))
+    assert len(lines) == 3
+
+
+@pytest.mark.parametrize("rows", [60, 150])
+def test_item_rows_are_not_cut_by_the_chunk_budget(rows, monkeypatch):
+    monkeypatch.setenv("AGENTIC_EVIDENCE_MAX_TOKENS", "200")
+    monkeypatch.setenv("AGENTIC_EVIDENCE_MAX_TOKENS_PER_DOC", "200")
+    bill = [_chunk(RECUR, 0, "BILL NO. 1\nPIPEWORK\n")] + [
+        _chunk(RECUR, i, _row(f"P{i} potable water pipe run", "m", i, 10))
+        for i in range(1, rows + 1)
+    ]
+    text = _recur_action(bill, "total potable water pipe")("potable water pipe")
+    lines = _row_lines(text)
+    assert len(lines) == rows
+    assert sum(_amount(ln) for ln in lines) == 10 * rows * (rows + 1) // 2
+    assert all(_label(ln) == "[Bill No. 1 - PIPEWORK]" for ln in lines)
+
+
+@pytest.mark.parametrize(("ask", "label"), [
+    ("ductile iron pipe in the drainage bill", "[Bill No. 2 - DRAINAGE]"),
+    ("ductile iron pipe in the pumping station bill",
+     "[Bill No. 3 - PUMPING STATION]"),
+])
+def test_a_bill_whose_section_is_not_named_is_kept_whole(ask, label):
+    """Two typed bills; the ask names a section by a title only the first
+    prints. The
+    second bill is not restricted, so all its rows still reach the model."""
+    other = _recurring_bill(item="ductile iron pipe", other="kerb")
+    corpus = _sectioned_bill() + other
+    action = bill_rows_action(
+        _bm25_over(corpus), "p1", row_count=priced_row_count,
+        typed_bills=lambda _pid: [BILL, RECUR], bill_chunks=_fetch_over(corpus),
+        ask=ask, row_segments=priced_row_segments,
+    )
+    labels = [_label(ln) for ln in _row_lines(action("ductile iron pipe"))]
+    assert labels == [label, "[Bill No. 1 - SITEWORKS]",
+                      "[Bill No. 2 - BUILDINGS]", "[Bill No. 3 - EXTERNAL WORKS]"]
+
+
+@pytest.mark.parametrize(("text", "count"), [
+    ("Pipe 110mm\nm\n300\n45.00\n13,500.00\nKerb\nm\n40\n180.00\n7,200.00", 2),
+    ("Preamble only, no priced row: 12 m of pipe", 0),
+])
+def test_priced_row_segments_match_the_row_count(text, count):
+    assert len(priced_row_segments(text)) == count == priced_row_count(text)
+
+
+@pytest.mark.parametrize(("text", "first", "second"), [
+    ("A1 | Pipe | m | 300 | 45.00 | 13,500.00\nA2 | Kerb | m | 40 | 180.00 | 7,200.00",
+     "A1 Pipe m 300 45.00 13,500.00", "\nA2 Kerb m 40 180.00 7,200.00"),
+    ("B1 Duct m 10 5.00 50.00 B2 Valve nr 2 300.00 600.00",
+     "B1 Duct m 10 5.00 50.00", " B2 Valve nr 2 300.00 600.00"),
+])
+def test_priced_row_segments_carry_the_description_above_each_row(text, first, second):
+    assert priced_row_segments(text) == [first, second]

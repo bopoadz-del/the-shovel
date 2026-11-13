@@ -7754,6 +7754,32 @@ def priced_row_count(text: str) -> int:
     return len(spans)
 
 
+def priced_row_segments(text: str) -> List[str]:
+    """Each priced row of ``text`` with the description printed above it.
+
+    The same rows :func:`priced_row_count` counts (qty x rate = amount, either
+    column order). Row ``n`` is the text after row ``n-1``'s amount up to and
+    including row ``n``'s amount, so it carries the item ref and description
+    the bill prints before the figures. Line breaks are kept (a heading line
+    stays a line); runs of spaces, tabs and table bars collapse to one space.
+    """
+    blob = re.sub(r"[ \t|]+", " ", text or "")
+    spans: List[tuple] = []
+    for cand in _priced_boq_triples(blob):
+        if _consistent_priced_triple(cand) is None:
+            continue
+        lo, hi = cand.span()
+        if any(lo < s_hi and s_lo < hi for s_lo, s_hi in spans):
+            continue
+        spans.append((lo, hi))
+    segments: List[str] = []
+    previous_end = 0
+    for _lo, hi in sorted(spans):
+        segments.append(blob[previous_end:hi])
+        previous_end = hi
+    return segments
+
+
 def _plain_boq_number(value: float) -> str:
     if abs(value - round(value)) < 1e-9:
         return str(int(round(value)))

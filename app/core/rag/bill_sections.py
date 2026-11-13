@@ -209,3 +209,114 @@ def in_named_span(
     """True when chunk ``index`` lies inside a section numbered in ``numbers``."""
     wanted = set(numbers)
     return any(s.number in wanted for s in sections_of(index, sections))
+
+
+#: The label of a row whose bill prints no section heading.
+UNKNOWN_SECTION = "[section unknown]"
+#: A compressed row keeps the end of its text: the figures and the
+#: description printed just above them.
+_ROW_MAX = 240
+#: A row's identity for deduplication: its last tokens (unit, qty, rate,
+#: amount and the description words printed just before them).
+_ROW_KEY_TOKENS = 8
+#: Column and aggregate words of a bill ("total quantity", "rate", "amount").
+#: They say what to compute about an item, not which item it is, so a row is
+#: never matched on them.
+_COLUMN_WORDS = frozenset({
+    "total", "quantity", "qty", "rate", "amount", "sum", "price", "priced",
+    "cost", "value", "item", "boq", "row", "unit", "many", "much", "what",
+    "all", "every", "listed",
+})
+
+
+def _covers(word: str, row_words: set[str]) -> bool:
+    """``word`` is in ``row_words``, or one is a 4+ letter prefix of the other
+    ("pipe" / "pipework")."""
+    if word in row_words:
+        return True
+    return any(
+        min(len(word), len(other)) >= 4
+        and (other.startswith(word) or word.startswith(other))
+        for other in row_words
+    )
+
+
+def _row_owner(
+    owners: list[BillSection], segment: str, current: BillSection | None,
+) -> BillSection | None:
+    """The section a row belongs to inside a chunk spanning ``owners``.
+
+    A chunk that closes one section and opens the next prints the old
+    section's rows above the new heading: the row switches to a section
+    whose heading it prints, else stays with the current one.
+    """
+    for line in segment.splitlines():
+        match = _HEADING_RE.match(line)
+        if not match or _CARRIED_RE.search(line):
+            continue
+        number = match.group(1).upper()
+        for section in owners:
+            if section.number == number:
+                current = section
+    return current
+
+
+def _labelled_rows(chunks, sections, numbers, row_segments):
+    """``[(label, compact row text)]`` of every priced row, in bill order."""
+    rows: list[tuple[str, str]] = []
+    for index, text in sorted(chunks, key=lambda p: p[0]):
+        owners = sorted(sections_of(index, sections), key=lambda s: s.start)
+        if numbers and not any(s.number in numbers for s in owners):
+            continue
+        current = owners[0] if owners else None
+        for segment in row_segments(text):
+            current = _row_owner(owners, segment, current)
+            if numbers and (current is None or current.number not in numbers):
+                continue
+            label = f"[{current.label}]" if current is not None else UNKNOWN_SECTION
+            rows.append((label, " ".join(segment.split())[-_ROW_MAX:]))
+    return rows
+
+
+def item_rows(
+    chunks: Iterable[tuple[int, str]],
+    sections: Sequence[BillSection],
+    item: str,
+    *,
+    row_segments,
+    numbers: Iterable[str] = (),
+) -> list[str]:
+    """Every priced row of one bill that is ``item``, labelled by section.
+
+    ``chunks`` are the bill's ``(chunk_index, text)``; ``row_segments(text)``
+    splits a chunk into its priced rows. The result is complete, not ranked:
+    every row whose text prints at least half of the item's words (the words
+    the bill's rows print at all; column words such as "total" or "rate" do
+    not count), deduplicated on the row's figures and last description
+    words, each led by its section label, or
+    :data:`UNKNOWN_SECTION` when the bill prints no heading. With
+    ``numbers`` only the rows of those sections are kept.
+    """
+    wanted = {str(n) for n in numbers}
+    rows = _labelled_rows(list(chunks), sections, wanted, row_segments)
+    row_words = [words(text) for _label, text in rows]
+    asked = {
+        w for w in words(item) - _COLUMN_WORDS
+        if any(_covers(w, ws) for ws in row_words)
+    }
+    if not asked:
+        return []
+    need = (len(asked) + 1) // 2
+    out: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for (label, text), ws in zip(rows, row_words):
+        if sum(_covers(w, ws) for w in asked) < need:
+            continue
+        # Overlapping chunks print the same row with a different lead-in:
+        # the row is its figures and the description words just before them.
+        key = (label, " ".join(text.lower().split()[-_ROW_KEY_TOKENS:]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{label} {text}")
+    return out
