@@ -3,11 +3,10 @@
 Two backends, selected by ``DOCUMENT_BYTE_STORE``:
 
 * ``local`` — a directory on the process filesystem (``DOCUMENT_STORE_ROOT``,
-  or ``DATA_DIR`` when that is unset). Development, and the current
-  production task until a durable volume is attached.
+  or ``DATA_DIR`` when that is unset). Development. In production this
+  directory is durable whenever ``DATA_DIR`` is itself a mounted volume.
 * ``efs`` — the same directory layout on a filesystem that is a real mount,
-  distinct from the container root. Production uses this once EFS (or
-  another durable volume) is attached at ``DOCUMENT_STORE_ROOT``.
+  distinct from the container root, checked at startup.
 
 S3 is not a backend here. Adding an object store is a separate change with
 its own IAM; this module does not pretend to implement it.
@@ -18,9 +17,10 @@ points at an older location is still read from that path when the file is
 there.
 
 The production startup guard (``enforce_startup_guard``) refuses to boot
-into ephemeral container storage only when asked. The live ECS task has no
-durable volume yet, so the guard stays off until
-``REQUIRE_DURABLE_DOCUMENT_STORE`` is set. See ``deploy/aws/README.md``.
+into ephemeral container storage only when asked: the guard stays off until
+``REQUIRE_DURABLE_DOCUMENT_STORE`` is set. The live ECS task mounts an EFS
+volume at ``DATA_DIR``, so restoring the document store means restoring
+that file system, not copying a container. See ``deploy/aws/README.md``.
 """
 
 from __future__ import annotations

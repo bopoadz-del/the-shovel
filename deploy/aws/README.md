@@ -3,8 +3,11 @@
 `.github/workflows/deploy-aws.yml` builds one image and rolls the existing
 ECS service `the-fork` on cluster `cerebrum` (`us-west-2`). It reuses the
 task definition that is already on the service. It does not create a volume,
-and it does not change IAM. The live task therefore still has only the
-container's own disk until an owner attaches storage.
+and it does not change IAM. Storage is whatever that task definition mounts:
+the live task definition mounts an EFS volume (access point, transit
+encryption on) read-write at `/app/data`, which is `DATA_DIR`. The document
+byte store is therefore on EFS, and restoring it means restoring that file
+system from its backup, not copying files out of a container.
 
 Uploaded document bytes used to live only under `DATA_DIR` on that disk. A
 new task can start without them. This build adds a filesystem byte store
@@ -16,8 +19,8 @@ and a startup guard. It does not add an S3 client.
 
 - Unset: production boots, logs that the guard is **not enforcing**, and
   still accepts uploads on `DOCUMENT_BYTE_STORE=local` (the container disk
-  when `DATA_DIR` is not a separate mount). This is the current live task.
-  Setting the flag before a volume is mounted makes the process exit at
+  when `DATA_DIR` is not a separate mount; on the live task `DATA_DIR` is
+  the EFS mount). Setting the flag before a volume is mounted makes the process exit at
   startup and the service will not become healthy.
 - Set to `1` only after `DOCUMENT_BYTE_STORE=efs` and the mount check
   succeeds. The check compares mount identity with the container root
