@@ -234,3 +234,73 @@ async def test_executor_runs_generated_scipy_code(variables):
     )
     assert out["result"]["flow"] == pytest.approx(q_exact, rel=1e-9)
     assert out["attempts"] == 1
+
+
+# --------------------------------------------------------------------------
+# The policy helpers themselves (the importer and attribute guard are
+# installed into the jail as values, so they are also tested by name)
+# --------------------------------------------------------------------------
+
+import importlib  # noqa: E402
+
+from app.core.sandbox import (  # noqa: E402
+    _guarded_getattr,
+    _guarded_import,
+    _module_reachable,
+    module_allowed,
+)
+
+
+@pytest.mark.parametrize(
+    "name, allowed, reachable",
+    [
+        ("numpy.linalg", True, True),
+        ("scipy.optimize", True, True),
+        ("scipy.io", False, False),
+        ("app.lib", False, True),   # parent of a dotted entry: walk-through only
+        ("app.core", False, False),
+        ("os", False, False),
+    ],
+)
+def test_module_policy(name, allowed, reachable):
+    assert module_allowed(name) is allowed
+    assert _module_reachable(name) is reachable
+
+
+@pytest.mark.parametrize(
+    "package, attr",
+    [("scipy", "optimize"), ("numpy", "linalg"), ("app.lib", "pm_computations")],
+)
+def test_guarded_getattr_returns_an_allowed_module(package, attr):
+    importlib.import_module(f"{package}.{attr}")
+    pkg = importlib.import_module(package)
+    assert _guarded_getattr(pkg, attr) is getattr(pkg, attr)
+
+
+@pytest.mark.parametrize("package, attr", [("scipy", "io"), ("app", "core")])
+def test_guarded_getattr_refuses_a_module_outside_the_policy(package, attr):
+    importlib.import_module(f"{package}.{attr}")
+    with pytest.raises(ImportError, match=f"{package}.{attr}"):
+        _guarded_getattr(importlib.import_module(package), attr)
+
+
+@pytest.mark.parametrize("obj, attr", [(math, "pi"), ([3, 1, 2], "count")])
+def test_guarded_getattr_passes_plain_attributes(obj, attr):
+    assert _guarded_getattr(obj, attr) == getattr(obj, attr)
+
+
+@pytest.mark.parametrize(
+    "name, fromlist, expected",
+    [("math", (), "math"), ("scipy.optimize", (), "scipy"), ("scipy", ("optimize",), "scipy")],
+)
+def test_guarded_import_returns_the_module(name, fromlist, expected):
+    assert _guarded_import(name, None, None, fromlist, 0).__name__ == expected
+
+
+@pytest.mark.parametrize(
+    "name, fromlist, level",
+    [("os", (), 0), ("scipy", ("io",), 0), ("scipy.datasets", (), 0), ("math", (), 1)],
+)
+def test_guarded_import_refuses(name, fromlist, level):
+    with pytest.raises(ImportError):
+        _guarded_import(name, None, None, fromlist, level)

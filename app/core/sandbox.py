@@ -192,35 +192,31 @@ def _guarded_getattr(obj: Any, name: str, default: Any = None) -> Any:
     return value
 
 
-def _make_guarded_import() -> Any:
-    """Build an ``__import__`` replacement that honours :data:`ALLOWED_MODULES`.
+def _guarded_import(
+    name: str,
+    globals: Optional[Dict[str, Any]] = None,
+    locals: Optional[Dict[str, Any]] = None,
+    fromlist: tuple = (),
+    level: int = 0,
+) -> Any:
+    """``__import__`` replacement that honours :func:`module_allowed`.
 
     A submodule import (``import app.lib.pm_computations``) is allowed only if
     its full dotted path is whitelisted; ``from os import path`` is denied
     because ``os`` is not in the whitelist.
     """
-
-    def _guarded_import(
-        name: str,
-        globals: Optional[Dict[str, Any]] = None,
-        locals: Optional[Dict[str, Any]] = None,
-        fromlist: tuple = (),
-        level: int = 0,
-    ) -> Any:
-        if level != 0:
-            raise ImportError("Relative imports are not permitted in the sandbox.")
-        if not module_allowed(name):
-            raise _deny_module(name)
-        module = __import__(name, globals, locals, fromlist, level)
-        # `from scipy import io` binds a subpackage without a dotted import
-        # name; the names it binds pass the same policy.
-        for item in fromlist or ():
-            value = getattr(module, item, None)
-            if isinstance(value, ModuleType) and not module_allowed(value.__name__):
-                raise _deny_module(value.__name__)
-        return module
-
-    return _guarded_import
+    if level != 0:
+        raise ImportError("Relative imports are not permitted in the sandbox.")
+    if not module_allowed(name):
+        raise _deny_module(name)
+    module = __import__(name, globals, locals, fromlist, level)
+    # `from scipy import io` binds a subpackage without a dotted import
+    # name; the names it binds pass the same policy.
+    for item in fromlist or ():
+        value = getattr(module, item, None)
+        if isinstance(value, ModuleType) and not module_allowed(value.__name__):
+            raise _deny_module(value.__name__)
+    return module
 
 
 def _build_builtins() -> Dict[str, Any]:
@@ -234,7 +230,7 @@ def _build_builtins() -> Dict[str, Any]:
     for blocked in BLOCKED_BUILTINS:
         builtins.pop(blocked, None)
     # Provide a whitelisted importer so `import math` etc. still works.
-    builtins["__import__"] = _make_guarded_import()
+    builtins["__import__"] = _guarded_import
     return builtins
 
 
