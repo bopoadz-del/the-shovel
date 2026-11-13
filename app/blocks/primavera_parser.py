@@ -57,6 +57,13 @@ class PrimaveraParserBlock(UniversalBlock):
             return {"status": "error", "error": f"File not found: {file_path}"}
         if not file_path.lower().endswith(".xer"):
             return {"status": "error", "error": "File must be a .xer Primavera export"}
+        # Near-critical band: a caller input with no default, refused before
+        # the file is read when it is not a positive number of days.
+        from app.lib.pm_computations import parse_near_critical_band
+        try:
+            near_band = parse_near_critical_band(params.get("near_critical_band_days"))
+        except ValueError as exc:
+            return {"status": "error", "error": str(exc)}
 
         try:
             # open_plaintext transparently decrypts when DATA_ENCRYPTION_KEY is
@@ -180,19 +187,17 @@ class PrimaveraParserBlock(UniversalBlock):
             parsed = parse_xer_full(xer_text)
             cpm_activities = parsed.get("activities") or []
             if cpm_activities:
-                cpm_input = CPMInput(activities=cpm_activities)
+                cpm_input = CPMInput(activities=cpm_activities,
+                                     near_critical_band_days=near_band)
                 cpm_out = compute_cpm(cpm_input)
                 per_activity_float = {
                     r.id: r.total_float for r in cpm_out.results
                 }
-                near_critical_ids = [
-                    r.id for r in cpm_out.results
-                    if not r.is_critical and 0 < r.total_float <= 5
-                ]
                 response["cpm"] = {
                     "total_duration_days": cpm_out.project_duration,
                     "critical_path_activity_ids": list(cpm_out.critical_path),
-                    "near_critical_activity_ids": near_critical_ids,
+                    "near_critical_activity_ids": cpm_out.near_critical,
+                    "near_critical_band_days": near_band,
                     "per_activity_float": per_activity_float,
                     "id_space": "task_code (matches activities[].code)",
                 }
@@ -200,7 +205,9 @@ class PrimaveraParserBlock(UniversalBlock):
                 response["cpm"] = {
                     "total_duration_days": 0,
                     "critical_path_activity_ids": [],
-                    "near_critical_activity_ids": [],
+                    "near_critical_activity_ids": (
+                        None if near_band is None else []),
+                    "near_critical_band_days": near_band,
                     "per_activity_float": {},
                 }
             # Surface calendar + TASKRSRC parse results for downstream callers.

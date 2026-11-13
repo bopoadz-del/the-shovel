@@ -696,6 +696,13 @@ class ConstructionScheduleMixin:
     
         if not file_path:
             return {"status": "error", "error": "No schedule file provided"}
+        # Near-critical band is a caller input with no default; a bad value
+        # is refused before any file is read.
+        from app.lib.pm_computations import parse_near_critical_band
+        try:
+            near_band = parse_near_critical_band(p.get("near_critical_band_days"))
+        except ValueError as exc:
+            return {"status": "error", "error": str(exc)}
     
         ext = Path(file_path).suffix.lower()
         if ext == '.xer':
@@ -708,7 +715,7 @@ class ConstructionScheduleMixin:
         if schedule_data.get("status") == "error":
             return schedule_data
     
-        cpm_results = self._calculate_cpm(schedule_data)
+        cpm_results = self._calculate_cpm(schedule_data, near_band)
     
         delay_analysis = None
         if baseline_file:
