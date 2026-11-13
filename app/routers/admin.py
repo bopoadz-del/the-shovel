@@ -247,6 +247,7 @@ async def _doc_reindex_job(
             chunker,
             force_ocr=force_ocr,
             stamp_as_indexed=True,
+            profile=_doc_index.PROFILE_CORPUS_BUILD,
         )
         job.update(result)
         job["status"] = result.get("status") or "error"
@@ -729,7 +730,9 @@ def admin_project_reindex(
     """
     _require_admin(auth)
     from app.core import doc_index as _doc_index
-    result = _doc_index.index_project(project_id)
+    result = _doc_index.index_project(
+        project_id, profile=_doc_index.PROFILE_CORPUS_BUILD,
+    )
     if result.get("status") == "error":
         raise HTTPException(status_code=422, detail=result)
     return result
@@ -873,7 +876,9 @@ async def admin_drive_ingest_proof(
             "name": original_name,
         }
 
-    idx_result = _doc_index.index_document(req.project_id, doc["id"])
+    idx_result = _doc_index.index_document(
+        req.project_id, doc["id"], profile=_doc_index.PROFILE_CORPUS_BUILD,
+    )
     if idx_result.get("status") == "error":
         banner = idx_result.get(
             "banner",

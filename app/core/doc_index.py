@@ -239,6 +239,48 @@ def is_whole_document(doc: dict[str, Any] | None) -> bool:
     return meta.get("provenance") in WHOLE_DOCUMENT_PROVENANCES
 
 
+# Ingest profiles are chosen by how a document arrives, never by its name.
+# ``user_upload`` (a platform user's upload, the default) keeps today's size
+# gates. ``corpus_build`` (the Drive walk, the admin re-index) builds the RAG:
+# no whole-file size ceiling and no size-based OCR skip. Memory stays bounded
+# by the isolated page batches; OCR pages stay bounded by the page budget.
+PROFILE_USER_UPLOAD = "user_upload"
+PROFILE_CORPUS_BUILD = "corpus_build"
+INGEST_PROFILES = frozenset({PROFILE_USER_UPLOAD, PROFILE_CORPUS_BUILD})
+
+
+def _checked_profile(profile: str) -> str:
+    """``profile`` if it is a known ingest profile; raises ValueError otherwise."""
+    if profile not in INGEST_PROFILES:
+        raise ValueError(f"unknown ingest profile: {profile!r}")
+    return profile
+
+
+def _pdf_hits_size_gate(file_path: str, filename: str) -> bool:
+    """True when a size gate (batching, OCR skip, whole-file skip) applies."""
+    size_mb = _document_size_mb(file_path)
+    gates = [pdf_batch_min_mb(), pdf_ocr_max_size_mb(filename), pdf_max_size_mb()]
+    return any(gate > 0 and size_mb > gate for gate in gates)
+
+
+def _extract_for_profile(
+    file_path: str, filename: str, profile: str,
+) -> tuple[str, dict[str, Any]]:
+    """``_extract_with_meta`` under the gates of ``profile``.
+
+    Under ``corpus_build`` a PDF that any size gate touches is read in
+    isolated page batches with no whole-file ceiling and no size-based OCR
+    skip; every other document extracts exactly as a user upload does.
+    """
+    corpus_build = _checked_profile(profile) == PROFILE_CORPUS_BUILD
+    if corpus_build and _ext_of(filename) == ".pdf" and _pdf_hits_size_gate(file_path, filename):
+        return _extract_with_meta(
+            file_path, filename,
+            whole_document=True, max_size_mb=0.0, ocr_size_gate=False,
+        )
+    return _extract_with_meta(file_path, filename)
+
+
 # How many leading letters/digits of a chunk are matched against the extracted
 # text to find the page the chunk starts on (``chunk_start_pages``).
 _DEFAULT_CHUNK_PAGE_PROBE_CHARS = 48
@@ -1042,6 +1084,7 @@ def _extract_pdf_batched(
     *,
     force_ocr: bool = False,
     max_size_mb: float | None = None,
+    ocr_size_gate: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Extract a large PDF as isolated page batches, keeping prior text.
 
@@ -1052,6 +1095,9 @@ def _extract_pdf_batched(
 
     ``max_size_mb`` replaces the whole-PDF skip ceiling (``PDF_MAX_SIZE_MB``)
     for callers with their own, e.g. whole reference works.
+    ``ocr_size_gate=False`` (the ``corpus_build`` profile) never skips OCR
+    for size, and its OCR page budget is the document's own page count, so
+    a long image-only volume is not cut at ``pdf_ocr_page_cap``.
     """
     from app.core.extract_isolated import run_isolated
 
@@ -1079,11 +1125,14 @@ def _extract_pdf_batched(
     ocr_max = pdf_ocr_max_size_mb(filename)
     if force_ocr:
         ocr_max = max(ocr_max, max_mb if max_mb > 0 else ocr_max)
-    ocr_skipped = ocr_max > 0 and size_mb > ocr_max
+    ocr_skipped = ocr_size_gate and ocr_max > 0 and size_mb > ocr_max
     if ocr_skipped:
         budget = 0
     elif force_ocr:
         budget = max(pdf_ocr_page_cap(filename), pdf_ocr_force_page_cap(), n_pages)
+    elif not ocr_size_gate:
+        # corpus_build: the budget is the document's own page count.
+        budget = max(pdf_ocr_page_cap(filename), n_pages)
     else:
         budget = pdf_ocr_page_cap(filename)
     batch = pdf_ocr_batch_pages()
@@ -1399,6 +1448,7 @@ def _strip_nul(text: str, meta: dict[str, Any]) -> str:
 def _extract_with_meta(
     file_path: str, filename: str, force_ocr: bool = False,
     *, whole_document: bool = False, max_size_mb: float | None = None,
+    ocr_size_gate: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Extract plaintext from a document, plus a small metadata dict.
 
@@ -1434,7 +1484,7 @@ def _extract_with_meta(
         ceiling = admin_knowledge_pdf_max_mb() if max_size_mb is None else max_size_mb
         text, meta = _extract_pdf_batched(
             file_path, filename, force_ocr=force_ocr,
-            max_size_mb=ceiling,
+            max_size_mb=ceiling, ocr_size_gate=ocr_size_gate,
         )
         return _strip_nul(text, meta), meta
 
@@ -2539,8 +2589,14 @@ def _unsupported_skip_reason(ext: str) -> str:
     return "unsupported_type"
 
 
-def index_project(project_id: str) -> dict[str, Any]:
+def index_project(
+    project_id: str, *, profile: str = PROFILE_USER_UPLOAD,
+) -> dict[str, Any]:
     """Build (or rebuild) the full text index for ``project_id``.
+
+    ``profile`` picks the extraction gates (see ``PROFILE_CORPUS_BUILD``); a
+    document whose text stage fell short is stamped TEXT_SPARSE with the
+    reason, so its table chunks alone never read as a fully indexed body.
 
     For each document:
     - unsupported extension → record under ``skipped`` with reason
@@ -2554,6 +2610,7 @@ def index_project(project_id: str) -> dict[str, Any]:
 
     Persists the result as JSON and returns a summary dict.
     """
+    _checked_profile(profile)
     docs = _projects.list_documents(project_id)
     # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
     prior = _entries_of(_load_index(project_id))
@@ -2611,11 +2668,12 @@ def index_project(project_id: str) -> dict[str, Any]:
             continue
 
         file_path = doc.get("file_path") or ""
-        text, meta = _extract_with_meta(file_path, filename)
+        text, meta = _extract_for_profile(file_path, filename, profile)
         meta = dict(meta or {})
         chunks, pages = _text_chunks_with_pages(
             text, meta, _chunker_for_document(filename), filename,
         )
+        text_chunk_count = len(chunks)
         # BOQ → RAG: mirror index_document so the package total + line items
         # are retrievable regardless of which indexing path ran.
         doc_attrs: dict[str, Any] = {}
@@ -2635,6 +2693,7 @@ def index_project(project_id: str) -> dict[str, Any]:
             chunks = chunks + drawing_chunks
         meta["chunk_pages"] = pages + [None] * (len(chunks) - len(pages))
         chunks = _normalize_cesmm_in_chunks(chunks)
+        _record_stage_split(meta, text_chunk_count, len(chunks) - text_chunk_count)
 
         if not chunks:
             # A file that yields no text is never recorded as indexed: the
@@ -2667,6 +2726,12 @@ def index_project(project_id: str) -> dict[str, Any]:
         }
         if meta.get("ocr_low_quality"):
             entry["ocr_low_quality"] = True
+        shortfall = _text_stage_shortfall(meta)
+        if shortfall:
+            entry["text_stage_shortfall"] = shortfall
+            _stamp_index_ledger(
+                doc["id"], filename, len(chunks), text_stage_shortfall=shortfall,
+            )
         documents.append(entry)
         total_chunks += len(chunks)
         ocr_flags = _ocr_flags_for(chunks, meta)
@@ -3449,6 +3514,34 @@ def _mostly_without_text(empty_text_pages: int, pages_read: int) -> bool:
     return empty_text_pages >= pdf_scanned_empty_page_share() * pages_read
 
 
+def _record_stage_split(meta: dict[str, Any], text_chunks: int, table_chunks: int) -> None:
+    """Record how many chunks the text stage and the table stages produced."""
+    meta["text_chunks"] = int(text_chunks)
+    meta["table_chunks"] = int(table_chunks)
+
+
+#: Reasons the text stage did not read the whole document, keyed by the
+#: extraction-meta flag that records it. In order: the first that applies wins.
+_TEXT_STAGE_SHORTFALLS = (
+    ("skipped_too_large", "text_stage_skipped_over_size_ceiling"),
+    ("extract_failed", "text_stage_failed"),
+    ("extract_partial", "text_stage_partial"),
+)
+
+
+def _text_stage_shortfall(meta: dict[str, Any]) -> str | None:
+    """Why the text stage did not read the whole document, or None.
+
+    The table stages run whether or not the text stage did, so chunk_count > 0
+    alone cannot tell a read document from one whose body never entered the
+    index. A document with a shortfall is never stamped INDEXED.
+    """
+    for flag, reason in _TEXT_STAGE_SHORTFALLS:
+        if meta.get(flag):
+            return reason
+    return None
+
+
 def _scanned_pdf_missing_ocr(ext: str, meta: dict[str, Any]) -> bool:
     """True when a PDF had empty body pages and OCR was never invoked.
 
@@ -3496,6 +3589,7 @@ def _stamp_index_ledger(
     pages_ocrd: int | None = None,
     ocr_skip_reason: str | None = None,
     ocr_unusable_pages: int = 0,
+    text_stage_shortfall: str | None = None,
 ) -> None:
     """Write documents.chunk_count / ingest_status / extractor_version.
 
@@ -3523,6 +3617,11 @@ def _stamp_index_ledger(
         # reindex flag says: the tail pages are missing and the user must be
         # told "partially read, pages 1-N of M", not shown a complete doc.
         status, reason = ist.PARTIAL_OCR, "ocr_truncated"
+    elif text_stage_shortfall and chunk_count > 0:
+        # The text stage was skipped, failed or stopped early: whatever the
+        # table stages produced, the body is not (wholly) in the index. Its
+        # chunks stay retrievable; the row never reads INDEXED.
+        status, reason = ist.TEXT_SPARSE, text_stage_shortfall
     elif stamp_as_indexed and chunk_count > 0:
         status, reason = ist.INDEXED, None
     else:
@@ -3605,6 +3704,7 @@ def _produce_chunks(
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
     structured, attrs = _structured_stage(file_path, filename, ext, project_id)
+    _record_stage_split(meta, len(chunks), len(structured))
     meta["chunk_pages"] = pages + [None] * len(structured)
     if attrs:
         meta["document_attributes"] = attrs
@@ -3660,6 +3760,7 @@ def _produce_whole_document_chunks(
     force_ocr: bool,
     *,
     max_size_mb: float | None = None,
+    ocr_size_gate: bool = True,
 ) -> tuple[list[str], dict[str, Any]]:
     """``_produce_chunks`` for a whole reference work.
 
@@ -3672,7 +3773,7 @@ def _produce_whole_document_chunks(
 
     text, meta = _extract_with_meta(
         file_path, filename, force_ocr=force_ocr, whole_document=True,
-        max_size_mb=max_size_mb,
+        max_size_mb=max_size_mb, ocr_size_gate=ocr_size_gate,
     )
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
@@ -3692,6 +3793,7 @@ def _produce_whole_document_chunks(
             filename, diag.get("extract_failed_detail"),
         )
     structured = list(structured or [])
+    _record_stage_split(meta, len(chunks), len(structured))
     meta["chunk_pages"] = pages + [None] * len(structured)
     if attrs:
         meta["document_attributes"] = dict(attrs)
@@ -3730,6 +3832,7 @@ def _produce_chunks_isolated(
     force_ocr: bool,
     *,
     whole_document: bool = False,
+    profile: str = PROFILE_USER_UPLOAD,
 ) -> tuple[list[str], dict[str, Any]]:
     """``_produce_chunks`` in its own memory-capped, time-limited child.
 
@@ -3743,6 +3846,15 @@ def _produce_chunks_isolated(
     """
     from app.core.extract_isolated import run_isolated, worth_isolating
 
+    corpus_build = _checked_profile(profile) == PROFILE_CORPUS_BUILD
+    if corpus_build and ext == ".pdf" and _pdf_hits_size_gate(file_path, filename):
+        # Building the corpus: a PDF any size gate would touch is read in
+        # isolated page batches with no whole-file ceiling and no size-based
+        # OCR skip. Memory is bounded per batch, OCR by the page budget.
+        return _produce_whole_document_chunks(
+            file_path, filename, ext, project_id, chunker, force_ocr,
+            max_size_mb=0.0, ocr_size_gate=False,
+        )
     if whole_document or (ext == ".pdf" and _pdf_should_batch(file_path)):
         # Whole reference works AND large ordinary PDFs isolate per page batch,
         # not per file. A child cannot fork again, so batching inside the
@@ -3838,12 +3950,18 @@ def index_document(
     *,
     force_ocr: bool = False,
     stamp_as_indexed: bool = False,
+    profile: str = PROFILE_USER_UPLOAD,
 ) -> dict[str, Any]:
     """Index one document (see ``_index_document``) and record on its row how
-    many PDF pages had no text layer."""
+    many PDF pages had no text layer.
+
+    ``profile`` is how the document arrived: ``user_upload`` (default) or
+    ``corpus_build`` (no whole-file size ceiling, no size-based OCR skip).
+    """
     result = _index_document(
         project_id, document_id, chunker,
         force_ocr=force_ocr, stamp_as_indexed=stamp_as_indexed,
+        profile=_checked_profile(profile),
     )
     _record_pages_without_text(document_id, result)
     return result
@@ -3891,6 +4009,7 @@ def _index_document(
     *,
     force_ocr: bool = False,
     stamp_as_indexed: bool = False,
+    profile: str = PROFILE_USER_UPLOAD,
 ) -> dict[str, Any]:
     """Incrementally index a single document into the project's index.
 
@@ -3984,6 +4103,7 @@ def _index_document(
             file_path, filename, ext, project_id,
             _chunker_for_document(filename, chunker), force_ocr,
             whole_document=is_whole_document(doc),
+            profile=profile,
         )
         quarantined = _quarantine_index_result(
             project_id, document_id, filename, meta,
@@ -4189,6 +4309,7 @@ def _index_document(
         pages_ocrd=meta.get("pages_ocrd"),
         ocr_skip_reason=meta.get("ocr_skip_reason"),
         ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
+        text_stage_shortfall=_text_stage_shortfall(meta),
     )
     result = {
         "status": "ok",
@@ -4208,6 +4329,11 @@ def _index_document(
         "ocr_truncated": bool(meta.get("ocr_truncated")),
         "ocr_skip_reason": meta.get("ocr_skip_reason"),
         "ocr_unusable_pages": int(meta.get("ocr_unusable_pages") or 0),
+        "pages_read": meta.get("pages_read"),
+        "text_chunks": meta.get("text_chunks"),
+        "table_chunks": meta.get("table_chunks"),
+        "text_stage_shortfall": _text_stage_shortfall(meta),
+        "ingest_profile": profile,
     }
     if ext == ".pdf":
         result["pages_without_text"] = int(meta.get("empty_text_pages") or 0)

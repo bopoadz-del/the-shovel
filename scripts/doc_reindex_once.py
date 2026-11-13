@@ -26,6 +26,7 @@ heading lines found.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -194,7 +195,11 @@ def production_deps() -> Deps:
         write_transient=write_transient_copy,
         discard_transient=p1b._discard_transient_copy,  # noqa: SLF001
         set_file_path=projects_mod.set_document_file_path,
-        index_document=doc_index.index_document,
+        # The tool exists to read what the upload gates refuse (a 221 MB
+        # drawing volume): it indexes on the corpus_build profile.
+        index_document=functools.partial(
+            doc_index.index_document, profile=doc_index.PROFILE_CORPUS_BUILD,
+        ),
         chunk_texts=_chunk_texts,
         log=p1b.log,
     )
