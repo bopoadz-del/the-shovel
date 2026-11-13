@@ -2622,13 +2622,15 @@ def index_project(project_id: str) -> dict[str, Any]:
         boq_chunks = _boq_chunks_for_document(
             file_path, filename, ext, project_id, doc_attrs,
         )
-        _record_document_attributes(doc["id"], doc_attrs)
         if boq_chunks:
             chunks = chunks + boq_chunks
         # Drawing → RAG: same mirroring rule as the BOQ hook. Both indexing
         # paths must append these or a schedule is retrievable after one kind
         # of ingest and invisible after the other.
-        drawing_chunks = _drawing_chunks_for_document(file_path, filename, ext, project_id)
+        drawing_chunks = _drawing_chunks_for_document(
+            file_path, filename, ext, project_id, doc_attrs,
+        )
+        _record_document_attributes(doc["id"], doc_attrs)
         if drawing_chunks:
             chunks = chunks + drawing_chunks
         meta["chunk_pages"] = pages + [None] * (len(chunks) - len(pages))
@@ -3231,33 +3233,64 @@ def _drawing_table_chunks(tables: list[dict[str, Any]], source: str) -> list[str
     return out
 
 
-def _drawing_no_table_guard(filename: str) -> str:
-    """Emitted when a document is named as a drawing but yields no readable
-    schedule — a scanned/vector-only sheet whose text layer is empty.
+#: ``documents.metadata`` key holding what the drawing schedule stage saw.
+#: A document-level attribute, never chunk text -- the same rule as
+#: ``BOQ_TOTAL_META_KEY``: a stored warning sentence is embedded and indexed
+#: like content and cannot be told apart from what the sheet says.
+DRAWING_SCHEDULE_META_KEY = "drawing_schedule"
 
-    Mirrors `_boq_no_total_guard`, and for the same reason: without it, chat
-    sees a drawing in the corpus, finds no schedule values, and is free to
-    produce a plausible bar diameter or door count. This says: the sheet is
-    here, its schedules are NOT readable, do not state values from it.
+
+def _drawing_schedule_attribute(
+    pages_read: int, pages_with_text: int, tables_read: int,
+) -> dict[str, Any]:
+    """What the schedule stage observed on one drawing, as counts.
+
+    ``read`` is True only when at least one schedule table became chunks.
+    The reason names the observation (no table grid on the pages read, with
+    or without a text layer), never a guess at why.
     """
-    return (
-        f"SCHEDULE-VALUE GUARD for '{filename}': this document is a drawing "
-        "sheet, but NO schedule table could be read from it — it appears to be "
-        "a scanned or image-only PDF with no recoverable text layer. Do NOT "
-        "state bar marks, diameters, quantities, door or window references, or "
-        "any other schedule value from this drawing; any such figure would be "
-        "invented. To read its schedules, a vector (non-scanned) PDF of this "
-        "sheet is required."
-    )
+    if tables_read:
+        reason = "tables_read"
+    elif pages_with_text:
+        reason = "no_table_grid_text_layer_present"
+    else:
+        reason = "no_table_grid_no_text_layer"
+    return {
+        "read": bool(tables_read),
+        "reason": reason,
+        "pages_read": int(pages_read),
+        "pages_with_text": int(pages_with_text),
+        "tables_read": int(tables_read),
+    }
+
+
+def drawing_schedule_status(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Read the drawing schedule attribute off a document dict, or None.
+
+    None means the document never went through the drawing schedule stage.
+    """
+    meta = _projects.coerce_document_metadata((document or {}).get("metadata"))
+    attr = meta.get(DRAWING_SCHEDULE_META_KEY)
+    return dict(attr) if isinstance(attr, dict) else None
 
 
 def _drawing_chunks_for_document(
-    file_path: str, filename: str, ext: str, project_id: str
+    file_path: str,
+    filename: str,
+    ext: str,
+    project_id: str,
+    attrs: dict[str, Any] | None = None,
 ) -> list[str]:
     """Return schedule + title-block chunks for a drawing, or [] otherwise.
 
-    Never raises — a parse failure yields the guard (or []) so the primary
-    text indexing is unaffected, exactly as `_boq_chunks_for_document` behaves.
+    When ``attrs`` is given, what the stage saw (pages read, pages with a
+    text layer, schedule tables read) is written into it under
+    ``DRAWING_SCHEDULE_META_KEY`` for the caller to store on the document
+    row. No chunk is ever emitted for "no schedule": that fact is an
+    attribute.
+
+    Never raises — a parse failure yields [] so the primary text indexing is
+    unaffected, exactly as `_boq_chunks_for_document` behaves.
     """
     if not file_path or not _looks_like_drawing(filename, ext):
         return []
@@ -3270,7 +3303,9 @@ def _drawing_chunks_for_document(
         container = ConstructionContainer()
         out: list[str] = []
         source = ""
-        any_text = False
+        pages_read = 0
+        pages_with_text = 0
+        tables_read = 0
         # The extractor already decrypted this file to a temp and deleted it.
         # The stored path is Fernet ciphertext when DATA_ENCRYPTION_KEY is
         # set, so opening it directly is FileDataError ("no objects found")
@@ -3278,11 +3313,13 @@ def _drawing_chunks_for_document(
         with file_crypto.open_plaintext(file_path) as readable_path:
             with fitz.open(readable_path) as doc:
                 for page_num, page in enumerate(doc):
+                    pages_read += 1
+                    raw = page.get_text() or ""
+                    if raw.strip():
+                        pages_with_text += 1
                     if page_num == 0:
                         # The title block is on sheet 1 and names the drawing, so
                         # every chunk below can be attributed to it.
-                        raw = page.get_text() or ""
-                        any_text = bool(raw.strip())
                         title_block = container._extract_title_block({"raw_text": raw})
                         source = title_block.get("drawing_number") or ""
                         if title_block.get("fields_found"):
@@ -3295,23 +3332,20 @@ def _drawing_chunks_for_document(
                                 f"DRAWING TITLE BLOCK — {filename}. "
                                 f"Sheet identity: {named}."
                             )
-                    elif not any_text and (page.get_text() or "").strip():
-                        any_text = True
-                    out.extend(
-                        _drawing_table_chunks(
-                            container._extract_tables_advanced(page),
-                            source or os.path.splitext(filename or "")[0],
-                        )
+                    table_chunks = _drawing_table_chunks(
+                        container._extract_tables_advanced(page),
+                        source or os.path.splitext(filename or "")[0],
                     )
-        if out:
-            return out
-        # Named like a drawing, opened fine, produced nothing readable. If
-        # there was no text layer at all it is a scan — say so, so the model
-        # cannot invent schedule values. If there WAS text but no tables, the
-        # sheet genuinely has no schedule and the raw text already covers it.
-        if not any_text:
-            return [_drawing_no_table_guard(filename)]
-        return []
+                    tables_read += len(table_chunks)
+                    out.extend(table_chunks)
+        # Named like a drawing and opened: what was seen (pages, text layer,
+        # schedule tables) is a document attribute. A sheet with no schedule
+        # gets no chunk; the counts say what the stage observed.
+        if attrs is not None:
+            attrs[DRAWING_SCHEDULE_META_KEY] = _drawing_schedule_attribute(
+                pages_read, pages_with_text, tables_read,
+            )
+        return out
     except Exception as exc:
         log.warning(
             "drawing table wiring skipped for %s: %s", filename, exc, exc_info=True
@@ -3611,7 +3645,9 @@ def _structured_stage(
     chunks += _spreadsheet_row_chunks(file_path, filename, ext)
     # Drawing → RAG: mirrors index_project above. A drawing's schedules
     # live in its tables, and the raw text layer loses their structure.
-    chunks = chunks + _drawing_chunks_for_document(file_path, filename, ext, project_id)
+    chunks = chunks + _drawing_chunks_for_document(
+        file_path, filename, ext, project_id, attrs,
+    )
     return chunks, attrs
 
 
