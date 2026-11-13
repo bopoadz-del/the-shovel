@@ -1,0 +1,55 @@
+# Restore drill (P-I1 (2)): compare a Neon restore branch with live, counts
+# only. The restore branch is made from a restore point (the backup) by the
+# owner or the advisor; its endpoint id is the one input. Both databases are
+# read in READ ONLY transactions. Nothing is written; no row text, URL or
+# secret is printed.
+name: restore-drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_endpoint:
+        description: "Neon endpoint id on the restore-point branch (ep-...)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  ECS_SERVICE: the-fork
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Requirements
+        run: python -m pip install -q -r requirements.txt
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Load live task env (values masked, never printed)
+        run: |
+          set +x
+          python scripts/load_live_task_env.py --github-env "$GITHUB_ENV"
+
+      - name: Compare restore branch with live (counts only)
+        env:
+          DRILL_ENDPOINT: ${{ inputs.restore_endpoint }}
+        run: |
+          set +x
+          python scripts/restore_drill.py --endpoint "$DRILL_ENDPOINT"
