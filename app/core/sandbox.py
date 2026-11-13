@@ -21,7 +21,8 @@ import builtins as _py_builtins
 import copy
 import logging
 import warnings
-from typing import Any, Dict, Optional
+from types import ModuleType
+from typing import Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ from RestrictedPython.PrintCollector import PrintCollector
 #: ``numpy``/``sympy``/``pint`` are whitelisted because LLM-generated formulas
 #: routinely reach for them (vectorised math, symbolic algebra, unit-aware
 #: arithmetic); without the whitelist the sandbox would silently force retries.
+#: ``scipy`` is whitelisted for the numeric methods closed-form formulas lack
+#: (root finding, optimisation, interpolation, integration, ODE solvers), but
+#: only through :data:`ALLOWED_SUBPACKAGES`.
 #: Note: numpy exposes a handful of file-touching helpers (``loadtxt``,
 #: ``savetxt``, ``fromfile``) — RestrictedPython's attribute guard is the
 #: backstop, but treat this as a deliberate widening of the attack surface.
@@ -56,10 +60,31 @@ ALLOWED_MODULES: frozenset[str] = frozenset(
         "datetime",
         "json",
         "numpy",
+        "scipy",
         "sympy",
         "pint",
     }
 )
+
+#: Whitelisted packages whose subpackages are allowed one by one. The root
+#: itself imports, but a dotted path below it passes only when its first
+#: component is listed. SciPy is the case in point: its numeric subpackages
+#: are why it is allowed, while ``scipy.io`` reads and writes files and
+#: ``scipy.datasets`` downloads over the network. A package not named here
+#: keeps the root-wide rule.
+ALLOWED_SUBPACKAGES: Mapping[str, frozenset[str]] = {
+    "scipy": frozenset(
+        {
+            "constants",
+            "integrate",
+            "interpolate",
+            "linalg",
+            "optimize",
+            "special",
+            "stats",
+        }
+    ),
+}
 
 #: Builtins that are never exposed, even if RestrictedPython would allow them.
 #: ``open`` / ``eval`` / ``exec`` / ``__import__`` are already absent from
@@ -112,6 +137,61 @@ class SandboxResult(BaseModel):
     namespace: Dict[str, str] = Field(default_factory=dict)
 
 
+def module_allowed(name: str) -> bool:
+    """Whether sandboxed code may import or hold the module ``name``.
+
+    An exact :data:`ALLOWED_MODULES` entry passes. Otherwise the dotted root
+    must be whitelisted: numpy/sympy/pint load internal submodules
+    (``numpy._core._methods``, ``sympy.core.numbers``, …) that a strict
+    equality check would block. A root listed in :data:`ALLOWED_SUBPACKAGES`
+    narrows that to its listed subpackages.
+    """
+    if name in ALLOWED_MODULES:
+        return True
+    parts = name.split(".")
+    if parts[0] not in ALLOWED_MODULES:
+        return False
+    subpackages = ALLOWED_SUBPACKAGES.get(parts[0])
+    if subpackages is None:
+        return True
+    return len(parts) > 1 and parts[1] in subpackages
+
+
+def _module_reachable(name: str) -> bool:
+    """Whether a module may be reached by attribute access.
+
+    Allowed modules, plus the parent packages on the way to a dotted entry
+    (``import app.lib.pm_computations`` binds ``app``, and the code walks
+    ``app.lib`` to get there). Those parents are pass-through only: any other
+    module under them fails :func:`module_allowed` on the next step.
+    """
+    if module_allowed(name):
+        return True
+    prefix = name + "."
+    return any(entry.startswith(prefix) for entry in ALLOWED_MODULES)
+
+
+def _deny_module(name: str) -> ImportError:
+    return ImportError(
+        f"Import of '{name}' is blocked by the sandbox. "
+        f"Allowed modules: {', '.join(sorted(ALLOWED_MODULES))}."
+    )
+
+
+def _guarded_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    """``_getattr_`` for sandboxed code: :func:`safer_getattr`, plus the
+    import policy for any module the attribute yields.
+
+    Packages load subpackages lazily on attribute access (``scipy.io``), which
+    never passes through ``__import__``; without this check a whitelisted
+    root would open every subpackage under it.
+    """
+    value = safer_getattr(obj, name, default)
+    if isinstance(value, ModuleType) and not _module_reachable(value.__name__):
+        raise _deny_module(value.__name__)
+    return value
+
+
 def _make_guarded_import() -> Any:
     """Build an ``__import__`` replacement that honours :data:`ALLOWED_MODULES`.
 
@@ -129,20 +209,16 @@ def _make_guarded_import() -> Any:
     ) -> Any:
         if level != 0:
             raise ImportError("Relative imports are not permitted in the sandbox.")
-        if name not in ALLOWED_MODULES:
-            # Numpy/sympy/pint load internal submodules (`numpy._core._methods`,
-            # `sympy.core.numbers`, …) at first import. A strict-equality
-            # whitelist would block them, defeating the entry. Allow any
-            # submodule whose dotted-path root is whitelisted; for leaf
-            # entries (``math``, ``json``, ``app.lib.pm_computations``) this
-            # is a no-op because they don't import siblings via `__import__`.
-            root = name.split(".", 1)[0]
-            if root not in ALLOWED_MODULES:
-                raise ImportError(
-                    f"Import of '{name}' is blocked by the sandbox. "
-                    f"Allowed modules: {', '.join(sorted(ALLOWED_MODULES))}."
-                )
-        return __import__(name, globals, locals, fromlist, level)
+        if not module_allowed(name):
+            raise _deny_module(name)
+        module = __import__(name, globals, locals, fromlist, level)
+        # `from scipy import io` binds a subpackage without a dotted import
+        # name; the names it binds pass the same policy.
+        for item in fromlist or ():
+            value = getattr(module, item, None)
+            if isinstance(value, ModuleType) and not module_allowed(value.__name__):
+                raise _deny_module(value.__name__)
+        return module
 
     return _guarded_import
 
@@ -194,7 +270,7 @@ def _build_globals(state: Dict[str, Any]) -> Dict[str, Any]:
         "__builtins__": _build_builtins(),
         # RestrictedPython rewrites code to call these helpers by name.
         "_print_": PrintCollector,
-        "_getattr_": safer_getattr,
+        "_getattr_": _guarded_getattr,
         "_getitem_": default_guarded_getitem,
         "_getiter_": default_guarded_getiter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
@@ -217,7 +293,7 @@ def run_sandboxed(
         code: Untrusted Python source to run.
         state: Variables injected into the namespace before execution
             (the session-state round-trip). Defaults to empty. Note: the
-            result is read only from the executed code's *local* scope, so a
+            result is read only from the names the executed code bound, so a
             state key named ``result_var`` (default ``"result"``) is injected
             but silently ignored on read-back unless the code reassigns it.
         result_var: Name of the variable read back into
@@ -264,10 +340,16 @@ def run_sandboxed(
         )
 
     # --- execute (catches every runtime failure) ---------------------------
-    local_ns: Dict[str, Any] = {}
+    # One namespace, as for a module: with a separate locals dict, top-level
+    # code behaves like a class body, and a function or lambda the snippet
+    # defines cannot see the snippet's other top-level names (a residual
+    # lambda calling two curve helpers raised NameError). Read-back still
+    # covers only the names the code itself bound.
+    preset = dict(glb)
     try:
-        exec(byte_code, glb, local_ns)
+        exec(byte_code, glb)
     except Exception as exc:
+        local_ns = _bound_by_code(glb, preset)
         stdout = _extract_stdout(local_ns)
         return SandboxResult(
             success=False,
@@ -277,12 +359,26 @@ def run_sandboxed(
             namespace=_safe_namespace(local_ns),
         )
 
+    local_ns = _bound_by_code(glb, preset)
     return SandboxResult(
         success=True,
         stdout=_extract_stdout(local_ns),
         result=local_ns.get(result_var),
         namespace=_safe_namespace(local_ns),
     )
+
+
+def _bound_by_code(ns: Dict[str, Any], preset: Dict[str, Any]) -> Dict[str, Any]:
+    """The names the executed code bound: new keys, or keys rebound to a
+    different object. Injected state the code only read or mutated in place,
+    builtins and guard helpers are not the code's own bindings, so they stay
+    out of the read-back (an injected ``result`` is not read back unless the
+    code reassigns it).
+    """
+    return {
+        k: v for k, v in ns.items()
+        if k not in preset or v is not preset[k]
+    }
 
 
 def _extract_stdout(local_ns: Dict[str, Any]) -> str:
