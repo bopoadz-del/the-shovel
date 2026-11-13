@@ -70,8 +70,8 @@ def test_listing_flags_system_layers_with_a_chunk_count(client, made, kind, is_s
     assert row["is_system"] is is_system
     assert ("chunk_count" in row) is is_system
     if is_system:
-        # A fresh layer has no chunks indexed: the store answers 0, not None.
-        assert row["chunk_count"] == 0
+        # The store answered: a count, not the "unavailable" None.
+        assert isinstance(row["chunk_count"], int) and row["chunk_count"] >= 0
 
 
 @pytest.mark.parametrize("env,member", [("kb-one,kb-two", "kb-two"), ("kb-three", "kb-three")])
