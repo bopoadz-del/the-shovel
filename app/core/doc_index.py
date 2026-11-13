@@ -3813,6 +3813,41 @@ def index_document(
     return result
 
 
+def _prior_retrievable_chunks(doc: dict[str, Any]) -> int:
+    """Chunks this row already serves to retrieval, or 0.
+
+    A row in a retrieval-visible status with a positive ``chunk_count``
+    holds a working index. Stamping a no-chunk status deletes those chunks
+    in the same transaction (``projects.stamp_document_index``), so a
+    re-extraction that produces nothing must not stamp one over them: the
+    swap happens only on success (``upsert_chunks`` replaces in one
+    transaction), a failed attempt leaves the previous chunks in place.
+    """
+    from app.core.ingest_status import NO_CHUNK_STATUSES
+
+    if doc.get("ingest_status") in NO_CHUNK_STATUSES:
+        return 0
+    count = doc.get("chunk_count")
+    return count if isinstance(count, int) and count > 0 else 0
+
+
+def _kept_prior_result(
+    result: dict[str, Any], doc: dict[str, Any], prior: int,
+) -> dict[str, Any]:
+    """``result`` of a failed re-extraction, marked as having kept ``prior``."""
+    _logging.getLogger(__name__).error(
+        "REINDEX_KEPT_PRIOR doc=%s file=%s error=%s prior_chunks=%d -- "
+        "re-extraction produced no usable chunks; previous index kept",
+        result.get("document_id"), result.get("filename"),
+        result.get("error"), prior,
+    )
+    kept = dict(result)
+    kept["chunks_kept"] = True
+    kept["prior_chunk_count"] = prior
+    kept["prior_ingest_status"] = doc.get("ingest_status")
+    return kept
+
+
 def _index_document(
     project_id: str,
     document_id: str,
@@ -3848,6 +3883,7 @@ def _index_document(
     filename = doc.get("original_name", "")
     ext = _ext_of(filename)
     fingerprint = f"{doc.get('uploaded_at', '')}:{doc.get('size', 0)}"
+    prior_chunks = _prior_retrievable_chunks(doc)
 
     # Confirmed-gone bytes are not an extraction failure. Do not stamp
     # EXTRACT_FAILED (that status deletes chunks) and do not burn a retry:
@@ -3917,17 +3953,7 @@ def _index_document(
                 meta.get("ocr_pages", 0),
                 bool(meta.get("ocr_skipped_too_large")),
             )
-            _stamp_index_ledger(
-                document_id, filename, 0,
-                stamp_as_indexed=False,
-                ocr_degraded=True,
-                pages_in_file=meta.get("pages_in_file"),
-                pages_ocrd=meta.get("pages_ocrd"),
-                ocr_truncated=bool(meta.get("ocr_truncated")),
-                ocr_skip_reason=meta.get("ocr_skip_reason"),
-                ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
-            )
-            return {
+            ocr_result = {
                 "status": "error",
                 "error": "OCR_REQUIRED",
                 "banner": (
@@ -3947,6 +3973,19 @@ def _index_document(
                 "pages_without_text": int(meta.get("empty_text_pages") or 0),
                 "ocr_skipped_too_large": bool(meta.get("ocr_skipped_too_large")),
             }
+            if prior_chunks:
+                return _kept_prior_result(ocr_result, doc, prior_chunks)
+            _stamp_index_ledger(
+                document_id, filename, 0,
+                stamp_as_indexed=False,
+                ocr_degraded=True,
+                pages_in_file=meta.get("pages_in_file"),
+                pages_ocrd=meta.get("pages_ocrd"),
+                ocr_truncated=bool(meta.get("ocr_truncated")),
+                ocr_skip_reason=meta.get("ocr_skip_reason"),
+                ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
+            )
+            return ocr_result
         if not chunks:
             # A supported file that produced zero chunks is a SILENT indexing
             # failure: the document "exists" but can never be retrieved. Three
@@ -3979,6 +4018,8 @@ def _index_document(
             }
             if extract_error:
                 result["extract_error"] = extract_error
+            if prior_chunks:
+                return _kept_prior_result(result, doc, prior_chunks)
             _stamp_index_ledger(
                 document_id, filename, 0,
                 stamp_as_indexed=stamp_as_indexed,
