@@ -5,8 +5,10 @@
  * walks assistant messages in order so the server-side per-index lookup
  * works the same as before the redesign.
  */
-import { useEffect, useRef } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
+import AnswerFeedback from './AnswerFeedback'
 import ChatBubble from './ChatBubble'
+import type { FeedbackBody, FeedbackEcho } from './feedbackPayload'
 import type { ChatMessage, ExportDescriptor } from './types'
 import './ChatList.css'
 
@@ -17,6 +19,12 @@ interface Props {
   suggestionsDisabled: boolean
   onDownloadMessage?: (assistantIndex: number, format: 'docx' | 'xlsx') => void
   onExport?: (descriptor: ExportDescriptor) => void
+  /** When set with both ids, each settled answer gets a feedback control. */
+  feedback?: {
+    projectId: string
+    conversationId: string
+    post: (body: FeedbackBody) => Promise<FeedbackEcho>
+  }
 }
 
 const EMPTY_SUGGESTIONS = [
@@ -32,6 +40,7 @@ export default function ChatList({
   suggestionsDisabled,
   onDownloadMessage,
   onExport,
+  feedback,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -95,7 +104,21 @@ export default function ChatList({
           const idx = assistantIndexById.get(msg.id) ?? 0
           downloadHandler = (format) => onDownloadMessage(idx, format)
         }
-        return <ChatBubble key={msg.id} message={msg} onDownload={downloadHandler} onExport={onExport} />
+        const bubble = <ChatBubble key={msg.id} message={msg} onDownload={downloadHandler} onExport={onExport} />
+        if (!isDownloadable || !feedback?.projectId || !feedback.conversationId) return bubble
+        return (
+          <Fragment key={msg.id}>
+            {bubble}
+            <AnswerFeedback
+              key={`${feedback.conversationId}:${msg.id}`}
+              content={msg.content}
+              projectId={feedback.projectId}
+              conversationId={feedback.conversationId}
+              assistantIndex={assistantIndexById.get(msg.id) ?? 0}
+              post={feedback.post}
+            />
+          </Fragment>
+        )
       })}
       <div ref={bottomRef} />
     </div>

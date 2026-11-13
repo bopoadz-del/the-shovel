@@ -78,6 +78,10 @@ class DatasetRecord:
     retrieved_ids: tuple[str, ...] = ()
     citations: tuple[dict[str, Any], ...] = ()
     logged_at: str = ""
+    #: The conversation and stored assistant message this turn belongs to,
+    #: when the caller knows them. ``None`` is stored as NULL downstream.
+    conversation_id: str | None = None
+    message_id: str | None = None
 
     def with_timestamp(self, now: datetime | None = None) -> "DatasetRecord":
         """Return a copy carrying an ISO-8601 UTC ``logged_at`` stamp."""
@@ -193,4 +197,14 @@ def _forward_to_ml_loop(project_id: str, record: DatasetRecord) -> None:
         "evidence_plan": [str(x) for x in record.evidence_plan],
         "retrieved_ids": [str(x) for x in record.retrieved_ids],
         "cited_ids": _citation_ids(record.citations),
+        "conversation_id": _optional_id(record.conversation_id),
+        "message_id": _optional_id(record.message_id),
     })
+
+
+def _optional_id(value: Any) -> str | None:
+    """A row key as a string, or ``None`` when the record does not carry it."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
