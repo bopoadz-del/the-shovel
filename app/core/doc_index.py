@@ -1142,6 +1142,10 @@ def _extract_pdf_batched(
     page_starts: list[list[int]] = []
     joined_len = 0
     ocr_used = 0
+    # Absolute 1-based page numbers (each batch reads the file's own page
+    # indices), carried so the chunk writer can stamp ``ocr`` per chunk: a
+    # count alone left every chunk of a force-OCR'd scan with ocr=false.
+    ocr_page_numbers: list[int] = []
     ocr_attempts = 0
     empty_text_pages = 0
     pages_read = 0
@@ -1164,6 +1168,9 @@ def _extract_pdf_batched(
             parts.append(text)
             joined_len = base + len(text)
         ocr_used += int((bmeta or {}).get("ocr_pages") or 0)
+        ocr_page_numbers.extend(
+            int(p) for p in (bmeta or {}).get("ocr_page_numbers") or []
+        )
         ocr_attempts += int((bmeta or {}).get("ocr_attempts") or 0)
         empty_text_pages += int((bmeta or {}).get("empty_text_pages") or 0)
         pages_read += int((bmeta or {}).get("pages_read") or 0)
@@ -1190,6 +1197,8 @@ def _extract_pdf_batched(
     if ocr_used:
         meta["ocr_pages"] = ocr_used
         meta["ocr_low_quality"] = True
+    if ocr_page_numbers:
+        meta["ocr_page_numbers"] = ocr_page_numbers
     if ocr_attempts:
         meta["ocr_attempts"] = ocr_attempts
     if empty_text_pages:

@@ -33,6 +33,7 @@ class FakeWorld:
         self.file_path_seen_by_index: Optional[str] = None
         self.bytes_seen_by_index: Optional[bytes] = None
         self.lines: List[str] = []
+        self.metadata_writes: List[tuple] = []
 
     def deps(self, tmp_path: Path) -> dro.Deps:
         def write(raw: bytes, name: str) -> Path:
@@ -62,6 +63,10 @@ class FakeWorld:
                 self.docs[did]["pages_ocrd"] = 7
             return dict(self.index_result)
 
+        def update_metadata(doc_id: str, md: Dict[str, Any]) -> None:
+            self.metadata_writes.append((doc_id, md))
+            self.docs[doc_id].setdefault("metadata", {}).update(md)
+
         def download(fid: str):
             if fid in self.drive:
                 return self.drive[fid], None
@@ -76,6 +81,7 @@ class FakeWorld:
             set_file_path=set_fp,
             index_document=index,
             chunk_texts=lambda pid, did: list(self.chunks),
+            update_metadata=update_metadata,
             log=self.lines.append,
         )
 

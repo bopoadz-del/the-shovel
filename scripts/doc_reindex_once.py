@@ -22,7 +22,9 @@ place. The transient copy is deleted on every exit.
 
 The last line is ``REINDEXSUMMARY <json>`` with the before/after
 ``chunk_count``, ``ingest_status``, ``pages_in_file``, ``pages_ocrd`` and the
-heading lines found.
+heading lines found. A successful run with a heading pattern also stores those
+lines on the document row as ``metadata.headings`` (``pattern``, ``lines``,
+``at``).
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -40,6 +43,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 SUMMARY_PREFIX = "REINDEXSUMMARY "
+#: Document attribute (``metadata.headings``) holding the run's heading lines.
+HEADINGS_KEY = "headings"
 DOC_FIELDS = ("chunk_count", "ingest_status", "pages_in_file", "pages_ocrd")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
@@ -57,6 +62,7 @@ class Deps:
     set_file_path: Callable[[str, str], Any]
     index_document: Callable[..., Dict[str, Any]]
     chunk_texts: Callable[[str, str], List[str]]
+    update_metadata: Callable[[str, Dict[str, Any]], Any]
     log: Callable[[str], None] = field(default=print)
 
 
@@ -158,6 +164,19 @@ def reindex_one(
     report["ok"] = not result.get("error") and result.get("status") != "error"
     if not report["ok"]:
         report["error"] = result.get("error") or "index_document reported an error"
+    report["headings_stored"] = False
+    if report["ok"] and heading_re:
+        # The row keeps what this run found in its own new chunks, with the
+        # pattern that found it; a failed run kept the old chunks, so it
+        # writes nothing.
+        deps.update_metadata(document_id, {
+            HEADINGS_KEY: {
+                "pattern": heading_re,
+                "lines": list(report["headings"]),
+                "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        })
+        report["headings_stored"] = True
     return report
 
 
@@ -201,6 +220,7 @@ def production_deps() -> Deps:
             doc_index.index_document, profile=doc_index.PROFILE_CORPUS_BUILD,
         ),
         chunk_texts=_chunk_texts,
+        update_metadata=projects_mod.update_document_metadata,
         log=p1b.log,
     )
 
