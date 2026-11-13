@@ -200,6 +200,31 @@ def _looks_like_duration(token: str) -> bool:
     return bool(_DURATION_RE.match(token.strip()))
 
 
+# The chat composer writes each attachment into the message as
+# ``[attached: NAME]`` (photos: ``[attached: NAME | observations: ...]``).
+# A marker is a pointer to evidence the user handed over, never a reference
+# into the indexed corpus: its filename (often digit-heavy) and observation
+# text must not reach the identifier extractors. One pattern, shared with the
+# chat router that resolves the markers to documents.
+ATTACHED_MARKER_RE = re.compile(
+    r"\[attached:\s*([^\]|]+?)\s*(?:\|([^\]]*))?\]", re.IGNORECASE
+)
+
+
+def strip_attachment_markers(text: str) -> str:
+    """``text`` with every ``[attached: ...]`` segment removed. ``text`` is a
+    string; the empty/None entry guard lives in the caller."""
+    return ATTACHED_MARKER_RE.sub(" ", text)
+
+
+def attachment_markers_carry_content(text: str) -> bool:
+    """True when a marker in ``text`` carries content of its own (a payload
+    after ``|``, e.g. photo observations)."""
+    return any(
+        (m.group(2) or "").strip() for m in ATTACHED_MARKER_RE.finditer(text or "")
+    )
+
+
 def extract_query_identifiers(query: str) -> List[str]:
     """Pull construction reference identifiers out of a user query.
 
@@ -214,6 +239,7 @@ def extract_query_identifiers(query: str) -> List[str]:
     """
     if not query:
         return []
+    query = strip_attachment_markers(query)
 
     # OCR / CESMM print ``D 549.2``; compact that before the token regexes
     # so a spaced code extracts as ``d549.2`` (WAVE 2 B5). The original

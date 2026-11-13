@@ -147,7 +147,7 @@ async def _chat_stream_impl(
         _requested_char_offset, _sanitize_citation_labels, _sanitize_final_text,
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
-        _should_short_circuit_priced_boq, _should_short_circuit_rag_miss,
+        _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
         _strip_answer_routing_preamble, _summarize_result, _text_needs_tool_recovery,
         _timing_log, _tool_result_content, _tool_result_errored, _turn_progress,
         _vo_draft_hard_excludes, _vo_draft_ready_for_synthesis,
@@ -562,9 +562,10 @@ async def _chat_stream_impl(
                "result": _calc_summary,
                "predispatched": True}
 
+    _pin_reference_miss(messages, user_message, attached_documents, _rag_audit, _rag_sys_msg)
     # Fast path: exact reference miss with no RAG context. Skip when a
     # named project file was already fetched/extracted from disk.
-    if not _pre and not _wbs_pre and not _hist_pre and not _wir_pre and not _more_pre and not _calc_pre and (await _off_loop(_should_short_circuit_rag_miss, _rag_audit, _rag_sys_msg, user_message
+    if not _pre and not _wbs_pre and not _hist_pre and not _wir_pre and not _more_pre and not _calc_pre and (await _off_loop(_should_short_circuit_rag_miss, _rag_audit, _rag_sys_msg, user_message, attached_documents
     )):
         answer = _build_missing_reference_answer(project_id, user_id)
         if conversation_id:

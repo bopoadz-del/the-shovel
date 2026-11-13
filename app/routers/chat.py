@@ -440,7 +440,7 @@ def _resolve_predefined_file_params(
 # "work on the attached file" had nothing to route to (PILOT_READINESS T6b).
 # The parser below turns markers into concrete documents, deterministically
 # (no LLM), reusing the doc→slot honesty rules from DECISIONS 2026-07-13.
-_ATTACHED_MARKER_RE = re.compile(r"\[attached:\s*([^\]|]+?)\s*(?:\|[^\]]*)?\]", re.IGNORECASE)
+from app.core.rag.retriever import ATTACHED_MARKER_RE as _ATTACHED_MARKER_RE  # noqa: E402
 
 
 def _parse_attached_markers(message: str) -> List[str]:
