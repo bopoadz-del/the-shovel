@@ -10,7 +10,8 @@ name: service-env-flag
 # that one JSON key and forcing a new deployment.
 #
 # All logic is in scripts/service_env_flag.py (unit-tested in
-# tests/test_service_env_flag.py):
+# tests/test_service_env_flag.py). It drives the runner's `aws` CLI and
+# parses its JSON; the repository imports no AWS SDK.
 #   1. `key` must be on the script's ALLOWLIST and `value` must fit its kind,
 #      or the job fails before any AWS read.
 #   2. Plan (execute=false, default) prints only `KEY=<current value>` and
@@ -61,9 +62,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install boto3
-        run: python -m pip install --quiet boto3==1.35.36
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:

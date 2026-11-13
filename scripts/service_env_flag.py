@@ -25,11 +25,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
+from datetime import datetime
 
 _BOM = "﻿"
 
@@ -72,7 +76,7 @@ def validate_request(key: str, value: str) -> str:
     return str(num)
 
 
-def proof_pattern(key: str, value: str) -> Optional[str]:
+def proof_pattern(key: str, value: str) -> str | None:
     """The app.core.hydration_scheduler startup line that proves the flag
     took on a new task, or None when the app logs no line for this key."""
     if key == "HYDRATION_ENABLED":
@@ -150,7 +154,7 @@ def rewrite(secret_string: str, json_key: str, value: str) -> str:
     doc = _load(secret_string)
     doc[json_key] = value
     # A dict always serialises starting with "{", so the result never carries
-    # a BOM, and a BOM read in is dropped by _load. boto3 sends the str as
+    # a BOM, and a BOM read in is dropped by _load. AwsCli writes it as
     # UTF-8. The 11 Nov break was a BOM-prefixed file written from PowerShell.
     return json.dumps(doc, ensure_ascii=False)
 
@@ -176,6 +180,16 @@ def _secret_string(clients: Clients, secret_id: str) -> str:
     return clients.secrets.get_secret_value(SecretId=secret_id)["SecretString"]
 
 
+def _epoch(started) -> float:
+    """ECS startedAt as epoch seconds: a datetime (SDK), an ISO string (CLI
+    JSON) or a number. A task that has not started yet counts as 0."""
+    if isinstance(started, str):
+        return datetime.fromisoformat(started).timestamp()
+    if hasattr(started, "timestamp"):
+        return started.timestamp()
+    return float(started or 0)
+
+
 def _new_task_streams(clients: Clients, cluster: str, service: str, td: dict,
                       container: str, since: float) -> tuple[str, list[str]]:
     opts = {}
@@ -192,7 +206,7 @@ def _new_task_streams(clients: Clients, cluster: str, service: str, td: dict,
     streams = []
     for t in tasks or []:
         started = t.get("startedAt")
-        ts = started.timestamp() if hasattr(started, "timestamp") else float(started or 0)
+        ts = _epoch(started)
         if ts >= since:
             streams.append(f"{prefix}/{container}/{t['taskArn'].rsplit('/', 1)[-1]}")
     return group, streams
@@ -276,17 +290,84 @@ def run(key: str, value: str, execute: bool, clients_factory: Callable[[], Clien
     return 0
 
 
-def _boto3_clients(region: str) -> Callable[[], Clients]:
-    def make() -> Clients:
-        import boto3  # imported here so the pure helpers need no AWS SDK
+class AwsCli:
+    """The AWS CLI behind the client methods `run` uses. The repository keeps
+    no AWS SDK import (tests/test_ingest_no_archive.py), so the workflow's
+    `aws` CLI does the calls and this class only shapes the JSON. stdout is
+    parsed, never printed. A failed call raises with the CLI's stderr, which
+    carries the AWS error text, not the secret."""
 
-        return Clients(ecs=boto3.client("ecs", region_name=region),
-                       secrets=boto3.client("secretsmanager", region_name=region),
-                       logs=boto3.client("logs", region_name=region))
+    def __init__(self, region: str, runner: Callable = subprocess.run):
+        self.region, self.runner = region, runner
+
+    def _call(self, *args: str, parse: bool = True, env: dict | None = None):
+        cmd = ["aws", *args, "--region", self.region, "--output", "json"]
+        proc = self.runner(cmd, capture_output=True, text=True, encoding="utf-8",
+                           env={**os.environ, **(env or {})})
+        if proc.returncode != 0:
+            raise RuntimeError(f"aws {args[0]} {args[1]} failed: {proc.stderr.strip()[:500]}")
+        return json.loads(proc.stdout) if parse and proc.stdout.strip() else {}
+
+    # ECS
+    def describe_services(self, cluster, services):
+        return self._call("ecs", "describe-services", "--cluster", cluster, "--services", *services)
+
+    def describe_task_definition(self, taskDefinition):
+        return self._call("ecs", "describe-task-definition", "--task-definition", taskDefinition)
+
+    def update_service(self, cluster, service, forceNewDeployment):
+        flag = "--force-new-deployment" if forceNewDeployment else "--no-force-new-deployment"
+        self._call("ecs", "update-service", "--cluster", cluster, "--service", service, flag,
+                   parse=False)
+
+    def get_waiter(self, name):
+        cli = self
+
+        class _Wait:
+            def wait(self, cluster, services, WaiterConfig=None):
+                cli._call("ecs", "wait", name.replace("_", "-"), "--cluster", cluster,
+                          "--services", *services, parse=False)
+        return _Wait()
+
+    def list_tasks(self, cluster, serviceName, desiredStatus):
+        return self._call("ecs", "list-tasks", "--cluster", cluster, "--service-name",
+                          serviceName, "--desired-status", desiredStatus)
+
+    def describe_tasks(self, cluster, tasks):
+        return self._call("ecs", "describe-tasks", "--cluster", cluster, "--tasks", *tasks)
+
+    # Secrets Manager
+    def get_secret_value(self, SecretId):
+        return self._call("secretsmanager", "get-secret-value", "--secret-id", SecretId)
+
+    def put_secret_value(self, SecretId, SecretString):
+        # Through a 0600 temp file, not argv. AWS_CLI_FILE_ENCODING makes the
+        # CLI read it as UTF-8; the file is written without a BOM.
+        fd, path = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                fh.write(SecretString)
+            self._call("secretsmanager", "put-secret-value", "--secret-id", SecretId,
+                       "--secret-string", f"file://{path}",
+                       env={"AWS_CLI_FILE_ENCODING": "UTF-8"})
+        finally:
+            os.unlink(path)
+
+    # CloudWatch Logs
+    def filter_log_events(self, logGroupName, logStreamNames, filterPattern, startTime):
+        return self._call("logs", "filter-log-events", "--log-group-name", logGroupName,
+                          "--log-stream-names", *logStreamNames, "--filter-pattern",
+                          filterPattern, "--start-time", str(startTime))
+
+
+def _cli_clients(region: str) -> Callable[[], Clients]:
+    def make() -> Clients:
+        cli = AwsCli(region)
+        return Clients(ecs=cli, secrets=cli, logs=cli)
     return make
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--key", required=True)
     ap.add_argument("--value", required=True)
@@ -296,7 +377,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--region", default="us-west-2")
     args = ap.parse_args(argv)
     execute = str(args.execute).strip().lower() == "true"
-    return run(args.key, args.value, execute, _boto3_clients(args.region),
+    return run(args.key, args.value, execute, _cli_clients(args.region),
                args.cluster, args.service)
 
 

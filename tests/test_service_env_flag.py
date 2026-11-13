@@ -369,3 +369,90 @@ def test_ops_workflow_is_dispatch_only_with_execute_off_by_default(workflow):
     trigger = doc["on"] if "on" in doc else doc[True]
     assert set(trigger) == {"workflow_dispatch"}
     assert trigger["workflow_dispatch"]["inputs"]["execute"]["default"] is False
+
+
+# ---------------------------------------------------------------- CLI adapter
+
+class _Proc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+class _Runner:
+    """Records each `aws` argv; for put-secret-value, captures the file bytes."""
+
+    def __init__(self, stdout="{}", returncode=0, stderr=""):
+        self.calls, self.files, self.envs = [], [], []
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        self.envs.append(kw.get("env") or {})
+        for arg in cmd:
+            if arg.startswith("file://"):
+                self.files.append(Path(arg[len("file://"):]).read_bytes())
+        return _Proc(self.returncode, self.stdout, self.stderr)
+
+
+@pytest.mark.parametrize("secret", [
+    json.dumps({"HYDRATION_ENABLED": "true", "X": "é"}, ensure_ascii=False),
+    json.dumps({"PDF_OCR_PAGE_CAP": "90"}),
+])
+def test_cli_put_secret_goes_through_a_utf8_file_without_bom_and_not_argv(secret):
+    runner = _Runner(stdout="")
+    sef.AwsCli("us-west-2", runner).put_secret_value(SecretId=_ARN, SecretString=secret)
+    cmd = runner.calls[0]
+    assert cmd[:3] == ["aws", "secretsmanager", "put-secret-value"]
+    assert secret not in cmd
+    assert runner.files == [secret.encode("utf-8")]
+    assert runner.envs[0]["AWS_CLI_FILE_ENCODING"] == "UTF-8"
+    path = next(a for a in cmd if a.startswith("file://"))[len("file://"):]
+    assert not Path(path).exists()  # temp file removed
+
+
+@pytest.mark.parametrize("method,kwargs,want_head", [
+    ("describe_services", {"cluster": "c", "services": ["s"]}, ["aws", "ecs", "describe-services"]),
+    ("get_secret_value", {"SecretId": _ARN}, ["aws", "secretsmanager", "get-secret-value"]),
+    ("list_tasks", {"cluster": "c", "serviceName": "s", "desiredStatus": "RUNNING"},
+     ["aws", "ecs", "list-tasks"]),
+])
+def test_cli_calls_parse_json_and_pin_region(method, kwargs, want_head):
+    runner = _Runner(stdout='{"ok": 1}')
+    got = getattr(sef.AwsCli("eu-west-1", runner), method)(**kwargs)
+    assert got == {"ok": 1}
+    assert runner.calls[0][:3] == want_head
+    assert runner.calls[0][-4:] == ["--region", "eu-west-1", "--output", "json"]
+
+
+@pytest.mark.parametrize("force,flag", [(True, "--force-new-deployment"),
+                                        (False, "--no-force-new-deployment")])
+def test_cli_update_service_flag(force, flag):
+    runner = _Runner(stdout="")
+    sef.AwsCli("us-west-2", runner).update_service(cluster="c", service="s",
+                                                   forceNewDeployment=force)
+    assert flag in runner.calls[0]
+
+
+@pytest.mark.parametrize("name,sub", [("services_stable", "services-stable"),
+                                      ("services_inactive", "services-inactive")])
+def test_cli_waiter_maps_to_aws_ecs_wait(name, sub):
+    runner = _Runner(stdout="")
+    sef.AwsCli("us-west-2", runner).get_waiter(name).wait(cluster="c", services=["s"])
+    assert runner.calls[0][:4] == ["aws", "ecs", "wait", sub]
+
+
+@pytest.mark.parametrize("stderr", ["AccessDeniedException: no", "ResourceNotFoundException"])
+def test_cli_failure_raises_with_stderr(stderr):
+    runner = _Runner(stdout="", returncode=254, stderr=stderr)
+    with pytest.raises(RuntimeError, match=stderr.split(":")[0]):
+        sef.AwsCli("us-west-2", runner).describe_task_definition(taskDefinition="td")
+
+
+@pytest.mark.parametrize("started,want", [
+    ("2026-11-13T06:30:00+00:00", datetime(2026, 11, 13, 6, 30, tzinfo=timezone.utc).timestamp()),
+    (datetime(2026, 1, 2, tzinfo=timezone.utc), datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp()),
+    (1234.5, 1234.5),
+    (None, 0.0),
+])
+def test_epoch_accepts_cli_sdk_and_numeric_forms(started, want):
+    assert sef._epoch(started) == want
