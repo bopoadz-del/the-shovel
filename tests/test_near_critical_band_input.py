@@ -43,33 +43,26 @@ def _net() -> list[Activity]:
 
 # -- kernel -----------------------------------------------------------------
 
-def test_no_band_means_near_critical_is_not_computed():
-    out = compute_cpm(CPMInput(activities=_net()))
-    floats = {r.id: r.total_float for r in out.results}
-    assert floats == {"A": 0, "B": 1, "C": 3, "D": 0}
-    assert out.near_critical is None
-    assert out.near_critical_band_days is None
+@pytest.mark.parametrize("band,expected", [
+    (None, None),          # no band: not computed, not an empty list
+    (0.5, []),             # band below every positive float
+    (2, ["B"]),
+    (3, ["B", "C"]),       # inclusive: float 3 sits inside a 3-day band
+])
+def test_the_supplied_band_decides_membership(band, expected):
+    out = compute_cpm(CPMInput(activities=_net(), near_critical_band_days=band))
+    # the band never changes the floats themselves
+    assert {r.id: r.total_float for r in out.results} == {
+        "A": 0, "B": 1, "C": 3, "D": 0}
+    got = None if out.near_critical is None else sorted(out.near_critical)
+    assert got == expected
+    assert out.near_critical_band_days == band
 
 
-def test_the_supplied_band_decides_membership():
-    narrow = compute_cpm(CPMInput(activities=_net(), near_critical_band_days=2))
-    wide = compute_cpm(CPMInput(activities=_net(), near_critical_band_days=3))
-    assert narrow.near_critical == ["B"]
-    assert narrow.near_critical_band_days == 2
-    # the band is inclusive: float 3 is inside a 3-day band
-    assert sorted(wide.near_critical) == ["B", "C"]
-    assert wide.near_critical_band_days == 3
-
-
-def test_a_band_below_every_float_gives_an_empty_list_not_none():
-    out = compute_cpm(CPMInput(activities=_net(), near_critical_band_days=0.5))
-    assert out.near_critical == []
-
-
-def test_empty_network_keeps_the_same_contract():
-    assert compute_cpm(CPMInput(activities=[])).near_critical is None
-    assert compute_cpm(
-        CPMInput(activities=[], near_critical_band_days=4)).near_critical == []
+@pytest.mark.parametrize("band,expected", [(None, None), (4, [])])
+def test_empty_network_keeps_the_same_contract(band, expected):
+    out = compute_cpm(CPMInput(activities=[], near_critical_band_days=band))
+    assert out.near_critical == expected
 
 
 @pytest.mark.parametrize("bad", [0, -1])
@@ -78,11 +71,11 @@ def test_schema_rejects_a_non_positive_band(bad):
         CPMInput(activities=_net(), near_critical_band_days=bad)
 
 
-def test_near_critical_ids_excludes_critical_and_respects_band():
-    floats = [("x", 0), ("y", 2), ("z", 6)]
-    assert near_critical_ids(floats, None) is None
-    assert near_critical_ids(floats, 2) == ["y"]
-    assert near_critical_ids(floats, 6) == ["y", "z"]
+@pytest.mark.parametrize("band,expected", [
+    (None, None), (2, ["y"]), (6, ["y", "z"]),
+])
+def test_near_critical_ids_excludes_critical_and_respects_band(band, expected):
+    assert near_critical_ids([("x", 0), ("y", 2), ("z", 6)], band) == expected
 
 
 @pytest.mark.parametrize("given,expected", [
@@ -105,28 +98,30 @@ def _dict_net() -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_cpm_engine_without_band_labels_nothing():
-    res = await CPMEngineBlock().process({"activities": _dict_net()})
+@pytest.mark.parametrize("where,band,expected", [
+    (None, None, None),
+    ("data", 2, ["B"]),
+    ("params", 3, ["B", "C"]),
+])
+async def test_cpm_engine_band_from_data_or_params(where, band, expected):
+    data = {"activities": _dict_net()}
+    params = {}
+    if where == "data":
+        data["near_critical_band_days"] = band
+    elif where == "params":
+        params["near_critical_band_days"] = band
+    res = await CPMEngineBlock().process(data, params)
     assert res["status"] == "success"
-    assert res["near_critical"] is None
-    assert res["near_critical_band_days"] is None
+    got = None if res["near_critical"] is None else sorted(res["near_critical"])
+    assert got == expected
+    assert res["near_critical_band_days"] == band
 
 
 @pytest.mark.asyncio
-async def test_cpm_engine_band_from_data_or_params():
-    a = await CPMEngineBlock().process(
-        {"activities": _dict_net(), "near_critical_band_days": 2})
-    b = await CPMEngineBlock().process(
-        {"activities": _dict_net()}, {"near_critical_band_days": 3})
-    assert a["near_critical"] == ["B"]
-    assert sorted(b["near_critical"]) == ["B", "C"]
-    assert b["near_critical_band_days"] == 3
-
-
-@pytest.mark.asyncio
-async def test_cpm_engine_bad_band_is_an_error_naming_the_input():
+@pytest.mark.parametrize("bad", [-2, "x"])
+async def test_cpm_engine_bad_band_is_an_error_naming_the_input(bad):
     res = await CPMEngineBlock().process(
-        {"activities": _dict_net()}, {"near_critical_band_days": -2})
+        {"activities": _dict_net()}, {"near_critical_band_days": bad})
     assert res["status"] == "error"
     assert "near_critical_band_days" in res["error"]
 
@@ -158,40 +153,33 @@ def _xer(tmp_path, durations_hr: dict[str, int]) -> str:
     return str(path)
 
 
-def _float_by_code(res) -> dict:
-    return res["cpm"]["per_activity_float"]
+_DURS = {"L1": 40, "S1": 32, "S2": 16}   # floats 0, 1, 3 (8 h days)
 
 
 @pytest.mark.asyncio
-async def test_primavera_parser_without_band_labels_nothing(tmp_path):
-    path = _xer(tmp_path, {"L1": 40, "S1": 32, "S2": 16})
-    res = await PrimaveraParserBlock().process({"file_path": path}, {})
-    assert res["status"] == "success"
-    floats = _float_by_code(res)
-    assert sorted(v for v in floats.values()) == [0, 1, 3]
-    assert res["cpm"]["near_critical_activity_ids"] is None
-    assert res["cpm"]["near_critical_band_days"] is None
-
-
-@pytest.mark.asyncio
-async def test_primavera_parser_band_decides_membership(tmp_path):
-    path = _xer(tmp_path, {"L1": 40, "S1": 32, "S2": 16})
-    narrow = await PrimaveraParserBlock().process(
-        {"file_path": path}, {"near_critical_band_days": 2})
-    wide = await PrimaveraParserBlock().process(
-        {"file_path": path}, {"near_critical_band_days": 3})
-    floats = _float_by_code(narrow)
-    by_float = {v: k for k, v in floats.items()}
-    assert narrow["cpm"]["near_critical_activity_ids"] == [by_float[1]]
-    assert sorted(wide["cpm"]["near_critical_activity_ids"]) == sorted(
-        [by_float[1], by_float[3]])
-
-
-@pytest.mark.asyncio
-async def test_primavera_parser_bad_band_is_an_error(tmp_path):
-    path = _xer(tmp_path, {"L1": 40})
+@pytest.mark.parametrize("band,member_floats", [
+    (None, None), (2, [1]), (3, [1, 3]),
+])
+async def test_primavera_parser_band_decides_membership(
+        tmp_path, band, member_floats):
+    params = {} if band is None else {"near_critical_band_days": band}
     res = await PrimaveraParserBlock().process(
-        {"file_path": path}, {"near_critical_band_days": "soon"})
+        {"file_path": _xer(tmp_path, _DURS)}, params)
+    assert res["status"] == "success"
+    floats = res["cpm"]["per_activity_float"]
+    assert sorted(floats.values()) == [0, 1, 3]
+    ids = res["cpm"]["near_critical_activity_ids"]
+    got = None if ids is None else sorted(floats[i] for i in ids)
+    assert got == member_floats
+    assert res["cpm"]["near_critical_band_days"] == band
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["soon", 0])
+async def test_primavera_parser_bad_band_is_an_error(tmp_path, bad):
+    res = await PrimaveraParserBlock().process(
+        {"file_path": _xer(tmp_path, {"L1": 40})},
+        {"near_critical_band_days": bad})
     assert res["status"] == "error"
     assert "near_critical_band_days" in res["error"]
 
@@ -212,28 +200,24 @@ def _sched() -> dict:
     ]}
 
 
-def test_container_cpm_without_band_labels_nothing():
-    out = _container()._calculate_cpm(_sched())
-    assert out["near_critical_count"] is None
-    assert out["near_critical_activities"] is None
-    assert out["near_critical_band_days"] is None
+@pytest.mark.parametrize("band,expected", [
+    (None, None), (2, ["M"]), (4, ["M", "N"]),
+])
+def test_container_cpm_band_decides_membership(band, expected):
+    out = _container()._calculate_cpm(_sched(), band)
+    acts = out["near_critical_activities"]
+    assert (None if acts is None else [a["id"] for a in acts]) == expected
+    assert out["near_critical_count"] == (
+        None if expected is None else len(expected))
+    assert out["near_critical_band_days"] == band
     assert out["critical_path"] == ["K"]
 
 
-def test_container_cpm_band_decides_membership():
-    c = _container()
-    narrow = c._calculate_cpm(_sched(), 2)
-    wide = c._calculate_cpm(_sched(), 4)
-    assert [a["id"] for a in narrow["near_critical_activities"]] == ["M"]
-    assert narrow["near_critical_count"] == 1
-    assert [a["id"] for a in wide["near_critical_activities"]] == ["M", "N"]
-    assert wide["near_critical_band_days"] == 4
-
-
 @pytest.mark.asyncio
-async def test_parse_primavera_schedule_bad_band_is_an_error(tmp_path):
-    path = _xer(tmp_path, {"L1": 40})
+@pytest.mark.parametrize("bad", [0, "later"])
+async def test_parse_primavera_schedule_bad_band_is_an_error(tmp_path, bad):
     res = await _container().parse_primavera_schedule(
-        {"file_path": path}, {"near_critical_band_days": 0})
+        {"file_path": _xer(tmp_path, {"L1": 40})},
+        {"near_critical_band_days": bad})
     assert res["status"] == "error"
     assert "near_critical_band_days" in res["error"]
