@@ -267,6 +267,56 @@ async def create_project_from_drive(
     }
 
 
+def _system_project_ids() -> frozenset[str]:
+    """Ids of the general-knowledge layers: not user projects.
+
+    The retriever's configured general-knowledge ids (searched on every turn
+    through ``search_general_knowledge``). The master corpus is NOT one: it is
+    the client's project and stays a project card. Configuration decides
+    membership; no id is named here.
+    """
+    from app.core.rag.retriever import _general_knowledge_project_ids
+
+    return frozenset(i for i in _general_knowledge_project_ids() if i)
+
+
+def _is_system_project(project_id: str) -> bool:
+    """True when ``project_id`` is a general-knowledge layer (listing partition)."""
+    return project_id in _system_project_ids()
+
+
+def _is_undeletable_project(project_id: str) -> bool:
+    """True for ids no caller may delete: the general-knowledge layers and
+    the master-corpus alias with its backing source."""
+    if _is_system_project(project_id):
+        return True
+    master = {store.MASTER_CORPUS_PROJECT_ID, store.MASTER_CORPUS_SOURCE_PROJECT_ID}
+    return project_id in master or (store._master_corpus_source(project_id) or project_id) in master
+
+
+def _layer_chunk_count(project_id: str) -> Optional[int]:
+    """Indexed chunk count of a knowledge layer; None when the store is down."""
+    try:
+        from app.core.rag.embeddings import get_embedder
+        from app.core.rag.vector_store import get_store
+        chunk_store = get_store(dim=get_embedder().dim)
+        return int(chunk_store.count(store._master_corpus_source(project_id) or project_id))
+    except Exception:  # noqa: BLE001 -- a listing must load without the store
+        logging.getLogger(__name__).warning(
+            "knowledge-layer chunk count unavailable for %s", project_id, exc_info=True,
+        )
+        return None
+
+
+def _mark_system_layers(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Flag each listed row ``is_system``; a system layer also gets its chunk count."""
+    for row in rows:
+        row["is_system"] = _is_system_project(str(row.get("id") or ""))
+        if row["is_system"]:
+            row["chunk_count"] = _layer_chunk_count(str(row["id"]))
+    return rows
+
+
 @router.get("/v1/projects")
 async def list_projects(auth: dict = Depends(require_user)):
     """List projects visible to the caller.
@@ -297,7 +347,7 @@ async def list_projects(auth: dict = Depends(require_user)):
                 and r.get("document_count", 0) <= PILOT_INCOMPLETE_SHELL_DOC_THRESHOLD
             )
         ]
-    return {"projects": rows}
+    return {"projects": _mark_system_layers(rows)}
 
 
 @router.get("/v1/projects/{project_id}")
@@ -754,9 +804,14 @@ async def download_document(
 
 @router.delete("/v1/projects/{project_id}")
 async def delete_project(project_id: str, auth: dict = Depends(require_user)):
-    """Delete a project: its document records, facts, AND files on disk."""
-    # Resolve pilot master-corpus alias before the ownership check so admins
-    # can delete the shared corpus project from the UI.
+    """Delete a project: its document records, facts, AND files on disk.
+
+    A general-knowledge layer and the master corpus (alias and backing
+    source) are refused for every caller, admin included
+    (``_is_undeletable_project``).
+    """
+    if _is_undeletable_project(project_id):
+        raise HTTPException(403, "System knowledge layers cannot be deleted")
     resolved_id = store._master_corpus_source(project_id) or project_id
     # Admins see every project in the list, so they must be able to load (and
     # then delete) any of them — look up unscoped for admins. Without this an

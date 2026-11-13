@@ -439,15 +439,19 @@ def test_master_corpus_alias_export_conversation_resolves(client):
     assert resp.content[:2] == b"PK"
 
 
-def test_master_corpus_alias_delete_project_resolves(client):
-    """Deleting the alias resolves to the source corpus and SOFT-archives it
-    (hidden from listings) — the row + RAG chunks are preserved, not deleted."""
-    resp = client.delete(f"/v1/projects/{projects_mod.MASTER_CORPUS_PROJECT_ID}")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "archived"
+@pytest.mark.parametrize("target", [
+    projects_mod.MASTER_CORPUS_PROJECT_ID,
+    projects_mod.MASTER_CORPUS_SOURCE_PROJECT_ID,
+])
+def test_master_corpus_alias_delete_is_refused(client, target):
+    """The alias and its backing source are a system knowledge layer (S-U1):
+    delete is refused for an admin too, and the corpus stays listed."""
+    resp = client.delete(f"/v1/projects/{target}")
+    assert resp.status_code == 403, resp.text
 
-    # Alias should no longer be listed (the backing source is archived).
     resp = client.get("/v1/projects")
     assert resp.status_code == 200
-    ids = {p["id"] for p in resp.json()["projects"]}
-    assert projects_mod.MASTER_CORPUS_PROJECT_ID not in ids
+    rows = {p["id"]: p for p in resp.json()["projects"]}
+    assert projects_mod.MASTER_CORPUS_PROJECT_ID in rows
+    # The client's corpus is a project card, not a knowledge layer.
+    assert rows[projects_mod.MASTER_CORPUS_PROJECT_ID].get("is_system") is False
