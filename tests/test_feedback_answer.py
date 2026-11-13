@@ -119,17 +119,21 @@ def test_verdict_is_stored_with_message_and_cited_ids(
     assert row["unit"] == body.get("unit")
 
 
-def test_repeat_verdict_appends_a_row(store, memory):
+@pytest.mark.parametrize("kinds", [
+    ("wrong_document", "correct"),
+    ("correct", "missing", "correct"),
+])
+def test_repeat_verdict_appends_a_row(store, memory, kinds):
     _seed(memory, "conv-r", "proj-r", "owner", [("Answer one.", None)])
     client = _client("owner")
-    for kind in ("wrong_document", "correct"):
-        extra = {"note": "cites the wrong spec"} if kind == "wrong_document" else {}
+    for kind in kinds:
+        extra = {"note": "a note"} if kind in ("wrong_document", "missing") else {}
         assert client.post("/v1/feedback/answer", json={
             "project_id": "proj-r", "conversation_id": "conv-r", "kind": kind, **extra,
         }).status_code == 200
-    assert [r["kind"] for r in store.rows("ml_feedback", project_id="proj-r")] == [
-        "wrong_document", "correct",
-    ]
+    rows = store.rows("ml_feedback", project_id="proj-r")
+    assert [r["kind"] for r in rows] == list(kinds)
+    assert len({r["message_id"] for r in rows}) == 1
 
 
 # ── ownership ───────────────────────────────────────────────────────────
