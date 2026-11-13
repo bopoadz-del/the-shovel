@@ -517,23 +517,24 @@ def test_rag_inject_returns_system_message_when_confident(monkeypatch, tmp_path)
     assert audit_rec["budget_remaining"] >= 0
 
 
-@pytest.mark.parametrize("burn,degraded_budget,expected_handed", [
-    (100, "1200", 3),   # budget spent: the degraded CHARACTER budget bounds the set
-    (0, "1200", 10),    # budget left: the normal budget hands the whole pool
+@pytest.mark.parametrize("burn", [
+    100_000,  # far above the daily budget: still the full set
+    0,        # below it: the full set
 ])
-def test_rag_inject_budget_degrade_is_a_char_budget_not_k2(
-    monkeypatch, tmp_path, burn, degraded_budget, expected_handed,
+def test_rag_inject_daily_budget_never_shortens_the_handed_set(
+    monkeypatch, tmp_path, burn,
 ):
-    """S-R5: the spent daily budget used to collapse the depth to k=2 (every
-    live ask handed exactly two chunks). The depth now stays the turn's k
-    (pooled wider for diversity) and the degrade is a smaller character
-    budget on what is handed."""
+    """Owner order (uncap, 13 Nov): the spent daily budget used to collapse
+    the depth to k=2, then (S-R5) a smaller character budget. Now the counter
+    is measure-only: the depth stays the turn's k (pooled wider for
+    diversity), the whole pool is handed either way, and the counter still
+    accumulates and reports degraded."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("RAG_DAILY_TOKEN_BUDGET", "100")
     monkeypatch.setenv("RAG_K", "5")
     monkeypatch.setenv("MAX_RAG_TOKENS", "10000")  # don't let cap interfere
     monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.0")
-    monkeypatch.setenv("RAG_DEGRADED_CHAR_BUDGET", degraded_budget)
+    monkeypatch.setenv("RAG_DEGRADED_CHAR_BUDGET", "1200")  # removed setting: ignored
 
     from app.core.rag import budget
     import datetime as _dt
@@ -562,7 +563,10 @@ def test_rag_inject_budget_degrade_is_a_char_budget_not_k2(
     )
     assert seen_k["value"] == 10  # depth is never collapsed to 2
     assert audit_rec["budget_degraded"] is bool(burn)
-    assert audit_rec["injected_k"] == expected_handed
+    assert audit_rec["budget_consumed"] == burn
+    assert audit_rec["injected_k"] == 10
+    after = budget.snapshot(day=today)
+    assert after["consumed"] > burn  # the counter still counts this turn
 
 
 def test_rag_inject_runs_for_any_agent_when_project_id_present(monkeypatch, tmp_path):

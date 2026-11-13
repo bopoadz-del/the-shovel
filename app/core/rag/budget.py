@@ -1,12 +1,10 @@
 """Daily RAG injection token budget.
 
-Layered on top of the per-turn ``MAX_RAG_TOKENS`` cap and the
-``RAG_CONFIDENCE_THRESHOLD`` short-circuit so RAG token spend has
-three independent degradation paths. When the day's consumed sum
-reaches the budget INCLUSIVELY (``consumed >= budget``), the
-injector hands a smaller CHARACTER budget of excerpts for the remaining
-turns of the day (``handed_set.char_budget(degraded=True)``); the
-retrieval depth is unchanged.
+MEASURE-ONLY: the counter records the day's injected tokens and the
+injector prints ``consumed`` and ``degraded`` (``consumed >= budget``,
+inclusive) in its trace, but neither changes what is handed -- no smaller
+character budget, no k cut (owner order, 13 Nov). The per-turn
+``MAX_RAG_TOKENS`` cap is the only spend bound on a turn.
 
 Day rollover is implicit: callers pass ``day=utc.strftime("%Y-%m-%d")``
 and a fresh row materialises on the first read of a new date.
