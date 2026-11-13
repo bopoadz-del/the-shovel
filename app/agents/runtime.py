@@ -3180,10 +3180,52 @@ _QUOTED_SENTENCE_RE = re.compile(
 )
 
 
+def _turn_has_attachment_content(
+    user_message: str = "",
+    attached_documents: list[dict[str, Any]] | None = None,
+) -> bool:
+    """True when the user handed evidence over with this turn: a resolved
+    attached document, or a composer marker carrying its own payload
+    (photo observations). Such a turn is answered from that evidence; the
+    corpus refusal covers only claims about the indexed corpus."""
+    if attached_documents:
+        return True
+    from app.core.rag.retriever import attachment_markers_carry_content
+
+    return attachment_markers_carry_content(user_message)
+
+
+def _rag_miss_identifiers(
+    audit_rec: dict[str, Any] | None,
+    rag_sys_msg: dict[str, str] | None,
+    user_message: str = "",
+) -> list[str]:
+    """The reference identifiers retrieval definitively missed; empty when
+    the turn is not an exact-reference miss (see
+    :func:`_should_short_circuit_rag_miss` for the conditions)."""
+    return list(_missed_reference_ids(audit_rec, rag_sys_msg, user_message))
+
+
+def _build_reference_miss_note(identifiers: list[str]) -> str:
+    """System note for a turn that names a reference the index lacks AND
+    carries attachment evidence: refuse the reference, answer the rest."""
+    if not identifiers:
+        return ""
+    refs = ", ".join(identifiers)
+    return (
+        f"REFERENCE NOT IN INDEXED SOURCES: {refs}. "
+        f"{_MISSING_REFERENCE_ANSWER}; say so for that reference and do not "
+        "answer about it from memory. The user also attached evidence this "
+        "turn: answer from that attachment and cite the attachment as the "
+        "source."
+    )
+
+
 def _should_short_circuit_rag_miss(
     audit_rec: dict[str, Any] | None,
     rag_sys_msg: dict[str, str] | None,
     user_message: str = "",
+    attached_documents: list[dict[str, Any]] | None = None,
 ) -> bool:
     """True when retrieval has definitively missed an exact reference.
 
@@ -3200,11 +3242,25 @@ def _should_short_circuit_rag_miss(
     general knowledge. A self-contained calculation / self-coding request
     is never a document lookup — unit rates like ``AED/m2`` used to trip
     this gate and return "could not confirm this reference" in ~2s.
+
+    A turn that carries attachment evidence is never refused whole: the
+    model answers from the attachment, and the caller pins any missed
+    reference with :func:`_build_reference_miss_note`.
     """
+    if _turn_has_attachment_content(user_message, attached_documents):
+        return False
+    return bool(_missed_reference_ids(audit_rec, rag_sys_msg, user_message))
+
+
+def _missed_reference_ids(
+    audit_rec: dict[str, Any] | None,
+    rag_sys_msg: dict[str, str] | None,
+    user_message: str = "",
+) -> list[str]:
     if rag_sys_msg is not None:
-        return False
+        return []
     if not audit_rec:
-        return False
+        return []
     if user_message and (
         _asks_self_coding(user_message)
         or _looks_like_self_contained_calculation(user_message)
@@ -3214,7 +3270,7 @@ def _should_short_circuit_rag_miss(
         or _message_wants_primavera_parse(user_message)
         or _message_wants_rfi_draft(user_message)
     ):
-        return False
+        return []
     # A unit RATE ("SAR 62/m2") is not a reference: it looks like page
     # "d/3/3" to the extractor, and a variance question carrying all its own
     # numbers was refused as a missing document in 4 s.
@@ -3229,10 +3285,10 @@ def _should_short_circuit_rag_miss(
     # Require a digit to avoid short-circuiting generic phrases like
     # "contract value" that happen to match a reference label.
     if not any(re.search(r"\d", ident) for ident in identifiers):
-        return False
-    return bool(
-        audit_rec.get("identifier_miss") or audit_rec.get("threshold_fired")
-    )
+        return []
+    if not (audit_rec.get("identifier_miss") or audit_rec.get("threshold_fired")):
+        return []
+    return [i for i in identifiers if re.search(r"\d", i)]
 
 
 def _build_missing_reference_answer(

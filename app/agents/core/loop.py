@@ -140,6 +140,7 @@ async def _chat_impl(
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss,
+        _build_reference_miss_note, _rag_miss_identifiers, _turn_has_attachment_content,
         _text_needs_tool_recovery, _tool_result_content, _tool_result_errored,
         _vo_draft_hard_excludes, _vo_draft_ready_for_synthesis, answer_report_export_enabled,
         fulfill_wbs_export, inspect, json, message_wants_answer_report,
@@ -352,9 +353,17 @@ async def _chat_impl(
     if _calc_pre:
         tool_calls_made.append(_calc_pre)
 
+    # A turn that carries attachment evidence is answered from it; a
+    # reference it also names that the index lacks is refused by note,
+    # not by refusing the whole turn (S-A8).
+    if _turn_has_attachment_content(user_message, None):
+        _miss_note = _build_reference_miss_note(
+            _rag_miss_identifiers(_rag_audit, _rag_sys_msg, user_message))
+        if _miss_note:
+            messages.append({"role": "system", "content": _miss_note})
     # Fast path: exact reference miss with no RAG context. Skip when a
     # named project file was already fetched/extracted from disk.
-    if not _pre and not _wbs_pre and not _hist_pre and not _wir_pre and not _more_pre and not _calc_pre and (await _off_loop(_should_short_circuit_rag_miss, _rag_audit, _rag_sys_msg, user_message
+    if not _pre and not _wbs_pre and not _hist_pre and not _wir_pre and not _more_pre and not _calc_pre and (await _off_loop(_should_short_circuit_rag_miss, _rag_audit, _rag_sys_msg, user_message, None
     )):
         answer = _build_missing_reference_answer(project_id, user_id)
         if conversation_id:

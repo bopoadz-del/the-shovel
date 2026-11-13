@@ -200,6 +200,32 @@ def _looks_like_duration(token: str) -> bool:
     return bool(_DURATION_RE.match(token.strip()))
 
 
+# The chat composer writes each attachment into the message as
+# ``[attached: NAME]`` (photos: ``[attached: NAME | observations: ...]``).
+# A marker is a pointer to evidence the user handed over, never a reference
+# into the indexed corpus: its filename (often digit-heavy) and observation
+# text must not reach the identifier extractors. One pattern, shared with the
+# chat router that resolves the markers to documents.
+ATTACHED_MARKER_RE = re.compile(
+    r"\[attached:\s*([^\]|]+?)\s*(?:\|([^\]]*))?\]", re.IGNORECASE
+)
+
+
+def strip_attachment_markers(text: str) -> str:
+    """``text`` with every ``[attached: ...]`` segment removed."""
+    if not text:
+        return text or ""
+    return ATTACHED_MARKER_RE.sub(" ", text)
+
+
+def attachment_markers_carry_content(text: str) -> bool:
+    """True when a marker in ``text`` carries content of its own (a payload
+    after ``|``, e.g. photo observations)."""
+    return any(
+        (m.group(2) or "").strip() for m in ATTACHED_MARKER_RE.finditer(text or "")
+    )
+
+
 def extract_query_identifiers(query: str) -> List[str]:
     """Pull construction reference identifiers out of a user query.
 
@@ -212,7 +238,8 @@ def extract_query_identifiers(query: str) -> List[str]:
     Returns a deduplicated list of lowercase identifier strings. The list
     is empty for queries that contain no identifier-like tokens.
     """
-    if not query:
+    query = strip_attachment_markers(query)
+    if not query.strip():
         return []
 
     # OCR / CESMM print ``D 549.2``; compact that before the token regexes
@@ -365,7 +392,8 @@ def extract_contract_doc_ids(text: str) -> List[str]:
     AB-2023 question cannot surface AB-2022 chunks. Empty when the text
     names no such id.
     """
-    if not text:
+    text = strip_attachment_markers(text)
+    if not text.strip():
         return []
     found: List[str] = []
     seen: Set[str] = set()
