@@ -1,0 +1,55 @@
+# Run a READ-ONLY PDF page-coverage diagnosis as a one-off ECS task.
+#
+# Same shape as project-inventory.yml: the existing `the-fork` task definition
+# (DATABASE_URL, data volume, extractor env) with a command override that runs
+# scripts/pdf_page_coverage.py. The script issues one parameterised SELECT per
+# id and reads each PDF's text layer with PyMuPDF. It never OCRs a page,
+# re-extracts a document or writes anything; the workflow has contents:read
+# and no write step. Document ids arrive as a dispatch input -- no document
+# identifier lives in this repository. An ops tool, not a gate.
+name: pdf-page-coverage
+
+on:
+  workflow_dispatch:
+    inputs:
+      doc_ids:
+        description: "document ids or unambiguous id prefixes, comma or space separated (read-only)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  TASK_FAMILY: the-fork
+  SERVICE_FOR_NETWORK: the-fork
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run the read-only page-coverage diagnosis as a one-off task
+        env:
+          IDS: ${{ inputs.doc_ids }}
+        run: |
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$SERVICE_FOR_NETWORK" --query 'services[0].networkConfiguration' --output json)
+          container=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query 'taskDefinition.containerDefinitions[0].name' --output text)
+          overrides=$(jq -cn --arg c "$container" --arg ids "$IDS" '{containerOverrides:[{name:$c, environment:[{name:"WORKER_COMMAND",value:"python -m scripts.pdf_page_coverage"},{name:"COVERAGE_DOC_IDS",value:$ids}]}]}')
+          arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" --task-definition "$TASK_FAMILY" --launch-type FARGATE --network-configuration "$netcfg" --overrides "$overrides" --query 'tasks[0].taskArn' --output text)
+          for attempt in $(seq 1 30); do
+            aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null && break
+            sleep 10
+          done
+          id=${arn##*/}
+          aws logs get-log-events --log-group-name /ecs/the-fork --log-stream-name "ecs/$container/$id" --query 'events[].message' --output text | tee -a "$GITHUB_STEP_SUMMARY"
+          code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "task exit code: $code"
+          test "$code" = "0"
