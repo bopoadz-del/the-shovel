@@ -1319,11 +1319,13 @@ def test_index_document_boq_total_hedged_when_pages_skipped(fresh_db, tmp_path, 
     assert "partial" in blob, f"pages_skipped>0 must hedge; chunks missing 'partial': {blob[:300]}"
 
 
-def test_boq_named_pdf_without_computable_total_emits_guard(fresh_db, tmp_path, monkeypatch):
-    """A BOQ-named PDF that boq_processor CANNOT total (scanned/unparseable)
-    must emit a guard chunk telling the model NOT to state a total — so it
-    can't synthesise a false 'total package value' from partial OCR text
-    (the demolition-BOQ failure mode: 8 chunks of a 675-page scan)."""
+def test_boq_named_pdf_without_computable_total_records_attribute_not_chunk(
+    fresh_db, tmp_path, monkeypatch,
+):
+    """A BOQ-named PDF that boq_processor CANNOT total records the fact on the
+    document row (``metadata.boq_total.verified = False``) and writes NO
+    warning prose into the chunk store: a stored warning ranks for every
+    "total" ask and cannot be told apart from document content."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     from app.core import doc_index
@@ -1333,10 +1335,10 @@ def test_boq_named_pdf_without_computable_total_emits_guard(fresh_db, tmp_path, 
     import app.blocks.boq_processor as boq
 
     async def _no_total(self, input_data, params=None):
-        return {"status": "error", "error": "no tables found (scanned image PDF)"}
+        return {"status": "error", "error": "no tables found"}
     monkeypatch.setattr(boq.BOQProcessorBlock, "process", _no_total)
 
-    proj = projects_mod.create_project("Scanned BOQ")
+    proj = projects_mod.create_project("Unparsed BOQ")
     pid = proj["id"]
     doc_path = _write_txt_doc(
         tmp_path, "Demolition BOQ.pdf", b"%PDF-1.4\nscanned image content",
@@ -1344,8 +1346,12 @@ def test_boq_named_pdf_without_computable_total_emits_guard(fresh_db, tmp_path, 
     doc = projects_mod.add_document(pid, "Demolition BOQ.pdf", file_path=doc_path, size=21)
 
     result = doc_index.index_document(pid, doc["id"])
-    blob = "\n".join(result["chunks"]).lower()
-    assert "do not state a total" in blob, f"missing no-total guard; chunks={blob[:200]}"
+    blob = "\n".join(result.get("chunks") or []).lower()
+    assert "do not state" not in blob and "guard" not in blob, blob[:300]
+    status = doc_index.boq_total_status(projects_mod.get_document(doc["id"]))
+    assert status == {
+        "verified": False, "reason": "parse_failed", "detail": "no tables found",
+    }
 
 
 def test_index_project_empty_project(fresh_db, monkeypatch):

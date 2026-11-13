@@ -2618,7 +2618,11 @@ def index_project(project_id: str) -> dict[str, Any]:
         )
         # BOQ → RAG: mirror index_document so the package total + line items
         # are retrievable regardless of which indexing path ran.
-        boq_chunks = _boq_chunks_for_document(file_path, filename, ext, project_id)
+        doc_attrs: dict[str, Any] = {}
+        boq_chunks = _boq_chunks_for_document(
+            file_path, filename, ext, project_id, doc_attrs,
+        )
+        _record_document_attributes(doc["id"], doc_attrs)
         if boq_chunks:
             chunks = chunks + boq_chunks
         # Drawing → RAG: same mirroring rule as the BOQ hook. Both indexing
@@ -2854,34 +2858,85 @@ def _boq_summary_chunks(result: dict[str, Any]) -> list[str]:
     return out
 
 
-def _boq_no_total_guard(filename: str) -> str:
-    """A guard chunk emitted when a document is clearly a BOQ but NO verified
-    total could be computed from it (scanned/image PDF, or an unparseable
-    table). It instructs the model NOT to state a total, so chat can't
-    synthesise a confident-but-wrong 'total package value' from partial OCR
-    text. Accuracy over coverage (no-assumptions rule)."""
-    return (
-        f"VERIFIED-TOTAL GUARD for '{filename}': this is a Bill of Quantities, "
-        "but NO verified total could be computed from it — it appears to be a "
-        "scanned/image PDF or its priced table could not be parsed, so only "
-        "fragments were extracted. Do NOT state a total package value, total "
-        "contract value, or any overall BOQ total from this document; any such "
-        "figure would be partial or wrong. To get an accurate total, an "
-        "xlsx/csv version of this BOQ is required."
-    )
+#: ``documents.metadata`` key holding the BOQ verified-total fact. A
+#: document-level attribute, never chunk text: a stored warning sentence is
+#: embedded and FTS-indexed like content, ranks for every "total"/"bill" ask,
+#: and cannot be told apart from what the document says.
+BOQ_TOTAL_META_KEY = "boq_total"
+
+
+def _boq_total_attribute(result: Any, *, parse_error: str | None = None) -> dict[str, Any]:
+    """The verified-total fact for one BOQ parse, as a metadata attribute.
+
+    ``verified`` is True only when the parsed rows were cross-checked against
+    the bill's own stated total. boq_processor sums priced line items; it does
+    not read a "carried to summary" row, so nothing it returns is verified and
+    no total is recorded here. The reason names what the parser observed --
+    never a guess at the cause (a typed bill whose table the parser missed is
+    not a scanned PDF).
+    """
+    attr: dict[str, Any] = {"verified": False}
+    if parse_error is not None:
+        attr["reason"] = "parse_error"
+        attr["detail"] = parse_error[:200]
+        return attr
+    res = result if isinstance(result, dict) else {}
+    if res.get("status") != "success":
+        attr["reason"] = "parse_failed"
+        detail = str(res.get("error") or "").strip()
+        if detail:
+            attr["detail"] = detail[:200]
+        return attr
+    priced = len(res.get("line_items") or [])
+    attr["priced_rows"] = priced
+    if not priced:
+        attr["reason"] = "no_priced_rows"
+    elif res.get("pages_skipped"):
+        attr["reason"] = "pages_skipped"
+        attr["pages_skipped"] = int(res.get("pages_skipped") or 0)
+    else:
+        attr["reason"] = "not_cross_checked"
+    return attr
+
+
+def boq_total_status(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Read the BOQ verified-total attribute off a document dict, or None.
+
+    The reader the answer path's total guard consumes instead of retrieving a
+    stored warning chunk. None means the document was never staged as a BOQ.
+    """
+    meta = _projects.coerce_document_metadata((document or {}).get("metadata"))
+    attr = meta.get(BOQ_TOTAL_META_KEY)
+    return dict(attr) if isinstance(attr, dict) else None
+
+
+def _record_document_attributes(document_id: str, attrs: dict[str, Any] | None) -> None:
+    """Merge the structured stages' document attributes onto the row."""
+    if not attrs:
+        return
+    try:
+        _projects.update_document_metadata(document_id, dict(attrs))
+    except Exception:
+        logger.warning(
+            "could not record document attributes for %s", document_id, exc_info=True,
+        )
 
 
 def _boq_chunks_for_document(
-    file_path: str, filename: str, ext: str, project_id: str
+    file_path: str,
+    filename: str,
+    ext: str,
+    project_id: str,
+    attrs: dict[str, Any] | None = None,
 ) -> list[str]:
     """Return BOQ summary chunks for a BOQ-type document, or [] otherwise.
 
-    When the file is clearly a BOQ (by filename) but no total could be
-    computed — e.g. a scanned PDF pdfplumber can't parse — emit a guard chunk
-    instead, so the model doesn't invent a total from partial OCR text.
+    When ``attrs`` is given, the verified-total fact is written into it under
+    ``BOQ_TOTAL_META_KEY`` for the caller to store on the document row. No
+    chunk is ever emitted for "no total": that fact is an attribute.
 
-    Never raises — a parse failure just yields the guard (or []) so the primary
-    text indexing is unaffected.
+    Never raises -- a parse failure yields [] and an unverified attribute so
+    the primary text indexing is unaffected.
     """
     if not file_path or not _looks_like_boq(filename, ext):
         return []
@@ -2897,20 +2952,17 @@ def _boq_chunks_for_document(
         # name their origin (disambiguates several BOQs in one project).
         if isinstance(result, dict):
             result.setdefault("source_name", os.path.splitext(filename or "")[0])
-        chunks = _boq_summary_chunks(result)
-        if chunks:
-            return chunks
-        # No verified total. If the FILENAME clearly says BOQ (not just any
-        # spreadsheet), emit the guard so chat refuses to state a false total.
-        if _BOQ_NAME_RE.search(filename or ""):
-            return [_boq_no_total_guard(filename)]
-        return []
+        if attrs is not None:
+            attrs[BOQ_TOTAL_META_KEY] = _boq_total_attribute(result)
+        return _boq_summary_chunks(result)
     except Exception as exc:  # noqa: BLE001 — never block indexing on a BOQ parse
         _logging.getLogger(__name__).warning(
             "BOQ wiring skipped for %s: %s", filename, exc
         )
-        if _BOQ_NAME_RE.search(filename or ""):
-            return [_boq_no_total_guard(filename)]
+        if attrs is not None:
+            attrs[BOQ_TOTAL_META_KEY] = _boq_total_attribute(
+                None, parse_error=f"{type(exc).__name__}: {exc}",
+            )
         return []
 
 
@@ -3367,8 +3419,8 @@ def _scanned_pdf_missing_ocr(ext: str, meta: dict[str, Any]) -> bool:
     """True when a PDF had empty body pages and OCR was never invoked.
 
     A live reindex of a scanned priced BOQ returned status=ok with 6 cover-page chunks
-    because the finer chunker recast the text layer + VERIFIED-TOTAL GUARD
-    as success. Its item codes were never in the extract.
+    because the finer chunker recast the text layer (plus a since-removed
+    total-guard chunk) as success. Its item codes were never in the extract.
 
     OCR that ran and returned empty (a genuinely blank digital page) is
     not this failure — ``ocr_attempts > 0`` means the trigger fired.
@@ -3518,8 +3570,10 @@ def _produce_chunks(
     text, meta = _extract_with_meta(file_path, filename, force_ocr=force_ocr)
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
-    structured = _structured_chunks(file_path, filename, ext, project_id)
+    structured, attrs = _structured_stage(file_path, filename, ext, project_id)
     meta["chunk_pages"] = pages + [None] * len(structured)
+    if attrs:
+        meta["document_attributes"] = attrs
     return _normalize_cesmm_in_chunks(chunks + structured), meta
 
 
@@ -3535,17 +3589,30 @@ def _text_chunks_with_pages(
 def _structured_chunks(
     file_path: str, filename: str, ext: str, project_id: str,
 ) -> list[str]:
-    """The table stages: BOQ totals, spreadsheet rows, and drawing schedules."""
+    """The table stages' chunks: BOQ totals, spreadsheet rows, drawing schedules."""
+    return _structured_stage(file_path, filename, ext, project_id)[0]
+
+
+def _structured_stage(
+    file_path: str, filename: str, ext: str, project_id: str,
+) -> tuple[list[str], dict[str, Any]]:
+    """The table stages: ``(chunks, document_attributes)``.
+
+    The attributes are document-level facts (the BOQ verified-total status)
+    that belong on ``documents.metadata``, not in the chunk store.
+    """
+    attrs: dict[str, Any] = {}
     # BOQ → RAG: append the computed total + line items so the package
     # value is answerable from the corpus (the raw text never holds the sum).
-    chunks = _boq_chunks_for_document(file_path, filename, ext, project_id)
+    chunks = _boq_chunks_for_document(file_path, filename, ext, project_id, attrs)
     # Spreadsheet → RAG: one chunk per measured row with the sheet name and
     # the bill/section heading inherited into it, so a billed-quantity or
     # unit-rate ask finds the row that states the figure.
     chunks += _spreadsheet_row_chunks(file_path, filename, ext)
     # Drawing → RAG: mirrors index_project above. A drawing's schedules
     # live in its tables, and the raw text layer loses their structure.
-    return chunks + _drawing_chunks_for_document(file_path, filename, ext, project_id)
+    chunks = chunks + _drawing_chunks_for_document(file_path, filename, ext, project_id)
+    return chunks, attrs
 
 
 def _produce_whole_document_chunks(
@@ -3575,10 +3642,10 @@ def _produce_whole_document_chunks(
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
     del text
     mem_mb, timeout_s = _file_budget()
-    structured, diag = run_isolated(
-        _structured_chunks,
+    (structured, attrs), diag = run_isolated(
+        _structured_stage,
         (file_path, filename, ext, project_id),
-        fallback=[],
+        fallback=([], {}),
         label=f"table stages of {filename}",
         mem_mb=mem_mb,
         timeout_s=timeout_s,
@@ -3590,6 +3657,8 @@ def _produce_whole_document_chunks(
         )
     structured = list(structured or [])
     meta["chunk_pages"] = pages + [None] * len(structured)
+    if attrs:
+        meta["document_attributes"] = dict(attrs)
     return _normalize_cesmm_in_chunks(chunks + structured), meta
 
 
@@ -3834,8 +3903,9 @@ def _index_document(
         )
         if quarantined is not None:
             return quarantined
+        _record_document_attributes(document_id, meta.get("document_attributes"))
         if _scanned_pdf_missing_ocr(ext, meta):
-            # Cover-page text + VERIFIED-TOTAL GUARD still produce chunks.
+            # Cover-page text still produces chunks.
             # That must not look like a successful body index.
             import logging as _logging
             _logging.getLogger(__name__).error(
