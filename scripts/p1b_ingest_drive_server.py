@@ -582,6 +582,7 @@ def _ingest_file(
             projects_mod.set_document_drive_md5(existing_doc["id"], drive_token)
         result = doc_index.index_document(
             project_id, existing_doc["id"],
+            profile=doc_index.PROFILE_CORPUS_BUILD,
         )
         result["reindexed_existing_doc"] = True
         if existing_doc.get("_stale_extractor_retry"):
@@ -623,6 +624,7 @@ def _ingest_file(
         }
     result = doc_index.index_document(
         project_id, doc["id"], stamp_as_indexed=bool(reingest_of),
+        profile=doc_index.PROFILE_CORPUS_BUILD,
     )
     if reingest_of:
         result["reingest_of"] = reingest_of
