@@ -105,14 +105,14 @@ def test_reindex_reports_before_after_and_passes_force_flag(tmp_path, force_ocr)
     assert rep["downloaded_bytes"] == len(b"%PDF-bytes")
 
 
-def test_index_reads_the_downloaded_bytes_and_the_copy_is_deleted(tmp_path):
-    for payload in (b"first-bytes", b"second, longer bytes"):
-        w = FakeWorld({"d1": _doc("p1")}, {"drv1": payload}, new_chunks=["a"])
-        dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=w.deps(tmp_path))
-        assert w.file_path_seen_by_index == str(w.paths_written[0])
-        assert w.bytes_seen_by_index == payload
-        assert w.paths_discarded == w.paths_written
-        assert not w.paths_written[0].exists()
+@pytest.mark.parametrize("payload", [b"first-bytes", b"second, longer bytes"])
+def test_index_reads_the_downloaded_bytes_and_the_copy_is_deleted(tmp_path, payload):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": payload}, new_chunks=["a"])
+    dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=w.deps(tmp_path))
+    assert w.file_path_seen_by_index == str(w.paths_written[0])
+    assert w.bytes_seen_by_index == payload
+    assert w.paths_discarded == w.paths_written
+    assert not w.paths_written[0].exists()
 
 
 # --- refusals before any download ----------------------------------------
@@ -157,12 +157,17 @@ def test_failed_index_is_not_ok_and_old_chunks_stay(tmp_path, result, raises):
 
 # --- headings -------------------------------------------------------------
 
-def test_heading_lines_order_dedupe_and_whitespace():
-    texts = ["intro\n  SECTION   2  \nbody", "SECTION 1\nSECTION 2", "none"]
-    assert dro.heading_lines(texts, r"^SECTION \d") == ["SECTION 2", "SECTION 1"]
-    assert dro.heading_lines(texts, r"^PART") == []
-    assert dro.heading_lines(texts, None) == []
-    assert dro.heading_lines(texts, "") == []
+_HEADING_TEXTS = ["intro\n  SECTION   2  \nbody", "SECTION 1\nSECTION 2", "none"]
+
+
+@pytest.mark.parametrize("pattern,want", [
+    (r"^SECTION \d", ["SECTION 2", "SECTION 1"]),
+    (r"^PART", []),
+    (None, []),
+    ("", []),
+])
+def test_heading_lines_order_dedupe_and_whitespace(pattern, want):
+    assert dro.heading_lines(_HEADING_TEXTS, pattern) == want
 
 
 # --- env entry ------------------------------------------------------------
