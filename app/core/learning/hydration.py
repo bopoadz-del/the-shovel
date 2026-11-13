@@ -35,6 +35,7 @@ isolated, errors are captured per-project in the row's ``facts`` payload.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -50,6 +51,60 @@ logger = logging.getLogger(__name__)
 
 _MAX_MESSAGES_PER_PROJECT = 400
 _SUMMARY_MAX_TOKENS = 600
+
+
+# ── Per-pass model usage (what one pass cost) ─────────────────────────────
+#
+# ``_call_chat`` adds every model response it receives to the usage tally of
+# the scope being summarised. ``run`` opens one tally per project and one for
+# the global rollup, so each recorded row says how many model calls it took
+# and how many prompt / completion tokens the provider reported. A ContextVar
+# keeps concurrent passes (the nightly scheduler and an admin-triggered run)
+# from adding into each other's tally. Accounting only: nothing here changes
+# what a pass reads, writes or summarises.
+
+_usage_tally: contextvars.ContextVar[Optional[Dict[str, int]]] = contextvars.ContextVar(
+    "hydration_usage_tally", default=None,
+)
+
+_USAGE_KEYS = ("model_calls", "prompt_tokens", "completion_tokens")
+
+
+def _new_usage() -> Dict[str, int]:
+    return {key: 0 for key in _USAGE_KEYS}
+
+
+def _add_usage(total: Dict[str, int], part: Dict[str, Any]) -> None:
+    for key in _USAGE_KEYS:
+        total[key] = int(total.get(key, 0)) + int(part.get(key) or 0)
+
+
+def _record_model_response(resp: Any, provider: str) -> None:
+    """Count one model response into the open tally (no-op without one).
+
+    A response counts as a model call when a provider answered it; the
+    ChatBlock's offline template is not a model call. Token counts are the
+    provider's own ``usage`` figures, which the ChatBlock returns under
+    ``tokens``; a response without them counts the call with zero tokens.
+    """
+    tally = _usage_tally.get()
+    if tally is None or provider in ("offline_template", "unknown"):
+        return
+    tokens = resp.get("tokens") if isinstance(resp, dict) else None
+    tokens = tokens if isinstance(tokens, dict) else {}
+    _add_usage(tally, {
+        "model_calls": 1,
+        "prompt_tokens": tokens.get("prompt_tokens"),
+        "completion_tokens": tokens.get("completion_tokens"),
+    })
+
+
+def _usage_line(scope: str, project: str, run_id: str, usage: Dict[str, int]) -> str:
+    """The one log line per recorded row: what that scope cost in model use."""
+    return (
+        f"hydration_run scope={scope} project={project} run_id={run_id} "
+        + " ".join(f"{key}={int(usage.get(key, 0))}" for key in _USAGE_KEYS)
+    )
 
 
 def _llm_summary_enabled() -> bool:
@@ -98,14 +153,20 @@ async def run(
 
     results_per_project: List[Dict[str, Any]] = []
     global_errors: List[str] = []
+    pass_usage = _new_usage()
 
     for pid in pids:
+        project_usage = _new_usage()
+        token = _usage_tally.set(project_usage)
         try:
             row = await _hydrate_project(pid, target_date, window_start, window_end)
             results_per_project.append(row)
         except Exception as exc:  # noqa: BLE001 — never abort the whole pass
             logger.exception("hydration: project %s failed", pid)
             global_errors.append(f"{pid}: {type(exc).__name__}: {exc}")
+        finally:
+            _usage_tally.reset(token)
+            _add_usage(pass_usage, project_usage)
 
     global_facts = {
         "projects_processed": len(results_per_project),
@@ -116,14 +177,22 @@ async def run(
         },
         "errors": global_errors,
     }
-    global_summary_md, global_provider = await _summarize_global(
-        results_per_project, target_date
-    )
+    global_usage = _new_usage()
+    token = _usage_tally.set(global_usage)
+    try:
+        global_summary_md, global_provider = await _summarize_global(
+            results_per_project, target_date
+        )
+    finally:
+        _usage_tally.reset(token)
+    _add_usage(pass_usage, global_usage)
+    global_facts["usage"] = dict(global_usage)
+    global_facts["pass_usage"] = dict(pass_usage)
     if global_provider in ("offline_template", "unavailable", "error", "disabled"):
         global_summary_md = await off_loop_in("background", 
             _heuristic_global_summary, target_date, results_per_project, global_errors
         )
-    await off_loop_in("background", 
+    global_run_id = await off_loop_in("background", 
         hydration_store.record_run,
         run_date=target_date,
         scope="global",
@@ -132,13 +201,21 @@ async def run(
         facts=global_facts,
         provider=global_provider,
     )
+    cost_line = _usage_line("pass", "all", global_run_id, pass_usage)
+    logger.info(cost_line)
 
     return {
         "status": "success",
         "run_date": target_date,
+        "run_id": global_run_id,
+        "project_run_ids": {
+            r["project_id"]: r.get("run_id") for r in results_per_project
+        },
         "projects_processed": len(results_per_project),
         "errors": global_errors,
         "summary_md": global_summary_md,
+        "usage": dict(pass_usage),
+        "cost_line": cost_line,
     }
 
 
@@ -198,11 +275,13 @@ async def _hydrate_project(
         logger.warning("hydration writeback for project %s failed: %s", project_id, exc)
         writeback_summary = {"writeback_error": f"{type(exc).__name__}: {exc}"}
 
+    usage = dict(_usage_tally.get() or _new_usage())
     facts = {
         "messages_seen": len(messages),
         "writeback": writeback_summary,
+        "usage": usage,
     }
-    await off_loop_in("background", 
+    run_id = await off_loop_in("background", 
         hydration_store.record_run,
         run_date=run_date,
         scope="project",
@@ -211,10 +290,13 @@ async def _hydrate_project(
         facts=facts,
         provider=provider,
     )
+    logger.info(_usage_line("project", project_id, run_id, usage))
     return {
         "project_id": project_id,
+        "run_id": run_id,
         "messages_seen": len(messages),
         "summary_md": summary_md,
+        "usage": usage,
     }
 
 
@@ -674,4 +756,5 @@ async def _call_chat(prompt: str, max_tokens: int = 600) -> tuple[str, str]:
             or ""
         )
     provider = (resp.get("provider") if isinstance(resp, dict) else None) or "unknown"
+    _record_model_response(resp, provider)
     return (text or "_(empty response)_", provider)
