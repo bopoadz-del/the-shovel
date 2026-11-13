@@ -34,38 +34,50 @@ def test_refusal_reason(text, reason):
     assert chunk_noise.refusal_reason(text) == reason
 
 
-def test_clean_table_text_drops_header_repeat_keeps_first_and_data():
-    text = "\n".join([
-        "Item | Description | Unit | Qty",
-        "1.1 | Excavation | m3 | 120",
-        "0 | 0 | 0 | 0",
-        "Item | Description | Unit | Qty",
-        "2.1 | Backfill | m3 | 80",
-    ])
-    out, counts = chunk_noise.clean_table_text(text)
-    lines = out.splitlines()
-    assert lines == [
-        "Item | Description | Unit | Qty",
-        "1.1 | Excavation | m3 | 120",
-        "2.1 | Backfill | m3 | 80",
-    ]
-    assert counts == {"empty_row": 1, "header_repeat": 1}
+H = "Item | Description | Unit | Qty"
+R1 = "1.1 | Excavation | m3 | 120"
+R2 = "2.1 | Backfill | m3 | 80"
 
 
-def test_clean_table_text_keeps_repeated_data_row_with_figures():
-    # A repeated row that states a figure is data, not a header repeat.
-    text = "Item | Qty\nBolt M12 | 40\nBolt M12 | 40"
-    out, counts = chunk_noise.clean_table_text(text)
-    assert out.splitlines() == ["Item | Qty", "Bolt M12 | 40", "Bolt M12 | 40"]
-    assert counts == {"empty_row": 0, "header_repeat": 0}
+@pytest.mark.parametrize(
+    "lines, kept, counts",
+    [
+        # a header re-printed above the next bill, and a zero row: both dropped
+        ([H, R1, "0 | 0 | 0 | 0", H, R2], [H, R1, R2],
+         {"empty_row": 1, "header_repeat": 1}),
+        # two DIFFERENT label rows are both headers, both kept
+        ([H, R1, "Ref | Note", R2], [H, R1, "Ref | Note", R2],
+         {"empty_row": 0, "header_repeat": 0}),
+        # a repeated row that states a figure is data, kept
+        (["Item | Qty", "Bolt M12 | 40", "Bolt M12 | 40"],
+         ["Item | Qty", "Bolt M12 | 40", "Bolt M12 | 40"],
+         {"empty_row": 0, "header_repeat": 0}),
+        # a blank line is layout, neither kept nor counted as a row
+        ([H, "", "   ", R1], [H, R1], {"empty_row": 0, "header_repeat": 0}),
+    ],
+)
+def test_clean_table_text(lines, kept, counts):
+    out, got = chunk_noise.clean_table_text(chr(10).join(lines))
+    assert out.splitlines() == kept
+    assert got == counts
 
 
-def test_refuse_chunks_keeps_pages_aligned():
-    chunks = ["Real clause text on page one.", "0 | 0 | 0", "Clause on page three."]
-    kept, pages, counts = chunk_noise.refuse_chunks(chunks, [1, 2, 3])
-    assert kept == ["Real clause text on page one.", "Clause on page three."]
-    assert pages == [1, 3]
-    assert counts == {"empty_row": 1}
+@pytest.mark.parametrize(
+    "chunks, pages, kept, kept_pages, counts",
+    [
+        (["Clause one.", "0 | 0 | 0", "Clause three."], [1, 2, 3],
+         ["Clause one.", "Clause three."], [1, 3], {"empty_row": 1}),
+        (["Clause one.", "Clause two."], [4, 5],
+         ["Clause one.", "Clause two."], [4, 5], {}),
+        # pages of another length are not aligned: passed through untouched
+        (["0 | 0", "Clause two."], [7], ["Clause two."], [7], {"empty_row": 1}),
+    ],
+)
+def test_refuse_chunks_keeps_pages_aligned(chunks, pages, kept, kept_pages, counts):
+    got, got_pages, got_counts = chunk_noise.refuse_chunks(chunks, pages)
+    assert got == kept
+    assert got_pages == kept_pages
+    assert got_counts == counts
 
 
 @pytest.mark.parametrize(
@@ -95,11 +107,16 @@ def _write_xlsx(path, rows):
 
 
 @pytest.mark.parametrize(
-    "row, emitted",
-    [(["0", 0, 0, 0], False), (["Blockwork 200mm", 50, 30, 1500], True)],
+    "row, ext, emitted",
+    [
+        (["0", 0, 0, 0], ".xlsx", False),
+        (["Blockwork 200mm", 50, 30, 1500], ".xlsx", True),
+        # the row chunker reads spreadsheets only
+        (["Blockwork 200mm", 50, 30, 1500], ".pdf", False),
+    ],
 )
-def test_row_chunker_refuses_all_zero_row(tmp_path, row, emitted):
+def test_row_chunker_refuses_all_zero_row(tmp_path, row, ext, emitted):
     path = tmp_path / "w.xlsx"
     _write_xlsx(path, [["Description", "Quantity", "Rate", "Amount"], row])
-    chunks = doc_index._spreadsheet_row_chunks(str(path), "w.xlsx", ".xlsx")
+    chunks = doc_index._spreadsheet_row_chunks(str(path), "w" + ext, ext)
     assert bool(chunks) is emitted

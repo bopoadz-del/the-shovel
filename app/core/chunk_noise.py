@@ -59,10 +59,8 @@ def is_empty_row(row: str) -> bool:
     ``"0 | 0 | 0"`` and ``"- | 0.00 | 0"`` are empty rows; ``"12 | 4.5 | 54"``
     (a figure) and ``"Excavation | 0"`` (a description) are not.
     """
-    parts = cells(row)
-    if not parts:
-        return True
-    return all(_is_zero_cell(c) and not _LETTER.search(c) for c in parts)
+    # A row with no cell at all is empty too: ``all`` of nothing is True.
+    return all(_is_zero_cell(c) and not _LETTER.search(c) for c in cells(row))
 
 
 def is_label_row(row: str) -> bool:

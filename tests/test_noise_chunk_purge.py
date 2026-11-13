@@ -37,41 +37,59 @@ def _project(monkeypatch, tmp_path, pid):
     return pm
 
 
-def test_plan_writes_nothing_and_execute_needs_the_live_hash(monkeypatch, tmp_path):
+BILL = [HEADER + chr(10) + ROW, "0 | 0 | 0", HEADER, "2.1 | Backfill | m3 | 80"]
+SPEC = ["Clause 3.1 Concrete grade C40.", ROW]
+
+
+@pytest.mark.parametrize(
+    "name, texts, counts, kept",
+    [
+        ("bill.xlsx", BILL,
+         {"guard_sentence": 0, "empty_row": 1, "header_repeat": 1}, [BILL[0], BILL[3]]),
+        ("spec.pdf", SPEC,
+         {"guard_sentence": 0, "empty_row": 0, "header_repeat": 0}, SPEC),
+    ],
+)
+def test_plan_writes_nothing_and_execute_needs_the_live_hash(
+    monkeypatch, tmp_path, name, texts, counts, kept,
+):
     pm = _project(monkeypatch, tmp_path, "nproj")
-    texts = [f"{HEADER}\n{ROW}", "0 | 0 | 0", HEADER, "2.1 | Backfill | m3 | 80"]
-    did = _doc(pm, "nproj", "bill.xlsx", texts)
+    did = _doc(pm, "nproj", name, texts)
 
     plan = noise_chunk_purge(project_id="nproj")["plan"]
-    assert plan["counts"] == {"guard_sentence": 0, "empty_row": 1, "header_repeat": 1}
-    assert plan["chunk_ids"]["empty_row"] == [f"{did}-1"]
-    assert plan["chunk_ids"]["header_repeat"] == [f"{did}-2"]
-    assert len(_texts_of(did)) == 4
+    assert plan["counts"] == counts
+    assert plan["total"] == len(texts) - len(kept)
+    assert plan["documents"] == ([did] if kept != texts else [])
+    assert len(_texts_of(did)) == len(texts)  # the plan writes nothing
 
     wrong = noise_chunk_purge(project_id="nproj", execute=True, plan_hash="0" * 64)
     assert wrong["executed"] is False and wrong["refused"]
-    assert len(_texts_of(did)) == 4
+    assert len(_texts_of(did)) == len(texts)
 
     done = noise_chunk_purge(
         project_id="nproj", execute=True, plan_hash=plan["plan_hash"],
     )
-    assert done["executed"] is True and done["deleted"] == 2
-    assert _texts_of(did) == [texts[0], texts[3]]
-    got = pm.get_document(did)
-    assert got["chunk_count"] == 2
-    assert got["ingest_status"] == ist.classify(chunk_count=2, extension=".xlsx").status
+    assert done["executed"] is True
+    assert done["deleted"] == len(texts) - len(kept)
+    assert _texts_of(did) == kept
+    if kept != texts:
+        ext = name[name.rindex("."):]
+        got = pm.get_document(did)
+        assert got["chunk_count"] == len(kept)
+        assert got["ingest_status"] == ist.classify(
+            chunk_count=len(kept), extension=ext,
+        ).status
+    assert noise_chunk_purge(project_id="nproj")["plan"]["total"] == 0
 
-    again = noise_chunk_purge(project_id="nproj")["plan"]
-    assert again["total"] == 0
 
-
-def test_clean_project_plans_nothing(monkeypatch, tmp_path):
-    pm = _project(monkeypatch, tmp_path, "cproj")
-    did = _doc(pm, "cproj", "spec.pdf", ["Clause 3.1 Concrete grade C40.", ROW])
-    out = noise_chunk_purge(project_id="cproj")
-    assert out["plan"]["total"] == 0
-    assert out["plan"]["documents"] == []
-    assert len(_texts_of(did)) == 2
+@pytest.mark.parametrize("project_id, raises", [("", True), ("eproj", False)])
+def test_project_id_is_required(monkeypatch, tmp_path, project_id, raises):
+    _project(monkeypatch, tmp_path, "eproj")
+    if raises:
+        with pytest.raises(ValueError):
+            noise_chunk_purge(project_id=project_id)
+    else:
+        assert noise_chunk_purge(project_id=project_id)["plan"]["total"] == 0
 
 
 ADMIN = {"user_id": "admin", "role": "admin"}
@@ -83,12 +101,20 @@ def test_admin_route_plans_then_writes_on_hash(monkeypatch, tmp_path, execute):
 
     pm = _project(monkeypatch, tmp_path, "rproj")
     did = _doc(pm, "rproj", "w.xlsx", [ROW, "0 | 0"])
+    from app.core import audit
+
+    events: list = []
+    monkeypatch.setattr(audit, "record", lambda event, **kw: events.append((event, kw)))
     planned = admin_corpus_noise_chunks(project_id="rproj", auth=ADMIN)["plan"]
     out = admin_corpus_noise_chunks(
         project_id="rproj", execute=execute, plan_hash=planned["plan_hash"], auth=ADMIN,
     )
     assert out["executed"] is execute
     assert len(_texts_of(did)) == (1 if execute else 2)
+    # only a write is audited, with what it deleted
+    assert [e for e, _ in events] == (["corpus.noise_chunks_purged"] if execute else [])
+    if execute:
+        assert events[0][1]["deleted"] == 1
 
 
 @pytest.mark.parametrize("role", ["user", "viewer"])
