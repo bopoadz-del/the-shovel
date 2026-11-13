@@ -6,7 +6,7 @@ from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import logging
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,117 @@ def critical_path_float(
                     if behind else
                     ("critical" if on_critical else "has float") + ".")),
     }
+
+
+def _network_links(raw: Any) -> List[Dict[str, Any]]:
+    """One activity's predecessors as ``{"predecessor_id", "type", "lag"}``.
+
+    A predecessor is given as an id (``"A"``), a comma-separated string of
+    ids (``"A, B"``) or a mapping with ``id`` and, optionally, ``type``
+    (FS/SS/FF/SF) and ``lag`` in working days. Nothing is assumed beyond
+    what the CPM convention itself defines: a link with no type is FS and a
+    link with no lag has none."""
+    if raw is None or raw == "":
+        return []
+    items = raw if isinstance(raw, list) else [raw]
+    links: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            pid = item.get("id", item.get("predecessor_id"))
+            links.append({"predecessor_id": str(pid).strip(),
+                          "type": str(item.get("type") or "FS").strip().upper(),
+                          "lag": item.get("lag") or 0})
+        else:
+            links += [{"predecessor_id": p.strip(), "type": "FS", "lag": 0}
+                      for p in str(item).split(",") if p.strip()]
+    return links
+
+
+@formula(
+    owner='planning',
+    display_name='Critical path of an activity network',
+    description=('Forward and backward pass over an activity network: early and '
+                 'late dates, total float and free float of every activity, the '
+                 'project duration and the critical path.'),
+    inputs={
+        'activities': Param(label='activities with durations and predecessors'),
+    },
+    outputs={'project_duration': 'working days', 'critical_path': '-',
+             'activities': '-', 'working': '-'},
+    main_output='project_duration',
+)
+def cpm_network(activities: List[Dict]) -> dict:
+    """CPM over the network the user supplied. Each activity is a mapping
+    with ``id``, ``duration`` (whole working days) and ``predecessors``.
+
+    Total float TF = LS - ES; free float FF = the slack to the earliest
+    successor date (an activity with no successor has FF = TF, because its
+    late finish is the project finish). Durations are taken as given: no
+    crashing, no calendar, no near-critical band is applied."""
+    import json
+
+    from app.lib.pm_computations import CircularDependencyError, compute_cpm
+    from app.schemas.cpm import CPMInput
+
+    if isinstance(activities, str):
+        try:
+            activities = json.loads(activities)
+        except ValueError:
+            return {"error": "activities must be a list of {id, duration, predecessors}."}
+    if not isinstance(activities, list) or not activities:
+        return {"error": "the network needs at least one activity with an id and a duration."}
+
+    rows = []
+    for i, act in enumerate(activities, start=1):
+        if not isinstance(act, dict):
+            return {"error": f"activity {i} is not a mapping of id, duration and predecessors."}
+        aid = str(act.get("id") or "").strip()
+        if not aid:
+            return {"error": f"activity {i} has no id."}
+        dur = act.get("duration")
+        try:
+            dur_f = float(dur)
+        except (TypeError, ValueError):
+            return {"error": f"activity {aid} has no duration (whole working days)."}
+        if dur_f < 0 or dur_f != int(dur_f):
+            return {"error": f"activity {aid} duration {dur} is not a whole number of "
+                             f"working days >= 0."}
+        rows.append({"id": aid, "name": str(act.get("name") or ""),
+                     "duration": int(dur_f),
+                     "predecessors": _network_links(act.get("predecessors"))})
+
+    try:
+        out = compute_cpm(CPMInput(activities=rows))
+    except CircularDependencyError as exc:
+        return {"error": f"the network has a loop: {exc}."}
+    except ValueError as exc:
+        return {"error": f"the network cannot be scheduled: {exc}."}
+
+    table, working = [], []
+    for r in out.results:
+        table.append({
+            "id": r.id, "duration": r.duration,
+            "early_start": r.early_start_day, "early_finish": r.early_finish_day,
+            "late_start": r.late_start_day, "late_finish": r.late_finish_day,
+            "total_float": r.total_float, "free_float": r.free_float,
+            "is_critical": r.is_critical,
+        })
+        working.append(
+            f"{r.id}: EF = ES + d = {r.early_start_day} + {r.duration} = "
+            f"{r.early_finish_day}; LS = LF - d = {r.late_finish_day} - {r.duration} = "
+            f"{r.late_start_day}; TF = LS - ES = {r.late_start_day} - "
+            f"{r.early_start_day} = {r.total_float}; FF = {r.free_float}"
+            + (" (critical)" if r.is_critical else ""))
+    return {
+        "project_duration": out.project_duration,
+        "critical_path": out.critical_path,
+        "activities": table,
+        "working": working,
+        "standard": "CPM forward and backward pass",
+        "note": (f"Project duration = max EF = {out.project_duration} working days; "
+                 "offsets are working days from the start of the first activity."),
+    }
+
 
 @formula(
     owner='planning',

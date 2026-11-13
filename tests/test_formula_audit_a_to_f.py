@@ -56,6 +56,7 @@ _AUDIT_A_TO_F = [
     "cost_buildup_formwork",
     "cost_buildup_rebar",
     "cost_per_area",
+    "cpm_network",
     "crane_cost_estimate",
     "crane_lift_capacity",
     "crane_planning",
@@ -817,6 +818,31 @@ def test_crane_planning_without_a_rate_gives_count_and_no_invented_cost(cap):
 
 
 # ── 33–35 planning / earthwork / FIDIC ─────────────────────────────────────
+
+@pytest.mark.parametrize("network, duration, critical", [
+    ([{"id": "S", "duration": 6},
+      {"id": "T", "duration": 2, "predecessors": ["S"]},
+      {"id": "U", "duration": 5, "predecessors": ["S"]},
+      {"id": "V", "duration": 1, "predecessors": ["T", "U"]}], 12, ["S", "U", "V"]),
+    ([{"id": "S", "duration": 6},
+      {"id": "T", "duration": 9, "predecessors": ["S"]},
+      {"id": "U", "duration": 5, "predecessors": ["S"]},
+      {"id": "V", "duration": 1, "predecessors": ["T", "U"]}], 16, ["S", "T", "V"]),
+])
+def test_audit_cpm_network(network, duration, critical):
+    """The network entry through the binding path: a table input reaches the
+    formula whole and the longest chain is the critical path."""
+    r = _ok("cpm_network", {"activities": network})
+    assert r["project_duration"] == duration
+    assert r["critical_path"] == critical
+
+
+def test_audit_cpm_network_loop_is_refused():
+    _err("cpm_network", {"activities": [
+        {"id": "S", "duration": 1, "predecessors": ["T"]},
+        {"id": "T", "duration": 1, "predecessors": ["S"]},
+    ]})
+
 
 def test_audit_critical_path_float():
     """CPM / PMBOK: TF = LS − ES (= LF − EF). TF ≤ 0 is critical,
