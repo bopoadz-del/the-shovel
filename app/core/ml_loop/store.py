@@ -119,6 +119,15 @@ ml_shadow_predictions = Table(
 TABLES: dict[str, Table] = {t.name: t for t in metadata.sorted_tables}
 
 
+def create_tables(bind: Any) -> None:
+    """Create any of the block's tables that do not exist yet (idempotent).
+
+    A host that runs migrations gets the same tables from its migration;
+    this is for a host without one (a local SQLite store, a Store deploy).
+    """
+    metadata.create_all(bind, checkfirst=True)
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
