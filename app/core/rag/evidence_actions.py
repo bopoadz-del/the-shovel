@@ -470,10 +470,13 @@ def _bill_rows_retrieve(
         if (maps and row_segments is not None) else ("", {})
     )
     if named or row_counts:
+        # ``sections`` is what the ask names; ``mapped`` is how many sections
+        # each bill's own headings gave, so an empty map is told apart from
+        # an ask that names no section.
         logger.info(
-            "rag_bill_section_trace item=%r sections=%s rows=%s",
+            "rag_bill_section_trace item=%r sections=%s mapped=%s rows=%s",
             (item or "")[:120], {d: sorted(n) for d, n in named.items()},
-            row_counts,
+            {d: len(m[0]) for d, m in maps.items()}, row_counts,
         )
     chunks_text = _budgeted_text(handed, presorted=True)
     status_text = _total_status_text(total_status, _handed_docs(handed))

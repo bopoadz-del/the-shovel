@@ -7700,10 +7700,13 @@ _BOQ_CURRENCY_ATOM = (
     r"(?:SAR|SR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR|EGP|CNY|INR|JPY|riyal[s]?)"
 )
 _BOQ_CURRENCY_PREFIX = rf"(?:{_BOQ_CURRENCY_ATOM}\s+)?"
+# Units are the bill's own column vocabulary: a weight column prints "t",
+# "tn", "ton(s)", "tonne(s)" or "kg", a count column "nr", "no." or "nos".
 _PRICED_BOQ_TRIPLE_RE = re.compile(
     r"(?i)(?P<qty>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
     r"\s+"
-    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|no\.?|item|sum|ls|m)\b"
+    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|nos|no\.?|item|sum|ls"
+    r"|tonnes?|tons?|tn|kg|t|m)\b"
     r"\s*[@]?\s*"
     + _BOQ_CURRENCY_PREFIX
     + r"(?P<rate>\d{1,3}(?:,\d{3})*(?:\.\d+)?)"
@@ -7722,7 +7725,8 @@ _PRICED_BOQ_TRIPLE_RE = re.compile(
 # the first order is: the caller only accepts qty × rate == amount.
 _PRICED_BOQ_TRIPLE_UNIT_FIRST_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9.])"
-    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|no\.?|item|sum|ls|ha|kg|t|m)"
+    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|nos|no\.?|item|sum|ls|ha|kg"
+    r"|tonnes?|tons?|tn|t|m)"
     r"\s*"
     r"(?P<qty>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
     r"\s+"

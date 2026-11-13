@@ -26,8 +26,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 #: A heading line: "Bill No. 4", "BILL NO 4 - EARTHWORKS", "Bill Number 12A".
+#: An OCR'd page prints the heading inside a table cell or after a stray
+#: mark ("|BILL NO. 4", "' BILL NO. 4") and can read the "O" of "NO" as a
+#: zero or its point as a comma: punctuation before the heading and those
+#: two misreads still make a heading. A letter or digit before it does not
+#: (that is a sentence or a row that mentions a bill).
 _HEADING_RE = re.compile(
-    r"^\s*bill\s*(?:no\.?|number|#)\s*(\d{1,3}[a-z]?)\b[\s.:\-–—/]*(.*)$",
+    r"^[\W_]*?bill\s*(?:n[o0][.,]?|number|#)\s*(\d{1,3}[a-z]?)\b"
+    r"[\s.:\-–—/|]*(.*)$",
     re.IGNORECASE,
 )
 #: The closing total row of a section: "carried to (the) (general) summary".
@@ -214,8 +220,10 @@ def in_named_span(
 #: The label of a row whose bill prints no section heading.
 UNKNOWN_SECTION = "[section unknown]"
 #: A compressed row keeps the end of its text: the figures and the
-#: description printed just above them.
-_ROW_MAX = 240
+#: description printed just above them. Room for a description wrapped over
+#: four lines plus its figures line, so the head of a wrapped description
+#: (where a bill names the item) is matched and listed with its figures.
+_ROW_MAX = 360
 #: A row's identity for deduplication: its last tokens (unit, qty, rate,
 #: amount and the description words printed just before them).
 _ROW_KEY_TOKENS = 8
@@ -261,13 +269,34 @@ def _row_owner(
     return current
 
 
+def _chunk_row_segments(row_segments, text: str, previous: str | None) -> list[str]:
+    """The rows whose figures ``text`` prints, each with its whole description.
+
+    A bill row wraps its description over several lines and prints its
+    figures on the last one, so a chunk boundary can fall inside a row: the
+    chunk then opens with the row's last description lines and figures while
+    its first lines sit at the end of the chunk before. With the adjacent
+    ``previous`` chunk the rows are read over both texts joined, and the rows
+    the previous chunk completes on its own are dropped (it lists them), so
+    the first row of ``text`` carries the description printed above it.
+    """
+    if not previous:
+        return list(row_segments(text))
+    own = len(row_segments(previous))
+    return list(row_segments(previous + "\n" + text))[own:]
+
+
 def _labelled_rows(chunks, sections, numbers, row_segments):
     """``[(label, compact row text)]`` of every priced row, in bill order."""
     rows: list[tuple[str, str]] = []
+    previous: tuple[int, str] | None = None
     for index, text in sorted(chunks, key=lambda p: p[0]):
         owners = sorted(sections_of(index, sections), key=lambda s: s.start)
         current = owners[0] if owners else None
-        for segment in row_segments(text):
+        # Only the chunk printed directly before this one continues into it.
+        adjacent = previous[1] if previous and previous[0] == index - 1 else None
+        previous = (index, text)
+        for segment in _chunk_row_segments(row_segments, text, adjacent):
             current = _row_owner(owners, segment, current)
             if numbers and (current is None or current.number not in numbers):
                 continue
