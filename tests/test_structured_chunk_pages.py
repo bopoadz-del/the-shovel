@@ -127,24 +127,34 @@ def test_whole_document_path_pages_structured_chunks(
     assert _table_pages(chunks, pages) == expected
 
 
-def test_stage_pages_of_the_wrong_length_give_no_attribution():
-    assert doc_index._aligned_pages([3, 7], 2) == [3, 7]
-    assert doc_index._aligned_pages([3], 2) == [None, None]
-    assert doc_index._aligned_pages([], 3) == [None, None, None]
+@pytest.mark.parametrize(
+    "pages, n, expected",
+    [
+        ([3, 7], 2, [3, 7]),
+        ([3], 2, [None, None]),
+        ([], 3, [None, None, None]),
+        ([4, 5, 6], 2, [None, None]),
+    ],
+)
+def test_stage_pages_of_the_wrong_length_give_no_attribution(pages, n, expected):
+    assert doc_index._aligned_pages(pages, n) == expected
 
 
-def test_stage_that_reports_no_pages_pads_with_none(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "stage_chunks",
+    [["DRAWING TABLE x", "DRAWING TABLE y"], ["DRAWING TABLE z"]],
+)
+def test_stage_that_reports_no_pages_pads_with_none(tmp_path, monkeypatch, stage_chunks):
     """A drawing stage replaced by one that fills no page list (as the BOQ and
     spreadsheet stages have no page) keeps its chunks with page None."""
     monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(
-        doc_index, "_drawing_chunks_for_document",
-        lambda *a, **k: ["DRAWING TABLE x", "DRAWING TABLE y"],
+        doc_index, "_drawing_chunks_for_document", lambda *a, **k: list(stage_chunks),
     )
     path = _pdf(tmp_path / DRAWING, 2, set(), title=False)
     chunks, _attrs, pages = doc_index._structured_stage(path, DRAWING, ".pdf", "p1")
-    assert chunks == ["DRAWING TABLE x", "DRAWING TABLE y"]
-    assert pages == [None, None]
+    assert chunks == stage_chunks
+    assert pages == [None] * len(stage_chunks)
 
 
 @pytest.mark.parametrize(
