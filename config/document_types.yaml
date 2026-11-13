@@ -26,7 +26,7 @@ document_types:
   - name: boq
     description: Bill of quantities / cost breakdown
     match:
-      filename: ["boq", "bill of quant", "pricing", "cost plan"]
+      filename: ["boq", "bill of quant", "bill of quantities", "bills of quantities", "bill", "pricing", "cost plan"]
       extensions: []
       content: ["bill of quantities", "unit rate", "provisional sum", "preliminaries"]
     expected_fields: ["boq_total"]
@@ -69,7 +69,7 @@ document_types:
   - name: photo
     description: Site photographs
     match:
-      filename: ["photo", "site", "img", "image"]
+      filename: ["photo", "img", "image"]
       extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif"]
       content: []
     expected_fields: []
@@ -85,7 +85,31 @@ document_types:
   - name: report
     description: Progress / inspection / site reports
     match:
-      filename: ["report", "daily", "weekly", "minutes"]
+      filename: ["report", "daily", "weekly"]
       extensions: []
       content: ["progress", "site instruction", "weather", "manpower"]
+    expected_fields: []
+
+  - name: minutes
+    description: Minutes of meeting
+    match:
+      filename: ["minutes", "mom", "meeting"]
+      extensions: []
+      content: ["attendees", "action by", "next meeting", "apologies"]
+    expected_fields: []
+
+  - name: correspondence
+    description: Letters, memos, transmittals
+    match:
+      filename: ["letter", "correspondence", "memo", "transmittal"]
+      extensions: [".msg", ".eml"]
+      content: ["dear sir", "yours faithfully", "yours sincerely"]
+    expected_fields: []
+
+  - name: template
+    description: Blank templates and forms
+    match:
+      filename: ["template", "blank form"]
+      extensions: [".dotx", ".xltx"]
+      content: []
     expected_fields: []

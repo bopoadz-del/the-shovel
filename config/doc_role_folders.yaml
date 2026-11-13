@@ -1,0 +1,18 @@
+# Folder name -> document role (RQ-3).
+#
+# A document's role is taken from the NEAREST folder in its source path
+# (metadata drive_path) whose name is listed here. Matching is
+# case-insensitive and whitespace-collapsed. Roles must be one of the
+# vocabulary in app/core/doc_typing.FOLDER_ROLES; an unknown role is ignored.
+#
+# Override without a redeploy: DOC_ROLE_FOLDERS_FILE=<path to a yaml like
+# this one>, or DOC_ROLE_FOLDERS='{"<folder>": "<role>", ...}' (JSON).
+# This default is the owner's Drive taxonomy (advisor order 19:50Z, 13 Nov).
+
+folder_roles:
+  "Contract docs SIGNED": contract
+  "Contract docs NOT SIGNED": draft
+  "ITT": tender
+  "LOA": award
+  "Reporting": reporting
+  "Design": design
