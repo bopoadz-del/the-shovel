@@ -19,6 +19,98 @@ from .schedule import ConstructionScheduleMixin
 logger = logging.getLogger(__name__)
 
 
+
+# ── title block: one (label, value) pair per field ───────────────────────────
+# The same-line pattern is `label + _TB_SEP + value`; the next-line reading
+# (label alone on its line, value alone on the next) reuses both halves, so
+# the two layouts can never disagree on what a field looks like.
+_TB_SEP = r"[ \t]*[:\-.]?[ \t]*"
+_TITLE_BLOCK_FIELDS: Dict[str, Tuple[str, str]] = {
+    "drawing_number": (
+        r"(?:DRAWING|DWG|SHEET)[ \t]*(?:NO\.?|NUMBER|#)",
+        r"([A-Z0-9][A-Z0-9\-_/\.]{3,})",
+    ),
+    "drawing_title": (
+        r"(?:DRAWING[ \t]*TITLE|SHEET[ \t]*TITLE|TITLE)",
+        r"([^\r\n]{3,80})",
+    ),
+    "revision": (
+        r"\bREV(?:ISION)?\.?(?:[ \t]*NO\.?)?",
+        r"([A-Z]?\d{1,2}[A-Z]?|[A-Z])(?=[ \t]*$|\W)",
+    ),
+    "scale": (
+        r"\bSCALE",
+        r"(1[ \t]*:[ \t]*\d{1,5}|N\.?T\.?S\.?|NOT[ \t]*TO[ \t]*SCALE|AS[ \t]*SHOWN)",
+    ),
+    "date": (
+        r"\bDATE",
+        r"(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})",
+    ),
+    # `(?:[ \t]*BY)?` must be greedy and inside the label, not a separate
+    # alternative: with `(?:DRAWN|DRAWN[ \t]*BY)` the regex takes the shorter
+    # branch first and captures "BY" as the name.
+    "drawn_by": (
+        r"\b(?:DRAWN|DRAFTED|DES(?:IGNED)?)(?:[ \t]*BY)?",
+        r"([A-Z][A-Za-z0-9 .&'\-]{1,40})",
+    ),
+    "checked_by": (
+        r"\bCHECKED(?:[ \t]*BY)?",
+        r"([A-Z][A-Za-z0-9 .&'\-]{1,40})",
+    ),
+    "approved_by": (
+        r"\b(?:APPROVED|AUTHORISED|AUTHORIZED)(?:[ \t]*BY)?",
+        r"([A-Z][A-Za-z0-9 .&'\-]{1,40})",
+    ),
+    "project_name": (
+        r"\bPROJECT[ \t]*(?:NAME|TITLE)?",
+        r"([^\r\n]{3,80})",
+    ),
+    "client": (
+        r"\b(?:CLIENT|EMPLOYER|OWNER)",
+        r"([^\r\n]{3,80})",
+    ),
+    "sheet_number": (
+        r"\b(?:SHEET|SH\.?)",
+        r"(\d{1,3}[ \t]*(?:OF|/)[ \t]*\d{1,3})",
+    ),
+}
+# A label read as a value: "DRAWING NO." followed by "TITLE" on one line.
+_TB_LABEL_WORD = re.compile(r"(?i)(no|title|by|date|rev|scale)\.?")
+# A line that OPENS with any title-block label is a label line, never a value.
+_TB_ANY_LABEL_LEAD = re.compile(
+    r"[ \t]*(?:" + "|".join(lbl for lbl, _ in _TITLE_BLOCK_FIELDS.values())
+    + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _title_block_next_line_value(text: str, label: str, value_re: str) -> Optional[str]:
+    """The value of a label that stands ALONE on its line, read from the next
+    non-empty line; the LAST such pair wins (title blocks end the stream).
+
+    The next line is accepted only when it is not itself a label line and
+    fully matches the field's value shape, so an empty `DRAWN BY:` followed
+    by `CHECKED BY:` stays None instead of naming a drafter.
+    """
+    lines = [ln.strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    bare = re.compile(r"[ \t]*" + label + r"[ \t]*[:\-.#]?[ \t]*", re.IGNORECASE)
+    value_full = re.compile(value_re + r"[ \t]*", re.IGNORECASE)
+    found: Optional[str] = None
+    for i in range(len(lines) - 1):
+        if not bare.fullmatch(lines[i]):
+            continue
+        nxt = lines[i + 1]
+        if _TB_ANY_LABEL_LEAD.match(nxt):
+            continue
+        m = value_full.fullmatch(nxt)
+        if not m:
+            continue
+        value = m.group(1).strip(" :-.\t")
+        if value and not _TB_LABEL_WORD.fullmatch(value):
+            found = value
+    return found
+
 class ConstructionContainer(
     ConstructionDocumentsMixin,
     ConstructionBoqMixin,
@@ -887,36 +979,21 @@ class ConstructionContainer(
 
         # Title blocks sit at the end of a CAD text stream far more often than
         # the start, so prefer the LAST match of each label.
-        # DELIBERATE LIMITATION, and the reason every separator below is
-        # `[ \t]*` and never `\s*`: a value is only read from the SAME LINE as
-        # its label. Some CAD title blocks do put the value on the next line,
-        # and those are missed here — but allowing the gap to cross a newline
-        # makes `DRAWN BY:` (empty) capture the following `CHECKED BY` label as
-        # the drafter's name, which is a fabricated field on a client drawing.
-        # Missing a field is recoverable; inventing one is not.
-        patterns = {
-            "drawing_number": r"(?:DRAWING|DWG|SHEET)[ \t]*(?:NO\.?|NUMBER|#)[ \t]*[:\-.]?[ \t]*([A-Z0-9][A-Z0-9\-_/\.]{3,})",
-            "drawing_title": r"(?:DRAWING[ \t]*TITLE|SHEET[ \t]*TITLE|TITLE)[ \t]*[:\-.]?[ \t]*([^\r\n]{3,80})",
-            "revision": r"\bREV(?:ISION)?\.?[ \t]*(?:NO\.?)?[ \t]*[:\-.]?[ \t]*([A-Z]?\d{1,2}[A-Z]?|[A-Z])(?=[ \t]*$|\W)",
-            "scale": r"\bSCALE[ \t]*[:\-.]?[ \t]*(1[ \t]*:[ \t]*\d{1,5}|N\.?T\.?S\.?|NOT[ \t]*TO[ \t]*SCALE|AS[ \t]*SHOWN)",
-            "date": r"\bDATE[ \t]*[:\-.]?[ \t]*(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})",
-            # `(?:[ \t]*BY)?` must be greedy and inside the label, not a
-            # separate alternative: with `(?:DRAWN|DRAWN[ \t]*BY)` the regex
-            # takes the shorter branch first and captures "BY" as the name.
-            "drawn_by": r"\b(?:DRAWN|DRAFTED|DES(?:IGNED)?)(?:[ \t]*BY)?[ \t]*[:\-.]?[ \t]*([A-Z][A-Za-z0-9 .&'\-]{1,40})",
-            "checked_by": r"\bCHECKED(?:[ \t]*BY)?[ \t]*[:\-.]?[ \t]*([A-Z][A-Za-z0-9 .&'\-]{1,40})",
-            "approved_by": r"\b(?:APPROVED|AUTHORISED|AUTHORIZED)(?:[ \t]*BY)?[ \t]*[:\-.]?[ \t]*([A-Z][A-Za-z0-9 .&'\-]{1,40})",
-            "project_name": r"\bPROJECT[ \t]*(?:NAME|TITLE)?[ \t]*[:\-.]?[ \t]*([^\r\n]{3,80})",
-            "client": r"\b(?:CLIENT|EMPLOYER|OWNER)[ \t]*[:\-.]?[ \t]*([^\r\n]{3,80})",
-            "sheet_number": r"\b(?:SHEET|SH\.?)[ \t]*[:\-.]?[ \t]*(\d{1,3}[ \t]*(?:OF|/)[ \t]*\d{1,3})",
-        }
-        for field, pattern in patterns.items():
-            matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            if not matches:
-                continue
-            value = matches[-1].group(1).strip(" :-.\t")
-            # A label immediately followed by the next label read as a value.
-            if value and not re.fullmatch(r"(?i)(no|title|by|date|rev|scale)\.?", value):
+        # Every separator is `[ \t]*` and never `\s*`: a same-line value never
+        # reaches across a newline, because that makes `DRAWN BY:` (empty)
+        # capture the following `CHECKED BY` label as the drafter's name.
+        # CAD-generated PDFs, however, usually emit the label and its value as
+        # separate text runs, i.e. on separate lines. That layout is read by
+        # `_title_block_next_line_value`, which accepts the next line only
+        # when it is not itself a label and fully matches the field's value
+        # shape. Missing a field is recoverable; inventing one is not.
+        for field, (label, value_re) in _TITLE_BLOCK_FIELDS.items():
+            same_line = label + _TB_SEP + value_re
+            matches = list(re.finditer(same_line, text, re.IGNORECASE))
+            value = matches[-1].group(1).strip(" :-.\t") if matches else None
+            if not value or _TB_LABEL_WORD.fullmatch(value):
+                value = _title_block_next_line_value(text, label, value_re)
+            if value:
                 result[field] = value
                 result["fields_found"] += 1
 

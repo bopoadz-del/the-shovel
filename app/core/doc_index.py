@@ -3274,6 +3274,46 @@ def drawing_schedule_status(document: dict[str, Any] | None) -> dict[str, Any] |
     return dict(attr) if isinstance(attr, dict) else None
 
 
+# Where a title block sits on a sheet: a band along the bottom edge or a strip
+# down the right edge (fractions of the page, so any sheet size works). The
+# crop keeps drawing-zone notes such as "SCALE 1:20" on a detail callout from
+# being read as the sheet's own fields.
+_TITLE_BLOCK_REGIONS: tuple[tuple[float, float, float, float], ...] = (
+    (0.0, 0.70, 1.0, 1.0),   # bottom band
+    (0.70, 0.0, 1.0, 1.0),   # right strip
+)
+
+
+def _sheet_title_block(container: Any, page: Any, raw: str) -> dict[str, Any]:
+    """The title block of one sheet: each title-block region is read, then
+    the whole page, and the reading with the most fields wins (a region wins
+    a tie). A page the reader cannot crop is read from its whole text."""
+    candidates: list[str] = []
+    rect = getattr(page, "rect", None)
+    if rect is not None:
+        import fitz  # PyMuPDF
+
+        for fx0, fy0, fx1, fy1 in _TITLE_BLOCK_REGIONS:
+            clip = fitz.Rect(
+                rect.x0 + rect.width * fx0, rect.y0 + rect.height * fy0,
+                rect.x0 + rect.width * fx1, rect.y0 + rect.height * fy1,
+            )
+            try:
+                candidates.append(page.get_text("text", clip=clip) or "")
+            except Exception:
+                _logging.getLogger(__name__).warning(
+                    "title-block region unreadable on a page; whole page used",
+                    exc_info=True,
+                )
+    candidates.append(raw)
+    best: dict[str, Any] = {}
+    for text in candidates:
+        reading = container._extract_title_block({"raw_text": text})
+        if not best or reading.get("fields_found", 0) > best.get("fields_found", 0):
+            best = reading
+    return best
+
+
 def _drawing_chunks_for_document(
     file_path: str,
     filename: str,
@@ -3317,24 +3357,29 @@ def _drawing_chunks_for_document(
                     raw = page.get_text() or ""
                     if raw.strip():
                         pages_with_text += 1
+                    # Every sheet carries its own title block: a drawings
+                    # volume is many sheets, and its first page is usually a
+                    # cover or drawing list, so reading page 0 alone left
+                    # every other sheet with no identity.
+                    title_block = _sheet_title_block(container, page, raw)
+                    sheet_source = title_block.get("drawing_number") or ""
                     if page_num == 0:
-                        # The title block is on sheet 1 and names the drawing, so
-                        # every chunk below can be attributed to it.
-                        title_block = container._extract_title_block({"raw_text": raw})
-                        source = title_block.get("drawing_number") or ""
-                        if title_block.get("fields_found"):
-                            named = ", ".join(
-                                f"{k.replace('_', ' ')}: {v}"
-                                for k, v in title_block.items()
-                                if k != "fields_found" and v
-                            )
-                            out.append(
-                                f"DRAWING TITLE BLOCK — {filename}. "
-                                f"Sheet identity: {named}."
-                            )
+                        # Sheet 1's number is the document's fallback for a
+                        # page whose own title block is unreadable.
+                        source = sheet_source
+                    if title_block.get("fields_found"):
+                        named = ", ".join(
+                            f"{k.replace('_', ' ')}: {v}"
+                            for k, v in title_block.items()
+                            if k != "fields_found" and v
+                        )
+                        out.append(
+                            f"DRAWING TITLE BLOCK — {filename}, page {page_num + 1}. "
+                            f"Sheet identity: {named}."
+                        )
                     table_chunks = _drawing_table_chunks(
                         container._extract_tables_advanced(page),
-                        source or os.path.splitext(filename or "")[0],
+                        sheet_source or source or os.path.splitext(filename or "")[0],
                     )
                     tables_read += len(table_chunks)
                     out.extend(table_chunks)
