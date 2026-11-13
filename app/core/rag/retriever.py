@@ -212,9 +212,8 @@ ATTACHED_MARKER_RE = re.compile(
 
 
 def strip_attachment_markers(text: str) -> str:
-    """``text`` with every ``[attached: ...]`` segment removed."""
-    if not text:
-        return text or ""
+    """``text`` with every ``[attached: ...]`` segment removed. ``text`` is a
+    string; the empty/None entry guard lives in the caller."""
     return ATTACHED_MARKER_RE.sub(" ", text)
 
 
@@ -238,9 +237,9 @@ def extract_query_identifiers(query: str) -> List[str]:
     Returns a deduplicated list of lowercase identifier strings. The list
     is empty for queries that contain no identifier-like tokens.
     """
-    query = strip_attachment_markers(query)
-    if not query.strip():
+    if not query:
         return []
+    query = strip_attachment_markers(query)
 
     # OCR / CESMM print ``D 549.2``; compact that before the token regexes
     # so a spaced code extracts as ``d549.2`` (WAVE 2 B5). The original

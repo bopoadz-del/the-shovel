@@ -46,6 +46,24 @@ def test_attachment_marker_yields_no_identifier(message):
     assert strip_attachment_markers(message).strip() == ""
 
 
+@pytest.mark.parametrize("empty", [None, ""])
+def test_missing_message_yields_no_identifier(empty):
+    assert extract_query_identifiers(empty) == []
+
+
+@pytest.mark.parametrize(
+    "message,kept",
+    [
+        ("Check RFI-4417 [attached: 5512.pdf] please", "RFI-4417"),
+        ("[attached: a.jpg | observations: wet floor] grid C4 status", "grid C4"),
+    ],
+)
+def test_strip_keeps_the_text_around_markers(message, kept):
+    out = strip_attachment_markers(message)
+    assert kept in out
+    assert "attached" not in out
+
+
 @pytest.mark.parametrize("message", ATTACHMENT_ONLY)
 def test_attachment_only_turn_is_not_short_circuited(message):
     audit = _miss_audit(message)
