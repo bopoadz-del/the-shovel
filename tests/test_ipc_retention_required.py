@@ -89,6 +89,20 @@ def test_payment_uses_the_given_rate(certified, rate, held, net):
     assert r["retention_rate_pct"] == pytest.approx(rate * 100)
 
 
+@pytest.mark.parametrize("gross, pct", [(-1, 10), (-250_000, 5)])
+def test_interim_payment_negative_gross_is_refused_whatever_the_rate(gross, pct):
+    out = calculate_interim_payment(gross, pct)
+    assert "gross_valuation" in out["error"]
+    assert "net_payment" not in out
+
+
+@pytest.mark.parametrize("claimed, certified", [(-1, 900), (1_000, -5)])
+def test_payment_negative_amount_is_refused_whatever_the_rate(claimed, certified):
+    out = calculate_payment(claimed, certified, 0.05)
+    assert "must be >= 0" in out["error"]
+    assert "net_payment_due" not in out
+
+
 @pytest.mark.parametrize("fn, args, key", [
     (calculate_interim_payment, (100_000, 150), "retention_percent"),
     (calculate_payment, (1_000, 900, 1.5), "retention_rate"),
