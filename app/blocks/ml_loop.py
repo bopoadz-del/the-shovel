@@ -85,6 +85,11 @@ class MLLoopBlock(UniversalBlock):
         return await self.process({"operation": operation, "payload": payload or {}})
 
     async def process(self, input_data: Any, params: dict | None = None) -> dict[str, Any]:
+        return self.dispatch(input_data, params)
+
+    def dispatch(self, input_data: Any, params: dict | None = None) -> dict[str, Any]:
+        """Synchronous twin of :meth:`process` for sync host adapters. The
+        store is synchronous, so both entry points run the same code."""
         params = params or {}
         data = input_data if isinstance(input_data, dict) else {}
         operation = data.get("operation") or params.get("operation") or "status"
@@ -227,3 +232,26 @@ class MLLoopBlock(UniversalBlock):
     def _error(operation: Any, message: str, **extra: Any) -> dict[str, Any]:
         logger.info("%serror op=%s %s", LOG_PREFIX, operation, message)
         return {"status": "error", "operation": operation, "error": message, **extra}
+
+
+_shared_block: MLLoopBlock | None = None
+_shared_lock = threading.Lock()
+
+
+def record(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Host adapters' one entry point: run ``operation`` on a shared block.
+
+    Never raises. A host write (a dataset turn, a correction) must not fail
+    because the learning loop did; a failure is logged and returned as an
+    ``error`` result.
+    """
+    global _shared_block
+    try:
+        with _shared_lock:
+            if _shared_block is None:
+                _shared_block = MLLoopBlock()
+            block = _shared_block
+        return block.dispatch({"operation": operation, "payload": payload})
+    except Exception as exc:  # noqa: BLE001 -- the loop must never break its host
+        logger.exception("%srecord_failed op=%s", LOG_PREFIX, operation)
+        return {"status": "error", "operation": operation, "error": str(exc)}

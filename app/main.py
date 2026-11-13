@@ -235,6 +235,7 @@ async def lifespan(app: FastAPI):
     # instance before the app ever served a request.
     from app.core.hydration_store import init_db as init_hydration_db
     init_hydration_db()
+    _configure_ml_loop()
     from app.core import rate_limit as _rate_limit_startup
     logger.info("Rate limiter backend: %s", _rate_limit_startup.init_rate_limiter())
     from app.core.session_store import get_session_store
@@ -398,6 +399,31 @@ def _check_embedder_identity() -> None:
     embedder and reads one row, so it must not be inline in lifespan."""
     from app.core.rag import vector_store
     vector_store.run_boot_identity_check()
+
+
+def _configure_ml_loop() -> None:
+    """Give the ML loop block its ONE session factory (ML-1).
+
+    Its tables come from the Alembic series (0034) under Postgres and from
+    ``create_tables`` on a database without migrations (local SQLite). If
+    that fails the block stays ``not_configured``: it stores nothing and
+    the app boots.
+    """
+    from app.blocks.ml_loop import MLLoopBlock
+    from app.core.db import SessionLocal, get_engine
+    from app.core.ml_loop.settings import MLLoopSettings
+    from app.core.ml_loop.store import create_tables
+
+    try:
+        create_tables(get_engine())
+    except Exception:  # noqa: BLE001 -- a failed learning store must not stop boot
+        logger.exception("ml_loop_tables_unavailable; block stays not_configured")
+        MLLoopBlock.configure(MLLoopSettings.from_env(session_factory=None))
+        return
+    settings = MLLoopSettings.from_env(session_factory=SessionLocal)
+    MLLoopBlock.configure(settings)
+    logger.info("ml_loop_configured enabled=%s build_sha=%s",
+                settings.enabled, settings.build_sha)
 
 
 async def _warm_models() -> None:
