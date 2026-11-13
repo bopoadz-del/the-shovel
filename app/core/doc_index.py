@@ -2689,8 +2689,10 @@ def index_project(
         boq_chunks = _boq_chunks_for_document(
             file_path, filename, ext, project_id, doc_attrs,
         )
+        from app.core.chunk_bounds import bound_chunks
+
         if boq_chunks:
-            chunks = chunks + boq_chunks
+            chunks = chunks + bound_chunks(boq_chunks)
         # Drawing → RAG: same mirroring rule as the BOQ hook. Both indexing
         # paths must append these or a schedule is retrievable after one kind
         # of ingest and invisible after the other.
@@ -2699,7 +2701,7 @@ def index_project(
         )
         _record_document_attributes(doc["id"], doc_attrs)
         if drawing_chunks:
-            chunks = chunks + drawing_chunks
+            chunks = chunks + bound_chunks(drawing_chunks)
         meta["chunk_pages"] = pages + [None] * (len(chunks) - len(pages))
         chunks = _normalize_cesmm_in_chunks(chunks)
         _record_stage_split(meta, text_chunk_count, len(chunks) - text_chunk_count)
@@ -3731,6 +3733,7 @@ def _text_chunks_with_pages(
 ) -> tuple[list[str], list[int | None]]:
     """Chunk extracted text; give each chunk the page its text starts on."""
     from app.core import chunk_noise
+    from app.core.chunk_bounds import bound_chunks
 
     page_starts = meta.pop("page_starts", None)
     refused: dict[str, int] = {}
@@ -3739,7 +3742,12 @@ def _text_chunks_with_pages(
         # row is structure, not content (RQ-1). Sheets carry no page starts,
         # so editing the text cannot misplace a page.
         text, refused = chunk_noise.clean_table_text(text)
-    chunks = chunk_extracted_document(text, chunker=chunker, filename=filename)
+    # Bounds first, pages second: each bounded chunk is located on its own.
+    bounds: dict[str, Any] = {}
+    chunks = bound_chunks(
+        chunk_extracted_document(text, chunker=chunker, filename=filename), bounds,
+    )
+    meta["chunk_bounds"] = bounds
     pages = chunk_start_pages(text, page_starts, chunks)
     chunks, pages, dropped = chunk_noise.refuse_chunks(chunks, pages)
     _record_refused(meta, refused, dropped)
@@ -3786,8 +3794,9 @@ def _structured_stage(
         file_path, filename, ext, project_id, attrs,
     )
     from app.core import chunk_noise
+    from app.core.chunk_bounds import bound_chunks
 
-    chunks, _, _ = chunk_noise.refuse_chunks(chunks)
+    chunks, _, _ = chunk_noise.refuse_chunks(bound_chunks(chunks))
     return chunks, attrs
 
 

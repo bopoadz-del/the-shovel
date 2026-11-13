@@ -1,0 +1,81 @@
+name: chunk-bounds-plan
+
+# Ops workflow (Advisor 19:50Z, 13 Nov, RQ-2): PLAN ONLY. Calls
+# GET /v1/admin/corpus/chunk-bounds on the live deployment and prints how many
+# stored chunks are outside the chunk floor/ceiling, plus PDF chunks without
+# a page and PDF documents without pages_in_file. It writes nothing; the
+# re-chunk of existing chunks is a later, separately ordered run.
+# Credentials step is the same as document-exclude.yml / noise-chunk-purge.yml.
+# project_id has NO committed default.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project to report (no default committed)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Chunk bounds plan (live, read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
+      - name: Plan (read-only)
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/corpus/chunk-bounds?project_id=$(enc "$PROJECT_ID")"
+          echo "GET ${url}"
+          curl --fail-with-body --max-time 600 -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" -H "Accept: application/json" -o plan.json -w "HTTP %{http_code}\n" "${url}"
+          jq '.' plan.json
+          {
+            echo "### Chunk bounds plan (read-only)"
+            echo "- length: $(jq -c '.length' plan.json)"
+            echo "- PDF documents: $(jq -r '.pdf_documents' plan.json), without pages_in_file: $(jq -r '.pdf_documents_without_pages_in_file' plan.json)"
+            echo "- PDF chunks: $(jq -r '.pdf_chunks' plan.json), without page: $(jq -r '.pdf_chunks_without_page' plan.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload response
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-bounds-plan-response
+          path: plan.json
+          if-no-files-found: ignore
+          retention-days: 7
