@@ -120,3 +120,14 @@ def test_row_chunker_refuses_all_zero_row(tmp_path, row, ext, emitted):
     _write_xlsx(path, [["Description", "Quantity", "Rate", "Amount"], row])
     chunks = doc_index._spreadsheet_row_chunks(str(path), "w" + ext, ext)
     assert bool(chunks) is emitted
+
+
+@pytest.mark.parametrize("ext, opened", [(".pdf", False), (".xlsx", True)])
+def test_row_chunker_opens_only_spreadsheets(tmp_path, caplog, ext, opened):
+    # Bytes no workbook reader accepts: a spreadsheet extension is attempted
+    # (and its failure logged); any other extension is never opened.
+    path = tmp_path / ("x" + ext)
+    path.write_bytes(b"%PDF-1.4 not a workbook")
+    with caplog.at_level("WARNING"):
+        assert doc_index._spreadsheet_row_chunks(str(path), path.name, ext) == []
+    assert ("spreadsheet row wiring skipped" in caplog.text) is opened
