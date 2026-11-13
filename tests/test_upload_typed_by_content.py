@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.core import upload_limits as ul
 from app.main import app
+from app.routers import chat_photos
 from tests._dev_key import DEV_KEY
 
 H = {"Authorization": "Bearer " + DEV_KEY}
@@ -183,3 +184,54 @@ def test_photo_route_types_by_content(client, name, data, detail):
     )
     assert r.status_code == 400, r.text
     assert r.json()["detail"].startswith(detail)
+
+
+def _photo_path():
+    for route in app.routes:
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is not None and (endpoint.__module__, endpoint.__qualname__) == (
+            chat_photos.__name__, chat_photos.analyze_chat_photo.__qualname__,
+        ):
+            return route.path
+    raise AssertionError("analyze_chat_photo is not routed")
+
+
+class _CountingImageBlock:
+    """Stands in for the image block: reports a fixed person count."""
+
+    def __init__(self, persons):
+        self.persons = persons
+        self.paths = []
+
+    async def execute(self, inputs, params):
+        self.paths.append(inputs["file_path"])
+        return {"result": {"summary_by_class": {"person": self.persons}, "safety_qaqc": []}}
+
+
+@pytest.mark.parametrize(
+    "multipart_name,display_name,data,persons,typed,observation",
+    [
+        ("Photo from شادي \U0001F1F8\U0001F1E6", None, JPEG, 2,
+         "Photo from شادي \U0001F1F8\U0001F1E6.jpg", "2 people visible"),
+        ("Photo_from_Chadi", "Photo from شادي", PNG, 1,
+         "Photo from شادي.png", "1 person visible"),
+    ],
+)
+def test_extensionless_photo_is_analysed_by_content(
+    client, monkeypatch, multipart_name, display_name, data, persons, typed, observation,
+):
+    block = _CountingImageBlock(persons)
+    monkeypatch.setattr("app.dependencies.get_block_instance", lambda name: block)
+    form = {"display_name": display_name} if display_name else {}
+    r = client.post(
+        _photo_path(),
+        files={"file": (multipart_name, data, "application/octet-stream")},
+        data=form,
+        headers=H,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["filename"] == typed
+    assert body["observations"] == [observation]
+    assert body["person_count"] == persons
+    assert len(block.paths) == 1 and block.paths[0].endswith(typed[-4:])
