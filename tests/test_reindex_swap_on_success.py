@@ -89,9 +89,10 @@ def test_failed_reextraction_keeps_a_working_index(world, stamp_as_indexed):
     assert _stored(pid, doc["id"]) == held
 
 
-def test_failed_extraction_without_an_index_is_still_zero_chunk(world):
+@pytest.mark.parametrize("body", [b"", b"   \n\t  \n\n   "])
+def test_failed_extraction_without_an_index_is_still_zero_chunk(world, body):
     projects, doc_index, pid, tmp_path = world
-    doc, _path = _doc(projects, pid, tmp_path, "empty.txt", b"")
+    doc, _path = _doc(projects, pid, tmp_path, "empty.txt", body)
 
     result = doc_index.index_document(pid, doc["id"], stamp_as_indexed=True)
 
@@ -103,18 +104,28 @@ def test_failed_extraction_without_an_index_is_still_zero_chunk(world):
     assert _stored(pid, doc["id"]) == 0
 
 
-def test_a_row_in_a_no_chunk_status_does_not_count_as_an_index(world):
+@pytest.mark.parametrize(
+    ("failed_status", "stale_count"),
+    [("EXTRACT_FAILED", 7), ("UNSUPPORTED_TYPE", 42), ("ZERO_CHUNK", 1)],
+)
+def test_a_row_in_a_no_chunk_status_does_not_count_as_an_index(
+    world, failed_status, stale_count,
+):
+    from app.core.ingest_status import NO_CHUNK_STATUSES
+
+    assert failed_status in NO_CHUNK_STATUSES
     projects, doc_index, pid, tmp_path = world
     doc, path = _doc(projects, pid, tmp_path, "gone.txt", _text("beta", 300))
     doc_index.index_document(pid, doc["id"], stamp_as_indexed=True)
     # A stale chunk_count on a failed row is not a working index.
     projects.stamp_document_index(
-        doc["id"], chunk_count=0, ingest_status="EXTRACT_FAILED",
+        doc["id"], chunk_count=0, ingest_status=failed_status,
     )
-    stale = dict(projects.get_document(doc["id"]), chunk_count=7)
+    assert _stored(pid, doc["id"]) == 0
+    stale = dict(projects.get_document(doc["id"]), chunk_count=stale_count)
     assert doc_index._prior_retrievable_chunks(stale) == 0  # noqa: SLF001
     indexed = dict(stale, ingest_status="INDEXED")
-    assert doc_index._prior_retrievable_chunks(indexed) == 7  # noqa: SLF001
+    assert doc_index._prior_retrievable_chunks(indexed) == stale_count  # noqa: SLF001
 
     _rewrite(path, b"")
     result = doc_index.index_document(pid, doc["id"], stamp_as_indexed=True)
@@ -122,17 +133,24 @@ def test_a_row_in_a_no_chunk_status_does_not_count_as_an_index(world):
     assert projects.get_document(doc["id"])["ingest_status"] == "ZERO_CHUNK"
 
 
-def test_successful_reextraction_still_swaps_the_chunks(world):
+@pytest.mark.parametrize(("first_n", "second_n"), [(900, 150), (150, 900)])
+def test_successful_reextraction_still_swaps_the_chunks(world, first_n, second_n):
     projects, doc_index, pid, tmp_path = world
-    doc, path = _doc(projects, pid, tmp_path, "spec.txt", _text("gamma", 900))
+    doc, path = _doc(projects, pid, tmp_path, "spec.txt", _text("gamma", first_n))
     doc_index.index_document(pid, doc["id"], stamp_as_indexed=True)
     held = _stored(pid, doc["id"])
+    assert held > 0
 
-    _rewrite(path, _text("delta", 150))
+    _rewrite(path, _text("delta", second_n))
     result = doc_index.index_document(pid, doc["id"], stamp_as_indexed=True)
 
     assert result.get("status") != "error"
     assert "chunks_kept" not in result
     now = _stored(pid, doc["id"])
-    assert 0 < now < held
-    assert projects.get_document(doc["id"])["chunk_count"] == now
+    # The new extraction replaced the old chunks: the count follows the new
+    # text in whichever direction it moved, and the row agrees with the store.
+    assert now > 0
+    assert (now < held) if second_n < first_n else (now > held)
+    row = projects.get_document(doc["id"])
+    assert row["chunk_count"] == now
+    assert row["ingest_status"] not in ("ZERO_CHUNK", "EXTRACT_FAILED")
