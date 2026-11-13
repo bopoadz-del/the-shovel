@@ -391,9 +391,9 @@ class BOQProcessorBlock(UniversalBlock):
         aliasing in ``_resolve_columns`` works for any BOQ table format.
 
         Returns the standard BOQ result (item_count, total_cost, line_items,
-        cost_breakdown). If no usable table is found, the result says what the
-        parser saw (pages read, tables found, pages with a text layer) rather
-        than guessing how the file was made.
+        cost_breakdown). If no extractable tables are found (e.g. a pure-image
+        scanned PDF that wasn't OCR'd first), surfaces a clear error pointing
+        to that limitation.
         """
         # ── memory guard ────────────────────────────────────────────────
         # pdfplumber loads the entire PDF and builds every page's table grid
