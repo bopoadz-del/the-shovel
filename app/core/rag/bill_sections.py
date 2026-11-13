@@ -22,7 +22,7 @@ Nothing here names a project, a document, a bill number or a bill title.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 #: A heading line: "Bill No. 4", "BILL NO 4 - EARTHWORKS", "Bill Number 12A".
@@ -209,15 +209,3 @@ def in_named_span(
     """True when chunk ``index`` lies inside a section numbered in ``numbers``."""
     wanted = set(numbers)
     return any(s.number in wanted for s in sections_of(index, sections))
-
-
-def maps_by_doc(
-    chunks_by_doc: Mapping[str, Iterable[tuple[int, str]]],
-) -> dict[str, list[BillSection]]:
-    """``{doc_id: section map}`` for the documents that print headings."""
-    out: dict[str, list[BillSection]] = {}
-    for doc_id, chunks in chunks_by_doc.items():
-        sections = section_map(chunks)
-        if sections:
-            out[doc_id] = sections
-    return out

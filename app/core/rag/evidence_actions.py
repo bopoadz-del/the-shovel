@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache, partial
+from types import SimpleNamespace
 from typing import Callable, Iterable, Mapping, Sequence
 
 from app.core.rag.bill_sections import (
@@ -244,21 +245,19 @@ def typed_bill_ids(
         return frozenset()
 
 
-class _SectionTagged:
-    """A chunk whose text leads with the bill section it belongs to.
+def _section_tagged(chunk, label: str) -> SimpleNamespace:
+    """A copy of ``chunk`` whose text leads with its bill section ``label``.
 
-    Carries the attributes the ranking and the budget read, so a tagged
-    chunk ranks, dedups and budgets like the chunk it wraps.
+    Carries the attributes the ranking, dedup and budget read, so a tagged
+    chunk ranks, dedups and budgets like the chunk it copies.
     """
-
-    __slots__ = ("chunk_id", "chunk_index", "doc_id", "score", "text")
-
-    def __init__(self, chunk, label: str):
-        self.doc_id = getattr(chunk, "doc_id", "") or ""
-        self.chunk_id = getattr(chunk, "chunk_id", None)
-        self.chunk_index = getattr(chunk, "chunk_index", None)
-        self.score = getattr(chunk, "score", None)
-        self.text = f"{label}\n{chunk_text(chunk)}"
+    return SimpleNamespace(
+        doc_id=getattr(chunk, "doc_id", "") or "",
+        chunk_id=getattr(chunk, "chunk_id", None),
+        chunk_index=getattr(chunk, "chunk_index", None),
+        score=getattr(chunk, "score", None),
+        text=f"{label}\n{chunk_text(chunk)}",
+    )
 
 
 def bill_section_maps(
@@ -347,7 +346,7 @@ def _tag_sections(chunks, maps) -> list:
         label = ""
         if doc_id in maps:
             label = section_label(getattr(chunk, "chunk_index", None), maps[doc_id][0])
-        out.append(_SectionTagged(chunk, label) if label else chunk)
+        out.append(_section_tagged(chunk, label) if label else chunk)
     return out
 
 
