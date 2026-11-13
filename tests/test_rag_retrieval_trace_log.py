@@ -203,7 +203,9 @@ def test_default_is_on_in_code():
 
 def _strip_volatile(audit):
     return {k: v for k, v in audit.items()
-            if k not in ("timestamp", "budget_remaining")}
+            # the day's counter moves between the two calls (it counts the
+            # first call's tokens), so both views of it are volatile
+            if k not in ("timestamp", "budget_remaining", "budget_consumed")}
 
 
 @pytest.mark.parametrize("ask", PHRASINGS[:2])
