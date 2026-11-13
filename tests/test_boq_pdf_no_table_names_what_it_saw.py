@@ -137,14 +137,18 @@ def test_observation_sentence_follows_the_counts(read, tables, text, expect):
     assert not any(g in s.lower() for g in _GUESSES), s
 
 
-def test_block_entrypoint_carries_the_counts(make_pdf):
+@pytest.mark.parametrize("pages", [
+    [["Preliminaries"], ["Item 2.3 Formwork m2 340"]],
+    [["Section 4"], ["Item 4.1 Blockwork m2 210"], ["Item 4.2 Plaster m2 95"]],
+])
+def test_block_entrypoint_carries_the_counts(make_pdf, pages):
     """Through the block's public ``process`` (isolation wrapper included)
     the counts survive to the caller."""
-    path = make_pdf([["Preliminaries"], ["Item 2.3 Formwork m2 340"]])
+    path = make_pdf(pages)
     out = asyncio.run(bp.BOQProcessorBlock().process({"file_path": path}, {}))
     inner = out.get("result", out) if isinstance(out, dict) else out
     found = inner if "pages_read" in inner else next(
         (v for v in inner.values() if isinstance(v, dict) and "pages_read" in v), inner
     )
-    assert found.get("pages_read") == 2, out
-    assert found.get("pages_with_text") == 2, out
+    assert found.get("pages_read") == len(pages), out
+    assert found.get("pages_with_text") == len(pages), out

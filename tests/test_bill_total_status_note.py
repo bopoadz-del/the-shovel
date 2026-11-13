@@ -126,3 +126,24 @@ def test_runtime_reader_returns_the_attribute_with_the_document_name(monkeypatch
         lambda doc_id: {"id": doc_id, "original_name": "Bill.pdf", "metadata": meta},
     )
     assert runtime._bill_total_status("d1") == expected
+
+
+@pytest.mark.parametrize("doc_ids", [["d1"], ["d1", "d2"]])
+def test_no_reader_adds_nothing_and_logs_nothing(caplog, doc_ids):
+    from app.core.rag.evidence_actions import _total_status_text
+
+    with caplog.at_level("WARNING", logger="app.core.rag.evidence_actions"):
+        assert _total_status_text(None, doc_ids) == ""
+    assert not [r for r in caplog.records if "total-status" in r.getMessage()]
+
+
+@pytest.mark.parametrize("reasons", [["not_cross_checked"], ["pages_skipped", "no_priced_rows"]])
+def test_one_note_line_per_unverified_bill(reasons):
+    from app.core.rag.evidence_actions import _total_status_text
+
+    table = {f"d{i}": {"verified": False, "reason": r} for i, r in enumerate(reasons)}
+    text = _total_status_text(table.get, list(table))
+    lines = text.splitlines()
+    assert len(lines) == len(reasons)
+    for line, reason in zip(lines, reasons):
+        assert reason.replace("_", " ") in line

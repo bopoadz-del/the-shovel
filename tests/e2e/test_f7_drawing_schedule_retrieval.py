@@ -124,17 +124,14 @@ def test_chunks_name_the_sheet_they_came_from(tmp_path):
     )
 
 
-def test_a_sheet_with_no_text_layer_records_an_attribute_not_a_chunk(tmp_path):
+@pytest.mark.parametrize("fname", ["blank-DWG.pdf", "QZ-200-DWG-0007.pdf"])
+def test_a_sheet_with_no_text_layer_records_an_attribute_not_a_chunk(tmp_path, fname):
     """No schedule and no text layer: the fact goes on the document row as
     counts. A stored warning sentence would be indexed like content."""
-    path = _drawing_pdf(
-        tmp_path / "blank-DWG.pdf", with_schedule=False, with_text=False
-    )
+    path = _drawing_pdf(tmp_path / fname, with_schedule=False, with_text=False)
     attrs: dict = {}
 
-    chunks = doc_index._drawing_chunks_for_document(
-        path, "blank-DWG.pdf", ".pdf", "p1", attrs
-    )
+    chunks = doc_index._drawing_chunks_for_document(path, fname, ".pdf", "p1", attrs)
 
     assert chunks == []
     assert attrs[doc_index.DRAWING_SCHEDULE_META_KEY] == {
@@ -146,15 +143,14 @@ def test_a_sheet_with_no_text_layer_records_an_attribute_not_a_chunk(tmp_path):
     }
 
 
-def test_a_readable_sheet_with_no_schedule_records_its_text_layer(tmp_path):
+@pytest.mark.parametrize("fname", ["notes-only-DWG.pdf", "QZ-300-DWG-0012.pdf"])
+def test_a_readable_sheet_with_no_schedule_records_its_text_layer(tmp_path, fname):
     """Text but no table grid: the attribute says the text layer was there,
     and no chunk claims anything about the sheet."""
-    path = _drawing_pdf(tmp_path / "notes-only-DWG.pdf", with_schedule=False)
+    path = _drawing_pdf(tmp_path / fname, with_schedule=False)
     attrs: dict = {}
 
-    chunks = doc_index._drawing_chunks_for_document(
-        path, "notes-only-DWG.pdf", ".pdf", "p1", attrs
-    )
+    chunks = doc_index._drawing_chunks_for_document(path, fname, ".pdf", "p1", attrs)
 
     assert not any("GUARD" in c for c in chunks), chunks
     attr = attrs[doc_index.DRAWING_SCHEDULE_META_KEY]
@@ -163,13 +159,12 @@ def test_a_readable_sheet_with_no_schedule_records_its_text_layer(tmp_path):
     assert (attr["pages_read"], attr["pages_with_text"], attr["tables_read"]) == (1, 1, 0)
 
 
-def test_a_sheet_whose_schedule_was_read_counts_its_tables(tmp_path):
-    path = _drawing_pdf(tmp_path / "sched-DWG.pdf")
+@pytest.mark.parametrize("fname", ["sched-DWG.pdf", "QZ-400-DWG-0021.pdf"])
+def test_a_sheet_whose_schedule_was_read_counts_its_tables(tmp_path, fname):
+    path = _drawing_pdf(tmp_path / fname)
     attrs: dict = {}
 
-    chunks = doc_index._drawing_chunks_for_document(
-        path, "sched-DWG.pdf", ".pdf", "p1", attrs
-    )
+    chunks = doc_index._drawing_chunks_for_document(path, fname, ".pdf", "p1", attrs)
 
     attr = attrs[doc_index.DRAWING_SCHEDULE_META_KEY]
     assert attr["read"] is True and attr["reason"] == "tables_read"
@@ -177,9 +172,13 @@ def test_a_sheet_whose_schedule_was_read_counts_its_tables(tmp_path):
     assert attr["tables_read"] == len(table_chunks) >= 1
 
 
-def test_drawing_schedule_status_reads_the_attribute_back():
-    stored = {"read": False, "reason": "no_table_grid_no_text_layer",
-              "pages_read": 3, "pages_with_text": 0, "tables_read": 0}
+@pytest.mark.parametrize("stored", [
+    {"read": False, "reason": "no_table_grid_no_text_layer",
+     "pages_read": 3, "pages_with_text": 0, "tables_read": 0},
+    {"read": True, "reason": "tables_read",
+     "pages_read": 1, "pages_with_text": 1, "tables_read": 2},
+])
+def test_drawing_schedule_status_reads_the_attribute_back(stored):
     doc = {"metadata": {doc_index.DRAWING_SCHEDULE_META_KEY: stored}}
 
     assert doc_index.drawing_schedule_status(doc) == stored
