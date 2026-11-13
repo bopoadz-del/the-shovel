@@ -234,3 +234,109 @@ async def test_on_demand_route_runs_only_the_named_project_for_admin(
         "pass", "all", result["run_id"], 2, p_tok + 20, c_tok + 5,
     )
     assert hydration_store.get_latest("project", not_named) is None
+
+
+# ── The pieces of the pass the usage accounting rides on ──────────────────
+
+
+@pytest.mark.parametrize(
+    "named, active",
+    [(["proj-n1"], ["proj-n1", "proj-n2"]), (["site-y", "site-z"], ["site-x", "site-y", "site-z"])],
+)
+@pytest.mark.asyncio
+async def test_named_project_ids_replace_auto_detection(
+    isolated_data_dir, named, active,  # noqa: F811
+):
+    """``project_ids`` given: only those projects run, even when others were
+    active in the window; each named project has its own usage row."""
+    from app.core import hydration_store
+    from app.core.learning import hydration as hydration_module
+
+    for i, pid in enumerate(active):
+        _seed_conversation(pid, f"{_DAY}T1{i}:00:00Z", f"ask {i}?", "reply")
+
+    result = await hydration_module.run(target_date=_DAY, project_ids=named)
+
+    assert sorted(result["project_run_ids"]) == sorted(named)
+    assert result["projects_processed"] == len(named)
+    for pid in active:
+        row = hydration_store.get_latest("project", pid)
+        assert (row is not None) == (pid in named), pid
+
+
+@pytest.mark.parametrize("cap, conversations", [(3, 4), (5, 6)])
+@pytest.mark.asyncio
+async def test_project_messages_are_capped_before_summary(
+    isolated_data_dir, monkeypatch, cap, conversations,  # noqa: F811
+):
+    """More messages than the per-project cap: the pass reads the cap, and
+    the row says how many it saw."""
+    from app.core import hydration_store
+    from app.core.learning import hydration as hydration_module
+
+    monkeypatch.setattr(hydration_module, "_MAX_MESSAGES_PER_PROJECT", cap)
+    pid = f"proj-cap-{cap}"
+    for i in range(conversations):
+        _seed_conversation(pid, f"{_DAY}T0{i}:00:00Z", f"ask {i}?", "reply")
+
+    result = await hydration_module.run(target_date=_DAY)
+
+    assert 2 * conversations > cap
+    assert hydration_store.get_latest("project", pid)["facts"]["messages_seen"] == cap
+    assert result["projects_processed"] == 1
+
+
+@pytest.mark.parametrize(
+    "query_pid, body_pids, expected",
+    [
+        ("proj-q", None, ["proj-q"]),
+        ("proj-q", ["proj-b"], ["proj-b", "proj-q"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_on_demand_route_dispatches_hydrate_with_the_named_projects(
+    monkeypatch, query_pid, body_pids, expected,
+):
+    """The admin route hands ``learning_engine`` one ``hydrate`` op whose
+    ``project_ids`` merge the query parameter into the body list, and returns
+    what the block returned."""
+    import app.blocks as _blocks
+    from app.routers.hydration import HydrationRunRequest, hydration_run
+
+    seen = []
+
+    class _FakeEngine:
+        @classmethod
+        def shared_instance(cls):
+            return cls()
+
+        async def execute(self, data, params):
+            seen.append(dict(data))
+            return {"status": "success", "result": {"echo": list(data.get("project_ids") or [])}}
+
+    monkeypatch.setitem(_blocks.BLOCK_REGISTRY, "learning_engine", _FakeEngine)
+    envelope = await hydration_run(
+        HydrationRunRequest(target_date=_DAY, project_ids=body_pids),
+        project_id=query_pid,
+        auth={"role": "admin", "user_id": "ops"},
+    )
+    assert seen == [{"operation": "hydrate", "target_date": _DAY, "project_ids": expected}]
+    assert envelope == {"status": "success", "result": {"echo": expected}}
+
+
+@pytest.mark.parametrize("project_id", ["proj-a", None])
+@pytest.mark.asyncio
+async def test_on_demand_route_says_503_when_learning_engine_is_absent(monkeypatch, project_id):
+    """No ``learning_engine`` block loaded: the admin route answers 503, it
+    does not crash on a missing class."""
+    import app.blocks as _blocks
+    from app.routers.hydration import HydrationRunRequest, hydration_run
+
+    monkeypatch.delitem(_blocks.BLOCK_REGISTRY, "learning_engine", raising=False)
+    with pytest.raises(HTTPException) as unavailable:
+        await hydration_run(
+            HydrationRunRequest(target_date=_DAY),
+            project_id=project_id,
+            auth={"role": "admin", "user_id": "ops"},
+        )
+    assert unavailable.value.status_code == 503
