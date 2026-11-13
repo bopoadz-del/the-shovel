@@ -266,8 +266,6 @@ def _labelled_rows(chunks, sections, numbers, row_segments):
     rows: list[tuple[str, str]] = []
     for index, text in sorted(chunks, key=lambda p: p[0]):
         owners = sorted(sections_of(index, sections), key=lambda s: s.start)
-        if numbers and not any(s.number in numbers for s in owners):
-            continue
         current = owners[0] if owners else None
         for segment in row_segments(text):
             current = _row_owner(owners, segment, current)

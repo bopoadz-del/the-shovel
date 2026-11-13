@@ -561,6 +561,7 @@ def test_a_bill_whose_section_is_not_named_is_kept_whole(ask, label):
 @pytest.mark.parametrize(("text", "count"), [
     ("Pipe 110mm\nm\n300\n45.00\n13,500.00\nKerb\nm\n40\n180.00\n7,200.00", 2),
     ("Preamble only, no priced row: 12 m of pipe", 0),
+    ("Pipe\nm\n10\n5.00\n99.00\nKerb\nm\n40\n180.00\n7,200.00", 1),  # 10 x 5 != 99
 ])
 def test_priced_row_segments_match_the_row_count(text, count):
     assert len(priced_row_segments(text)) == count == priced_row_count(text)
@@ -574,3 +575,53 @@ def test_priced_row_segments_match_the_row_count(text, count):
 ])
 def test_priced_row_segments_carry_the_description_above_each_row(text, first, second):
     assert priced_row_segments(text) == [first, second]
+
+
+@pytest.mark.parametrize(("item", "expected"), [
+    ("gas", ["Gas valve"]),            # a 3-letter word matches exactly
+    ("tee", ["Tee junction"]),
+])
+def test_short_item_word_matches_a_row_exactly(item, expected):
+    bill = [_chunk(RECUR, 0, "BILL NO. 1\nMECHANICAL\n"
+                   + _row("Gas valve", "nr", 4, 250) + "\n"
+                   + _row("Tee junction", "nr", 6, 40) + "\n"
+                   + _row("Gasket set", "nr", 9, 15))]
+    rows = item_rows(
+        [(c.chunk_index, c.text) for c in bill],
+        section_map((c.chunk_index, c.text) for c in bill), item,
+        row_segments=priced_row_segments,
+    )
+    assert [r for r in expected if any(r in row for row in rows)] == expected
+    assert len(rows) == len(expected)
+
+
+@pytest.mark.parametrize("ask", [
+    "What are the steel reinforcement rates?",
+    "reinforcement rate in the pumping station bill",
+])
+def test_handed_bill_chunks_lead_with_their_section(ask):
+    """Without the row list (no row splitter) the bill's own chunks still
+    carry their section labels."""
+    text = _action(_sectioned_bill(), ask=ask, rows=False)("reinforcement steel bars")
+    assert "bill item rows" not in text
+    assert "[Bill No. 3 - PUMPING STATION]" in text
+    assert text.index("[Bill No. 3 - PUMPING STATION]") < text.index("3,050.00")
+
+
+@pytest.mark.parametrize(("item", "row"), [
+    ("gabion basket mesh", ("Gabion basket mesh 2x1x1", "nr", 30, 95)),
+    ("geotextile membrane", ("Geotextile membrane 300gsm", "m2", 500, 4)),
+])
+def test_item_the_typed_bill_does_not_bill_gets_no_row_list(item, row):
+    """The pool's priced row comes from an untyped rate sheet; the typed bill
+    prints no row of the item, so no (empty) row list is handed."""
+    other = [_chunk("rate-sheet", 0, _row(*row))]
+    corpus = _sectioned_bill() + other
+    action = bill_rows_action(
+        _bm25_over(corpus), "p1", row_count=priced_row_count,
+        typed_bills=lambda _pid: [BILL], bill_chunks=_fetch_over(corpus),
+        ask=f"total {item}", row_segments=priced_row_segments,
+    )
+    text = action(item)
+    assert "bill item rows" not in text
+    assert row[0] in text
