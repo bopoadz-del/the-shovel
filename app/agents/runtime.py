@@ -3995,6 +3995,103 @@ def _strip_reasoning_blocks(text: str) -> str:
     return text.strip()
 
 
+#: Keys of a truncation envelope (``_tool_result_content`` and
+#: ``_compacted_tool_payload``, both marked ``"truncated": True``) whose text is
+#: addressed to the MODEL -- how to read the rest, what it may not conclude.
+#: Never user-facing. ``tests/test_tool_directive_echo.py`` builds both
+#: envelopes and checks every string key outside ``preview`` is listed here.
+_TOOL_DIRECTIVE_KEYS: tuple[str, ...] = ("note", "scope_of_absence")
+
+#: Words in a row an answer sentence must share with a tool directive before
+#: the run counts as copied. Five words in the same order is a quotation, not
+#: a coincidence of vocabulary.
+_DIRECTIVE_NGRAM = 5
+
+
+def _directive_words(text: str) -> list[str]:
+    """Lower-case words of ``text`` with identifiers split and figures masked.
+
+    ``char_offset=7098`` and ``char offset 7098`` and ``char-offset 512`` all
+    read ``char offset #``: a copy that passed through the exit check (which
+    turns identifiers into words) or a paraphrase that changed only the number
+    is still the same instruction.
+    """
+    spaced = re.sub(r"[^0-9a-z]+", " ", (text or "").lower())
+    return ["#" if w.isdigit() else w for w in spaced.split()]
+
+
+def _ngrams(words: list[str], n: int) -> set[tuple[str, ...]]:
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def _tool_directive_texts(messages: list[dict[str, Any]] | None) -> list[str]:
+    """Every model-directed instruction the turn's tool results carried."""
+    out: list[str] = []
+    for m in messages or []:
+        if not isinstance(m, dict) or m.get("role") != "tool":
+            continue
+        raw = m.get("content")
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("truncated") is not True:
+            continue
+        for key in _TOOL_DIRECTIVE_KEYS:
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                out.append(val)
+    return out
+
+
+def _strip_tool_directive_echo(
+    text: str, messages: list[dict[str, Any]] | None,
+) -> str:
+    """Remove every sentence of ``text`` that copies a tool's directive.
+
+    A truncation envelope tells the model to call the tool again with the
+    next offset. That instruction is for the model; shipped as the answer it
+    tells the user to operate a tool they do not have. The check reads the
+    directives this turn's tool results actually carried, so it follows the
+    envelope's wording wherever it changes, and a sentence goes only when
+    most of its word runs appear, in order, in one of them. An answer that
+    merely uses the same words ("the next window", "the file") keeps them.
+    """
+    if not text or not text.strip():
+        return text
+    directives = _tool_directive_texts(messages)
+    if not directives:
+        return text
+    grams: set[tuple[str, ...]] = set()
+    for d in directives:
+        grams |= _ngrams(_directive_words(d), _DIRECTIVE_NGRAM)
+    if not grams:
+        return text
+    kept: list[str] = []
+    dropped = 0
+    for line in text.splitlines(keepends=True):
+        parts = re.split(r"(?<=[.!?])(\s+)", line)
+        # re.split with a capture group alternates sentence, separator.
+        out_line: list[str] = []
+        for i in range(0, len(parts), 2):
+            sentence = parts[i]
+            sep = parts[i + 1] if i + 1 < len(parts) else ""
+            own = _ngrams(_directive_words(sentence), _DIRECTIVE_NGRAM)
+            if own and len(own & grams) * 2 >= len(own):
+                dropped += 1
+                continue
+            out_line.append(sentence + sep)
+        joined = "".join(out_line)
+        if joined.strip():
+            kept.append(joined)
+        elif not line.strip():
+            kept.append(line)
+    if not dropped:
+        return text
+    _LOG.warning("final answer copied %d tool-directive sentence(s); removed", dropped)
+    return "".join(kept).strip()
+
+
 def _sanitize_final_text(
     text: str,
     messages: list[dict[str, Any]] | None = None,
@@ -4009,12 +4106,16 @@ def _sanitize_final_text(
     5. If that fallback would hide a ``validation_pipeline`` verdict, graft it.
     6. Return empty string if nothing usable remains.
     """
-    if not text:
-        cleaned = ""
-    else:
+    cleaned = ""
+    if text:
         cleaned = _strip_dsml(text).strip()
         cleaned = _strip_answer_routing_preamble(cleaned)
         cleaned = _strip_reasoning_blocks(cleaned)
+        # A tool's instruction to the model is never the user's answer.
+        # Removed here, the one chokepoint both answer paths share, so a
+        # reply that was nothing but the directive comes out empty and takes
+        # the no-tools retry the empty answer already gets.
+        cleaned = _strip_tool_directive_echo(cleaned, messages)
 
     if cleaned:
         # Unwrap a sole markdown fence / BOM before the tool-JSON detector so
