@@ -2089,6 +2089,72 @@ def admin_corpus_ghost_tombstone(
     return p3_ghost_tombstone(project_id=project_id, execute=execute)
 
 
+@router.post("/v1/admin/documents/{document_id}/exclude")
+def admin_exclude_document(
+    document_id: str,
+    project_id: str = Query(..., description="Project the document must belong to"),
+    execute: bool = Query(False, description="false = plan only. true = delete chunks + mark excluded"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    reason: str = Query("", description="Why the owner excluded the document; stored on the row"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) apply an owner exclusion of one document.
+
+    The plan (always computed, never writes) lists the document, its
+    chunk_count, the exact chunk rows to delete, the project chunk total and
+    a ``plan_hash`` over those rows. ``execute=true`` writes only when
+    ``plan_hash`` equals the live plan's hash; otherwise ``refused`` says why
+    and nothing changes. Executing deletes every chunk of the document, keeps
+    the row, and stores ``metadata.excluded = {by, at, reason}``, which every
+    ingest entry point and the documents list read from then on.
+    """
+    _require_admin(auth)
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.core import audit
+    from app.core import projects as _projects
+
+    plan = _projects.plan_document_exclusion(document_id)
+    if plan is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    if plan["project_id"] != project_id:
+        raise HTTPException(400, "document does not belong to project")
+    out: Dict[str, Any] = {"plan": plan, "executed": False}
+    if not execute:
+        return out
+    if not reason.strip():
+        out["refused"] = "reason is required with execute=true"
+        return out
+    if not plan_hash or plan_hash != plan["plan_hash"]:
+        out["refused"] = "plan_hash does not match the live plan; nothing written"
+        return out
+    at = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = _projects.exclude_document(document_id, by="owner", reason=reason.strip(), at=at)
+    if result is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    after = _projects.plan_document_exclusion(document_id) or {}
+    doc = result["document"] or {}
+    audit.record(
+        "document.excluded",
+        project_id=project_id,
+        user_id=auth.get("user_id"),
+        document_id=document_id,
+        chunks_deleted=result["chunks_deleted"],
+    )
+    out.update({
+        "executed": True,
+        "chunks_deleted": result["chunks_deleted"],
+        "index_pruned": result["index_pruned"],
+        "chunk_rows_after": after.get("chunk_rows"),
+        "chunk_count_after": doc.get("chunk_count"),
+        "project_chunk_total_after": after.get("project_chunk_total"),
+        "excluded": (doc.get("metadata") or {}).get("excluded"),
+        "ingest_status": doc.get("ingest_status"),
+        "retrieval_visible": doc.get("retrieval_visible"),
+    })
+    return out
+
+
 @router.post("/v1/admin/corpus/legacy-guard-chunks")
 def admin_corpus_legacy_guard_chunks(
     project_id: Optional[str] = Query(None),

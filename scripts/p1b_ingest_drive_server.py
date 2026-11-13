@@ -409,6 +409,10 @@ def _ingest_file(
             "mimeType": mime,
         }
 
+    # An owner-excluded row is never downloaded or indexed again.
+    if _ist_gate.is_excluded(existing_doc):
+        return rel, {"status": "error", "error": "SKIPPED_EXCLUDED"}
+
     # Size guard before download. Default OFF (0) — Tier-1 the client project contract
     # volumes (signed PSA, drawing packs) exceed 500 MB and were still
     # SKIPPED_TOO_LARGE after the 100→500 bump. Set P1B_MAX_FILE_SIZE_MB

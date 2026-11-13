@@ -36,6 +36,9 @@ from app.core.ingest_status import (
     TOMBSTONED,
     UNSUPPORTED_TYPE,
     ZERO_CHUNK,
+    EXCLUDED_KEY,
+    OWNER_EXCLUDED_REASON,
+    is_excluded,
     partial_read_note,
 )
 from app.core.models import Document, IngestionJob, Project, ProjectFact
@@ -1677,6 +1680,119 @@ def tombstone_document_ghost(doc_id: str) -> Optional[Dict[str, Any]]:
     return get_document(doc_id)
 
 
+def _chunk_tables(session) -> List[str]:
+    """The active and the legacy chunk table, those that exist."""
+    from sqlalchemy import inspect as _inspect
+
+    from app.core.models import rag_chunk_table_name
+    from app.core.rag.vector_store import _rag_vector_namespace
+
+    existing = set(_inspect(session.get_bind()).get_table_names())
+    wanted = {rag_chunk_table_name(_rag_vector_namespace()), rag_chunk_table_name("")}
+    return sorted(t for t in wanted if t in existing)
+
+
+def _document_chunk_ids(session, doc_id: str) -> List[str]:
+    """Every chunk row of ``doc_id``, as ``table:chunk_id``."""
+    ids: List[str] = []
+    for table in _chunk_tables(session):
+        ids.extend(
+            f"{table}:{r[0]}" for r in session.execute(
+                sqla_text(f"SELECT chunk_id FROM {table} WHERE doc_id = :doc_id"),
+                {"doc_id": doc_id},
+            )
+        )
+    return sorted(ids)
+
+
+def _project_chunk_total(session, project_id: str) -> int:
+    """Chunk rows of ``project_id`` across the chunk tables."""
+    total = 0
+    for table in _chunk_tables(session):
+        total += int(session.execute(
+            sqla_text(f"SELECT COUNT(*) FROM {table} WHERE project_id = :p"),
+            {"p": project_id},
+        ).scalar() or 0)
+    return total
+
+
+def plan_document_exclusion(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Read-only plan for ``exclude_document``: what it would delete.
+
+    ``plan_hash`` binds the plan to the exact chunk rows listed, so an
+    execute against a document whose chunks changed since the plan refuses.
+    """
+    if not doc_id:
+        return None
+    _ensure_db()
+    with SessionLocal() as session:
+        document = session.get(Document, doc_id)
+        if document is None:
+            return None
+        doc = _document_as_dict(document)
+        rows = _document_chunk_ids(session, doc_id)
+        project_total = _project_chunk_total(session, document.project_id)
+    digest = hashlib.sha256(
+        json.dumps({"doc_id": doc_id, "rows": rows}, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "document_id": doc_id,
+        "project_id": doc.get("project_id"),
+        "original_name": doc.get("original_name"),
+        "doc_type": doc.get("doc_type"),
+        "ingest_status": doc.get("ingest_status"),
+        "chunk_count": doc.get("chunk_count"),
+        "chunk_rows": len(rows),
+        "rows_to_delete": rows,
+        "project_chunk_total": project_total,
+        "already_excluded": is_excluded(doc),
+        "plan_hash": digest,
+    }
+
+
+def exclude_document(doc_id: str, *, by: str, reason: str, at: str) -> Optional[Dict[str, Any]]:
+    """Exclude a document by owner decision: delete every chunk, KEEP the row.
+
+    The row gets ``metadata.excluded = {by, at, reason}``, the TOMBSTONED
+    status (a no-chunk status retrieval ignores) and ``retrieval_visible =
+    false``, in the same transaction as the chunk delete. Every ingest entry
+    point reads the attribute through ``ingest_status.is_excluded`` and
+    skips the row from then on. Returns ``{document, chunks_deleted,
+    index_pruned}``; ``None`` when the row does not exist.
+    """
+    if not doc_id:
+        return None
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            document = session.get(Document, doc_id)
+            if document is None:
+                return None
+            project_id = document.project_id
+            current = dict(coerce_document_metadata(document.metadata_))
+            if not isinstance(current.get(EXCLUDED_KEY), dict):
+                current[EXCLUDED_KEY] = {"by": by, "at": at, "reason": reason}
+            document.metadata_ = current
+            document.ingest_status = TOMBSTONED
+            document.ingest_status_reason = OWNER_EXCLUDED_REASON
+            document.retrieval_visible = False
+            deleted = delete_document_chunks(session, doc_id)
+            document.chunk_count = 0
+            session.commit()
+    index_pruned = False
+    try:
+        from app.core import doc_index as _doc_index
+
+        index_pruned = bool(_doc_index.drop_index_entry(project_id, doc_id))
+    except Exception:  # noqa: BLE001 - the chunk delete above is the commit that matters
+        logger.warning("index entry cleanup failed for %s", doc_id, exc_info=True)
+    return {
+        "document": get_document(doc_id),
+        "chunks_deleted": deleted,
+        "index_pruned": index_pruned,
+    }
+
+
 def update_document_metadata(doc_id: str, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Merge ``metadata`` into the document's existing metadata_ column.
 
@@ -2256,7 +2372,9 @@ def list_documents(
         if limit is not None:
             stmt = stmt.limit(limit).offset(offset)
         rows = session.scalars(stmt).all()
-    return [_document_as_dict(document) for document in rows]
+    docs = [_document_as_dict(document) for document in rows]
+    # An owner-excluded document is never listed (ingest_status.is_excluded).
+    return [d for d in docs if not is_excluded(d)]
 
 
 def list_document_names(project_id: str) -> List[Dict[str, Any]]:
@@ -2270,12 +2388,14 @@ def list_document_names(project_id: str) -> List[Dict[str, Any]]:
     source_id = _master_corpus_source(project_id) or project_id
     with SessionLocal() as session:
         rows = session.execute(
-            select(Document.id, Document.original_name, Document.doc_type, Document.file_path)
+            select(Document.id, Document.original_name, Document.doc_type,
+                   Document.file_path, Document.metadata_)
             .where(Document.project_id == source_id)
             .order_by(Document.uploaded_at)
         ).all()
     return [{"id": r.id, "original_name": r.original_name, "doc_type": r.doc_type,
-             "file_path": r.file_path} for r in rows]
+             "file_path": r.file_path} for r in rows
+            if not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
 
 
 def count_documents(project_id: str) -> int:
