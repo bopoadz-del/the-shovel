@@ -28,6 +28,11 @@ PRIVILEGED_BLOCKS = frozenset({
     # through this gate.
     "google_drive",
     "onedrive",
+    # Reads and writes the learning-loop tables of EVERY project: an
+    # ``export_tables`` with no project_id has no id for the project-access
+    # check to see, and the store applies no filter. Hosts reach it in
+    # process (``app.blocks.ml_loop.record``), never through this gate.
+    "ml_loop",
 })
 
 _caller_role: ContextVar[Optional[str]] = ContextVar("caller_role", default=None)
