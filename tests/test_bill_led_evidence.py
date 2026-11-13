@@ -222,10 +222,15 @@ def test_runtime_leaves_a_non_figure_ask_alone(ask):
         _chunk(SHEET_ID, 0, sheet_row, 0.9), _chunk(BILL_ID, 7, bill_row, 0.7),
     )}
 
-    def _boom(_pid):
-        raise AssertionError("documents read for a non-figure ask")
+    reads: list[str] = []
 
-    assert _bill_led_rag_msg(ask, "p-test", msg, documents=_boom) is msg
+    def _recording(pid):
+        reads.append(pid)
+        return _docs()(pid)
+
+    # The documents would reorder this context; a non-figure ask never reads them.
+    assert _bill_led_rag_msg(ask, "p-test", msg, documents=_recording) is msg
+    assert reads == []
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("db down"), ValueError("bad row")])
