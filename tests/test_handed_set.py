@@ -178,7 +178,11 @@ def test_degraded_budget_is_characters(size, expected_degraded, monkeypatch):
     assert audit["injected_k"] == expected_degraded
 
 
-def test_trace_prints_requested_effective_k_and_allotment(monkeypatch):
+@pytest.mark.parametrize("degraded,budget", [
+    (True, hs.DEFAULT_DEGRADED_CHAR_BUDGET),
+    (False, hs.DEFAULT_CHAR_BUDGET),
+])
+def test_trace_prints_requested_effective_k_and_allotment(degraded, budget, monkeypatch):
     lg = logging.getLogger("app.rag.retrieval_trace")
     records = []
 
@@ -193,15 +197,15 @@ def test_trace_prints_requested_effective_k_and_allotment(monkeypatch):
     try:
         pool = [_c("a", i, 0.9 - i * 0.01, text_len=300) for i in range(4)]
         pool += [_c("b", 0, 0.86, text_len=300, layer="general_knowledge")]
-        _inject(monkeypatch, pool, True)
+        _inject(monkeypatch, pool, degraded)
     finally:
         lg.removeHandler(h)
     lines = [r.getMessage() for r in records if r.getMessage().startswith(TRACE_EVENT)]
     assert len(lines) == 1
     p = json.loads(lines[0][len(TRACE_EVENT):].strip())
     assert p["requested_k"] == 5 and p["effective_k"] == 5 and p["pool_k"] == 10
-    assert p["budget_degraded"] is True
-    assert p["allotment"]["char_budget"] == hs.DEFAULT_DEGRADED_CHAR_BUDGET
+    assert p["budget_degraded"] is degraded
+    assert p["allotment"]["char_budget"] == budget
     assert p["allotment"]["layers"] == {"own": 4, "general_knowledge": 1}
 
 
