@@ -136,6 +136,7 @@ async def _chat_stream_impl(
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
         _looks_like_search_preamble, _looks_like_tool_markup_leak,
         _message_is_formula_style_ask, _message_wants_locked_deliverable, _normalize_tool_call_ids, _nudge_for_failed_tool,
+        _supersede_tool_failure_with_evidence,
         _off_loop, _parse_dsml_tool_calls, _persist_failed_turn, _postprocess_answer,
         _predispatch_file_tool, _predispatch_formula_calc, _predispatch_look_ahead,
         _predispatch_remaining_deliverables, _predispatch_resource_histogram,
@@ -1431,15 +1432,16 @@ async def _chat_stream_impl(
             })
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
-            else:
-                if (_tool_result_errored(tool_result)
-                        and error_nudges < _TOOL_ERROR_NUDGE_CAP):
-                    error_nudges += 1
-                    pending_nudges.append({"role": "user",
-                                     "content": _nudge_for_failed_tool(
-                                         tool_result, self, project_id=project_id, messages=messages)
-                                     + (await _off_loop(_file_tool_hint, messages, project_id,
-                                                       self.allowed_blocks))})
+            elif ((_superseded := await _off_loop(
+                    _supersede_tool_failure_with_evidence, tc, tool_result, messages)) is not None
+                  or _tool_result_errored(tool_result)) and error_nudges < _TOOL_ERROR_NUDGE_CAP:
+                # S-A6: evidence in this turn supersedes a file-level failure on the same document.
+                error_nudges += 1
+                pending_nudges.append({"role": "user", "content": _superseded if _superseded is not None
+                                       else _nudge_for_failed_tool(
+                                           tool_result, self, project_id=project_id, messages=messages)
+                                       + (await _off_loop(_file_tool_hint, messages, project_id,
+                                                         self.allowed_blocks))})
         messages.extend(pending_nudges)
 
     # Hit the cap without a final answer — force one more call with tools disabled.
