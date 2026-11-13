@@ -22,6 +22,14 @@ name: service-env-flag
 #      no BOM), reads it back, forces a new deployment, waits for
 #      services-stable, reads it back again, and for hydration flags finds
 #      the scheduler's startup line in a NEW task's CloudWatch stream.
+#   4. map=true (P-H1c) is for an allowlisted key that the live task
+#      definition does not map. It copies the LIVE task definition with
+#      exactly one secrets entry added (<key> <- <same secret ARN>:<key>::)
+#      and prints that one-entry diff. Execute registers the copy, writes the
+#      key, rolls the service onto the new revision and checks that the
+#      service runs it. It is refused when the key is already mapped, or when
+#      the latest registered revision differs from the live one (infra was
+#      changed by hand).
 #
 # Shares the deploy-aws concurrency group so a flag roll and a deploy never
 # overlap.
@@ -37,6 +45,10 @@ on:
         required: true
       execute:
         description: "false = plan only (default). true = write, roll the service, prove it took"
+        type: boolean
+        default: false
+      map:
+        description: "true = the key is not yet mapped: add its secrets entry to a copy of the live task definition (P-H1c)"
         type: boolean
         default: false
 
@@ -56,6 +68,7 @@ jobs:
       FLAG_KEY: ${{ inputs.key }}
       FLAG_VALUE: ${{ inputs.value }}
       FLAG_EXECUTE: ${{ inputs.execute }}
+      FLAG_MAP: ${{ inputs.map }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,12 +85,12 @@ jobs:
       - name: Plan / execute
         run: |
           python scripts/service_env_flag.py \
-            --key "$FLAG_KEY" --value "$FLAG_VALUE" --execute "$FLAG_EXECUTE" \
+            --key "$FLAG_KEY" --value "$FLAG_VALUE" --execute "$FLAG_EXECUTE" --map "$FLAG_MAP" \
             --cluster cerebrum --service the-fork --region us-west-2 \
             | tee flag.log
           rc=${PIPESTATUS[0]}
           {
-            echo "### service-env-flag (execute=${FLAG_EXECUTE})"
+            echo "### service-env-flag (execute=${FLAG_EXECUTE} map=${FLAG_MAP})"
             echo '```'
             cat flag.log
             echo '```'
