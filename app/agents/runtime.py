@@ -985,6 +985,59 @@ def _first_pass_composes_figure(user_message: str, evidence: str) -> bool:
     )
 
 
+def _bill_led_rag_msg(
+    user_message: str,
+    project_id: str,
+    rag_sys_msg: dict[str, str],
+    *,
+    documents: Callable[[str], list[dict[str, Any]]] | None = None,
+) -> dict[str, str]:
+    """``rag_sys_msg`` with a typed bill's rows leading, for a figure ask.
+
+    Applies ``evidence_actions.bill_led_evidence`` over the first-pass
+    excerpts using the project's ``documents.doc_type`` (typed bill or not)
+    and display names. A question that is not a figure ask, a failed
+    document read, or a project with no typed bill keeps the message as it
+    is. ``documents(project_id)`` defaults to ``projects.list_document_names``.
+    """
+    from app.core.rag import route as _rag_route
+    from app.core.rag.evidence_actions import bill_led_evidence
+    from app.core.rag.retriever import measured_quantity_kinds, priced_row_count
+
+    if not _rag_route.wants_agentic_figure_retrieval(
+        user_message,
+        asks_measured_quantity=measured_quantity_kinds,
+        exclude=_agentic_figure_retrieval_excluded,
+    ):
+        return rag_sys_msg
+    if documents is None:
+        from app.core import projects as _projects
+
+        documents = _projects.list_document_names
+    from app.core.projects import DOC_TYPE_BILL
+
+    try:
+        docs = [d for d in (documents(project_id) or []) if d.get("id")]
+    except Exception:  # noqa: BLE001 -- a document read must not break the turn
+        _LOG.warning(
+            "bill-led evidence: document read failed project=%s", project_id,
+            exc_info=True,
+        )
+        return rag_sys_msg
+    names = {str(d["id"]): d.get("original_name") for d in docs}
+    typed = [
+        str(d["id"]) for d in docs
+        if (d.get("doc_type") or "").strip().lower() == DOC_TYPE_BILL
+    ]
+    content = rag_sys_msg.get("content", "")
+    led = bill_led_evidence(
+        content, typed_bills=typed, row_count=priced_row_count, doc_name=names.get,
+    )
+    if led == content:
+        return rag_sys_msg
+    return {**rag_sys_msg, "content": led}
+
+
 async def _agentic_figure_retrieval_augment(
     agent: Any,
     user_message: str,
@@ -1012,6 +1065,10 @@ async def _agentic_figure_retrieval_augment(
         retrieve_with_filter,
     )
     from app.core.rag.vector_store import get_store as _get_store
+
+    # A typed bill's rows lead a non-bill workbook's before anything reads the
+    # first pass, so the no-LLM composers and the model see the bill first.
+    rag_sys_msg = _bill_led_rag_msg(user_message, project_id, rag_sys_msg)
 
     # A figure already parseable from the first pass is answered by one of the
     # existing no-LLM compose paths; retrieval augmentation must not spend an
