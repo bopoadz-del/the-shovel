@@ -448,6 +448,6 @@ xlsxwriter==3.2.9
     # via python-pptx
 yarl==1.25.1
     # via aiohttp
-dnspython==2.9.0
+dnspython==2.9.2
     # via -r requirements.in
 
