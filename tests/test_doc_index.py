@@ -1319,8 +1319,25 @@ def test_index_document_boq_total_hedged_when_pages_skipped(fresh_db, tmp_path, 
     assert "partial" in blob, f"pages_skipped>0 must hedge; chunks missing 'partial': {blob[:300]}"
 
 
+@pytest.mark.parametrize(
+    "outcome, expected",
+    [
+        (
+            {"status": "error", "error": "no tables found"},
+            {"verified": False, "reason": "parse_failed", "detail": "no tables found"},
+        ),
+        (
+            ValueError("table header unreadable"),
+            {
+                "verified": False, "reason": "parse_error",
+                "detail": "ValueError: table header unreadable",
+            },
+        ),
+    ],
+    ids=["parser_error_status", "parser_raises"],
+)
 def test_boq_named_pdf_without_computable_total_records_attribute_not_chunk(
-    fresh_db, tmp_path, monkeypatch,
+    fresh_db, tmp_path, monkeypatch, outcome, expected,
 ):
     """A BOQ-named PDF that boq_processor CANNOT total records the fact on the
     document row (``metadata.boq_total.verified = False``) and writes NO
@@ -1335,7 +1352,9 @@ def test_boq_named_pdf_without_computable_total_records_attribute_not_chunk(
     import app.blocks.boq_processor as boq
 
     async def _no_total(self, input_data, params=None):
-        return {"status": "error", "error": "no tables found"}
+        if isinstance(outcome, Exception):
+            raise outcome
+        return dict(outcome)
     monkeypatch.setattr(boq.BOQProcessorBlock, "process", _no_total)
 
     proj = projects_mod.create_project("Unparsed BOQ")
@@ -1349,9 +1368,7 @@ def test_boq_named_pdf_without_computable_total_records_attribute_not_chunk(
     blob = "\n".join(result.get("chunks") or []).lower()
     assert "do not state" not in blob and "guard" not in blob, blob[:300]
     status = doc_index.boq_total_status(projects_mod.get_document(doc["id"]))
-    assert status == {
-        "verified": False, "reason": "parse_failed", "detail": "no tables found",
-    }
+    assert status == expected
 
 
 def test_index_project_empty_project(fresh_db, monkeypatch):
