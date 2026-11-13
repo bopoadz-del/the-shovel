@@ -87,6 +87,10 @@ class CPMInput(BaseModel):
     activities: List[Activity]
     project_start: Optional[date] = None
     calendar: WorkCalendar = Field(default_factory=WorkCalendar)
+    #: Total-float band (working days) inside which a non-critical activity
+    #: is reported as near-critical. A project or client choice, so it has no
+    #: default: when it is not supplied no activity is labelled near-critical.
+    near_critical_band_days: Optional[float] = Field(default=None, gt=0)
 
 
 class CPMOutput(BaseModel):
@@ -95,7 +99,10 @@ class CPMOutput(BaseModel):
     project_finish: Optional[date] = None
     critical_path: List[str]
     critical_percentage: float
-    near_critical: List[str]
+    #: ``None`` when no near-critical band was supplied (not computed);
+    #: a list (possibly empty) when one was.
+    near_critical: Optional[List[str]] = None
+    near_critical_band_days: Optional[float] = None
 
 
 class HistogramPeriod(BaseModel):

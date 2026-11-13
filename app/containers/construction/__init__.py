@@ -346,7 +346,8 @@ class ConstructionContainer(
             }
         except Exception as e:
             return {"status": "error", "error": f"XML parse failed: {str(e)}"}
-    def _calculate_cpm(self, schedule_data: Dict) -> Dict:
+    def _calculate_cpm(self, schedule_data: Dict,
+                       near_critical_band_days: Optional[float] = None) -> Dict:
         activities = schedule_data.get("activities", [])
     
         if not activities:
@@ -370,15 +371,26 @@ class ConstructionContainer(
     
         floats = [a.get("total_float", 0) for a in activities if a.get("total_float", 999) < 999]
         avg_float = sum(floats) / len(floats) if floats else 0
-        near_critical = [a for a in schedule_data.get("activities", []) if 0 < a.get("total_float", 999) < 5]
+        # Near-critical needs a band the caller chose; none is assumed.
+        from app.lib.pm_computations import near_critical_ids
+        sched_acts = schedule_data.get("activities", [])
+        near_ids = near_critical_ids(
+            [(i, a.get("total_float", 999)) for i, a in enumerate(sched_acts)],
+            near_critical_band_days,
+        )
+        near_critical = (None if near_ids is None
+                         else [sched_acts[i] for i in near_ids])
     
         return {
             "critical_path": [a["id"] for a in critical_activities],
             "critical_path_activities": critical_activities,
             "critical_path_duration": duration,
             "critical_count": len(critical_activities),
-            "near_critical_count": len(near_critical),
-            "near_critical_activities": near_critical[:10],
+            "near_critical_count": (None if near_critical is None
+                                    else len(near_critical)),
+            "near_critical_activities": (None if near_critical is None
+                                         else near_critical[:10]),
+            "near_critical_band_days": near_critical_band_days,
             "average_float": avg_float,
             "project_duration_days": duration,
             "driving_paths": []
