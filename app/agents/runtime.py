@@ -1024,6 +1024,12 @@ async def _agentic_figure_retrieval_augment(
         run_sync=off_loop,
         outcome_sink=partial(_stash_dataset_outcome, agent, user_message),
         typed_bills=_typed_bill_doc_ids,
+        # Every chunk of the typed bills, so the bill-rows action can read
+        # each bill's sections; a store without the reader ranks as before.
+        bill_chunks=(
+            partial(store.chunks_for_docs, all_rows=True)
+            if hasattr(store, "chunks_for_docs") else None
+        ),
     )
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)
