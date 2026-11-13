@@ -278,3 +278,26 @@ def test_runtime_exclusions_still_apply(excluded, monkeypatch):
 
     monkeypatch.setattr(runtime, "_agentic_figure_retrieval_excluded", lambda t: excluded)
     assert runtime._wants_source_coverage_plan(_THREE, _first_pass(["d1"])) is (not excluded)
+
+
+# --- guards the mutation gate pins ------------------------------------------
+
+@pytest.mark.parametrize("raw", [None, "not-a-score", True])
+def test_non_numeric_score_ranks_as_zero_not_a_crash(raw):
+    odd = SimpleNamespace(score=raw, doc_id="odd", source_name="odd.pdf", text="t odd")
+    good = _c("good", 0, 0.5)
+    out = hs.diversify([odd, good], slots=5, share=0.4, margin=0.15)
+    assert [c.doc_id for c in out] == ["good", "odd"]
+
+
+@pytest.mark.parametrize("slots", [1, 5])
+def test_empty_pool_hands_nothing(slots):
+    assert hs.diversify([], slots=slots, share=0.4, margin=0.15) == []
+    handed, allot = hs.select_handed([], k=slots, degraded=False)
+    assert handed == [] and allot["families"] == 0
+
+
+@pytest.mark.parametrize("first_pass", ["", "plain text with no excerpt markers"])
+def test_one_named_kind_never_plans_even_with_no_sources(first_pass):
+    assert hs.wants_source_coverage_retrieval(_ONE, first_pass) is False
+    assert hs.wants_source_coverage_retrieval(_THREE, first_pass) is True
