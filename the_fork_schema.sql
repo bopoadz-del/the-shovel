@@ -60,7 +60,8 @@ CREATE TABLE documents (
     doc_type       TEXT NOT NULL DEFAULT 'document',
     doc_role       TEXT NOT NULL DEFAULT 'other'
                    CHECK (doc_role IN (
-                       'baseline_schedule', 'daily_report', 'weekly_report', 'other'
+                       'baseline_schedule', 'daily_report', 'weekly_report', 'other',
+                       'contract', 'draft', 'tender', 'award', 'reporting', 'design'
                    )),
     size           INTEGER NOT NULL DEFAULT 0,
     uploaded_at    TEXT NOT NULL,

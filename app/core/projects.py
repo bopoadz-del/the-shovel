@@ -557,27 +557,11 @@ def _ensure_db() -> None:
 DOC_TYPE_BILL = "boq"
 
 
-def classify_doc_type(filename: str) -> str:
-    """Coarse document-type guess from the filename (display only)."""
-    n = (filename or "").lower()
-    _, ext = os.path.splitext(n)
-    if ext in {".xer", ".mpp"} or "primavera" in n or "p6" in n:
-        return "schedule"
-    if ext == ".ifc":
-        return "bim"
-    if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
-        return "photo"
-    if "boq" in n or "bill of quant" in n:
-        return DOC_TYPE_BILL
-    if "contract" in n or "agreement" in n:
-        return "contract"
-    if "spec" in n:
-        return "specification"
-    if "drawing" in n or ext == ".dwg":
-        return "drawing"
-    if "schedule" in n or "programme" in n or "program" in n:
-        return "schedule"
-    return "document"
+def classify_doc_type(filename: str, content_sample: str = "") -> str:
+    """Document type from the type table (``config/document_types.yaml`` plus
+    custom types), not from code branches. Unmatched -> ``document``."""
+    from app.core.doc_typing import type_for
+    return type_for(filename, content_sample)
 
 
 def classify_doc_role(filename: str) -> str:
@@ -590,6 +574,27 @@ def classify_doc_role(filename: str) -> str:
     if "weekly" in n:
         return ROLE_WEEKLY
     return ROLE_OTHER
+
+
+def resolve_doc_role(
+    filename: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    role: Optional[str] = None,
+) -> str:
+    """The role a new document row gets.
+
+    An explicit caller role other than the default ``other`` wins. Then a
+    readiness role read from the filename. Then the folder-name table
+    (``app.core.doc_typing``) over the source path in ``metadata``.
+    Otherwise ``other``.
+    """
+    if role in VALID_ROLES and role != ROLE_OTHER:
+        return role
+    by_name = classify_doc_role(filename)
+    if by_name != ROLE_OTHER:
+        return by_name
+    from app.core.doc_typing import role_for_path, source_path
+    return role_for_path(source_path(metadata)) or ROLE_OTHER
 
 
 # ── projects ────────────────────────────────────────────────────────────────
@@ -1280,7 +1285,7 @@ def add_document(
             )
     did = str(uuid.uuid4())[:8]
     doc_type = classify_doc_type(original_name)
-    doc_role = role if role in VALID_ROLES else classify_doc_role(original_name)
+    doc_role = resolve_doc_role(original_name, metadata, role)
     with _lock:
         with SessionLocal() as session:
             session.add(

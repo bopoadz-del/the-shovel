@@ -369,7 +369,8 @@ class Document(Base):
     __table_args__ = (
         CheckConstraint(
             "doc_role IN ("
-            "'baseline_schedule', 'daily_report', 'weekly_report', 'other'"
+            "'baseline_schedule', 'daily_report', 'weekly_report', 'other', "
+            "'contract', 'draft', 'tender', 'award', 'reporting', 'design'"
             ")",
             name="ck_documents_doc_role",
         ),
