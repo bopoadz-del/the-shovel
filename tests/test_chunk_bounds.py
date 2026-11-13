@@ -87,24 +87,97 @@ def test_ceiling_is_configurable_and_zero_turns_it_off(monkeypatch, env, pieces)
     assert len(cb.bound_chunks([_sentences(8)])) == pieces
 
 
-@pytest.mark.parametrize("raw, value", [("", cb.DEFAULT_MAX_CHARS), ("abc", cb.DEFAULT_MAX_CHARS), ("900", 900)])
+@pytest.mark.parametrize(
+    "raw, value",
+    [("", cb.DEFAULT_MAX_CHARS), ("abc", cb.DEFAULT_MAX_CHARS), ("-5", 0), ("900", 900)],
+)
 def test_ceiling_env_parsing(monkeypatch, raw, value):
     monkeypatch.setenv("CHUNK_MAX_CHARS", raw)
     assert cb.chunk_max_chars() == value
 
 
-def test_text_stage_pages_follow_the_bounded_chunks(monkeypatch):
+@pytest.mark.parametrize(
+    "merge, expected",
+    [
+        # prose: the short heading joins the next chunk
+        (True, ["Item 4.1\n4.1 | Excavation in rock | m3 | 104"]),
+        # unit chunks (rows): never joined, so each row stays its own chunk
+        (False, ["Item 4.1", "4.1 | Excavation in rock | m3 | 104"]),
+    ],
+)
+def test_unit_chunks_get_the_ceiling_only(merge, expected):
+    out = cb.bound_chunks(["Item 4.1", "4.1 | Excavation in rock | m3 | 104"], merge=merge)
+    assert out == expected
+
+
+@pytest.mark.parametrize("floor, merged", [("30", True), ("500", False)])
+def test_a_floor_at_or_above_the_ceiling_is_ignored(monkeypatch, floor, merged):
+    monkeypatch.setenv("CHUNK_MIN_CHARS", floor)
+    out = cb.bound_chunks(["Section 4", _sentences(1)])
+    assert (len(out) == 1) is merged
+
+
+@pytest.mark.parametrize(
+    "lengths, expected",
+    [
+        ([10, 50, 60, 200], {"chunks": 4, "over_ceiling": 1, "under_floor": 1,
+                             "p50": 60, "p95": 200, "max": 200}),
+        ([], {"chunks": 0, "over_ceiling": 0, "under_floor": 0,
+              "p50": None, "p95": None, "max": None}),
+    ],
+)
+def test_bounds_summary(lengths, expected):
+    got = cb.bounds_summary(lengths)
+    assert {k: got[k] for k in expected} == expected
+    assert (got["min_chars"], got["max_chars"]) == (30, 120)
+
+
+@pytest.mark.parametrize(
+    "page2_sentences, last_page",
+    [(3, 2), (0, 1)],
+)
+def test_text_stage_pages_follow_the_bounded_chunks(page2_sentences, last_page):
     from app.core import doc_index
 
     page1 = _sentences(4)
-    page2 = "Schedule of rates follows. " + _sentences(3)
-    text = f"{page1}\n{page2}"
-    meta = {"page_starts": [[1, 0], [2, len(page1) + 1]]}
-    chunks, pages = doc_index._text_chunks_with_pages(text, meta, "default", "spec.pdf")
+    page2 = _sentences(page2_sentences).replace("Clause", "Article")
+    text = f"{page1}\n{page2}" if page2 else page1
+    starts = [[1, 0]] + ([[2, len(page1) + 1]] if page2 else [])
+    chunks, pages = doc_index._text_chunks_with_pages(
+        text, {"page_starts": starts}, "default", "spec.pdf",
+    )
+    assert len(chunks) > 1
     assert all(len(c) <= 120 for c in chunks)
     assert len(pages) == len(chunks)
-    assert pages[0] == 1 and pages[-1] == 2
-    assert meta["chunk_bounds"]["split_from"] >= 1
+    assert pages[0] == 1 and pages[-1] == last_page
+
+
+@pytest.mark.parametrize("role, status", [("admin", None), ("member", 403)])
+def test_route_is_admin_only(monkeypatch, tmp_path, role, status):
+    from fastapi import HTTPException
+
+    from app.routers import admin
+
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("R", user_id="system", project_id="rproj")
+    if status is None:
+        out = admin.admin_corpus_chunk_bounds(project_id="rproj", auth={"role": role})
+        assert out["project_id"] == "rproj" and out["executed"] is False
+    else:
+        with pytest.raises(HTTPException) as err:
+            admin.admin_corpus_chunk_bounds(project_id="rproj", auth={"role": role})
+        assert err.value.status_code == status
+
+
+@pytest.mark.parametrize("pid, raises", [("", True), ("rproj", False)])
+def test_plan_requires_a_project(monkeypatch, tmp_path, pid, raises):
+    pm = _reload_projects(monkeypatch, tmp_path)
+    pm.create_project("R", user_id="system", project_id="rproj")
+    if raises:
+        with pytest.raises(ValueError):
+            chunk_bounds_plan(project_id=pid)
+    else:
+        assert chunk_bounds_plan(project_id=pid)["length"]["chunks"] == 0
 
 
 @pytest.mark.parametrize(

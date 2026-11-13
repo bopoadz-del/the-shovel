@@ -11,10 +11,14 @@ carries too little text to embed into a useful neighbourhood.
   split at the coarsest boundary that fits: blank line, then line (a
   spreadsheet or bill row), then sentence end, then whitespace. A hard cut
   is the last resort for a single unbroken run.
-* **floor** -- a chunk shorter than ``CHUNK_MIN_CHARS`` (default 200) is
-  joined to its next neighbour (the previous one for the last chunk) when the
-  joined text still fits under the ceiling. A short chunk that cannot be
+* **floor** -- a prose chunk shorter than ``CHUNK_MIN_CHARS`` (default 200)
+  is joined to its next neighbour (the previous one for the last chunk) when
+  the joined text still fits under the ceiling. A short chunk that cannot be
   joined without breaking the ceiling is kept as is: text is never dropped.
+  Unit chunks -- one bill or spreadsheet row, one Contract Data particulars
+  block, one drawing schedule -- are a deliberate unit of retrieval and get
+  the ceiling only (``merge=False``): joining two rows would blur which row
+  states the figure.
 
 Both values are read from the environment at call time; ``0`` turns the
 rule off. Nothing here reads a document name or id: the rules look only at
@@ -40,11 +44,8 @@ _BOUNDARIES = (
 
 
 def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return default
     try:
-        return max(0, int(raw))
+        return max(0, int(os.getenv(name, "").strip()))
     except ValueError:
         return default
 
@@ -96,7 +97,7 @@ def split_oversize(text: str, ceiling: int, _level: int = 0) -> list[str]:
 
 def merge_undersize(chunks: list[str], floor: int, ceiling: int) -> list[str]:
     """Join each chunk shorter than ``floor`` to a neighbour when it still fits."""
-    if floor <= 0 or not chunks:
+    if floor <= 0:
         return list(chunks)
     out: list[str] = []
     carry = ""
@@ -121,16 +122,20 @@ def merge_undersize(chunks: list[str], floor: int, ceiling: int) -> list[str]:
 
 
 def bound_chunks(
-    chunks: Iterable[str], stats: dict[str, Any] | None = None,
+    chunks: Iterable[str],
+    stats: dict[str, Any] | None = None,
+    *,
+    merge: bool = True,
 ) -> list[str]:
-    """Every chunk within ``[CHUNK_MIN_CHARS, CHUNK_MAX_CHARS]`` where possible.
+    """Every chunk under ``CHUNK_MAX_CHARS``; with ``merge``, over the floor too.
 
     The ceiling is applied first so a merge never rebuilds an oversize chunk.
+    ``merge=False`` is for unit chunks (rows, particulars, schedules).
     ``stats`` (optional) receives ``split_from`` / ``merged`` counts.
     """
     ceiling = chunk_max_chars()
-    floor = chunk_min_chars()
-    if ceiling and floor and floor >= ceiling:
+    floor = chunk_min_chars() if merge else 0
+    if ceiling and floor >= ceiling:
         floor = 0  # a floor at or above the ceiling cannot be honoured
     src = [c for c in chunks if c is not None]
     split: list[str] = []
