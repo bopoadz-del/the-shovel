@@ -328,3 +328,33 @@ def test_index_project_refuses_unknown_profile(monkeypatch, profile):
     with pytest.raises(ValueError):
         doc_index.index_project("p", profile=profile)
     assert listed == []
+
+
+@pytest.mark.parametrize("ocr_size_gate, n_pages, want_budget", [
+    (True, 400, 80),     # user_upload: a long scan is cut at the page cap
+    (True, 150, 80),
+    (False, 400, 400),   # corpus_build: the budget is the document's pages
+    (False, 150, 150),
+])
+def test_ocr_page_budget_is_the_page_count_only_under_corpus_build(
+    tmp_path, monkeypatch, ocr_size_gate, n_pages, want_budget,
+):
+    """Under the OCR size gate (no skip: 25 MB < 32 MB) the first batch gets
+    the page cap; ``corpus_build`` gets every page of the document."""
+    import app.core.extract_isolated as extract_isolated
+
+    calls: list = []
+    monkeypatch.setattr(doc_index, "_document_size_mb", lambda p: 25.0)
+    monkeypatch.setattr(doc_index, "_quarantine_meta", lambda p, n: None)
+    monkeypatch.setattr(doc_index, "_pdf_page_count", lambda p: n_pages)
+    monkeypatch.setenv("PDF_OCR_MAX_SIZE_MB", "32")
+    monkeypatch.setenv("PDF_OCR_PAGE_CAP", "80")
+    monkeypatch.setenv("PDF_OCR_BATCH_PAGES", "50")
+    monkeypatch.setattr(extract_isolated, "run_isolated", _fake_range_job(calls))
+
+    _text, meta = doc_index._extract_pdf_batched(
+        str(tmp_path / "vol.pdf"), "vol.pdf", max_size_mb=0.0, ocr_size_gate=ocr_size_gate,
+    )
+    assert calls[0]["remaining"] == want_budget
+    assert meta["pages_in_file"] == n_pages
+    assert "ocr_skipped_too_large" not in meta

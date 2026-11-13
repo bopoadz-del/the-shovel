@@ -275,3 +275,29 @@ def test_transient_write_failure_is_reported_not_raised(tmp_path, exc):
     assert w.index_calls == [] and w.paths_discarded == []
     assert w.docs["d1"]["file_path"] == "/gone/old.pdf"
     assert w.chunks == ["keep"]
+
+
+@pytest.mark.parametrize("force_ocr", [True, False])
+def test_production_index_document_runs_on_corpus_build_profile(monkeypatch, force_ocr):
+    """The tool reads what the upload gates refuse: production wiring indexes
+    on ``corpus_build``, while ``index_document`` itself defaults to
+    ``user_upload``."""
+    import inspect
+
+    from app.core import doc_index
+
+    seen: List[tuple] = []
+
+    def fake_index(pid: str, did: str, **kw: Any) -> Dict[str, Any]:
+        seen.append((pid, did, kw))
+        return {"status": "ok"}
+
+    default = inspect.signature(doc_index.index_document).parameters["profile"].default
+    assert default == doc_index.PROFILE_USER_UPLOAD
+    monkeypatch.setattr(doc_index, "index_document", fake_index)
+    deps = dro.production_deps()
+    deps.index_document("p1", "d1", force_ocr=force_ocr, stamp_as_indexed=True)
+    assert seen == [("p1", "d1", {
+        "force_ocr": force_ocr, "stamp_as_indexed": True,
+        "profile": doc_index.PROFILE_CORPUS_BUILD,
+    })]

@@ -1096,7 +1096,8 @@ def _extract_pdf_batched(
     ``max_size_mb`` replaces the whole-PDF skip ceiling (``PDF_MAX_SIZE_MB``)
     for callers with their own, e.g. whole reference works.
     ``ocr_size_gate=False`` (the ``corpus_build`` profile) never skips OCR
-    for size; the page budget still bounds how many pages are OCR'd.
+    for size, and its OCR page budget is the document's own page count, so
+    a long image-only volume is not cut at ``pdf_ocr_page_cap``.
     """
     from app.core.extract_isolated import run_isolated
 
@@ -1129,6 +1130,9 @@ def _extract_pdf_batched(
         budget = 0
     elif force_ocr:
         budget = max(pdf_ocr_page_cap(filename), pdf_ocr_force_page_cap(), n_pages)
+    elif not ocr_size_gate:
+        # corpus_build: the budget is the document's own page count.
+        budget = max(pdf_ocr_page_cap(filename), n_pages)
     else:
         budget = pdf_ocr_page_cap(filename)
     batch = pdf_ocr_batch_pages()
