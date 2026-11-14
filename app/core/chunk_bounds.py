@@ -116,8 +116,6 @@ def _merge_pairs(
 
     Pairs are ``(text, split_parent)``; a joined pair keeps a parent id.
     """
-    if floor <= 0:
-        return list(pairs)
     out: list[tuple[str, int | None]] = []
     carry: tuple[str, int | None] | None = None
     for chunk, parent in pairs:
