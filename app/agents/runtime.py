@@ -10041,23 +10041,18 @@ def _search_row_sources(
     cited by the same signs the pre-injected path reads: a source citation
     naming its document (file name or id), its file name in the prose, or a
     quoted run of its passage. A declining answer only counts a quote, as the
-    pre-injected path lists nothing for a decline.
+    pre-injected path lists nothing for a decline. A document found by two
+    searches gives two rows here; the caller dedupes every source row.
     """
     from app.core.rag.source_class import classify, label_for
 
-    rows_read = _search_rows_read(tool_results)
-    if not rows_read or not final_text:
-        return []
     declines = _answer_is_caveat(final_text)
     cites = [] if declines else _extract_cited_chunk_indexes(final_text)
     cite_tokens = [(tok, _normalise_filename(tok)) for tok, _idx in cites]
     text_n = _normalise_filename(final_text)
     out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in rows_read:
+    for row in _search_rows_read(tool_results):
         doc_id = str(row.get("document_id"))
-        if doc_id in seen:
-            continue
         name = str(row.get("filename"))
         name_n = _normalise_filename(name)
         snippet = str(row.get("snippet") or "")
@@ -10069,7 +10064,6 @@ def _search_row_sources(
             )
         if not cited:
             continue
-        seen.add(doc_id)
         layer = str(row.get("origin") or "own")
         score = float(row.get("score") or 0.0)
         pages = row.get("pages") or []

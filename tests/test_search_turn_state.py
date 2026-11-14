@@ -291,3 +291,84 @@ def test_a_cited_search_row_stands_beside_cited_injected_chunks(name, snippet):
     answer = f"One part [source: d_pre, chunk 2] and another [source: {name}]."
     got = {s["doc_id"] for s in _build_sources_from_audit(audit, answer, tool_results)}
     assert got == {"d_pre", "d_row"}
+
+
+# ── the shared turn step, called directly ────────────────────────────────
+
+
+def _search_call(i: int, name: str = "search_project_documents") -> dict:
+    return {"id": f"call_{i}", "type": "function",
+            "function": {"name": name, "arguments": json.dumps({"query": f"qzq{i}"})}}
+
+
+@pytest.mark.parametrize("cap", [1, 2])
+def test_the_capped_result_names_the_cap_and_runs_nothing(cap):
+    from app.agents.core.tools import search_cap_reached_result
+
+    out = search_cap_reached_result(cap)
+    assert out["ok"] is False and out["name"] == "search_project_documents"
+    assert out["result"]["error"] == "search limit reached"
+    assert f"its {cap} project searches" in out["result"]["hint"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap,batch", [(1, 3), (2, 4)])
+async def test_the_turn_step_runs_searches_up_to_the_cap_and_other_tools_always(cap, batch):
+    from app.agents.core.tools import _run_turn_tool_call
+
+    ran: list = []
+
+    class _Agent:
+        async def _run_tool_call(self, tool_call, **kwargs):
+            ran.append((tool_call["id"], kwargs.get("search_turn")))
+            return {"name": tool_call["function"]["name"], "ok": True, "result": {"id": tool_call["id"]}}
+
+    agent = _Agent()
+    turn = SearchTurn(cap)
+    outs = [await _run_turn_tool_call(agent, _search_call(i), search_turn=turn) for i in range(batch)]
+    other = await _run_turn_tool_call(agent, _search_call(99, "list_project_documents"), search_turn=turn)
+    assert [o["ok"] for o in outs] == [True] * cap + [False] * (batch - cap)
+    assert [o["result"]["id"] for o in outs[:cap]] == [f"call_{i}" for i in range(cap)]
+    assert other["result"]["id"] == "call_99"
+    assert [cid for cid, _ in ran] == [f"call_{i}" for i in range(cap)] + ["call_99"]
+    assert all(t is turn for _, t in ran)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["search_project_documents", "search_documents"])
+async def test_run_tool_call_hands_the_turn_to_the_search_tool(monkeypatch, name):
+    """A search, under its own name or a manifest alias, reaches the search
+    tool with the turn's state and returns the tool's own result."""
+    from app.agents.core.tools import _run_tool_call
+
+    seen: list = []
+
+    async def fake(project_id, query, top_k=5, *, trace_path=None, turn=None):
+        seen.append((query, turn))
+        return [{"document_id": "dq", "filename": "Q.pdf", "snippet": query, "score": 0.5}]
+
+    monkeypatch.setattr("app.core.doc_index.search_project_documents", fake)
+    monkeypatch.setattr("app.agents.runtime._effective_tool_result_max_chars", lambda: 4000)
+    turn = SearchTurn(2)
+    out = await _run_tool_call(_agent(), _search_call(5, name), project_id="p-t", search_turn=turn)
+    assert out["name"] == "search_project_documents" and out["ok"] is True
+    assert out["result"]["results"][0]["snippet"] == "qzq5"
+    assert seen == [("qzq5", turn)]
+
+
+@pytest.mark.parametrize("handed,skipped", [(["a"], 0), (["a", "b", ""], 2)])
+def test_a_search_record_joins_the_handed_set(handed, skipped):
+    turn = SearchTurn(2, ["pre"])
+    turn.record_search(handed, skipped)
+    assert turn.handed == {"pre", *[h for h in handed if h]}
+    assert turn.last_skipped == skipped
+
+
+@pytest.mark.parametrize("name,snippet", ROW_CASES)
+def test_a_failed_search_result_is_not_a_source(name, snippet):
+    rows = [_row("d_f", name, snippet)]
+    answer = f"Stated there [source: {name}]."
+    audit = {"project_id": "p", "chunks": []}
+    failed = [{"name": "search_project_documents", "ok": False, "result": {"results": rows}}]
+    assert _build_sources_from_audit(audit, answer, failed) == []
+    assert [s["doc_id"] for s in _build_sources_from_audit(audit, answer, _search_result(rows))] == ["d_f"]
