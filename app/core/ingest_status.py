@@ -94,6 +94,9 @@ NO_CHUNK_STATUSES = ALL_STATUSES - INDEXED_STATUSES - {UNVERIFIED, PARTIAL_OCR}
 # by every entry point -- never a document id in code.
 EXCLUDED_KEY = "excluded"
 OWNER_EXCLUDED_REASON = "owner_excluded"
+# The reverse (``projects.include_document``) pops ``excluded`` and keeps it
+# under this key with who brought the document back, when and why.
+INCLUDED_BACK_KEY = "included_back"
 
 
 def is_excluded(doc: Any) -> bool:
