@@ -8394,8 +8394,14 @@ def _should_short_circuit_delay_damages_daily(
 
 
 def _calc_input_question(pre: dict[str, Any] | None) -> str:
-    """The pre-dispatched calculator's question for inputs it would not run, or ''."""
+    """The pre-dispatched calculator's question for inputs it would not run, or ''.
+
+    A calculator that only lacks inputs on a message that asked for no
+    computation does not end the turn: the turn goes on to retrieval.
+    """
     if not pre or pre.get("name") != "construction_calc":
+        return ""
+    if pre.get("falls_to_retrieval"):
         return ""
     result = pre.get("result")
     if not isinstance(result, dict) or not result.get("needs_input"):
@@ -12445,6 +12451,32 @@ def _figures_only_describe_record_ask(text: str) -> bool:
         return False
 
 
+def _message_requests_computation(text: str) -> bool:
+    """The user asks for a computation: in words, as arithmetic, or by
+    writing the figures to compute with beside a calculation verb."""
+    raw = text or ""
+    return bool(
+        _COMPUTE_REQUEST_RE.search(raw)
+        or _ARITH_EXPR_RE.search(raw)
+        or _looks_like_self_contained_calculation(raw)
+    )
+
+
+def _missing_inputs_fall_to_retrieval(result: Any, text: str) -> bool:
+    """A calculator that only lacks inputs, on a message that asked for no
+    computation, does not end the turn with its question.
+
+    The calculator was elected without a request to compute, so the
+    documents are asked instead; its missing-input note may ride along. A
+    value the user supplied and the calculator rejected is still asked about.
+    """
+    if not isinstance(result, dict) or result.get("status") != "needs_input":
+        return False
+    if not result.get("missing") or result.get("rejected"):
+        return False
+    return not _message_requests_computation(text)
+
+
 _FILE_TOKEN_RE = re.compile(_FILE_TOKEN, re.IGNORECASE)
 
 
@@ -12842,6 +12874,19 @@ def _formula_not_run_bubble(calc_name: str | None, result: Any) -> str:
     return " ".join(parts)
 
 
+def _calc_missing_input_retrieval_note(result: dict[str, Any]) -> str:
+    """The platform note when a calculator lacked inputs nobody asked it to
+    compute with: the documents answer, the missing inputs may be mentioned."""
+    question = str(result.get("question") or "").strip()
+    note = (f"{_CALC_NOT_RUN_HEAD} The user did not ask for a computation. "
+            "Answer the question from the project documents. Do not compute "
+            "a figure or choose an input.")
+    if question:
+        note += (" If the documents do not answer it, you may say that the "
+                 f"calculator would need: {question}")
+    return note
+
+
 async def _predispatch_formula_calc(
     agent: "Agent",
     messages: list,
@@ -12925,19 +12970,26 @@ async def _predispatch_formula_calc(
                 json.dumps(inner, default=str)[:4000],
                 (await _off_loop(_formula_predispatch_instruction, calc_name, result)),
             )
-        else:
+        falls_to_retrieval = False
+        if not ran:
             from app.agents import answer_exit
 
             answer_exit.note_tool_result("construction_calc", inner)
-            messages.append({
-                "role": "user",
-                "content": await _off_loop(_formula_not_run_bubble, calc_name, result),
-            })
+            falls_to_retrieval = await _off_loop(
+                _missing_inputs_fall_to_retrieval, inner, detect,
+            )
+            note = (
+                _calc_missing_input_retrieval_note(inner)
+                if falls_to_retrieval
+                else await _off_loop(_formula_not_run_bubble, calc_name, result)
+            )
+            messages.append({"role": "user", "content": note})
         return {
             "name": "construction_calc",
             "ok": bool(isinstance(result, dict) and result.get("ok")),
             "predispatched": True,
             "result": inner,
+            "falls_to_retrieval": falls_to_retrieval,
         }
     except Exception:  # noqa: BLE001
         _LOG.warning(

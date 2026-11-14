@@ -178,3 +178,85 @@ def test_each_records_frame_matches(text, frame):
 def test_no_records_frame_without_a_record(text):
     assert not runtime._RECORD_CHOICE_RE.search(text)
     assert not runtime._RECORD_ACT_RE.search(text)
+
+
+# --- 7. A calculator that lacks inputs ends the turn only on a compute ask ---
+# The recogniser above can miss a records question. Whatever elected the
+# calculator, a missing-input answer closes the turn only when the user asked
+# for a computation; otherwise the turn goes on to retrieval.
+
+@pytest.mark.parametrize("compute_ask, plain_ask", [
+    ("Calculate the lap length for the column bars",
+     "Lap length for the column bars"),
+    ("Work out the lap length for the column bars",
+     "Lap length for the column bars"),
+    ("Lap length for the column bars: (40*16) mm",
+     "Lap length for the column bars"),
+])
+def test_missing_inputs_ask_only_when_a_computation_was_asked(monkeypatch, compute_ask, plain_ask):
+    monkeypatch.setenv("AGENT_FORMULA_PREDISPATCH", "1")
+    out, agent = _predispatch(compute_ask)
+    assert out is not None and len(agent.calls) == 1
+    assert out["falls_to_retrieval"] is False
+    assert runtime._calc_input_question(out) == "What x?"
+
+    out, agent = _predispatch(plain_ask)
+    assert out is not None and len(agent.calls) == 1
+    assert out["falls_to_retrieval"] is True
+    # The turn does not end with the calculator's question ...
+    assert runtime._calc_input_question(out) == ""
+
+
+class _AskingAgent(_Agent):
+    """As the real tool wrapper reports it: an ask is not ``ok``."""
+
+    async def _run_tool_call(self, tc: dict[str, Any]) -> dict[str, Any]:
+        out = await super()._run_tool_call(tc)
+        return {**out, "ok": False}
+
+
+def test_the_model_is_sent_to_the_documents_with_the_note_alongside(monkeypatch):
+    monkeypatch.setenv("AGENT_FORMULA_PREDISPATCH", "1")
+    for text, to_docs in (("Calculate the lap length for the column bars", False),
+                          ("Lap length for the column bars", True)):
+        agent = _AskingAgent()
+        messages = [{"role": "user", "content": text}]
+        asyncio.run(runtime._predispatch_formula_calc(agent, messages, "p1", operator_text=text))
+        note = messages[-1]["content"]
+        assert ("from the project documents" in note) is to_docs
+        assert ("ask the user" in note.lower()) is not to_docs
+        # ... and the missing-input note rides along either way.
+        assert "What x?" in note
+
+
+@pytest.mark.parametrize("result, falls", [
+    ({"status": "needs_input", "needs_input": True, "missing": ["x"], "question": "q"}, True),
+    # A value the user wrote and the calculator rejected is still asked about.
+    ({"status": "error", "needs_input": True, "missing": [], "question": "q",
+      "rejected": [{"name": "x", "reason": "range"}]}, False),
+    ({"status": "needs_input", "needs_input": True, "missing": ["x"], "question": "q",
+      "rejected": [{"name": "y", "reason": "unreadable"}]}, False),
+    # Nothing missing: nothing to fall through on.
+    ({"status": "needs_input", "needs_input": True, "missing": [], "question": "q"}, False),
+    ({"status": "success", "calculation": "x"}, False),
+    (None, False),
+])
+def test_only_a_pure_missing_input_falls_to_retrieval(result, falls):
+    plain = "Lap length for the column bars"
+    assert runtime._missing_inputs_fall_to_retrieval(result, plain) is falls
+    # The same result on a compute request never falls through.
+    assert runtime._missing_inputs_fall_to_retrieval(result, "Calculate the " + plain) is False
+
+
+@pytest.mark.parametrize("text, computes", [
+    ("Calculate the lap length", True),
+    ("compute the lap length", True),
+    ("estimate the lap length", True),
+    ("Lap length is (40*16) mm", True),
+    ("What is the volume of a raft 30 m x 20 m?", True),
+    ("Lap length for the column bars", False),
+    ("How many manholes", False),
+    ("", False),
+])
+def test_message_requests_computation(text, computes):
+    assert runtime._message_requests_computation(text) is computes
