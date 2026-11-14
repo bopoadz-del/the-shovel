@@ -158,7 +158,12 @@ async def test_augment_merges_recovered_evidence(monkeypatch, ask):
     monkeypatch.setattr(rag_route, "augment_figure_retrieval", _fake_augment)
     monkeypatch.setattr(
         vector_store, "get_store",
-        lambda: SimpleNamespace(bm25_search=lambda pid, q, k=50: []),
+        # The project's index holds every question term in one chunk, so each
+        # term the first pass lacks is a reason to search again (S-R10 b).
+        lambda: SimpleNamespace(
+            bm25_search=lambda pid, q, k=50: [],
+            term_chunk_counts=lambda pid, terms: {t: 1 for t in terms},
+        ),
     )
 
     rag = {"content": "bulk excavation only"}

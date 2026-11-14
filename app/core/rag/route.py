@@ -84,6 +84,39 @@ def question_coverage(
             terms.append(term)
     return tuple(terms), tuple(t for t in terms if t not in found)
 
+
+def informative_missing_terms(
+    terms: Sequence[str],
+    absent: Iterable[str],
+    chunk_counts: Mapping[str, int],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(indexed, informative)`` among the ``absent`` question terms.
+
+    A term the first pass lacks (``absent``, rule a) is a reason to search
+    again only when a second retrieval could find it and it says something
+    about the question:
+
+    * (b) ``indexed``: the project's index holds it (``chunk_counts`` > 0).
+      A word no document uses cannot be retrieved.
+    * (c) ``informative``: its count is at or below the median count of the
+      question's terms the index holds. A word most of the project's
+      chunks carry ("many", "give") is scaffolding for this project, not
+      the fact asked for.
+
+    Every number comes from ``chunk_counts`` (the project's own index) and
+    the question's own terms: there is no word list and no fixed threshold.
+    """
+    def count(term: str) -> int:
+        return max(0, int(chunk_counts.get(term, 0) or 0))
+
+    held = sorted(count(t) for t in terms if count(t) > 0)
+    indexed = tuple(t for t in absent if count(t) > 0)
+    if not held:
+        return indexed, ()
+    mid = len(held) // 2
+    median = held[mid] if len(held) % 2 else (held[mid - 1] + held[mid]) / 2
+    return indexed, tuple(t for t in indexed if count(t) <= median)
+
 # An interrogative that asks for a value (as opposed to a procedure or a
 # yes/no): "what is the rate", "how much cover", "how many lux".
 _ASK_VALUE_RE = re.compile(r"(?i)\b(?:what|how\s+much|how\s+many)\b")

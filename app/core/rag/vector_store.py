@@ -2464,6 +2464,73 @@ class VectorStore:
         self._lexeme_freq_cache = (now, freq)
         return freq
 
+    _TERM_COUNT_TTL_S = 600.0
+
+    def term_chunk_counts(
+        self, project_id: str, terms: Iterable[str],
+    ) -> Dict[str, int]:
+        """How many of ``project_id``'s visible chunks hold each term.
+
+        Read from the lexical index the BM25 leg already uses (the
+        ``text_search`` tsvector on PostgreSQL, ``chunks_fts`` on SQLite),
+        so "the index contains this word" means what a lexical re-query
+        could find. A term the index cannot match (a stopword, punctuation
+        only) counts 0. Counts are cached per project for
+        ``_TERM_COUNT_TTL_S``. Backend errors propagate: the caller decides
+        what an unreadable index means.
+        """
+        import time as _time
+
+        wanted = [t for t in dict.fromkeys(str(t) for t in terms) if t]
+        now = _time.monotonic()
+        cache = getattr(self, "_term_count_cache", None)
+        if cache is None:
+            cache = self._term_count_cache = {}
+        stamp, counts = cache.get(project_id, (now, {}))
+        if now - stamp >= self._TERM_COUNT_TTL_S:
+            stamp, counts = now, {}
+        todo = [t for t in wanted if t not in counts]
+        if todo:
+            with self._lock:
+                with self._session_factory()() as session:
+                    vis = (
+                        self._hidden_doc_sql("c")
+                        if self._docs_visibility_ready(session) else ""
+                    )
+                    for term in todo:
+                        counts[term] = self._term_chunk_count(
+                            session, project_id, term, vis,
+                        )
+            cache[project_id] = (stamp, counts)
+        return {t: counts[t] for t in wanted}
+
+    def _term_chunk_count(
+        self, session: Session, project_id: str, term: str, vis: str,
+    ) -> int:
+        table = self._table_name
+        if self._use_pgvector:
+            sql = (
+                f"SELECT count(*) FROM {table} c "
+                "WHERE c.project_id = :project_id "
+                "AND c.text_search @@ plainto_tsquery('english', :q)" + vis
+            )
+            return int(session.execute(
+                text(sql), {"project_id": project_id, "q": term},
+            ).scalar() or 0)
+        tokens = _FTS5_SAFE_RE.sub(" ", term).split()
+        if not tokens:
+            return 0
+        fts_table = f"{table}_fts"
+        sql = (
+            f"SELECT count(*) FROM {fts_table} "
+            f"JOIN {table} c ON c.rowid = {fts_table}.rowid "
+            f"WHERE {fts_table} MATCH :q AND c.project_id = :project_id" + vis
+        )
+        phrase = '"' + " ".join(tokens) + '"'
+        return int(session.execute(
+            text(sql), {"project_id": project_id, "q": phrase},
+        ).scalar() or 0)
+
     def _bm25_sqlite(
         self, project_id: str, query: str, k: int,
         scope_sql: str = "", scope_params: Optional[Dict[str, str]] = None,

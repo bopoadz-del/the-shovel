@@ -104,7 +104,16 @@ def test_a_question_with_no_content_terms_is_never_uncovered(question):
 
 # --- the runtime gate --------------------------------------------------------
 
-def _run_gate(monkeypatch, question: str, first_pass: str, *, excluded: bool = False):
+def _every_term_once(project_id, terms):
+    """A store whose index holds every term in exactly one chunk: each is as
+    informative as the next, so rule (c) keeps every indexed absent term."""
+    return {t: 1 for t in terms}
+
+
+def _run_gate(
+    monkeypatch, question: str, first_pass: str, *, excluded: bool = False,
+    term_chunk_counts=_every_term_once,
+):
     calls: list[str] = []
 
     async def fake_augment(**kwargs):
@@ -117,7 +126,9 @@ def _run_gate(monkeypatch, question: str, first_pass: str, *, excluded: bool = F
     monkeypatch.setattr(runtime, "_bill_led_rag_msg", lambda q, p, m: m)
     monkeypatch.setattr(
         "app.core.rag.vector_store.get_store",
-        lambda: SimpleNamespace(bm25_search=lambda *a, **k: []),
+        lambda: SimpleNamespace(
+            bm25_search=lambda *a, **k: [], term_chunk_counts=term_chunk_counts,
+        ),
     )
     out = asyncio.run(runtime._agentic_figure_retrieval_augment(
         agent=SimpleNamespace(), user_message=question, project_id="p",
@@ -160,3 +171,157 @@ def test_exclusions_still_keep_the_loop_out(question, covering_body, monkeypatch
     calls, out = _run_gate(monkeypatch, question, first_pass, excluded=True)
     assert calls == []
     assert out["content"] == first_pass
+
+
+# --- rules (b) and (c): the project's own index decides --------------------
+#
+# Each case builds a question, a first pass and the project's chunk counts.
+# The counts stand in for what ``VectorStore.term_chunk_counts`` reads from
+# the lexical index; the store-level tests below read a real one.
+
+# A first pass that holds the fact; the question carries one word the
+# excerpts lack and that most of the project's chunks use.
+_SCAFFOLD_ABSENT = [
+    ("How many days notice does the contractor give before a pour?",
+     "The Contractor shall give 2 days notice before any concrete pour.",
+     {"many": 140, "days": 30, "notice": 12, "contractor": 150,
+      "give": 90, "before": 160, "pour": 6}),
+    ("Which supplier delivers the precast stair units to site?",
+     "Precast stair units: the appointed supplier delivers them to the works.",
+     {"supplier": 15, "delivers": 3, "precast": 8, "stair": 10,
+      "units": 70, "site": 210}),
+]
+
+# A first pass that lacks the question's rarest indexed term.
+_RAREST_ABSENT = [
+    ("What is the cube strength of the blinding concrete?",
+     "Concrete for the slabs shall reach the specified strength.",
+     {"cube": 4, "strength": 40, "blinding": 2, "concrete": 300}),
+    ("When is the waterproofing membrane inspected",
+     "The membrane is laid after the screed has cured.",
+     {"when": 120, "waterproofing": 5, "membrane": 9, "inspected": 25}),
+]
+
+# A first pass that lacks a term no document in the project uses.
+_UNINDEXED_ABSENT = [
+    ("What is the retention percentage?",
+     "Retention: 5% of each interim payment until practical completion.",
+     {"retention": 7, "percentage": 0}),
+    ("How many lux are required in the plant room",
+     "Plant room lighting required: 200 lx at floor level.",
+     {"many": 0, "lux": 0, "required": 60, "plant": 9, "room": 80}),
+]
+
+
+def _missing(question, body, counts):
+    terms, absent = route.question_coverage(
+        question, _context(_excerpt("d1", 0, body)), content_terms=_content_terms,
+    )
+    return terms, absent, route.informative_missing_terms(terms, absent, counts)
+
+
+@pytest.mark.parametrize("question,body,counts", _SCAFFOLD_ABSENT)
+def test_a_common_absent_word_is_not_missing(question, body, counts):
+    _, absent, (indexed, missing) = _missing(question, body, counts)
+    assert absent and indexed == absent  # rule (a) and (b) hold for it
+    assert missing == ()                 # rule (c) does not
+
+
+@pytest.mark.parametrize("question,body,counts", _RAREST_ABSENT)
+def test_the_rarest_absent_term_is_missing(question, body, counts):
+    terms, _, (_, missing) = _missing(question, body, counts)
+    rarest = min((t for t in terms if counts.get(t)), key=lambda t: counts[t])
+    assert rarest in missing
+
+
+@pytest.mark.parametrize("question,body,counts", _UNINDEXED_ABSENT)
+def test_a_term_the_index_lacks_is_never_missing(question, body, counts):
+    _, absent, (indexed, missing) = _missing(question, body, counts)
+    unindexed = {t for t in absent if not counts.get(t)}
+    assert unindexed
+    assert not unindexed & set(indexed)
+    assert not unindexed & set(missing)
+
+
+@pytest.mark.parametrize("question,body,counts", _SCAFFOLD_ABSENT)
+def test_gate_holding_the_fact_with_a_common_word_skips_the_loop(
+    question, body, counts, monkeypatch,
+):
+    first_pass = _context(_excerpt("d1", 0, body))
+    calls, out = _run_gate(
+        monkeypatch, question, first_pass,
+        term_chunk_counts=lambda pid, terms: {t: counts.get(t, 0) for t in terms},
+    )
+    assert calls == []
+    assert out["content"] == first_pass
+
+
+@pytest.mark.parametrize("question,body,counts", _RAREST_ABSENT)
+def test_gate_lacking_the_rarest_term_runs_the_loop(
+    question, body, counts, monkeypatch,
+):
+    first_pass = _context(_excerpt("d1", 0, body))
+    calls, _ = _run_gate(
+        monkeypatch, question, first_pass,
+        term_chunk_counts=lambda pid, terms: {t: counts.get(t, 0) for t in terms},
+    )
+    assert calls == [question]
+
+
+@pytest.mark.parametrize("question,body,counts", _UNINDEXED_ABSENT)
+def test_gate_never_fires_on_a_term_the_index_lacks(
+    question, body, counts, monkeypatch,
+):
+    first_pass = _context(_excerpt("d1", 0, body))
+    calls, _ = _run_gate(
+        monkeypatch, question, first_pass,
+        term_chunk_counts=lambda pid, terms: {t: counts.get(t, 0) for t in terms},
+    )
+    assert calls == []
+
+
+@pytest.mark.parametrize("question,covering_body", _UNGATED_SHAPES)
+def test_an_unreadable_index_does_not_run_the_loop(
+    question, covering_body, monkeypatch,
+):
+    def broken(project_id, terms):
+        raise RuntimeError("index unavailable")
+
+    first_pass = _context(_excerpt("d1", 0, "Formwork shall be plywood."))
+    calls, out = _run_gate(monkeypatch, question, first_pass, term_chunk_counts=broken)
+    assert calls == []
+    assert out["content"] == first_pass
+
+
+# --- the store reads the counts from its own lexical index ------------------
+
+@pytest.fixture
+def small_store(tmp_path):
+    import numpy as np
+
+    from app.core.rag import vector_store as vs
+
+    vs.reset_store_cache()
+    store = vs.VectorStore(db_path=str(tmp_path / "terms.db"), dim=8)
+    rng = np.random.default_rng(0)
+
+    def index(project_id, doc_id, texts):
+        store.upsert_chunks(
+            project_id, doc_id, texts, rng.random((len(texts), 8), dtype=np.float32),
+        )
+
+    yield store, index
+    store.close()
+
+
+@pytest.mark.parametrize("texts,expect", [
+    (["the pour is cast", "the slab is cured", "pour the blinding"],
+     {"pour": 2, "slab": 1, "blinding": 1, "membrane": 0}),
+    (["Retention 5% applies", "retention is released", "interim payment due"],
+     {"retention": 2, "interim": 1, "percentage": 0, "payment": 1}),
+])
+def test_store_counts_chunks_holding_each_term(small_store, texts, expect):
+    store, index = small_store
+    index("p-own", "doc-a", texts)
+    index("p-other", "doc-b", [" ".join(expect)] * 3)  # another project's words
+    assert store.term_chunk_counts("p-own", list(expect)) == expect
