@@ -224,11 +224,12 @@ def rag_inject_job(kwargs: dict, caller_role: Optional[str]):
     return rag_inject(**kwargs)
 
 
-def search_documents_job(project_id: str, query: str, top_k: int, caller_role: Optional[str]):
+def search_documents_job(project_id: str, query: str, top_k: int, caller_role: Optional[str],
+                         exclude_chunk_ids: frozenset = frozenset()):
     _as_caller(caller_role)
     from app.core.doc_index import _search_project_documents_traced
 
-    return _search_project_documents_traced(project_id, query, top_k)
+    return _search_project_documents_traced(project_id, query, top_k, exclude_chunk_ids)
 
 
 def project_is_rag_ready_job(project_id: str) -> bool:
