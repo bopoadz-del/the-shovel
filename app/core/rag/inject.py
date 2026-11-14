@@ -1019,7 +1019,7 @@ def rag_inject(
        turn's k), call ``retrieve_with_filter`` for a pool of
        ``handed_set.pool_k(effective_k)``; the handed set is chosen from it
        by ``handed_set.select_handed`` (diverse across documents, bounded by
-       a character budget that is smaller when budget_degraded).
+       a character budget that is the same whatever the day's spend).
     4. If retrieved top_score < THRESHOLD or no chunks at all: return
        (None, audit_record) with ``threshold_fired=true`` so the caller can
        still write the audit log and prepend its fallback prefix. When
@@ -1043,12 +1043,12 @@ def rag_inject(
     requested_k = int(os.getenv("RAG_K", "5"))
 
     budget_state = _budget.snapshot(day=today)
-    # The day's budget no longer collapses the depth to two chunks (S-R5:
-    # every ask handed exactly two, mostly of one document). Depth stays the
-    # turn's k; the degrade is a smaller CHARACTER budget on the handed set
-    # (handed_set.char_budget), so the cost guard holds and several sources
-    # still fit. The pool is wider than k so the set can be diverse.
+    # The day's token counter is MEASURE-ONLY (owner order, 13 Nov): it is
+    # read for the trace and never changes the depth or the handed set. On
+    # 13 Nov the old degrade cut every user's answer to two excerpts. The
+    # pool is wider than k so the handed set can be diverse.
     budget_degraded = bool(budget_state["degraded"])
+    budget_consumed = budget_state["consumed"]
     effective_k = rag_retrieval_k(user_message, requested_k)
     retrieval_pool_k = _handed_set.pool_k(effective_k)
 
@@ -1145,6 +1145,7 @@ def rag_inject(
         "top_score": top_score,
         "budget_remaining": budget_state["remaining"],
         "budget_degraded": budget_state["degraded"],
+        "budget_consumed": budget_consumed,
         "fallback_used": fallback_used,
         "extracted_contract_ids": named_contracts,
     }
@@ -1174,13 +1175,12 @@ def rag_inject(
             retrieved=chunks, handed=[], threshold_fired=True,
             identifier_miss=identifier_miss, top_score=top_score,
             k_info={"requested_k": requested_k, "effective_k": effective_k,
-                    "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded},
+                    "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
+                    "budget_consumed": budget_consumed},
         )
         return None, audit_rec
 
-    handed_pool, allotment = _handed_set.select_handed(
-        chunks, k=effective_k, degraded=budget_degraded,
-    )
+    handed_pool, allotment = _handed_set.select_handed(chunks, k=effective_k)
     kept, total_tokens = apply_token_cap(handed_pool, query=user_message or "")
     sys_msg = format_chunks_as_system_message(
         kept, total_candidates=len(chunks), query=user_message or "",
@@ -1208,6 +1208,7 @@ def rag_inject(
         identifier_miss=False, top_score=top_score,
         k_info={"requested_k": requested_k, "effective_k": effective_k,
                 "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
+                    "budget_consumed": budget_consumed,
                 "allotment": allotment},
     )
     _budget.consume(day=today, tokens=total_tokens)

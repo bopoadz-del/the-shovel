@@ -31,7 +31,7 @@ def _c(doc, idx, score, text_len=400, name=None, layer="own", text=None):
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    for name in ("RAG_HANDED_CHAR_BUDGET", "RAG_DEGRADED_CHAR_BUDGET",
+    for name in ("RAG_HANDED_CHAR_BUDGET",
                  "RAG_HANDED_POOL_FACTOR", "RAG_HANDED_DOC_SHARE",
                  "RAG_HANDED_DOC_MARGIN", "RAG_K", "RAG_RETRIEVAL_TRACE"):
         monkeypatch.delenv(name, raising=False)
@@ -64,16 +64,20 @@ def test_first_chunk_kept_even_over_budget_and_shorter_ones_fill_after(first_len
     assert [c.doc_id for c in kept2] == ["mid", "small"]
 
 
-@pytest.mark.parametrize("degraded,env,value", [
-    (False, "RAG_HANDED_CHAR_BUDGET", 12_345),
-    (True, "RAG_DEGRADED_CHAR_BUDGET", 2_222),
-])
-def test_char_budget_reads_its_own_setting(degraded, env, value, monkeypatch):
-    monkeypatch.setenv(env, str(value))
-    assert hs.char_budget(degraded) == value
-    monkeypatch.setenv(env, "not-a-number")
-    default = hs.DEFAULT_DEGRADED_CHAR_BUDGET if degraded else hs.DEFAULT_CHAR_BUDGET
-    assert hs.char_budget(degraded) == default
+@pytest.mark.parametrize("value", [12_345, 2_222])
+def test_char_budget_reads_its_setting(value, monkeypatch):
+    monkeypatch.setenv("RAG_HANDED_CHAR_BUDGET", str(value))
+    assert hs.char_budget() == value
+    monkeypatch.setenv("RAG_HANDED_CHAR_BUDGET", "not-a-number")
+    assert hs.char_budget() == hs.DEFAULT_CHAR_BUDGET
+
+
+@pytest.mark.parametrize("old_setting", ["1", "6000"])
+def test_removed_degraded_setting_changes_nothing(old_setting, monkeypatch):
+    """The uncap: the old degraded character budget is not read any more."""
+    monkeypatch.setenv("RAG_DEGRADED_CHAR_BUDGET", old_setting)
+    assert hs.char_budget() == hs.DEFAULT_CHAR_BUDGET
+    assert not hasattr(hs, "DEFAULT_DEGRADED_CHAR_BUDGET")
 
 
 @pytest.mark.parametrize("k,factor,pool", [(5, None, 10), (7, "3", 21)])
@@ -126,7 +130,7 @@ def test_select_handed_reports_allotment(n_docs):
     chunks = [_c(f"d{i}", j, 0.9 - i * 0.02 - j * 0.001, text_len=300)
               for i in range(n_docs) for j in range(3)]
     chunks.append(_c("gk", 0, 0.88, text_len=300, layer="general_knowledge"))
-    handed, allot = hs.select_handed(chunks, k=5, degraded=False)
+    handed, allot = hs.select_handed(chunks, k=5)
     assert allot["families"] == n_docs + 1
     assert allot["layers"]["general_knowledge"] == 1
     assert allot["layers"]["own"] == len(handed) - 1
@@ -134,7 +138,7 @@ def test_select_handed_reports_allotment(n_docs):
     assert allot["char_budget"] == hs.DEFAULT_CHAR_BUDGET
 
 
-# --- (a)+(b) through rag_inject: the degrade no longer means two chunks -----
+# --- (a)+(b) through rag_inject: the daily counter never shortens the set ---
 
 def _inject(monkeypatch, pool, degraded, ask="what does the method statement say about piling?"):
     from app.core.rag import inject
@@ -147,7 +151,7 @@ def _inject(monkeypatch, pool, degraded, ask="what does the method statement say
 
     monkeypatch.setattr(inject, "retrieve_with_filter", fake_retrieve)
     monkeypatch.setattr(inject._budget, "snapshot", lambda day: {
-        "day": day, "consumed": 9, "budget": 9 if degraded else 10,
+        "day": day, "consumed": 9_000_000 if degraded else 9, "budget": 10,
         "remaining": 0 if degraded else 1, "degraded": degraded,
     })
     monkeypatch.setattr(inject._budget, "consume", lambda **kw: None)
@@ -171,18 +175,20 @@ def test_short_excerpts_from_several_documents_are_all_handed(degraded, monkeypa
     assert len({c["doc_id"] for c in audit["chunks"]}) == 5
 
 
-@pytest.mark.parametrize("size,expected_degraded", [(2_500, 2), (1_000, 6)])
-def test_degraded_budget_is_characters(size, expected_degraded, monkeypatch):
+@pytest.mark.parametrize("size", [2_500, 1_000])
+def test_spent_daily_budget_hands_the_same_set(size, monkeypatch):
+    """Owner order (uncap): consumed far above the limit hands exactly what
+    consumed below it hands."""
     pool = [_c(f"d{i}", 0, 0.9 - i * 0.02, text_len=size) for i in range(8)]
-    _m, audit, _s = _inject(monkeypatch, pool, True)
-    assert audit["injected_k"] == expected_degraded
+    _m, below, _s = _inject(monkeypatch, pool, False)
+    _m, above, _s = _inject(monkeypatch, pool, True)
+    assert below["budget_degraded"] is False and above["budget_degraded"] is True
+    assert [c["chunk_id"] for c in above["chunks"]] == [c["chunk_id"] for c in below["chunks"]]
+    assert above["injected_k"] == below["injected_k"] > 2
 
 
-@pytest.mark.parametrize("degraded,budget", [
-    (True, hs.DEFAULT_DEGRADED_CHAR_BUDGET),
-    (False, hs.DEFAULT_CHAR_BUDGET),
-])
-def test_trace_prints_requested_effective_k_and_allotment(degraded, budget, monkeypatch):
+@pytest.mark.parametrize("degraded,consumed", [(True, 9_000_000), (False, 9)])
+def test_trace_prints_requested_effective_k_and_allotment(degraded, consumed, monkeypatch):
     lg = logging.getLogger("app.rag.retrieval_trace")
     records = []
 
@@ -205,7 +211,8 @@ def test_trace_prints_requested_effective_k_and_allotment(degraded, budget, monk
     p = json.loads(lines[0][len(TRACE_EVENT):].strip())
     assert p["requested_k"] == 5 and p["effective_k"] == 5 and p["pool_k"] == 10
     assert p["budget_degraded"] is degraded
-    assert p["allotment"]["char_budget"] == budget
+    assert p["budget_consumed"] == consumed
+    assert p["allotment"]["char_budget"] == hs.DEFAULT_CHAR_BUDGET
     assert p["allotment"]["layers"] == {"own": 4, "general_knowledge": 1}
 
 
@@ -293,7 +300,7 @@ def test_non_numeric_score_ranks_as_zero_not_a_crash(raw):
 @pytest.mark.parametrize("slots", [1, 5])
 def test_empty_pool_hands_nothing(slots):
     assert hs.diversify([], slots=slots, share=0.4, margin=0.15) == []
-    handed, allot = hs.select_handed([], k=slots, degraded=False)
+    handed, allot = hs.select_handed([], k=slots)
     assert handed == [] and allot["families"] == 0
 
 

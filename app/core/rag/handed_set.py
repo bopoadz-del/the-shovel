@@ -7,8 +7,9 @@ source names, chunk text lengths and the question's own words.
 (a) The handed set is bounded by a CHARACTER budget, not a fixed count. A
     count of two hands two long chunks of one document and nothing else; a
     character budget lets several short excerpts from several sources fit
-    the same spend. The daily-budget degrade keeps its cost guard as a
-    smaller character budget instead of collapsing the depth to two.
+    the same spend. The budget is the same on every turn: the daily RAG
+    token counter (app/core/rag/budget.py) is measured and traced, never
+    used to shorten what is handed (owner order, 13 Nov).
 
 (b) The handed set is diverse across documents. One document may hold at
     most a share of the handed slots while another document's best chunk
@@ -35,10 +36,6 @@ from typing import Any, Sequence
 #: MAX_RAG_TOKENS' default spend at 4 chars per token, leaving the token cap
 #: as the backstop it already is.
 DEFAULT_CHAR_BUDGET = 16_000
-#: Character budget once the day's RAG token budget is spent. Replaces the
-#: old "k=2": about the same spend as two long chunks, but several short
-#: excerpts from several sources fit inside it.
-DEFAULT_DEGRADED_CHAR_BUDGET = 6_000
 #: Retrieval pool depth as a multiple of the turn's k: selection needs
 #: candidates beyond the top k to have other documents to choose from.
 DEFAULT_POOL_FACTOR = 2
@@ -59,12 +56,9 @@ def _env_number(name: str, default: float, *, minimum: float) -> float:
     return value if value >= minimum else default
 
 
-def char_budget(degraded: bool) -> int:
-    """The handed set's character budget for this turn."""
-    if degraded:
-        return int(_env_number(
-            "RAG_DEGRADED_CHAR_BUDGET", DEFAULT_DEGRADED_CHAR_BUDGET, minimum=1,
-        ))
+def char_budget() -> int:
+    """The handed set's character budget. It does not depend on the day's
+    token spend: the daily counter never changes what is handed."""
     return int(_env_number("RAG_HANDED_CHAR_BUDGET", DEFAULT_CHAR_BUDGET, minimum=1))
 
 
@@ -178,14 +172,14 @@ def fit_char_budget(chunks: Sequence[Any], budget: int) -> list:
 
 
 def select_handed(
-    chunks: Sequence[Any], *, k: int, degraded: bool,
+    chunks: Sequence[Any], *, k: int,
 ) -> tuple[list, dict[str, Any]]:
     """The handed set: diversified, then fitted to the character budget.
 
     Returns ``(handed, allotment)`` where ``allotment`` is what the trace
     prints: the budget, the characters used, the per-layer and per-family
     counts."""
-    budget = char_budget(degraded)
+    budget = char_budget()
     ordered = diversify(chunks, slots=k, share=doc_share(), margin=doc_margin())
     handed = fit_char_budget(ordered, budget)
     layers: dict[str, int] = {}
