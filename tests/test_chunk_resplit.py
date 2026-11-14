@@ -290,17 +290,23 @@ def test_each_piece_text_search_is_derived_from_its_own_text(
         assert len(rows) > 1
         for cid, body, own, as_parent in rows:
             assert own is True and as_parent is False
-            # a parent word whose lexeme this piece lacks must not match it
-            foreign = [w for w in sorted(set(re.findall(r"[A-Za-z]{4,}", parent)))
-                       if s.execute(sql(
-                           "SELECT NOT (to_tsvector('english', :b) @@ plainto_tsquery('english', :w))"),
-                           {"b": body, "w": w}).scalar()]
+            # a lexeme of the parent that this piece's own text lacks (taken from
+            # Postgres' parser, so numbers and codes count, not only words)
+            foreign = [r[0] for r in s.execute(sql(
+                "SELECT unnest(tsvector_to_array(to_tsvector('english', :p))) "
+                "EXCEPT SELECT unnest(tsvector_to_array(to_tsvector('english', :b))) "
+                "ORDER BY 1"), {"p": parent, "b": body}).all()]
             assert foreign
-            hits = s.execute(sql(
-                f"SELECT count(*) FROM {table} WHERE chunk_id = :c "
-                "AND text_search @@ plainto_tsquery('english', :w)"),
-                {"c": cid, "w": foreign[0]}).scalar()
-            assert hits == 0
+            for lex in foreign:
+                hits = s.execute(sql(
+                    f"SELECT count(*) FROM {table} WHERE chunk_id = :c "
+                    "AND text_search @@ CAST(quote_literal(:w) AS tsquery)"),
+                    {"c": cid, "w": lex}).scalar()
+                assert hits == 0
+                # the same lexeme does hit the parent's vector: the probe is live
+                assert s.execute(sql(
+                    "SELECT to_tsvector('english', :p) @@ CAST(quote_literal(:w) AS tsquery)"),
+                    {"p": parent, "w": lex}).scalar() is True
 
 
 @pytest.mark.parametrize("doc_ids", [[], ["  ", ""]])
