@@ -81,6 +81,31 @@ def _project(monkeypatch, tmp_path, pid):
     return pm
 
 
+def _project_on_job_db(monkeypatch, tmp_path, pid):
+    """Like ``_project`` but on the job's own DATABASE_URL (PostgreSQL in test-postgres).
+
+    ``_reload_projects`` drops DATABASE_URL, so an earlier test in the same
+    worker may have left ``app.core.db`` bound to SQLite; reload it back.
+    """
+    import importlib
+
+    import app.core.db as db_mod
+    import app.core.users as users_mod
+    from app.core import projects
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
+    importlib.reload(db_mod)
+    importlib.reload(users_mod)
+    users_mod._initialized = False
+    pm = importlib.reload(projects)
+    pm._initialized = False
+    pm.init_db()
+    assert db_mod.engine.dialect.name == "postgresql"
+    pm.create_project(pid, user_id="system", project_id=pid)
+    return pm
+
+
 def _cls():
     import os
 
@@ -233,7 +258,7 @@ def test_each_piece_text_search_is_derived_from_its_own_text(
 
     from app.core.db import SessionLocal
 
-    pm = _project(monkeypatch, tmp_path, "tsproj")
+    pm = _project_on_job_db(monkeypatch, tmp_path, "tsproj")
     did = _doc(pm, "tsproj", "t.pdf", texts, "spec", page=1)
     plan = cr.chunk_resplit(project_id="tsproj", doc_ids=[did])["plan"]
     done = cr.chunk_resplit(project_id="tsproj", doc_ids=[did], execute=True,
