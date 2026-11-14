@@ -171,9 +171,18 @@ def _inject(monkeypatch, chunk_ids):
 
 
 def _batch_then_answer(n_calls: int, answer: str, seen: list):
-    """First model call asks for ``n_calls`` searches at once; the next one
-    answers. ``seen`` records the tool messages the second call was given."""
+    """First chat call asks for ``n_calls`` searches at once; the next one
+    answers. ``seen`` records the messages of each chat call.
+
+    A tool-free call (``with_tools=False``, the evidence loop's plan call) is
+    not a chat turn: it gets an empty plan and is not counted, so whether the
+    evidence gate runs the loop before the chat does not shift which chat
+    call asks for the batch."""
     async def fake(messages, api_key, **kwargs):
+        if kwargs.get("with_tools", True) is False:
+            return {"status": "success", "choice": {
+                "message": {"role": "assistant", "content": "", "tool_calls": []},
+                "finish_reason": "stop"}}
         seen.append(list(messages))
         if len(seen) == 1:
             calls = [{
