@@ -247,17 +247,19 @@ def test_thresholds_are_env_tunable_without_a_deploy():
 def test_status_vocabulary_matches_the_migration_check_constraint():
     """The latest CHECK-constraint migration pins these in SQL. A status added
     here and not there is written to production as a constraint violation, at
-    ingest time, on a live run. 0032 is the current emitter: it drops and
-    re-adds ck_documents_ingest_status with the full vocabulary."""
+    ingest time, on a live run. The governing emitter is the highest-numbered
+    migration that re-adds ck_documents_ingest_status (found, not named), and
+    it must carry the full vocabulary -- every status, the newest included."""
     from pathlib import Path
 
-    src = Path("alembic/versions/0032_documents_ocr_pages.py").read_text(
-        encoding="utf-8"
+    emitters = sorted(
+        p for p in Path("alembic/versions").glob("[0-9][0-9][0-9][0-9]_*.py")
+        if "ADD CONSTRAINT ck_documents_ingest_status" in p.read_text(encoding="utf-8")
     )
+    assert emitters, "no migration emits ck_documents_ingest_status"
+    src = emitters[-1].read_text(encoding="utf-8")
     for status in ist.ALL_STATUSES:
-        assert f'"{status}"' in src, f"{status} missing from migration 0032"
-    # The migration that introduced PARTIAL_OCR must be the one that governs.
-    assert '"PARTIAL_OCR"' in src
+        assert f'"{status}"' in src, f"{status} missing from {emitters[-1].name}"
 
 
 def test_migration_backfill_only_ever_touches_unverified_rows():

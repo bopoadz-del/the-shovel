@@ -60,6 +60,13 @@ PARTIAL_OCR = "PARTIAL_OCR"
 # ceiling must be visible on the ledger; adding a new ingest_status value
 # would require an ALTER CONSTRAINT. Recoverable: force_ocr / raise ceiling.
 OCR_DEGRADED = "OCR_DEGRADED"
+# Stored but deliberately not indexed: owner policy keeps the uploader's file
+# out of the project RAG (``privileges.caller_may_add_to_project_rag``). A
+# settled outcome, not open work, so an inventory can tell "not indexed by
+# policy" from "lost" (UNVERIFIED forever). It holds no chunks, like every
+# other non-indexed status; its reason says which policy (see
+# ``ADMIN_ONLY_POLICY_REASON``).
+NOT_INDEXED_POLICY = "NOT_INDEXED_POLICY"
 
 # Statuses whose document holds chunks and is retrieved.
 INDEXED_STATUSES = frozenset({INDEXED, TEXT_SPARSE})
@@ -75,6 +82,7 @@ ALL_STATUSES = frozenset(
         TOMBSTONED,
         QUARANTINED,
         PARTIAL_OCR,
+        NOT_INDEXED_POLICY,
     }
 )
 
@@ -127,6 +135,10 @@ OPEN_STATUSES = frozenset({UNVERIFIED, ZERO_CHUNK, EXTRACT_FAILED})
 # Reason suffixes that qualify TEXT_SPARSE and UNSUPPORTED_TYPE.
 TERMINAL = "terminal"        # nothing left to recover, anywhere
 RECOVERABLE = "recoverable"  # a richer source for this document exists
+
+# The NOT_INDEXED_POLICY reason for an upload by a caller who may not add to
+# the project RAG. ``<reason>:terminal``: no retry can change a policy.
+ADMIN_ONLY_POLICY_REASON = f"rag_admin_only:{TERMINAL}"
 
 # BOUNDED RETRIES. Every open outcome -- UNVERIFIED, ZERO_CHUNK,
 # EXTRACT_FAILED, and the RECOVERABLE qualifiers -- is retried only while the
