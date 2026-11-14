@@ -58,6 +58,8 @@ def _legs(n_both: int, *, lexical_only_first: bool = True):
 @pytest.mark.parametrize("n_both", [10, 15])
 def test_lexical_only_rank_one_is_counted_and_followed(
         monkeypatch, tmp_path, turn, n_both):
+    # S-R7b arithmetic before the S-R7c leg share: share 0 is the fused order.
+    monkeypatch.setenv("RAG_FUSION_LEG_SHARE", "0")
     semantic, lexical = _legs(n_both)
     _install(monkeypatch, tmp_path, semantic, lexical)
 
@@ -113,6 +115,8 @@ def test_agreeing_legs_trace_no_single_leg_and_same_pool(
 
 @pytest.mark.parametrize("n_both", [0, 12])
 def test_trace_on_and_off_give_the_same_pool(monkeypatch, tmp_path, n_both):
+    # S-R7b arithmetic before the S-R7c leg share: share 0 is the fused order.
+    monkeypatch.setenv("RAG_FUSION_LEG_SHARE", "0")
     semantic, lexical = _legs(n_both)
     _install(monkeypatch, tmp_path, semantic, lexical)
 
@@ -125,6 +129,29 @@ def test_trace_on_and_off_give_the_same_pool(monkeypatch, tmp_path, n_both):
         vs.end_turn_memo(token)
     assert _ids(inside) == _ids(outside)
     assert rec["best_lexical_only"]["fused_rank"] == n_both + 1
+
+
+# ── 3b. with the leg share on, the trace follows the order that is cut ─────
+
+@pytest.mark.parametrize("n_both", [10, 15])
+def test_trace_follows_the_order_after_the_leg_share(
+        monkeypatch, tmp_path, turn, n_both):
+    """S-R7c places the lexical leg's rank-1 hit at its own leg rank before
+    the cut; the trace reports that position, not the pre-share one."""
+    monkeypatch.setenv("RAG_FUSION_LEG_SHARE", "2")
+    semantic, lexical = _legs(n_both)
+    _install(monkeypatch, tmp_path, semantic, lexical)
+
+    pooled, _ = retriever.retrieve_with_filter(QUERY, PID, k=10)
+    rec = vs.fused_candidates_record(PID)
+
+    lex = rec["best_lexical_only"]
+    assert lex["leg_rank"] == 1
+    assert lex["fused_rank"] == 1 < n_both + 1
+    assert lex["in_fused_list"] is True
+    assert "x" in _ids(pooled)
+    assert lex["pool_position"] == _ids(pooled).index("x") + 1
+    assert lex["dropped_by"] is None
 
 
 # ── 4. a keep-loop drop is named ───────────────────────────────────────────
@@ -199,6 +226,8 @@ def test_follow_tells_rerank_cut_from_below_target(reason_order):
 @pytest.mark.parametrize("n_both", [10, 14])
 def test_pre_injection_line_carries_fused_candidates(
         monkeypatch, tmp_path, turn, caplog, n_both):
+    # S-R7b arithmetic before the S-R7c leg share: share 0 is the fused order.
+    monkeypatch.setenv("RAG_FUSION_LEG_SHARE", "0")
     semantic, lexical = _legs(n_both)
     _install(monkeypatch, tmp_path, semantic, lexical)
     monkeypatch.setenv("RAG_RETRIEVAL_TRACE", "1")
