@@ -965,8 +965,11 @@ def _emit_retrieval_trace(
 
         rid = request_id_ctx.get()
         handed_ids = {getattr(c, "chunk_id", None) for c in handed}
+        from app.core.rag.fusion_trace import public_view
         from app.core.rag.retriever import retrievable_project_ids
-        from app.core.rag.vector_store import _MISS, _memo_get
+        from app.core.rag.vector_store import (
+            _MISS, _memo_get, fused_candidates_record,
+        )
 
         lexical = {}
         for pid in retrievable_project_ids(project_id):
@@ -986,6 +989,10 @@ def _emit_retrieval_trace(
             "identifier_miss": identifier_miss,
             "lexical": lexical,
             "degraded": any(v != "hit" for v in lexical.values()),
+            "fused_candidates": (
+                public_view(fused_candidates_record(project_id), handed)
+                if project_id else None
+            ),
             "top_score": round(float(top_score or 0.0), 6),
             "chunks": [_trace_chunk(i + 1, c) for i, c in enumerate(handed)],
             "not_handed": [

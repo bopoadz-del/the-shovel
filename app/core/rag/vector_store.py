@@ -688,6 +688,31 @@ def _memo_put(key: tuple, value):
     return value
 
 
+def record_fusion(project_id: str, summary: Dict[str, Any]) -> None:
+    """Append one fusion's leg summary (``fusion_trace.leg_summary``) to the
+    turn's list for ``project_id``. Outside a turn nothing is kept."""
+    memo = _TURN_MEMO.get()
+    if memo is not None:
+        memo.setdefault(("fusion", project_id), []).append(summary)
+
+
+def fusion_records(project_id: str) -> list:
+    """The turn's fusion summaries for ``project_id``, oldest first."""
+    hit = _memo_get(("fusion", project_id))
+    return [] if hit is _MISS else hit
+
+
+def record_fused_candidates(project_id: str, record: Optional[Dict[str, Any]]) -> None:
+    """The last retrieval's followed fusion summary (``fusion_trace.Follow``)
+    for ``project_id``; the pre_injection trace line reads it."""
+    _memo_put(("fused_candidates", project_id), record)
+
+
+def fused_candidates_record(project_id: str) -> Optional[Dict[str, Any]]:
+    hit = _memo_get(("fused_candidates", project_id))
+    return None if hit is _MISS else hit
+
+
 def _memoised(key: tuple, compute):
     hit = _memo_get(key)
     return _memo_put(key, compute()) if hit is _MISS else hit
@@ -1884,7 +1909,7 @@ class VectorStore:
             return sem_results[:k]
 
         _memo_put(("lexical_leg", project_id), "hit")
-        return _rrf_combine(sem_results, bm25_results, k)
+        return _rrf_combine(sem_results, bm25_results, k, project_id=project_id)
 
     def identifier_search(
         self,
@@ -2534,6 +2559,8 @@ def _rrf_combine(
     semantic: List[Chunk],
     bm25: List[Chunk],
     top_k: int,
+    *,
+    project_id: Optional[str] = None,
 ) -> List[Chunk]:
     """Reciprocal Rank Fusion (Cormack et al. 2009).
 
@@ -2556,6 +2583,10 @@ def _rrf_combine(
     left as the leg gave it. The raw leg scores are kept on
     ``.vector_score`` / ``.lexical_score`` and the fused position on
     ``.fused_rank``, debug-only like ``.rrf_score``.
+
+    With ``project_id``, the full fused order (before the ``top_k`` cut) is
+    summarised by leg into the turn memo (``record_fusion``) for the
+    retrieval trace. Counts and ranks only; the ranking is unchanged.
     """
     sem_rank = {c.chunk_id: r for r, c in enumerate(semantic, 1)}
     bm_rank = {c.chunk_id: r for r, c in enumerate(bm25, 1)}
@@ -2586,6 +2617,12 @@ def _rrf_combine(
             )
         scored.append((rrf, c))
     scored.sort(key=lambda x: -x[0])
+    if project_id is not None:
+        from app.core.rag.fusion_trace import leg_summary
+
+        record_fusion(project_id, leg_summary(
+            (c for _, c in scored), sem_rank, bm_rank, top_k,
+        ))
     fused = [c for _, c in scored[:top_k]]
     cosines = sorted(
         (float(v) for v in sem_score.values() if v is not None), reverse=True,
