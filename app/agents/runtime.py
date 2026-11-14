@@ -406,12 +406,14 @@ def _apply_rag_context(
                 "above. Reproduce its specific facts — numbers, deadlines, clause "
                 "references, named principles, definitions — EXACTLY. If the "
                 "context conflicts with what you think you know, the context "
-                "wins. If the context does not contain the answer but one of "
-                "your TOOLS can extract or compute it from the project's files "
-                "(BIM/IFC extraction, BOQ parsing, drawing take-off, "
-                "calculators), CALL THE TOOL and answer from its result. Only "
-                "say you don't have it when neither the context nor your tools "
-                "can produce the answer — never invent one.\n\nQUESTION: "
+                "wins. If the context does not contain the answer, one of "
+                "your TOOLS can find, extract or compute it from the project's "
+                "files (searching the project documents, BIM/IFC extraction, "
+                "BOQ parsing, drawing take-off, calculators): CALL THE TOOL and "
+                "answer from its result. Only say you don't have it when "
+                "neither the context nor your tools can produce the answer, "
+                "and then name what you searched for — never invent one."
+                "\n\nQUESTION: "
             )
         messages[-1] = {**messages[-1], "content": content + directive + question}
         return True
@@ -11127,9 +11129,9 @@ def _compact_retrieval_message(content: str, budget: int) -> str:
             "retrieved excerpts were dropped to fit this request, lowest "
             "relevance first. The sample you are reading is SMALLER than "
             "what search found, so the SCOPE OF ABSENCE rule above applies "
-            "with more force, not less: say what you found and offer to "
-            "search again by document name or section. Never report that "
-            "something is absent.\n"
+            "with more force, not less: search the project documents for "
+            "what the excerpts lack before answering, and say what you "
+            "searched for. Never report that something is absent.\n"
         )
 
     for kept in range(len(excerpts), 0, -1):
@@ -11962,6 +11964,9 @@ class Agent:
     _chat_impl = _core_loop._chat_impl
 
     _fetch_named_missing_input = _core_context._fetch_named_missing_input
+    _search_before_refusal = _core_context._search_before_refusal
+    _search_first_nudges = _core_context._search_first_nudges
+    _intent_hard_excludes = _core_context._intent_hard_excludes
 
     chat_stream = _core_loop.chat_stream
 
