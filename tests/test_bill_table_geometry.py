@@ -1013,3 +1013,30 @@ def test_workbook_sheets_follow_the_path(tmp_path, rows, titles):
     assert wb.sheetnames == titles
     banners = [wb[t].cell(1, 1).value for t in titles]
     assert banners == [" > ".join(r.path or (r.section,)) for r in rows]
+
+
+def _lv(text: str, left: float = 40.0, height: float = H) -> g._Label:
+    return g._Label(text, left, height)
+
+
+@pytest.mark.parametrize(
+    "pushes,expected",
+    [
+        # (label, rows emitted after it): a fresh path nests a run of labels
+        ([(_lv("B", height=HEAVY), False), (_lv("S"), False), (_lv("D", 80), False)], ("B", "S", "D")),
+        # a sibling after rows replaces only the innermost
+        ([(_lv("B", height=HEAVY), False), (_lv("D1", 80), True), (_lv("D2", 80), False)], ("B", "D2")),
+        # an outer label (further left) drops every level not outer to it
+        ([(_lv("B", height=HEAVY), False), (_lv("S"), False), (_lv("D", 80), True), (_lv("T"), False)], ("B", "T")),
+        # an outer label (heavier) with nothing outer to it starts a new path
+        ([(_lv("B", height=HEAVY), False), (_lv("S"), True), (_lv("C", height=HEAVY), False)], ("C",)),
+    ],
+)
+def test_heading_path_push(pushes, expected):
+    hp = g._HeadingPath()
+    assert hp.texts() == () and hp.after_rows is False
+    for lab, rows_after in pushes:
+        hp.push(lab, indent=H)
+        assert hp.after_rows is False
+        hp.after_rows = rows_after
+    assert hp.texts() == expected

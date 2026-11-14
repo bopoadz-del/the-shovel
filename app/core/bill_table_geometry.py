@@ -113,6 +113,7 @@ def _outer(a: _Label, b: _Label, indent: float) -> bool:
     return a.left < b.left - indent or a.height > b.height * _HEAVIER_RATIO
 
 
+@dataclass
 class _HeadingPath:
     """The nested labels above a measured row, outer to inner.
 
@@ -123,9 +124,8 @@ class _HeadingPath:
     dropped. No label text is consulted, only the word boxes.
     """
 
-    def __init__(self) -> None:
-        self.levels: list[_Label] = []
-        self.after_rows = False
+    levels: list[_Label] = field(default_factory=list)
+    after_rows: bool = False
 
     def push(self, label: _Label, indent: float) -> None:
         if self.levels and _outer(label, self.levels[-1], indent):
