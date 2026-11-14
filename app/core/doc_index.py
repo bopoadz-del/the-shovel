@@ -4595,16 +4595,108 @@ def _search_snippet_words() -> int:
     return _positive_int_env("SEARCH_SNIPPET_WORDS", _SEARCH_SNIPPET_WORDS_DEFAULT)
 
 
-def _join_chunk_texts(kept: list[Any]) -> str:
-    """The kept chunks as one snippet body, each bounded, in score order."""
+def _term(word: str) -> str:
+    """A word reduced to its letters and digits, lower-cased, for matching."""
+    return "".join(ch for ch in word.lower() if ch.isalnum())
+
+
+def _matching_window_start(words: list[str], query: str, width: int) -> int:
+    """Start of the ``width``-word window of ``words`` that best matches ``query``.
+
+    A window scores the query terms it contains, each weighted by how rare it
+    is in this chunk (1 / its count in the chunk), so a term the chunk repeats
+    on every line weighs little and the passage that holds the asked-for words
+    together wins. No word list: the weighting comes from the chunk itself.
+    Ties go to the earlier window; a chunk with no query term starts at 0, which
+    is the head cut this replaces.
+    """
+    terms = {t for t in (_term(w) for w in (query or "").split()) if t}
+    normed = [_term(w) for w in words]
+    hits = [t if t in terms else "" for t in normed]
+    total: dict[str, int] = {}
+    for t in hits:
+        if t:
+            total[t] = total.get(t, 0) + 1
+    if not total:
+        return 0
+    in_window: dict[str, int] = {}
+
+    def _add(t: str, step: int) -> None:
+        if t:
+            in_window[t] = in_window.get(t, 0) + step
+            if not in_window[t]:
+                del in_window[t]
+
+    for t in hits[:width]:
+        _add(t, 1)
+    best_start = 0
+    best = sum(1.0 / total[t] for t in in_window)
+    for start in range(1, len(words) - width + 1):
+        _add(hits[start - 1], -1)
+        _add(hits[start + width - 1], 1)
+        score = sum(1.0 / total[t] for t in in_window)
+        if score > best + 1e-12:
+            best, best_start = score, start
+    # Centre the window on the matched words it holds. The earliest window
+    # that reaches them ends right after them, and the value a passage is
+    # asked for usually FOLLOWS the words that name it.
+    matched = [i for i in range(best_start, best_start + width) if hits[i]]
+    lo, hi = matched[0], matched[-1]
+    start = lo - (width - (hi - lo + 1)) // 2
+    return max(0, min(start, len(words) - width))
+
+
+def _matching_passage(text: str, query: str, width: int) -> str:
+    """The ``width`` words of ``text`` that best match ``query``.
+
+    A chunk no longer than ``width`` comes back unchanged. A longer one is cut
+    around the query's matching terms, never from the start by position: the
+    indexer writes chunks of a few hundred words and the asked-for sentence is
+    usually past the first ``width`` of them. An ellipsis marks each cut end.
+    """
+    words = (text or "").split()
+    if len(words) <= width:
+        return " ".join(words)
+    start = _matching_window_start(words, query, width)
+    end = start + width
+    body = " ".join(words[start:end])
+    return ("... " if start else "") + body + (" ..." if end < len(words) else "")
+
+
+def _join_chunk_texts(kept: list[Any], query: str = "") -> str:
+    """The kept chunks as one snippet body, each bounded to its passage that
+    matches ``query``, in score order."""
     width = _search_snippet_words()
     parts = []
     for chunk in kept:
-        words = (chunk.text or "").split()
-        if not words:
-            continue
-        parts.append(" ".join(words[:width]))
+        passage = _matching_passage(chunk.text or "", query, width)
+        if passage:
+            parts.append(passage)
     return " ... ".join(parts)
+
+
+def _row_document_fields(doc_id: str, kept: list[Any]) -> dict[str, Any]:
+    """What a result row says about where its passages sit: the pages of the
+    kept chunks (in passage order, unknown pages left out) and the stored
+    document type and role. A field the store does not hold is left out."""
+    out: dict[str, Any] = {}
+    pages: list[int] = []
+    for c in kept:
+        page = getattr(c, "page", None)
+        if page and page not in pages:
+            pages.append(page)
+    if pages:
+        out["pages"] = pages
+    try:
+        doc = _projects.get_document(doc_id) or {}
+    except Exception:
+        logger.debug("document fields lookup failed for %s", doc_id, exc_info=True)
+        doc = {}
+    for key in ("doc_type", "doc_role"):
+        value = (doc.get(key) or "").strip() if isinstance(doc.get(key), str) else ""
+        if value:
+            out[key] = value
+    return out
 
 
 async def search_project_documents(
@@ -4799,7 +4891,7 @@ def _search_project_documents_traced(
         best[doc_id] = {
             "document_id": doc_id,
             "filename": _doc_name_for_id(doc_id),
-            "chunk": _join_chunk_texts(kept),
+            "chunk": _join_chunk_texts(kept, query),
             "score": float(kept[0].score or 0.0),
             # OCR provenance (item 7): true when any kept chunk was OCR-derived.
             "ocr": any(bool(getattr(c, "ocr", False)) for c in kept),
@@ -4847,6 +4939,9 @@ def _search_project_documents_traced(
         }
         if ocr_flag_by_doc.get(item["document_id"]):
             result_row["ocr_low_quality"] = True
+        result_row.update(_row_document_fields(
+            item["document_id"], kept_by_doc.get(item["document_id"], []),
+        ))
         results.append(result_row)
     trace = _search_trace(
         chunks, kept_by_doc, [item["document_id"] for item in ranked],
