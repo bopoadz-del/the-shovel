@@ -1574,6 +1574,35 @@ def materialize_document_file(doc: Dict[str, Any]) -> Tuple[Optional[str], str]:
     return cache, "ok"
 
 
+def materialize_document_path(doc: Dict[str, Any]) -> Optional[str]:
+    """A readable local path for a project document a resolver matched by name.
+
+    File-reading tools (the agent's file resolver, boq_processor) used to
+    accept a match only when its ``file_path`` existed on this disk. A
+    Drive-ingested row keeps no local bytes by rule, so its match was always
+    refused and the tool reported "File not found" for a file the project
+    holds. This goes through :func:`materialize_document_file` instead (local
+    bytes, preview cache, Drive by ``drive_file_id``, public Drive).
+
+    ``doc`` may be a narrow name-listing row; when it carries no metadata the
+    full row is read by id, so the Drive pointer is visible. ``None`` when
+    the bytes cannot be produced -- the caller keeps its existing not-found.
+    """
+    if not isinstance(doc, dict):
+        return None
+    full = doc
+    if "metadata" not in doc and doc.get("id"):
+        full = get_document(str(doc["id"])) or doc
+    try:
+        path, reason = materialize_document_file(full)
+    except Exception:  # noqa: BLE001 — a failed hydrate is a not-found, never a crash
+        logger.warning("could not materialise document %s", doc.get("id"), exc_info=True)
+        return None
+    if not path:
+        logger.info("document %s has no readable bytes: %s", doc.get("id"), reason)
+    return path or None
+
+
 def set_document_drive_md5(doc_id: str, token: Optional[str]) -> Optional[Dict[str, Any]]:
     """Write Drive's content token. Never used as a skip key by itself."""
     if not doc_id:
