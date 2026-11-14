@@ -1969,8 +1969,14 @@ def _chunker_for_document(filename: str, requested: str = "default") -> str:
     return "default"
 
 
-def _chunk_prose_segment(text: str, chunker: str) -> list[str]:
-    """Prose chunks, bounded by the chunk floor and ceiling (RQ-2)."""
+def _chunk_prose_segment(
+    text: str, chunker: str, split_parents: list[int | None] | None = None,
+) -> list[str]:
+    """Prose chunks, bounded by the chunk floor and ceiling (RQ-2).
+
+    ``split_parents`` (optional) gets one entry per chunk returned: the id
+    shared by the pieces of one split chunk, or None.
+    """
     from app.core.chunk_bounds import bound_chunks
 
     if not text or not text.strip():
@@ -1981,7 +1987,7 @@ def _chunk_prose_segment(text: str, chunker: str) -> list[str]:
         chunks = chunk_text_with_overlap(text, target_chars=500, overlap=50)
     else:
         chunks = chunk_text(text)
-    return bound_chunks(chunks)
+    return bound_chunks(chunks, split_parents=split_parents)
 
 
 def _normalize_cesmm_in_chunks(chunks: list[str]) -> list[str]:
@@ -1996,6 +2002,7 @@ def chunk_extracted_document(
     text: str,
     chunker: str = "default",
     filename: str = "",
+    split_parents: list[int | None] | None = None,
 ) -> list[str]:
     """Chunk extracted document text, keeping Contract Data rows intact.
 
@@ -2008,6 +2015,9 @@ def chunk_extracted_document(
 
     CESMM item codes are space-collapsed before chunking so ``D 549.2``
     and ``D549.2`` share a token and a row stays adjacent to its figures.
+
+    ``split_parents`` (optional) gets one entry per returned chunk: the id
+    shared by the pieces of one prose chunk the ceiling split, or None.
     """
     if not text or not text.strip():
         return []
@@ -2018,24 +2028,27 @@ def chunk_extracted_document(
         contract_data_spans,
     )
 
+    parents = split_parents
     spans = contract_data_spans(text, filename)
     if not spans:
-        return _chunk_prose_segment(text, chunker)
+        return _chunk_prose_segment(text, chunker, parents)
     chunks: list[str] = []
     prev = 0
     for start, end in spans:
         if start > prev:
-            chunks.extend(_chunk_prose_segment(text[prev:start], chunker))
+            chunks.extend(_chunk_prose_segment(text[prev:start], chunker, parents))
         cd_chunks = contract_data_particulars_chunks(text[start:end], filename)
         if cd_chunks:
             chunks.extend(cd_chunks)
+            if parents is not None:
+                parents.extend([None] * len(cd_chunks))
         else:
-            chunks.extend(_chunk_prose_segment(text[start:end], chunker))
+            chunks.extend(_chunk_prose_segment(text[start:end], chunker, parents))
         prev = end
     if prev < len(text):
-        chunks.extend(_chunk_prose_segment(text[prev:], chunker))
+        chunks.extend(_chunk_prose_segment(text[prev:], chunker, parents))
     if not chunks:
-        return _chunk_prose_segment(text, chunker)
+        return _chunk_prose_segment(text, chunker, parents)
     return chunks
 
 
@@ -3746,11 +3759,33 @@ def _text_chunks_with_pages(
         # row is structure, not content (RQ-1). Sheets carry no page starts,
         # so editing the text cannot misplace a page.
         text, refused = chunk_noise.clean_table_text(text)
-    chunks = chunk_extracted_document(text, chunker=chunker, filename=filename)
+    split_parents: list[int | None] = []
+    chunks = chunk_extracted_document(
+        text, chunker=chunker, filename=filename, split_parents=split_parents,
+    )
     pages = chunk_start_pages(text, page_starts, chunks)
+    if page_starts and any(p is not None for p in split_parents):
+        # Each piece of a split page or sheet starts with that page's own
+        # heading line (RQ-2). Pages are located first, on the bare pieces.
+        from app.core.chunk_bounds import attach_page_headings, page_heading_lines
+
+        headings = page_heading_lines(text, page_starts, _title_block_reader())
+        chunks, pages = attach_page_headings(chunks, pages, split_parents, headings)
     chunks, pages, dropped = chunk_noise.refuse_chunks(chunks, pages)
     _record_refused(meta, refused, dropped)
     return chunks, pages
+
+
+def _title_block_reader() -> Any:
+    """The label-anchored title-block reader, or None when it cannot load."""
+    try:
+        from app.containers.construction import ConstructionContainer
+
+        container = ConstructionContainer()
+    except Exception as exc:  # noqa: BLE001 - a heading line is optional
+        logger.info("title-block reader unavailable for page headings: %s", exc)
+        return None
+    return lambda page_text: container._extract_title_block({"raw_text": page_text})
 
 
 def _record_refused(meta: dict[str, Any], *counts: dict[str, int]) -> None:
