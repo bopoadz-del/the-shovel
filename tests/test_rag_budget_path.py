@@ -123,3 +123,40 @@ def test_trace_tokens_sum_to_the_counter_across_paths(sizes, monkeypatch, trace)
         by_path[ln["budget_path"]] = by_path.get(ln["budget_path"], 0) + ln["budget_tokens"]
     assert set(by_path) == {inject.BUDGET_PATH_FIRST_PASS, inject.BUDGET_PATH_MISSING_INPUT}
     assert sum(by_path.values()) == _consumed() - before
+
+
+# --- the missing-input fetch spends under its own path ------------------------
+
+@pytest.mark.parametrize("answer,project_id,fetches", [
+    ("The retention percentage is not stated in the excerpts provided.", "p", 1),
+    ("The retention is 5% of the contract sum per the excerpt.", "p", 0),
+    # no project: nothing to search, so no fetch even though a gap is named
+    ("The retention percentage is not stated in the excerpts provided.", None, 0),
+])
+def test_missing_input_fetch_counts_under_its_own_path(answer, project_id, fetches, monkeypatch):
+    """``app.agents.core.context._fetch_named_missing_input``: an answer that
+    names a missing input re-fetches once, labelled ``missing_input``; an
+    answer that names none, or a turn with no project, fetches nothing.
+    Either way, with nothing found, the answer stands as written."""
+    import asyncio
+    from types import SimpleNamespace as NS
+
+    import app.agents.runtime as rt
+    from app.agents.core import context as ctx
+
+    calls: list = []
+
+    async def spy(**kwargs):
+        calls.append(kwargs)
+        return None, {}
+
+    monkeypatch.setenv("MISSING_INPUT_FETCH", "1")
+    monkeypatch.setattr(rt, "_rag_inject_off_process", spy)
+    out = asyncio.run(ctx._fetch_named_missing_input(
+        NS(name="project-assistant"), answer, [],
+        user_message="what retention applies?", project_id=project_id,
+        api_key="k", user_id="u",
+    ))
+    assert out == (answer, None)
+    assert len(calls) == fetches
+    assert all(c["budget_path"] == inject.BUDGET_PATH_MISSING_INPUT for c in calls)
