@@ -319,8 +319,9 @@ def format_chunks_as_system_message(
         "(numbers, deadlines, clause references, named principles, definitions), "
         "reproduce them EXACTLY and do NOT substitute or override them with your own "
         "prior knowledge — your training data on this topic may be wrong or generic. "
-        "If a detail the user asks for is not in this context, say you don't have it "
-        "rather than inventing a plausible answer.\n"
+        "If a detail the user asks for is not in this context, search the project "
+        "documents for it before you say it is missing; never invent a plausible "
+        "answer.\n"
         # Scoped-absence rule. These excerpts are a top-K sample of a corpus that
         # can run to thousands of chunks — they are evidence of what IS present,
         # never evidence of what is absent. Live failure (2026-08-17): asked about
@@ -335,8 +336,10 @@ def format_chunks_as_system_message(
         "excerpts for this question. NEVER state or imply that the project, the "
         "corpus, or the documents do not contain it, that it is 'not mentioned "
         "anywhere', or that it 'does not apply' — you cannot see far enough to "
-        "know that. Say what you did not find, then offer to search again with "
-        "the exact document name, code, or section number.\n"
+        "know that. When the excerpts do not state what is asked, search the "
+        "project documents yourself before you answer; only after a search came "
+        "back without it, say so and name what you searched for. Never ask the "
+        "user for a document name you could search for.\n"
         # Without this the model treats src= as decoration. Construction
         # filenames routinely carry the answer -- expiry dates, revision
         # letters, discipline codes, status -- where the text layer does not.

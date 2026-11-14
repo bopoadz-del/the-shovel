@@ -130,8 +130,8 @@ async def _chat_stream_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _cost_grounding_enabled, _empty_router_verdict,
         _file_tool_hint, _final_text_needs_forced_retry, _forced_retry_min_seconds, _forced_retry_nudge,
-        _fulfill_answer_report, _has_unread_windows, _inline_boq_hard_excludes,
-        _is_capability_request, _is_cost_shaped_query, _latest_operator_ask, _llm_config,
+        _fulfill_answer_report, _has_unread_windows,
+        _is_capability_request, _is_cost_shaped_query, _llm_config,
         _log_dataset_turn,
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
         _looks_like_search_preamble, _looks_like_tool_markup_leak,
@@ -150,7 +150,7 @@ async def _chat_stream_impl(
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
         _strip_answer_routing_preamble, _summarize_result, _text_needs_tool_recovery,
         _timing_log, _tool_result_content, _tool_result_errored, _turn_progress,
-        _vo_draft_hard_excludes, _vo_draft_ready_for_synthesis,
+        _vo_draft_ready_for_synthesis,
         _withhold_names_in_streamed_segment, answer_report_export_enabled, fulfill_wbs_export,
         json, message_wants_answer_report, message_wants_wbs_export, os, time,
     )
@@ -693,19 +693,9 @@ async def _chat_stream_impl(
     # other tools stay available.
     SEARCH_TOOL_CAP = int(os.getenv("AGENT_SEARCH_TOOL_CAP", "2"))
     search_calls = 0
-    excluded_tools: set = set()
-    # Live tip 0a95d03: VO ask2 stole to construction/sympy when
-    # predispatch missed — hard-exclude on draft intent alone.
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _vo_draft_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("vo hard-exclude skipped", exc_info=True)
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _inline_boq_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("inline-boq hard-exclude skipped", exc_info=True)
+    # Hard excludes on the operator's draft intent (VO / inline BOQ).
+    excluded_tools, _op = self._intent_hard_excludes(messages)
+    _sf: dict = {}  # S-R8: one runtime search round before a draft may decline
     # Once a deliverable (non-search) tool has returned its result, the model
     # has what it needs — the next call is synthesis. Offering tools on that
     # synthesis call is pure downside: it lets the model loop, and on Groq a
@@ -1239,6 +1229,13 @@ async def _chat_stream_impl(
                     "content": "",
                     "tool_calls": recovered_tool_calls,
                 }
+            elif (_sf_call := await self._search_before_refusal(
+                    raw_content, messages, _sf, user_message=user_message, project_id=project_id,
+                    tool_results=stream_tool_results, search_calls=search_calls, search_cap=SEARCH_TOOL_CAP,
+                    excluded_tools=excluded_tools, force_synthesis=force_synthesis,
+                    iterations_left=MAX_TOOL_ITERATIONS - iteration - 1)) is not None:
+                tool_calls = [_sf_call]  # S-R8: search, do not finalise the draft
+                assistant_msg = {"role": "assistant", "content": "", "tool_calls": tool_calls}
             else:
                 # Final answer — sanitize DSML markup, raw tool JSON, and
                 # empty content before streaming it to the user.
@@ -1444,7 +1441,7 @@ async def _chat_stream_impl(
                                            tool_result, self, project_id=project_id, messages=messages)
                                        + (await _off_loop(_file_tool_hint, messages, project_id,
                                                          self.allowed_blocks))})
-        messages.extend(pending_nudges)
+        messages.extend(pending_nudges + self._search_first_nudges(_sf))
 
     # Hit the cap without a final answer — force one more call with tools disabled.
     daily_damages_cap = (await _off_loop(_should_short_circuit_delay_damages_daily, _rag_sys_msg, messages, has_predispatch=False,

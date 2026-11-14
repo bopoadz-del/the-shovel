@@ -204,3 +204,64 @@ def fetched_context_supports(chunks_text: str, missing: str) -> bool:
     # the word "rate" alone.
     need = len(words) if len(words) <= 2 else (len(words) + 1) // 2 + 1
     return hits >= min(need, len(words))
+
+
+# ── Does a draft answer DECLINE for lack of the thing asked? (S-R8) ────
+#
+# names_missing_input above needs a nameable thing, because its job is to
+# build a query. Deciding that a turn may not END on "I don't have that"
+# before the project was searched needs less: only that the draft declines
+# or hands the search back to the user. Measured 14 Nov: 21 of 24 turns were
+# one model call with no tool call, and 11 of 24 answers ended with "give me
+# the document name and I will search" while the passage sat in the index.
+#
+# "without" is deliberately not a cue here: "carried out without delay" is
+# an answer, not a refusal.
+_DECLINE_CUES = tuple(c for c in _CUES if c != "without") + (
+    r"(?:not|no(?:thing)?)\s+(?:in|within|among)\s+the\s+"
+    r"(?:retrieved|provided|available|handed|reference)\b",
+    r"(?:cannot|can't|am\s+unable\s+to|unable\s+to)\s+"
+    r"(?:find|confirm|locate|identify|determine|answer|see)",
+)
+_DECLINE_RE = re.compile(r"\b(?:%s)\b" % "|".join(_DECLINE_CUES), re.IGNORECASE)
+_PASSIVE_DECLINE_RE = re.compile(
+    r"\b(?:is|are|was|were)\s+not\s+"
+    r"(?:stated|contained|included|provided|specified|given|available|present)\b",
+    re.IGNORECASE,
+)
+#: One sentence that asks the USER to point at something AND names a search
+#: verb: the search is being handed back to the person who asked.
+_ASKS_USER_RE = re.compile(
+    r"\b(?:if\s+you|once\s+you|give\s+me|provide|share|send\s+me|tell\s+me|"
+    r"point\s+me|let\s+me\s+know|upload)\b",
+    re.IGNORECASE,
+)
+_SEARCH_VERB_RE = re.compile(
+    r"\b(?:search|look\s+(?:for|up|it\s+up)|pull|find|locate|retrieve|"
+    r"check)\w*\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def hands_search_to_user(text: str) -> bool:
+    """True when one sentence asks the user for something to search with."""
+    for sentence in _SENTENCE_SPLIT_RE.split(text or ""):
+        if _ASKS_USER_RE.search(sentence) and _SEARCH_VERB_RE.search(sentence):
+            return True
+    return False
+
+
+def declines_for_lack(text: str) -> bool:
+    """True when a draft answer says what was asked is not available to it,
+    or offers the user a search instead of having run one.
+
+    Pure text test. Whether the turn may still search is decided by the
+    caller from turn state (search budget, indexed project), never here.
+    """
+    body = text or ""
+    # Handing the search back to the user is a decline even when the draft
+    # never says the thing is missing.
+    if hands_search_to_user(body):
+        return True
+    return bool(_DECLINE_RE.search(body) or _PASSIVE_DECLINE_RE.search(body))
