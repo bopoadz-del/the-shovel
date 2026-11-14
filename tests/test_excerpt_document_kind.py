@@ -199,3 +199,33 @@ def test_every_marker_field_the_rule_names_is_emitted(doc_type, doc_role):
 def test_chunk_kind_never_reaches_the_wire(doc_type, doc_role):
     d = _chunk("w", 0, doc_type=doc_type, doc_role=doc_role).to_dict()
     assert "doc_type" not in d and "doc_role" not in d
+
+
+# --- the early returns hold: no read when there is nothing to read -----------
+
+@pytest.mark.parametrize("name", [None, ""])
+def test_a_missing_name_shortens_to_nothing(name):
+    assert _truncate_source_name(name) == ""
+
+
+@pytest.mark.parametrize("ids", [[], ["", ""]])
+def test_document_kinds_of_no_ids_opens_no_session(monkeypatch, ids):
+    from app.core import projects
+
+    def boom(*a, **k):
+        raise AssertionError("opened a session for no ids")
+    monkeypatch.setattr(projects, "SessionLocal", boom)
+    monkeypatch.setattr(projects, "_ensure_db", boom)
+    assert projects.document_kinds(ids) == {}
+
+
+@pytest.mark.parametrize("chunks", [
+    [],
+    [Chunk(chunk_id="p:t:0", project_id="p", doc_id="t", chunk_index=0, text="x",
+           doc_type="drawing", doc_role="baseline_schedule"),
+     "a plain evidence string"],
+])
+def test_annotate_reads_nothing_when_no_chunk_needs_a_kind(monkeypatch, chunks):
+    calls = _fake_kinds(monkeypatch, {})
+    annotate_document_kinds(chunks)
+    assert calls == []
