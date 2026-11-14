@@ -2,13 +2,14 @@
 
 ``VectorStore._bm25_bounded`` ranks only the chunks a GIN lookup admits and
 accepts the result only when the k-th rank proves no other chunk could beat
-it. These tests pin the three facts that proof rests on, then compare the
-store's results with the full ``ORDER BY ts_rank`` over every match on a
-seeded corpus, row for row.
+it. These tests pin the facts that proof rests on, then compare the store's
+results with the score computed in Python for every match on a seeded corpus,
+row for row.
 """
 from __future__ import annotations
 
 import itertools
+import math
 import os
 import random
 
@@ -18,7 +19,7 @@ from sqlalchemy import event, text
 from app.core.rag import vector_store as vs
 
 _PG = os.getenv("PYTEST_USE_POSTGRES", "").strip().lower() in ("1", "true", "yes")
-pg_only = pytest.mark.skipif(not _PG, reason="ts_rank / GIN are PostgreSQL features")
+pg_only = pytest.mark.skipif(not _PG, reason="text_search / GIN are PostgreSQL features")
 
 
 # ── the pieces of the proof (no database) ────────────────────────────────
@@ -48,9 +49,9 @@ def test_candidate_query_admits_every_chunk_with_t_lexemes(n):
     """Pigeonhole: any chunk holding t of the n lexemes satisfies the DNF."""
     lexemes = [f"lx{i}" for i in range(n)]
     rng = random.Random(n)
-    freq = {lx: rng.random() for lx in lexemes}
+    weights = {lx: rng.random() for lx in lexemes}
     for t in range(1, n + 1):
-        tsq = vs.bm25_candidate_tsquery(lexemes, t, freq)
+        tsq = vs.bm25_candidate_tsquery(lexemes, t, weights)
         assert tsq is not None
         assert tsq.count("|") + 1 <= vs._BM25_MAX_CONJUNCTIONS
         subsets = (
@@ -61,27 +62,20 @@ def test_candidate_query_admits_every_chunk_with_t_lexemes(n):
             assert _dnf_admits(tsq, set(subset)), (n, t, subset)
 
 
-def test_bound_needs_the_kth_rank_to_clear_t_minus_one_terms():
-    cap = vs._TS_RANK_TERM_CAP
-    n = 7
-    # A chunk with 3 of 7 lexemes ranks below 3 * cap / 7.
-    assert vs.bm25_rank_bound_holds(3 * cap / n, n, 4)
-    assert not vs.bm25_rank_bound_holds(3 * cap / n - 1e-9, n, 4)
-    assert not vs.bm25_rank_bound_holds(1.0, 0, 2)
-
-
-@pg_only
-def test_one_lexeme_never_contributes_the_cap():
-    """The per-lexeme cap holds however often the lexeme occurs."""
-    from app.core.db import get_engine
-
-    with get_engine().connect() as conn:
-        for reps in (1, 2, 5, 50, 300, 2000):
-            rank = conn.execute(text(
-                "SELECT ts_rank(to_tsvector('english', repeat('culvert ', :r)), "
-                "'culvert'::tsquery)"
-            ), {"r": reps}).scalar()
-            assert 0 < rank < vs._TS_RANK_TERM_CAP, (reps, rank)
+@pytest.mark.parametrize("weights", [
+    {"a": 3.0, "b": 2.0, "c": 1.0, "d": 0.5},
+    {"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0},
+])
+def test_bound_is_the_t_minus_one_heaviest_after_the_rare(weights):
+    lex = sorted(weights)
+    scale = vs.lexical_score_scale(weights)
+    order = vs.rarest_first(lex, weights)
+    # Admitting the rarest alone, a chunk left out holds at most t-1 of the rest.
+    assert vs.bm25_excluded_bound(lex, weights, 3, 1) == pytest.approx(
+        (weights[order[1]] + weights[order[2]]) * scale
+    )
+    assert vs.bm25_excluded_bound(lex, weights, 1, 0) == 0.0
+    assert not vs.bm25_rank_bound_holds(0.0, 1e-6)
 
 
 # ── the store against the full ranking (PostgreSQL) ───────────────────────
@@ -125,6 +119,18 @@ def _seed(engine, table: str, project: str, docs: int, per: int, seed: int) -> N
         """), rows)
 
 
+def _tie_groups(items, scores):
+    """Chunk ids grouped by score (to 9 significant digits), the last group
+    dropped: the LIMIT may cut a run of equal scores at a different chunk."""
+    ids = [getattr(x, "chunk_id", x) for x in items]
+    groups = {}
+    for cid, sc in zip(ids, scores):
+        groups.setdefault(float(f"{sc:.9g}"), set()).add(cid)
+    if scores:
+        groups.pop(float(f"{scores[-1]:.9g}"), None)
+    return groups
+
+
 @pg_only
 def test_bounded_bm25_matches_ranking_every_match():
     from app.core.db import get_engine
@@ -162,12 +168,35 @@ def test_bounded_bm25_matches_ranking_every_match():
         elif "c.text_search @@ q AND c.project_id = %(project_id)s" in statement:
             full_scans.append(statement)
 
-    full_sql = text(
-        f"SELECT c.chunk_id, ts_rank(c.text_search, q) AS rank "
+    # The reference ranks EVERY match in Python from each chunk's lexemes,
+    # with the score's definition written out independently of the store's SQL.
+    all_sql = text(
+        f"SELECT c.chunk_id, tsvector_to_array(c.text_search) AS lexemes, "
+        f"websearch_to_tsquery('english', :q)::text AS tsq "
         f"FROM {table} c, websearch_to_tsquery('english', :q) AS q "
-        "WHERE c.text_search @@ q AND c.project_id = :p "
-        "ORDER BY rank DESC, c.chunk_id LIMIT :k"
+        "WHERE c.text_search @@ q AND c.project_id = :p"
     )
+    store._lexeme_freq_cache = None  # weights from the statistics just analysed
+
+    def _want(project, q, k):
+        with engine.connect() as conn:
+            rows = conn.execute(all_sql, {
+                "q": vs._sanitize_websearch_query(q), "p": project,
+            }).all()
+            freq = store._lexeme_frequencies(conn)
+        if not rows:
+            return []
+        lex = vs.tsquery_lexemes(rows[0].tsq)
+        w = vs.lexeme_weights(lex, freq)
+        total = sum(w.values())
+        scored = []
+        for r in rows:
+            held = set(r.lexemes)
+            s_ = sum(w[x] for x in lex if x in held) * 0.1 / total
+            scored.append((s_ / (1 + math.log(max(len(held), 1))), r.chunk_id))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return scored[:k]
+
     event.listen(engine, "before_cursor_execute", _seen)
     try:
         for project in ("bm-a", "bm-b"):
@@ -175,13 +204,15 @@ def test_bounded_bm25_matches_ranking_every_match():
                 for k in (5, 50):
                     searches += 1
                     got = store.bm25_search(project, q, k)
-                    with engine.connect() as conn:
-                        want = conn.execute(full_sql, {
-                            "q": vs._sanitize_websearch_query(q), "p": project, "k": k,
-                        }).all()
-                    assert [(c.chunk_id, c.score) for c in got] == [
-                        (r.chunk_id, float(r.rank)) for r in want
-                    ], (project, q, k)
+                    want = _want(project, q, k)
+                    assert [c.score for c in got] == pytest.approx(
+                        [x[0] for x in want], rel=1e-9, abs=1e-15,
+                    ), (project, q, k)
+                    # Same chunks; within a run of equal scores the database's
+                    # and Python's last-bit rounding may order ties apart.
+                    assert _tie_groups(got, [c.score for c in got]) == _tie_groups(
+                        [x[1] for x in want], [x[0] for x in want],
+                    ), (project, q, k)
     finally:
         event.remove(engine, "before_cursor_execute", _seen)
     # The comparison above is only worth something if the bounded path ran

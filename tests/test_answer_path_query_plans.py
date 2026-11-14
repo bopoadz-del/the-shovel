@@ -199,7 +199,9 @@ def test_no_answer_path_statement_seq_scans_the_chunk_table(monkeypatch):
     ]
     # The path really ran against the table: semantic, lexical and recall reads.
     assert len(on_table) >= 10, f"only {len(on_table)} chunk-table reads captured"
-    assert any("ts_rank" in s for s, _ in on_table), "no BM25 statement captured"
+    assert any("tsvector_to_array(c.text_search)" in s for s, _ in on_table), (
+        "no BM25 statement captured"
+    )
     assert any("<=>" in s for s, _ in on_table), "no vector statement captured"
 
     offenders = []
