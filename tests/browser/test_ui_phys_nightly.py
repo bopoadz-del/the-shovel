@@ -116,16 +116,22 @@ def _ask(page: Page, text: str, timeout: float = 90_000) -> None:
 
 def _project_documents(page: Page) -> list[dict]:
     """The open project's documents as the platform serves them."""
-    return page.evaluate(
+    got = page.evaluate(
         """async () => {
           const token = localStorage.getItem('tf_token');
           const m = location.pathname.match(/\\/projects\\/([^/]+)/);
+          if (!token || !m) return { error: 'no token or project in ' + location.pathname };
           const r = await fetch('/v1/projects/' + m[1], {
             headers: { Authorization: 'Bearer ' + token },
           });
-          return (await r.json()).documents || [];
+          const body = await r.json();
+          return { status: r.status, path: location.pathname,
+                   keys: Object.keys(body || {}), documents: body.documents };
         }"""
     )
+    docs = got.get("documents")
+    assert isinstance(docs, list) and docs, f"project documents not served: {got!r}"[:800]
+    return docs
 
 
 def _assert_sources_cite(page: Page, uploaded_name: str) -> None:
