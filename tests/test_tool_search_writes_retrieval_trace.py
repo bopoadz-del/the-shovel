@@ -268,7 +268,9 @@ def test_trace_chunk_ids_is_identity_and_rank_only(score, layer):
     entry = inject.trace_chunk_ids(4, c)
     assert entry == {
         "rank": 4, "chunk_id": "k1", "doc_id": "d1",
-        "score": round(score, 6) if score is not None else None, "layer": layer,
+        "score": round(score, 6) if score is not None else None,
+        "vector_score": None, "lexical_score": None, "fused_rank": None,
+        "layer": layer,
     }
 
 

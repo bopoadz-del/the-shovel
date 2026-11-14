@@ -344,9 +344,16 @@ def test_kill_switch_restores_spec_lift_and_both_copies(rank_corpus, monkeypatch
         "What nominal cover does exposure class XC1 give for foundations "
         "cast against soil and against blinding?"
     )
-    copies = _passed(rank_corpus, ask, k=5)
+    # k=8, not 5: since the fused rank became chunk.score (S-R7) the
+    # pre-fix lift also raises lexical specification hits, so the second
+    # copy sits just past slot 5. What the switch restores is unchanged:
+    # with the guard on, one copy is kept even at k=8.
+    copies = _passed(rank_corpus, ask, k=8)
     ids = [c.doc_id for c in copies]
     assert UNSIGNED in ids and SIGNED in ids, _fmt(copies)
+    monkeypatch.setenv("RETRIEVAL_SPEC_BOOST_GUARD", "1")
+    guarded = [c.doc_id for c in _passed(rank_corpus, ask, k=8)]
+    assert not (UNSIGNED in guarded and SIGNED in guarded), guarded
 
 
 def test_s4_governing_contract_ask_does_not_name_specification(rank_corpus):
