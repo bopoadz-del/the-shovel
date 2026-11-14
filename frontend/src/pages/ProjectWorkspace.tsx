@@ -20,6 +20,7 @@ import ChatComposer, { type AgentOption } from '../chat/ChatComposer'
 import SourcesList, { type CitedSource } from '../chat/SourcesList'
 import WhyThisAnswer, { type ProvenanceEntry } from '../chat/WhyThisAnswer'
 import { sanitizeAssistantContent } from '../chat/toolJsonGuard'
+import type { FeedbackEcho } from '../chat/feedbackPayload'
 import {
   freshSessionEntropy,
   historyBelongsToSession,
@@ -1638,6 +1639,15 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                 })
                 .catch((e) => alert(`Download error: ${(e as Error).message}`))
             }}
+            feedback={
+              id && conversationId
+                ? {
+                    projectId: id,
+                    conversationId,
+                    post: (body) => apiPost<FeedbackEcho>('/v1/feedback/answer', body),
+                  }
+                : undefined
+            }
             onExport={(descriptor) => {
               // Data-backed download offer (e.g. cost BOQ / A1–A9 Word). The
               // descriptor's endpoint is server-relative; generation happens

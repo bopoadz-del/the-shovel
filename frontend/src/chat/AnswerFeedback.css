@@ -1,0 +1,55 @@
+.answer-feedback {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.8rem;
+}
+.answer-feedback__choices,
+.answer-feedback__detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+}
+.answer-feedback__detail {
+  margin-top: 0.375rem;
+}
+.answer-feedback__choice,
+.answer-feedback__send {
+  border: 1px solid var(--border, #d0d4da);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.125rem 0.625rem;
+  font: inherit;
+  cursor: pointer;
+}
+.answer-feedback__choice.is-active {
+  border-color: var(--accent, #2f6fde);
+}
+.answer-feedback__choice:disabled,
+.answer-feedback__send:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.answer-feedback__input {
+  border: 1px solid var(--border, #d0d4da);
+  border-radius: 6px;
+  padding: 0.125rem 0.5rem;
+  font: inherit;
+  min-width: 12rem;
+}
+.answer-feedback__input--unit {
+  min-width: 5rem;
+  width: 5rem;
+}
+.answer-feedback__count {
+  opacity: 0.7;
+}
+.answer-feedback__done {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+.answer-feedback__error {
+  margin: 0.25rem 0 0;
+  color: var(--danger, #c0392b);
+}
