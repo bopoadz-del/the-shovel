@@ -318,7 +318,10 @@ class Chunk:
 
     ``rrf_score`` is set on results from the hybrid path (debug-only,
     not serialized). ``score`` remains the primary ranking signal —
-    cosine for semantic-only, semantic cosine for hybrid results."""
+    cosine for semantic-only; for hybrid results it is the FUSED rank
+    expressed on the cosine scale (see ``_rrf_combine``), with the raw
+    leg scores kept beside it in ``vector_score`` / ``lexical_score``
+    and the fused position in ``fused_rank`` (all debug-only)."""
 
     chunk_id: str
     project_id: str
@@ -327,6 +330,12 @@ class Chunk:
     text: str
     score: Optional[float] = None  # set on search results, None when raw
     rrf_score: Optional[float] = field(default=None, repr=False, compare=False)
+    # Hybrid path only, debug-only like ``rrf_score``: the raw score each leg
+    # gave this chunk (cosine / lexical rank; None when that leg missed it)
+    # and its 1-based position after fusion. Never serialized.
+    vector_score: Optional[float] = field(default=None, repr=False, compare=False)
+    lexical_score: Optional[float] = field(default=None, repr=False, compare=False)
+    fused_rank: Optional[int] = field(default=None, repr=False, compare=False)
     # Retrieval layer this chunk came from, set by ``retrieve_with_filter``:
     # "own" (the active project), "general_knowledge" (a disclosed curated GK
     # project), or "master_corpus" (the labeled empty/thin fallback corpus).
@@ -397,8 +406,11 @@ class Chunk:
         # Drop None scores from API responses
         if d["score"] is None:
             d.pop("score")
-        # rrf_score is debug-only; never expose it via the wire
+        # rrf_score and the per-leg scores are debug-only; never on the wire
         d.pop("rrf_score", None)
+        d.pop("vector_score", None)
+        d.pop("lexical_score", None)
+        d.pop("fused_rank", None)
         # layer/knowledge_layer/authority are internal ranking+isolation
         # signals; keep them off the API payload
         d.pop("layer", None)
@@ -1815,8 +1827,9 @@ class VectorStore:
         - **Hybrid** (default when env flag is truthy AND ``query_text``
           is provided): pulls 50 semantic + 50 BM25 candidates, fuses
           with Reciprocal Rank Fusion (k=60), returns top ``k`` by RRF
-          score. Each returned chunk keeps its semantic cosine in
-          ``.score`` and gets ``.rrf_score`` set for debug.
+          score. Each returned chunk's ``.score`` is its fused rank on
+          the cosine scale (``_rrf_combine``); ``.rrf_score``,
+          ``.vector_score`` and ``.lexical_score`` are set for debug.
 
         Returns an empty list when the project has no indexed chunks.
 
@@ -2527,13 +2540,28 @@ def _rrf_combine(
     Combines two ranked lists by summing 1/(RRF_K + rank) contributions.
     Chunks present in only one list still get a score from that list
     (the other term is 0). When a chunk appears in both lists the
-    semantic instance is kept (its ``.score`` cosine attaches), so
-    callers reading ``.score`` see semantic relevance. ``.rrf_score``
-    is set for debug. Position in the returned list = RRF score desc.
+    semantic instance is kept. Position in the returned list = RRF score
+    desc (stable on ties).
+
+    ``.score`` carries the fused rank on the cosine scale: the chunk at
+    fused position i gets the i-th highest cosine of the vector leg
+    (past the vector leg's length, the last cosine repeats). Every later
+    step ranks, thresholds and adds its bonuses on ``.score``, so a chunk
+    the lexical leg ranks first must not keep its raw lexical rank there:
+    that rank is on another scale (``ts_rank`` < 0.1) and would sort it
+    under every vector hit whatever its fused position. The remap keeps
+    the score distribution of the vector leg, so the pool's top score is
+    still the top cosine, and when both legs agree it is the identity.
+    With an empty vector leg there is no cosine scale and ``.score`` is
+    left as the leg gave it. The raw leg scores are kept on
+    ``.vector_score`` / ``.lexical_score`` and the fused position on
+    ``.fused_rank``, debug-only like ``.rrf_score``.
     """
     sem_rank = {c.chunk_id: r for r, c in enumerate(semantic, 1)}
     bm_rank = {c.chunk_id: r for r, c in enumerate(bm25, 1)}
-    # Semantic instances take precedence on tie (they carry .score).
+    sem_score = {c.chunk_id: c.score for c in semantic}
+    bm_score = {c.chunk_id: c.score for c in bm25}
+    # Semantic instances take precedence on tie.
     by_id: dict[str, Chunk] = {}
     for c in bm25:
         by_id[c.chunk_id] = c
@@ -2549,6 +2577,8 @@ def _rrf_combine(
         )
         try:
             c.rrf_score = rrf
+            c.vector_score = sem_score.get(chunk_id)
+            c.lexical_score = bm_score.get(chunk_id)
         except Exception:
             logger.warning(
                 "swallowed %s in _rrf_combine() — continuing",
@@ -2556,7 +2586,15 @@ def _rrf_combine(
             )
         scored.append((rrf, c))
     scored.sort(key=lambda x: -x[0])
-    return [c for _, c in scored[:top_k]]
+    fused = [c for _, c in scored[:top_k]]
+    cosines = sorted(
+        (float(v) for v in sem_score.values() if v is not None), reverse=True,
+    )
+    for i, c in enumerate(fused):
+        c.fused_rank = i + 1
+        if cosines:
+            c.score = cosines[min(i, len(cosines) - 1)]
+    return fused
 
 
 # ── Boot-time serving gate (S1) ──────────────────────────────────────────────

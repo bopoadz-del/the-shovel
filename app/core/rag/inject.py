@@ -905,6 +905,19 @@ def retrieval_trace_enabled() -> bool:
     )
 
 
+def _leg_fields(c) -> Dict[str, Any]:
+    """The hybrid path's per-leg scores and fused rank (``_rrf_combine``),
+    so a trace can tell a lexical-leg chunk from a vector-leg one. None when
+    the chunk did not come through fusion. Never text or names."""
+    out: Dict[str, Any] = {}
+    for key in ("vector_score", "lexical_score"):
+        v = getattr(c, key, None)
+        out[key] = round(float(v), 6) if v is not None else None
+    r = getattr(c, "fused_rank", None)
+    out["fused_rank"] = int(r) if r is not None else None
+    return out
+
+
 def _trace_chunk(rank: int, c) -> Dict[str, Any]:
     """Identity and rank of one chunk. Never its text."""
     name = getattr(c, "source_name", "") or ""
@@ -919,6 +932,7 @@ def _trace_chunk(rank: int, c) -> Dict[str, Any]:
         "doc_id": getattr(c, "doc_id", None),
         "doc_name": name,
         "score": round(float(score), 6) if score is not None else None,
+        **_leg_fields(c),
         "layer": getattr(c, "layer", "own"),
     }
 
@@ -986,7 +1000,8 @@ def _emit_retrieval_trace(
 
 
 def trace_chunk_ids(rank: int, c) -> Dict[str, Any]:
-    """Identity and rank of one chunk with no name: ids, score, layer.
+    """Identity and rank of one chunk with no name: ids, score, per-leg
+    scores and fused rank, layer.
 
     The tool-path line (``emit_search_trace``) is built from this alone, so
     it carries neither chunk text nor a file name."""
@@ -996,6 +1011,7 @@ def trace_chunk_ids(rank: int, c) -> Dict[str, Any]:
         "chunk_id": getattr(c, "chunk_id", None),
         "doc_id": getattr(c, "doc_id", None),
         "score": round(float(score), 6) if score is not None else None,
+        **_leg_fields(c),
         "layer": getattr(c, "layer", "own") or "own",
     }
 
