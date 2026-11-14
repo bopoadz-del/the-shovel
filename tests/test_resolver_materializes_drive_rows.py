@@ -165,10 +165,10 @@ def test_boq_processor_reads_a_drive_only_bill(store, tmp_path):
     assert "file not found" not in text, out
 
 
-def test_drive_download_happens_once_per_resolve(store, tmp_path):
+@pytest.mark.parametrize("kind", RESOLVERS)
+def test_drive_download_happens_once_per_resolve(store, tmp_path, kind):
     """An exact match that cannot be materialised is not retried by the substring pass."""
-    from app.agents.runtime import _resolve_file_path
-
+    resolve = _resolver(kind)
     pid = _project(store)
     tag = uuid.uuid4().hex[:6]
     fid = f"drive-missing-{tag}"
@@ -178,5 +178,5 @@ def test_drive_download_happens_once_per_resolve(store, tmp_path):
         metadata={"drive_file_id": fid},
     )
 
-    assert _resolve_file_path(pid, name) == name
+    assert resolve(pid, name) == name
     assert store._test_downloads.count(fid) == 1
