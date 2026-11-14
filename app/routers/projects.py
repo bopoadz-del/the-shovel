@@ -1104,6 +1104,17 @@ async def add_document(
             doc_index.maybe_eager_index, store.storage_project_id(project_id), doc["id"],
         )
     else:
+        # Record the policy outcome on the ledger too, so the row does not
+        # sit at UNVERIFIED (open work) forever and read as a lost job. The
+        # extractor stamp is left alone: nothing was extracted.
+        from app.core import ingest_status as ist
+
+        store.stamp_document_index(
+            doc["id"], chunk_count=0,
+            ingest_status=ist.NOT_INDEXED_POLICY,
+            ingest_status_reason=ist.ADMIN_ONLY_POLICY_REASON,
+            stamp_extractor_version=False,
+        )
         doc = store.update_document_metadata(doc["id"], {"indexing": {
             "status": "not_indexed",
             "detail": privileges.PROJECT_RAG_ADMIN_ONLY_DETAIL,
