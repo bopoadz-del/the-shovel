@@ -66,7 +66,10 @@ def test_long_names_keep_the_TAIL_not_the_head():
     assert len(long_name) > _MAX_SOURCE_NAME_CHARS
     msg = format_chunks_as_system_message([_chunk(long_name)], 12)
     assert "17Jul25" in msg["content"], "the tail carries the fact"
-    assert "QZ-ENG-310-0000-EXC" not in msg["content"], "head is what gets dropped"
+    # S-R11: the leading document number names the document, so it is kept
+    # in front of the tail; the middle of the name is what gets dropped.
+    assert "src=QZ-ENG-310-0000-EXC-SPC-IF-000013-B…" in msg["content"]
+    assert "Scope_of_Package" not in msg["content"], "the middle is what gets dropped"
 
 
 def test_long_contract_filename_keeps_the_PREFIX_YEAR_SEQ():
