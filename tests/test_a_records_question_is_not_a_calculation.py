@@ -260,3 +260,14 @@ def test_only_a_pure_missing_input_falls_to_retrieval(result, falls):
 ])
 def test_message_requests_computation(text, computes):
     assert runtime._message_requests_computation(text) is computes
+
+
+def test_the_predispatch_kill_switch_turns_it_off(monkeypatch):
+    text = "Lap length for the column bars"
+    monkeypatch.setenv("AGENT_FORMULA_PREDISPATCH", "1")
+    out, agent = _predispatch(text)
+    assert out is not None and len(agent.calls) == 1
+
+    monkeypatch.setenv("AGENT_FORMULA_PREDISPATCH", "0")
+    out, agent = _predispatch(text)
+    assert out is None and agent.calls == []
