@@ -240,6 +240,51 @@ def _term_equivalence_note(query: str) -> str:
     )
 
 
+def chunk_marker(c) -> str:
+    """One excerpt as the model sees it: ``[doc_id=… chunk=N score=… class=…
+    layer=… page=… rev=… src=…] text``.
+
+    The single formatter for every chunk handed to the model -- the first
+    pass here and the evidence loop's fetches (``evidence_actions``) -- so the
+    provenance gate and the sources panel read every handed chunk the same
+    way (S-R5b: loop chunks without a marker were glued to the previous
+    excerpt and their documents were never evidence).
+    """
+    rev = getattr(c, "revision", "") or ""
+    rev_s = f" rev={rev}" if rev else ""
+    sup_s = " SUPERSEDED" if getattr(c, "superseded", False) else ""
+    # The FILENAME is evidence in its own right on construction documents:
+    # expiry dates, revision letters, discipline codes and status live
+    # there and frequently never reach the text layer. Live case — asked
+    # when the Street Lighting NOC expires, retrieval returned the right
+    # document, but "17 July 2025" exists only in
+    # "AM Rev Design NOC ... (exp. 17Jul25).pdf". The extracted text held
+    # only an OCR-mangled "Issue Date 13\02\2025" and "Time Duration
+    # 6 months", so the model did arithmetic on noise to reach a date the
+    # document never states. Nothing about retrieval could fix that; the
+    # model simply never saw the name.
+    #
+    # Truncated because a marker is repeated per excerpt and long
+    # engineering filenames would otherwise crowd the token budget. The
+    # tail is kept rather than the head: that is where revision letters and
+    # parenthesised dates sit.
+    name = _truncate_source_name((getattr(c, "source_name", "") or "").strip())
+    src_s = f" src={name}" if name else ""
+    # class= sits immediately AFTER score= and never between chunk= and
+    # score=: the internal-leak detector and _EXCERPT_SPLIT_RE in
+    # runtime.py both anchor on "chunk=N score=" being adjacent, and an
+    # attribute inserted there would silently switch the leak guard off.
+    cls_s = f" class={_source_class(c)}"
+    # Provenance: the excerpt's layer and real page ride on the marker so
+    # an answer's figures can be credited to "document, page" -- after
+    # class=, never between chunk= and score=.
+    layer = getattr(c, "layer", None)
+    page = getattr(c, "page", None)
+    prov_s = (f" layer={layer}" if layer else "") + (f" page={page}" if page else "")
+    return (f"[doc_id={c.doc_id} chunk={c.chunk_index} "
+            f"score={(c.score or 0):.3f}{cls_s}{prov_s}{rev_s}{sup_s}{src_s}] {c.text}")
+
+
 def format_chunks_as_system_message(
     chunks: List[Chunk],
     total_candidates: int,
@@ -647,42 +692,7 @@ def format_chunks_as_system_message(
             "a different year's or different contract's documents.\n"
         )
 
-    def _marker(c) -> str:
-        rev = getattr(c, "revision", "") or ""
-        rev_s = f" rev={rev}" if rev else ""
-        sup_s = " SUPERSEDED" if getattr(c, "superseded", False) else ""
-        # The FILENAME is evidence in its own right on construction documents:
-        # expiry dates, revision letters, discipline codes and status live
-        # there and frequently never reach the text layer. Live case — asked
-        # when the Street Lighting NOC expires, retrieval returned the right
-        # document, but "17 July 2025" exists only in
-        # "AM Rev Design NOC ... (exp. 17Jul25).pdf". The extracted text held
-        # only an OCR-mangled "Issue Date 13\02\2025" and "Time Duration
-        # 6 months", so the model did arithmetic on noise to reach a date the
-        # document never states. Nothing about retrieval could fix that; the
-        # model simply never saw the name.
-        #
-        # Truncated because a marker is repeated per excerpt and long
-        # engineering filenames would otherwise crowd the token budget. The
-        # tail is kept rather than the head: that is where revision letters and
-        # parenthesised dates sit.
-        name = _truncate_source_name((getattr(c, "source_name", "") or "").strip())
-        src_s = f" src={name}" if name else ""
-        # class= sits immediately AFTER score= and never between chunk= and
-        # score=: the internal-leak detector and _EXCERPT_SPLIT_RE in
-        # runtime.py both anchor on "chunk=N score=" being adjacent, and an
-        # attribute inserted there would silently switch the leak guard off.
-        cls_s = f" class={_source_class(c)}"
-        # Provenance: the excerpt's layer and real page ride on the marker so
-        # an answer's figures can be credited to "document, page" -- after
-        # class=, never between chunk= and score=.
-        layer = getattr(c, "layer", None)
-        page = getattr(c, "page", None)
-        prov_s = (f" layer={layer}" if layer else "") + (f" page={page}" if page else "")
-        return (f"[doc_id={c.doc_id} chunk={c.chunk_index} "
-                f"score={(c.score or 0):.3f}{cls_s}{prov_s}{rev_s}{sup_s}{src_s}] {c.text}")
-
-    body_parts = [_marker(c) for c in chunks]
+    body_parts = [chunk_marker(c) for c in chunks]
     return {"role": "system", "content": header + "\n" + "\n\n".join(body_parts)}
 
 

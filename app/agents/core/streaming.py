@@ -297,6 +297,7 @@ async def _chat_stream_impl(
     if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
         _rag_sys_msg = await _agentic_figure_retrieval_augment(
             self, user_message, project_id, api_key, user_id, _rag_sys_msg,
+            audit_rec=_rag_audit,
         )
     # The message preparation below scans the question and the excerpts with
     # many patterns: in a worker thread, like retrieval (CI: 125-203 ms loop
