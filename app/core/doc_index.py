@@ -4089,7 +4089,26 @@ def index_document(
         profile=_checked_profile(profile),
     )
     _record_pages_without_text(document_id, result)
+    if profile == PROFILE_CORPUS_BUILD and _ext_of(result.get("filename") or "") == ".pdf":
+        result["derived_bill"] = _derive_bill_sheet(project_id, document_id)
     return result
+
+
+def _derive_bill_sheet(project_id: str, document_id: str) -> dict[str, Any]:
+    """P-B3 hook: an image-only bill gets a derived spreadsheet row.
+
+    Runs after the source is indexed and never changes the source's result:
+    a derivation that raises is logged and reported as ``derived: False``.
+    """
+    from app.core import bill_derived
+
+    try:
+        return bill_derived.derive_bill_sheet(project_id, document_id)
+    except Exception as exc:  # noqa: BLE001 - the source index already stands
+        logger.warning(
+            "bill sheet derivation failed for %s: %s", document_id, exc, exc_info=True,
+        )
+        return {"derived": False, "reason": "error", "error": type(exc).__name__}
 
 
 def _prior_retrievable_chunks(doc: dict[str, Any]) -> int:
