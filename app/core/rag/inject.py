@@ -36,14 +36,28 @@ retrieve_first_ctx: ContextVar[bool] = ContextVar("shovel_retrieve_first", defau
 _MAX_SOURCE_NAME_CHARS = 60
 
 
+# A document number at the head of a filename: a run of letters and digits
+# joined by '-' or '.', with at least one digit and one joint
+# ("AB-CDE-001-0000-XYZ-SPC-IF-000001-B_Specification.pdf"). It names the
+# document, so shortening the name must not cut it (S-R11).
+_LEADING_DOC_NUMBER_RE = re.compile(r"^(?=[^\s_]*\d)[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)+")
+
+
+def _leading_doc_number(name: str) -> str:
+    m = _LEADING_DOC_NUMBER_RE.match(name or "")
+    # A file extension glued to the number ("...-000001-B.pdf") is not part of it.
+    return re.sub(r"\.[A-Za-z]{2,4}$", "", m.group(0)) if m else ""
+
+
 def _truncate_source_name(name: str) -> str:
     """Fit ``name`` into the per-excerpt src= budget.
 
-    The tail is kept (expiry dates / revision letters live there). When
-    the filename also carries a PREFIX-YEAR-SEQ contract id, that id is
-    preserved at the front so a contract answer can name the cited
-    contract — tail-only truncation used to drop the contract id from
-    long package filenames.
+    The tail is kept (expiry dates / revision letters live there). The head
+    that names the document is kept in front of it: a PREFIX-YEAR-SEQ
+    contract id when the filename carries one (so a contract answer can name
+    the cited contract), else the leading document number (so a cited sheet
+    or specification keeps the number it is known by). Tail-only truncation
+    used to drop both from long filenames.
     """
     if not name:
         return ""
@@ -51,20 +65,62 @@ def _truncate_source_name(name: str) -> str:
         return name
     from app.core.rag.retriever import extract_contract_doc_ids
     ids = extract_contract_doc_ids(name)
-    if not ids:
-        return "…" + name[-(_MAX_SOURCE_NAME_CHARS - 1):]
-    name_l = name.lower()
-    prefix_parts: List[str] = []
-    for cid in ids:
-        idx = name_l.find(cid)
-        if idx >= 0:
-            prefix_parts.append(name[idx:idx + len(cid)])
-    prefix = " ".join(prefix_parts) if prefix_parts else ids[0]
+    if ids:
+        name_l = name.lower()
+        prefix_parts: List[str] = []
+        for cid in ids:
+            idx = name_l.find(cid)
+            if idx >= 0:
+                prefix_parts.append(name[idx:idx + len(cid)])
+        prefix = " ".join(prefix_parts) if prefix_parts else ids[0]
+    else:
+        prefix = _leading_doc_number(name)
     ellip = "…"
+    if not prefix:
+        return ellip + name[-(_MAX_SOURCE_NAME_CHARS - 1):]
     budget = _MAX_SOURCE_NAME_CHARS - len(prefix) - len(ellip)
     if budget < 8:
         return prefix[:_MAX_SOURCE_NAME_CHARS]
     return prefix + ellip + name[-budget:]
+
+
+def annotate_document_kinds(chunks) -> None:
+    """Fill ``doc_type`` / ``doc_role`` on chunks that lack them, from their
+    documents rows, with one batch read (S-R11).
+
+    The marker then tells the model what kind of document each excerpt is.
+    A failed read leaves the fields empty: the excerpt is still handed, it
+    just carries no kind.
+    """
+    need = [c for c in chunks or []
+            if not isinstance(c, str) and getattr(c, "doc_id", None)
+            and not getattr(c, "doc_type", "") and not getattr(c, "doc_role", "")]
+    if not need:
+        return
+    try:
+        from app.core import projects as _projects
+        kinds = _projects.document_kinds([c.doc_id for c in need])
+    except Exception:  # noqa: BLE001 -- the excerpt is handed without a kind
+        _LOG.debug("document kind lookup failed", exc_info=True)
+        return
+    for c in need:
+        c.doc_type, c.doc_role = kinds.get(c.doc_id, ("", ""))
+
+
+def _kind_attrs(c) -> str:
+    """`` kind=… role=…`` for the marker. A column default (the type table
+    did not recognise the document, or no role was assigned) is not a kind,
+    so it is left off rather than printed as if it were one."""
+    from app.core.doc_typing import DEFAULT_DOC_TYPE
+    from app.core.projects import ROLE_OTHER
+    doc_type = (getattr(c, "doc_type", "") or "").strip()
+    doc_role = (getattr(c, "doc_role", "") or "").strip()
+    out = ""
+    if doc_type and doc_type != DEFAULT_DOC_TYPE:
+        out += f" kind={doc_type.replace(' ', '_')}"
+    if doc_role and doc_role != ROLE_OTHER:
+        out += f" role={doc_role.replace(' ', '_')}"
+    return out
 
 
 def _estimate_tokens(text: str) -> int:
@@ -242,7 +298,7 @@ def _term_equivalence_note(query: str) -> str:
 
 def chunk_marker(c) -> str:
     """One excerpt as the model sees it: ``[doc_id=… chunk=N score=… class=…
-    layer=… page=… rev=… src=…] text``.
+    layer=… page=… kind=… role=… rev=… src=…] text``.
 
     The single formatter for every chunk handed to the model -- the first
     pass here and the evidence loop's fetches (``evidence_actions``) -- so the
@@ -281,8 +337,12 @@ def chunk_marker(c) -> str:
     layer = getattr(c, "layer", None)
     page = getattr(c, "page", None)
     prov_s = (f" layer={layer}" if layer else "") + (f" page={page}" if page else "")
+    # What the document is (S-R11): its type and role from the documents
+    # row, after page= and before src= (src= is read up to the next
+    # attribute or the end of the marker, so it stays last).
+    kind_s = _kind_attrs(c)
     return (f"[doc_id={c.doc_id} chunk={c.chunk_index} "
-            f"score={(c.score or 0):.3f}{cls_s}{prov_s}{rev_s}{sup_s}{src_s}] {c.text}")
+            f"score={(c.score or 0):.3f}{cls_s}{prov_s}{kind_s}{rev_s}{sup_s}{src_s}] {c.text}")
 
 
 def format_chunks_as_system_message(
@@ -695,6 +755,7 @@ def format_chunks_as_system_message(
             "a different year's or different contract's documents.\n"
         )
 
+    annotate_document_kinds(chunks)
     body_parts = [chunk_marker(c) for c in chunks]
     return {"role": "system", "content": header + "\n" + "\n\n".join(body_parts)}
 
