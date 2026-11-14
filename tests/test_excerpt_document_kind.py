@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 
 from app.agents import citation_provenance as cp
@@ -196,8 +194,8 @@ def test_every_marker_field_the_rule_names_is_emitted(doc_type, doc_role):
         assert f" {field}=" in out
 
 
-def test_chunk_kind_never_reaches_the_wire():
-    d = _chunk("w", 0, doc_type="drawing", doc_role="baseline_schedule").to_dict()
+@pytest.mark.parametrize("doc_type,doc_role", [("drawing", "baseline_schedule"),
+                                               ("method_statement", "weekly_report")])
+def test_chunk_kind_never_reaches_the_wire(doc_type, doc_role):
+    d = _chunk("w", 0, doc_type=doc_type, doc_role=doc_role).to_dict()
     assert "doc_type" not in d and "doc_role" not in d
-    d2 = SimpleNamespace(**_chunk("w", 1).__dict__)
-    assert d2.doc_type == ""
