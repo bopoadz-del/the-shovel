@@ -84,8 +84,8 @@ def test_default_work_dir_is_per_document_under_data_dir(data_dir, want):
 # --- plan_one decisions ---------------------------------------------------
 
 @pytest.mark.parametrize("docs,error", [
-    ({}, "document not found"),
-    ({"d1": {"id": "d1", "project_id": "other"}}, "document does not belong to project"),
+    ({}, bpo.ERR_NOT_FOUND),
+    ({"d1": {"id": "d1", "project_id": "other"}}, bpo.ERR_WRONG_PROJECT),
 ])
 def test_plan_one_refuses_before_planning(tmp_path, docs, error):
     calls: list = []
@@ -101,7 +101,7 @@ def test_plan_one_reports_a_skip_as_not_ok(tmp_path, reason):
     plan_out = {"derived": False, "reason": reason}
     rep = bpo.plan_one("p1", "d1", pages=None, work_dir=str(tmp_path),
                        deps=_deps({"d1": {"project_id": "p1"}}, lambda *a, **k: plan_out, lines))
-    assert rep["ok"] is False and rep["error"] == f"no plan: {reason}"
+    assert rep["ok"] is False and rep["error"] == bpo.ERR_NO_PLAN
     assert rep["reason"] == reason and "section_paths" not in rep
 
 
@@ -112,8 +112,134 @@ def test_plan_one_reports_an_exception_and_keeps_timing(tmp_path, exc):
     lines: list[str] = []
     rep = bpo.plan_one("p1", "d1", pages=(0, 2), work_dir=str(tmp_path),
                        deps=_deps({"d1": {"project_id": "p1"}}, boom, lines, clock=Clock(1.0, 5.5)))
-    assert rep["ok"] is False and type(exc).__name__ in rep["error"]
+    assert rep["ok"] is False and rep["error"] == bpo.ERR_RAISED
+    assert rep["error_class"] == type(exc).__name__ and str(exc) not in json.dumps(rep)
     assert rep["wall_s"] == 4.5 and rep["peak_rss_mb"] == 12.5
+    # the message is kept privately, beside the word boxes
+    kept = json.loads((tmp_path / "last_error.json").read_text(encoding="utf-8"))
+    assert kept == {"error_class": type(exc).__name__, "message": str(exc)}
+
+
+# --- the public summary carries counts, codes and hashes only ---------------
+
+#: Free text a plan, a verdict or an exception could carry; none may reach the summary.
+_LEAKS = [
+    "Bill No. 4 - Substructure / Concrete works",
+    "C:/projects/Tender Package/priced_bill_final.pdf",
+    "Excavate to reduce levels, n.e. 2m deep",
+    "x" * (bpo.HASH_LEN + 1),
+]
+
+
+def _assert_public(summary: dict[str, Any], leaks: list[str]) -> None:
+    """Every string (key or value) is a short code token; no leak survives."""
+    def walk(value):
+        if isinstance(value, str):
+            assert len(value) <= bpo.HASH_LEN and bpo._TOKEN.fullmatch(value), value
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                walk(k)
+                walk(v)
+        elif isinstance(value, list):
+            for v in value:
+                walk(v)
+        else:
+            assert value is None or isinstance(value, (bool, int, float)), value
+    walk(summary)
+    text = json.dumps(summary)
+    assert not any(leak in text for leak in leaks)
+    assert set(summary) <= set(bpo.SUMMARY_KEYS)
+
+
+@pytest.mark.parametrize("leak", _LEAKS)
+def test_public_summary_redacts_free_text_in_every_field(leak):
+    report = {
+        "ok": False, "error": leak, "error_class": leak, "document_id": "d1",
+        "reason": leak, "plan_hash": "a" * 64,
+        "verdict": {"is_bill": True, "reason": leak, "measured_rows": 7},
+        "rows_by_path_depth": {"1": 3, leak: 2},
+        "sections": [{"path": [leak], "rows": 3}],  # not a summary key: dropped
+        "file_name": leak,
+    }
+    out = bpo.public_summary(report)
+    _assert_public(out, [leak])
+    assert out["plan_hash"] == "a" * 64 and out["document_id"] == "d1"
+    assert out["error"] == bpo.REDACTED and out["verdict"]["measured_rows"] == 7
+    assert "sections" not in out and "file_name" not in out
+
+
+@pytest.mark.parametrize("value,want", [
+    ("priced_rows_reconcile", "priced_rows_reconcile"),
+    ("b" * 64, "b" * 64),
+    ("b" * 65, bpo.REDACTED),
+    ("two words", bpo.REDACTED),
+    ("", bpo.REDACTED),
+    (object(), bpo.REDACTED),
+    (12, 12),
+    (None, None),
+])
+def test_public_value_passes_only_tokens_and_numbers(value, want):
+    assert bpo._public_value(value) == want
+
+
+def _leaky_plan(*a, **k):
+    """A plan whose sections, reason and extras carry free text."""
+    return {
+        "derived": False, "reason": "priced_rows_reconcile", "source_id": "d1",
+        "pages": [0, 2], "pages_in_file": 9, "rows": 5, "unreconciled": 1,
+        "sections": [{"path": [_LEAKS[0], _LEAKS[2]], "rows": 4, "unreconciled": 1,
+                      "pages": [0, 1]},
+                     {"path": [_LEAKS[0]], "rows": 1, "unreconciled": 0, "pages": [1, 1]}],
+        "plan_hash": "c" * 64, "original_name": _LEAKS[1],
+    }
+
+
+@pytest.mark.parametrize("plan,code", [
+    (_leaky_plan, None),
+    (lambda *a, **k: (_ for _ in ()).throw(ValueError(_LEAKS[2])), bpo.ERR_RAISED),
+])
+def test_summary_line_never_carries_plan_or_exception_text(tmp_path, plan, code):
+    lines: list[str] = []
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path), "BILL_PLAN_PAGES": "0:2"}
+    deps = _deps({"d1": {"project_id": "p1"}}, plan, lines)
+    rc = bpo.main_from_env(env, deps=deps)
+    assert len(lines) == 1  # the script prints nothing but the summary
+    summary = _summary(lines)
+    _assert_public(summary, _LEAKS)
+    if code is None:
+        assert rc == 0 and summary["rows_by_path_depth"] == {"1": 1, "2": 4}
+        assert summary["private_plan_saved"] is True
+        # the full plan, labels included, is kept privately in the work dir
+        kept = json.loads((tmp_path / "plan_0_2.json").read_text(encoding="utf-8"))
+        assert kept["sections"][0]["path"] == [_LEAKS[0], _LEAKS[2]]
+    else:
+        assert rc == 1 and summary["error"] == code and summary["error_class"] == "ValueError"
+        assert not (tmp_path / "plan_0_2.json").exists()
+
+
+@pytest.mark.parametrize("blocker", ["file", "dir"])
+def test_a_plan_that_cannot_be_kept_privately_fails_the_run(tmp_path, blocker):
+    target = tmp_path / "plan_0_2.json"
+    if blocker == "dir":  # the plan's file name is taken by a directory
+        target.mkdir()
+        wd = tmp_path
+    else:  # the work directory is a regular file
+        wd = tmp_path / "wd"
+        wd.write_text("x", encoding="utf-8")
+    lines: list[str] = []
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(wd), "BILL_PLAN_PAGES": "0:2"}
+    rc = bpo.main_from_env(env, deps=_deps({"d1": {"project_id": "p1"}}, _leaky_plan, lines))
+    summary = _summary(lines)
+    assert rc == 1 and summary["ok"] is False and summary["error"] == bpo.ERR_NOT_SAVED
+    assert summary["private_plan_saved"] is False and summary["error_class"]
+    _assert_public(summary, _LEAKS)
+
+
+@pytest.mark.parametrize("pages,name", [([0, 40], "plan_0_40.json"), ([40, 80], "plan_40_80.json")])
+def test_private_plan_is_named_by_its_page_range(pages, name):
+    assert bpo.private_plan_name({"pages": pages}) == name
 
 
 # --- end to end through the real plan_bill_sheet ---------------------------
@@ -151,6 +277,8 @@ def test_main_plans_through_the_real_planner_and_writes_no_row(tmp_path, monkeyp
     # ids and counts only: no section label reaches the summary line
     line = [ln for ln in lines if ln.startswith(bpo.SUMMARY_PREFIX)][0]
     assert not any(label in line for label in want)
+    _assert_public(rep, [str(label) for label in want])
+    assert (tmp_path / "wd" / f"plan_0_{pages}.json").is_file()
 
 
 @pytest.mark.parametrize("ranges,cached", [(("0:2", "2:3"), [2, 3]), (("0:1", "1:3"), [1, 3])])

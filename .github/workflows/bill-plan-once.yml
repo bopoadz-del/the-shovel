@@ -13,6 +13,13 @@
 # ranges, one task run each, and a later range or a whole-document run reads
 # them back. It prints one `BILLPLANSUMMARY <json>` line of ids and counts.
 # No project, document or page range is committed here. An ops tool, not a gate.
+#
+# Actions logs and job summaries are world-readable, so nothing from the
+# document reaches them: the task's log lines are never echoed, the summary is
+# re-filtered here (every string must be a short code token, at most a hash
+# long, else "redacted"), and without a summary only a line count and the
+# last exception CLASS name are printed. The full plan with its labels stays
+# in the task's work directory on the data mount.
 name: bill-plan-once
 
 on:
@@ -149,16 +156,22 @@ jobs:
           done
           line=$(grep 'BILLPLANSUMMARY ' logs.txt | tail -n 1 || true)
           if [ -z "$line" ]; then
+            # Never echo task output: a line count and the last exception
+            # class name (a bare identifier) only.
+            nlines=$(wc -l < logs.txt | tr -d ' ')
+            err_class=$(grep -oE '\b[A-Z][A-Za-z0-9_]{0,63}(Error|Exception|Interrupt|Exit)\b' logs.txt \
+              | tail -n 1 || true)
             {
-              echo "## bill-plan-once: no BILLPLANSUMMARY captured (last 40 log lines)"
-              echo '```'
-              tail -n 40 logs.txt
-              echo '```'
+              echo "## bill-plan-once: no BILLPLANSUMMARY captured"
+              echo "- log lines read: ${nlines}"
+              echo "- last exception class: ${err_class:-none}"
             } | tee -a "$GITHUB_STEP_SUMMARY"
             echo "::error::no BILLPLANSUMMARY captured from the task"
             exit 1
           fi
-          printf '%s' "$line" | sed -n 's/.*BILLPLANSUMMARY //p' > bill-plan-summary.json
+          printf '%s' "$line" | sed -n 's/.*BILLPLANSUMMARY //p' \
+            | jq -c 'walk(if type == "string" and (test("^[A-Za-z0-9_.:+-]{1,64}$") | not)
+                          then "redacted" else . end)' > bill-plan-summary.json
           {
             echo "## bill-plan-once"
             echo '```json'
