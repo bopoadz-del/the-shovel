@@ -160,6 +160,9 @@ class _Result:
     def all(self):
         return list(self._rows)
 
+    def first(self):
+        return None  # no planner statistics
+
     def scalar(self):
         return " 'steel' "
 

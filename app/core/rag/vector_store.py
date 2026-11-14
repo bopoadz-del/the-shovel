@@ -9,8 +9,8 @@ similarity over the project's rows — slower but works everywhere.
 
 Hybrid retrieval: when ``RAG_HYBRID_SEARCH`` is truthy and the caller
 supplies ``query_text``, the store also runs a BM25 leg and fuses with
-Reciprocal Rank Fusion. On PostgreSQL the BM25 leg is ``ts_rank`` over
-the ``text_search`` tsvector column + GIN index (added by Alembic 0003).
+Reciprocal Rank Fusion. On PostgreSQL the BM25 leg is an idf-weighted,
+length-normed score over the ``text_search`` tsvector column + GIN index (added by Alembic 0003).
 On SQLite the BM25 leg is FTS5 over a ``chunks_fts`` external-content
 virtual table maintained by AFTER INSERT/DELETE/UPDATE triggers on
 ``chunks``. See ``_ensure_fts5_sqlite`` for the trigger rationale.
@@ -323,33 +323,56 @@ def _sanitize_websearch_query(query: str) -> str:
     return " or ".join(tokens)
 
 
+# ── The lexical leg's score: rarity over matched lexemes, mildly length-normed ─
+#
+# ``ts_rank`` gave every matched query lexeme the same weight and did not
+# normalise for length, so a long chunk won by holding MORE of the question's
+# common words ('works', 'water', 'base') over a short chunk holding its rare
+# ones. The score is now
+#
+#     sum of idf(lexeme) over the query lexemes the chunk holds
+#     ------------------------------------------------------------
+#          1 + ln(number of distinct lexemes in the chunk)
+#
+# * idf = ln(1 + 1/f), f the fraction of chunks holding the lexeme, read from
+#   the store's own planner statistics (``pg_stats.most_common_elem_freqs``).
+#   A lexeme absent from that list is rarer than the least common listed one,
+#   so it takes that floor frequency. No statistics at all -> every lexeme
+#   weighs the same. No word list, no fixed threshold.
+# * The divisor grows with the log of the chunk's vocabulary: mild, so a
+#   long chunk that really holds the rare terms still ranks.
+# * The sum is scaled by 0.1 / (sum of every query lexeme's idf), one constant
+#   per query, so the order is unchanged and the value stays on ``ts_rank``'s
+#   scale (at most 0.1) for the callers that read ``Chunk.score`` from this leg.
+#   Fusion uses the leg's rank, never this value.
+#
 # ── Bounded BM25 (exact top-k without ranking every matching row) ─────────
 #
 # The bag-of-words tsquery above matches most of a large project: measured on
 # live, "commencement date stated agreement pump station works" matched 57,069
-# of the master corpus's 118,665 chunks. ``ORDER BY ts_rank LIMIT k`` then has
-# to read every one of those tsvectors (most are TOASTed), twice -- once for
-# ``@@`` and once for ``ts_rank`` -- which was ~155k buffers (1.2 GB) per call
-# and ~80% of all the database reading one question did.
+# of the master corpus's 118,665 chunks. Ranking all of them reads every one of
+# those tsvectors -- ~155k buffers (1.2 GB) per call and ~80% of all the
+# database reading one question did.
 #
-# The top-k does not need every match ranked. ``text_search`` is
-# ``to_tsvector('english', text)``: every position carries weight D (0.1), and
-# for an OR query ``ts_rank`` sums, per matched query lexeme, a term that is
-# below 0.1 however often the lexeme occurs (0.1 * sum(1/j^2) / (pi^2/6)), then
-# divides by the number of distinct query lexemes n. So a chunk matching m of
-# the n lexemes ranks strictly below m * 0.1 / n. Once k chunks with rank >= tau
-# are in hand, a chunk can only enter the top-k if it matches more than
-# tau * n / 0.1 lexemes -- and "matches at least t of n lexemes" is something
-# the GIN index can answer without touching the heap for the rest.
+# The top-k does not need every match ranked. Order the query lexemes by idf,
+# rarest first, w1 >= w2 >= ... >= wn. Admit every chunk that holds one of the
+# r rarest lexemes, or at least t of the others. A chunk left out holds none of
+# the r rarest and at most t-1 of the rest, so its weight sum is at most
+# w(r+1) + ... + w(r+t-1), and its divisor is at least 1: its score is at most
+# that sum times the query's scale. Once the k-th score among the admitted
+# chunks reaches that bound, no chunk left out can enter the top-k. "Holds one
+# of these, or t of those" is something the GIN index answers without touching
+# the heap for the rest, and the rarest lexemes admit few rows.
 #
-# ``_bm25_bounded`` ranks exactly the chunks the GIN index admits for a
-# threshold t, and accepts the result only when the k-th rank it found proves
-# no excluded chunk could beat it. Otherwise it widens t, and in the end falls
-# back to the full scan. The result is identical to ranking every match.
+# ``_bm25_bounded`` ranks exactly the chunks the GIN index admits for (r, t),
+# and accepts the result only when the k-th score proves the bound. Otherwise it
+# admits more rare lexemes and lowers t, and in the end falls back to the full
+# scan. The result is identical to ranking every match.
 
-# Upper bound of one matched lexeme's contribution to ``ts_rank`` for an
-# unweighted tsvector (weight D = 0.1), with a margin for float4 rounding.
-_TS_RANK_TERM_CAP = 0.1 * (1 + 1e-4)
+# The score's ceiling: ``ts_rank``'s for an unweighted tsvector (weight D).
+_LEXICAL_SCORE_SCALE = 0.1
+# Relative margin on the bound for float rounding in the database's sum.
+_BM25_BOUND_MARGIN = 1e-9
 # Most OR-of-AND groups one candidate tsquery may hold. The GIN index checks
 # every group per candidate row, so a much larger tsquery costs more CPU than
 # the reads it saves (measured on live: 600 groups took 1.2 s, 120 took 0.2 s
@@ -364,6 +387,8 @@ _BM25_MAX_ROUNDS = 6
 _BM25_MAX_SHORT_ROUNDS = 2
 # One operand of a tsquery's text form: a quoted lexeme with no weight/prefix.
 _TSQUERY_LEXEME_RE = re.compile(r"^'((?:[^']|'')+)'$")
+# Every quoted lexeme anywhere in a tsquery's text form.
+_TSQUERY_ANY_LEXEME_RE = re.compile(r"'((?:[^']|'')+)'")
 
 
 def tsquery_or_lexemes(tsquery_text: Optional[str]) -> Optional[List[str]]:
@@ -372,8 +397,7 @@ def tsquery_or_lexemes(tsquery_text: Optional[str]) -> Optional[List[str]]:
     ``"'commenc' | 'date'"`` -> ``['commenc', 'date']``; an empty query ->
     ``[]``; anything else (a phrase from a compound token, ``&``, ``!``, a
     weight or prefix marker) -> ``None``, which the caller answers with the
-    full scan. Distinct, because ``ts_rank`` divides by the number of
-    distinct operands.
+    full scan.
     """
     raw = (tsquery_text or "").strip()
     if not raw:
@@ -387,53 +411,112 @@ def tsquery_or_lexemes(tsquery_text: Optional[str]) -> Optional[List[str]]:
     return sorted(out)
 
 
+def tsquery_lexemes(tsquery_text: Optional[str]) -> List[str]:
+    """Every distinct lexeme a tsquery names, whatever joins them.
+
+    The score weighs the lexemes a chunk holds; a phrase's lexemes count one
+    by one (the ``@@`` predicate still decides whether the chunk matches).
+    """
+    return sorted({
+        m.group(1).replace("''", "'")
+        for m in _TSQUERY_ANY_LEXEME_RE.finditer(tsquery_text or "")
+    })
+
+
+def lexeme_weights(
+    lexemes: Iterable[str], frequency: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    """idf = ln(1 + 1/f) per lexeme; see the notes above ``_LEXICAL_SCORE_SCALE``.
+
+    ``frequency`` is the fraction of chunks holding each listed lexeme. An
+    unlisted lexeme takes the least listed frequency (it is rarer than every
+    listed one); with nothing listed every lexeme weighs 1.
+    """
+    import math
+
+    freq = {k: float(v) for k, v in (frequency or {}).items() if v and v > 0}
+    floor = min(freq.values()) if freq else None
+    out: Dict[str, float] = {}
+    for lx in lexemes:
+        f = freq.get(lx, floor)
+        out[lx] = 1.0 if f is None else math.log(1.0 + 1.0 / min(f, 1.0))
+    return out
+
+
+def lexical_score_scale(weights: Dict[str, float]) -> float:
+    """The per-query constant that puts the score on ``ts_rank``'s scale."""
+    total = sum(weights.values())
+    return _LEXICAL_SCORE_SCALE / total if total > 0 else 0.0
+
+
+def rarest_first(lexemes: Iterable[str], weights: Optional[Dict[str, float]] = None) -> List[str]:
+    """``lexemes`` by idf, highest first; ties by the lexeme itself."""
+    w = weights or {}
+    return sorted(set(lexemes), key=lambda x: (-w.get(x, 0.0), x))
+
+
 def _tsquery_literal(lexeme: str) -> str:
     return "'" + lexeme.replace("\\", "\\\\").replace("'", "''") + "'"
 
 
 def bm25_candidate_tsquery(
-    lexemes: List[str], t: int, frequency: Optional[Dict[str, float]] = None,
+    lexemes: List[str], t: int, weights: Optional[Dict[str, float]] = None,
+    rare: int = 0,
 ) -> Optional[str]:
-    """A tsquery matched by every chunk holding at least ``t`` of ``lexemes``.
+    """A tsquery matched by every chunk that holds one of the ``rare`` rarest
+    ``lexemes``, or at least ``t`` of the others.
 
-    A chunk with ``t`` of the ``n`` lexemes holds at least ``j`` of any
-    ``n - t + j`` of them, so OR-ing the ``j``-subsets of the ``n - t + j``
-    rarest lexemes admits all such chunks while the common lexemes stay out
-    of the index lookup. The largest ``j`` (up to 3) whose subset count fits
-    ``_BM25_MAX_CONJUNCTIONS`` is used. ``frequency`` only orders the lexemes
-    (rare first); it never changes which chunks qualify.
+    A chunk with ``t`` of the ``m`` others holds at least ``j`` of any
+    ``m - t + j`` of them, so OR-ing the ``j``-subsets of the ``m - t + j``
+    rarest admits all such chunks while the common lexemes stay out of the
+    index lookup. The largest ``j`` (up to 3) whose subset count fits
+    ``_BM25_MAX_CONJUNCTIONS`` is used. When ``t`` exceeds the others, only
+    the rare lexemes admit. ``weights`` only orders the lexemes.
     """
     from itertools import combinations
     from math import comb
 
-    n = len(lexemes)
-    if n == 0 or t < 1 or t > n:
+    order = rarest_first(lexemes, weights)
+    n = len(order)
+    if n == 0 or t < 1 or rare < 0 or rare >= n:
         return None
-    freq = frequency or {}
-    order = sorted(lexemes, key=lambda x: (freq.get(x, 0.0), x))
+    singles = [f"({_tsquery_literal(x)})" for x in order[:rare]]
+    rest = order[rare:]
+    m = len(rest)
+    if t > m:
+        return " | ".join(singles) if singles else None
+    budget = _BM25_MAX_CONJUNCTIONS - len(singles)
     for j in (3, 2, 1):
         if j > t:
             continue
-        r = n - t + j
-        if comb(r, j) > _BM25_MAX_CONJUNCTIONS:
+        r = m - t + j
+        if comb(r, j) > budget:
             continue
         groups = (
             " & ".join(_tsquery_literal(x) for x in combo)
-            for combo in combinations(order[:r], j)
+            for combo in combinations(rest[:r], j)
         )
-        return " | ".join(f"({g})" for g in groups)
+        return " | ".join(singles + [f"({g})" for g in groups])
     return None
 
 
-def bm25_rank_bound_holds(kth_rank: float, n_lexemes: int, t: int) -> bool:
-    """True when no chunk with fewer than ``t`` lexemes can reach ``kth_rank``.
+def bm25_excluded_bound(
+    lexemes: List[str], weights: Dict[str, float], t: int, rare: int = 0,
+) -> float:
+    """Highest score a chunk left out by ``bm25_candidate_tsquery`` can have.
 
-    Such a chunk ranks below ``(t - 1) * cap / n``; when that is at most the
-    k-th rank already found, it cannot displace any of the k.
+    It holds none of the ``rare`` rarest lexemes and at most ``t - 1`` of the
+    rest, so its weight sum is at most the ``t - 1`` largest weights after the
+    first ``rare``; its divisor is at least 1.
     """
-    if n_lexemes <= 0:
-        return False
-    return (t - 1) * _TS_RANK_TERM_CAP / n_lexemes <= kth_rank
+    order = rarest_first(lexemes, weights)
+    held = order[rare:rare + max(t - 1, 0)]
+    return sum(weights.get(x, 0.0) for x in held) * lexical_score_scale(weights)
+
+
+def bm25_rank_bound_holds(kth_rank: float, bound: float) -> bool:
+    """True when no chunk scoring at most ``bound`` can displace the k-th."""
+    return kth_rank >= bound * (1 + _BM25_BOUND_MARGIN)
 
 
 # ── Public types ──────────────────────────────────────────────────────────
@@ -2343,9 +2426,9 @@ class VectorStore:
 
         Dispatches on backend:
 
-        - PostgreSQL: ``ts_rank`` over ``text_search`` (the tsvector
-          column added by Alembic 0003) with a ``@@ plainto_tsquery``
-          predicate. GIN index ``chunks_fts_gin`` keeps it fast.
+        - PostgreSQL: an idf-weighted, length-normed score (see
+          ``_LEXICAL_SCORE_SCALE``) over ``text_search`` (the tsvector
+          column added by Alembic 0003) with a ``@@`` tsquery predicate. GIN index ``chunks_fts_gin`` keeps it fast.
         - SQLite: FTS5 ``chunks_fts`` external-content virtual table,
           joined back to ``chunks`` by rowid.
 
@@ -2375,11 +2458,11 @@ class VectorStore:
         self, project_id: str, query: str, k: int,
         scope_sql: str = "", scope_params: Optional[Dict[str, str]] = None,
     ) -> List[Chunk]:
-        """ts_rank + GIN over a BAG-OF-WORDS tsquery.
+        """Rarity-weighted score + GIN over a BAG-OF-WORDS tsquery.
 
         Bag-of-words (OR), not plainto_tsquery's AND — see
         ``_sanitize_websearch_query`` for the production failure that came from
-        requiring every query term to appear in a chunk. ``ts_rank`` still ranks
+        requiring every query term to appear in a chunk. The score still ranks
         a chunk matching more of the terms above one matching fewer, so relaxing
         the predicate widens recall without flattening precision.
         """
@@ -2428,16 +2511,27 @@ class VectorStore:
         ]
 
     def _bm25_select(self, where: str, vis: str) -> str:
-        """The BM25 statement over ``where``; ranks by the FULL query ``q``.
+        """The BM25 statement over ``where``; scores by the FULL query's lexemes.
 
-        ``chunk_id`` breaks rank ties so the top-k is one fixed set rather
-        than whichever tied rows a scan happened to reach first.
+        The score is the one described above ``_LEXICAL_SCORE_SCALE``:
+        ``:lx`` / ``:lw`` are the query's lexemes and their idf weights,
+        ``:scale`` the per-query constant. The chunk's lexemes are read once
+        per row (``OFFSET 0`` keeps the planner from inlining the read into
+        both places it is used). ``chunk_id`` breaks score ties so the top-k
+        is one fixed set rather than whichever tied rows a scan happened to
+        reach first.
         """
         return (
             "SELECT c.chunk_id, c.project_id, c.doc_id, c.chunk_index, "
             "c.text, c.knowledge_layer, c.authority, c.page, c.ocr, "
-            "ts_rank(c.text_search, q) AS rank "
-            f"FROM {self._table_name} c, websearch_to_tsquery('english', :q) AS q "
+            "(SELECT coalesce(sum(u.w), 0) "
+            "FROM unnest(CAST(:lx AS text[]), CAST(:lw AS float8[])) AS u(lx, w) "
+            "WHERE u.lx = ANY(a.lexemes)) * :scale "
+            "/ (1 + ln(greatest(cardinality(a.lexemes), 1))) AS rank "
+            f"FROM {self._table_name} c "
+            "CROSS JOIN LATERAL (SELECT tsvector_to_array(c.text_search) AS lexemes "
+            "OFFSET 0) a, "
+            "websearch_to_tsquery('english', :q) AS q "
             f"WHERE {where} AND c.project_id = :project_id {vis} "
             "ORDER BY rank DESC, c.chunk_id LIMIT :k"
         )
@@ -2447,28 +2541,35 @@ class VectorStore:
         scope_params: Optional[Dict[str, str]] = None,
     ) -> list:
         scope_params = dict(scope_params or {})
-        params = {"q": safe_query, "project_id": project_id, "k": k, **scope_params}
         tsq = session.execute(
             text("SELECT websearch_to_tsquery('english', :q)::text"), {"q": safe_query},
         ).scalar()
-        lexemes = tsquery_or_lexemes(tsq)
-        if lexemes == []:
+        scored = tsquery_lexemes(tsq)
+        if not scored:
             # Every word is a stopword: nothing can match. Asking anyway reads
             # every tsvector in the project to learn that.
             return []
-        # Keyed on the normalised tsquery: query wordings that reduce to the
-        # same tsquery rank the same rows.
+        weights = lexeme_weights(scored, self._lexeme_frequencies(session))
+        params = {
+            "q": safe_query, "project_id": project_id, "k": k,
+            "lx": scored, "lw": [weights[x] for x in scored],
+            "scale": lexical_score_scale(weights),
+            **scope_params,
+        }
+        # Keyed on the normalised tsquery and the weights it was scored with:
+        # query wordings that reduce to the same tsquery rank the same rows.
         # ``vis`` carries the document scope's placeholders, not its values,
         # so the bound document ids are part of the key too.
         key = (
             "bm25", self._table_name, project_id, tsq, k, vis,
-            tuple(sorted(scope_params.items())),
+            tuple(params["lw"]), tuple(sorted(scope_params.items())),
         )
         hit = _memo_get(key)
         if hit is not _MISS:
             return hit
+        lexemes = tsquery_or_lexemes(tsq)
         if lexemes and len(lexemes) > 1 and k > 0:
-            rows = self._bm25_bounded(session, params, lexemes, vis)
+            rows = self._bm25_bounded(session, params, lexemes, weights, vis)
             if rows is not None:
                 return _memo_put(key, rows)
         return _memo_put(key, session.execute(
@@ -2476,37 +2577,49 @@ class VectorStore:
         ).all())
 
     def _bm25_bounded(
-        self, session: Session, params: Dict[str, Any], lexemes: List[str], vis: str,
+        self, session: Session, params: Dict[str, Any], lexemes: List[str],
+        weights: Dict[str, float], vis: str,
     ) -> Optional[list]:
-        """Exact top-k ranked over GIN-admitted candidates only, or ``None``.
+        """Exact top-k scored over GIN-admitted candidates only, or ``None``.
 
-        See the module notes above ``_TS_RANK_TERM_CAP``. A round at threshold
-        ``t`` ranks every chunk holding at least ``t`` lexemes (and possibly
-        others); it is the answer when ``k`` rows came back and the k-th rank
-        proves nothing outside the candidates could beat it. Otherwise ``t``
-        drops by one. ``None`` sends the caller to the full scan.
+        See the module notes above ``_LEXICAL_SCORE_SCALE``. A round at
+        ``(rare, t)`` scores every chunk holding one of the ``rare`` rarest
+        lexemes or ``t`` of the others (and possibly more); it is the answer
+        when ``k`` rows came back and the k-th score reaches
+        ``bm25_excluded_bound``. Otherwise ``t`` drops by one and ``rare``
+        grows to the fewest rare lexemes whose bound the best k-th score seen
+        so far already clears (at least one more). ``None`` sends the caller
+        to the full scan.
         """
         n = len(lexemes)
         k = params["k"]
-        freq = self._lexeme_frequencies(session)
         sql = text(self._bm25_select("c.text_search @@ CAST(:cand AS tsquery)", vis))
         t = max(2, min(_BM25_START_THRESHOLD, (n + 1) // 2))
+        rare = 1
+        best_kth = 0.0
         rounds = short = 0
-        while t >= 2 and rounds < _BM25_MAX_ROUNDS:
-            cand = bm25_candidate_tsquery(lexemes, t, freq)
+        while t >= 2 and rare < n and rounds < _BM25_MAX_ROUNDS:
+            cand = bm25_candidate_tsquery(lexemes, t, weights, rare)
             if cand is None:
                 t -= 1
                 continue
             rounds += 1
             rows = session.execute(sql, {**params, "cand": cand}).all()
             if len(rows) >= k:
-                if bm25_rank_bound_holds(float(rows[k - 1].rank), n, t):
+                kth = float(rows[k - 1].rank)
+                if bm25_rank_bound_holds(kth, bm25_excluded_bound(lexemes, weights, t, rare)):
                     return rows
+                best_kth = max(best_kth, kth)
             else:
                 short += 1
                 if short >= _BM25_MAX_SHORT_ROUNDS:
                     return None
             t -= 1
+            rare += 1
+            while best_kth > 0 and rare < n - 1 and not bm25_rank_bound_holds(
+                best_kth, bm25_excluded_bound(lexemes, weights, t, rare),
+            ):
+                rare += 1
         return None
 
     _LEXEME_FREQ_TTL_S = 3600.0
@@ -2514,8 +2627,9 @@ class VectorStore:
     def _lexeme_frequencies(self, session: Session) -> Dict[str, float]:
         """Planner statistics' lexeme frequencies for ``text_search``.
 
-        Only orders candidate lexemes rarest-first (cheaper index lookups);
-        correctness never depends on it, so any failure yields ``{}``.
+        The lexical score's idf weights and the bounded leg's rarest-first
+        order come from these. Any failure yields ``{}``: every lexeme then
+        weighs the same, and the bounded leg stays exact.
         Cached per store for an hour -- statistics move with ANALYZE, not
         per request.
         """

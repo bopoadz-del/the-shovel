@@ -310,6 +310,8 @@ class _PgSession:
         sql = str(stmt)
         if "::text" in sql and "FROM" not in sql:
             return SimpleNamespace(scalar=lambda: "'geotextil'")
+        if "pg_stats" in sql:
+            return SimpleNamespace(first=lambda: None)  # no planner statistics
         self.full_params.append((sql, dict(params)))
         return SimpleNamespace(all=lambda: [SimpleNamespace(chunk_id=params.get("bm25_doc_0"))])
 
