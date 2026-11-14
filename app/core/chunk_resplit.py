@@ -350,23 +350,20 @@ def _staged_keys(session, stage, project_id: str, did: str, rows_hash: str) -> s
     return keys
 
 
-class _StagedVectors:
-    """``vectors[parent_id]`` -> that parent's piece vectors, read from staging."""
+def staged_vectors(session, stage, project_id: str, did: str):
+    """``get(parent_id)`` -> that parent's piece vectors, read from staging."""
+    import numpy as np
+    from sqlalchemy import select
 
-    def __init__(self, session, stage, project_id: str, did: str):
-        self._s, self._t, self._pid, self._did = session, stage, project_id, did
-
-    def __getitem__(self, parent_id: str) -> list:
-        import numpy as np
-        from sqlalchemy import select
-
-        t = self._t
-        return [np.frombuffer(v, dtype=np.float32).copy() for (v,) in self._s.execute(
-            select(t.c.vector).where(
-                t.c.project_id == self._pid, t.c.doc_id == self._did,
-                t.c.parent_id == parent_id,
-            ).order_by(t.c.piece_no)
+    def get(parent_id: str) -> list:
+        return [np.frombuffer(v, dtype=np.float32).copy() for (v,) in session.execute(
+            select(stage.c.vector).where(
+                stage.c.project_id == project_id, stage.c.doc_id == did,
+                stage.c.parent_id == parent_id,
+            ).order_by(stage.c.piece_no)
         )]
+
+    return get
 
 
 def _stage_pieces(stage, project_id: str, todo: list, encode, batch: int) -> int:
@@ -396,7 +393,7 @@ def _stage_pieces(stage, project_id: str, todo: list, encode, batch: int) -> int
 def _replace_document(session, cls, project_id: str, did: str, item: dict, vectors) -> str:
     """One document under lock: compare-and-set, then rewrite its rows.
 
-    ``vectors[parent_id]`` gives a parent's piece vectors in order. Rows are
+    ``vectors(parent_id)`` gives a parent's piece vectors in order. Rows are
     rewritten one parent at a time (flushed, then the session is cleared), so
     the transaction never holds the whole document's rows or vectors.
     """
@@ -430,7 +427,7 @@ def _replace_document(session, cls, project_id: str, did: str, item: dict, vecto
             )
             nxt += 1
             continue
-        vecs = vectors[cid]
+        vecs = vectors(cid)
         if len(vecs) != len(pieces):
             raise ValueError(f"staged vectors for a parent: {len(vecs)} != {len(pieces)} pieces")
         obj = session.get(cls, cid)
@@ -567,7 +564,7 @@ def _execute(project_id, doc_ids, expected_plan_hash, doc_type, sample, max_pare
         with SessionLocal() as session:
             try:
                 state = _replace_document(session, cls, project_id, did, item,
-                                          _StagedVectors(session, stage, project_id, did))
+                                          staged_vectors(session, stage, project_id, did))
                 if state == "replaced":
                     session.execute(delete(stage).where(
                         stage.c.project_id == project_id, stage.c.doc_id == did))

@@ -233,7 +233,7 @@ def test_compare_and_set_skips_a_document_changed_after_the_plan(
     dim = int(cls.embedding_identity["dim"])
     vectors = {rows[0][0]: [np.ones(dim, dtype=np.float32)] * len(pieces)}
     with SessionLocal() as s:
-        assert cr._replace_document(s, cls, "cproj", did, item, vectors) == state
+        assert cr._replace_document(s, cls, "cproj", did, item, vectors.__getitem__) == state
         s.commit()
     assert len(_rows(did)) == (1 if stale else len(pieces))
 
@@ -585,6 +585,7 @@ def test_a_call_limited_to_n_parents_stages_n_and_reports_the_rest(
     assert calls[-1]["documents"] == {did: "replaced"}
     assert len(_rows(did)) > len(before)
 
+    assert _staged_count("nproj", did) == 0  # staging is cleared by the replace
     _run_to_end("nproj", ref, max_parents=1000)
     assert [r[1:] for r in _rows_with_vectors(did)] == [r[1:] for r in _rows_with_vectors(ref)]
 
@@ -609,3 +610,67 @@ def test_a_second_concurrent_execute_is_refused(monkeypatch, tmp_path, window, i
     else:
         assert out["documents"] == {did: "replaced"}
     assert not cr._EXECUTE_LOCK.locked()  # the guard is released after every call
+
+
+def _staged_count(pid, did):
+    from sqlalchemy import func, select
+
+    from app.core.db import SessionLocal
+
+    stage = cr._stage_table()
+    with SessionLocal() as s:
+        return s.execute(select(func.count()).select_from(stage).where(
+            stage.c.project_id == pid, stage.c.doc_id == did)).scalar_one()
+
+
+@pytest.mark.parametrize("current, stale", [("hash-a", "hash-b"), ("hash-b", "hash-a")])
+def test_staging_of_an_older_document_state_is_dropped(monkeypatch, tmp_path, current, stale):
+    from app.core.db import SessionLocal
+
+    _project(monkeypatch, tmp_path, "sproj")
+    stage = cr._stage_table()
+    rows = [("p1", 0, current), ("p1", 1, current), ("p2", 0, stale)]
+    with SessionLocal() as s:
+        s.execute(stage.insert(), [
+            {"project_id": "sproj", "doc_id": "d1", "parent_id": p, "piece_no": n,
+             "rows_hash": h, "vector": bytes(4)} for p, n, h in rows])
+        s.commit()
+    with SessionLocal() as s:
+        keys = cr._staged_keys(s, stage, "sproj", "d1", current)
+    assert keys == {("p1", 0), ("p1", 1)}
+    assert _staged_count("sproj", "d1") == 2  # the stale state's row is gone
+
+
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_a_parent_whose_staged_vector_count_differs_is_refused(monkeypatch, tmp_path, delta):
+    import numpy as np
+
+    from app.core.db import SessionLocal
+
+    pm = _project(monkeypatch, tmp_path, "vproj")
+    did = _doc(pm, "vproj", "v.pdf", [PROSE], "spec", page=1)
+    before = _rows(did)
+    rows = [(r[0], r[1], r[2]) for r in before]
+    pieces = cr.partition(PROSE, words, 12)
+    item = {"doc_type": "spec", "parents": {rows[0][0]: pieces},
+            "rows_hash": cr.doc_rows_hash(rows)}
+    cls = _cls()
+    vec = np.ones(int(cls.embedding_identity["dim"]), dtype=np.float32)
+    with SessionLocal() as s:
+        with pytest.raises(ValueError):
+            cr._replace_document(s, cls, "vproj", did, item,
+                                 lambda cid: [vec] * (len(pieces) + delta))
+        s.rollback()
+    assert _rows(did) == before
+
+
+@pytest.mark.parametrize("execute", [True, False])
+def test_execute_refuses_without_a_tokenizer_window(monkeypatch, tmp_path, execute):
+    pm = _project(monkeypatch, tmp_path, "wproj")
+    did = _doc(pm, "wproj", "w.pdf", [PROSE], "spec", page=1)
+    before = _rows(did)
+    monkeypatch.setattr(cr, "embedder_window", lambda: None)
+    out = cr.chunk_resplit(project_id="wproj", doc_ids=[did], execute=execute,
+                           expected_plan_hash="0" * 64, sample=0)
+    assert out["executed"] is False and "tokenizer window" in out["refused"]
+    assert _rows(did) == before
