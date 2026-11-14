@@ -241,11 +241,12 @@ async def test_search_tool_calls_doc_index(monkeypatch):
     captured = {}
     operator = "Per the project specification, what compaction is required?"
 
-    async def fake_search(project_id, query, top_k=5):
+    async def fake_search(project_id, query, top_k=5, *, trace_path=None):
         captured["project_id"] = project_id
         captured["query"] = query
         captured["top_k"] = top_k
         captured["args"] = (project_id, query, top_k)
+        captured["trace_path"] = trace_path
         return sentinel
 
     import app.core.doc_index as di
@@ -269,6 +270,8 @@ async def test_search_tool_calls_doc_index(monkeypatch):
     assert captured["query"] == "anything"
     assert captured["args"] == ("proj-x", "anything", 5)
     assert operator not in captured["args"]
+    # the tool asks for its retrieval trace line (F0)
+    assert captured["trace_path"] == "tool"
 
 
 @pytest.mark.asyncio

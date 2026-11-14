@@ -4563,6 +4563,8 @@ async def search_project_documents(
     project_id: str,
     query: str,
     top_k: int = 5,
+    *,
+    trace_path: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
 
@@ -4572,6 +4574,11 @@ async def search_project_documents(
     21 Sep 2026 a search stalled /livez 4-6 s during chat turns, and one past
     5 s made the platform restart the instance (health check timed out). It runs in
     a thread, like the chat pre-retrieval already does.
+
+    ``trace_path`` set (the agent tool passes ``"tool"``): one
+    ``rag_retrieval_trace`` line is written for this call, results or none,
+    naming the chunks handed and the rows the per-document collapse dropped.
+    Ids, scores and ranks only; never chunk text, a file name or the query.
     """
     from app.core.rag import retrieval_worker
 
@@ -4579,12 +4586,22 @@ async def search_project_documents(
         # Retrieval's CPU work runs in the worker process (its own GIL).
         from app.core.privileges import caller_role
 
-        return await retrieval_worker.call(
+        results, trace = await retrieval_worker.call(
             retrieval_worker.search_documents_job, project_id, query, top_k, caller_role(),
         )
-    return await asyncio.to_thread(
-        _search_project_documents_sync, project_id, query, top_k,
-    )
+    else:
+        results, trace = await asyncio.to_thread(
+            _search_project_documents_traced, project_id, query, top_k,
+        )
+    if trace_path:
+        # Emitted here, in the request's own process, so the line carries the
+        # request id even when the search itself ran in the retrieval worker.
+        from app.core.rag.inject import emit_search_trace
+
+        emit_search_trace(
+            path=trace_path, project_id=project_id, requested_top_k=top_k, trace=trace,
+        )
+    return results
 
 
 def _search_project_documents_sync(
@@ -4593,6 +4610,49 @@ def _search_project_documents_sync(
     top_k: int = 5,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
+
+    The result rows of ``_search_project_documents_traced``; see there.
+    """
+    return _search_project_documents_traced(project_id, query, top_k)[0]
+
+
+def _empty_search_trace() -> dict[str, Any]:
+    return {"retrieved_k": 0, "chunks": [], "not_handed": []}
+
+
+def _search_trace(chunks: list[Any], kept_by_doc: dict[str, list[Any]],
+                  ranked_doc_ids: list[str]) -> dict[str, Any]:
+    """Which retrieved chunks the result rows carry, and which the collapse
+    dropped and why. ``rank`` is the retriever's order; ``result_rank`` is the
+    row a handed chunk rides in. Identity only (see ``trace_chunk_ids``)."""
+    from app.core.rag.inject import trace_chunk_ids
+
+    row_of = {doc_id: i + 1 for i, doc_id in enumerate(ranked_doc_ids)}
+    handed_ids = {
+        id(c) for doc_id in ranked_doc_ids for c in kept_by_doc.get(doc_id, [])
+    }
+    handed: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for rank, c in enumerate(chunks, start=1):
+        entry = trace_chunk_ids(rank, c)
+        if id(c) in handed_ids:
+            entry["result_rank"] = row_of[c.doc_id]
+            handed.append(entry)
+        else:
+            entry["dropped"] = (
+                "beyond_top_k" if c.doc_id not in row_of else "per_doc_cap"
+            )
+            dropped.append(entry)
+    handed.sort(key=lambda e: (e["result_rank"], e["rank"]))
+    return {"retrieved_k": len(chunks), "chunks": handed, "not_handed": dropped}
+
+
+def _search_project_documents_traced(
+    project_id: str,
+    query: str,
+    top_k: int = 5,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Search indexed documents for ``query``: ``(result rows, trace)``.
 
     Each result is a dict: ``{document_id, filename, snippet, score}``.
 
@@ -4611,7 +4671,7 @@ def _search_project_documents_sync(
     itself uses).
     """
     if not query or not query.strip():
-        return []
+        return [], _empty_search_trace()
 
     # Hybrid retriever lives in app.core.rag.retriever; local import to
     # keep app.core.doc_index importable when the RAG stack isn't fully
@@ -4665,7 +4725,7 @@ def _search_project_documents_sync(
             )
         chunks = _query()
     if not chunks:
-        return []
+        return [], _empty_search_trace()
 
     # Keep the best FEW chunks per document, not just one. A live foundation
     # backfill compaction ask was 1/6: five runs said "I don't have that" about a clause the sixth quoted
@@ -4683,9 +4743,11 @@ def _search_project_documents_sync(
         grouped.setdefault(c.doc_id, []).append(c)
 
     best: dict[str, dict[str, Any]] = {}
+    kept_by_doc: dict[str, list[Any]] = {}
     for doc_id, doc_chunks in grouped.items():
         doc_chunks.sort(key=lambda c: float(c.score or 0.0), reverse=True)
         kept = doc_chunks[:per_doc]
+        kept_by_doc[doc_id] = kept
         best[doc_id] = {
             "document_id": doc_id,
             "filename": _doc_name_for_id(doc_id),
@@ -4738,7 +4800,10 @@ def _search_project_documents_sync(
         if ocr_flag_by_doc.get(item["document_id"]):
             result_row["ocr_low_quality"] = True
         results.append(result_row)
-    return results
+    trace = _search_trace(
+        chunks, kept_by_doc, [item["document_id"] for item in ranked],
+    )
+    return results, trace
 
 
 # ── eager (background) indexing ───────────────────────────────────────────────

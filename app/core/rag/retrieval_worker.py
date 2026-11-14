@@ -226,9 +226,9 @@ def rag_inject_job(kwargs: dict, caller_role: Optional[str]):
 
 def search_documents_job(project_id: str, query: str, top_k: int, caller_role: Optional[str]):
     _as_caller(caller_role)
-    from app.core.doc_index import _search_project_documents_sync
+    from app.core.doc_index import _search_project_documents_traced
 
-    return _search_project_documents_sync(project_id, query, top_k)
+    return _search_project_documents_traced(project_id, query, top_k)
 
 
 def project_is_rag_ready_job(project_id: str) -> bool:
