@@ -161,6 +161,70 @@ def guarantee_leg_share(
     return out
 
 
+# ── The lexical leg's query tokeniser (both backends) ──────────────────────
+#
+# Documents write a quantity, a unit and a grade in more than one shape:
+# "2.5", "1200mm" or "1200 mm", "N/mm2", "C50/40". PostgreSQL's parser keeps a
+# decimal and a slash-joined run as ONE lexeme in ``to_tsvector``, and keeps a
+# number glued to letters as one lexeme ('1200mm'). Stripping every punctuation
+# mark from the question split those into pieces no chunk's tsvector holds, so
+# the exact figure a user typed could not be matched as written.
+#
+# The rule is the digit/letter boundary only -- no unit list, no word list:
+#   * a decimal (digits '.' digits) and a run of word characters joined by '/'
+#     stay one token;
+#   * a number followed by an alphabetic token also emits the joined form
+#     ("1200 mm" -> 1200, mm, 1200mm);
+#   * a number glued to letters also emits its parts ("1200mm" -> 1200mm,
+#     1200, mm).
+# Every form is OR'ed, so whichever way the question writes it meets whichever
+# way the document wrote it. The stored index is not touched.
+_LEXICAL_TOKEN_RE = re.compile(
+    r"\w+(?:/\w+)+"            # slash-joined: N/mm2, C50/40
+    r"|\d+(?:\.\d+)+[^\W\d_]*"   # decimal, possibly glued to letters: 2.5, 2.5m
+    r"|\w+",
+    re.UNICODE,
+)
+_LEXICAL_NUMBER_RE = re.compile(r"\d+(?:\.\d+)*")
+_LEXICAL_ALPHA_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+_LEXICAL_NUMBER_LETTERS_RE = re.compile(r"(\d+(?:\.\d+)*)([^\W\d_]+)", re.UNICODE)
+# A token FTS5 accepts unquoted in MATCH.
+_FTS5_BAREWORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def lexical_query_terms(query: str) -> List[str]:
+    """The lexical leg's search terms for ``query``, in order, each once.
+
+    See the notes above ``_LEXICAL_TOKEN_RE``. Case is kept (both backends
+    fold it); duplicates are dropped case-insensitively.
+    """
+    text_ = query or ""
+    matches = list(_LEXICAL_TOKEN_RE.finditer(text_))
+    out: List[str] = []
+    seen: Set[str] = set()
+
+    def emit(term: str) -> None:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(term)
+
+    for i, m in enumerate(matches):
+        tok = m.group(0)
+        emit(tok)
+        glued = _LEXICAL_NUMBER_LETTERS_RE.fullmatch(tok)
+        if glued:
+            emit(glued.group(1))
+            emit(glued.group(2))
+        if i + 1 < len(matches) and _LEXICAL_NUMBER_RE.fullmatch(tok):
+            nxt = matches[i + 1]
+            # Joined only across whitespace: "5. Next" is two sentences.
+            gap = text_[m.end():nxt.start()]
+            if gap.isspace() and _LEXICAL_ALPHA_RE.fullmatch(nxt.group(0)):
+                emit(tok + nxt.group(0))
+    return out
+
+
 def _sanitize_fts5_query(query: str) -> str:
     """Strip punctuation, collapse whitespace, and re-join tokens with
     ``OR`` so the resulting MATCH clause is bag-of-words rather than
@@ -173,8 +237,13 @@ def _sanitize_fts5_query(query: str) -> str:
     Empty → empty (caller treats that as "no BM25 leg")."""
     if not query:
         return ""
-    cleaned = _FTS5_SAFE_RE.sub(" ", query)
-    tokens = cleaned.split()
+    # FTS5's unicode61 tokenizer splits on '.' and '/', so a form carrying
+    # them is quoted: inside quotes FTS5 reads it as the phrase of its parts,
+    # which is how it indexed the same characters in a chunk.
+    tokens = [
+        t if _FTS5_BAREWORD_RE.fullmatch(t) else f'"{t}"'
+        for t in lexical_query_terms(query)
+    ]
     if not tokens:
         return ""
     return " OR ".join(tokens)
@@ -245,8 +314,10 @@ def _sanitize_websearch_query(query: str) -> str:
     """
     if not query:
         return ""
-    cleaned = _FTS5_SAFE_RE.sub(" ", query)
-    tokens = [t for t in cleaned.split() if t.lower() not in _WEBSEARCH_OPERATORS]
+    tokens = [
+        t for t in lexical_query_terms(query)
+        if t.lower() not in _WEBSEARCH_OPERATORS
+    ]
     if not tokens:
         return ""
     return " or ".join(tokens)
