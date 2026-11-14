@@ -81,8 +81,12 @@ def test_no_page_offsets_means_no_pages():
 # ── extraction → chunks ──────────────────────────────────────────────────────
 
 
-def test_pdf_extraction_records_pages_and_chunks_keep_their_text(tmp_path):
+def test_pdf_extraction_records_pages_and_chunks_keep_their_text(tmp_path, monkeypatch):
     # 400 words a page, 500-word chunks: chunks start on pages 1, 2 and 4.
+    # The chunk floor/ceiling (RQ-2) is off here so the unbounded chunker's
+    # exact output is pinned; bounded pages: tests/test_chunk_bounds.py.
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "0")
+    monkeypatch.setenv("CHUNK_MIN_CHARS", "0")
     path = _pdf(tmp_path / "synthetic_book.pdf",
                 [_page_body(1, 400), _page_body(2, 400), None, _page_body(4, 400)])
     text, meta = doc_index._extract_pdf(path, "synthetic_book.pdf")

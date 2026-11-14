@@ -150,8 +150,13 @@ def test_word_chunker_splits_the_table_but_particulars_chunker_does_not():
     assert not any("CONTRACT DATA particulars" in c for c in glossary)
 
 
-def test_prose_mention_of_contract_data_is_not_stolen():
+def test_prose_mention_of_contract_data_is_not_stolen(monkeypatch):
     from app.core.doc_index import chunk_extracted_document, chunk_text
+
+    # Pins the unbounded prose chunker's exact output; the chunk
+    # floor/ceiling (RQ-2) is off here and covered in test_chunk_bounds.py.
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "0")
+    monkeypatch.setenv("CHUNK_MIN_CHARS", "0")
 
     prose = (
         "The Contractor shall complete the Works within the Time for Completion "

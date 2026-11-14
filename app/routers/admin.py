@@ -2191,6 +2191,19 @@ def admin_exclude_document(
     return out
 
 
+@router.get("/v1/admin/corpus/chunk-bounds")
+def admin_corpus_chunk_bounds(
+    project_id: str = Query(..., description="Project to report (no default)"),
+    auth: dict = Depends(require_api_key),
+):
+    """Read-only (RQ-2): stored chunks outside the chunk floor/ceiling, and
+    PDF chunks / documents missing their page locators. Never writes."""
+    _require_admin(auth)
+    from app.core.chunk_bounds_plan import chunk_bounds_plan
+
+    return chunk_bounds_plan(project_id=project_id)
+
+
 @router.post("/v1/admin/documents/{document_id}/include")
 def admin_include_document(
     document_id: str,
