@@ -86,10 +86,10 @@ def _hard_cut(text: str, fits: Callable[[str], bool]) -> list[str]:
 
 
 def _split(text: str, fits: Callable[[str], bool], level: int) -> list[str]:
+    if level >= len(_BOUNDARIES):
+        return _hard_cut(text, fits)  # returns [text] when it fits
     if fits(text):
         return [text]
-    if level >= len(_BOUNDARIES):
-        return _hard_cut(text, fits)
     units = _units(text, _BOUNDARIES[level])
     if len(units) == 1:
         return _split(text, fits, level + 1)

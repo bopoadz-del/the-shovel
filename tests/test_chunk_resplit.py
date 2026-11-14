@@ -246,9 +246,9 @@ def test_token_window_is_the_models_max_length_minus_special_tokens(max_len, spe
     emb = Embedder("fake")
     emb._backend = "sentence_transformers"
     emb._model = _Model(max_len, specials)
-    count, got = emb.token_window()
+    count_tokens, got = emb.token_window()
     assert got == window
-    assert count("a b c") == 3
+    assert count_tokens("a b c") == 3
 
 
 @pytest.mark.parametrize("backend", ["fake", "model2vec"])
@@ -258,3 +258,106 @@ def test_token_window_is_none_without_a_bounded_tokenizer(backend):
     emb = Embedder("fake")
     emb._backend = backend
     assert emb.token_window() is None
+
+
+# ── guards ───────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("window", [0, -3])
+def test_partition_refuses_a_window_that_is_not_positive(window):
+    with pytest.raises(ValueError):
+        cr.partition(PROSE, words, window)
+
+
+@pytest.mark.parametrize("project_id", ["", None])
+def test_chunk_resplit_requires_a_project(monkeypatch, window, project_id):
+    with pytest.raises(ValueError):
+        cr.chunk_resplit(project_id=project_id, doc_ids=["d1"])
+
+
+class _Emb:
+    model_name = "stub-model"
+
+    def __init__(self, tw):
+        self.tw = tw
+
+    def token_window(self):
+        return self.tw
+
+
+@pytest.mark.parametrize("tw, expected", [
+    (None, None),
+    ((words, 77), (words, 77, "stub-model")),
+])
+def test_embedder_window_reads_the_loaded_embedder(monkeypatch, tw, expected):
+    import app.core.rag.embeddings as emb_mod
+
+    monkeypatch.setattr(emb_mod, "get_embedder", lambda *a, **k: _Emb(tw))
+    assert cr.embedder_window() == expected
+
+
+@pytest.mark.parametrize("tw", [None])
+def test_plan_refuses_without_a_tokenizer_window(monkeypatch, tw):
+    monkeypatch.setattr(cr, "embedder_window", lambda: tw)
+    out = cr.chunk_resplit(project_id="p", doc_ids=["d1"])
+    assert out["executed"] is False and out["refused"]
+
+
+# ── admin routes ─────────────────────────────────────────────────────────
+
+ADMIN = {"role": "admin"}
+
+
+@pytest.mark.parametrize("raw, ids", [("a, b ,c", ["a", "b", "c"]), ("only", ["only"])])
+def test_doc_id_list_parses_the_comma_list(raw, ids):
+    from app.routers import admin as admin_router
+
+    assert admin_router._doc_id_list(raw) == ids
+
+
+@pytest.mark.parametrize("raw", ["", " , ,"])
+def test_doc_id_list_refuses_an_empty_list(raw):
+    from fastapi import HTTPException
+
+    from app.routers import admin as admin_router
+
+    with pytest.raises(HTTPException) as err:
+        admin_router._doc_id_list(raw)
+    assert err.value.status_code == 400
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_routes_turn_a_bad_request_into_400(monkeypatch, tmp_path, window, execute):
+    from fastapi import HTTPException
+
+    from app.routers import admin as admin_router
+
+    _project(monkeypatch, tmp_path, "hproj")
+    with pytest.raises(HTTPException) as err:
+        if execute:
+            admin_router.admin_corpus_chunk_resplit_execute(
+                project_id="", doc_ids="d1", expected_plan_hash="0" * 64,
+                doc_type=None, auth=ADMIN)
+        else:
+            admin_router.admin_corpus_chunk_resplit_plan(
+                project_id="", doc_ids="d1", sample=0, auth=ADMIN)
+    assert err.value.status_code == 400
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_routes_return_the_plan_and_refuse_a_wrong_hash(monkeypatch, tmp_path, window, execute):
+    from app.routers import admin as admin_router
+
+    pm = _project(monkeypatch, tmp_path, "gproj")
+    did = _doc(pm, "gproj", "g.pdf", [PROSE], "spec", page=1)
+    before = _rows(did)
+    if execute:
+        out = admin_router.admin_corpus_chunk_resplit_execute(
+            project_id="gproj", doc_ids=did, expected_plan_hash="0" * 64,
+            doc_type=None, auth=ADMIN)
+        assert out["refused"] and out["executed"] is False
+    else:
+        out = admin_router.admin_corpus_chunk_resplit_plan(
+            project_id="gproj", doc_ids=did, sample=0, auth=ADMIN)
+        assert out["plan"]["doc_ids_found"] == 1
+    assert out["plan"]["tables"][out["plan"]["active_table"]]["parents_over_window"] == 1
+    assert _rows(did) == before
