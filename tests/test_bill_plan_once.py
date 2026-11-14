@@ -257,7 +257,7 @@ def test_private_plan_is_named_by_its_page_range(pages, name):
 # --- end to end through the real plan_bill_sheet ---------------------------
 
 def _real_plan(words, seen):
-    return functools.partial(bd.plan_bill_sheet, page_words=_by_page(words, seen))
+    return functools.partial(bd.plan_bill_sheet, page_source=_by_page(words, seen))
 
 
 @pytest.mark.parametrize("build", [_bill_a, _bill_b])
@@ -315,7 +315,7 @@ def test_ranges_resume_from_saved_boxes_and_the_whole_plan_matches(
     assert [r["pages"] for r in reports] == want_pages
     assert [r["pages_cached_after"] for r in reports] == [*cached, 3]
     assert [r["pages_cached_before"] for r in reports] == [0, cached[0], 3]
-    fresh = bd.plan_bill_sheet("p1", "d1", classify=_BILL, page_words=_by_page(words))
+    fresh = bd.plan_bill_sheet("p1", "d1", classify=_BILL, page_source=_by_page(words))
     assert reports[-1]["plan_hash"] == fresh["plan_hash"]
     assert reports[0]["plan_hash"] != fresh["plan_hash"]
 

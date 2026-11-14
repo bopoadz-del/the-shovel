@@ -1,15 +1,16 @@
-"""Derived spreadsheet for an image-only bill: its own document row (P-B3).
+"""Derived spreadsheet for a bill the text path did not index: its own document row (P-B3).
 
 The owner's ruling (13 Nov 05:55Z): when a document classified as a bill BY
-ITS OWN CONTENT is image-only, the corpus build produces a derived ``.xlsx``
+ITS OWN CONTENT has no rows in the index (its row parse did not succeed, see
+``bill_classify.rows_indexed_as_rows``), the corpus build produces a derived ``.xlsx``
 (one sheet per bill section, canonical columns, ``Check`` and ``Source Page``),
 stores it as its own documents row linked to the source (``derived_from`` in
 metadata), and indexes it through the existing spreadsheet row-chunk path.
 The source PDF row stays for provenance; its ``retrieval_visible`` is not
 touched here.
 
-Two steps, both refused inside a web request (the derivation renders and OCRs
-every page; it runs in the ingest task or a dispatched ops task only):
+Two steps, both refused inside a web request (the derivation reads every
+page, rendering and OCRing those without a text layer; it runs in the ingest task or a dispatched ops task only):
 
 * :func:`plan_bill_sheet` classifies and extracts rows and reports, per
   section path, the row count, the rows whose quantity x rate does not
@@ -18,14 +19,17 @@ every page; it runs in the ingest task or a dispatched ops task only):
 * :func:`derive_bill_sheet` takes that hash, rebuilds the plan, refuses when
   it differs, and only then adds and indexes the derived row.
 
-Pages are rendered and OCR'd one at a time; only each page's word boxes are
-kept (in ``work_dir``, one JSON file per page), so a run over a page range
-resumes where an earlier one stopped and a later run reads the boxes back
-instead of OCRing again.
+Pages are read one at a time, each from its own best source
+(``bill_classify.read_pages``: text layer with boxes, else render and OCR);
+only each page's word boxes and their source are kept (in ``work_dir``, one
+JSON file per page), so a run over a page range resumes where an earlier one
+stopped and a later run reads the boxes back instead of reading again. The
+plan counts pages by source; it never names one.
 
 Pieces this module only joins, never re-implements:
 
-* ``bill_classify.classify_image_only_bill`` - is it an image-only bill;
+* ``bill_classify.classify_bill_pdf`` / ``rows_indexed_as_rows`` - is it a
+  bill, and are its rows already in the index;
 * ``bill_table_geometry.extract_bill_rows`` / ``write_bill_workbook`` - word
   boxes to rows to sheets;
 * ``projects.materialize_document_path`` - readable bytes for a row (local,
@@ -61,9 +65,11 @@ SKIP_NO_BYTES = "no_readable_bytes"
 SKIP_NO_ROWS = "no_rows_extracted"
 SKIP_PLAN_MISMATCH = "plan_hash_mismatch"
 SKIP_PARTIAL_PLAN = "plan_not_whole_document"
+#: Word boxes saved before page sources were recorded came from OCR only.
+_LEGACY_CACHE_SOURCE = bc.SOURCE_OCR
 
 Classify = Callable[[str], bc.BillVerdict]
-PageWords = Callable[[str, Sequence[int]], list[g.Word]]
+PageSource = bc.PageSource
 
 
 class WebRequestRefused(RuntimeError):
@@ -93,21 +99,41 @@ def _page_count(file_path: str) -> int:
             doc.close()
 
 
-def _page_words(
-    file_path: str, index: int, page_words: PageWords, work_dir: str | None,
-) -> list[g.Word]:
-    """One page's word boxes: read back from ``work_dir`` or OCR'd and saved."""
+def _page_read(
+    file_path: str, index: int, page_source: PageSource, work_dir: str | None,
+) -> tuple[bc.PageRead, bool]:
+    """One page's word boxes and source: read back from ``work_dir`` (True)
+    or read from the page and saved (False)."""
     cached = os.path.join(work_dir, f"page_{index:05d}.json") if work_dir else None
     if cached and os.path.exists(cached):
         with open(cached, encoding="utf-8") as fh:
-            return [g.Word(**w) for w in json.load(fh)]
-    words = page_words(file_path, [index])
+            body = json.load(fh)
+        if isinstance(body, list):  # saved before sources were recorded
+            body = {"source": _LEGACY_CACHE_SOURCE, "words": body}
+        words = tuple(g.Word(**w) for w in body["words"])
+        return bc.PageRead(index, body["source"], words), True
+    (read,) = page_source(file_path, [index])
     if cached:
         tmp = cached + ".part"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump([dataclasses.asdict(w) for w in words], fh)
+            json.dump({"source": read.source,
+                       "words": [dataclasses.asdict(w) for w in read.words]}, fh)
         os.replace(tmp, cached)
-    return words
+    return read, False
+
+
+def _source_counts(reads: Sequence[tuple[bc.PageRead, bool]]) -> dict[str, int]:
+    """Counts only: pages by source, and how many were read fresh from each."""
+    def n(source: str, fresh: bool | None = None) -> int:
+        return sum(1 for r, cached in reads
+                   if r.source == source and (fresh is None or fresh != cached))
+    return {
+        "pages_text_layer": n(bc.SOURCE_TEXT_LAYER),
+        "pages_without_text_layer": n(bc.SOURCE_OCR),
+        "pages_read_text_layer": n(bc.SOURCE_TEXT_LAYER, fresh=True),
+        "pages_read_ocr": n(bc.SOURCE_OCR, fresh=True),
+        "pages_read_cache": sum(1 for _r, cached in reads if cached),
+    }
 
 
 def _workbook_bytes(rows: Sequence[g.BillRow]) -> tuple[bytes, dict[str, int]]:
@@ -160,7 +186,7 @@ def _prepare(
     document_id: str,
     pages: tuple[int, int] | None,
     classify: Classify | None,
-    page_words: PageWords | None,
+    page_source: PageSource | None,
     block,
     work_dir: str | None,
 ) -> dict[str, Any]:
@@ -175,11 +201,13 @@ def _prepare(
     name = doc.get("original_name") or ""
     if os.path.splitext(name)[1].lower() != ".pdf":
         return {"derived": False, "reason": SKIP_NOT_PDF}
+    if bc.rows_indexed_as_rows(doc):
+        return {"derived": False, "reason": bc.NOT_CANDIDATE_ROWS_INDEXED}
     file_path = projects.materialize_document_path(doc)
     if not file_path:
         return {"derived": False, "reason": SKIP_NO_BYTES}
 
-    verdict = (classify or bc.classify_image_only_bill)(file_path)
+    verdict = (classify or bc.classify_bill_pdf)(file_path)
     if not verdict.is_bill:
         return {"derived": False, "reason": verdict.reason}
 
@@ -188,12 +216,15 @@ def _prepare(
     first, stop = max(0, first), min(total, stop)
     if work_dir:
         os.makedirs(work_dir, exist_ok=True)
-    words: list[g.Word] = []
-    for index in range(first, stop):
-        words += _page_words(file_path, index, page_words or bc._ocr_sampled_pages, work_dir)
-    rows = g.extract_bill_rows(words, block)
+    reads = [
+        _page_read(file_path, index, page_source or bc.read_pages, work_dir)
+        for index in range(first, stop)
+    ]
+    sources = _source_counts(reads)
+    rows = g.extract_bill_rows([w for r, _c in reads for w in r.words], block)
     if not rows:
-        return {"derived": False, "reason": SKIP_NO_ROWS, "bill_verdict": verdict.reason}
+        return {"derived": False, "reason": SKIP_NO_ROWS,
+                "bill_verdict": verdict.reason, **sources}
     return {
         "doc": doc,
         "verdict": verdict,
@@ -204,6 +235,7 @@ def _prepare(
             "source_id": document_id,
             "pages": [first, stop],
             "pages_in_file": total,
+            **sources,
             "rows": len(rows),
             "unreconciled": sum(1 for r in rows if r.check),
             "sections": _sections(rows),
@@ -218,13 +250,13 @@ def plan_bill_sheet(
     *,
     pages: tuple[int, int] | None = None,
     classify: Classify | None = None,
-    page_words: PageWords | None = None,
+    page_source: PageSource | None = None,
     block=None,
     work_dir: str | None = None,
 ) -> dict[str, Any]:
     """What the derivation would write, without writing it. ``pages`` is a
     0-based half-open range (default: every page)."""
-    prepared = _prepare(document_id, pages, classify, page_words, block, work_dir)
+    prepared = _prepare(document_id, pages, classify, page_source, block, work_dir)
     return prepared.get("plan", prepared)
 
 
@@ -234,7 +266,7 @@ def derive_bill_sheet(
     *,
     plan_hash: str,
     classify: Classify | None = None,
-    page_words: PageWords | None = None,
+    page_source: PageSource | None = None,
     block=None,
     work_dir: str | None = None,
 ) -> dict[str, Any]:
@@ -242,7 +274,7 @@ def derive_bill_sheet(
     whose hash is ``plan_hash``. Returns what happened, as counts and ids."""
     from app.core import byte_store, doc_index, projects
 
-    prepared = _prepare(document_id, None, classify, page_words, block, work_dir)
+    prepared = _prepare(document_id, None, classify, page_source, block, work_dir)
     plan = prepared.get("plan")
     if plan is None:
         return prepared

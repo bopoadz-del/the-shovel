@@ -140,21 +140,23 @@ def _BILL(path: str) -> bc.BillVerdict:
     return bc.BillVerdict(True, bc.BILL_PRICED)
 
 
-def _by_page(words: list[g.Word], seen: list[int] | None = None):
-    """A page_words stand-in that returns only the asked page's boxes."""
-    def page_words(path, indices):
+def _by_page(words: list[g.Word], seen: list[int] | None = None,
+             source: str = bc.SOURCE_OCR):
+    """A page_source stand-in that returns only the asked page's boxes."""
+    def page_source(path, indices):
         (index,) = indices
         if seen is not None:
             seen.append(index)
-        return [w for w in words if w.page == index + 1]
-    return page_words
+        page = tuple(w for w in words if w.page == index + 1)
+        return [bc.PageRead(index, source, page)]
+    return page_source
 
 
 def _plan_then_derive(words, **kw) -> tuple[dict, dict]:
-    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words), **kw)
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=_by_page(words), **kw)
     out = bd.derive_bill_sheet(
         "p1", "src1", plan_hash=plan["plan_hash"], classify=_BILL,
-        page_words=_by_page(words), **kw,
+        page_source=_by_page(words), **kw,
     )
     return plan, out
 
@@ -227,7 +229,7 @@ def test_plan_reports_sections_and_writes_nothing(tmp_path, monkeypatch, build, 
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
 
-    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=_by_page(words))
 
     assert plan["derived"] is False
     assert plan["pages"] == [0, 3] and plan["pages_in_file"] == 3
@@ -245,10 +247,10 @@ def test_execute_refuses_a_hash_that_is_not_this_plan(tmp_path, monkeypatch, bad
     words, _, _ = _bill_a()
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
-    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=_by_page(words))
 
     out = bd.derive_bill_sheet(
-        "p1", "src1", plan_hash=bad_hash, classify=_BILL, page_words=_by_page(words),
+        "p1", "src1", plan_hash=bad_hash, classify=_BILL, page_source=_by_page(words),
     )
 
     assert out == {"derived": False, "reason": bd.SKIP_PLAN_MISMATCH,
@@ -270,11 +272,11 @@ def test_execute_refuses_when_the_rows_moved_after_the_plan(tmp_path, monkeypatc
     words, _, _ = _bill_a()
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
-    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=_by_page(words))
 
     out = bd.derive_bill_sheet(
         "p1", "src1", plan_hash=plan["plan_hash"], classify=_BILL,
-        page_words=_by_page(rows_changed(words)),
+        page_source=_by_page(rows_changed(words)),
     )
     assert out["reason"] == bd.SKIP_PLAN_MISMATCH and docs.added == []
 
@@ -287,16 +289,16 @@ def test_partial_plan_counts_its_range_and_cannot_execute(tmp_path, monkeypatch,
     seen: list[int] = []
 
     plan = bd.plan_bill_sheet("p1", "src1", pages=pages, classify=_BILL,
-                              page_words=_by_page(words, seen))
+                              page_source=_by_page(words, seen))
     assert seen == list(range(*pages))
     assert plan["pages"] == list(pages)
     in_range = set(range(pages[0] + 1, pages[1] + 1))
     assert {p for s in plan["sections"] for p in s["pages"]} <= in_range
 
-    full = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    full = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=_by_page(words))
     assert plan["plan_hash"] != full["plan_hash"]
     out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
-                               classify=_BILL, page_words=_by_page(words))
+                               classify=_BILL, page_source=_by_page(words))
     assert out["reason"] == bd.SKIP_PLAN_MISMATCH and docs.added == []
 
 
@@ -314,15 +316,15 @@ def test_work_dir_resumes_and_ocrs_each_page_once(tmp_path, monkeypatch, first_r
     seen: list[int] = []
 
     bd.plan_bill_sheet("p1", "src1", pages=first_range, classify=_BILL,
-                       page_words=_by_page(words, seen), work_dir=work)
+                       page_source=_by_page(words, seen), work_dir=work)
     whole = bd.plan_bill_sheet("p1", "src1", classify=_BILL,
-                               page_words=_by_page(words, seen), work_dir=work)
+                               page_source=_by_page(words, seen), work_dir=work)
     assert seen == [0, 1, 2]  # each page OCR'd once across both runs
 
     def no_ocr(path, indices):
         raise AssertionError("re-OCR'd a page whose boxes were kept")
     out = bd.derive_bill_sheet("p1", "src1", plan_hash=whole["plan_hash"],
-                               classify=_BILL, page_words=no_ocr, work_dir=work)
+                               classify=_BILL, page_source=no_ocr, work_dir=work)
     assert out["derived"] is True and out["rows"] == whole["rows"]
 
 
@@ -332,10 +334,10 @@ def test_pages_are_ocrd_one_at_a_time(tmp_path, monkeypatch, pages):
     docs.install(monkeypatch, tmp_path)
     calls: list[list[int]] = []
 
-    def page_words(path, indices):
+    def page_source(path, indices):
         calls.append(list(indices))
-        return []
-    bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=page_words)
+        return [bc.PageRead(i, bc.SOURCE_OCR, ()) for i in indices]
+    bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=page_source)
     assert calls == [[i] for i in range(pages)]
 
 
@@ -363,7 +365,7 @@ def test_refused_inside_a_web_request(tmp_path, monkeypatch, step):
         monitoring.web_request_ctx.reset(token)
     assert docs.added == []
     # The same call outside a request runs.
-    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_source=_by_page(words))
     assert plan["rows"] == 6
 
 
@@ -470,7 +472,7 @@ def test_no_readable_bytes_only_when_nothing_materialises(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("verdict", [
-    bc.BillVerdict(False, bc.NOT_BILL_TEXT_LAYER),
+    bc.BillVerdict(False, bc.NOT_BILL_FEW_ROWS),
     bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER),
 ])
 def test_not_a_bill_gets_no_derived_row(tmp_path, monkeypatch, verdict):
@@ -481,7 +483,7 @@ def test_not_a_bill_gets_no_derived_row(tmp_path, monkeypatch, verdict):
         raise AssertionError("OCR'd every page of a document that is not a bill")
 
     out = bd.derive_bill_sheet("p1", "src1", plan_hash="x",
-                               classify=lambda p: verdict, page_words=no_ocr)
+                               classify=lambda p: verdict, page_source=no_ocr)
 
     assert out == {"derived": False, "reason": verdict.reason}
     assert docs.added == [] and docs.indexed == [] and docs.meta_updates == []
@@ -513,7 +515,7 @@ def test_bill_with_no_extractable_rows_gets_no_row(tmp_path, monkeypatch, words)
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
     out = bd.derive_bill_sheet("p1", "src1", plan_hash="x", classify=_BILL,
-                               page_words=_by_page(words))
+                               page_source=_by_page(words))
     assert out["derived"] is False and out["reason"] == bd.SKIP_NO_ROWS
     assert docs.added == []
 
