@@ -281,3 +281,38 @@ def test_trace_lines_carry_leg_scores_and_fused_rank(vector_score, lexical_score
         assert {k: entry[k] for k in want} == want
         assert entry["score"] == 0.75
         assert "text" not in entry
+
+
+@pytest.mark.parametrize("own_name, resolved, want", [
+    ("", "resolved-by-id.pdf", "resolved-by-id.pdf"),
+    ("carried-on-chunk.pdf", "resolved-by-id.pdf", "carried-on-chunk.pdf"),
+])
+def test_trace_chunk_names_a_nameless_chunk_by_its_doc_id(monkeypatch, own_name,
+                                                          resolved, want):
+    """A chunk that carries no source name is named by resolving its doc_id;
+    a chunk that carries one keeps it and the resolver is not consulted."""
+    from app.core.rag import inject
+
+    asked: list[str] = []
+
+    def _resolve(doc_id: str) -> str:
+        asked.append(doc_id)
+        return resolved
+
+    monkeypatch.setattr(retriever, "_doc_name_for_id", _resolve)
+    c = _chunk("n", 0.74, doc="doc-named")
+    c.source_name = own_name
+    assert inject._trace_chunk(1, c)["doc_name"] == want
+    assert asked == ([] if own_name else ["doc-named"])
+
+
+@pytest.mark.parametrize("score, has_score", [(None, False), (0.73, True)])
+def test_to_dict_drops_only_a_missing_score(score, has_score):
+    """A raw chunk (no score) serialises without a score key; a scored
+    chunk keeps its score on the wire, unchanged by the debug-field pops."""
+    c = _chunk("w", 0.0)
+    c.score = score
+    d = c.to_dict()
+    assert ("score" in d) is has_score
+    if has_score:
+        assert d["score"] == score
