@@ -213,6 +213,62 @@ def test_compare_and_set_skips_a_document_changed_after_the_plan(
     assert len(_rows(did)) == (1 if stale else len(pieces))
 
 
+_ON_POSTGRES = __import__("os").getenv("PYTEST_USE_POSTGRES", "").strip().lower() in (
+    "1", "true", "yes",
+)
+
+
+@pytest.mark.skipif(not _ON_POSTGRES, reason="text_search is a PostgreSQL column (test-postgres job)")
+@pytest.mark.parametrize("texts", [[PROSE], [TABLE]])
+def test_each_piece_text_search_is_derived_from_its_own_text(
+    monkeypatch, tmp_path, window, texts,
+):
+    """A piece must not be found by a word that only its parent's other pieces hold.
+
+    ``text_search`` is GENERATED ALWAYS from ``text`` and is not an ORM column,
+    so the column copy in ``_replace_document`` cannot carry the parent's
+    vector into a piece. This checks it on the live schema.
+    """
+    from sqlalchemy import text as sql
+
+    from app.core.db import SessionLocal
+
+    pm = _project(monkeypatch, tmp_path, "tsproj")
+    did = _doc(pm, "tsproj", "t.pdf", texts, "spec", page=1)
+    plan = cr.chunk_resplit(project_id="tsproj", doc_ids=[did])["plan"]
+    done = cr.chunk_resplit(project_id="tsproj", doc_ids=[did], execute=True,
+                            expected_plan_hash=plan["plan_hash"])
+    assert done["documents"] == {did: "replaced"}
+    table = cr._active_table()
+    cls = _cls()
+    assert "text_search" not in {c.key for c in cls.__mapper__.column_attrs}
+    parent = texts[0]
+    with SessionLocal() as s:
+        generated = s.execute(sql(
+            "SELECT a.attgenerated FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+            "WHERE c.relname = :t AND a.attname = 'text_search'"), {"t": table}).scalar()
+        assert generated == "s"  # STORED generated column: Postgres derives it
+        rows = s.execute(sql(
+            f"SELECT chunk_id, text, text_search::text = to_tsvector('english', text)::text, "
+            f"text_search::text = to_tsvector('english', :p)::text "
+            f"FROM {table} WHERE doc_id = :d ORDER BY chunk_index"),
+            {"d": did, "p": parent}).all()
+        assert len(rows) > 1
+        for cid, body, own, as_parent in rows:
+            assert own is True and as_parent is False
+            # a parent word whose lexeme this piece lacks must not match it
+            foreign = [w for w in sorted(set(re.findall(r"[A-Za-z]{4,}", parent)))
+                       if s.execute(sql(
+                           "SELECT NOT (to_tsvector('english', :b) @@ plainto_tsquery('english', :w))"),
+                           {"b": body, "w": w}).scalar()]
+            assert foreign
+            hits = s.execute(sql(
+                f"SELECT count(*) FROM {table} WHERE chunk_id = :c "
+                "AND text_search @@ plainto_tsquery('english', :w)"),
+                {"c": cid, "w": foreign[0]}).scalar()
+            assert hits == 0
+
+
 @pytest.mark.parametrize("doc_ids", [[], ["  ", ""]])
 def test_no_whole_project_run(monkeypatch, tmp_path, window, doc_ids):
     _project(monkeypatch, tmp_path, "nproj")
@@ -249,6 +305,32 @@ def test_token_window_is_the_models_max_length_minus_special_tokens(max_len, spe
     count_tokens, got = emb.token_window()
     assert got == window
     assert count_tokens("a b c") == 3
+
+
+class _SpecialTok(_Tok):
+    """Word tokenizer that wraps a single text in ``specials`` extra tokens."""
+
+    def __call__(self, text, add_special_tokens=True, truncation=False):
+        ids = text.split()
+        return {"input_ids": (["<s>"] * self.specials + ids) if add_special_tokens else ids}
+
+
+@pytest.mark.parametrize("max_len, specials", [(16, 2), (11, 3)])
+def test_a_piece_plus_the_special_tokens_never_exceeds_max_seq_length(max_len, specials):
+    """What the model actually reads (piece + its special tokens) stays within bound."""
+    from app.core.rag.embeddings import Embedder
+
+    emb = Embedder("fake")
+    emb._backend = "sentence_transformers"
+    emb._model = _Model(max_len, specials)
+    emb._model.tokenizer = _SpecialTok(specials)
+    count_tokens, window = emb.token_window()
+    assert window == max_len - specials
+    pieces = cr.partition(PROSE + "\n\n" + TABLE, count_tokens, window)
+    assert len(pieces) > 1
+    model_reads = [len(emb._model.tokenizer(p)["input_ids"]) for p in pieces]
+    assert max(model_reads) <= max_len
+    assert all(r == count_tokens(p) + specials for r, p in zip(model_reads, pieces))
 
 
 @pytest.mark.parametrize("backend", ["fake", "model2vec"])
