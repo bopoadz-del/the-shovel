@@ -792,3 +792,224 @@ def test_a_cell_the_figure_line_leaves_empty_keeps_the_chain_text(cols, lines, e
 def test_figures_only_line_without_an_open_chain_is_not_a_row(cols, lines, expected):
     rows = g.extract_bill_rows(_page(cols, lines, page=1))
     assert [(r.section, r.fields["description"]) for r in rows] == expected
+
+
+# --- P-B3 heading path: nested labels above a measured row -----------------
+
+COLS_N = [("Description", 40), ("Unit", 600), ("Qty", 700), ("Rate", 820), ("Amount", 960)]
+HEAVY = 28.0  # a taller (heavier) heading face than the body's H
+
+
+def _lab(text: str, x: float = 40.0, h: float = H) -> tuple[str, float, float]:
+    return (text, x, h)
+
+
+def _page_path(columns, lines, page: int = 1) -> list[g.Word]:
+    """Like ``_page`` but a label line is ``_lab(text, x, h)``: its own left
+    edge and word height."""
+    words: list[g.Word] = []
+    y = 100.0
+    for label, x in columns:
+        words += _words_for_cell(label, x, y, page)
+    y += LINE
+    for line in lines:
+        if isinstance(line, tuple):
+            text, x, h = line
+            cur = x
+            for tok in text.split():
+                w = CW * len(tok)
+                words.append(g.Word(tok, page, cur, y, w, h))
+                cur += w + CW
+        else:
+            for (_label, x), text in zip(columns, line):
+                if text:
+                    words += _words_for_cell(text, x, y, page)
+        y += LINE
+    return words
+
+
+def _paths(rows):
+    return [(r.path, r.section, r.fields["description"]) for r in rows]
+
+
+def _row_n(desc: str) -> list[str]:
+    return [desc, "m", "10", "2.00", "20.00"]
+
+
+def _row_a(ref: str, desc: str) -> list[str]:
+    return [ref, desc, "m", "10", "2.00", "20.00"]
+
+
+@pytest.mark.parametrize(
+    "cols,lines,expected",
+    [
+        (
+            # heavy bill label, a section, an indented sub-heading, then rows
+            COLS_N,
+            [
+                _lab("BILL 2 DRAINAGE", h=HEAVY),
+                _lab("Pipes"),
+                _lab("Depth not exceeding 2 m", x=80),
+                _row_n("Pipe 150 dia"),
+                _row_n("Pipe 225 dia"),
+            ],
+            [
+                (("BILL 2 DRAINAGE", "Pipes", "Depth not exceeding 2 m"), "Depth not exceeding 2 m", "Pipe 150 dia"),
+                (("BILL 2 DRAINAGE", "Pipes", "Depth not exceeding 2 m"), "Depth not exceeding 2 m", "Pipe 225 dia"),
+            ],
+        ),
+        (
+            # a reference column; both labels printed at the margin, the
+            # outer one heavier
+            COLS_A,
+            [
+                _lab("Bill 3 Pipework", h=HEAVY),
+                _lab("Section 7 Valves"),
+                _row_a("A", "Gate valve"),
+            ],
+            [(("Bill 3 Pipework", "Section 7 Valves"), "Section 7 Valves", "Gate valve")],
+        ),
+    ],
+)
+def test_consecutive_labels_nest_outer_to_inner(cols, lines, expected):
+    assert _paths(g.extract_bill_rows(_page_path(cols, lines))) == expected
+
+
+@pytest.mark.parametrize(
+    "lines,expected",
+    [
+        (
+            [
+                _lab("BILL 2", h=HEAVY),
+                _lab("Pipes"),
+                _lab("Depth 0 to 2 m", x=80),
+                _row_n("Pipe 150"),
+                _lab("Depth 2 to 4 m", x=80),
+                _row_n("Pipe 150"),
+            ],
+            [
+                (("BILL 2", "Pipes", "Depth 0 to 2 m"), "Depth 0 to 2 m", "Pipe 150"),
+                (("BILL 2", "Pipes", "Depth 2 to 4 m"), "Depth 2 to 4 m", "Pipe 150"),
+            ],
+        ),
+        (
+            [
+                _lab("BILL 5", h=HEAVY),
+                _lab("Size 100"),
+                _row_n("Bend"),
+                _row_n("Tee"),
+                _lab("Size 200"),
+                _row_n("Bend"),
+            ],
+            [
+                (("BILL 5", "Size 100"), "Size 100", "Bend"),
+                (("BILL 5", "Size 100"), "Size 100", "Tee"),
+                (("BILL 5", "Size 200"), "Size 200", "Bend"),
+            ],
+        ),
+    ],
+)
+def test_a_sibling_label_after_rows_changes_only_the_innermost_level(lines, expected):
+    assert _paths(g.extract_bill_rows(_page_path(COLS_N, lines))) == expected
+
+
+_NESTED = [
+    _lab("BILL 2", h=HEAVY),
+    _lab("Pipes"),
+    _lab("Depth 0 to 2 m", x=80),
+    _row_n("Pipe 150"),
+]
+
+
+@pytest.mark.parametrize(
+    "tail,expected_last",
+    [
+        # printed further left than the innermost: replaces from its own level
+        # (the section level) down; the heavier bill level stays
+        ([_lab("Fittings"), _row_n("Bend")], ("BILL 2", "Fittings")),
+        # the same, followed by a run of labels before the next row
+        ([_lab("Fittings"), _lab("Size 100", x=80), _row_n("Bend")], ("BILL 2", "Fittings", "Size 100")),
+        # heavier than the innermost and as heavy as the bill level: a new bill
+        ([_lab("BILL 3", h=HEAVY), _row_n("Kerb")], ("BILL 3",)),
+    ],
+)
+def test_an_outer_label_replaces_from_its_own_level_down(tail, expected_last):
+    rows = g.extract_bill_rows(_page_path(COLS_N, _NESTED + tail))
+    assert rows[0].path == ("BILL 2", "Pipes", "Depth 0 to 2 m")
+    assert rows[-1].path == expected_last
+    assert rows[-1].section == expected_last[-1]
+
+
+@pytest.mark.parametrize(
+    "a,b,indent,expected",
+    [
+        (g._Label("x", 40, H), g._Label("y", 80, H), 20.0, True),  # 40 px left > indent
+        (g._Label("x", 65, H), g._Label("y", 80, H), 20.0, False),  # 15 px left <= indent
+        (g._Label("x", 80, 25.0), g._Label("y", 80, H), 20.0, True),  # 1.25 x taller
+        (g._Label("x", 80, 23.0), g._Label("y", 80, H), 20.0, False),  # 1.15 x taller
+        (g._Label("x", 120, HEAVY), g._Label("y", 40, H), 20.0, True),  # heavier wins over indent
+        (g._Label("x", 40, H), g._Label("y", 40, H), 20.0, False),  # same print: a sibling
+    ],
+)
+def test_outer_is_left_edge_or_heavier_face(a, b, indent, expected):
+    assert g._outer(a, b, indent) is expected
+
+
+@pytest.mark.parametrize(
+    "lines,counts,probe,needles",
+    [
+        (
+            _NESTED + [_lab("Depth 2 to 4 m", x=80), _row_n("Pipe 225")],
+            [1, 1],
+            1,
+            ["Bill: BILL 2 > Pipes > Depth 2 to 4 m", "Item: Pipe 225"],
+        ),
+        (
+            _NESTED + [_row_n("Pipe 300")],
+            [2],
+            1,
+            ["Bill: BILL 2 > Pipes > Depth 0 to 2 m", "Item: Pipe 300"],
+        ),
+    ],
+)
+def test_each_row_chunk_reads_the_path_then_the_row(tmp_path, lines, counts, probe, needles):
+    """One sheet per heading path; the row chunker inherits the banner, so the
+    chunk reads the path, then the row."""
+    from app.core import doc_index
+
+    path = tmp_path / "derived.xlsx"
+    rows = g.extract_bill_rows(_page_path(COLS_N, lines))
+    assert list(g.write_bill_workbook(rows, str(path)).values()) == counts
+    chunks = doc_index._spreadsheet_row_chunks(str(path), "derived.xlsx", ".xlsx")
+    assert len(chunks) == sum(counts)
+    for needle in needles:
+        assert needle in chunks[probe]
+
+
+@pytest.mark.parametrize(
+    "rows,titles",
+    [
+        # same innermost label under two outer paths: two sheets, not one
+        (
+            [
+                g.BillRow(section="Size 100", source_page=1, fields={"description": "a"}, path=("B1", "Size 100")),
+                g.BillRow(section="Size 100", source_page=1, fields={"description": "b"}, path=("B2", "Size 100")),
+            ],
+            ["Size 100", "Size 100 2"],
+        ),
+        # a row built without a path keeps its section as a one-level path
+        (
+            [g.BillRow(section="S", source_page=1, fields={"description": "a"})],
+            ["S"],
+        ),
+    ],
+)
+def test_workbook_sheets_follow_the_path(tmp_path, rows, titles):
+    import openpyxl
+
+    path = tmp_path / "w.xlsx"
+    g.write_bill_workbook(rows, str(path))
+    wb = openpyxl.load_workbook(path)
+    assert wb.sheetnames == titles
+    banners = [wb[t].cell(1, 1).value for t in titles]
+    assert banners == [" > ".join(r.path or (r.section,)) for r in rows]

@@ -48,6 +48,12 @@ _FIGURE_FIELDS = ("quantity", "rate", "total")
 _CHECK_REL_TOL = 0.005
 _CHECK_ABS_TOL = 0.01
 
+# A label is printed "heavier" than another when its words are this much
+# taller (a larger or bolder heading face).
+_HEAVIER_RATIO = 1.2
+# Path separator in the sheet banner (the row chunker's inherited heading).
+_PATH_SEP = " > "
+
 _NUMBER_RE = re.compile(r"^-?\(?\d[\d,]*(?:\.\d+)?\)?$")
 
 
@@ -83,6 +89,59 @@ class _Column:
     right: float
 
 
+@dataclass(frozen=True)
+class _Label:
+    """A heading line: its text, left edge and word height (its print style)."""
+
+    text: str
+    left: float
+    height: float
+
+
+def _label_of(words: Sequence[Word]) -> _Label:
+    heights = [w.height for w in words if w.height > 0]
+    return _Label(
+        text=" ".join(w.text for w in words),
+        left=min(w.left for w in words),
+        height=statistics.median(heights) if heights else 0.0,
+    )
+
+
+def _outer(a: _Label, b: _Label, indent: float) -> bool:
+    """True when ``a`` is printed as an outer level relative to ``b``: further
+    left by more than ``indent``, or in a heavier (taller) face."""
+    return a.left < b.left - indent or a.height > b.height * _HEAVIER_RATIO
+
+
+class _HeadingPath:
+    """The nested labels above a measured row, outer to inner.
+
+    Labels that follow each other with no measured row between them nest. A
+    label after measured rows is a sibling of the innermost level and replaces
+    it. A label printed further left or heavier than the innermost level
+    replaces from its own level down: every level not printed outer to it is
+    dropped. No label text is consulted, only the word boxes.
+    """
+
+    def __init__(self) -> None:
+        self.levels: list[_Label] = []
+        self.after_rows = False
+
+    def push(self, label: _Label, indent: float) -> None:
+        if self.levels and _outer(label, self.levels[-1], indent):
+            keep = 0
+            while keep < len(self.levels) and _outer(self.levels[keep], label, indent):
+                keep += 1
+            del self.levels[keep:]
+        elif self.levels and self.after_rows:
+            self.levels.pop()
+        self.levels.append(label)
+        self.after_rows = False
+
+    def texts(self) -> tuple[str, ...]:
+        return tuple(lv.text for lv in self.levels)
+
+
 @dataclass
 class BillRow:
     section: str
@@ -90,6 +149,7 @@ class BillRow:
     fields: dict[str, str] = field(default_factory=dict)  # alias field -> text
     extra: dict[str, str] = field(default_factory=dict)   # unmapped header label -> text
     check: str = ""
+    path: tuple[str, ...] = ()  # heading labels above the row, outer to inner
 
 
 def words_from_tesseract_data(data: dict, page: int) -> list[Word]:
@@ -248,6 +308,7 @@ class _Line:
     ref: str
     top: float
     bottom: float
+    label: _Label
 
 
 def _bucket_line(line: Sequence[Word], columns: Sequence[_Column], refs: set[int]) -> _Line:
@@ -269,6 +330,7 @@ def _bucket_line(line: Sequence[Word], columns: Sequence[_Column], refs: set[int
         ref=ref,
         top=min(w.top for w in line),
         bottom=max(w.top + w.height for w in line),
+        label=_label_of(line),
     )
 
 
@@ -292,8 +354,12 @@ def _merge_wrapped(pending: Sequence[_Line], last: _Line) -> tuple[dict[str, str
 def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
     """Rows of every bill table found in ``words`` (any number of pages).
 
-    A line with no figure cell and some letters is a section label: it is
-    carried onto every measured row that follows until the next label.
+    A line with no figure cell and some letters is a heading label. Labels
+    nest into a heading path (see :class:`_HeadingPath`): consecutive labels
+    go outer to inner, a label after measured rows replaces the innermost
+    level, and a label printed further left or heavier replaces from its own
+    level down. Every measured row carries the path; ``section`` is its
+    innermost label.
 
     A description may wrap over several printed lines with the figures on the
     last one. The evidence for that is geometric, never textual: the first
@@ -314,18 +380,36 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
     rows: list[BillRow] = []
     columns: list[_Column] | None = None
     refs: set[int] = set()
-    section = ""
+    path = _HeadingPath()
+    indent = 1.0
     pending: list[_Line] = []
 
+    def label(lab: _Label) -> None:
+        path.push(lab, indent)
+
+    def emit(page: int, fields: dict[str, str], extra: dict[str, str]) -> None:
+        texts = path.texts()
+        row = BillRow(
+            section=texts[-1] if texts else "",
+            source_page=page,
+            fields=fields,
+            extra=extra,
+            path=texts,
+        )
+        row.check = check_row(fields)
+        rows.append(row)
+        path.after_rows = True
+
     def flush() -> None:
-        nonlocal section
         if pending:
-            section = " ".join(ln.text for ln in pending)
+            first = pending[0].label
+            label(_Label(" ".join(ln.text for ln in pending), first.left, first.height))
             pending.clear()
 
     for page in sorted(by_page):
         heights = [w.height for w in by_page[page] if w.height > 0]
         max_gap = statistics.median(heights) if heights else 1.0
+        indent = max_gap
         for line in group_lines(by_page[page]):
             header = detect_header(line, block)
             if header is not None:
@@ -334,9 +418,8 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
                 refs = _ref_columns(columns)
                 continue
             if columns is None:
-                text = " ".join(w.text for w in line)
-                if re.search(r"[A-Za-z]", text):
-                    section = text
+                if re.search(r"[A-Za-z]", " ".join(w.text for w in line)):
+                    label(_label_of(line))
                 continue
             cur = _bucket_line(line, columns, refs)
             has_figure = any(cur.fields.get(f) for f in _FIGURE_FIELDS)
@@ -359,22 +442,18 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
             if has_figure and adjacent and not cur.ref:
                 fields, extra = _merge_wrapped(pending, cur)
                 pending.clear()
-                row = BillRow(section=section, source_page=page, fields=fields, extra=extra)
-                row.check = check_row(fields)
-                rows.append(row)
+                emit(page, fields, extra)
                 continue
             flush()
             # Same rule as the spreadsheet row chunker: a measured row has a
             # description AND a figure. Anything else with letters (a bill or
             # section label, even one that prints a number such as "Bill 3")
-            # is carried as the section of the rows that follow.
+            # is a heading label of the rows that follow.
             if not has_figure or not has_desc:
                 if re.search(r"[A-Za-z]", cur.text):
-                    section = cur.text
+                    label(cur.label)
                 continue
-            row = BillRow(section=section, source_page=page, fields=cur.fields, extra=cur.extra)
-            row.check = check_row(cur.fields)
-            rows.append(row)
+            emit(page, cur.fields, cur.extra)
         flush()
     return rows
 
@@ -390,10 +469,12 @@ def _sheet_title(name: str, used: set[str]) -> str:
 
 
 def write_bill_workbook(rows: Sequence[BillRow], path: str) -> dict[str, int]:
-    """Write one sheet per section; returns ``{sheet title: row count}``.
+    """Write one sheet per heading path; returns ``{sheet title: row count}``.
 
-    Each sheet carries the section label as a banner row above the header (the
-    row chunker inherits it as the bill heading), then the canonical columns,
+    Each sheet carries the row's heading path, outer to inner, as a banner row
+    above the header (the row chunker inherits it as the bill heading, so each
+    row chunk reads the path, then the row); the sheet is titled by the
+    innermost label. Then the canonical columns,
     any unmapped columns the page printed (item, ref ...), ``Check`` and
     ``Source Page``.
     """
@@ -401,27 +482,28 @@ def write_bill_workbook(rows: Sequence[BillRow], path: str) -> dict[str, int]:
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    order: list[str] = []
-    grouped: dict[str, list[BillRow]] = {}
+    order: list[tuple[str, ...]] = []
+    grouped: dict[tuple[str, ...], list[BillRow]] = {}
     for r in rows:
-        if r.section not in grouped:
-            order.append(r.section)
-            grouped[r.section] = []
-        grouped[r.section].append(r)
+        key = r.path or ((r.section,) if r.section else ())
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(r)
 
     used: set[str] = set()
     counts: dict[str, int] = {}
-    for section in order:
-        section_rows = grouped[section]
+    for key in order:
+        section_rows = grouped[key]
         extras: list[str] = []
         for r in section_rows:
             for label in r.extra:
                 if label not in extras:
                     extras.append(label)
-        title = _sheet_title(section, used)
+        title = _sheet_title(key[-1] if key else "", used)
         ws = wb.create_sheet(title)
-        if section:
-            ws.append([section])
+        if key:
+            ws.append([_PATH_SEP.join(key)])
         header = [lbl for f, lbl in _FIELD_LABELS] + extras + ["Check", "Source Page"]
         ws.append(header)
         for r in section_rows:
