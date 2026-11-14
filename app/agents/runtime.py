@@ -4955,7 +4955,11 @@ def _looks_like_self_contained_calculation(text: str) -> bool:
         return False
     if _ARITH_EXPR_RE.search(text):
         return True
-    return _count_dimensions(text) >= _MIN_DIMENSIONS_FOR_CALC
+    if _count_dimensions(text) < _MIN_DIMENSIONS_FOR_CALC:
+        return False
+    # "How many 1.8 x 1.8 m manholes are billed" carries dimensions, but
+    # they describe the item a record is asked about.
+    return not _figures_only_describe_record_ask(text)
 
 
 def _forced_specific_tool(messages: list[dict[str, Any]], available: set) -> str | None:
@@ -12389,8 +12393,56 @@ def _document_question(text: str) -> bool:
     return bool(
         _DOCUMENT_FRAME_RE.search(raw)
         or _REPORT_FRAME_RE.search(raw)
+        or _RECORD_CHOICE_RE.search(raw)
+        or _RECORD_ACT_RE.search(raw)
         or _own_upload_nouns(raw)
     )
+
+
+# The ask picks a record by its kind: "which drawing fixes ...", "which
+# contract specification volume governs ...". The answer is a record.
+_RECORD_CHOICE_RE = re.compile(
+    rf"\b(?:which|what)\s+(?:{_PHRASE_BREAK}[\w-]+\s+){{0,3}}?{_DOCUMENT_NOUN}\b",
+    re.IGNORECASE,
+)
+# The ask says what a record does to the item: "how many are billed",
+# "what grade is specified". Only a record bills, schedules or specifies.
+_RECORD_ACT_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been)\s+"
+    r"(?:billed|scheduled|specified|itemi[sz]ed|listed\s+in|shown\s+on|shown\s+in)\b",
+    re.IGNORECASE,
+)
+# The user asks for a computation in their own words. A count word ("how
+# many") or the subject of a formula ("lap length") is not this.
+_COMPUTE_REQUEST_RE = re.compile(
+    r"\b(?:calculat(?:e|ing|ion|ions)|comput(?:e|ing|ation)|"
+    r"work(?:ing)?\s+out|estimate)\b",
+    re.IGNORECASE,
+)
+
+
+def _figures_only_describe_record_ask(text: str) -> bool:
+    """A document question whose figures only describe the item asked about.
+
+    The figures neither complete a registered formula nor come with a
+    request to compute, so no calculator runs and no calculator asks the
+    user for inputs: the documents answer it.
+    """
+    raw = text or ""
+    if not _document_question(raw):
+        return False
+    if _COMPUTE_REQUEST_RE.search(raw) or _ARITH_EXPR_RE.search(raw):
+        return False
+    if _user_supplied_registered_calculation(raw):
+        return False
+    try:
+        from app.lib.construction_formulas import formula_inputs_supplied_by_text
+        return not formula_inputs_supplied_by_text(
+            _formula_calculator_name_from_message(raw), raw,
+        )
+    except Exception:  # noqa: BLE001 — routing must still classify
+        _LOG.exception("supplied-input dry run failed")
+        return False
 
 
 _FILE_TOKEN_RE = re.compile(_FILE_TOKEN, re.IGNORECASE)
@@ -12456,9 +12508,15 @@ def _formula_run_authorized(text: str, calculation: str | None = None) -> bool:
 
 
 def _document_question_without_operands(text: str) -> bool:
-    """A question about what a record says that supplies no figure."""
+    """A question about what a record says that supplies no figure.
+
+    Figures that only describe the item asked about (a size, a depth band)
+    are not operands either.
+    """
     raw = text or ""
-    return _document_question(raw) and not _user_supplied_operand(raw)
+    if not _document_question(raw):
+        return False
+    return not _user_supplied_operand(raw) or _figures_only_describe_record_ask(raw)
 
 
 def _defaulted_run_refusal(
