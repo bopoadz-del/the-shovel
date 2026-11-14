@@ -307,3 +307,101 @@ def test_production_index_document_runs_on_corpus_build_profile(monkeypatch, for
         "force_ocr": force_ocr, "stamp_as_indexed": True,
         "profile": doc_index.PROFILE_CORPUS_BUILD,
     })]
+
+
+# --- the summary line stays bounded and names what ran --------------------
+
+@pytest.mark.parametrize("n,limit,want_kept,want_trunc", [
+    (5, 2, 2, True),
+    (5, 10, 5, False),
+    (3, 3, 3, False),
+])
+def test_summary_headings_keeps_count_and_first_n(n, limit, want_kept, want_trunc):
+    lines = [f"SECTION {i}" for i in range(n)]
+    got = dro.summary_headings(lines, limit)
+    assert got["count"] == n
+    assert got["lines"] == lines[:want_kept]
+    assert got["truncated"] is want_trunc
+
+
+@pytest.mark.parametrize("length,clipped", [
+    (dro.SUMMARY_HEADING_CHARS, False),
+    (dro.SUMMARY_HEADING_CHARS + 1, True),
+])
+def test_summary_headings_clips_a_long_line(length, clipped):
+    line = "H" * length
+    (kept,) = dro.summary_headings([line], 5)["lines"]
+    assert len(kept) <= dro.SUMMARY_HEADING_CHARS
+    assert (kept == line) is (not clipped)
+    assert kept.endswith("...") is clipped
+
+
+@pytest.mark.parametrize("n,limit", [(7, 3), (2, 3)])
+def test_reindex_summary_is_bounded_but_the_row_keeps_every_heading(tmp_path, n, limit):
+    heads = [f"HEAD {i}" for i in range(n)]
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"%PDF"}, new_chunks=heads)
+    rep = dro.reindex_one("p1", "d1", force_ocr=False, heading_re=r"^HEAD ",
+                          deps=w.deps(tmp_path), max_summary_headings=limit)
+    assert rep["headings"] == heads[:limit]
+    assert rep["headings_count"] == n
+    assert rep["headings_truncated"] is (n > limit)
+    assert w.docs["d1"]["metadata"]["headings"]["lines"] == heads
+
+
+@pytest.mark.parametrize("raw,want", [("", dro.DEFAULT_SUMMARY_HEADINGS), ("0", 0), (" 12 ", 12)])
+def test_parse_count(raw, want):
+    assert dro.parse_count(raw, default=dro.DEFAULT_SUMMARY_HEADINGS) == want
+
+
+@pytest.mark.parametrize("raw", ["-1", "many"])
+def test_parse_count_rejects_non_counts(raw):
+    with pytest.raises(ValueError):
+        dro.parse_count(raw, default=1)
+
+
+@pytest.mark.parametrize("raw", ["-1", "many"])
+def test_main_rejects_bad_summary_heading_count_before_any_io(tmp_path, raw):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"})
+    env = {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1",
+           "DOC_REINDEX_SUMMARY_HEADINGS": raw}
+    assert dro.main_from_env(env, deps=w.deps(tmp_path)) == 2
+    assert w.index_calls == [] and w.paths_written == []
+
+
+@pytest.mark.parametrize("limit", ["1", "4"])
+def test_main_summary_line_parses_with_thousands_of_long_headings(tmp_path, limit):
+    heads = [f"DRAWING SHEET {i:05d} " + "X" * 400 for i in range(3000)]
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, new_chunks=heads)
+    env = {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1",
+           "DOC_REINDEX_HEADING_RE": "^DRAWING SHEET", "DOC_REINDEX_SUMMARY_HEADINGS": limit}
+    assert dro.main_from_env(env, deps=w.deps(tmp_path)) == 0
+    (line,) = [ln for ln in w.lines if ln.startswith(dro.SUMMARY_PREFIX)]
+    rep = json.loads(line[len(dro.SUMMARY_PREFIX):])
+    assert rep["headings_count"] == 3000 and rep["headings_truncated"] is True
+    assert len(rep["headings"]) == int(limit)
+    assert len(line) < 8 * 1024
+    assert len(w.docs["d1"]["metadata"]["headings"]["lines"]) == 3000
+
+
+@pytest.mark.parametrize("sha", ["ceba9719c91693bd7fa4b0dd27d2bc4feca12b62", None])
+def test_summary_names_the_build_that_ran(tmp_path, sha):
+    import dataclasses
+
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, new_chunks=["a"])
+    deps = dataclasses.replace(w.deps(tmp_path), build_sha=lambda: sha)
+    rep = dro.reindex_one("p1", "d1", force_ocr=False, heading_re=None, deps=deps)
+    assert rep["build_sha"] == sha
+
+
+@pytest.mark.parametrize("profile,skip", [
+    ("corpus_build", None),
+    ("user_upload", "ocr_skipped_over_size_ceiling"),
+])
+def test_summary_carries_the_profile_and_ocr_skip_the_index_reported(tmp_path, profile, skip):
+    result = {"status": "ok", "indexed": 1, "rag_indexed": 2,
+              "ingest_profile": profile, "ocr_skip_reason": skip, "chunks": ["big"] * 3}
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, index_result=result, new_chunks=["a"])
+    rep = dro.reindex_one("p1", "d1", force_ocr=False, heading_re=None, deps=w.deps(tmp_path))
+    assert rep["index_result"]["ingest_profile"] == profile
+    assert rep["index_result"]["ocr_skip_reason"] == skip
+    assert "chunks" not in rep["index_result"]
