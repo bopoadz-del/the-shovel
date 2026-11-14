@@ -180,3 +180,59 @@ def test_drive_download_happens_once_per_resolve(store, tmp_path, kind):
 
     assert resolve(pid, name) == name
     assert store._test_downloads.count(fid) == 1
+
+
+@pytest.mark.parametrize("kind,listing", [("runtime", "list_document_names"), ("boq", "list_documents")])
+def test_an_empty_name_never_reads_the_document_store(store, monkeypatch, kind, listing):
+    """No name, no lookup: an empty reference returns as-is without a store query."""
+    pid = _project(store)
+    reads: list[str] = []
+    monkeypatch.setattr(store, listing, lambda pid, **_kw: reads.append(pid) or [])
+
+    assert _resolver(kind)(pid, "") == ""
+    assert reads == []
+
+
+@pytest.mark.parametrize("bad", [None, "a-bare-name.csv"])
+def test_materialize_document_path_refuses_a_non_row(store, bad):
+    assert store.materialize_document_path(bad) is None
+
+
+@pytest.mark.parametrize("project_id", ["", None])
+def test_schedule_picker_without_a_project_never_reads_the_store(store, monkeypatch, project_id):
+    from app.agents.runtime import _resolve_histogram_schedule_file
+
+    reads: list = []
+    monkeypatch.setattr(store, "list_document_names", lambda pid, **_kw: reads.append(pid) or [])
+
+    assert _resolve_histogram_schedule_file(project_id, "histogram please") == (None, "")
+    assert reads == []
+
+
+@pytest.mark.parametrize("where", ["local", "drive"])
+def test_schedule_picker_returns_a_readable_xer(store, tmp_path, where):
+    """The .xer picker materialises a Drive-only schedule like a local one."""
+    from app.agents.runtime import _resolve_histogram_schedule_file
+    from app.core import file_crypto
+
+    pid = _project(store)
+    tag = uuid.uuid4().hex[:6]
+    name = f"{tag}-programme.xer"
+    body = f"ERMHDR\t{uuid.uuid4().hex}\n".encode()
+    if where == "local":
+        path = str(tmp_path / f"{tag}.xer")
+        file_crypto.write_document(path, body)
+        store.add_document(pid, name, file_path=path, size=len(body))
+    else:
+        fid = f"drive-{tag}"
+        store._test_drive[fid] = body
+        store.add_document(
+            pid, name, file_path=str(tmp_path / "gone" / f"{tag}.xer"), size=0,
+            metadata={"drive_file_id": fid},
+        )
+
+    fp, label = _resolve_histogram_schedule_file(pid, "histogram from the schedule")
+
+    assert label == name
+    assert fp and os.path.exists(fp) and "gone" not in fp
+    assert _read_plain(fp) == body
