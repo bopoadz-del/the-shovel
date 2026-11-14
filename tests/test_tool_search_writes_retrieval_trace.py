@@ -30,18 +30,18 @@ class _Chunk:
         self.layer = "own"
 
 
-SECRET_TEXT = "zz-chunk-body-must-not-be-logged"
-SECRET_NAME = "zz-file-name-must-not-be-logged.pdf"
+UNLOGGED_TEXT = "zz-chunk-body-must-not-be-logged"
+UNLOGGED_NAME = "zz-file-name-must-not-be-logged.pdf"
 
 
 def _chunks():
     # doc "a": three chunks; doc "b": one; doc "c": one (lowest)
     return [
-        _Chunk("a1", "a", 0.90, SECRET_TEXT),
-        _Chunk("b1", "b", 0.80, SECRET_TEXT),
-        _Chunk("a2", "a", 0.70, SECRET_TEXT),
-        _Chunk("a3", "a", 0.60, SECRET_TEXT),
-        _Chunk("c1", "c", 0.50, SECRET_TEXT),
+        _Chunk("a1", "a", 0.90, UNLOGGED_TEXT),
+        _Chunk("b1", "b", 0.80, UNLOGGED_TEXT),
+        _Chunk("a2", "a", 0.70, UNLOGGED_TEXT),
+        _Chunk("a3", "a", 0.60, UNLOGGED_TEXT),
+        _Chunk("c1", "c", 0.50, UNLOGGED_TEXT),
     ]
 
 
@@ -54,7 +54,7 @@ def corpus(monkeypatch):
         retr, "retrieve_with_filter",
         lambda query, project_id, k=5, **_kw: (list(box["chunks"]), 0),
     )
-    monkeypatch.setattr(retr, "_doc_name_for_id", lambda _d: SECRET_NAME)
+    monkeypatch.setattr(retr, "_doc_name_for_id", lambda _d: UNLOGGED_NAME)
     monkeypatch.setattr(doc_index, "_load_index", lambda _pid: {"documents": []})
     monkeypatch.setattr("app.core.rag.retrieval_worker.enabled", lambda: False)
     monkeypatch.delenv("RAG_RETRIEVAL_TRACE", raising=False)
@@ -190,10 +190,10 @@ async def test_the_line_carries_no_text_no_file_name_and_no_query_words(
     caplog.set_level(logging.INFO, logger="app.rag.retrieval_trace")
     out = await _tool(query, top_k=2)
     # the result rows the model sees do carry them; the trace line must not
-    assert SECRET_NAME in json.dumps(out)
+    assert UNLOGGED_NAME in json.dumps(out)
     raw = _trace_lines(caplog)[0][0]
-    assert SECRET_TEXT not in raw
-    assert SECRET_NAME not in raw
+    assert UNLOGGED_TEXT not in raw
+    assert UNLOGGED_NAME not in raw
     assert query not in raw
     assert "doc_name" not in raw
 
@@ -206,3 +206,97 @@ async def test_the_result_rows_are_unchanged_by_tracing(corpus, monkeypatch, top
     assert on == off
     rows = doc_index._search_project_documents_sync("p-test", "zz-query", top_k)
     assert rows == on["result"]["results"]
+
+
+# -- each piece, named (the mutation gate selects killers by name) ------------
+
+@pytest.mark.parametrize("project_id, ok", [
+    ("p-test", True),
+    (None, False),
+])
+async def test_the_tool_needs_a_project_and_traces_only_a_real_search(
+    corpus, caplog, project_id, ok,
+):
+    from app.agents.base.tools import handle_search_project_documents
+
+    class _Call:
+        name = "search_project_documents"
+        args = {"query": "zz-query", "top_k": 5}
+
+    _Call.project_id = project_id
+    caplog.set_level(logging.INFO, logger="app.rag.retrieval_trace")
+    out = await handle_search_project_documents(_Call())
+    assert out["ok"] is ok
+    assert len(_trace_lines(caplog)) == (1 if ok else 0)
+
+
+@pytest.mark.parametrize("query, empty_chunks", [
+    ("   ", False),
+    ("zz-query", True),
+])
+def test_a_search_with_nothing_found_returns_an_empty_trace(corpus, query, empty_chunks):
+    if empty_chunks:
+        corpus["chunks"] = []
+    rows, trace = doc_index._search_project_documents_traced("p-test", query, 5)
+    assert rows == []
+    assert trace == {"retrieved_k": 0, "chunks": [], "not_handed": []}
+    assert doc_index._empty_search_trace() == trace
+
+
+@pytest.mark.parametrize("query, rows_expected", [
+    ("zz-query", 3),
+    ("   ", 0),
+])
+def test_the_worker_job_returns_rows_and_trace(corpus, query, rows_expected):
+    from app.core.rag import retrieval_worker
+
+    rows, trace = retrieval_worker.search_documents_job("p-test", query, 5, None)
+    assert len(rows) == rows_expected
+    assert len({e["doc_id"] for e in trace["chunks"]}) == rows_expected
+
+
+@pytest.mark.parametrize("score, layer", [
+    (0.123456789, "own"),
+    (None, "master_corpus"),
+])
+def test_trace_chunk_ids_is_identity_and_rank_only(score, layer):
+    from app.core.rag import inject
+
+    c = _Chunk("k1", "d1", score, UNLOGGED_TEXT)
+    c.layer = layer
+    c.source_name = UNLOGGED_NAME
+    entry = inject.trace_chunk_ids(4, c)
+    assert entry == {
+        "rank": 4, "chunk_id": "k1", "doc_id": "d1",
+        "score": round(score, 6) if score is not None else None, "layer": layer,
+    }
+
+
+@pytest.mark.parametrize("switch, lines_expected", [
+    ("off", 0),
+    ("on", 1),
+])
+def test_emit_search_trace_writes_the_given_trace_under_the_switch(
+    caplog, monkeypatch, switch, lines_expected,
+):
+    from app.core.rag import inject
+
+    monkeypatch.setenv("RAG_RETRIEVAL_TRACE", switch)
+    caplog.set_level(logging.INFO, logger="app.rag.retrieval_trace")
+    handed = [{"rank": 2, "chunk_id": "k2", "doc_id": "d2", "score": 0.7,
+               "layer": "own", "result_rank": 1}]
+    dropped = [{"rank": 1, "chunk_id": "k1", "doc_id": "d1", "score": 0.8,
+                "layer": "own", "dropped": "beyond_top_k"}]
+    inject.emit_search_trace(
+        path="tool", project_id="p-test", requested_top_k=1,
+        trace={"retrieved_k": 2, "chunks": handed, "not_handed": dropped},
+    )
+    lines = _trace_lines(caplog)
+    assert len(lines) == lines_expected
+    if lines:
+        p = lines[0][1]
+        assert p["path"] == "tool" and p["query"] == "tool_query"
+        assert p["requested_k"] == 1 and p["retrieved_k"] == 2
+        assert p["handed_k"] == 1 and p["handed_docs"] == 1
+        assert p["top_score"] == 0.7
+        assert p["chunks"] == handed and p["not_handed"] == dropped
