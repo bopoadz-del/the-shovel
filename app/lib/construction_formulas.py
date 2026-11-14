@@ -2344,6 +2344,28 @@ def formula_completed_by_user_text(
     return name, bound
 
 
+def formula_inputs_supplied_by_text(name: Optional[str], text: str) -> bool:
+    """True when ``text`` binds every required input of ``name``, at least one
+    of them a figure the user wrote.
+
+    The same extractor and required-input rule as the calculator, so a dry
+    run here agrees with what a real run would ask for. A formula with no
+    figure from the user is not supplied by the user, even when it needs none.
+    """
+    from app.lib.formula_registry import get
+
+    spec = get(str(name or "").strip()) if name else None
+    if spec is None or not (text or "").strip():
+        return False
+    bound = extract_calculation_params_from_text(spec.fn, text)
+    if _missing_required(spec.fn, bound, spec.name):
+        return False
+    return any(
+        isinstance(val, (int, float)) and not isinstance(val, bool)
+        for val in bound.values()
+    )
+
+
 def calculation_headline(name: str, result: Any) -> Optional[Tuple[str, float]]:
     """First numeric declared output that is not also an input."""
     from app.lib.formula_registry import get
