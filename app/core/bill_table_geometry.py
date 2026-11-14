@@ -337,9 +337,22 @@ def write_bill_workbook(rows: Sequence[BillRow], path: str) -> dict[str, int]:
     return counts
 
 
+# Tesseract page segmentation for a bill page: one uniform block of text.
+# The automatic layout modes (3, 4) and the sparse modes (11, 12) drop an
+# isolated one-character word, and a bill is full of them: a quantity of 1 to
+# 9, a unit of "m" or "t". Reading order is irrelevant here (rows and columns
+# come from the word boxes), so the block mode costs nothing and keeps them.
+_BILL_PAGE_PSM = 6
+
+
 def ocr_page_words(image, page: int, lang: str = "eng") -> list[Word]:
     """Word boxes for one rendered page image via tesseract."""
     import pytesseract
 
-    data = pytesseract.image_to_data(image, lang=lang, output_type=pytesseract.Output.DICT)
+    data = pytesseract.image_to_data(
+        image,
+        lang=lang,
+        config=f"--psm {_BILL_PAGE_PSM}",
+        output_type=pytesseract.Output.DICT,
+    )
     return words_from_tesseract_data(data, page)
