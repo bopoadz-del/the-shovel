@@ -308,8 +308,8 @@ def test_calculate_interim_payment_model_aliases():
         "gross_amount": 900_000, "retention": 10,
     })
     assert inner["net_payment"] == pytest.approx(810_000.0)
-    via_amt = _ok("calculate_interim_payment", {"amount": 900_000})
-    assert via_amt["net_payment"] == pytest.approx(810_000.0)
+    via_amt = _ok("calculate_interim_payment", {"amount": 900_000, "retention": 5})
+    assert via_amt["net_payment"] == pytest.approx(855_000.0)
 
 
 def test_carbon_footprint_concrete_model_aliases():

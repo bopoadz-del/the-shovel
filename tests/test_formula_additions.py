@@ -96,11 +96,14 @@ class TestInterimPayment:
         assert result["retention_amount"] == 90000.0
         assert result["net_payment"] == 810000.0
 
-    def test_900k_default_retention(self):
-        """Default retention is 10%."""
-        result = calculate_interim_payment(900000)
-        assert result["retention_amount"] == 90000.0
-        assert result["net_payment"] == 810000.0
+    @pytest.mark.parametrize("gross", [900000, 250000])
+    def test_missing_retention_is_an_error_naming_the_input(self, gross):
+        """Retention has no default: a call without it is refused by name."""
+        with pytest.raises(TypeError, match="retention_percent"):
+            calculate_interim_payment(gross)
+        result = calculate_interim_payment(gross, None)
+        assert "retention_percent" in result["error"]
+        assert result["missing"] == ["retention_percent"]
 
     def test_zero_retention(self):
         result = calculate_interim_payment(500000, 0)
@@ -129,12 +132,13 @@ class TestInterimPayment:
         assert "810000" in result["calculation"]
 
     def test_cites_fidic(self):
-        result = calculate_interim_payment(100000)
+        result = calculate_interim_payment(100000, 10)
         assert "FIDIC" in result["standard"]
 
     def test_note_warns_about_cap(self):
-        result = calculate_interim_payment(100000)
+        result = calculate_interim_payment(100000, 10)
         assert "cap" in result["note"].lower()
+        assert "default" not in result["note"].lower()
 
 
 # -- Registry -------------------------------------------------------------
