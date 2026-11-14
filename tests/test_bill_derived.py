@@ -301,11 +301,15 @@ def test_hook_failure_never_changes_the_source_result(monkeypatch, exc):
     }
 
 
-def test_derived_name_stays_inside_the_store(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_name, want_name", [
+    ("nested/dir/scan.pdf", "scan.bill.xlsx"),
+    ("a/b/../Vol 2.PDF", "Vol 2.bill.xlsx"),
+])
+def test_derived_name_stays_inside_the_store(tmp_path, monkeypatch, source_name, want_name):
     words, _, _ = _bill_b()
-    docs = _Docs(_source(name="nested/dir/scan.pdf"))
+    docs = _Docs(_source(name=source_name))
     docs.install(monkeypatch, tmp_path)
     bd.derive_bill_sheet("p1", "src1", classify=_BILL, page_words=lambda p, i: words)
     (row,) = docs.added
     assert os.path.dirname(row["file_path"]) == str(tmp_path)
-    assert row["original_name"] == "scan.bill.xlsx"
+    assert row["original_name"] == want_name
