@@ -247,6 +247,11 @@ def _stub_title_block(text: str) -> dict:
         ("SECTION 4 - DRAINAGE PIPES", True),
         ("The contractor shall place the concrete in layers.", False),
         ("Note 1: cover to reinforcement 40 mm in grade C30 concrete.", False),
+        # Capitals alone do not make a heading: a closing full stop or a
+        # line too long to file a piece under rules it out.
+        ("ALL WORKS TO COMPLY WITH THE SPEC.", False),
+        ("ALL WORKS TO COMPLY WITH THE SPEC", True),
+        ("", False),
     ],
 )
 def test_heading_line_shape(line, is_heading):
@@ -267,6 +272,41 @@ def test_heading_line_shape(line, is_heading):
 def test_heading_line_for_page(page_text, use_title_block, expected):
     reader = _stub_title_block if use_title_block else None
     assert cb.heading_line_for_page(page_text, reader) == expected
+
+
+@pytest.mark.parametrize("page_text, reads", [("  \n ", 0), ("DRAWING NO: XY-1", 1)])
+def test_a_blank_page_is_not_read_for_a_title_block(page_text, reads):
+    calls: list[str] = []
+
+    def reader(text):
+        calls.append(text)
+        return _stub_title_block(text)
+
+    cb.heading_line_for_page(page_text, reader)
+    assert len(calls) == reads
+
+
+@pytest.mark.parametrize(
+    "page2, expected",
+    [
+        ("2.1 Pipe Bedding\nBed pipes on granular material.", {1: "1.0 Scope", 2: "2.1 Pipe Bedding"}),
+        ("only a sentence on this page.", {1: "1.0 Scope"}),  # no heading, no entry
+    ],
+)
+def test_page_heading_lines_maps_each_page_to_its_own_heading(page2, expected):
+    page1 = "1.0 Scope\nThe works comprise drainage."
+    text = f"{page1}\n{page2}"
+    got = cb.page_heading_lines(text, [[2, len(page1) + 1], [1, 0]])
+    assert got == expected
+
+
+@pytest.mark.parametrize("pages, changed", [([2, 2], True), ([2], False)])
+def test_attach_leaves_misaligned_lists_alone(monkeypatch, pages, changed):
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "400")
+    chunks = ["piece a", "piece b"]
+    out, out_pages = cb.attach_page_headings(chunks, pages, [5, 5], {2: "H - T"})
+    assert (out != chunks) is changed
+    assert out_pages == pages if not changed else out_pages == [2, 2]
 
 
 @pytest.mark.parametrize("track, cut", [(True, 400 - cb.HEADING_RESERVE), (False, 400)])

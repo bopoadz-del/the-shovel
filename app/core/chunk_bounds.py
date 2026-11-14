@@ -112,7 +112,10 @@ def split_oversize(text: str, ceiling: int, _level: int = 0) -> list[str]:
 def _merge_pairs(
     pairs: list[tuple[str, int | None]], floor: int, ceiling: int,
 ) -> list[tuple[str, int | None]]:
-    """``merge_undersize`` on ``(text, split_parent)`` pairs; a join keeps a parent."""
+    """Join each pair shorter than ``floor`` to a neighbour when it still fits.
+
+    Pairs are ``(text, split_parent)``; a joined pair keeps a parent id.
+    """
     if floor <= 0:
         return list(pairs)
     out: list[tuple[str, int | None]] = []
@@ -139,11 +142,6 @@ def _merge_pairs(
         else:
             out.append(carry)
     return out
-
-
-def merge_undersize(chunks: list[str], floor: int, ceiling: int) -> list[str]:
-    """Join each chunk shorter than ``floor`` to a neighbour when it still fits."""
-    return [c for c, _ in _merge_pairs([(c, None) for c in chunks], floor, ceiling)]
 
 
 def bound_chunks(
