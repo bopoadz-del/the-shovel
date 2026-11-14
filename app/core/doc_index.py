@@ -4705,6 +4705,7 @@ async def search_project_documents(
     top_k: int = 5,
     *,
     trace_path: str | None = None,
+    turn: Any = None,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
 
@@ -4719,8 +4720,14 @@ async def search_project_documents(
     ``rag_retrieval_trace`` line is written for this call, results or none,
     naming the chunks handed and the rows the per-document collapse dropped.
     Ids, scores and ranks only; never chunk text, a file name or the query.
+
+    ``turn`` (a ``handed_set.SearchTurn``) set: chunks already handed to the
+    model this turn are not handed again, and the chunks this call hands are
+    added to the turn's handed set.
     """
     from app.core.rag import retrieval_worker
+
+    exclude = frozenset(turn.handed) if turn is not None else frozenset()
 
     if retrieval_worker.enabled():
         # Retrieval's CPU work runs in the worker process (its own GIL).
@@ -4728,10 +4735,16 @@ async def search_project_documents(
 
         results, trace = await retrieval_worker.call(
             retrieval_worker.search_documents_job, project_id, query, top_k, caller_role(),
+            exclude,
         )
     else:
         results, trace = await asyncio.to_thread(
-            _search_project_documents_traced, project_id, query, top_k,
+            _search_project_documents_traced, project_id, query, top_k, exclude,
+        )
+    if turn is not None:
+        turn.record_search(
+            [c.get("chunk_id") for c in trace.get("chunks") or []],
+            sum(1 for c in trace.get("not_handed") or [] if c.get("dropped") == "already_handed"),
         )
     if trace_path:
         # Emitted here, in the request's own process, so the line carries the
@@ -4761,10 +4774,14 @@ def _empty_search_trace() -> dict[str, Any]:
 
 
 def _search_trace(chunks: list[Any], kept_by_doc: dict[str, list[Any]],
-                  ranked_doc_ids: list[str]) -> dict[str, Any]:
+                  ranked_doc_ids: list[str],
+                  skipped: list[Any] = ()) -> dict[str, Any]:
     """Which retrieved chunks the result rows carry, and which the collapse
     dropped and why. ``rank`` is the retriever's order; ``result_rank`` is the
-    row a handed chunk rides in. Identity only (see ``trace_chunk_ids``)."""
+    row a handed chunk rides in. ``skipped`` are the retrieved chunks left out
+    because the turn had already handed them (``dropped="already_handed"``).
+    Identity only (see ``trace_chunk_ids``)."""
+    skipped_ids = {id(c) for c in skipped}
     from app.core.rag.inject import trace_chunk_ids
 
     row_of = {doc_id: i + 1 for i, doc_id in enumerate(ranked_doc_ids)}
@@ -4775,6 +4792,10 @@ def _search_trace(chunks: list[Any], kept_by_doc: dict[str, list[Any]],
     dropped: list[dict[str, Any]] = []
     for rank, c in enumerate(chunks, start=1):
         entry = trace_chunk_ids(rank, c)
+        if id(c) in skipped_ids:
+            entry["dropped"] = "already_handed"
+            dropped.append(entry)
+            continue
         if id(c) in handed_ids:
             entry["result_rank"] = row_of[c.doc_id]
             handed.append(entry)
@@ -4791,8 +4812,13 @@ def _search_project_documents_traced(
     project_id: str,
     query: str,
     top_k: int = 5,
+    exclude_chunk_ids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Search indexed documents for ``query``: ``(result rows, trace)``.
+
+    ``exclude_chunk_ids``: chunks already handed to the model this turn. They
+    are left out of the rows (the trace names them ``already_handed``) and the
+    retrieval reaches that many candidates deeper so the rows can still fill.
 
     Each result is a dict: ``{document_id, filename, snippet, score}``.
 
@@ -4829,6 +4855,7 @@ def _search_project_documents_traced(
     over_fetch = max(top_k * 4, 20)
     if _reranker.enabled():
         over_fetch = max(over_fetch, _reranker.candidate_depth(top_k))
+    over_fetch += len(exclude_chunk_ids)
 
     def _query() -> list[Any]:
         try:
@@ -4866,6 +4893,10 @@ def _search_project_documents_traced(
         chunks = _query()
     if not chunks:
         return [], _empty_search_trace()
+    retrieved = chunks
+    skipped = [c for c in chunks if str(getattr(c, "chunk_id", "")) in exclude_chunk_ids]
+    if skipped:
+        chunks = [c for c in chunks if str(getattr(c, "chunk_id", "")) not in exclude_chunk_ids]
 
     # Keep the best FEW chunks per document, not just one. A live foundation
     # backfill compaction ask was 1/6: five runs said "I don't have that" about a clause the sixth quoted
@@ -4944,7 +4975,7 @@ def _search_project_documents_traced(
         ))
         results.append(result_row)
     trace = _search_trace(
-        chunks, kept_by_doc, [item["document_id"] for item in ranked],
+        retrieved, kept_by_doc, [item["document_id"] for item in ranked], skipped,
     )
     return results, trace
 

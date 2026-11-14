@@ -482,7 +482,11 @@ async def _chat_impl(
     # search_project_documents calls, then stop offering the tool so the
     # model answers from injected context instead of grinding to the cap.
     SEARCH_TOOL_CAP = int(os.getenv("AGENT_SEARCH_TOOL_CAP", "2"))
-    search_calls = 0
+    # S-R9: the cap and the chunks already handed live on one turn object
+    # that every tool call receives; the search tool enforces the cap per
+    # call (a parallel batch cannot overrun it) and skips handed chunks.
+    from app.core.rag.handed_set import SearchTurn
+    _search_turn = SearchTurn.from_audit(SEARCH_TOOL_CAP, _rag_audit)
     # Hard excludes on the operator's draft intent (VO / inline BOQ).
     excluded_tools, _op = self._intent_hard_excludes(messages)
     _sf: dict = {}  # S-R8: one runtime search round before a draft may decline
@@ -574,7 +578,7 @@ async def _chat_impl(
                 and _recovered_calls_are_search_only(recovered_tool_calls)
                 and (
                     "search_project_documents" in excluded_tools
-                    or search_calls >= SEARCH_TOOL_CAP
+                    or _search_turn.spent
                 )
             ):
                 recovered_tool_calls = []
@@ -595,7 +599,7 @@ async def _chat_impl(
                 }
             elif (_sf_call := await self._search_before_refusal(
                     raw_content, messages, _sf, user_message=user_message, project_id=project_id,
-                    tool_results=tool_calls_made, search_calls=search_calls, search_cap=SEARCH_TOOL_CAP,
+                    tool_results=tool_calls_made, search_calls=_search_turn.calls, search_cap=SEARCH_TOOL_CAP,
                     excluded_tools=excluded_tools, force_synthesis=force_synthesis,
                     iterations_left=MAX_TOOL_ITERATIONS - iteration - 1)) is not None:
                 tool_calls = [_sf_call]  # S-R8: search, do not finalise the draft
@@ -667,10 +671,6 @@ async def _chat_impl(
             # so the UI can show "️ tool_name — running…" live.
             fn = tc.get("function") or {}
             tc_name = fn.get("name") or tc.get("name") or "unknown"
-            if tc_name == "search_project_documents":
-                search_calls += 1
-                if search_calls >= SEARCH_TOOL_CAP:
-                    excluded_tools.add("search_project_documents")
             tc_args_raw = fn.get("arguments") or tc.get("arguments") or "{}"
             try:
                 tc_args = json.loads(tc_args_raw) if isinstance(tc_args_raw, str) else dict(tc_args_raw)
@@ -682,8 +682,9 @@ async def _chat_impl(
                 "id": tc.get("id") or "",
             })
             _t0 = time.monotonic()
-            tool_result = await self._run_tool_call(
+            tool_result = await self._run_turn_tool_call(
                 tc,
+                search_turn=_search_turn,
                 api_key=api_key,
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -692,6 +693,8 @@ async def _chat_impl(
                 user_message=user_message,
                 history=effective_history,
             )
+            if _search_turn.spent:
+                excluded_tools.add("search_project_documents")
             duration_ms = int((time.monotonic() - _t0) * 1000)
             tool_calls_made.append(tool_result)
             # Determine ok/error by introspecting the tool's result payload.
