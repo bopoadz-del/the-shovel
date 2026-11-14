@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from app.core import projects as projects_module
+
 from tests.test_owner_excluded_document import (  # noqa: F401 - world is a fixture
     PAIRS,
     SIZES,
@@ -143,13 +145,13 @@ def test_inclusion_plan_hash_moves_with_the_exclusion_state(world, target, other
 
 @pytest.mark.parametrize("missing", ["", None, "no-such-document"])
 def test_plan_and_include_answer_none_for_a_missing_id(world, missing):
-    projects, store, _emb, pid, _docs = world
+    _projects, store, _emb, pid, _docs = world
     import warnings
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert projects.plan_document_inclusion(missing) is None
-        assert projects.include_document(missing, by="owner", reason="r", at="t") is None
+        assert projects_module.plan_document_inclusion(missing) is None
+        assert projects_module.include_document(missing, by="owner", reason="r", at="t") is None
     assert sum(_counts(store, pid).values()) == TOTAL
 
 
