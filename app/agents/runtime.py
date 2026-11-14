@@ -1420,8 +1420,9 @@ def _resolve_histogram_schedule_file(
         pick = xers[0]
     if not pick:
         return None, ""
-    fp = pick.get("file_path") or ""
-    if not os.path.exists(fp):
+    # Drive-ingested rows keep no local copy: materialise, do not stat.
+    fp = _projects.materialize_document_path(pick)
+    if not fp:
         return None, ""
     return fp, pick.get("original_name") or os.path.basename(fp)
 
@@ -4404,8 +4405,12 @@ def _resolve_file_path(project_id: str, raw: Any) -> Any:
       - ``raw`` is already an absolute path that exists;
       - no matching document is found.
 
-    Otherwise looks up the project's documents (via ``projects.list_documents``)
-    and returns the document's ``file_path`` when the name matches.
+    Otherwise looks up the project's documents (via ``projects.list_document_names``)
+    and returns a readable local path for the matched document, produced by
+    ``projects.materialize_document_path`` (local bytes, preview cache or a
+    Drive download -- Drive-ingested rows keep no local copy). A match whose
+    bytes cannot be produced is skipped, so ``raw`` comes back unchanged and
+    the block reports its own "File not found".
 
     Matching is tried in two passes:
       1. Exact match on ``original_name`` (case-insensitive).
@@ -4436,17 +4441,17 @@ def _resolve_file_path(project_id: str, raw: Any) -> Any:
     for doc in docs:
         on = (doc.get("original_name") or "").strip().lower()
         if on and on == needle:
-            fp = doc.get("file_path") or ""
-            if fp and _os.path.exists(fp):
+            fp = _projects.materialize_document_path(doc)
+            if fp:
                 return fp
 
     # Pass 2: substring match either direction (handles the LLM truncating
     # or rewording the filename slightly).
     for doc in docs:
         on = (doc.get("original_name") or "").strip().lower()
-        if on and (needle in on or on in needle):
-            fp = doc.get("file_path") or ""
-            if fp and _os.path.exists(fp):
+        if on and on != needle and (needle in on or on in needle):
+            fp = _projects.materialize_document_path(doc)
+            if fp:
                 return fp
 
     return raw
