@@ -153,7 +153,10 @@ def test_main_plans_through_the_real_planner_and_writes_no_row(tmp_path, monkeyp
     assert not any(label in line for label in want)
 
 
-def test_ranges_resume_from_saved_boxes_and_the_whole_plan_matches(tmp_path, monkeypatch):
+@pytest.mark.parametrize("ranges,cached", [(("0:2", "2:3"), [2, 3]), (("0:1", "1:3"), [1, 3])])
+def test_ranges_resume_from_saved_boxes_and_the_whole_plan_matches(
+    tmp_path, monkeypatch, ranges, cached,
+):
     words, _, _ = _bill_a()
     docs = _Docs({**_source("d1"), "project_id": "p1"}, pages=3)
     docs.install(monkeypatch, tmp_path)
@@ -161,15 +164,17 @@ def test_ranges_resume_from_saved_boxes_and_the_whole_plan_matches(tmp_path, mon
     base = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1", "BILL_PLAN_WORK_DIR": wd}
     ocrd: list[int] = []
     reports = []
-    for pages in ("0:2", "2:3", ""):
+    for pages in (*ranges, ""):
         lines: list[str] = []
         deps = _deps(docs.rows, _real_plan(words, ocrd), lines, classify=_BILL)
         assert bpo.main_from_env({**base, "BILL_PLAN_PAGES": pages}, deps=deps) == 0
         reports.append(_summary(lines))
 
     assert ocrd == [0, 1, 2]  # the whole-document run OCR'd nothing again
-    assert [r["pages"] for r in reports] == [[0, 2], [2, 3], [0, 3]]
-    assert [r["pages_cached_after"] for r in reports] == [2, 3, 3]
+    want_pages = [[int(n) for n in r.split(":")] for r in ranges] + [[0, 3]]
+    assert [r["pages"] for r in reports] == want_pages
+    assert [r["pages_cached_after"] for r in reports] == [*cached, 3]
+    assert [r["pages_cached_before"] for r in reports] == [0, cached[0], 3]
     fresh = bd.plan_bill_sheet("p1", "d1", classify=_BILL, page_words=_by_page(words))
     assert reports[-1]["plan_hash"] == fresh["plan_hash"]
     assert reports[0]["plan_hash"] != fresh["plan_hash"]
