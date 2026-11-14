@@ -104,6 +104,63 @@ def _hybrid_enabled() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: Per leg, how many of its best candidates the OTHER leg did not return are
+#: guaranteed a place in the fused order at their own leg rank (S-R7c). One
+#: setting, the same number for both legs. 0 restores plain fusion.
+FUSION_LEG_SHARE_DEFAULT = 2
+
+
+def fusion_leg_share() -> int:
+    """``RAG_FUSION_LEG_SHARE`` read live; default
+    ``FUSION_LEG_SHARE_DEFAULT``. A malformed or negative value falls back
+    to the default / 0 respectively."""
+    raw = os.getenv("RAG_FUSION_LEG_SHARE", "")
+    try:
+        n = int(str(raw).strip()) if str(raw).strip() else FUSION_LEG_SHARE_DEFAULT
+    except ValueError:
+        n = FUSION_LEG_SHARE_DEFAULT
+    return max(n, 0)
+
+
+def guarantee_leg_share(
+    order: List["Chunk"],
+    sem_rank: Dict[str, int],
+    bm_rank: Dict[str, int],
+    share: int,
+) -> List["Chunk"]:
+    """Give each leg's best single-leg candidates a place by their own rank.
+
+    Reciprocal-rank fusion with k=60 ranks a chunk found by both legs at
+    ANY depth (2/(60+50) = 0.0182) above the best hit of one leg
+    (1/61 = 0.0164), so a passage only exact words can find (a figure, a
+    reference, a clause number) sits under every merely on-topic one. Here
+    the ``share`` best-ranked candidates of each leg that the other leg did
+    not return move up to the position of their own leg rank (never down:
+    a candidate already fused higher keeps its place). Everything else
+    keeps its fused order. When the legs agree there is no single-leg
+    candidate and the order is unchanged. On a tie of positions
+    the vector-leg candidate goes first, as fusion keeps the semantic
+    instance on a tie.
+    """
+    fused_pos = {c.chunk_id: i for i, c in enumerate(order, 1)}
+    picks: List[Tuple[int, int, str]] = []
+    for leg_index, (mine, other) in enumerate(((sem_rank, bm_rank), (bm_rank, sem_rank))):
+        alone = sorted(
+            (r, cid) for cid, r in mine.items()
+            if cid not in other and cid in fused_pos
+        )[:share]
+        picks += [(min(r, fused_pos[cid]), leg_index, cid) for r, cid in alone]
+    picked = {cid for _, _, cid in picks}
+    by_id = {c.chunk_id: c for c in order}
+    out = [c for c in order if c.chunk_id not in picked]
+    last = -1
+    for target, _leg, cid in sorted(picks):
+        at = min(max(target - 1, last + 1), len(out))
+        out.insert(at, by_id[cid])
+        last = at
+    return out
+
+
 def _sanitize_fts5_query(query: str) -> str:
     """Strip punctuation, collapse whitespace, and re-join tokens with
     ``OR`` so the resulting MATCH clause is bag-of-words rather than
@@ -2584,9 +2641,13 @@ def _rrf_combine(
     ``.vector_score`` / ``.lexical_score`` and the fused position on
     ``.fused_rank``, debug-only like ``.rrf_score``.
 
-    With ``project_id``, the full fused order (before the ``top_k`` cut) is
+    Before the ``top_k`` cut, ``guarantee_leg_share`` places each leg's best
+    single-leg candidates at their own leg rank (``RAG_FUSION_LEG_SHARE``
+    per leg); ``.fused_rank`` is the position after that step.
+
+    With ``project_id``, that full order (before the ``top_k`` cut) is
     summarised by leg into the turn memo (``record_fusion``) for the
-    retrieval trace. Counts and ranks only; the ranking is unchanged.
+    retrieval trace. Counts and ranks only; the trace changes no ranking.
     """
     sem_rank = {c.chunk_id: r for r, c in enumerate(semantic, 1)}
     bm_rank = {c.chunk_id: r for r, c in enumerate(bm25, 1)}
@@ -2617,13 +2678,14 @@ def _rrf_combine(
             )
         scored.append((rrf, c))
     scored.sort(key=lambda x: -x[0])
+    order = guarantee_leg_share(
+        [c for _, c in scored], sem_rank, bm_rank, fusion_leg_share(),
+    )
     if project_id is not None:
         from app.core.rag.fusion_trace import leg_summary
 
-        record_fusion(project_id, leg_summary(
-            (c for _, c in scored), sem_rank, bm_rank, top_k,
-        ))
-    fused = [c for _, c in scored[:top_k]]
+        record_fusion(project_id, leg_summary(order, sem_rank, bm_rank, top_k))
+    fused = order[:top_k]
     cosines = sorted(
         (float(v) for v in sem_score.values() if v is not None), reverse=True,
     )
