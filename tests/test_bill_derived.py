@@ -1,5 +1,6 @@
 """P-B3: an image-only bill gets its own derived spreadsheet row, linked to the
-source and indexed through the spreadsheet row-chunk path.
+source and indexed through the spreadsheet row-chunk path -- planned first,
+executed only against the plan's hash, never inside a web request.
 
 Every input is built here: synthetic OCR word boxes drawn in two column
 orders (one with a section split across pages), and in-memory stand-ins for
@@ -93,13 +94,15 @@ def _bill_b() -> tuple[list[g.Word], dict[str, tuple[int, float]], int]:
 class _Docs:
     """In-memory stand-in for the documents table (only what the module uses)."""
 
-    def __init__(self, source: dict[str, Any], others: list[dict[str, Any]] | None = None):
+    def __init__(self, source: dict[str, Any], others: list[dict[str, Any]] | None = None,
+                 pages: int = 3):
         self.rows = {source["id"]: source, **{o["id"]: o for o in others or []}}
         self.added: list[dict[str, Any]] = []
         self.meta_updates: list[tuple[str, dict]] = []
         self.indexed: list[tuple[tuple, dict]] = []
+        self.pages = pages
 
-    def install(self, monkeypatch, tmp_path) -> None:
+    def install(self, monkeypatch, tmp_path, *, real_bytes: bool = False) -> None:
         monkeypatch.setattr(projects, "get_document", lambda i: self.rows.get(i))
         monkeypatch.setattr(projects, "list_documents", lambda pid, **k: list(self.rows.values()))
         monkeypatch.setattr(projects, "add_document", self._add)
@@ -107,12 +110,14 @@ class _Docs:
             projects, "update_document_metadata",
             lambda i, m: self.meta_updates.append((i, m)),
         )
+        if not real_bytes:
+            monkeypatch.setattr(projects, "materialize_document_path", lambda d: d.get("file_path"))
         monkeypatch.setattr(byte_store, "allocate_path", lambda name: str(tmp_path / name))
         def write(path, data):
             with open(path, "wb") as fh:
                 fh.write(data)
         monkeypatch.setattr(byte_store, "write_bytes", write)
-        monkeypatch.setattr(bd, "_page_count", lambda path: 3)
+        monkeypatch.setattr(bd, "_page_count", lambda path: self.pages)
 
         def fake_index(*a, **k):
             self.indexed.append((a, k))
@@ -135,6 +140,25 @@ def _BILL(path: str) -> bc.BillVerdict:
     return bc.BillVerdict(True, bc.BILL_PRICED)
 
 
+def _by_page(words: list[g.Word], seen: list[int] | None = None):
+    """A page_words stand-in that returns only the asked page's boxes."""
+    def page_words(path, indices):
+        (index,) = indices
+        if seen is not None:
+            seen.append(index)
+        return [w for w in words if w.page == index + 1]
+    return page_words
+
+
+def _plan_then_derive(words, **kw) -> tuple[dict, dict]:
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words), **kw)
+    out = bd.derive_bill_sheet(
+        "p1", "src1", plan_hash=plan["plan_hash"], classify=_BILL,
+        page_words=_by_page(words), **kw,
+    )
+    return plan, out
+
+
 def _amount_sum(chunks: list[str]) -> float:
     total = 0.0
     for c in chunks:
@@ -152,7 +176,7 @@ def test_bill_gets_derived_row_whose_sheets_match_the_drawn_tables(tmp_path, mon
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
 
-    out = bd.derive_bill_sheet("p1", "src1", classify=_BILL, page_words=lambda p, idx: words)
+    plan, out = _plan_then_derive(words)
 
     assert out["derived"] is True
     assert out["rows"] == sum(n for n, _ in want.values())
@@ -161,6 +185,7 @@ def test_bill_gets_derived_row_whose_sheets_match_the_drawn_tables(tmp_path, mon
     (row,) = docs.added
     assert row["metadata"]["derived_from"] == "src1"
     assert row["metadata"]["derivation"] == bd.DERIVATION
+    assert row["metadata"]["plan_hash"] == plan["plan_hash"]
     assert row["reingest_of"] is None
     assert row["original_name"].endswith(".xlsx")
     # The source PDF row is linked to the derived row, not hidden.
@@ -189,6 +214,239 @@ def test_bill_gets_derived_row_whose_sheets_match_the_drawn_tables(tmp_path, mon
         assert sum(f"Bill: {section}" in c for c in chunks) == want[section][0]
 
 
+# -- plan before write --------------------------------------------------------
+
+
+@pytest.mark.parametrize("build, want_sections", [
+    (_bill_a, [("Section One Preliminaries", 4, 0, [1, 1]),
+               ("Section Two Concrete", 5, 1, [2, 3])]),
+    (_bill_b, [("Earthworks Bill", 6, 0, [1, 1])]),
+])
+def test_plan_reports_sections_and_writes_nothing(tmp_path, monkeypatch, build, want_sections):
+    words, _, want_flagged = build()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+
+    assert plan["derived"] is False
+    assert plan["pages"] == [0, 3] and plan["pages_in_file"] == 3
+    assert plan["unreconciled"] == want_flagged
+    got = [(s["path"][-1], s["rows"], s["unreconciled"], s["pages"]) for s in plan["sections"]]
+    assert got == want_sections
+    assert plan["rows"] == sum(n for _, n, _, _ in want_sections)
+    assert len(plan["plan_hash"]) == 64
+    assert docs.added == [] and docs.indexed == [] and docs.meta_updates == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("bad_hash", ["0" * 64, "stale"])
+def test_execute_refuses_a_hash_that_is_not_this_plan(tmp_path, monkeypatch, bad_hash):
+    words, _, _ = _bill_a()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+
+    out = bd.derive_bill_sheet(
+        "p1", "src1", plan_hash=bad_hash, classify=_BILL, page_words=_by_page(words),
+    )
+
+    assert out == {"derived": False, "reason": bd.SKIP_PLAN_MISMATCH,
+                   "plan_hash": plan["plan_hash"]}
+    assert docs.added == [] and docs.indexed == []
+
+
+def _drop_last_page(words):
+    return [x for x in words if x.page != 3]
+
+
+def _reread_a_ref(words):
+    return [g.Word("9" + x.text, x.page, x.left, x.top, x.width, x.height)
+            if x.text.startswith("A2") else x for x in words]
+
+
+@pytest.mark.parametrize("rows_changed", [_drop_last_page, _reread_a_ref])
+def test_execute_refuses_when_the_rows_moved_after_the_plan(tmp_path, monkeypatch, rows_changed):
+    words, _, _ = _bill_a()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+
+    out = bd.derive_bill_sheet(
+        "p1", "src1", plan_hash=plan["plan_hash"], classify=_BILL,
+        page_words=_by_page(rows_changed(words)),
+    )
+    assert out["reason"] == bd.SKIP_PLAN_MISMATCH and docs.added == []
+
+
+@pytest.mark.parametrize("pages", [(0, 2), (1, 3)])
+def test_partial_plan_counts_its_range_and_cannot_execute(tmp_path, monkeypatch, pages):
+    words, _, _ = _bill_a()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+    seen: list[int] = []
+
+    plan = bd.plan_bill_sheet("p1", "src1", pages=pages, classify=_BILL,
+                              page_words=_by_page(words, seen))
+    assert seen == list(range(*pages))
+    assert plan["pages"] == list(pages)
+    in_range = set(range(pages[0] + 1, pages[1] + 1))
+    assert {p for s in plan["sections"] for p in s["pages"]} <= in_range
+
+    full = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    assert plan["plan_hash"] != full["plan_hash"]
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=plan["plan_hash"],
+                               classify=_BILL, page_words=_by_page(words))
+    assert out["reason"] == bd.SKIP_PLAN_MISMATCH and docs.added == []
+
+
+# -- page by page, resumable --------------------------------------------------
+
+
+@pytest.mark.parametrize("first_range", [(0, 1), (0, 2)])
+def test_work_dir_resumes_and_ocrs_each_page_once(tmp_path, monkeypatch, first_range):
+    words, _, _ = _bill_a()
+    store = tmp_path / "store"
+    store.mkdir()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, store)
+    work = str(tmp_path / "work")
+    seen: list[int] = []
+
+    bd.plan_bill_sheet("p1", "src1", pages=first_range, classify=_BILL,
+                       page_words=_by_page(words, seen), work_dir=work)
+    whole = bd.plan_bill_sheet("p1", "src1", classify=_BILL,
+                               page_words=_by_page(words, seen), work_dir=work)
+    assert seen == [0, 1, 2]  # each page OCR'd once across both runs
+
+    def no_ocr(path, indices):
+        raise AssertionError("re-OCR'd a page whose boxes were kept")
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash=whole["plan_hash"],
+                               classify=_BILL, page_words=no_ocr, work_dir=work)
+    assert out["derived"] is True and out["rows"] == whole["rows"]
+
+
+@pytest.mark.parametrize("pages", [1, 3])
+def test_pages_are_ocrd_one_at_a_time(tmp_path, monkeypatch, pages):
+    docs = _Docs(_source(), pages=pages)
+    docs.install(monkeypatch, tmp_path)
+    calls: list[list[int]] = []
+
+    def page_words(path, indices):
+        calls.append(list(indices))
+        return []
+    bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=page_words)
+    assert calls == [[i] for i in range(pages)]
+
+
+# -- never in a web request ---------------------------------------------------
+
+
+@pytest.mark.parametrize("step", ["plan", "derive"])
+def test_refused_inside_a_web_request(tmp_path, monkeypatch, step):
+    from app.infra import monitoring
+
+    words, _, _ = _bill_b()
+    docs = _Docs(_source())
+    docs.install(monkeypatch, tmp_path)
+
+    def no_classify(path):
+        raise AssertionError("classified inside a web request")
+    token = monitoring.web_request_ctx.set(True)
+    try:
+        with pytest.raises(bd.WebRequestRefused):
+            if step == "plan":
+                bd.plan_bill_sheet("p1", "src1", classify=no_classify)
+            else:
+                bd.derive_bill_sheet("p1", "src1", plan_hash="x", classify=no_classify)
+    finally:
+        monitoring.web_request_ctx.reset(token)
+    assert docs.added == []
+    # The same call outside a request runs.
+    plan = bd.plan_bill_sheet("p1", "src1", classify=_BILL, page_words=_by_page(words))
+    assert plan["rows"] == 6
+
+
+@pytest.mark.parametrize("path", ["/livez", "/v1/admin/debug/project-reindex"])
+def test_middleware_marks_the_request_and_clears_it(path):
+    import asyncio
+
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from app.infra import monitoring
+
+    seen: list[bool] = []
+
+    async def call_next(request):
+        seen.append(monitoring.in_web_request())
+        return Response("ok")
+
+    scope = {"type": "http", "method": "GET", "path": path, "headers": [],
+             "query_string": b"", "server": ("t", 80), "scheme": "http"}
+    assert monitoring.in_web_request() is False
+    asyncio.run(monitoring.observability_middleware(Request(scope), call_next))
+    assert seen == [True]
+    assert monitoring.in_web_request() is False
+
+
+# -- bytes --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("where", ["local", "drive"])
+def test_bytes_come_from_local_file_or_drive_pointer(tmp_path, monkeypatch, where):
+    payload = b"%PDF-1.4 drawn " + where.encode()
+    src = {"id": "src1", "original_name": "scan.pdf", "size": len(payload), "metadata": {}}
+    if where == "local":
+        local = tmp_path / "local.pdf"
+        local.write_bytes(payload)
+        src["file_path"] = str(local)
+    else:
+        src["file_path"] = None
+        src["metadata"] = {"drive_file_id": "drv1"}
+    docs = _Docs(src)
+    docs.install(monkeypatch, tmp_path, real_bytes=True)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    fetched: list[str] = []
+
+    def fake_fetch(doc):
+        fetched.append(doc["id"])
+        return payload, "drive", None
+    monkeypatch.setattr(projects, "_fetch_remote_document_bytes", fake_fetch)
+    read: list[bytes] = []
+
+    def classify(path):
+        with open(path, "rb") as fh:
+            read.append(fh.read())
+        return bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER)
+
+    out = bd.plan_bill_sheet("p1", "src1", classify=classify)
+    assert out == {"derived": False, "reason": bc.NOT_BILL_NO_HEADER}
+    assert read == [payload]
+    assert fetched == ([] if where == "local" else ["src1"])
+
+
+@pytest.mark.parametrize("fetch", [
+    lambda doc: (None, None, "missing"),
+    lambda doc: (b"", "drive", None),
+])
+def test_no_readable_bytes_only_when_nothing_materialises(tmp_path, monkeypatch, fetch):
+    src = {"id": "src1", "original_name": "scan.pdf", "file_path": None, "size": 5,
+           "metadata": {"drive_file_id": "drv1"}}
+    docs = _Docs(src)
+    docs.install(monkeypatch, tmp_path, real_bytes=True)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(projects, "_fetch_remote_document_bytes", fetch)
+
+    def no_classify(path):
+        raise AssertionError("classified without bytes")
+    out = bd.plan_bill_sheet("p1", "src1", classify=no_classify)
+    assert out == {"derived": False, "reason": bd.SKIP_NO_BYTES}
+
+
+# -- skips --------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("verdict", [
     bc.BillVerdict(False, bc.NOT_BILL_TEXT_LAYER),
     bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER),
@@ -200,7 +458,8 @@ def test_not_a_bill_gets_no_derived_row(tmp_path, monkeypatch, verdict):
     def no_ocr(path, idx):
         raise AssertionError("OCR'd every page of a document that is not a bill")
 
-    out = bd.derive_bill_sheet("p1", "src1", classify=lambda p: verdict, page_words=no_ocr)
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash="x",
+                               classify=lambda p: verdict, page_words=no_ocr)
 
     assert out == {"derived": False, "reason": verdict.reason}
     assert docs.added == [] and docs.indexed == [] and docs.meta_updates == []
@@ -210,7 +469,7 @@ def test_not_a_bill_gets_no_derived_row(tmp_path, monkeypatch, verdict):
 @pytest.mark.parametrize("source, reason", [
     (_source(name="sheet.xlsx"), bd.SKIP_NOT_PDF),
     ({**_source(), "metadata": {"derived_from": "other"}}, bd.SKIP_IS_DERIVED),
-    ({**_source(), "file_path": None}, bd.SKIP_NO_FILE),
+    ({**_source(), "file_path": None}, bd.SKIP_NO_BYTES),
 ])
 def test_skips_before_classifying(tmp_path, monkeypatch, source, reason):
     docs = _Docs(source)
@@ -219,7 +478,7 @@ def test_skips_before_classifying(tmp_path, monkeypatch, source, reason):
     def no_classify(path):
         raise AssertionError("classified a document that cannot have a derived sheet")
 
-    out = bd.derive_bill_sheet("p1", "src1", classify=no_classify)
+    out = bd.plan_bill_sheet("p1", "src1", classify=no_classify)
     assert out == {"derived": False, "reason": reason}
     assert docs.added == []
 
@@ -231,7 +490,8 @@ def test_skips_before_classifying(tmp_path, monkeypatch, source, reason):
 def test_bill_with_no_extractable_rows_gets_no_row(tmp_path, monkeypatch, words):
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
-    out = bd.derive_bill_sheet("p1", "src1", classify=_BILL, page_words=lambda p, i: words)
+    out = bd.derive_bill_sheet("p1", "src1", plan_hash="x", classify=_BILL,
+                               page_words=_by_page(words))
     assert out["derived"] is False and out["reason"] == bd.SKIP_NO_ROWS
     assert docs.added == []
 
@@ -248,57 +508,26 @@ def test_rerun_supersedes_the_visible_previous_derived_row(
     docs = _Docs(_source(), [prior, unrelated])
     docs.install(monkeypatch, tmp_path)
 
-    out = bd.derive_bill_sheet("p1", "src1", classify=_BILL, page_words=lambda p, i: words)
+    _plan, out = _plan_then_derive(words)
 
     assert docs.added[0]["reingest_of"] == want_reingest
     assert out["superseded"] == want_reingest
 
 
-# ── the ingest hook in doc_index.index_document ──────────────────────────
-
-
-def _hooked(monkeypatch, filename: str, derive):
-    calls: list[tuple] = []
+@pytest.mark.parametrize("profile", [doc_index.PROFILE_CORPUS_BUILD, doc_index.PROFILE_USER_UPLOAD])
+def test_index_document_never_derives(monkeypatch, profile):
     monkeypatch.setattr(
         doc_index, "_index_document",
-        lambda *a, **k: {"status": "ok", "filename": filename, "total_chunks": 4},
+        lambda *a, **k: {"status": "ok", "filename": "scan.pdf", "total_chunks": 4},
     )
     monkeypatch.setattr(doc_index, "_record_pages_without_text", lambda *a: None)
 
-    def fake(project_id, document_id):
-        calls.append((project_id, document_id))
-        return derive()
-    monkeypatch.setattr(bd, "derive_bill_sheet", fake)
-    return calls
-
-
-@pytest.mark.parametrize("profile, filename, want_calls", [
-    (doc_index.PROFILE_CORPUS_BUILD, "scan.pdf", 1),
-    (doc_index.PROFILE_CORPUS_BUILD, "SCAN.PDF", 1),
-    (doc_index.PROFILE_USER_UPLOAD, "scan.pdf", 0),
-    (doc_index.PROFILE_CORPUS_BUILD, "bill.xlsx", 0),
-])
-def test_hook_runs_on_corpus_build_pdfs_only(monkeypatch, profile, filename, want_calls):
-    calls = _hooked(monkeypatch, filename, lambda: {"derived": True, "rows": 3})
+    def boom(*a, **k):
+        raise AssertionError("index_document ran the derivation")
+    monkeypatch.setattr(bd, "plan_bill_sheet", boom)
+    monkeypatch.setattr(bd, "derive_bill_sheet", boom)
     result = doc_index.index_document("p1", "d1", profile=profile)
-    assert len(calls) == want_calls
-    assert result["total_chunks"] == 4
-    assert ("derived_bill" in result) is bool(want_calls)
-    if want_calls:
-        assert calls == [("p1", "d1")]
-        assert result["derived_bill"] == {"derived": True, "rows": 3}
-
-
-@pytest.mark.parametrize("exc", [RuntimeError("ocr died"), OSError("disk full")])
-def test_hook_failure_never_changes_the_source_result(monkeypatch, exc):
-    def boom():
-        raise exc
-    _hooked(monkeypatch, "scan.pdf", boom)
-    result = doc_index.index_document("p1", "d1", profile=doc_index.PROFILE_CORPUS_BUILD)
-    assert result["status"] == "ok" and result["total_chunks"] == 4
-    assert result["derived_bill"] == {
-        "derived": False, "reason": "error", "error": type(exc).__name__,
-    }
+    assert result["total_chunks"] == 4 and "derived_bill" not in result
 
 
 @pytest.mark.parametrize("source_name, want_name", [
@@ -309,7 +538,7 @@ def test_derived_name_stays_inside_the_store(tmp_path, monkeypatch, source_name,
     words, _, _ = _bill_b()
     docs = _Docs(_source(name=source_name))
     docs.install(monkeypatch, tmp_path)
-    bd.derive_bill_sheet("p1", "src1", classify=_BILL, page_words=lambda p, i: words)
+    _plan_then_derive(words)
     (row,) = docs.added
     assert os.path.dirname(row["file_path"]) == str(tmp_path)
     assert row["original_name"] == want_name
