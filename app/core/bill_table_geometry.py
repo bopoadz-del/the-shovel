@@ -274,10 +274,14 @@ def _bucket_line(line: Sequence[Word], columns: Sequence[_Column], refs: set[int
 
 def _merge_wrapped(pending: Sequence[_Line], last: _Line) -> tuple[dict[str, str], dict[str, str]]:
     """One row from an item whose description wraps over ``pending`` lines and
-    whose figures print on ``last``: descriptions join top to bottom, every
-    other cell keeps the first non-empty text."""
+    whose figures print on ``last``: descriptions join top to bottom; a cell the
+    figure line leaves empty (a unit printed on the opening line) keeps the
+    first non-empty text of the chain, as every unmapped cell does."""
     chain = [*pending, last]
-    fields = dict(last.fields)
+    fields = {
+        f: last.fields.get(f) or next((ln.fields[f] for ln in chain if ln.fields.get(f)), "")
+        for f in last.fields
+    }
     fields["description"] = " ".join(
         d for d in (ln.fields.get("description", "") for ln in chain) if d
     )
@@ -296,8 +300,9 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
     line prints an item reference (an unmapped column left of the description
     column) and a description but no figure; each following line prints only
     description text; the closing line prints the figures and no reference of
-    its own; and no blank line separates any of them (vertical gap at most one
-    median word height). Such a chain is one row. A chain that is not closed
+    its own (its description cell may be empty: figures printed on a line of
+    their own under the text); and no blank line separates any of them
+    (vertical gap at most one median word height). Such a chain is one row. A chain that is not closed
     that way is a section label, as before. A page whose header has no
     reference column has no such evidence and keeps the line-per-row rule.
     """
@@ -349,7 +354,9 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
                 if adjacent and not other_text:
                     pending.append(cur)
                     continue
-            if has_figure and has_desc and adjacent and not cur.ref:
+            # The closing line may print figures only (its description cell
+            # empty): the open chain is the evidence the figures belong to it.
+            if has_figure and adjacent and not cur.ref:
                 fields, extra = _merge_wrapped(pending, cur)
                 pending.clear()
                 row = BillRow(section=section, source_page=page, fields=fields, extra=extra)

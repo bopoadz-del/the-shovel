@@ -674,3 +674,121 @@ def test_an_open_chain_ends_at_the_page(pages, expected):
         words += _page(cols, lines, page=page, header=header)
     rows = g.extract_bill_rows(words)
     assert [(r.section, r.fields["description"], r.source_page) for r in rows] == expected
+
+
+# Slice 3: the figures of a wrapped item print on a line of their own, under
+# the text, with the description cell of that line empty.
+FIG_A = [
+    "Bill 5 Water mains",
+    ["M", "Ductile iron pipe 200 dia laid", "", "", "", ""],
+    ["", "in trench", "", "", "", ""],
+    ["", "", "m", "250", "60.00", "15,000.00"],
+    ["N", "Air valve", "Nr", "3", "400.00", "1,200.00"],
+]
+FIG_B = [
+    "Section 11 Fencing",
+    ["R1", "", "", "", "", "Chain link fence 2 m high"],
+    ["", "1,800.00", "18.00", "100", "m", ""],
+]
+
+
+@pytest.mark.parametrize(
+    "cols,lines,expected,extra_label,extras",
+    [
+        (
+            COLS_A,
+            FIG_A,
+            [
+                ("Bill 5 Water mains", "Ductile iron pipe 200 dia laid in trench", "m", "250", "60.00", "15,000.00"),
+                ("Bill 5 Water mains", "Air valve", "Nr", "3", "400.00", "1,200.00"),
+            ],
+            "Item",
+            ["M", "N"],
+        ),
+        (
+            COLS_B,
+            FIG_B,
+            [("Section 11 Fencing", "Chain link fence 2 m high", "m", "100", "18.00", "1,800.00")],
+            "Ref",
+            ["R1"],
+        ),
+    ],
+)
+def test_a_figures_only_line_closes_the_open_item(cols, lines, expected, extra_label, extras):
+    """The figures belong to the open item; its text is neither a section nor
+    lost, and the figure line's numbers do not become a section."""
+    rows = g.extract_bill_rows(_page(cols, lines, page=1))
+    assert _fields(rows) == expected
+    assert [r.extra[extra_label] for r in rows] == extras
+    assert all(r.check == "" for r in rows)
+
+
+@pytest.mark.parametrize("cols,lines,n_rows,seed", [(COLS_A, FIG_A, 2, 5), (COLS_B, FIG_B, 1, 13)])
+def test_figures_only_closing_does_not_depend_on_word_order(cols, lines, n_rows, seed):
+    words = _page(cols, lines, page=1)
+    shuffled = list(words)
+    random.Random(seed).shuffle(shuffled)
+    column_major = sorted(words, key=lambda w: (w.left, w.top))
+    a = _fields(g.extract_bill_rows(shuffled))
+    assert a == _fields(g.extract_bill_rows(column_major))
+    assert len(a) == n_rows
+
+
+@pytest.mark.parametrize(
+    "cols,lines,expected",
+    [
+        # The unit prints on the opening line, the figures on the next one.
+        (
+            COLS_A,
+            [
+                ["S", "Hardcore filling", "m3", "", "", ""],
+                ["", "", "", "40", "25.00", "1,000.00"],
+            ],
+            [("Hardcore filling", "m3", "40")],
+        ),
+        # The figure line prints its own unit: that unit wins.
+        (
+            COLS_A,
+            [
+                ["T", "Topsoil", "m3", "", "", ""],
+                ["", "spread", "m2", "500", "3.00", "1,500.00"],
+            ],
+            [("Topsoil spread", "m2", "500")],
+        ),
+    ],
+)
+def test_a_cell_the_figure_line_leaves_empty_keeps_the_chain_text(cols, lines, expected):
+    rows = g.extract_bill_rows(_page(cols, lines, page=1))
+    assert [(r.fields["description"], r.fields["unit"], r.fields["quantity"]) for r in rows] == expected
+
+
+@pytest.mark.parametrize(
+    "cols,lines,expected",
+    [
+        # A blank line before the figures: no adjacency, so no row is made
+        # from them and the referenced text stays a section.
+        (
+            COLS_A,
+            [
+                ["U", "Road gully", "", "", "", ""],
+                BLANK_A,
+                ["", "", "Nr", "8", "90.00", "720.00"],
+                ["V", "Gully grating", "Nr", "8", "40.00", "320.00"],
+            ],
+            [("Nr 8 90.00 720.00", "Gully grating")],
+        ),
+        # No reference column = no open chain: a figures-only line is not a row.
+        (
+            COLS_C,
+            [
+                ["Kerb haunching", "", "", "", ""],
+                ["", "m", "70", "6.00", "420.00"],
+                ["Edging", "m", "30", "5.00", "150.00"],
+            ],
+            [("m 70 6.00 420.00", "Edging")],
+        ),
+    ],
+)
+def test_figures_only_line_without_an_open_chain_is_not_a_row(cols, lines, expected):
+    rows = g.extract_bill_rows(_page(cols, lines, page=1))
+    assert [(r.section, r.fields["description"]) for r in rows] == expected
