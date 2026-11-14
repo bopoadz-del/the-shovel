@@ -12,6 +12,7 @@ on top of these; nothing here knows a project, an item name or a question.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 #: Hard bound on retrieval rounds (spec): re-query up to this many times, then
@@ -82,8 +83,36 @@ def _terms(phrase: str) -> frozenset[str]:
     """The non-stopword words of ``phrase``, lowercased, for overlap."""
     out = set()
     for token in phrase.lower().split():
-        word = token.strip(" ,;:()[]\"'#")
+        word = token.strip(" ,;:()[]\"'#.")
         if word and word not in _STOPWORDS:
+            out.add(word)
+    return frozenset(out)
+
+
+#: A note the platform writes into evidence: a bracketed line that opens with
+#: lowercase words and a colon (``[bill item rows: ...]``,
+#: ``[context_truncated: ...]``). It may quote the plan item, so it is never
+#: evidence that the item was found.
+_PLATFORM_NOTE_RE = re.compile(r"^\[[a-z_][a-z_ ]*:.*\]$")
+
+
+def is_platform_note(line: str) -> bool:
+    """True when ``line`` is a note the platform wrote, not retrieved text."""
+    return bool(_PLATFORM_NOTE_RE.match((line or "").strip()))
+
+
+def _evidence_terms(evidence_text: str) -> frozenset[str]:
+    """The words of the retrieved text, tokenised like plan terms.
+
+    Lines the platform wrote (notes) are dropped first: a note that echoes
+    the plan item would otherwise cover the item with its own words.
+    """
+    kept = (line for line in (evidence_text or "").splitlines()
+            if not is_platform_note(line))
+    out = set()
+    for token in " ".join(kept).lower().split():
+        word = token.strip(" ,;:()[]\"'#.")
+        if word:
             out.add(word)
     return frozenset(out)
 
@@ -92,18 +121,20 @@ def missing_plan_items(plan: EvidencePlan, evidence_text: str) -> tuple[str, ...
     """Plan items with no evidence in ``evidence_text``.
 
     Coverage is lexical and conservative: an item is covered only when EVERY
-    one of its salient terms appears in the retrieved evidence. If any term is
-    absent the item is a gap and triggers another round. This errs toward
-    re-querying (a bounded extra round), never toward silently accepting a
-    missing row — a false negative on coverage would drop the very row the
-    loop exists to fetch. An item whose only words are stopwords carries no
-    signal, so it is never a gap.
+    one of its salient terms appears as a word of the retrieved evidence. If
+    any term is absent the item is a gap and triggers another round. This
+    errs toward re-querying (a bounded extra round), never toward silently
+    accepting a missing row. Terms are matched as whole words, not as
+    substrings, and notes the platform wrote into the evidence never count:
+    coverage is judged on retrieved text, never on the plan's own wording.
+    An item whose only words are stopwords carries no signal, so it is
+    never a gap.
     """
-    evidence = " ".join((evidence_text or "").lower().split())
+    evidence = _evidence_terms(evidence_text)
     missing = []
     for item in plan.items:
         terms = _terms(item)
-        if not all(term in evidence for term in terms):
+        if not terms <= evidence:
             missing.append(item)
     return tuple(missing)
 

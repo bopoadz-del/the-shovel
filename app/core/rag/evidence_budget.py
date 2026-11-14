@@ -50,6 +50,26 @@ def max_tokens_per_doc() -> int:
     return _env_int("AGENTIC_EVIDENCE_MAX_TOKENS_PER_DOC", 60_000)
 
 
+def loop_item_char_budget() -> int:
+    """Characters the evidence loop may add for ONE plan item, over all rounds.
+
+    Defaults to the first pass's handed-set budget, so one plan item is
+    evidenced on the same scale as the whole first pass.
+    """
+    from app.core.rag.handed_set import DEFAULT_CHAR_BUDGET
+    return _env_int("AGENTIC_EVIDENCE_ITEM_CHARS", DEFAULT_CHAR_BUDGET)
+
+
+def loop_total_char_budget() -> int:
+    """Characters the evidence loop may add in total, over every item and round.
+
+    Defaults to three first-pass budgets. The whole-turn token cap
+    (``max_total_tokens``) stays a backstop that this budget keeps from firing.
+    """
+    from app.core.rag.handed_set import DEFAULT_CHAR_BUDGET
+    return _env_int("AGENTIC_EVIDENCE_LOOP_CHARS", 3 * DEFAULT_CHAR_BUDGET)
+
+
 def estimate_tokens(text: str) -> int:
     """Cheap 4-chars-per-token proxy (matches ``inject._estimate_tokens``)."""
     return max(1, len(text or "") // 4)
