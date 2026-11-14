@@ -244,3 +244,32 @@ def test_a_text_layer_no_longer_excludes_a_bill(tmp_path, monkeypatch, kinds):
     verdict = bc.classify_bill_pdf(path)
     assert verdict.is_bill is True
     assert verdict.pages_sampled == len(kinds) and verdict.header_pages == len(kinds)
+
+
+class _StubPage:
+    """Just what ``text_layer_words`` reads from a page: its words and the
+    rotation matrix (identity: an unrotated page)."""
+
+    def __init__(self, words):
+        self._words = words
+        self.rotation_matrix = fitz.Matrix(1, 1)
+
+    def get_text(self, kind):
+        assert kind == "words"
+        return self._words
+
+
+@pytest.mark.parametrize("raw, kept", [
+    ([(10, 20, 40, 30, "Qty", 0, 0, 0), (50, 20, 60, 30, " ", 0, 0, 1)], ["Qty"]),
+    ([(5, 5, 9, 9, " ", 0, 0, 0), (72, 36, 108, 45, "Rate", 0, 0, 1),
+      (120, 36, 150, 45, "12.50", 0, 0, 2)], ["Rate", "12.50"]),
+])
+def test_text_layer_words_drop_blank_words_and_scale_boxes(raw, kept):
+    words = bc.text_layer_words(_StubPage(raw), number=4)
+    assert [w.text for w in words] == kept
+    by_text = {r[4]: r for r in raw}
+    for w in words:
+        x0, y0, x1, y1 = by_text[w.text][:4]
+        assert w.page == 4
+        assert (w.left, w.top) == pytest.approx((x0 * SCALE, y0 * SCALE))
+        assert (w.width, w.height) == pytest.approx(((x1 - x0) * SCALE, (y1 - y0) * SCALE))
