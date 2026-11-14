@@ -31,7 +31,9 @@ message. Nothing else is printed.
 The full plan, section labels included, is kept privately in the work
 directory on the task's data mount (``plan_<first>_<stop>.json``), and an
 exception's message goes to ``last_error.json`` beside it. Neither is
-printed.
+printed. ``work_dir_durable`` says whether that directory is on a durable
+mount (``byte_store.is_durable_mount``): only then do the word boxes and
+the private plan outlive the task.
 """
 from __future__ import annotations
 
@@ -68,7 +70,7 @@ SUMMARY_KEYS = (
     "ok", "error", "error_class", "project_id", "document_id", "build_sha",
     "requested_pages", "pages_cached_before", "pages_cached_after", "wall_s",
     "peak_rss_mb", "verdict", *PLAN_FIELDS, "section_paths", "rows_by_path_depth",
-    "private_plan_saved",
+    "private_plan_saved", "work_dir_durable",
 )
 #: Error codes (the summary never carries a message).
 ERR_MISSING_IDS = "missing_ids"
@@ -91,6 +93,9 @@ class Deps:
     build_sha: Callable[[], str | None] = field(default=lambda: None)
     peak_rss_mb: Callable[[], float | None] = field(default=lambda: None)
     clock: Callable[[], float] = field(default=time.monotonic)
+    #: Whether the work dir is on a durable mount (the word boxes and the
+    #: private plan outlive the task only then); None = not known.
+    durable: Callable[[str], bool | None] = field(default=lambda _path: None)
 
 
 def parse_pages(raw: str | None) -> tuple[int, int] | None:
@@ -204,6 +209,7 @@ def plan_one(
         report["error"] = ERR_WRONG_PROJECT
         return report
     report["pages_cached_before"] = cached_pages(work_dir)
+    report["work_dir_durable"] = deps.durable(work_dir)
     classify, verdict = verdict_counts(deps.classify) if deps.classify else (None, {})
     started = deps.clock()
     try:
@@ -252,7 +258,7 @@ def _peak_rss_mb() -> float | None:
 
 
 def production_deps() -> Deps:
-    from app.core import bill_classify, bill_derived, projects
+    from app.core import bill_classify, bill_derived, byte_store, projects
     from app.routers import health as _health
 
     return Deps(
@@ -261,6 +267,7 @@ def production_deps() -> Deps:
         classify=bill_classify.classify_image_only_bill,
         build_sha=_health._deployed_build_sha,
         peak_rss_mb=_peak_rss_mb,
+        durable=byte_store.is_durable_mount,
     )
 
 

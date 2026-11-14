@@ -237,6 +237,18 @@ def test_a_plan_that_cannot_be_kept_privately_fails_the_run(tmp_path, blocker):
     _assert_public(summary, _LEAKS)
 
 
+@pytest.mark.parametrize("durable", [True, False])
+def test_summary_reports_whether_the_work_dir_outlives_the_task(tmp_path, durable):
+    seen: list[str] = []
+    lines: list[str] = []
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path), "BILL_PLAN_PAGES": "0:2"}
+    deps = _deps({"d1": {"project_id": "p1"}}, _leaky_plan, lines,
+                 durable=lambda p: seen.append(p) or durable)
+    assert bpo.main_from_env(env, deps=deps) == 0
+    assert _summary(lines)["work_dir_durable"] is durable and seen == [str(tmp_path)]
+
+
 @pytest.mark.parametrize("pages,name", [([0, 40], "plan_0_40.json"), ([40, 80], "plan_40_80.json")])
 def test_private_plan_is_named_by_its_page_range(pages, name):
     assert bpo.private_plan_name({"pages": pages}) == name
