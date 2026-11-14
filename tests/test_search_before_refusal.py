@@ -27,6 +27,18 @@ from app.agents.runtime import Agent, _UNINDEXED_PROJECT_MESSAGE
 from tests._fixture_values import STUB_TOKEN_02
 
 
+def _is_nudge(msg: dict) -> bool:
+    """The guard's follow-up bubble: platform-marked, ending in the instruction."""
+    from app.agents.runtime import _PREDISPATCH_PREFIX
+
+    content = str(msg.get("content") or "")
+    return (
+        msg.get("role") == "user"
+        and content.startswith(_PREDISPATCH_PREFIX)
+        and content.endswith(SEARCH_FIRST_NUDGE)
+    )
+
+
 @pytest.fixture(autouse=True)
 def _stub_llm_key(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
@@ -197,7 +209,7 @@ async def test_stream_offer_only_draft_searches(monkeypatch, draft):
     events = await _stream(agent, question)
 
     assert [r["name"] for r in ran] == [SEARCH_TOOL_NAME]
-    assert seen[1]["messages"][-1]["content"] == SEARCH_FIRST_NUDGE
+    assert _is_nudge(seen[1]["messages"][-1])
     assert _end(events)["content"].startswith(answer)
 
 
@@ -247,7 +259,7 @@ async def test_stream_first_pass_miss_searches_and_answers_from_rows(monkeypatch
     second = seen[1]
     assert second["with_tools"] is True
     assert any(m.get("role") == "tool" and row in (m.get("content") or "") for m in second["messages"])
-    assert second["messages"][-1]["content"] == SEARCH_FIRST_NUDGE
+    assert _is_nudge(second["messages"][-1])
     # The declining draft never reaches the user or the next call.
     assert not any(draft == (m.get("content") or "") for m in second["messages"])
     end = _end(events)
@@ -417,5 +429,26 @@ async def test_stream_search_first_instruction_is_given_once(monkeypatch, case):
 
     assert len(ran) == 2
     last = seen[-1]["messages"]
-    assert sum(1 for m in last if m.get("content") == SEARCH_FIRST_NUDGE) == 1
+    assert sum(1 for m in last if _is_nudge(m)) == 1
     assert _end(events)["content"].startswith(answer)
+
+
+@pytest.mark.parametrize("question", [
+    "what curing period is given for the ground floor slab pour",
+    "which gauge of mesh is listed for the perimeter fence panels",
+])
+def test_operator_ask_survives_the_search_first_nudge(question):
+    """The nudge is the platform's bubble: after it is appended the
+    operator's question is still the latest operator ask (readers that
+    graft or gate on the ask must not read the nudge instead)."""
+    from app.agents.runtime import _latest_operator_ask, _operator_user_text
+
+    state = {"nudge": True}
+    messages = [{"role": "user", "content": question},
+                {"role": "assistant", "content": "", "tool_calls": []},
+                {"role": "tool", "content": "row"}]
+    messages.extend(_search_first_nudges(None, state))
+    assert _is_nudge(messages[-1])
+    assert _latest_operator_ask(messages) == question
+    assert _operator_user_text(messages) == question
+    assert _search_first_nudges(None, state) == []

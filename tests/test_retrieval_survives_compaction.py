@@ -163,7 +163,9 @@ def test_nothing_is_dropped_silently():
     note = text[text.index("BUDGET NOTE"):]
     assert "lowest relevance first" in note
     assert "Never report that" in note
-    assert "search again" in note
+    # S-R8: the absence rule now says search first (it used to say "offer to
+    # search again"); the model must still be pointed at a search.
+    assert "search the project documents" in note
 
 
 # -- the rules outlive the evidence ---------------------------------------

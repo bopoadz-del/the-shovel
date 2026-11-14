@@ -227,7 +227,15 @@ def _search_first_nudges(self, state: dict[str, Any]) -> list[dict[str, Any]]:
     if not state.get("nudge"):
         return []
     state["nudge"] = False
-    return [{"role": "user", "content": SEARCH_FIRST_NUDGE}]
+    # The platform wrote this bubble, not the operator: it carries the
+    # platform marker so every operator-text reader (_latest_operator_ask,
+    # _operator_user_text, the provenance tool-run parser) skips it.
+    from app.agents.runtime import _PREDISPATCH_PREFIX
+
+    return [{
+        "role": "user",
+        "content": f"{_PREDISPATCH_PREFIX} {SEARCH_TOOL_NAME} ran. {SEARCH_FIRST_NUDGE}",
+    }]
 
 
 def _intent_hard_excludes(self, messages: list[dict[str, Any]]) -> tuple[set, str]:
