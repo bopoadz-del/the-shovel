@@ -438,3 +438,226 @@ def test_ocr_page_words_reads_tesseract_boxes(monkeypatch, data, page, expected)
     words = g.ocr_page_words("IMG", page, lang="eng")
     assert [(w.text, w.page, w.left) for w in words] == expected
     assert seen["args"] == ("IMG", "eng", pytesseract.Output.DICT)
+
+
+# --- slice 2: a description that wraps over several printed lines -----------
+# A list of empty cells is a blank printed line (it advances y, adds no word).
+
+BLANK_A = [""] * len(COLS_A)
+WRAP_A = [
+    "Bill 4 Drainage",
+    ["A", "Excavate trench for pipe not", "", "", "", ""],
+    ["", "exceeding 2 m deep including", "", "", "", ""],
+    ["", "backfilling", "m", "80", "12.00", "960.00"],
+    ["B", "Manhole cover", "Nr", "2", "150.00", "300.00"],
+]
+WRAP_B = [
+    "Section 9 Paving",
+    ["P1", "", "", "", "", "Lay paving slabs on"],
+    ["", "", "", "", "", "sand bed"],
+    ["", "4,000.00", "20.00", "200", "m2", "jointed in mortar"],
+]
+
+
+@pytest.mark.parametrize(
+    "cols,lines,section,descs,extra_label,extras",
+    [
+        (
+            COLS_A,
+            WRAP_A,
+            "Bill 4 Drainage",
+            ["Excavate trench for pipe not exceeding 2 m deep including backfilling", "Manhole cover"],
+            "Item",
+            ["A", "B"],
+        ),
+        (
+            COLS_B,
+            WRAP_B,
+            "Section 9 Paving",
+            ["Lay paving slabs on sand bed jointed in mortar"],
+            "Ref",
+            ["P1"],
+        ),
+    ],
+)
+def test_wrapped_description_is_one_row(cols, lines, section, descs, extra_label, extras):
+    """A referenced item whose figures print on its last line is one row; the
+    fragments above the figures do not become the section."""
+    rows = g.extract_bill_rows(_page(cols, lines, page=1))
+    assert [r.fields["description"] for r in rows] == descs
+    assert [r.section for r in rows] == [section] * len(descs)
+    assert [r.extra[extra_label] for r in rows] == extras
+    assert all(r.check == "" for r in rows)
+
+
+@pytest.mark.parametrize("cols,lines,n_rows,seed", [(COLS_A, WRAP_A, 2, 3), (COLS_B, WRAP_B, 1, 11)])
+def test_wrapped_rows_do_not_depend_on_word_order(cols, lines, n_rows, seed):
+    words = _page(cols, lines, page=1)
+    shuffled = list(words)
+    random.Random(seed).shuffle(shuffled)
+    column_major = sorted(words, key=lambda w: (w.left, w.top))
+    a = _fields(g.extract_bill_rows(shuffled))
+    assert a == _fields(g.extract_bill_rows(column_major))
+    assert len(a) == n_rows
+
+
+@pytest.mark.parametrize(
+    "lines,expected",
+    [
+        # A blank line before the figure line: the referenced text was a heading.
+        (
+            [
+                ["D", "Demolition", "", "", "", ""],
+                BLANK_A,
+                ["", "Break out slab", "m2", "50", "8.00", "400.00"],
+            ],
+            [("D Demolition", "Break out slab")],
+        ),
+        # A blank line inside the chain: the chain ends there.
+        (
+            [
+                ["E", "Site clearance", "", "", "", ""],
+                BLANK_A,
+                ["", "general", "", "", "", ""],
+                ["", "Clear vegetation", "m2", "900", "1.50", "1,350.00"],
+            ],
+            [("general", "Clear vegetation")],
+        ),
+    ],
+)
+def test_a_blank_line_breaks_the_chain(lines, expected):
+    rows = g.extract_bill_rows(_page(COLS_A, lines, page=1))
+    assert [(r.section, r.fields["description"]) for r in rows] == expected
+
+
+@pytest.mark.parametrize(
+    "lines,expected",
+    [
+        # The figure line prints its own reference: the line above was a heading.
+        (
+            [
+                ["F", "Formwork", "", "", "", ""],
+                ["F1", "Sides of foundations", "m2", "40", "30.00", "1,200.00"],
+            ],
+            [("F Formwork", "Sides of foundations", "F1")],
+        ),
+        (
+            [
+                ["G", "Reinforcement", "", "", "", ""],
+                ["", "high yield bar", "", "", "", ""],
+                ["G1", "Bar 12 mm", "t", "3", "900.00", "2,700.00"],
+                ["G2", "Bar 16 mm", "t", "2", "880.00", "1,760.00"],
+            ],
+            [
+                ("G Reinforcement high yield bar", "Bar 12 mm", "G1"),
+                ("G Reinforcement high yield bar", "Bar 16 mm", "G2"),
+            ],
+        ),
+    ],
+)
+def test_a_referenced_figure_line_starts_its_own_row(lines, expected):
+    rows = g.extract_bill_rows(_page(COLS_A, lines, page=1))
+    assert [(r.section, r.fields["description"], r.extra["Item"]) for r in rows] == expected
+
+
+@pytest.mark.parametrize(
+    "lines,expected",
+    [
+        # A continuation line that prints a unit is not description-only.
+        (
+            [
+                ["H", "Pipe bedding", "", "", "", ""],
+                ["", "granular", "m", "", "", ""],
+                ["", "Type A", "m", "60", "5.00", "300.00"],
+            ],
+            [("granular m", "Type A")],
+        ),
+        # A line that prints its own reference starts a new chain.
+        (
+            [
+                ["J", "Kerbs", "", "", "", ""],
+                ["J1", "Precast kerb", "", "", "", ""],
+                ["", "laid straight", "m", "100", "18.00", "1,800.00"],
+            ],
+            [("J Kerbs", "Precast kerb laid straight")],
+        ),
+    ],
+)
+def test_only_description_text_continues_a_chain(lines, expected):
+    rows = g.extract_bill_rows(_page(COLS_A, lines, page=1))
+    assert [(r.section, r.fields["description"]) for r in rows] == expected
+
+
+COLS_C = [("Description", 40), ("Unit", 500), ("Qty", 600), ("Rate", 720), ("Amount", 860)]
+COLS_D = [("Description", 40), ("Unit", 500), ("Qty", 600), ("Amount", 760), ("Remarks", 900)]
+
+
+@pytest.mark.parametrize(
+    "cols,lines,expected",
+    [
+        (
+            COLS_C,
+            [
+                ["Concrete grade 30", "", "", "", ""],
+                ["in slabs", "m3", "10", "200.00", "2,000.00"],
+            ],
+            [("Concrete grade 30", "in slabs")],
+        ),
+        # An unmapped column right of the description is not a reference.
+        (
+            COLS_D,
+            [
+                ["Blockwork", "", "", "", "note"],
+                ["200 mm wall", "m2", "30", "1,500.00", ""],
+            ],
+            [("Blockwork note", "200 mm wall")],
+        ),
+    ],
+)
+def test_without_a_reference_column_each_line_stands_alone(cols, lines, expected):
+    """No reference column = no evidence of a wrap: the line-per-row rule holds."""
+    rows = g.extract_bill_rows(_page(cols, lines, page=1))
+    assert [(r.section, r.fields["description"]) for r in rows] == expected
+
+
+@pytest.mark.parametrize(
+    "cols,expected",
+    [
+        (COLS_A, {"Item"}),
+        (COLS_B, {"Ref"}),
+        (COLS_C, set()),
+        (COLS_D, set()),
+    ],
+)
+def test_reference_columns(cols, expected):
+    header = g.detect_header(g.group_lines(_page(cols, [], page=1))[0])
+    assert {header[i].label for i in g._ref_columns(header)} == expected
+
+
+@pytest.mark.parametrize(
+    "pages,expected",
+    [
+        # An open chain at the end of a page is a section, not a row.
+        (
+            [
+                (COLS_A, [["K", "Doors", "", "", "", ""]], 1, True),
+                (COLS_A, [["K1", "Flush door", "Nr", "5", "250.00", "1,250.00"]], 2, False),
+            ],
+            [("K Doors", "Flush door", 2)],
+        ),
+        # A chain is not carried across a page break.
+        (
+            [
+                (COLS_A, [["L", "Windows aluminium", "", "", "", ""]], 1, True),
+                (COLS_A, [["", "casement", "Nr", "4", "600.00", "2,400.00"]], 2, False),
+            ],
+            [("L Windows aluminium", "casement", 2)],
+        ),
+    ],
+)
+def test_an_open_chain_ends_at_the_page(pages, expected):
+    words = []
+    for cols, lines, page, header in pages:
+        words += _page(cols, lines, page=page, header=header)
+    rows = g.extract_bill_rows(words)
+    assert [(r.section, r.fields["description"], r.source_page) for r in rows] == expected

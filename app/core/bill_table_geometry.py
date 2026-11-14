@@ -228,11 +228,78 @@ def check_row(fields: dict[str, str]) -> str:
     return "qty x rate != amount"
 
 
+def _ref_columns(columns: Sequence[_Column]) -> set[int]:
+    """Indexes of unmapped columns printed left of the description column.
+
+    On a bill these carry the item reference; a line that prints one starts a
+    new item. A page whose header has no such column gives an empty set.
+    """
+    desc = next((i for i, c in enumerate(columns) if c.field == "description"), None)
+    if desc is None:
+        return set()
+    return {i for i, c in enumerate(columns[:desc]) if c.field is None}
+
+
+@dataclass
+class _Line:
+    text: str
+    fields: dict[str, str]
+    extra: dict[str, str]
+    ref: str
+    top: float
+    bottom: float
+
+
+def _bucket_line(line: Sequence[Word], columns: Sequence[_Column], refs: set[int]) -> _Line:
+    buckets: list[list[str]] = [[] for _ in columns]
+    for w in line:
+        buckets[_assign(w, columns)].append(w.text)
+    fields: dict[str, str] = {}
+    extra: dict[str, str] = {}
+    for col, bucket in zip(columns, buckets):
+        if col.field:
+            fields[col.field] = " ".join(bucket)
+        else:
+            extra[col.label] = " ".join(bucket)
+    ref = " ".join(" ".join(buckets[i]) for i in sorted(refs) if buckets[i])
+    return _Line(
+        text=" ".join(w.text for w in line),
+        fields=fields,
+        extra=extra,
+        ref=ref,
+        top=min(w.top for w in line),
+        bottom=max(w.top + w.height for w in line),
+    )
+
+
+def _merge_wrapped(pending: Sequence[_Line], last: _Line) -> tuple[dict[str, str], dict[str, str]]:
+    """One row from an item whose description wraps over ``pending`` lines and
+    whose figures print on ``last``: descriptions join top to bottom, every
+    other cell keeps the first non-empty text."""
+    chain = [*pending, last]
+    fields = dict(last.fields)
+    fields["description"] = " ".join(
+        d for d in (ln.fields.get("description", "") for ln in chain) if d
+    )
+    extra = {label: next((ln.extra[label] for ln in chain if ln.extra.get(label)), "") for label in last.extra}
+    return fields, extra
+
+
 def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
     """Rows of every bill table found in ``words`` (any number of pages).
 
     A line with no figure cell and some letters is a section label: it is
     carried onto every measured row that follows until the next label.
+
+    A description may wrap over several printed lines with the figures on the
+    last one. The evidence for that is geometric, never textual: the first
+    line prints an item reference (an unmapped column left of the description
+    column) and a description but no figure; each following line prints only
+    description text; the closing line prints the figures and no reference of
+    its own; and no blank line separates any of them (vertical gap at most one
+    median word height). Such a chain is one row. A chain that is not closed
+    that way is a section label, as before. A page whose header has no
+    reference column has no such evidence and keeps the line-per-row rule.
     """
     block = block or _resolver()
     by_page: dict[int, list[Word]] = {}
@@ -241,41 +308,67 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
 
     rows: list[BillRow] = []
     columns: list[_Column] | None = None
+    refs: set[int] = set()
     section = ""
+    pending: list[_Line] = []
+
+    def flush() -> None:
+        nonlocal section
+        if pending:
+            section = " ".join(ln.text for ln in pending)
+            pending.clear()
+
     for page in sorted(by_page):
+        heights = [w.height for w in by_page[page] if w.height > 0]
+        max_gap = statistics.median(heights) if heights else 1.0
         for line in group_lines(by_page[page]):
             header = detect_header(line, block)
             if header is not None:
+                flush()
                 columns = header
+                refs = _ref_columns(columns)
                 continue
             if columns is None:
                 text = " ".join(w.text for w in line)
                 if re.search(r"[A-Za-z]", text):
                     section = text
                 continue
-            buckets: list[list[str]] = [[] for _ in columns]
-            for w in line:
-                buckets[_assign(w, columns)].append(w.text)
-            fields: dict[str, str] = {}
-            extra: dict[str, str] = {}
-            for col, bucket in zip(columns, buckets):
-                if col.field:
-                    fields[col.field] = " ".join(bucket)
-                else:
-                    extra[col.label] = " ".join(bucket)
+            cur = _bucket_line(line, columns, refs)
+            has_figure = any(cur.fields.get(f) for f in _FIGURE_FIELDS)
+            has_desc = bool(cur.fields.get("description"))
+            other_text = any(
+                t for lbl, t in cur.extra.items()
+                if lbl not in {columns[i].label for i in refs}
+            ) or cur.fields.get("unit")
+            adjacent = bool(pending) and cur.top - pending[-1].bottom <= max_gap
+            if not has_figure and has_desc:
+                if cur.ref:
+                    flush()
+                    pending.append(cur)
+                    continue
+                if adjacent and not other_text:
+                    pending.append(cur)
+                    continue
+            if has_figure and has_desc and adjacent and not cur.ref:
+                fields, extra = _merge_wrapped(pending, cur)
+                pending.clear()
+                row = BillRow(section=section, source_page=page, fields=fields, extra=extra)
+                row.check = check_row(fields)
+                rows.append(row)
+                continue
+            flush()
             # Same rule as the spreadsheet row chunker: a measured row has a
             # description AND a figure. Anything else with letters (a bill or
             # section label, even one that prints a number such as "Bill 3")
             # is carried as the section of the rows that follow.
-            has_figure = any(fields.get(f) for f in _FIGURE_FIELDS)
-            if not has_figure or not fields.get("description"):
-                label = " ".join(w.text for w in line)
-                if re.search(r"[A-Za-z]", label):
-                    section = label
+            if not has_figure or not has_desc:
+                if re.search(r"[A-Za-z]", cur.text):
+                    section = cur.text
                 continue
-            row = BillRow(section=section, source_page=page, fields=fields, extra=extra)
-            row.check = check_row(fields)
+            row = BillRow(section=section, source_page=page, fields=cur.fields, extra=cur.extra)
+            row.check = check_row(cur.fields)
             rows.append(row)
+        flush()
     return rows
 
 
