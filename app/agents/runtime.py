@@ -1082,10 +1082,8 @@ async def _agentic_figure_retrieval_augment(
         return rag_sys_msg
     from app.core.offload import off_loop
     from app.core.rag import route as _rag_route
-    from app.core.rag.retriever import (
-        measured_quantity_kinds,
-        retrieve_with_filter,
-    )
+    from app.core.rag.inject import _content_terms
+    from app.core.rag.retriever import retrieve_with_filter
     from app.core.rag.vector_store import get_store as _get_store
 
     # A typed bill's rows lead a non-bill workbook's before anything reads the
@@ -1098,13 +1096,46 @@ async def _agentic_figure_retrieval_augment(
     if _first_pass_composes_figure(user_message, rag_sys_msg.get("content", "")):
         return rag_sys_msg
 
-    if not _rag_route.wants_agentic_figure_retrieval(
-        user_message,
-        asks_measured_quantity=measured_quantity_kinds,
-        exclude=_agentic_figure_retrieval_excluded,
-    ) and not _wants_source_coverage_plan(
-        user_message, rag_sys_msg.get("content", ""),
-    ):
+    # The gate is the first pass's coverage of the question, not its wording
+    # (S-R10 b). A question term is MISSING when (a) the retrieved excerpts
+    # lack it as a whole word, (b) the project's index holds it, and (c) it
+    # is among the question's more informative terms by the project's own
+    # chunk counts (``route.informative_missing_terms``). The loop runs when
+    # a term is missing, or when the excerpts name fewer sources than the
+    # kinds of document the question names. The runtime's "not a retrieval
+    # ask" exclusions apply first.
+    question = (user_message or "").strip()
+    if not question or _agentic_figure_retrieval_excluded(question):
+        return rag_sys_msg
+    first_pass = rag_sys_msg.get("content", "")
+    terms, absent = _rag_route.question_coverage(
+        question, first_pass, content_terms=_content_terms,
+    )
+    store = _get_store()
+    indexed: tuple[str, ...] = ()
+    missing: tuple[str, ...] = ()
+    if absent:
+        try:
+            counts = await off_loop(store.term_chunk_counts, project_id, terms)
+        except Exception:
+            # An unreadable index gives the term rule no evidence: it does
+            # not run the loop on its own.
+            _LOG.warning(
+                "rag_evidence_gate project=%s term counts unavailable; the "
+                "term rule does not run the loop", project_id, exc_info=True,
+            )
+        else:
+            indexed, missing = _rag_route.informative_missing_terms(
+                terms, absent, counts,
+            )
+    source_gap = _wants_source_coverage_plan(question, first_pass)
+    _LOG.info(
+        "rag_evidence_gate project=%s question_terms=%d missing_a=%d "
+        "missing_ab=%d missing_abc=%d source_gap=%s run=%s",
+        project_id, len(terms), len(absent), len(indexed), len(missing),
+        source_gap, bool(missing or source_gap),
+    )
+    if not missing and not source_gap:
         return rag_sys_msg
 
     from functools import partial
@@ -1113,7 +1144,6 @@ async def _agentic_figure_retrieval_augment(
         agent, api_key=api_key, project_id=project_id, user_id=user_id,
     )
 
-    store = _get_store()
     augmented = await _rag_route.augment_figure_retrieval(
         question=user_message,
         project_id=project_id,
