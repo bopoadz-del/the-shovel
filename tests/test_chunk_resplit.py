@@ -258,7 +258,15 @@ def test_each_piece_text_search_is_derived_from_its_own_text(
 
     from app.core.db import SessionLocal
 
+    import os
+
+    from app.core.rag import vector_store as vs
+
     pm = _project_on_job_db(monkeypatch, tmp_path, "tsproj")
+    # Build the chunk table the way the app does at startup (the GENERATED
+    # text_search column + GIN index come from _ensure_schema, not the ORM).
+    monkeypatch.setattr(vs, "_INITIALIZED_NAMESPACES", set())
+    vs._ensure_schema(os.environ["DATABASE_URL"], _cls())
     did = _doc(pm, "tsproj", "t.pdf", texts, "spec", page=1)
     plan = cr.chunk_resplit(project_id="tsproj", doc_ids=[did])["plan"]
     done = cr.chunk_resplit(project_id="tsproj", doc_ids=[did], execute=True,
@@ -266,6 +274,7 @@ def test_each_piece_text_search_is_derived_from_its_own_text(
     assert done["documents"] == {did: "replaced"}
     table = cr._active_table()
     cls = _cls()
+    assert table == cls.__tablename__
     assert "text_search" not in {c.key for c in cls.__mapper__.column_attrs}
     parent = texts[0]
     with SessionLocal() as s:
