@@ -1082,10 +1082,8 @@ async def _agentic_figure_retrieval_augment(
         return rag_sys_msg
     from app.core.offload import off_loop
     from app.core.rag import route as _rag_route
-    from app.core.rag.retriever import (
-        measured_quantity_kinds,
-        retrieve_with_filter,
-    )
+    from app.core.rag.inject import _content_terms
+    from app.core.rag.retriever import retrieve_with_filter
     from app.core.rag.vector_store import get_store as _get_store
 
     # A typed bill's rows lead a non-bill workbook's before anything reads the
@@ -1098,13 +1096,25 @@ async def _agentic_figure_retrieval_augment(
     if _first_pass_composes_figure(user_message, rag_sys_msg.get("content", "")):
         return rag_sys_msg
 
-    if not _rag_route.wants_agentic_figure_retrieval(
-        user_message,
-        asks_measured_quantity=measured_quantity_kinds,
-        exclude=_agentic_figure_retrieval_excluded,
-    ) and not _wants_source_coverage_plan(
-        user_message, rag_sys_msg.get("content", ""),
-    ):
+    # The gate is the first pass's coverage of the question, not its wording
+    # (S-R10 b): the loop runs when the retrieved excerpts lack a term the
+    # first-pass query searched on, or name fewer sources than the kinds of
+    # document the question names. The runtime's "not a retrieval ask"
+    # exclusions apply first.
+    question = (user_message or "").strip()
+    if not question or _agentic_figure_retrieval_excluded(question):
+        return rag_sys_msg
+    first_pass = rag_sys_msg.get("content", "")
+    terms, missing = _rag_route.question_coverage(
+        question, first_pass, content_terms=_content_terms,
+    )
+    source_gap = _wants_source_coverage_plan(question, first_pass)
+    _LOG.info(
+        "rag_evidence_gate project=%s question_terms=%d missing_terms=%d "
+        "source_gap=%s run=%s", project_id, len(terms), len(missing),
+        source_gap, bool(missing or source_gap),
+    )
+    if not missing and not source_gap:
         return rag_sys_msg
 
     from functools import partial

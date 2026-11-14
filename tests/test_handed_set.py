@@ -261,7 +261,6 @@ def test_runtime_runs_the_loop_for_a_non_figure_multi_source_ask(docs, ran, monk
         return kwargs["first_pass_evidence"] + "\n[doc_id=d9 chunk=1 score=0.7] more"
 
     monkeypatch.setattr(route, "augment_figure_retrieval", fake_augment)
-    monkeypatch.setattr(route, "wants_agentic_figure_retrieval", lambda *a, **k: False)
     monkeypatch.setattr(runtime, "_first_pass_composes_figure", lambda *a: False)
     monkeypatch.setattr(runtime, "_agentic_figure_retrieval_excluded", lambda t: False)
 
@@ -270,7 +269,9 @@ def test_runtime_runs_the_loop_for_a_non_figure_multi_source_ask(docs, ran, monk
             return []
 
     monkeypatch.setattr("app.core.rag.vector_store.get_store", lambda: _Store())
-    msg = {"role": "system", "content": _first_pass(docs)}
+    # Every excerpt carries the question's words, so the first pass covers
+    # the question's terms and only the named-source-kind rule decides.
+    msg = {"role": "system", "content": _first_pass(docs).replace("] text", "] " + _THREE)}
     out = asyncio.run(runtime._agentic_figure_retrieval_augment(
         agent=SimpleNamespace(), user_message=_THREE, project_id="p",
         api_key="k", user_id="u", rag_sys_msg=msg,
