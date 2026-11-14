@@ -44,9 +44,32 @@ def chunk_text(chunk) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _is_marked_chunk(chunk) -> bool:
+    """A retrieved chunk that can carry the excerpt marker: it names its
+    document and its position. A plain string or a fake without them cannot."""
+    return (
+        not isinstance(chunk, str)
+        and bool(getattr(chunk, "doc_id", None))
+        and isinstance(getattr(chunk, "chunk_index", None), int)
+    )
+
+
+def chunk_evidence(chunk) -> str:
+    """One chunk as evidence text: with the same ``[doc_id=… chunk=N …]``
+    marker the first pass carries when the chunk names its document, else
+    its bare text. The marker is what the sources panel and the provenance
+    gate read, so a chunk the loop fetched is evidence of its own document
+    instead of text glued to the previous excerpt (S-R5b)."""
+    if not _is_marked_chunk(chunk):
+        return chunk_text(chunk)
+    from app.core.rag.inject import chunk_marker
+    return chunk_marker(chunk)
+
+
 def chunks_to_text(chunks) -> str:
-    """Concatenate chunk texts into one evidence string."""
-    return "\n".join(chunk_text(c) for c in chunks if chunk_text(c).strip())
+    """Concatenate chunks into one evidence string, each marked as in
+    ``chunk_evidence``."""
+    return "\n".join(chunk_evidence(c) for c in chunks if chunk_text(c).strip())
 
 
 def _budgeted_text(
@@ -247,6 +270,14 @@ def typed_bill_ids(
         return frozenset()
 
 
+#: Chunk attributes the excerpt marker (``inject.chunk_marker``) reads beyond
+#: doc_id / chunk_index / score / text.
+_MARKER_ATTRS = (
+    "source_name", "layer", "page", "revision", "superseded",
+    "knowledge_layer", "source_class",
+)
+
+
 def _section_tagged(chunk, label: str) -> SimpleNamespace:
     """A copy of ``chunk`` whose text leads with its bill section ``label``.
 
@@ -258,6 +289,9 @@ def _section_tagged(chunk, label: str) -> SimpleNamespace:
         chunk_id=getattr(chunk, "chunk_id", None),
         chunk_index=getattr(chunk, "chunk_index", None),
         score=getattr(chunk, "score", None),
+        # What the excerpt marker prints, so a tagged chunk is attributed to
+        # its document exactly like the chunk it copies.
+        **{name: getattr(chunk, name) for name in _MARKER_ATTRS if hasattr(chunk, name)},
         text=f"{label}\n{chunk_text(chunk)}",
     )
 

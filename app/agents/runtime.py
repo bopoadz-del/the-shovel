@@ -1058,9 +1058,16 @@ async def _agentic_figure_retrieval_augment(
     api_key: str,
     user_id: str | None,
     rag_sys_msg: dict[str, str] | None,
+    *,
+    audit_rec: dict[str, Any] | None = None,
 ) -> dict[str, str] | None:
     """Fold the #163 evidence loop into a project-figure / published-standard
     turn's RAG context.
+
+    ``audit_rec``, when supplied, is the turn's retrieval audit: every marked
+    excerpt the loop added is appended to its ``chunks`` (see
+    ``_fold_loop_excerpts_into_audit``) so the sources panel and the
+    provenance gate read the same handed set the model read.
 
     The first pass is the text ``rag_inject`` already retrieved. A plan is
     generated, coverage checked against that first pass, and only uncovered
@@ -1126,8 +1133,57 @@ async def _agentic_figure_retrieval_augment(
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)
         merged["content"] = augmented
+        _fold_loop_excerpts_into_audit(audit_rec, augmented)
         return merged
     return rag_sys_msg
+
+
+def _fold_loop_excerpts_into_audit(
+    audit_rec: dict[str, Any] | None, content: str,
+) -> int:
+    """Append to ``audit_rec["chunks"]`` every marked excerpt in ``content``
+    the audit does not already hold; return how many were added (S-R5b).
+
+    The evidence loop's fetches carry the first pass's excerpt marker
+    (``inject.chunk_marker``), so they are read back with the provenance
+    gate's own parser -- one format, one reader. Without this the sources
+    panel listed only first-pass chunks: an answer citing a bill the loop
+    fetched matched nothing and the panel fell back to a first-pass
+    workbook. ``score`` is left empty: a loop fetch may be lexical, whose
+    rank value is not on the first pass's similarity scale, so the row
+    reads as Low confidence and never outranks a first-pass chunk in the
+    panel's score fallback; it is listed when the answer cites it.
+    """
+    if not isinstance(audit_rec, dict) or not content:
+        return 0
+    chunks = audit_rec.get("chunks")
+    if not isinstance(chunks, list):
+        return 0
+    from app.agents.citation_provenance import excerpt_records
+
+    held = {(c.get("doc_id"), c.get("chunk_index")) for c in chunks if isinstance(c, dict)}
+    added = 0
+    for rec in excerpt_records(content):
+        key = (rec.doc_id, rec.chunk_index)
+        if rec.doc_id is None or rec.chunk_index is None or key in held:
+            continue
+        held.add(key)
+        chunks.append({
+            "doc_id": rec.doc_id,
+            "chunk_index": rec.chunk_index,
+            "chunk_id": None,
+            "page": rec.page,
+            "project_id": audit_rec.get("project_id"),
+            "score": None,
+            "layer": rec.layer or "own",
+            "knowledge_layer": None,
+            "source_name": rec.source_name if rec.source_name != rec.doc_id else "",
+            "source_class": rec.source_class,
+            "text": rec.text,
+            "via": "evidence_loop",
+        })
+        added += 1
+    return added
 
 
 def _stash_dataset_outcome(agent: Any, question: str, outcome: Any) -> None:

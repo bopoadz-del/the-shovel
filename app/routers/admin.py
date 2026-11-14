@@ -1754,6 +1754,37 @@ def admin_repair_document_sizes(
     return {"status": "ok", **result}
 
 
+@router.post("/v1/admin/corpus/doc-typing")
+def admin_corpus_doc_typing(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = apply the planned fills"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) fill doc_type / doc_role on existing rows (RQ-3).
+
+    The plan (always computed, never writes) gives counts per new type and per
+    new role and every change as (doc_id, column, old, new), with a
+    ``plan_hash``. Only a column still at its default is filled. ``execute=true``
+    writes only when ``plan_hash`` equals the live plan's; each write is
+    compare-and-set on the planned old value.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.doc_typing_backfill import doc_typing_backfill
+
+    out = doc_typing_backfill(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.doc_typing_backfilled",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            updated=out["updated"],
+            counts=out["plan"]["counts"],
+        )
+    return out
+
+
 class _DeleteDocsRequest(BaseModel):
     doc_ids: List[str]
     # Safety scope: every doc must belong to this project_id or it is skipped.
@@ -2171,6 +2202,72 @@ def admin_corpus_chunk_bounds(
     from app.core.chunk_bounds_plan import chunk_bounds_plan
 
     return chunk_bounds_plan(project_id=project_id)
+
+
+@router.post("/v1/admin/documents/{document_id}/include")
+def admin_include_document(
+    document_id: str,
+    project_id: str = Query(..., description="Project the document must belong to"),
+    execute: bool = Query(False, description="false = plan only. true = clear the owner exclusion"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    reason: str = Query("", description="Why the owner brought the document back; stored on the row"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) apply the reverse of an owner exclusion.
+
+    The plan (always computed, never writes) shows the stored exclusion
+    record, the row's status and chunk rows, whether it is ``eligible`` (only
+    a row carrying ``metadata.excluded`` is) and a ``plan_hash``.
+    ``execute=true`` writes only for an eligible row, with a reason and the
+    live ``plan_hash``; otherwise ``refused`` says why and nothing changes.
+    Executing clears the exclusion and its tombstone (status ``UNVERIFIED``,
+    retrieval-visible) so the next index run of that document reads it; the
+    chunks the exclusion deleted are not restored by this call.
+    """
+    _require_admin(auth)
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.core import audit
+    from app.core import projects as _projects
+
+    plan = _projects.plan_document_inclusion(document_id)
+    if plan is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    if plan["project_id"] != project_id:
+        raise HTTPException(400, "document does not belong to project")
+    out: Dict[str, Any] = {"plan": plan, "executed": False}
+    if not execute:
+        return out
+    if not plan["eligible"]:
+        out["refused"] = f"{plan['not_eligible']}; nothing written"
+        return out
+    if not reason.strip():
+        out["refused"] = "reason is required with execute=true"
+        return out
+    if not plan_hash or plan_hash != plan["plan_hash"]:
+        out["refused"] = "plan_hash does not match the live plan; nothing written"
+        return out
+    at = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = _projects.include_document(document_id, by="owner", reason=reason.strip(), at=at)
+    if result is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    doc = result["document"] or {}
+    audit.record(
+        "document.included_back",
+        project_id=project_id,
+        user_id=auth.get("user_id"),
+        document_id=document_id,
+    )
+    meta = doc.get("metadata") or {}
+    out.update({
+        "executed": bool(result["changed"]),
+        "excluded_after": meta.get("excluded"),
+        "included_back": meta.get("included_back"),
+        "ingest_status": doc.get("ingest_status"),
+        "retrieval_visible": doc.get("retrieval_visible"),
+        "chunk_count": doc.get("chunk_count"),
+    })
+    return out
 
 
 @router.post("/v1/admin/corpus/legacy-guard-chunks")

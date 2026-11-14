@@ -186,6 +186,26 @@ def bound_chunks(
     return [c for c, _ in out]
 
 
+def bound_units_with_pages(
+    chunks: list[str], pages: list[int | None],
+) -> tuple[list[str], list[int | None]]:
+    """Unit chunks under the ceiling with ``pages`` kept one entry per chunk.
+
+    No merge (rows, schedules). Every piece of a split chunk keeps the page of
+    the chunk it came from. A ``pages`` list of the wrong length gives no
+    usable attribution, so every returned chunk then gets None.
+    """
+    if len(pages) != len(chunks):
+        pages = [None] * len(chunks)
+    out_chunks: list[str] = []
+    out_pages: list[int | None] = []
+    for chunk, page in zip(chunks, pages):
+        pieces = bound_chunks([chunk], merge=False)
+        out_chunks.extend(pieces)
+        out_pages.extend([page] * len(pieces))
+    return out_chunks, out_pages
+
+
 # A heading-like line: short, no closing sentence punctuation, and either
 # numbered ("3.2 Concrete"), a markdown heading, or mostly capitals.
 _NUMBERED_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*|[A-Z])[.)]?\s+\S")

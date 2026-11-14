@@ -415,3 +415,32 @@ def test_prose_segment_without_text_yields_no_chunks(text, chunker, has_chunks):
     chunks = doc_index._chunk_prose_segment(text, chunker, parents)
     assert bool(chunks) is has_chunks
     assert len(parents) == len(chunks)
+
+
+# ── bound_units_with_pages ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("long_first, split", [(True, True), (False, False)])
+def test_every_piece_of_a_split_unit_keeps_its_page(monkeypatch, long_first, split):
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "120")
+    first = _rows(6) if long_first else "Row A | 1 | m3"
+    chunks, pages = cb.bound_units_with_pages([first, "Row B | 2 | m2"], [4, 9])
+    assert (len(pages) > 2) is split
+    assert pages[-1] == 9 and set(pages[:-1]) == {4}
+    assert len(chunks) == len(pages)
+    assert all(len(c) <= 120 for c in chunks)
+
+
+@pytest.mark.parametrize("pages_in, pages_out", [
+    ([4], [None, None]),
+    ([4, 9], [4, 9]),
+])
+def test_a_misaligned_page_list_gives_unknown_pages(pages_in, pages_out):
+    chunks, pages = cb.bound_units_with_pages(["Row A | 1 | m3", "Row B | 2 | m2"], pages_in)
+    assert pages == pages_out and len(chunks) == 2
+
+
+@pytest.mark.parametrize("short, kept", [("ab", 2), ("Row B | 2 | m2", 2)])
+def test_unit_chunks_are_never_merged(monkeypatch, short, kept):
+    monkeypatch.setenv("CHUNK_MIN_CHARS", "40")
+    chunks, _ = cb.bound_units_with_pages(["Row A | 1 | m3", short], [1, 2])
+    assert len(chunks) == kept
