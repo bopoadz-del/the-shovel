@@ -119,7 +119,9 @@ async def handle_search_project_documents(call: ToolCall) -> dict:
         top_k = int(top_k) if top_k not in (None, "") else 5
     except (TypeError, ValueError):
         top_k = 5
-    results = await search_project_documents(project_id, query, top_k)
+    results = await search_project_documents(
+        project_id, query, top_k, trace_path="tool",
+    )
     return {
         "name": "search_project_documents",
         "ok": True,

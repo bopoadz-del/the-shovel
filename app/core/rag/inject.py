@@ -985,6 +985,65 @@ def _emit_retrieval_trace(
         _LOG.warning("retrieval trace line failed", exc_info=True)
 
 
+def trace_chunk_ids(rank: int, c) -> Dict[str, Any]:
+    """Identity and rank of one chunk with no name: ids, score, layer.
+
+    The tool-path line (``emit_search_trace``) is built from this alone, so
+    it carries neither chunk text nor a file name."""
+    score = getattr(c, "score", None)
+    return {
+        "rank": rank,
+        "chunk_id": getattr(c, "chunk_id", None),
+        "doc_id": getattr(c, "doc_id", None),
+        "score": round(float(score), 6) if score is not None else None,
+        "layer": getattr(c, "layer", "own") or "own",
+    }
+
+
+def emit_search_trace(
+    *,
+    path: str,
+    project_id: Optional[str],
+    requested_top_k: int,
+    trace: Dict[str, Any],
+) -> None:
+    """One ``rag_retrieval_trace`` line for a document search outside
+    pre-injection (``path="tool"`` for the agent's search tool).
+
+    ``trace`` is what ``doc_index._search_trace`` built: ``retrieved_k``,
+    ``chunks`` (handed, with ``result_rank``) and ``not_handed`` (dropped by
+    the per-document collapse, with the reason). The query is written as a
+    label, never its words. Best-effort, like the retriever's line."""
+    if not retrieval_trace_enabled():
+        return
+    try:
+        from app.infra.monitoring import request_id_ctx
+
+        rid = request_id_ctx.get()
+        trace = trace or {}
+        handed = list(trace.get("chunks") or [])
+        payload = {
+            "request_id": rid,
+            "path": path,
+            "query": "tool_query",
+            "project_id": project_id,
+            "requested_k": requested_top_k,
+            "retrieved_k": int(trace.get("retrieved_k") or 0),
+            "handed_k": len(handed),
+            "handed_docs": len({e.get("doc_id") for e in handed}),
+            "top_score": max((e.get("score") or 0.0 for e in handed), default=0.0),
+            "chunks": handed,
+            "not_handed": list(trace.get("not_handed") or []),
+        }
+        _TRACE_LOG.info(
+            "%s %s", _TRACE_EVENT,
+            json.dumps(payload, default=str, separators=(",", ":")),
+            extra={"event": _TRACE_EVENT, "request_id": rid},
+        )
+    except Exception:  # noqa: BLE001 - instrumentation must not break a turn
+        _LOG.warning("tool search trace line failed", exc_info=True)
+
+
 # A measured-quantity question that names its governing source ("per the
 # project specification, what minimum cover ...") is often answered in two
 # places: the source's own clause (which may only point elsewhere) and the
