@@ -98,11 +98,22 @@ def test_constraint_names_are_quoted(name, quoted):
     assert _load()._quoted(name) == quoted
 
 
-def test_vocabulary_matches_the_model_constraint():
+def _model_check_text() -> str:
     from app.core.models import Document
     check = next(a for a in Document.__table_args__
                  if getattr(a, "name", "") == "ck_documents_doc_role")
-    assert set(_load().ROLES) == set(re.findall(r"'(\w+)'", str(check.sqltext)))
+    return str(check.sqltext)
+
+
+def _schema_check_text() -> str:
+    schema = (ROOT / "the_fork_schema.sql").read_text(encoding="utf-8")
+    return re.search(r"CHECK \(doc_role IN \((.*?)\)\)", schema, re.DOTALL).group(1)
+
+
+@pytest.mark.parametrize("source", [_model_check_text, _schema_check_text])
+def test_vocabulary_matches_the_model_and_the_schema_file(source):
+    # A fresh database (schema file) and the ORM (model) carry the same roles.
+    assert set(_load().ROLES) == set(re.findall(r"'(\w+)'", source()))
 
 
 @pytest.mark.skipif(not _ON_POSTGRES, reason="pg_constraint is PostgreSQL (test-postgres job)")
