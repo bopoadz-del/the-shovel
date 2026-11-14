@@ -2236,10 +2236,19 @@ def admin_corpus_chunk_resplit_execute(
     doc_ids: str = Query(..., description="Comma-separated document ids; no whole-project run"),
     expected_plan_hash: str = Query(..., description="plan_hash of the live plan"),
     doc_type: Optional[str] = Query(None, description="Only re-split documents of this doc_type"),
+    max_parents: Optional[int] = Query(
+        None, ge=1, le=2000,
+        description="Parents staged this call (default RESPLIT_MAX_PARENTS); repeat until "
+                    "continuation.parents_remaining is 0",
+    ),
     auth: dict = Depends(require_api_key),
 ):
     """RQ-4 execute: re-split and re-embed in place, one document per
-    transaction, refused unless ``expected_plan_hash`` matches the live plan."""
+    transaction, refused unless ``expected_plan_hash`` matches the live plan.
+
+    A plain ``def`` route: FastAPI runs it in its threadpool, off the event
+    loop. Each call stages a bounded number of parents and returns a
+    continuation; a second EXECUTE while one is in flight is refused."""
     _require_admin(auth)
     from app.core.chunk_resplit import chunk_resplit
 
@@ -2247,6 +2256,7 @@ def admin_corpus_chunk_resplit_execute(
         return chunk_resplit(
             project_id=project_id, doc_ids=_doc_id_list(doc_ids), execute=True,
             expected_plan_hash=expected_plan_hash, doc_type=doc_type, sample=0,
+            max_parents=max_parents,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
