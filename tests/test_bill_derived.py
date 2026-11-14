@@ -390,6 +390,28 @@ def test_middleware_marks_the_request_and_clears_it(path):
     assert monitoring.in_web_request() is False
 
 
+@pytest.mark.parametrize("exc", [RuntimeError("handler died"), ValueError("bad input")])
+def test_middleware_reraises_and_still_clears_the_marker(exc):
+    import asyncio
+
+    from starlette.requests import Request
+
+    from app.infra import monitoring
+
+    seen: list[bool] = []
+
+    async def call_next(request):
+        seen.append(monitoring.in_web_request())
+        raise exc
+
+    scope = {"type": "http", "method": "POST", "path": "/v1/x", "headers": [],
+             "query_string": b"", "server": ("t", 80), "scheme": "http"}
+    with pytest.raises(type(exc), match=str(exc)):
+        asyncio.run(monitoring.observability_middleware(Request(scope), call_next))
+    assert seen == [True]
+    assert monitoring.in_web_request() is False
+
+
 # -- bytes --------------------------------------------------------------------
 
 
