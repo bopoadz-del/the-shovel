@@ -313,3 +313,16 @@ def test_derived_name_stays_inside_the_store(tmp_path, monkeypatch, source_name,
     (row,) = docs.added
     assert os.path.dirname(row["file_path"]) == str(tmp_path)
     assert row["original_name"] == want_name
+
+
+@pytest.mark.parametrize("pages", [1, 4])
+def test_page_count_reads_the_pdf(tmp_path, pages):
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page()
+    path = tmp_path / f"drawn_{pages}.pdf"
+    doc.save(str(path))
+    doc.close()
+    assert bd._page_count(str(path)) == pages
