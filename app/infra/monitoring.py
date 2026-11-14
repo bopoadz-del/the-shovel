@@ -21,6 +21,11 @@ from starlette.responses import Response
 logger = logging.getLogger(__name__)
 
 request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+#: True while an HTTP request is being served by this process (set by
+#: :func:`observability_middleware`, carried into threadpool and task copies of
+#: the context). ``request_id_ctx`` cannot answer this: ``get_request_id``
+#: sets it outside requests too.
+web_request_ctx: ContextVar[bool] = ContextVar("in_web_request", default=False)
 _sentry_enabled = False
 _structured_logging_enabled = False
 
@@ -207,6 +212,11 @@ def init_sentry() -> bool:
     return True
 
 
+def in_web_request() -> bool:
+    """Whether the caller runs on behalf of an HTTP request in this process."""
+    return web_request_ctx.get()
+
+
 def sentry_enabled() -> bool:
     return _sentry_enabled
 
@@ -355,6 +365,7 @@ async def observability_middleware(request: Request, call_next) -> Response:
     incoming = request.headers.get("X-Request-ID", "").strip()
     rid = incoming or str(uuid.uuid4())[:12]
     token = request_id_ctx.set(rid)
+    web_token = web_request_ctx.set(True)
     request.state.request_id = rid
     start = datetime.now(timezone.utc)
     try:
@@ -387,6 +398,7 @@ async def observability_middleware(request: Request, call_next) -> Response:
             },
         )
         request_id_ctx.reset(token)
+        web_request_ctx.reset(web_token)
 
 
 # ── Prometheus counter (PR #98) ───────────────────────────────────────────
