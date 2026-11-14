@@ -35,8 +35,10 @@ from app.core.ingest_status import (
     QUARANTINED,
     TOMBSTONED,
     UNSUPPORTED_TYPE,
+    UNVERIFIED,
     ZERO_CHUNK,
     EXCLUDED_KEY,
+    INCLUDED_BACK_KEY,
     OWNER_EXCLUDED_REASON,
     is_excluded,
     partial_read_note,
@@ -1796,6 +1798,92 @@ def exclude_document(doc_id: str, *, by: str, reason: str, at: str) -> Optional[
         "chunks_deleted": deleted,
         "index_pruned": index_pruned,
     }
+
+
+def plan_document_inclusion(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Read-only plan for ``include_document``: the reverse of an exclusion.
+
+    ``eligible`` is True only for a row that carries ``metadata.excluded``
+    (an owner exclusion); a row tombstoned for any other reason, or never
+    excluded, is not touched and ``not_eligible`` says why. ``plan_hash``
+    binds the plan to the stored exclusion record, the row's status and its
+    chunk rows, so an execute against a row that changed since the plan
+    refuses. The chunks deleted by the exclusion do not come back here: the
+    row becomes indexable again and the next index run reads it.
+    """
+    if not doc_id:
+        return None
+    _ensure_db()
+    with SessionLocal() as session:
+        document = session.get(Document, doc_id)
+        if document is None:
+            return None
+        doc = _document_as_dict(document)
+        rows = _document_chunk_ids(session, doc_id)
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    excluded = meta.get(EXCLUDED_KEY) if is_excluded(doc) else None
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "doc_id": doc_id,
+                "excluded": excluded,
+                "ingest_status": doc.get("ingest_status"),
+                "rows": rows,
+            },
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "document_id": doc_id,
+        "project_id": doc.get("project_id"),
+        "original_name": doc.get("original_name"),
+        "doc_type": doc.get("doc_type"),
+        "ingest_status": doc.get("ingest_status"),
+        "ingest_status_reason": doc.get("ingest_status_reason"),
+        "retrieval_visible": doc.get("retrieval_visible"),
+        "chunk_count": doc.get("chunk_count"),
+        "chunk_rows": len(rows),
+        "excluded": excluded,
+        "eligible": excluded is not None,
+        "not_eligible": None if excluded is not None else "document carries no owner exclusion",
+        "status_after": UNVERIFIED if excluded is not None else doc.get("ingest_status"),
+        "plan_hash": digest,
+    }
+
+
+def include_document(doc_id: str, *, by: str, reason: str, at: str) -> Optional[Dict[str, Any]]:
+    """Bring an owner-excluded document back: the reverse of ``exclude_document``.
+
+    Clears ``metadata.excluded`` and the owner-exclusion tombstone: the row
+    becomes ``UNVERIFIED`` (no chunks yet, not classified), retrieval-visible,
+    and indexable by every entry point again. The cleared exclusion record is
+    kept under ``metadata.included_back = {by, at, reason, excluded}`` as the
+    record of both decisions. A row without an owner exclusion is returned
+    unchanged with ``changed = False``. Returns ``{document, changed}``;
+    ``None`` when the row does not exist.
+    """
+    if not doc_id:
+        return None
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            document = session.get(Document, doc_id)
+            if document is None:
+                return None
+            current = dict(coerce_document_metadata(document.metadata_))
+            if not is_excluded({"metadata": current}):
+                changed = False
+            else:
+                previous = current.pop(EXCLUDED_KEY)
+                current[INCLUDED_BACK_KEY] = {"by": by, "at": at, "reason": reason, "excluded": previous}
+                document.metadata_ = current
+                document.ingest_status = UNVERIFIED
+                document.ingest_status_reason = None
+                document.retrieval_visible = True
+                session.commit()
+                changed = True
+    return {"document": get_document(doc_id), "changed": changed}
 
 
 def update_document_metadata(doc_id: str, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
