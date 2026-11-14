@@ -200,6 +200,8 @@ _SMOKE_INPUTS = {
     "productivity_rate": dict(output_quantity=500, labor_hours=40, crew_size=4),
     # Additive discipline library — planning.
     "critical_path_float": dict(early_start=5, early_finish=10, late_start=8, late_finish=13),
+    "cpm_network": dict(activities=[{"id": "A", "duration": 2},
+                                     {"id": "B", "duration": 3, "predecessors": ["A"]}]),
     "progress_quantity": dict(total_qty=1000, planned_qty=400, actual_qty=350),
     "productivity_manpower_duration": dict(
         quantity_executed=100, man_hours=50, quantity=200, daily_production=20,

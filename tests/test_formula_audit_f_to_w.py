@@ -98,8 +98,8 @@ def _err(name: str, *, expect: str = "error", **params):
 # ── registry contract ───────────────────────────────────────────────────────
 
 def test_audit_slice_matches_live_registry():
-    """sorted(available_calculations())[48:] must stay the owned F–W set."""
-    assert available_calculations()[48:] == _AUDIT_SLICE
+    """sorted(available_calculations())[49:] must stay the owned F–W set (49 = the A–F list, which gained cpm_network)."""
+    assert available_calculations()[49:] == _AUDIT_SLICE
 
 
 def test_audit_file_has_two_cases_per_calculator():
