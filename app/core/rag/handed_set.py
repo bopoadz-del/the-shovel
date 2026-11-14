@@ -241,3 +241,52 @@ def wants_source_coverage_retrieval(question: str, evidence_text: str) -> bool:
     if len(kinds) < 2:
         return False
     return first_pass_sources(evidence_text) < len(kinds)
+
+
+class SearchTurn:
+    """What the model's own search tool may still do in one chat turn (S-R9).
+
+    One object per turn, made by the chat loop and passed to every tool call:
+
+    * ``cap`` is the declared number of searches a turn may run
+      (AGENT_SEARCH_TOOL_CAP). ``admit()`` counts a search and refuses the
+      ones past the cap, so a batch of parallel calls cannot run more
+      searches than declared (the loops used to count them and run them all).
+    * ``handed`` holds the ids of the chunks already in front of the model
+      this turn: the first-pass excerpts, then every chunk a search handed.
+      A search skips them, so its rows carry passages the model has not
+      read yet instead of repeating the ones it has.
+
+    It reads ids and counts only; it never sees a question or chunk text.
+    """
+
+    def __init__(self, cap: int, handed: Sequence[Any] = ()) -> None:
+        self.cap = max(0, int(cap))
+        self.calls = 0
+        self.handed: set[str] = {str(cid) for cid in handed if cid}
+        #: Chunks the latest search reached but left out as already handed.
+        self.last_skipped = 0
+
+    @classmethod
+    def from_audit(cls, cap: int, audit: dict[str, Any] | None) -> SearchTurn:
+        """A turn whose handed set starts as the pre-injected chunks of
+        ``audit`` (the record ``_rag_inject`` returns)."""
+        chunks = (audit or {}).get("chunks") or []
+        return cls(cap, [c.get("chunk_id") for c in chunks if isinstance(c, dict)])
+
+    @property
+    def spent(self) -> bool:
+        return self.calls >= self.cap
+
+    def admit(self) -> bool:
+        """Count one search call; False when the turn's cap is already used."""
+        if self.spent:
+            return False
+        self.calls += 1
+        return True
+
+    def record_search(self, handed_ids: Sequence[Any], skipped: int) -> None:
+        """What one search did: the chunks it handed join the handed set;
+        ``skipped`` is how many it left out because they were handed before."""
+        self.handed.update(str(cid) for cid in handed_ids if cid)
+        self.last_skipped = max(0, int(skipped))

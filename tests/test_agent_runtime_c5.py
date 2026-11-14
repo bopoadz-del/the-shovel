@@ -241,7 +241,8 @@ async def test_search_tool_calls_doc_index(monkeypatch):
     captured = {}
     operator = "Per the project specification, what compaction is required?"
 
-    async def fake_search(project_id, query, top_k=5, *, trace_path=None):
+    async def fake_search(project_id, query, top_k=5, *, trace_path=None, turn=None):
+        captured["turn"] = turn
         captured["project_id"] = project_id
         captured["query"] = query
         captured["top_k"] = top_k
@@ -272,6 +273,8 @@ async def test_search_tool_calls_doc_index(monkeypatch):
     assert operator not in captured["args"]
     # the tool asks for its retrieval trace line (F0)
     assert captured["trace_path"] == "tool"
+    # a call made outside a chat loop carries no turn state
+    assert captured["turn"] is None
 
 
 @pytest.mark.asyncio

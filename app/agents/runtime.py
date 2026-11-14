@@ -10004,6 +10004,88 @@ def _working_document_sources(
     return rows
 
 
+#: The Sources panel's label for each retrieval layer (STEP 0b).
+_SOURCE_LAYER_LABELS = {
+    "own": "Project document",
+    "master_corpus": "Master Corpus (fallback)",
+    "general_knowledge": "Knowledge base",
+}
+
+
+def _search_rows_read(
+    tool_results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """The rows the model's own search handed this turn (S-R9), in order."""
+    rows: list[dict[str, Any]] = []
+    for payload in _coerce_tool_payloads(tool_results):
+        if payload.get("ok") is False:
+            continue
+        result = payload.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("results"), list):
+            continue
+        for row in result["results"]:
+            if isinstance(row, dict) and row.get("document_id") and row.get("filename"):
+                rows.append(row)
+    return rows
+
+
+def _search_row_sources(
+    final_text: str,
+    tool_results: list[dict[str, Any]] | None,
+    audit_rec: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Source rows for documents the answer cites from the search tool's rows.
+
+    The pre-injected chunks reach Sources through the audit; a document the
+    model found with its own search never did (S-R9). A search row counts as
+    cited by the same signs the pre-injected path reads: a source citation
+    naming its document (file name or id), its file name in the prose, or a
+    quoted run of its passage. A declining answer only counts a quote, as the
+    pre-injected path lists nothing for a decline. A document found by two
+    searches gives two rows here; the caller dedupes every source row.
+    """
+    from app.core.rag.source_class import classify, label_for
+
+    declines = _answer_is_caveat(final_text)
+    cites = [] if declines else _extract_cited_chunk_indexes(final_text)
+    cite_tokens = [(tok, _normalise_filename(tok)) for tok, _idx in cites]
+    text_n = _normalise_filename(final_text)
+    out: list[dict[str, Any]] = []
+    for row in _search_rows_read(tool_results):
+        doc_id = str(row.get("document_id"))
+        name = str(row.get("filename"))
+        name_n = _normalise_filename(name)
+        snippet = str(row.get("snippet") or "")
+        cited = _answer_quotes_passage(final_text, snippet)
+        if not cited and not declines:
+            cited = bool(name_n and name_n in text_n) or any(
+                tok == doc_id or (tok_n and name_n and (tok_n in name_n or name_n in tok_n))
+                for tok, tok_n in cite_tokens
+            )
+        if not cited:
+            continue
+        layer = str(row.get("origin") or "own")
+        score = float(row.get("score") or 0.0)
+        pages = row.get("pages") or []
+        source_class = classify(layer, name, snippet)
+        out.append({
+            "doc_id": doc_id,
+            "doc_name": _clean_path_label(name),
+            "page_or_section": page_or_section_label({"page": pages[0] if pages else None}),
+            "page": pages[0] if pages else None,
+            "chunk_index": None,
+            "chunk_id": None,
+            "project_id": (audit_rec or {}).get("project_id"),
+            "score": score,
+            "confidence": "High" if score >= 0.75 else "Medium" if score >= 0.5 else "Low",
+            "layer": layer,
+            "layer_label": _SOURCE_LAYER_LABELS.get(layer, "Knowledge base"),
+            "source_class": source_class,
+            "source_class_label": label_for(source_class),
+        })
+    return out
+
+
 def _dedupe_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
@@ -10091,7 +10173,10 @@ def _build_sources_from_audit(
     the answer credits a platform calculator — that row is the source —
     or it used a working document.
     """
-    used_documents = _working_document_sources(final_text, tool_results, audit_rec)
+    used_documents = _dedupe_source_rows([
+        *_working_document_sources(final_text, tool_results, audit_rec),
+        *_search_row_sources(final_text, tool_results, audit_rec),
+    ])
 
     def _finish(
         rows: list[dict[str, Any]] | None, *, fallback: bool = False,
@@ -10209,11 +10294,7 @@ def _build_sources_from_audit(
     # STEP 0b — human-readable layer labels for the sources panel so a
     # Master-Corpus fallback (and disclosed general-knowledge context) is
     # visible per-source, not just in the answer banner.
-    _LAYER_LABELS = {
-        "own": "Project document",
-        "master_corpus": "Master Corpus (fallback)",
-        "general_knowledge": "Knowledge base",
-    }
+    _LAYER_LABELS = _SOURCE_LAYER_LABELS
 
     def _format(chunk_meta: dict[str, Any], doc_name: str) -> dict[str, Any]:
         score = chunk_meta.get("score") or 0.0
@@ -11979,6 +12060,7 @@ class Agent:
     _stream_synthesis = _core_llm._stream_synthesis
 
     _run_tool_call = _core_tools._run_tool_call
+    _run_turn_tool_call = _core_tools._run_turn_tool_call
 
 
 # ── Auto-validation middleware ───────────────────────────────────────────

@@ -617,6 +617,37 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
     return tools
 
 
+def search_cap_reached_result(cap: int) -> dict[str, Any]:
+    """The tool result for a search the turn's cap does not allow."""
+    return {
+        "name": "search_project_documents",
+        "ok": False,
+        "result": {
+            "status": "skipped",
+            "error": "search limit reached",
+            "hint": (
+                f"This turn has already run its {cap} project searches; this "
+                "one was not run. Answer from the excerpts and search rows "
+                "already in the conversation, and say what they do not state."
+            ),
+        },
+    }
+
+
+async def _run_turn_tool_call(
+    self, tool_call: dict[str, Any], *, search_turn: Any, **kwargs: Any,
+) -> dict[str, Any]:
+    """One tool call of a chat turn. Both chat loops run their calls through
+    here so the turn's declared search cap holds per CALL, not per round: a
+    batch of parallel searches past the cap is answered without searching
+    (the loops used to count such a batch and run all of it). Every admitted
+    call goes to ``_run_tool_call`` with the turn's state."""
+    name = (tool_call.get("function") or {}).get("name")
+    if name == "search_project_documents" and not search_turn.admit():
+        return search_cap_reached_result(search_turn.cap)
+    return await self._run_tool_call(tool_call, search_turn=search_turn, **kwargs)
+
+
 async def _run_tool_call(
     self,
     tool_call: dict[str, Any],
@@ -627,6 +658,7 @@ async def _run_tool_call(
     _call_stack: list[str] | None = None,
     user_message: str | None = None,
     history: list | None = None,
+    search_turn: Any = None,
 ) -> dict[str, Any]:
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         BLOCK_REGISTRY, _FILE_CONSUMING_BLOCKS, _HAT_CALC_ALIASES, _HAT_CONTAINER_ALIASES,
@@ -670,6 +702,7 @@ async def _run_tool_call(
             agent=self, name=name, args=args, tool_call=tool_call, api_key=api_key,
             project_id=project_id, conversation_id=conversation_id, depth=_depth,
             call_stack=_call_stack, user_message=user_message, history=history,
+            search_turn=search_turn,
         ))
 
     # ── declared hat-manifest actions -> real implementations ───────────

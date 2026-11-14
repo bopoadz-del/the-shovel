@@ -36,6 +36,9 @@ class ToolCall:
     call_stack: List[str] = field(default_factory=list)
     user_message: Optional[str] = None
     history: Optional[list] = None
+    #: The turn's ``app.core.rag.handed_set.SearchTurn`` (search cap and the
+    #: chunks already handed), when the chat loop runs one.
+    search_turn: Any = None
 
 
 Handler = Callable[[ToolCall], Awaitable[Dict[str, Any]]]

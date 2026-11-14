@@ -692,7 +692,11 @@ async def _chat_stream_impl(
     # it has (or honestly say it doesn't) instead of looping. generate_wbs and
     # other tools stay available.
     SEARCH_TOOL_CAP = int(os.getenv("AGENT_SEARCH_TOOL_CAP", "2"))
-    search_calls = 0
+    # S-R9: the cap and the chunks already handed live on one turn object
+    # that every tool call receives; the search tool enforces the cap per
+    # call (a parallel batch cannot overrun it) and skips handed chunks.
+    from app.core.rag.handed_set import SearchTurn
+    _search_turn = SearchTurn.from_audit(SEARCH_TOOL_CAP, _rag_audit)
     # Hard excludes on the operator's draft intent (VO / inline BOQ).
     excluded_tools, _op = self._intent_hard_excludes(messages)
     _sf: dict = {}  # S-R8: one runtime search round before a draft may decline
@@ -1210,7 +1214,7 @@ async def _chat_stream_impl(
                 and _recovered_calls_are_search_only(recovered_tool_calls)
                 and (
                     "search_project_documents" in excluded_tools
-                    or search_calls >= SEARCH_TOOL_CAP
+                    or _search_turn.spent
                 )
             ):
                 recovered_tool_calls = []
@@ -1231,7 +1235,7 @@ async def _chat_stream_impl(
                 }
             elif (_sf_call := await self._search_before_refusal(
                     raw_content, messages, _sf, user_message=user_message, project_id=project_id,
-                    tool_results=stream_tool_results, search_calls=search_calls, search_cap=SEARCH_TOOL_CAP,
+                    tool_results=stream_tool_results, search_calls=_search_turn.calls, search_cap=SEARCH_TOOL_CAP,
                     excluded_tools=excluded_tools, force_synthesis=force_synthesis,
                     iterations_left=MAX_TOOL_ITERATIONS - iteration - 1)) is not None:
                 tool_calls = [_sf_call]  # S-R8: search, do not finalise the draft
@@ -1364,12 +1368,6 @@ async def _chat_stream_impl(
         pending_nudges: list[dict[str, Any]] = []
         for tc in tool_calls:
             fn = (tc.get("function") or {})
-            if fn.get("name") == "search_project_documents":
-                search_calls += 1
-                if search_calls >= SEARCH_TOOL_CAP:
-                    # Stop offering the search tool for the rest of this turn —
-                    # the model has searched enough; force it to answer.
-                    excluded_tools.add("search_project_documents")
             # SSE contract (distinct from the ``on_event`` callback above,
             # which uses "name"/"args"/"id"): the browser reads "tool" and
             # "args_preview" — see frontend ProjectWorkspace.tsx. "name" is
@@ -1382,8 +1380,9 @@ async def _chat_stream_impl(
                 "name": fn.get("name"),
                 "args_preview": (fn.get("arguments") or "")[:200],
             }
-            tool_result = await self._run_tool_call(
+            tool_result = await self._run_turn_tool_call(
                 tc,
+                search_turn=_search_turn,
                 api_key=api_key,
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -1392,6 +1391,10 @@ async def _chat_stream_impl(
                 user_message=user_message,
                 history=effective_history,
             )
+            if _search_turn.spent:
+                # Stop offering the search tool for the rest of this turn —
+                # the model has searched enough; force it to answer.
+                excluded_tools.add("search_project_documents")
             stream_tool_results.append(tool_result)
             _tool_content = _tool_result_content(
                 {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),

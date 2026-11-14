@@ -119,20 +119,34 @@ async def handle_search_project_documents(call: ToolCall) -> dict:
         top_k = int(top_k) if top_k not in (None, "") else 5
     except (TypeError, ValueError):
         top_k = 5
+    turn = getattr(call, "search_turn", None)
     results = await search_project_documents(
-        project_id, query, top_k, trace_path="tool",
+        project_id, query, top_k, trace_path="tool", turn=turn,
     )
     from app.agents.runtime import _effective_tool_result_max_chars
 
+    skipped = turn.last_skipped if turn is not None else 0
+    extra: dict = {}
+    if skipped:
+        extra["already_handed"] = skipped
+        if not results:
+            # Every passage this search reached was already in front of the
+            # model; an empty list alone would read as "nothing found".
+            extra["note"] = (
+                "Every passage this search reached was already handed to you "
+                "this turn (in the excerpts or an earlier search), so none is "
+                "repeated here."
+            )
+    payload = search_rows_within_cap(results, _effective_tool_result_max_chars(), extra)
     return {
         "name": "search_project_documents",
         "ok": True,
-        "result": search_rows_within_cap(results, _effective_tool_result_max_chars()),
+        "result": payload,
     }
 
 
-def _search_payload(rows: list[dict], withheld: int) -> dict:
-    payload: dict = {"results": rows}
+def _search_payload(rows: list[dict], withheld: int, extra: dict | None = None) -> dict:
+    payload: dict = {"results": rows, **(extra or {})}
     if withheld:
         payload["rows_withheld"] = withheld
         payload["note"] = (
@@ -149,7 +163,7 @@ def _serialized_len(payload: dict) -> int:
     return len(json.dumps(payload, default=str))
 
 
-def search_rows_within_cap(results: list[dict], cap: int) -> dict:
+def search_rows_within_cap(results: list[dict], cap: int, extra: dict | None = None) -> dict:
     """The search result as a tool payload that fits ``cap`` characters.
 
     Rows are taken in rank order while the serialised payload still fits; the
@@ -157,11 +171,12 @@ def search_rows_within_cap(results: list[dict], cap: int) -> dict:
     and counted, so the message is never cut mid-row and never needs paging
     (a cut result made the model re-run the same search once per window).
     Only a first row that cannot fit on its own is shortened, by whole words
-    from the end of its snippet.
+    from the end of its snippet. ``extra`` fields ride in the payload and are
+    measured with it.
     """
     kept: list[dict] = []
     for row in results:
-        if _serialized_len(_search_payload(kept + [row], len(results) - len(kept) - 1)) > cap:
+        if _serialized_len(_search_payload(kept + [row], len(results) - len(kept) - 1, extra)) > cap:
             break
         kept.append(row)
     if not kept and results:
@@ -171,10 +186,10 @@ def search_rows_within_cap(results: list[dict], cap: int) -> dict:
         while words:
             words = words[: len(words) * 3 // 4] if len(words) > 4 else words[:-1]
             first["snippet"] = " ".join(words) + " ..."
-            if _serialized_len(_search_payload([first], withheld)) <= cap:
-                return _search_payload([first], withheld)
-        return _search_payload([], len(results))
-    return _search_payload(kept, len(results) - len(kept))
+            if _serialized_len(_search_payload([first], withheld, extra)) <= cap:
+                return _search_payload([first], withheld, extra)
+        return _search_payload([], len(results), extra)
+    return _search_payload(kept, len(results) - len(kept), extra)
 
 
 @tool("list_project_documents", owner="base", display_name='Project document list', params={
