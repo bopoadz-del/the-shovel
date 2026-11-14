@@ -2204,6 +2204,54 @@ def admin_corpus_chunk_bounds(
     return chunk_bounds_plan(project_id=project_id)
 
 
+def _doc_id_list(doc_ids: str) -> list:
+    ids = [d.strip() for d in (doc_ids or "").split(",") if d.strip()]
+    if not ids:
+        raise HTTPException(400, "doc_ids is required (comma-separated document ids)")
+    return ids
+
+
+@router.get("/v1/admin/corpus/chunk-resplit")
+def admin_corpus_chunk_resplit_plan(
+    project_id: str = Query(..., description="Project of the documents (no default)"),
+    doc_ids: str = Query(..., description="Comma-separated document ids; no whole-project run"),
+    sample: int = Query(50, ge=0, le=500, description="Pieces embedded to time the estimate"),
+    auth: dict = Depends(require_api_key),
+):
+    """Read-only (RQ-4): stored chunks of the listed documents that are longer
+    than the embedder's token window, the pieces a re-split would write, an
+    embedding-time estimate and the plan hash. Never writes."""
+    _require_admin(auth)
+    from app.core.chunk_resplit import chunk_resplit
+
+    try:
+        return chunk_resplit(project_id=project_id, doc_ids=_doc_id_list(doc_ids), sample=sample)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/v1/admin/corpus/chunk-resplit")
+def admin_corpus_chunk_resplit_execute(
+    project_id: str = Query(..., description="Project of the documents (no default)"),
+    doc_ids: str = Query(..., description="Comma-separated document ids; no whole-project run"),
+    expected_plan_hash: str = Query(..., description="plan_hash of the live plan"),
+    doc_type: Optional[str] = Query(None, description="Only re-split documents of this doc_type"),
+    auth: dict = Depends(require_api_key),
+):
+    """RQ-4 execute: re-split and re-embed in place, one document per
+    transaction, refused unless ``expected_plan_hash`` matches the live plan."""
+    _require_admin(auth)
+    from app.core.chunk_resplit import chunk_resplit
+
+    try:
+        return chunk_resplit(
+            project_id=project_id, doc_ids=_doc_id_list(doc_ids), execute=True,
+            expected_plan_hash=expected_plan_hash, doc_type=doc_type, sample=0,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/v1/admin/documents/{document_id}/include")
 def admin_include_document(
     document_id: str,
