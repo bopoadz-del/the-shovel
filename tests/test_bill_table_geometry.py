@@ -430,11 +430,12 @@ def test_ocr_page_words_reads_tesseract_boxes(monkeypatch, data, page, expected)
 
     seen = {}
 
-    def _image_to_data(image, lang, output_type):
-        seen["args"] = (image, lang, output_type)
+    def _image_to_data(image, lang, config, output_type):
+        seen["args"] = (image, lang, config, output_type)
         return data
 
     monkeypatch.setattr(pytesseract, "image_to_data", _image_to_data)
     words = g.ocr_page_words("IMG", page, lang="eng")
     assert [(w.text, w.page, w.left) for w in words] == expected
-    assert seen["args"] == ("IMG", "eng", pytesseract.Output.DICT)
+    # One uniform block: the layout modes drop one-character words (qty 4, unit m).
+    assert seen["args"] == ("IMG", "eng", "--psm 6", pytesseract.Output.DICT)
