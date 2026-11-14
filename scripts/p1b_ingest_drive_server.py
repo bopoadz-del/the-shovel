@@ -986,6 +986,11 @@ def main() -> int:
         from scripts import doc_reindex_once
 
         return doc_reindex_once.main_from_env()
+    # bill-plan-once.yml: PLAN (never write) one document's bill sheet.
+    if (os.getenv("BILL_PLAN_DOCUMENT_ID") or "").strip():
+        from scripts import bill_plan_once
+
+        return bill_plan_once.main_from_env()
 
     args = build_parser().parse_args()
     args = apply_env_fallbacks(args)
