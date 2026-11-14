@@ -46,6 +46,8 @@ def test_a_hanging_model_load_does_not_prevent_serving(monkeypatch):
         release.wait(timeout=HANG_SECONDS)
         finished.set()
 
+    # The production default: the suite sets WARM_MODELS_BLOCKING (conftest).
+    monkeypatch.delenv("WARM_MODELS_BLOCKING", raising=False)
     monkeypatch.setattr(main_module, "_warm_embedder", _hang)
     monkeypatch.setattr(main_module, "_warm_safety_detector", lambda: None)
 
@@ -70,6 +72,7 @@ def test_a_failing_model_load_does_not_break_startup(monkeypatch):
     def _boom():
         raise RuntimeError("model repo unreachable")
 
+    monkeypatch.delenv("WARM_MODELS_BLOCKING", raising=False)
     monkeypatch.setattr(main_module, "_warm_embedder", _boom)
     monkeypatch.setattr(main_module, "_warm_safety_detector", _boom)
 
@@ -106,6 +109,7 @@ def test_startup_does_not_seed_the_knowledge_base_inline(monkeypatch):
 
     So this asserts on the SEED specifically, not on warm-up in general.
     """
+    monkeypatch.delenv("WARM_MODELS_BLOCKING", raising=False)
     seeded_during_startup = []
 
     def _record():
