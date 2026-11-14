@@ -1004,6 +1004,13 @@ def rag_retrieval_k(user_message: str, requested_k: int) -> int:
     return requested_k
 
 
+#: The paths that add to the day's RAG token counter (``budget.consume``).
+#: Only ``rag_inject`` writes it: the evidence loop, the bill-rows action and
+#: hydration hand evidence without counting it.
+BUDGET_PATH_FIRST_PASS = "first_pass"
+BUDGET_PATH_MISSING_INPUT = "missing_input"
+
+
 def rag_inject(
     user_message: str,
     project_id: Optional[str],
@@ -1012,8 +1019,14 @@ def rag_inject(
     agent_name: str,
     history: Optional[List[Dict[str, Any]]] = None,
     retrieve_first: bool = False,
+    budget_path: str = BUDGET_PATH_FIRST_PASS,
 ) -> Tuple[Optional[Dict[str, str]], Dict[str, Any]]:
     """Per-turn RAG entry point.
+
+    ``budget_path`` names which path this call's injected tokens are counted
+    under (S-R5c): the turn's first pass, or the missing-input re-fetch. It
+    is printed in the trace with the tokens this call added to the day's
+    counter, so the day's spend can be summed by path from the trace lines.
 
     Returns ``(system_message_or_None, audit_record_dict)``.
 
@@ -1156,6 +1169,7 @@ def rag_inject(
         "budget_remaining": budget_state["remaining"],
         "budget_degraded": budget_state["degraded"],
         "budget_consumed": budget_consumed,
+        "budget_path": budget_path,
         "fallback_used": fallback_used,
         "extracted_contract_ids": named_contracts,
     }
@@ -1186,7 +1200,8 @@ def rag_inject(
             identifier_miss=identifier_miss, top_score=top_score,
             k_info={"requested_k": requested_k, "effective_k": effective_k,
                     "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
-                    "budget_consumed": budget_consumed},
+                    "budget_consumed": budget_consumed,
+                    "budget_path": budget_path, "budget_tokens": 0},
         )
         return None, audit_rec
 
@@ -1218,7 +1233,8 @@ def rag_inject(
         identifier_miss=False, top_score=top_score,
         k_info={"requested_k": requested_k, "effective_k": effective_k,
                 "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
-                    "budget_consumed": budget_consumed,
+                "budget_consumed": budget_consumed,
+                "budget_path": budget_path, "budget_tokens": total_tokens,
                 "allotment": allotment},
     )
     _budget.consume(day=today, tokens=total_tokens)

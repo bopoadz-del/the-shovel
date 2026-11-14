@@ -45,6 +45,8 @@ async def _fetch_named_missing_input(
         names_missing_input as _mi_names,
     )
 
+    from app.core.rag.inject import BUDGET_PATH_MISSING_INPUT
+
     if not _mi_enabled() or not project_id or not (final_text or "").strip():
         return final_text, None
     missing = _mi_names(final_text)
@@ -60,6 +62,7 @@ async def _fetch_named_missing_input(
             user_id=user_id,
             agent_name=self.name,
             history=None,
+            budget_path=BUDGET_PATH_MISSING_INPUT,
         )
     except Exception:  # noqa: BLE001 - a failed extra fetch is not a failed turn
         _LOG.warning("missing-input fetch failed for %r", missing, exc_info=True)

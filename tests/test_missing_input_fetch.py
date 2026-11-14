@@ -339,6 +339,8 @@ def test_the_retrieval_searches_the_named_gap_not_the_question_again(monkeypatch
     # And it must not be filed against the conversation: a targeted lookup is
     # not a turn, and it must not enter the next turn's follow-up context.
     assert spy.rag_calls[0]["conversation_id"] is None
+    # S-R5c: its tokens are counted under their own path, not the first pass
+    assert spy.rag_calls[0]["budget_path"] == "missing_input"
 
 
 def test_an_answer_that_names_nothing_costs_nothing(monkeypatch):
