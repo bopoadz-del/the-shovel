@@ -118,7 +118,8 @@ def _project_documents(page: Page) -> list[dict]:
     """The open project's documents as the platform serves them."""
     got = page.evaluate(
         """async () => {
-          const token = localStorage.getItem('tf_token');
+          // Same order as frontend/src/lib/token.ts getToken().
+          const token = sessionStorage.getItem('tf_token') ?? localStorage.getItem('tf_token');
           const m = location.pathname.match(/\\/projects\\/([^/]+)/);
           if (!token || !m) return { error: 'no token or project in ' + location.pathname };
           const r = await fetch('/v1/projects/' + m[1], {
