@@ -635,6 +635,19 @@ def test_reference_columns(cols, expected):
 
 
 @pytest.mark.parametrize(
+    "columns",
+    [
+        [g._Column("Item", None, 0, 30), g._Column("Qty", "quantity", 60, 90)],
+        [g._Column("Ref", None, 0, 30), g._Column("Notes", None, 60, 90), g._Column("Rate", "rate", 120, 150)],
+    ],
+)
+def test_no_description_column_means_no_reference_columns(columns):
+    """A reference is defined relative to the description column; without one
+    no column is a reference."""
+    assert g._ref_columns(columns) == set()
+
+
+@pytest.mark.parametrize(
     "pages,expected",
     [
         # An open chain at the end of a page is a section, not a row.
