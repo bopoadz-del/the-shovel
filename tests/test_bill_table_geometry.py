@@ -368,3 +368,73 @@ def test_workbook_keeps_source_page_and_unmapped_columns(tmp_path, cols, lines, 
 def test_sheet_titles_are_valid_and_unique(names, expected):
     used: set[str] = set()
     assert [g._sheet_title(n, used) for n in names] == expected
+
+
+@pytest.mark.parametrize(
+    "word,cx,cy,right",
+    [
+        (g.Word("a", 1, 10, 20, 30, 40), 25.0, 40.0, 40.0),
+        (g.Word("b", 2, 0, 0, 8, 6), 4.0, 3.0, 8.0),
+    ],
+)
+def test_word_geometry(word, cx, cy, right):
+    assert (word.cx, word.cy, word.right) == (cx, cy, right)
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        ([], []),
+        (_words_for_cell("Unit Rate", 10, 0, 1) + _words_for_cell("Qty", 300, 0, 1), [["Unit", "Rate"], ["Qty"]]),
+    ],
+)
+def test_cells_by_gap(line, expected):
+    assert [[w.text for w in c] for c in g._cells_by_gap(line)] == expected
+
+
+@pytest.mark.parametrize(
+    "lines,sheets",
+    [
+        ([], [("Bill", ["Description", "Unit", "Quantity", "Rate", "Amount"])]),
+        (LINES_A[:2], [("Bill 3 Pipework", ["Bill 3 Pipework"])]),
+    ],
+)
+def test_workbook_always_has_a_sheet(tmp_path, lines, sheets):
+    import openpyxl
+
+    rows = g.extract_bill_rows(_page(COLS_A, lines, page=1)) if lines else []
+    path = tmp_path / "w.xlsx"
+    g.write_bill_workbook(rows, str(path))
+    wb = openpyxl.load_workbook(path)
+    got = [(ws.title, [c for c in next(ws.iter_rows(values_only=True)) if c is not None]) for ws in wb.worksheets]
+    assert got == sheets
+
+
+@pytest.mark.parametrize(
+    "data,page,expected",
+    [
+        (
+            {"text": ["Qty", ""], "conf": ["90", "-1"], "left": [5, 0], "top": [6, 0], "width": [27, 0], "height": [20, 0]},
+            2,
+            [("Qty", 2, 5.0)],
+        ),
+        (
+            {"text": ["Rate", "9.50"], "conf": ["80", "77"], "left": [1, 60], "top": [2, 2], "width": [36, 36], "height": [20, 20]},
+            7,
+            [("Rate", 7, 1.0), ("9.50", 7, 60.0)],
+        ),
+    ],
+)
+def test_ocr_page_words_reads_tesseract_boxes(monkeypatch, data, page, expected):
+    import pytesseract
+
+    seen = {}
+
+    def _image_to_data(image, lang, output_type):
+        seen["args"] = (image, lang, output_type)
+        return data
+
+    monkeypatch.setattr(pytesseract, "image_to_data", _image_to_data)
+    words = g.ocr_page_words("IMG", page, lang="eng")
+    assert [(w.text, w.page, w.left) for w in words] == expected
+    assert seen["args"] == ("IMG", "eng", pytesseract.Output.DICT)

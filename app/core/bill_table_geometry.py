@@ -126,8 +126,6 @@ def group_lines(words: Sequence[Word]) -> list[list[Word]]:
     joins the current line when its centre lies within half the median word
     height of the line's running centre.
     """
-    if not words:
-        return []
     heights = [w.height for w in words if w.height > 0]
     tol = (statistics.median(heights) if heights else 1.0) * 0.5
     lines: list[list[Word]] = []
