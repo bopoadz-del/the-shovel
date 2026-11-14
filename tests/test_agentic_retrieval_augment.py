@@ -142,10 +142,6 @@ async def test_augment_merges_recovered_evidence(monkeypatch, ask):
     import app.core.rag.vector_store as vector_store
 
     monkeypatch.setattr(retriever, "compose_priced_boq_row", lambda q, e: None)
-    monkeypatch.setattr(
-        rag_route, "wants_agentic_figure_retrieval",
-        lambda q, asks_measured_quantity, exclude: True,
-    )
 
     plan_calls = []
 
