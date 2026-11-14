@@ -25,16 +25,20 @@ and re-embeds the pieces.
   ``plan_hash``.
 * The EXECUTE takes ``expected_plan_hash`` and refuses on a mismatch. It
   writes the active chunk table only (the legacy table is retired and is
-  only counted). One document = one transaction: the pieces are embedded
-  first, then the document's rows are re-read under lock and their text hash
-  compared with the plan's (compare-and-set); a changed document is skipped
-  and any failure rolls the document back untouched.
+  only counted). Memory and time per call are flat (RQ-4b): pieces are
+  embedded a bounded batch at a time into a staging table, at most
+  ``max_parents`` parents per call, and the call returns a continuation. Once
+  the whole slice is staged, one document = one transaction: the document's
+  rows are re-read under lock and their text hash compared with the plan's
+  (compare-and-set); a changed document is skipped and any failure rolls the
+  document back untouched.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import threading
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -265,66 +269,244 @@ def _estimate_seconds(work: dict[str, Any], sample: int, encode) -> dict[str, An
     }
 
 
-def _replace_document(session, cls, project_id: str, did: str, item: dict, vectors: dict) -> str:
-    """One document under lock: compare-and-set, then rewrite its rows."""
+# ── EXECUTE: flat in memory and time (RQ-4b) ───────────────────────────────
+#
+# Pieces are embedded a bounded batch at a time and every batch's vectors are
+# written to a staging table and committed before the next batch is encoded,
+# so peak memory is one batch whatever the document size. A call stages at
+# most ``max_parents`` parents and returns a continuation (what remains, per
+# document). Staging never touches the chunk table, so the plan hash stays
+# the same across the calls of one slice. Only when nothing in the slice is
+# left unstaged does a call replace documents: one transaction per document,
+# compare-and-set on its rows, the vectors read back from staging one parent
+# at a time.
+#
+# Staging is in the database, not in process memory: a continuation must
+# survive between HTTP calls, and the service can run more than one task or
+# be replaced between two calls.
+
+
+def _env_positive(name: str, default: int) -> int:
+    import os
+
+    try:
+        n = int(os.getenv(name, str(default)))
+    except ValueError:
+        n = default
+    return max(1, n)
+
+
+def resplit_embed_batch() -> int:
+    """Pieces per ``encode`` call (env ``RESPLIT_EMBED_BATCH``, default 16)."""
+    return _env_positive("RESPLIT_EMBED_BATCH", 16)
+
+
+def resplit_max_parents() -> int:
+    """Parents staged per EXECUTE call (env ``RESPLIT_MAX_PARENTS``, default 100)."""
+    return _env_positive("RESPLIT_MAX_PARENTS", 100)
+
+
+_STAGE_META = None
+
+
+def _stage_table():
+    """``chunk_resplit_stage``: one row per piece vector, keyed to the rows hash."""
+    global _STAGE_META
+    from sqlalchemy import Column, Integer, LargeBinary, MetaData, String, Table
+
+    from app.core.db import engine
+    from app.core.rag.vector_store import ensure_table
+
+    if _STAGE_META is None:
+        _STAGE_META = MetaData()
+        Table(
+            "chunk_resplit_stage", _STAGE_META,
+            Column("project_id", String, primary_key=True),
+            Column("doc_id", String, primary_key=True),
+            Column("parent_id", String, primary_key=True),
+            Column("piece_no", Integer, primary_key=True),
+            Column("rows_hash", String, nullable=False),
+            Column("vector", LargeBinary, nullable=False),
+        )
+    stage = _STAGE_META.tables["chunk_resplit_stage"]
+    ensure_table(stage, bind=engine)
+    return stage
+
+
+def _staged_keys(session, stage, project_id: str, did: str, rows_hash: str) -> set:
+    """``(parent_id, piece_no)`` staged for this document state; stale rows dropped."""
+    from sqlalchemy import delete, select
+
+    session.execute(delete(stage).where(
+        stage.c.project_id == project_id, stage.c.doc_id == did,
+        stage.c.rows_hash != rows_hash,
+    ))
+    keys = {(str(p), int(n)) for p, n in session.execute(
+        select(stage.c.parent_id, stage.c.piece_no).where(
+            stage.c.project_id == project_id, stage.c.doc_id == did,
+        )
+    )}
+    session.commit()
+    return keys
+
+
+def staged_vectors(session, stage, project_id: str, did: str):
+    """``get(parent_id)`` -> that parent's piece vectors, read from staging."""
+    import numpy as np
     from sqlalchemy import select
 
+    def get(parent_id: str) -> list:
+        return [np.frombuffer(v, dtype=np.float32).copy() for (v,) in session.execute(
+            select(stage.c.vector).where(
+                stage.c.project_id == project_id, stage.c.doc_id == did,
+                stage.c.parent_id == parent_id,
+            ).order_by(stage.c.piece_no)
+        )]
+
+    return get
+
+
+def _stage_pieces(stage, project_id: str, todo: list, encode, batch: int) -> int:
+    """Encode ``todo`` = ``[(did, rows_hash, parent_id, piece_no, text)]`` in
+    batches of ``batch``; each batch is written and committed before the next
+    is encoded. Returns the number of ``encode`` calls."""
+    import numpy as np
+
+    from app.core.db import SessionLocal
+
+    calls = 0
+    for start in range(0, len(todo), batch):
+        part = todo[start:start + batch]
+        vecs = encode([t[4] for t in part])
+        calls += 1
+        with SessionLocal() as session:
+            session.execute(stage.insert(), [
+                {"project_id": project_id, "doc_id": did, "parent_id": cid,
+                 "piece_no": k, "rows_hash": rh,
+                 "vector": np.asarray(v, dtype=np.float32).tobytes()}
+                for (did, rh, cid, k, _), v in zip(part, vecs)
+            ])
+            session.commit()
+    return calls
+
+
+def _replace_document(session, cls, project_id: str, did: str, item: dict, vectors) -> str:
+    """One document under lock: compare-and-set, then rewrite its rows.
+
+    ``vectors(parent_id)`` gives a parent's piece vectors in order. Rows are
+    rewritten one parent at a time (flushed, then the session is cleared), so
+    the transaction never holds the whole document's rows or vectors.
+    """
+    from sqlalchemy import select, update
+
     rows = session.execute(
-        select(cls).where(cls.project_id == project_id, cls.doc_id == did)
+        select(cls.chunk_id, cls.chunk_index, cls.text)
+        .where(cls.project_id == project_id, cls.doc_id == did)
         .order_by(cls.chunk_index).with_for_update()
-    ).scalars().all()
-    if doc_rows_hash((r.chunk_id, r.chunk_index, r.text) for r in rows) != item["rows_hash"]:
+    ).all()
+    if doc_rows_hash((r[0], r[1], r[2]) for r in rows) != item["rows_hash"]:
         return "changed"
+    parents = item["parents"]
+    total = sum(len(parents.get(r[0]) or [r[0]]) for r in rows)
+    shift = max((r[1] for r in rows), default=0) + total + 1
+    # Move every row clear of the final index range first, so renumbering
+    # never collides with the (project_id, doc_id, chunk_index) unique key.
+    session.execute(
+        update(cls).where(cls.project_id == project_id, cls.doc_id == did)
+        .values(chunk_index=cls.chunk_index + shift)
+        .execution_options(synchronize_session=False)
+    )
     cols = [c.key for c in cls.__mapper__.column_attrs]
-    new_rows: list[dict[str, Any]] = []
-    for r in rows:
-        base = {k: getattr(r, k) for k in cols}
-        pieces = item["parents"].get(r.chunk_id)
+    nxt = 0
+    for cid, _, _ in rows:
+        pieces = parents.get(cid)
         if not pieces:
-            new_rows.append(base)
+            session.execute(
+                update(cls).where(cls.chunk_id == cid).values(chunk_index=nxt)
+                .execution_options(synchronize_session=False)
+            )
+            nxt += 1
             continue
-        for k, (piece, vec) in enumerate(zip(pieces, vectors[r.chunk_id])):
+        vecs = vectors(cid)
+        if len(vecs) != len(pieces):
+            raise ValueError(f"staged vectors for a parent: {len(vecs)} != {len(pieces)} pieces")
+        obj = session.get(cls, cid)
+        base = {k: getattr(obj, k) for k in cols}
+        obj.text, obj.embedding, obj.chunk_index = pieces[0], vecs[0], nxt
+        for k in range(1, len(pieces)):
             row = dict(base)
-            row["chunk_id"] = r.chunk_id if k == 0 else f"{r.chunk_id}#{k}"
-            row["text"] = piece
-            row["embedding"] = vec
-            new_rows.append(row)
-    for r in rows:
-        session.delete(r)
-    session.flush()
-    for i, row in enumerate(new_rows):
-        row["chunk_index"] = i
-        session.add(cls(**row))
-    session.flush()
+            row.update(chunk_id=f"{cid}#{k}", text=pieces[k], embedding=vecs[k],
+                       chunk_index=nxt + k)
+            session.add(cls(**row))
+        nxt += len(pieces)
+        session.flush()
+        session.expunge_all()
     return "replaced"
+
+
+# One EXECUTE at a time in this process: a second call is refused, not queued.
+_EXECUTE_LOCK = threading.Lock()
+
+_NO_WINDOW = "the embedder exposes no tokenizer window; nothing planned"
 
 
 def chunk_resplit(
     *, project_id: str, doc_ids: Iterable[str], execute: bool = False,
     expected_plan_hash: str | None = None, doc_type: str | None = None,
-    sample: int = 50,
+    sample: int = 50, max_parents: int | None = None,
 ) -> dict[str, Any]:
-    """Plan, and with ``execute`` plus the live plan hash, re-split in place."""
-    from sqlalchemy.exc import SQLAlchemyError
+    """Plan, and with ``execute`` plus the live plan hash, re-split in place.
 
+    An EXECUTE stages at most ``max_parents`` parents per call and returns
+    ``continuation``; call again with the same plan hash until
+    ``continuation.parents_remaining`` is 0. A call made while another
+    EXECUTE is running in this process is refused.
+    """
+    if not project_id:
+        raise ValueError("project_id is required")
+    if not execute:
+        plan, _, _ = _plan_and_work(project_id, doc_ids, sample)
+        if plan is None:
+            return {"refused": _NO_WINDOW, "executed": False}
+        return {"plan": plan, "executed": False, "refused": None}
+    if not _EXECUTE_LOCK.acquire(blocking=False):
+        return {"plan": None, "executed": False,
+                "refused": "another chunk-resplit EXECUTE is in flight; nothing written"}
+    try:
+        cap = resplit_max_parents() if max_parents is None else int(max_parents)
+        if cap <= 0:
+            raise ValueError("max_parents must be positive")
+        return _execute(project_id, doc_ids, expected_plan_hash, doc_type, sample, cap)
+    finally:
+        _EXECUTE_LOCK.release()
+
+
+def _plan_and_work(project_id: str, doc_ids: Iterable[str], sample: int):
     from app.core.db import SessionLocal
     from app.core.rag.embeddings import get_embedder
 
-    if not project_id:
-        raise ValueError("project_id is required")
     tw = embedder_window()
     if tw is None:
-        return {"refused": "the embedder exposes no tokenizer window; nothing planned",
-                "executed": False}
+        return None, None, None
     count_tokens, window, model = tw
     with SessionLocal() as session:
         plan = plan_resplit(session, project_id, doc_ids, count_tokens, window, model)
     work = plan.pop("_work")
     embedder = get_embedder()
     plan["embedding_time"] = _estimate_seconds(work, sample, embedder.encode)
+    return plan, work, embedder
+
+
+def _execute(project_id, doc_ids, expected_plan_hash, doc_type, sample, max_parents):
+    from sqlalchemy import delete
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.core.db import SessionLocal
+
+    plan, work, embedder = _plan_and_work(project_id, doc_ids, sample)
+    if plan is None:
+        return {"refused": _NO_WINDOW, "executed": False}
     result: dict[str, Any] = {"plan": plan, "executed": False, "refused": None}
-    if not execute:
-        return result
     if not expected_plan_hash or expected_plan_hash != plan["plan_hash"]:
         result["refused"] = "expected_plan_hash does not match the live plan; nothing written"
         return result
@@ -336,29 +518,64 @@ def chunk_resplit(
     if cls is None:
         result["refused"] = "active chunk table is not mapped in this process; nothing written"
         return result
+    stage = _stage_table()
+    in_slice = {d: w for d, w in sorted(work.items())
+                if not doc_type or w["doc_type"] == doc_type}
+
+    # 1. Stage the first ``max_parents`` parents that are not fully staged yet.
+    todo: list[tuple] = []
+    remaining: dict[str, int] = {}
+    budget = max_parents
+    for did, item in in_slice.items():
+        with SessionLocal() as session:
+            have = _staged_keys(session, stage, project_id, did, item["rows_hash"])
+        left = 0
+        for cid, pieces in sorted(item["parents"].items()):
+            missing = [k for k in range(len(pieces)) if (cid, k) not in have]
+            if not missing:
+                continue
+            if budget <= 0:
+                left += 1
+                continue
+            budget -= 1
+            todo.extend((did, item["rows_hash"], cid, k, pieces[k]) for k in missing)
+        remaining[did] = left
+    encode_calls = _stage_pieces(stage, project_id, todo, embedder.encode,
+                                 resplit_embed_batch())
+    parents_remaining = sum(remaining.values())
+    result.update({
+        "executed": True,
+        "staged": {"parents": max_parents - budget, "pieces": len(todo),
+                   "encode_calls": encode_calls},
+        "continuation": {
+            "parents_remaining": parents_remaining,
+            "documents_remaining": {d: n for d, n in remaining.items() if n},
+            "plan_hash": plan["plan_hash"],
+        },
+        "documents": {}, "pieces_written": 0, "restamped": [],
+    })
+    if parents_remaining:
+        return result
+
+    # 2. Every parent of the slice is staged: one transaction per document.
     outcome: dict[str, str] = {}
     pieces_written = 0
-    for did, item in sorted(work.items()):
-        if doc_type and item["doc_type"] != doc_type:
-            continue
-        flat = [(cid, p) for cid, ps in item["parents"].items() for p in ps]
-        vecs = embedder.encode([p for _, p in flat])
-        vectors: dict[str, list] = {}
-        for (cid, _), v in zip(flat, vecs):
-            vectors.setdefault(cid, []).append(v)
+    for did, item in in_slice.items():
         with SessionLocal() as session:
             try:
-                state = _replace_document(session, cls, project_id, did, item, vectors)
+                state = _replace_document(session, cls, project_id, did, item,
+                                          staged_vectors(session, stage, project_id, did))
                 if state == "replaced":
+                    session.execute(delete(stage).where(
+                        stage.c.project_id == project_id, stage.c.doc_id == did))
                     session.commit()
-                    pieces_written += len(flat)
+                    pieces_written += sum(len(p) for p in item["parents"].values())
                 else:
                     session.rollback()
-            except SQLAlchemyError as exc:  # the document stays as it was
+            except (SQLAlchemyError, ValueError) as exc:  # the document stays as it was
                 session.rollback()
                 state = f"failed: {type(exc).__name__}"
         outcome[did] = state
-    result["executed"] = True
     result["documents"] = outcome
     result["pieces_written"] = pieces_written
     result["restamped"] = _restamp_after_purge(

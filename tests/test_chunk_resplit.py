@@ -233,7 +233,7 @@ def test_compare_and_set_skips_a_document_changed_after_the_plan(
     dim = int(cls.embedding_identity["dim"])
     vectors = {rows[0][0]: [np.ones(dim, dtype=np.float32)] * len(pieces)}
     with SessionLocal() as s:
-        assert cr._replace_document(s, cls, "cproj", did, item, vectors) == state
+        assert cr._replace_document(s, cls, "cproj", did, item, vectors.__getitem__) == state
         s.commit()
     assert len(_rows(did)) == (1 if stale else len(pieces))
 
@@ -458,7 +458,7 @@ def test_routes_turn_a_bad_request_into_400(monkeypatch, tmp_path, window, execu
         if execute:
             admin_router.admin_corpus_chunk_resplit_execute(
                 project_id="", doc_ids="d1", expected_plan_hash="0" * 64,
-                doc_type=None, auth=ADMIN)
+                doc_type=None, max_parents=None, auth=ADMIN)
         else:
             admin_router.admin_corpus_chunk_resplit_plan(
                 project_id="", doc_ids="d1", sample=0, auth=ADMIN)
@@ -475,11 +475,202 @@ def test_routes_return_the_plan_and_refuse_a_wrong_hash(monkeypatch, tmp_path, w
     if execute:
         out = admin_router.admin_corpus_chunk_resplit_execute(
             project_id="gproj", doc_ids=did, expected_plan_hash="0" * 64,
-            doc_type=None, auth=ADMIN)
+            doc_type=None, max_parents=None, auth=ADMIN)
         assert out["refused"] and out["executed"] is False
     else:
         out = admin_router.admin_corpus_chunk_resplit_plan(
             project_id="gproj", doc_ids=did, sample=0, auth=ADMIN)
         assert out["plan"]["doc_ids_found"] == 1
     assert out["plan"]["tables"][out["plan"]["active_table"]]["parents_over_window"] == 1
+    assert _rows(did) == before
+
+
+# ── RQ-4b: flat EXECUTE (bounded encode batches, bounded parents per call) ──
+
+THREE_PARENTS = [PROSE, "Heading.", TABLE, PROSE.replace("seven", "ten")]
+
+
+class _CountingEmbedder:
+    """The configured (fake) embedder, recording every ``encode`` call size."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls: list[int] = []
+
+    def encode(self, texts):
+        self.calls.append(len(texts))
+        return self._inner.encode(texts)
+
+
+def _counting(monkeypatch):
+    from app.core.rag import embeddings as emb_mod
+
+    real = emb_mod.get_embedder()
+    counter = _CountingEmbedder(real)
+    monkeypatch.setattr(emb_mod, "get_embedder", lambda *a, **k: counter)
+    return counter
+
+
+def _rows_with_vectors(did):
+    import numpy as np
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+
+    cls = _cls()
+    with SessionLocal() as s:
+        return [(r.chunk_index, r.text, r.page,
+                 np.asarray(r.embedding, dtype=np.float32).round(6).tobytes())
+                for r in s.execute(select(cls).where(cls.doc_id == did)
+                                   .order_by(cls.chunk_index)).scalars()]
+
+
+def _run_to_end(pid, did, max_parents):
+    """EXECUTE with one plan hash until no parent remains; returns every call."""
+    plan = cr.chunk_resplit(project_id=pid, doc_ids=[did], sample=0)["plan"]
+    calls = []
+    while True:
+        out = cr.chunk_resplit(project_id=pid, doc_ids=[did], execute=True,
+                               expected_plan_hash=plan["plan_hash"], sample=0,
+                               max_parents=max_parents)
+        assert out["executed"] is True, out["refused"]
+        calls.append(out)
+        if out["continuation"]["parents_remaining"] == 0:
+            return calls
+
+
+@pytest.mark.parametrize("batch", [2, 3])
+def test_more_pieces_than_one_batch_encode_in_several_calls_and_end_identical(
+    monkeypatch, tmp_path, window, batch,
+):
+    pm = _project(monkeypatch, tmp_path, "bproj")
+    one = _doc(pm, "bproj", "one.pdf", THREE_PARENTS, "spec", page=1)
+    many = _doc(pm, "bproj", "many.pdf", THREE_PARENTS, "spec", page=1)
+    counter = _counting(monkeypatch)
+
+    monkeypatch.setenv("RESPLIT_EMBED_BATCH", "100000")
+    single = _run_to_end("bproj", one, max_parents=1000)
+    pieces = single[-1]["staged"]["pieces"]
+    assert pieces > batch and counter.calls == [pieces]  # one call holds every piece
+
+    counter.calls.clear()
+    monkeypatch.setenv("RESPLIT_EMBED_BATCH", str(batch))
+    batched = _run_to_end("bproj", many, max_parents=1000)
+    assert batched[-1]["staged"]["pieces"] == pieces
+    assert len(counter.calls) == -(-pieces // batch) and max(counter.calls) <= batch
+    assert batched[-1]["documents"] == {many: "replaced"}
+    assert _rows_with_vectors(many) == _rows_with_vectors(one)
+
+
+@pytest.mark.parametrize("cap", [1, 2])
+def test_a_call_limited_to_n_parents_stages_n_and_reports_the_rest(
+    monkeypatch, tmp_path, window, cap,
+):
+    pm = _project(monkeypatch, tmp_path, "nproj")
+    did = _doc(pm, "nproj", "n.pdf", THREE_PARENTS, "spec", page=1)
+    ref = _doc(pm, "nproj", "ref.pdf", THREE_PARENTS, "spec", page=1)
+    before = _rows(did)
+    parents = sum(1 for t in THREE_PARENTS if words(t) > 12)
+    assert parents == 3
+
+    calls = _run_to_end("nproj", did, max_parents=cap)
+    first = calls[0]
+    assert first["staged"]["parents"] == cap
+    assert first["continuation"]["parents_remaining"] == parents - cap
+    assert first["continuation"]["documents_remaining"] == {did: parents - cap}
+    assert first["documents"] == {} and first["pieces_written"] == 0
+    assert len(calls) == -(-parents // cap)
+    # the plan hash held across every call: nothing was written before the last
+    assert len({c["continuation"]["plan_hash"] for c in calls}) == 1
+    assert calls[-1]["documents"] == {did: "replaced"}
+    assert len(_rows(did)) > len(before)
+
+    assert _staged_count("nproj", did) == 0  # staging is cleared by the replace
+    _run_to_end("nproj", ref, max_parents=1000)
+    assert [r[1:] for r in _rows_with_vectors(did)] == [r[1:] for r in _rows_with_vectors(ref)]
+
+
+@pytest.mark.parametrize("in_flight", [True, False])
+def test_a_second_concurrent_execute_is_refused(monkeypatch, tmp_path, window, in_flight):
+    pm = _project(monkeypatch, tmp_path, "lproj")
+    did = _doc(pm, "lproj", "l.pdf", [PROSE], "spec", page=1)
+    before = _rows(did)
+    plan = cr.chunk_resplit(project_id="lproj", doc_ids=[did], sample=0)["plan"]
+    if in_flight:
+        assert cr._EXECUTE_LOCK.acquire(blocking=False)
+    try:
+        out = cr.chunk_resplit(project_id="lproj", doc_ids=[did], execute=True,
+                               expected_plan_hash=plan["plan_hash"], sample=0)
+    finally:
+        if in_flight:
+            cr._EXECUTE_LOCK.release()
+    if in_flight:
+        assert out["executed"] is False and "in flight" in out["refused"]
+        assert _rows(did) == before
+    else:
+        assert out["documents"] == {did: "replaced"}
+    assert not cr._EXECUTE_LOCK.locked()  # the guard is released after every call
+
+
+def _staged_count(pid, did):
+    from sqlalchemy import func, select
+
+    from app.core.db import SessionLocal
+
+    stage = cr._stage_table()
+    with SessionLocal() as s:
+        return s.execute(select(func.count()).select_from(stage).where(
+            stage.c.project_id == pid, stage.c.doc_id == did)).scalar_one()
+
+
+@pytest.mark.parametrize("current, stale", [("hash-a", "hash-b"), ("hash-b", "hash-a")])
+def test_staging_of_an_older_document_state_is_dropped(monkeypatch, tmp_path, current, stale):
+    from app.core.db import SessionLocal
+
+    _project(monkeypatch, tmp_path, "sproj")
+    stage = cr._stage_table()
+    rows = [("p1", 0, current), ("p1", 1, current), ("p2", 0, stale)]
+    with SessionLocal() as s:
+        s.execute(stage.insert(), [
+            {"project_id": "sproj", "doc_id": "d1", "parent_id": p, "piece_no": n,
+             "rows_hash": h, "vector": bytes(4)} for p, n, h in rows])
+        s.commit()
+    with SessionLocal() as s:
+        keys = cr._staged_keys(s, stage, "sproj", "d1", current)
+    assert keys == {("p1", 0), ("p1", 1)}
+    assert _staged_count("sproj", "d1") == 2  # the stale state's row is gone
+
+
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_a_parent_whose_staged_vector_count_differs_is_refused(monkeypatch, tmp_path, delta):
+    import numpy as np
+
+    from app.core.db import SessionLocal
+
+    pm = _project(monkeypatch, tmp_path, "vproj")
+    did = _doc(pm, "vproj", "v.pdf", [PROSE], "spec", page=1)
+    before = _rows(did)
+    rows = [(r[0], r[1], r[2]) for r in before]
+    pieces = cr.partition(PROSE, words, 12)
+    item = {"doc_type": "spec", "parents": {rows[0][0]: pieces},
+            "rows_hash": cr.doc_rows_hash(rows)}
+    cls = _cls()
+    vec = np.ones(int(cls.embedding_identity["dim"]), dtype=np.float32)
+    with SessionLocal() as s:
+        with pytest.raises(ValueError):
+            cr._replace_document(s, cls, "vproj", did, item,
+                                 lambda cid: [vec] * (len(pieces) + delta))
+        s.rollback()
+    assert _rows(did) == before
+
+
+@pytest.mark.parametrize("execute", [True, False])
+def test_execute_refuses_without_a_tokenizer_window(monkeypatch, tmp_path, execute):
+    pm = _project(monkeypatch, tmp_path, "wproj")
+    did = _doc(pm, "wproj", "w.pdf", [PROSE], "spec", page=1)
+    before = _rows(did)
+    monkeypatch.setattr(cr, "embedder_window", lambda: None)
+    out = cr.chunk_resplit(project_id="wproj", doc_ids=[did], execute=execute,
+                           expected_plan_hash="0" * 64, sample=0)
+    assert out["executed"] is False and "tokenizer window" in out["refused"]
     assert _rows(did) == before
