@@ -391,3 +391,27 @@ def test_text_stage_pieces_of_a_sheet_carry_its_title_block_line(monkeypatch, no
         assert not headed[0] and pages[0] == 1  # the cover page is not the sheet
     else:
         assert len(chunks) == 1 and not any(headed)
+
+
+@pytest.mark.parametrize(
+    "text, chunker, has_chunks",
+    [
+        (None, "default", False),
+        ("   \n\t", "default", False),
+        (_sentences(4), "default", True),
+        (None, "markdown", False),
+    ],
+)
+def test_prose_segment_without_text_yields_no_chunks(text, chunker, has_chunks):
+    """A segment with no text gives no chunks and no parent tags, never a crash.
+
+    The line chunker raises on a missing text; the segment guard is what
+    turns that into an empty result. Real text still gives chunks, each one
+    tagged in step.
+    """
+    from app.core import doc_index
+
+    parents: list[int | None] = []
+    chunks = doc_index._chunk_prose_segment(text, chunker, parents)
+    assert bool(chunks) is has_chunks
+    assert len(parents) == len(chunks)
