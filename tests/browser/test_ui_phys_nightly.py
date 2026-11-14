@@ -134,14 +134,21 @@ def _assert_sources_cite(page: Page, uploaded_name: str) -> None:
     file names stay out of citations (app/core/project_identity.py)."""
     from app.core.project_identity import display_title
 
-    docs = [d for d in _project_documents(page) if d.get("original_name") == uploaded_name]
-    assert len(docs) == 1, f"expected one upload named {uploaded_name!r}, got {len(docs)}"
+    # The stored name keeps the stem; the extension may be the one the
+    # bytes prove (upload_limits.typed_upload_name), so match on the stem.
+    stem = Path(uploaded_name).stem
+    all_docs = _project_documents(page)
+    docs = [d for d in all_docs if Path(str(d.get("original_name") or "")).stem == stem]
+    assert len(docs) == 1, (
+        f"expected one upload with stem {stem!r}, got "
+        f"{[d.get('original_name') for d in all_docs]!r}"
+    )
     doc = docs[0]
     shown = display_title(str(doc["id"]), str(doc.get("doc_type") or ""))
     sources = page.locator(".sources-list")
     expect(sources).to_contain_text(shown, timeout=10_000)
-    stem = Path(uploaded_name).stem
     expect(sources).not_to_contain_text(stem)
+    expect(sources).not_to_contain_text(str(doc.get("original_name")))
     expect(sources).not_to_contain_text(uploaded_name)
 
 
