@@ -1,0 +1,139 @@
+name: chunk-resplit
+
+# Ops workflow (Advisor 08:28Z + 08:39Z, 14 Nov, RQ-4): re-split stored chunks
+# that are longer than the embedder's token window, IN PLACE, for an explicit
+# list of documents only. Same shape as doc-typing-backfill.yml.
+#
+# Safety, in order:
+#   1. A plan call (GET, read-only) runs first, ALWAYS: per chunk table and per
+#      doc_type, parents over the window, pieces to write, under-floor chunks
+#      (counted only), an embedding-time estimate and plan_hash.
+#   2. The write runs only with execute=true AND an expected_plan_hash equal to
+#      the live plan's. The route recomputes the plan and checks it again.
+#   3. One document per transaction, compare-and-set on the document's rows;
+#      a changed document is skipped, a failure rolls it back untouched. A plan
+#      after the write must report 0 parents over the window for the slice.
+# project_id, doc_ids and expected_plan_hash have NO committed default.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project of the documents (no default committed)"
+        required: true
+      doc_ids:
+        description: "Comma-separated document ids (required; there is no whole-project run)"
+        required: true
+      expected_plan_hash:
+        description: "plan_hash from an earlier plan run; the write runs only if the live plan equals it"
+        required: false
+        default: ""
+      doc_type:
+        description: "Optional: only re-split documents of this doc_type (run in slices)"
+        required: false
+        default: ""
+      execute:
+        description: "false = plan only (default). true = re-split and re-embed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resplit:
+    name: Chunk re-split (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+      DOC_IDS: ${{ inputs.doc_ids }}
+      DOC_TYPE: ${{ inputs.doc_type }}
+      EXPECTED: ${{ inputs.expected_plan_hash }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
+
+      - name: Plan (read-only, always)
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/corpus/chunk-resplit?project_id=$(enc "$PROJECT_ID")&doc_ids=$(enc "$DOC_IDS")"
+          curl --fail-with-body --max-time 900 -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" -H "Accept: application/json" -o plan.json -w "HTTP %{http_code}\n" "${url}"
+          jq '.' plan.json
+          [ "$(jq -r '.refused // empty' plan.json)" = "" ] || { echo "::error::plan refused: $(jq -r '.refused' plan.json)"; exit 1; }
+          {
+            echo "### Plan (read-only)"
+            echo "- documents requested / found: $(jq -r '.plan.doc_ids_requested' plan.json) / $(jq -r '.plan.doc_ids_found' plan.json)"
+            echo "- model / window tokens: $(jq -r '.plan.model' plan.json) / $(jq -r '.plan.window_tokens' plan.json)"
+            echo "- per table: $(jq -c '.plan.tables | map_values({executes, parents_over_window, pieces_to_write, under_floor})' plan.json)"
+            echo "- embedding time: $(jq -c '.plan.embedding_time' plan.json)"
+            echo "- plan_hash (live): $(jq -r '.plan.plan_hash' plan.json)"
+            echo "- expected_plan_hash (operator): ${EXPECTED}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PLANNED=$(jq -r '.plan.plan_hash' plan.json)" >> "$GITHUB_ENV"
+
+      - name: Refuse the write when the plan differs from the expected hash
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          if [ "$PLANNED" != "$EXPECTED" ]; then
+            echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}; no write was made"
+            echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Re-split (execute=true)
+        if: inputs.execute
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/corpus/chunk-resplit?project_id=$(enc "$PROJECT_ID")&doc_ids=$(enc "$DOC_IDS")&expected_plan_hash=$(enc "$EXPECTED")"
+          [ -n "$DOC_TYPE" ] && url="${url}&doc_type=$(enc "$DOC_TYPE")"
+          curl --fail-with-body --max-time 3000 -X POST -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" -H "Accept: application/json" -o applied.json -w "HTTP %{http_code}\n" "${url}"
+          jq 'del(.plan)' applied.json
+          [ "$(jq -r '.executed' applied.json)" = "true" ] || { echo "::error::write refused: $(jq -r '.refused' applied.json)"; exit 1; }
+          {
+            echo "### Write (execute=true)"
+            echo "- pieces written: $(jq -r '.pieces_written' applied.json)"
+            echo "- documents: $(jq -c '.documents | to_entries | group_by(.value) | map({(.[0].value): length}) | add' applied.json)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload responses
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-resplit-response
+          path: |
+            plan.json
+            applied.json
+          if-no-files-found: ignore
+          retention-days: 7
