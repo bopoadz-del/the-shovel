@@ -122,11 +122,59 @@ async def handle_search_project_documents(call: ToolCall) -> dict:
     results = await search_project_documents(
         project_id, query, top_k, trace_path="tool",
     )
+    from app.agents.runtime import _effective_tool_result_max_chars
+
     return {
         "name": "search_project_documents",
         "ok": True,
-        "result": {"results": results},
+        "result": search_rows_within_cap(results, _effective_tool_result_max_chars()),
     }
+
+
+def _search_payload(rows: list[dict], withheld: int) -> dict:
+    payload: dict = {"results": rows}
+    if withheld:
+        payload["rows_withheld"] = withheld
+        payload["note"] = (
+            f"{withheld} lower-ranked row(s) did not fit in one tool message "
+            "and were left out whole; every row shown is complete."
+        )
+    return payload
+
+
+def _serialized_len(payload: dict) -> int:
+    import json
+
+    # The same serialisation the runtime applies to the tool message.
+    return len(json.dumps(payload, default=str))
+
+
+def search_rows_within_cap(results: list[dict], cap: int) -> dict:
+    """The search result as a tool payload that fits ``cap`` characters.
+
+    Rows are taken in rank order while the serialised payload still fits; the
+    first row that would overflow and every row after it are left out whole
+    and counted, so the message is never cut mid-row and never needs paging
+    (a cut result made the model re-run the same search once per window).
+    Only a first row that cannot fit on its own is shortened, by whole words
+    from the end of its snippet.
+    """
+    kept: list[dict] = []
+    for row in results:
+        if _serialized_len(_search_payload(kept + [row], len(results) - len(kept) - 1)) > cap:
+            break
+        kept.append(row)
+    if not kept and results:
+        first = dict(results[0])
+        words = str(first.get("snippet") or "").split()
+        withheld = len(results) - 1
+        while words:
+            words = words[: len(words) * 3 // 4] if len(words) > 4 else words[:-1]
+            first["snippet"] = " ".join(words) + " ..."
+            if _serialized_len(_search_payload([first], withheld)) <= cap:
+                return _search_payload([first], withheld)
+        return _search_payload([], len(results))
+    return _search_payload(kept, len(results) - len(kept))
 
 
 @tool("list_project_documents", owner="base", display_name='Project document list', params={
