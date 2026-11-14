@@ -2643,6 +2643,25 @@ def document_names(doc_ids: List[str]) -> Dict[str, str]:
     return {str(r.id): r.original_name or "" for r in rows}
 
 
+def document_kinds(doc_ids: List[str]) -> Dict[str, Tuple[str, str]]:
+    """``{id: (doc_type, doc_role)}`` for the ids that have a documents row.
+
+    The same one-query batch read as ``document_names``; it is how an excerpt
+    handed to the model learns what kind of document it came from. Absent ids
+    are missing from the result.
+    """
+    ids = [d for d in dict.fromkeys(doc_ids or []) if d]
+    if not ids:
+        return {}
+    _ensure_db()
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(Document.id, Document.doc_type, Document.doc_role)
+            .where(Document.id.in_(ids))
+        ).all()
+    return {str(r.id): (r.doc_type or "", r.doc_role or "") for r in rows}
+
+
 def delete_document(doc_id: str) -> Optional[Dict[str, Any]]:
     """Delete a document row. Returns the deleted row (so the caller can
     purge the file from disk), or None if it did not exist.

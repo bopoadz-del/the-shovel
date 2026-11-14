@@ -68,7 +68,10 @@ def chunk_evidence(chunk) -> str:
 
 def chunks_to_text(chunks) -> str:
     """Concatenate chunks into one evidence string, each marked as in
-    ``chunk_evidence``."""
+    ``chunk_evidence``, with each chunk's document kind read in one batch."""
+    from app.core.rag.inject import annotate_document_kinds
+    chunks = list(chunks or [])
+    annotate_document_kinds([c for c in chunks if _is_marked_chunk(c)])
     return "\n".join(chunk_evidence(c) for c in chunks if chunk_text(c).strip())
 
 

@@ -384,6 +384,12 @@ class Chunk:
     # unanswerable however good retrieval got. Passed to the model in the
     # context marker; internal like the rest, never serialized to the wire.
     source_name: str = field(default="", compare=False)
+    # The document's type and role from its documents row (S-R11), filled by
+    # ``inject.annotate_document_kinds`` before the excerpt is handed, so the
+    # model can tell a specification from a drawing or a contractor's method
+    # statement. "" until read; internal like ``source_name``, never on the wire.
+    doc_type: str = field(default="", compare=False)
+    doc_role: str = field(default="", compare=False)
     # ── photo_chunks fields (kind="photo") ─────────────────────────────
     # text chunks keep kind="text" and the photo fields default to None.
     kind: str = "text"
@@ -423,6 +429,8 @@ class Chunk:
         d.pop("drawing_number", None)
         d.pop("superseded", None)
         d.pop("source_name", None)
+        d.pop("doc_type", None)
+        d.pop("doc_role", None)
         # Drop photo fields for plain text chunks to keep payloads small
         if d.get("kind") == "text":
             d.pop("sha256", None)
