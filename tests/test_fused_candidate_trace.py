@@ -229,3 +229,22 @@ def test_no_fusion_traces_none(handed):
     follow.drop(_C("b1"), "noise_filename")
     assert follow.finish(handed, handed, handed) is None
     assert ft.public_view(None, handed) is None
+
+
+# ── 7. the turn-memo accessors ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("summaries", [[{"n_candidates": 3}],
+                                       [{"n_candidates": 1}, {"n_candidates": 9}]])
+def test_fusion_records_returns_the_turns_summaries_in_order(turn, summaries):
+    assert vs.fusion_records(PID) == []
+    for s in summaries:
+        vs.record_fusion(PID, s)
+    assert vs.fusion_records(PID) == summaries
+    assert vs.fusion_records("another-project") == []
+
+
+@pytest.mark.parametrize("record", [{"n_candidates": 4}, None])
+def test_record_fused_candidates_is_read_back_and_overwritten(turn, record):
+    vs.record_fused_candidates(PID, {"n_candidates": 99})
+    vs.record_fused_candidates(PID, record)
+    assert vs.fused_candidates_record(PID) == record
