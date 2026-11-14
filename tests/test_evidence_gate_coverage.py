@@ -325,3 +325,39 @@ def test_store_counts_chunks_holding_each_term(small_store, texts, expect):
     index("p-own", "doc-a", texts)
     index("p-other", "doc-b", [" ".join(expect)] * 3)  # another project's words
     assert store.term_chunk_counts("p-own", list(expect)) == expect
+
+
+@pytest.mark.parametrize("terms,counts", [
+    (("retention", "percentage"), {"retention": 0, "percentage": 0}),
+    (("many", "lux", "plant"), {}),
+])
+def test_a_project_index_holding_no_question_term_never_fires(terms, counts):
+    indexed, missing = route.informative_missing_terms(terms, terms, counts)
+    assert indexed == () and missing == ()
+
+
+class _RecordingSession:
+    """Answers ``count(*)`` with ``n`` and records each statement sent."""
+
+    def __init__(self, n):
+        self.n = n
+        self.sent: list[tuple[str, dict]] = []
+
+    def execute(self, stmt, params=None):
+        self.sent.append((str(stmt), dict(params or {})))
+        return SimpleNamespace(scalar=lambda: self.n)
+
+
+@pytest.mark.parametrize("term,n", [("blinding", 3), ("c35/45", 11)])
+def test_postgres_counts_from_the_bm25_tsvector(term, n):
+    from app.core.rag import vector_store as vs
+
+    store = object.__new__(vs.VectorStore)
+    store._table_name = "chunks_ns"
+    store._use_pgvector = True
+    session = _RecordingSession(n)
+    assert store._term_chunk_count(session, "p-own", term, "") == n
+    (sql, params), = session.sent
+    assert "text_search @@ plainto_tsquery" in sql
+    assert "chunks_ns" in sql and "_fts" not in sql
+    assert params == {"project_id": "p-own", "q": term}
