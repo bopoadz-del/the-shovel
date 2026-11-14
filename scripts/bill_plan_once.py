@@ -22,7 +22,8 @@ The last line is ``BILLPLANSUMMARY <json>``. That line reaches a GitHub job
 summary, which is world-readable, so it carries counts, codes and hashes
 only: the classifier verdict and its counts, the page range, pages cached
 before and after, rows, unreconciled rows, the number of section paths, the
-rows per path depth, wall time, peak RSS and the plan hash. It is built by
+rows per path depth, pages by word source (text layer, OCR, work-dir cache),
+wall time, peak RSS and the plan hash. It is built by
 :func:`public_summary` from a fixed key list, and every string in it must be
 a short code token (at most a hash long); anything else is replaced by
 ``"redacted"``. An error is a code plus the exception CLASS, never its
@@ -56,6 +57,12 @@ SUMMARY_PREFIX = "BILLPLANSUMMARY "
 MAX_LISTED_DEPTH = 3
 #: Plan fields the summary carries as they are (all ids or counts).
 PLAN_FIELDS = ("reason", "pages", "pages_in_file", "rows", "unreconciled", "plan_hash")
+#: Page-source counts the summary carries (pages with and without a text
+#: layer, and pages read fresh from each source or back from the work dir).
+SOURCE_FIELDS = (
+    "pages_text_layer", "pages_without_text_layer",
+    "pages_read_text_layer", "pages_read_ocr", "pages_read_cache",
+)
 #: Classifier counts the summary carries.
 VERDICT_FIELDS = (
     "pages_sampled", "header_pages", "measured_rows", "priced_rows", "reconciled_rows",
@@ -69,7 +76,7 @@ REDACTED = "redacted"
 SUMMARY_KEYS = (
     "ok", "error", "error_class", "project_id", "document_id", "build_sha",
     "requested_pages", "pages_cached_before", "pages_cached_after", "wall_s",
-    "peak_rss_mb", "verdict", *PLAN_FIELDS, "section_paths", "rows_by_path_depth",
+    "peak_rss_mb", "verdict", *PLAN_FIELDS, *SOURCE_FIELDS, "section_paths", "rows_by_path_depth",
     "private_plan_saved", "work_dir_durable",
 )
 #: Error codes (the summary never carries a message).
@@ -229,7 +236,7 @@ def plan_one(
         report["error"] = plan["error"]
         report["error_class"] = plan.get("error_class")
         return report
-    for name in PLAN_FIELDS:
+    for name in (*PLAN_FIELDS, *SOURCE_FIELDS):
         if name in plan:
             report[name] = plan[name]
     sections = plan.get("sections")
@@ -264,7 +271,7 @@ def production_deps() -> Deps:
     return Deps(
         get_document=projects.get_document,
         plan=bill_derived.plan_bill_sheet,
-        classify=bill_classify.classify_image_only_bill,
+        classify=bill_classify.classify_bill_pdf,
         build_sha=_health._deployed_build_sha,
         peak_rss_mb=_peak_rss_mb,
         durable=byte_store.is_durable_mount,

@@ -158,16 +158,7 @@ def test_sampled_pages_do_not_carry_columns(first, second):
     assert v.reason == bc.NOT_BILL_FEW_ROWS
 
 
-# --- classify_image_only_bill on real PDFs -----------------------------------
-
-
-def _text_pdf(path, pages: int) -> str:
-    doc = fitz.open()
-    for i in range(pages):
-        doc.new_page().insert_text((72, 72), f"Typed page {i}")
-    doc.save(path)
-    doc.close()
-    return str(path)
+# --- classify_bill_pdf on real PDFs -----------------------------------------
 
 
 def _image_pdf(path, pages: int) -> str:
@@ -182,13 +173,21 @@ def _image_pdf(path, pages: int) -> str:
 
 
 @pytest.mark.parametrize("pages", [1, 6])
-def test_text_layer_pdf_is_never_a_candidate(tmp_path, pages):
-    called = []
-    path = _text_pdf(tmp_path / "t.pdf", pages)
-    v = bc.classify_image_only_bill(path, page_words=lambda p, idx: called.append(idx) or [])
+def test_text_layer_pdf_is_judged_by_its_text_words_without_ocr(tmp_path, monkeypatch, pages):
+    def no_ocr(image, page, lang="eng"):
+        raise AssertionError("OCR'd a page that has a text layer")
+
+    monkeypatch.setattr(g, "ocr_page_words", no_ocr)
+    doc = fitz.open()
+    for i in range(pages):
+        doc.new_page().insert_text((72, 72), f"Typed page {i} of ordinary prose, no table at all")
+    path = str(tmp_path / "t.pdf")
+    doc.save(path)
+    doc.close()
+    v = bc.classify_bill_pdf(path)
     assert v.is_bill is False
-    assert v.reason == bc.NOT_BILL_TEXT_LAYER
-    assert called == []
+    assert v.reason == bc.NOT_BILL_NO_HEADER
+    assert v.pages_sampled == min(pages, 5)
 
 
 @pytest.mark.parametrize(
@@ -203,18 +202,18 @@ def test_text_layer_pdf_is_never_a_candidate(tmp_path, pages):
 def test_image_only_pdf_is_classified_by_sampled_content(tmp_path, pages, sample, expected_idx, content, reason):
     seen = []
 
-    def page_words(path, idx):
+    def page_source(path, idx):
         seen.append(list(idx))
-        return content()
+        return [bc.PageRead(idx[0], bc.SOURCE_OCR, tuple(content()))]
 
     path = _image_pdf(tmp_path / "s.pdf", pages)
-    v = bc.classify_image_only_bill(path, sample_pages=sample, page_words=page_words)
+    v = bc.classify_bill_pdf(path, sample_pages=sample, page_source=page_source)
     assert seen == [expected_idx]
     assert v.reason == reason
 
 
 @pytest.mark.parametrize("pages,expected", [(1, [1]), (4, [1, 3, 4])])
-def test_ocr_sampled_pages_renders_each_sampled_page(tmp_path, monkeypatch, pages, expected):
+def test_image_only_pages_are_rendered_and_ocrd(tmp_path, monkeypatch, pages, expected):
     """Rendering is real (PyMuPDF); the OCR engine is stood in for so the
     test checks which pages are rendered and that their words are joined."""
     rendered = []
@@ -226,6 +225,7 @@ def test_ocr_sampled_pages_renders_each_sampled_page(tmp_path, monkeypatch, page
     monkeypatch.setattr(g, "ocr_page_words", fake_ocr)
     path = _image_pdf(tmp_path / "o.pdf", pages)
     indices = [p - 1 for p in expected]
-    words = bc._ocr_sampled_pages(path, indices)
-    assert [w.text for w in words] == [f"w{p}" for p in expected]
+    reads = bc.read_pages(path, indices)
+    assert [r.source for r in reads] == [bc.SOURCE_OCR] * len(expected)
+    assert [w.text for r in reads for w in r.words] == [f"w{p}" for p in expected]
     assert rendered == [(p, True) for p in expected]

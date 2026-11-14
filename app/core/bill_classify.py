@@ -1,10 +1,10 @@
-"""Is this image-only PDF a bill? Decided by its own content (P-B3).
+"""Is this PDF a bill the derived sheet should carry? Decided by its own content (P-B3).
 
 The owner's ruling (13 Nov 05:55Z) converts an image-only bill into a derived
 spreadsheet. That conversion runs only on documents that ARE bills, and the
 decision must come from the page content, never from the file name.
 
-Content evidence, read from OCR word boxes of a deterministic page sample:
+Content evidence, read from the word boxes of a deterministic page sample:
 
 * a column-header line that resolves through the BOQ processor's aliasing
   (a description column plus at least one figure column) -- the same test
@@ -14,8 +14,17 @@ Content evidence, read from OCR word boxes of a deterministic page sample:
   (qty x rate == amount within rounding) on most of them. A priced bill
   reconciles; a table that merely has similar headings does not.
 
-A PDF with a text layer is never a candidate: the derived sheet exists only
-for a bill the text path cannot index.
+Word boxes come per PAGE from the best source that page has (see
+:func:`read_pages`): a page whose text layer passes the index's own OCR test
+(``doc_index._PDF_OCR_THRESHOLD``) gives its words with their boxes from that
+layer and is never OCR'd; any other page is rendered and OCR'd. Both land in
+the same pixel space, so the geometry downstream cannot tell them apart. A
+file is therefore judged page by page, never by whether some page has text.
+
+Candidacy is decided by what the index already holds, not by the file kind:
+a bill whose rows the text path indexed as row chunks (its BOQ parse recorded
+priced rows, :func:`rows_indexed_as_rows`) is never a candidate; one whose
+row parse did not succeed is, when its content passes the verdict above.
 
 Nothing here names a bill, a section, an item, a page or a file.
 """
@@ -33,7 +42,7 @@ _MIN_MEASURED_ROWS = 3
 # Share of priced rows (qty, rate and amount all numeric) that must reconcile.
 _MIN_RECONCILED_SHARE = 0.5
 
-NOT_BILL_TEXT_LAYER = "has_text_layer"
+NOT_CANDIDATE_ROWS_INDEXED = "rows_indexed_as_rows"
 NOT_BILL_NO_HEADER = "no_column_header"
 NOT_BILL_FEW_ROWS = "too_few_measured_rows"
 NOT_BILL_UNRECONCILED = "priced_rows_do_not_reconcile"
@@ -106,50 +115,118 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
     return BillVerdict(True, BILL_PRICED, **counts)
 
 
-PageWords = Callable[[str, Sequence[int]], list[g.Word]]
+#: Page word sources. ``text_layer``: the page's own digital text, with its
+#: boxes. ``ocr``: the page rendered at :data:`RENDER_DPI` and OCR'd.
+SOURCE_TEXT_LAYER = "text_layer"
+SOURCE_OCR = "ocr"
+#: Render resolution for OCR; text-layer boxes (PDF points) are scaled into
+#: the same pixel space so one geometry serves both sources.
+RENDER_DPI = 200
 
 
-def _ocr_sampled_pages(file_path: str, indices: Sequence[int]) -> list[g.Word]:
-    """Render each sampled page and OCR it to word boxes, one page at a time."""
+@dataclass(frozen=True)
+class PageRead:
+    """One page's word boxes and the source that produced them."""
+
+    index: int          # 0-based page index
+    source: str         # SOURCE_TEXT_LAYER or SOURCE_OCR
+    words: tuple[g.Word, ...]
+
+
+PageSource = Callable[[str, Sequence[int]], list[PageRead]]
+
+
+def page_has_text_layer(page) -> bool:
+    """The index's own per-page test: a text layer shorter than
+    ``doc_index._PDF_OCR_THRESHOLD`` is image-only and gets OCR'd there too."""
+    from app.core import doc_index
+
+    return len((page.get_text() or "").strip()) >= doc_index._PDF_OCR_THRESHOLD
+
+
+def text_layer_words(page, number: int) -> list[g.Word]:
+    """Word boxes from a page's text layer, in the rendered image's pixel space
+    (display orientation, :data:`RENDER_DPI`)."""
     import fitz  # PyMuPDF
+
+    scale = RENDER_DPI / 72.0
+    to_display = page.rotation_matrix
+    out: list[g.Word] = []
+    for x0, y0, x1, y1, raw, *_rest in page.get_text("words"):
+        text = (raw or "").strip()
+        if not text:
+            continue
+        r = fitz.Rect(x0, y0, x1, y1) * to_display
+        out.append(g.Word(
+            text=text, page=number,
+            left=r.x0 * scale, top=r.y0 * scale,
+            width=r.width * scale, height=r.height * scale,
+        ))
+    return out
+
+
+def _ocr_page(page, number: int) -> list[g.Word]:
     from PIL import Image
+
+    pix = page.get_pixmap(dpi=RENDER_DPI)
+    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    try:
+        return g.ocr_page_words(image, page=number)
+    finally:
+        del pix, image
+
+
+def read_pages(file_path: str, indices: Sequence[int]) -> list[PageRead]:
+    """Each asked page's word boxes from its best source, one page at a time."""
+    import fitz  # PyMuPDF
 
     from app.core import file_crypto
 
-    words: list[g.Word] = []
+    out: list[PageRead] = []
     with file_crypto.open_plaintext(file_path) as readable:
         doc = fitz.open(readable)
         try:
             for index in indices:
-                pix = doc[index].get_pixmap(dpi=200)
-                image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-                words += g.ocr_page_words(image, page=index + 1)
-                del pix, image
+                page = doc[index]
+                if page_has_text_layer(page):
+                    words, source = text_layer_words(page, index + 1), SOURCE_TEXT_LAYER
+                else:
+                    words, source = _ocr_page(page, index + 1), SOURCE_OCR
+                out.append(PageRead(index, source, tuple(words)))
         finally:
             doc.close()
-    return words
+    return out
 
 
-def classify_image_only_bill(
+def rows_indexed_as_rows(document: dict | None) -> bool:
+    """Whether the index already holds this document's bill rows as row
+    chunks: its BOQ parse succeeded with priced rows (the attribute
+    ``doc_index`` records next to the line-item chunks it emits). A parse
+    that failed, raised, found no priced rows or never ran leaves none."""
+    from app.core import doc_index
+
+    priced = (doc_index.boq_total_status(document) or {}).get("priced_rows")
+    return isinstance(priced, (int, float)) and not isinstance(priced, bool) and priced > 0
+
+
+def classify_bill_pdf(
     file_path: str,
     *,
     sample_pages: int = 5,
-    page_words: PageWords | None = None,
+    page_source: PageSource | None = None,
     block=None,
 ) -> BillVerdict:
-    """Verdict for one PDF: a bill only when it has no text layer AND its
-    sampled pages carry bill content (see :func:`bill_verdict`).
+    """Verdict for one PDF from its sampled pages' content (see
+    :func:`bill_verdict`), each page read from its own best source.
 
-    ``page_words`` maps (path, 0-based page indices) to word boxes; the default
-    renders and OCRs the pages. The sample is the same deterministic spread
-    ``pdf_has_text_layer`` reads (first, last, evenly spaced between).
+    ``page_source`` maps (path, 0-based page indices) to :class:`PageRead`;
+    the default is :func:`read_pages`. The sample is the deterministic spread
+    ``doc_index._sample_page_indices`` gives (first, last, evenly between).
     """
     import fitz  # PyMuPDF
 
     from app.core import doc_index, file_crypto
 
-    if doc_index.pdf_has_text_layer(file_path, sample_pages=sample_pages):
-        return BillVerdict(False, NOT_BILL_TEXT_LAYER)
     with file_crypto.open_plaintext(file_path) as readable:
         doc = fitz.open(readable)
         try:
@@ -157,5 +234,5 @@ def classify_image_only_bill(
         finally:
             doc.close()
     indices = doc_index._sample_page_indices(total, sample_pages)
-    words = (page_words or _ocr_sampled_pages)(file_path, indices)
-    return bill_verdict(words, block)
+    reads = (page_source or read_pages)(file_path, indices)
+    return bill_verdict([w for r in reads for w in r.words], block)
