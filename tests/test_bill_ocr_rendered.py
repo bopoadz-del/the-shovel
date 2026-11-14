@@ -15,9 +15,10 @@ Every page is drawn here from cell texts; no document, bill or fixture file.
 Each decision (rows read, column order, qty x rate check, a page without a
 header continuing the last columns) is exercised with at least two inputs.
 
-Tesseract is installed by every CI test job (``.github/workflows/test.yml``,
-"Install system deps for OCR + PDF", which fails the job if apt cannot
-install it), so this test runs in CI rather than being skipped there.
+Tesseract is installed by the CI test jobs in ``.github/workflows/test.yml``
+("Install system deps for OCR + PDF", which fails the job if apt cannot
+install it). The ``fast.yml`` targeted-tests job installs it through a
+separate workflow PR. The test is never skipped.
 """
 
 from __future__ import annotations
