@@ -253,7 +253,13 @@ async def _chat_stream_impl(
             for m in prior
             if m.get("role") in ("user", "assistant")
         ]
-        effective_history = prior_turns + effective_history
+        # The stored conversation is authoritative. The UI mirrors the same
+        # thread back as `history` every turn, so concatenating both
+        # duplicates the conversation and — under the MAX_HISTORY_TURNS cap —
+        # can replay an older question right before the current one (the reply
+        # answers the previous turn). Use the DB when it has turns; the client
+        # thread is only a fallback for a fresh, still-empty conversation.
+        effective_history = prior_turns if prior_turns else effective_history
         # Persist the user turn up front so it survives a mid-loop error.
         (await _off_loop(agent_memory.append_message, conversation_id, "user", user_message))
 
