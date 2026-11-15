@@ -44,5 +44,5 @@ If the user's question is in a different language than the document, use `transl
 
 - One-paragraph summary first.
 - Then a structured outline: sections / sheets / pages with one line each.
-- Then any explicit answer to the user's specific question, with source citation.
+- Then any explicit answer to the user's specific question, with a `[source: <filename>, p. N]` tag on the sentence it supports (no Source line).
 - If the user just uploaded the file without a question, end with: "Ask me anything about this document, or hand it to one of: QS / PM / Contracts / BIM / Safety."
