@@ -63,6 +63,35 @@ The task execution role needs `elasticfilesystem:ClientMount` (and
 application itself uses the mount as a directory; it does not call the EFS
 API.
 
+## Steps 3 and 6 as a workflow — `durable-store-rollout.yml`
+
+Once the volume is mounted (steps 1–2), steps 3 and 6 are one dispatch
+each. `scripts/durable_store_rollout.py` renders the next revision from the
+task definition that is on each service. It reads the EFS mount path from
+that definition, so it never names a path.
+
+1. Dispatch `stage=efs apply=false`. Read the printed setting names and values.
+2. Dispatch `stage=efs apply=true`. This registers a web revision and an
+   ingest revision. It rolls the web service, then requires a stable
+   service, `/livez` 200, and an `efs mount verified` log line from the new
+   boot. If any of those fails, it puts the web service back on the serving
+   revision and the run fails.
+3. Do step 5 (copy old bytes), if any are left.
+4. Dispatch `stage=enforce apply=true`. This is refused unless the efs
+   stage is already on the task definition.
+
+Rollback: dispatch `stage=off apply=true`. It removes all three settings
+from both families, and the task boots as before (the guard logs "not
+enforcing"). For a faster web-only rollback, run `aws ecs update-service`
+with the earlier revision.
+
+With `enforce` on, a missing or unmounted volume stops the boot. If the
+EFS mount fails, ECS cannot start the task at all. If `/app/data` turns out
+to be the container's own disk, the guard raises at startup and the process
+exits. It never falls back to the container disk. The ingest job
+(`scripts/p1b_ingest_drive_server.py`) carries the same settings but does not
+run the startup guard yet.
+
 ## Owner steps — S3, if you choose that instead
 
 S3 is not implemented in this build. There is no client, no bucket config,
