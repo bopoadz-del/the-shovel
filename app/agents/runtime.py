@@ -6109,12 +6109,16 @@ def _recover_answer_from_tool_messages(
         if not isinstance(payload, dict):
             # Truncation envelope: {"truncated": true, "preview": "..."}
             continue
-        inner = payload
-        if payload.get("truncated") and payload.get("preview"):
+        if payload.get("truncated"):
+            # A truncation envelope is a paging message to the model. Only a
+            # whole result inside its preview can be a draft; the envelope's
+            # own note ("This is the LAST window ...") never is.
             try:
-                inner = json.loads(payload["preview"])
+                inner = json.loads(payload.get("preview") or "")
             except (TypeError, json.JSONDecodeError):
-                inner = payload
+                continue
+        else:
+            inner = payload
         if not isinstance(inner, dict):
             continue
         action = inner.get("action")
@@ -6166,7 +6170,12 @@ def _recover_answer_from_tool_messages(
         formatted = _format_construction_calc(inner)
         if formatted:
             return formatted
-        generic = _format_any_calc_result(inner)
+        # The generic note/summary reader is for a calculator's result only.
+        # Any other tool's note (a search's rows-withheld count, an "already
+        # handed" notice) is addressed to the model, not the user.
+        generic = (
+            _format_any_calc_result(inner) if _is_calc_tool_result(m, inner) else ""
+        )
         if generic:
             return generic
         err_payload = _tool_error_payload(inner)
@@ -13724,6 +13733,30 @@ def _plain_sentence_for_tool_error_json(text: str) -> str:
     return _format_tool_error_plain(payload)
 
 
+_CALC_TOOL_NAMES = ("construction_calc", "formula_executor_v2", "formula_executor")
+
+
+def _is_calc_tool_result(
+    msg: dict[str, Any] | None,
+    inner: dict[str, Any] | None,
+) -> bool:
+    """True when a tool message carries a calculator's result.
+
+    A calculator names its ``calculation`` (on the envelope or on its
+    ``result``); a search or lookup never does, so its notes stay with the
+    model.
+    """
+    name = str((msg or {}).get("name") or "").lower()
+    if name in _CALC_TOOL_NAMES:
+        return True
+    blob = inner if isinstance(inner, dict) else {}
+    result = blob.get("result")
+    return bool(
+        blob.get("calculation")
+        or (isinstance(result, dict) and result.get("calculation"))
+    )
+
+
 def _is_calc_tool_error(
     msg: dict[str, Any] | None,
     inner: dict[str, Any] | None,
@@ -13731,7 +13764,7 @@ def _is_calc_tool_error(
 ) -> bool:
     """True when the failed tool is a calculator, not a search/lookup."""
     name = str((msg or {}).get("name") or "").lower()
-    if name in ("construction_calc", "formula_executor_v2", "formula_executor"):
+    if name in _CALC_TOOL_NAMES:
         return True
     blob = inner or {}
     err = err_payload or {}
