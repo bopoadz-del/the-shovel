@@ -329,7 +329,8 @@ def test_resolve_host_returns_addresses(host, expected):
 
 @pytest.mark.parametrize("offenders", [[], [dp.Offender("SENTRY_DSN", "remote")]])
 def test_profile_error_carries_its_offenders(offenders):
-    err = dp.DeploymentProfileError("refused", offenders)
+    err = dp.DeploymentProfileError.__new__(dp.DeploymentProfileError)
+    dp.DeploymentProfileError.__init__(err, "refused", offenders)
     assert str(err) == "refused"
     assert err.offenders == offenders, "stage=boot"
     assert err.offenders is not offenders
