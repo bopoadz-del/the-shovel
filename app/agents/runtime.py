@@ -9596,26 +9596,45 @@ _POST_GATE_ANSWER_COMPOSERS: list[tuple[str, Any]] = [
 ]
 
 
-#: A tool result whose top-level ``ok`` is true, and the first ``filename``
-#: key it reports, read from the head of its JSON so a result cut at the
-#: tool-result cap still counts (a key inside a string value is escaped).
-_TOOL_OK_HEAD_RE = re.compile(r'^\s*\{[^{}]*?"ok":\s*true\b')
+#: The failure keys and the first ``filename`` key of a tool result, read
+#: from the head of its JSON so a result cut at the tool-result cap is still
+#: judged (a key inside a string value is escaped, so it never matches).
+_TOOL_FAILED_HEAD_RE = re.compile(r'"ok":\s*false\b|"status":\s*"(?:error|needs_input)"')
 _TOOL_FILENAME_RE = re.compile(r'"filename":\s*"((?:[^"\\]|\\.)*)"')
 
 
 def _read_tool_result(content: str) -> tuple[bool, str]:
-    """(succeeded, the filename the result reports or ``""``)."""
+    """(succeeded, the filename the result reports or ``""``).
+
+    A tool message holds what ``_tool_result_content`` wrote: the tool's
+    result object, or past the cap a truncation envelope whose ``preview``
+    is the head of that object's JSON. A result failed when it says so the
+    way :func:`_tool_result_errored` reads it (``ok: false``, or an
+    ``error`` / ``needs_input`` status at any level); any other result
+    object succeeded."""
+    text = content if isinstance(content, str) else ""
     try:
-        parsed = json.loads(content)
+        parsed: Any = json.loads(text)
     except (TypeError, ValueError):
-        found = _TOOL_FILENAME_RE.search(content or "")
-        return (bool(_TOOL_OK_HEAD_RE.search(content or "")),
-                json.loads(f'"{found.group(1)}"') if found else "")
-    if not isinstance(parsed, dict):
+        parsed = None
+    if (isinstance(parsed, dict) and parsed.get("truncated") is True
+            and isinstance(parsed.get("preview"), str)):
+        text = parsed["preview"]
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+    if isinstance(parsed, dict):
+        inner = parsed.get("result")
+        name = parsed.get("filename") or (
+            inner.get("filename") if isinstance(inner, dict) else "")
+        failed = _tool_result_errored({"ok": parsed.get("ok"), "result": parsed})
+        return not failed, str(name or "").strip()
+    if not text.lstrip().startswith("{"):
         return False, ""
-    inner = parsed.get("result")
-    name = inner.get("filename") if isinstance(inner, dict) else ""
-    return parsed.get("ok") is True, str(name or "").strip()
+    found = _TOOL_FILENAME_RE.search(text)
+    return (not _TOOL_FAILED_HEAD_RE.search(text),
+            json.loads(f'"{found.group(1)}"') if found else "")
 
 
 def _documents_read_this_turn(
