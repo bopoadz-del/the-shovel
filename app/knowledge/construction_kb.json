@@ -3616,7 +3616,7 @@
           "construction.buildings"
         ],
         "region_specific": false,
-        "project_specific": true,
+        "project_specific": false,
         "standards_cross_ref": []
       },
       "remediation": [],

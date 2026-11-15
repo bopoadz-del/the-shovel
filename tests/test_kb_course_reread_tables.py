@@ -254,7 +254,7 @@ def test_course_tables_cite_course_pages_and_cells_stay_in_range(rule_id):
         ("type", "threshold"),
         ("thresholds.value", 10),
         ("thresholds.unit", "millimeter"),
-        ("applicability.project_specific", True),
+        ("applicability.project_specific", False),  # general corpus rule: no entry is project-specific; the statement carries the drawing-note caveat
     ],
 )
 def test_truss_min_fillet_weld_note(path, expected):
