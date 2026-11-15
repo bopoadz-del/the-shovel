@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from tests.calc_entry_exam import checker as ck
 
 
@@ -81,12 +83,36 @@ def _slab(length_m, width_m, thick_mm, loss_fraction=0.05):
     return length_m * width_m * thick_mm / 1000 * (1 + loss_fraction)
 
 
-_PARAMS = {
+def _beam(span_m, udl_kn_m, point_kn, load_factor=1.5, extra_knm=2.0):
+    return load_factor * (udl_kn_m * span_m ** 2 / 8 + point_kn * span_m / 4) + extra_knm
+
+
+@dataclass(frozen=True)
+class _Calc:
+    name: str
+    fn: Any
+    params: dict
+    defaults: dict  # optional input -> the value the calculator falls back on
+
+
+# Two invented calculators with different units, different required inputs
+# and a different number of fall-back defaults: every sweep decision below is
+# taken on both.
+_SLAB = _Calc("slab", _slab, {
     "length_m": _P("number", "m", 1, 100, "length"),
     "width_m": _P("number", "m", 1, 100, "width"),
     "thick_mm": _P("number", "mm", 50, 600, "thickness"),
     "loss_fraction": _P("number", "fraction", 0, 0.2, required=False),
-}
+}, {"loss_fraction": 0.05})
+_BEAM = _Calc("beam", _beam, {
+    "span_m": _P("number", "m", 2, 20, "span"),
+    "udl_kn_m": _P("number", "kN/m", 1, 80, "distributed load"),
+    "point_kn": _P("number", "kN", 0, 300, "point load"),
+    "load_factor": _P("number", "-", 1, 2, required=False),
+    "extra_knm": _P("number", "kNm", 0, 50, required=False),
+}, {"load_factor": 1.5, "extra_knm": 2.0})
+_CALCS = [_SLAB, _BEAM]
+_IDS = [c.name for c in _CALCS]
 
 
 def _to_number(v: Any, declared: str) -> float:
@@ -101,24 +127,28 @@ def _to_number(v: Any, declared: str) -> float:
     return float(v)
 
 
-def _good_door(name, params):
-    missing = [k for k, p in _PARAMS.items() if p.required and k not in params]
-    if missing:
-        return {"status": "needs_input", "needs_input": missing}
-    vals = {k: _to_number(v, _PARAMS[k].unit) for k, v in params.items()}
-    rows = [] if "loss_fraction" in vals else [{"parameter": "loss_fraction", "value": 0.05}]
-    return {"status": "success", "result": {"volume_m3": _slab(**vals), "defaults_used": rows}}
+def _good_door(calc: _Calc):
+    def door(name, params):
+        missing = [k for k, p in calc.params.items() if p.required and k not in params]
+        if missing:
+            return {"status": "needs_input", "needs_input": missing}
+        vals = {k: _to_number(v, calc.params[k].unit) for k, v in params.items()}
+        rows = [{"parameter": k, "value": v} for k, v in calc.defaults.items() if k not in vals]
+        return {"status": "success", "result": {"value": calc.fn(**vals), "defaults_used": rows}}
+    return door
 
 
-def _bad_door(name, params):
-    # Runs on a zero for a missing input, reads "X mm" as metres' number, and
-    # never discloses the default: every rule must catch it.
-    vals = {k: float(str(params.get(k, 0)).split()[0]) for k in ("length_m", "width_m", "thick_mm")}
-    return {"status": "success", "result": {"volume_m3": _slab(**vals)}}
+def _bad_door(calc: _Calc):
+    # Runs on a zero for a missing input, reads "X mm" as a bare number, and
+    # never discloses a default: every rule must catch it.
+    def door(name, params):
+        vals = {k: float(str(params.get(k, 0)).split()[0]) for k, p in calc.params.items() if p.required}
+        return {"status": "success", "result": {"value": calc.fn(**vals)}}
+    return door
 
 
-def _sweep(door):
-    spec = _Spec("slab", _slab, _PARAMS)
+def _sweep(calc: _Calc, door):
+    spec = _Spec(calc.name, calc.fn, calc.params)
     return ck.sweep([spec], lambda s: {k: _named(k, p) for k, p in s.params.items()}, door)
 
 
@@ -127,28 +157,50 @@ def _named(key, p):
                            "label": p.label, "required": p.required})()
 
 
-def test_sweep_passes_a_door_that_keeps_all_three_rules():
-    rep = _sweep(_good_door)
+@pytest.mark.parametrize("calc", _CALCS, ids=_IDS)
+def test_sweep_passes_a_door_that_keeps_all_three_rules(calc):
+    rep = _sweep(calc, _good_door(calc))
     assert rep["passed"] == rep["total"], [r for r in rep["rows"] if not r["passed"]]
+    # Both invented calculators have three required inputs, each in a unit the
+    # exam's table can rewrite, and at least one fall-back default.
     assert rep["by_rule"] == {"baseline": [1, 1], "M": [3, 3], "U": [3, 3], "D": [1, 1]}
 
 
-def test_sweep_fails_a_door_that_breaks_each_rule():
-    rep = _sweep(_bad_door)
+@pytest.mark.parametrize("calc", _CALCS, ids=_IDS)
+def test_sweep_fails_a_door_that_breaks_each_rule(calc):
+    rep = _sweep(calc, _bad_door(calc))
     assert rep["by_rule"]["M"] == [0, 3]
-    assert rep["by_rule"]["U"][0] == 0
+    assert rep["by_rule"]["U"] == [0, 3]
     assert rep["by_rule"]["D"] == [0, 1]
 
 
-def test_sweep_reports_the_stage_when_a_calculator_cannot_be_exercised():
-    blocked = {**_PARAMS, "mix": _P("text", "-", label="mix")}
+@pytest.mark.parametrize("calc", _CALCS, ids=_IDS)
+def test_sweep_fails_a_door_that_discloses_only_some_defaults(calc):
+    good = _good_door(calc)
+    first = next(iter(calc.defaults))
 
-    def needs_mix(length_m, width_m, thick_mm, mix, loss_fraction=0.05):
+    def door(name, params):
+        env = good(name, params)
+        if env.get("status") == "success":
+            env["result"]["defaults_used"] = [r for r in env["result"]["defaults_used"]
+                                              if r["parameter"] == first][: len(calc.defaults) - 1]
+        return env
+
+    rep = _sweep(calc, door)
+    assert rep["by_rule"]["D"] == [0, 1]
+    assert rep["by_rule"]["M"] == [3, 3] and rep["by_rule"]["U"] == [3, 3]
+
+
+@pytest.mark.parametrize("calc", _CALCS, ids=_IDS)
+def test_sweep_reports_the_stage_when_a_calculator_cannot_be_exercised(calc):
+    blocked = {**calc.params, "mix": _P("text", "-", label="mix")}
+
+    def needs_text(*args, mix=None, **kwargs):
         return 0.0
 
-    refuses = _Spec("refuses", _slab, _PARAMS)
-    rep = ck.sweep([_Spec("needs_mix", needs_mix, blocked), refuses],
+    rep = ck.sweep([_Spec("needs_text", needs_text, blocked), _Spec("refuses", calc.fn, calc.params)],
                    lambda s: {k: _named(k, p) for k, p in s.params.items()},
                    lambda n, p: {"status": "error", "error": "refused"})
     stages = [(r["calc"], r["rule"], r["passed"]) for r in rep["rows"]]
-    assert stages == [("needs_mix", "baseline", False), ("refuses", "baseline", False)]
+    assert stages == [("needs_text", "baseline", False), ("refuses", "baseline", False)]
+    assert "mix" in rep["rows"][0]["why"]
