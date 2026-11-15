@@ -235,7 +235,9 @@ def _prepare(
     verdict = (classify or (lambda rs: bc.verdict_of_reads(rs, block)))(page_reads)
     if not verdict.is_bill:
         return {"derived": False, "reason": verdict.reason, **sources}
-    rows = g.extract_bill_rows([w for r in page_reads for w in r.words], block)
+    column_stats = g.ColumnStats()
+    rows = g.extract_bill_rows([w for r in page_reads for w in r.words], block,
+                               stats=column_stats)
     if not rows:
         return {"derived": False, "reason": SKIP_NO_ROWS,
                 "bill_verdict": verdict.reason, **sources}
@@ -253,6 +255,7 @@ def _prepare(
             "rows": len(rows),
             "unreconciled": sum(1 for r in rows if r.check),
             "sections": _sections(rows),
+            "columns": column_stats.as_dict(rows),
             "plan_hash": _plan_hash(document_id, (first, stop), rows),
         },
     }

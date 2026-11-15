@@ -62,8 +62,10 @@ if str(REPO_ROOT) not in sys.path:
 SUMMARY_PREFIX = "BILLPLANSUMMARY "
 #: Path depths reported individually; deeper paths are counted together.
 MAX_LISTED_DEPTH = 3
-#: Plan fields the summary carries as they are (all ids or counts).
-PLAN_FIELDS = ("reason", "pages", "pages_in_file", "rows", "unreconciled", "plan_hash")
+#: Plan fields the summary carries as they are (all ids or counts; ``columns``
+#: is the column-source counts of ``bill_table_geometry.ColumnStats``).
+PLAN_FIELDS = ("reason", "pages", "pages_in_file", "rows", "unreconciled", "plan_hash",
+               "columns")
 #: Page-source counts the summary carries (pages with and without a text
 #: layer, and pages read fresh from each source or back from the work dir).
 SOURCE_FIELDS = (

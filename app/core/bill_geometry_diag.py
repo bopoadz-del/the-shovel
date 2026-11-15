@@ -38,7 +38,7 @@ from app.core import bill_table_geometry as g
 
 #: A numeric right-edge cluster is a vertical band when at least this many
 #: lines of the page put a number in it.
-MIN_BAND_LINES = 3
+MIN_BAND_LINES = g.MIN_BAND_LINES
 #: An unmapped column "holds mostly numbers" when more than this share of
 #: its non-empty cells below the header parse as numbers, over at least
 #: :data:`MIN_COLUMN_CELLS` cells.
@@ -136,42 +136,15 @@ def header_counts(pages: Mapping[int, list[list[g.Word]]], block) -> dict[str, A
     }
 
 
-def _bands(numeric: Sequence[tuple[int, g.Word]], tol: float) -> list[int]:
-    """Band index per numeric token (sorted by right edge, a new band where
-    the gap to the previous right edge exceeds ``tol``)."""
-    order = sorted(range(len(numeric)), key=lambda i: numeric[i][1].right)
-    band = [0] * len(numeric)
-    current, prev = -1, None
-    for i in order:
-        r = numeric[i][1].right
-        if prev is None or r - prev > tol:
-            current += 1
-        band[i] = current
-        prev = r
-    return band
-
-
 def band_counts(pages: Mapping[int, list[list[g.Word]]]) -> dict[str, int]:
-    """Item 3: header-free three-band numeric lines and product lines."""
+    """Item 3: header-free three-band numeric lines and product lines. The
+    bands are the extractor's own (``bill_table_geometry.numeric_bands``)."""
     out = {"lines": 0, "lines_three_bands": 0, "lines_product": 0,
            "lines_product_nontrivial": 0, "pages_with_product_line": 0}
     for lines in pages.values():
         out["lines"] += len(lines)
-        heights = [w.height for ln in lines for w in ln if w.height > 0]
-        tol = statistics.median(heights) if heights else 1.0
-        numeric = [(li, w) for li, ln in enumerate(lines) for w in ln
-                   if g.parse_number(w.text) is not None]
-        band = _bands(numeric, tol)
-        support: dict[int, set[int]] = {}
-        for (li, _w), b in zip(numeric, band):
-            support.setdefault(b, set()).add(li)
-        vertical = {b for b, ls in support.items() if len(ls) >= MIN_BAND_LINES}
-        per_line: dict[int, dict[int, g.Word]] = {}
-        for (li, w), b in zip(numeric, band):
-            if b in vertical:
-                per_line.setdefault(li, {}).setdefault(b, w)  # one token per band
         page_has = False
-        for toks in per_line.values():
+        for toks in g.numeric_bands(lines).values():
             if len(toks) < 3:
                 continue
             out["lines_three_bands"] += 1
