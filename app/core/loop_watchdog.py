@@ -73,6 +73,21 @@ def sample_stacks(loop_ident: Optional[int]) -> str:
     return " || ".join(parts)
 
 
+def heartbeat_lag_ms(posted: float, served_at: Optional[float], now: float) -> float:
+    """How late the LOOP served a heartbeat posted at ``posted``.
+
+    ``served_at`` is stamped by the heartbeat callback itself, on the loop
+    thread, so the figure is the loop's lateness only. The watchdog thread
+    must re-take the GIL to wake from its wait; under load that wake-up can
+    itself be hundreds of ms late, and timing the heartbeat at the watchdog's
+    wake-up charged that delay to the loop (a lag above the threshold with no
+    stall recorded, because the heartbeat had in fact been served in time).
+    A heartbeat not yet served (``served_at`` None) is late by ``now - posted``.
+    """
+    end = served_at if served_at is not None else now
+    return max(0.0, (end - posted) * 1000)
+
+
 class LagMonitor:
     """Measures how late the loop serves a heartbeat; optionally logs stalls."""
 
@@ -109,9 +124,15 @@ class LagMonitor:
     def _run(self) -> None:
         while not self._stop.is_set():
             served = threading.Event()
+            served_at: list[float] = []
+
+            def _serve(served=served, served_at=served_at) -> None:
+                served_at.append(time.monotonic())
+                served.set()
+
             posted = time.monotonic()
             try:
-                self.loop.call_soon_threadsafe(served.set)
+                self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
                 _LOG.info("loop watchdog stopped: the event loop is closed")
                 self._stop.set()
@@ -129,8 +150,13 @@ class LagMonitor:
                     snap = sample_stacks(self._loop_ident)
                     if snap:
                         sample = snap
-            lag_ms = (time.monotonic() - posted) * 1000
+            lag_ms = heartbeat_lag_ms(posted, served_at[0] if served_at else None,
+                                      time.monotonic())
             self.max_lag_ms = max(self.max_lag_ms, lag_ms)
+            # The loop's own lateness decides: a heartbeat served past the
+            # threshold is a stall even if this thread woke too late to sample
+            # it during the stall (it then samples below).
+            stalled = stalled or lag_ms >= self.threshold * 1000
             if stalled:
                 # A detected stall is ALWAYS recorded with its stack. sample is
                 # never empty (sample_stacks falls back to the main thread), but
