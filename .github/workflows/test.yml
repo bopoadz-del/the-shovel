@@ -9,12 +9,17 @@ on:
 permissions:
   contents: read
 
-# A new push to the same branch/PR supersedes the old run. Without this,
+# A new push to the same PR supersedes that PR's old run. Without this,
 # stuck runs stack: 8 zombie "tests" runs were in_progress at once on
 # 2026-07-05, each burning toward GitHub's 6-hour default job timeout.
+# A push to the default branch is never superseded: deploy-aws ships a
+# commit only after its own tests run finishes green, so each main run
+# gets its own group (one shared group would also drop a queued run when
+# a newer one arrives, even with cancel-in-progress off). Every job keeps
+# its timeout-minutes, so a stuck main run still ends.
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'push' && format('tests-{0}-{1}', github.ref, github.sha) || format('tests-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   # Docs-only changes (Markdown, docs/, FLEET_OPS-style report files) do not
