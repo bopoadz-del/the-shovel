@@ -30,17 +30,19 @@ def _ids(cases):
 
 # ── the fixture ──────────────────────────────────────────────────────────
 
-def test_ids_unique_and_every_kind_has_two_cases():
+@pytest.mark.parametrize("kind", ["differ", "agree", "looks_different", "other_thing"])
+def test_every_kind_has_two_cases_with_unique_ids(kind):
     assert len({c["id"] for c in CASES}) == len(CASES)
-    kinds = {}
-    for c in CASES:
-        kinds[c["kind"]] = kinds.get(c["kind"], 0) + 1
-    assert set(kinds) == {"differ", "agree", "looks_different", "other_thing"}
-    assert all(n >= 2 for n in kinds.values()), kinds
-    with_winner = [c for c in DIFFER if c["expected"]["governs"]]
-    no_winner_but_statement = [
-        c for c in DIFFER if not c["expected"]["governs"] and len(c["rows"]) > len(c["expected"]["values"])]
-    assert len(with_winner) >= 2 and len(no_winner_but_statement) >= 1
+    assert {c["kind"] for c in CASES} == {"differ", "agree", "looks_different", "other_thing"}
+    assert sum(c["kind"] == kind for c in CASES) >= 2
+
+
+@pytest.mark.parametrize("decides, minimum", [(True, 2), (False, 1)])
+def test_precedence_statements_cover_both_decisions(decides, minimum):
+    """A precedence statement in the evidence that names a winner, and one
+    that does not cover the documents in conflict (no winner)."""
+    with_statement = [c for c in DIFFER if len(c["rows"]) > len({v["document"] for v in c["expected"]["values"]})]
+    assert sum(bool(c["expected"]["governs"]) == decides for c in with_statement) >= minimum
 
 
 @pytest.mark.parametrize("case", DIFFER, ids=_ids(DIFFER))
@@ -151,22 +153,37 @@ def test_checker_fails_a_false_conflict(case):
 
 # ── the exam as a whole ──────────────────────────────────────────────────
 
-def test_exam_neither_passes_nor_fails_everything():
-    perfect = score(CASES, good_output)
-    assert perfect["passed"] == perfect["total"] == len(CASES)
-    silent = score(CASES, lambda c: {"text": c["model_answer"], "conflicts": []})
-    assert silent["passed"] == len(NO_CONFLICT)
-    flag_all = score(CASES, lambda c: {
-        "text": c["model_answer"],
-        "conflicts": [{"values": [{"value": "x", "document": r["doc_name"]} for r in c["rows"]]}]})
-    assert flag_all["passed"] == 0
-    crash = score(CASES[:1], lambda c: 1 / 0)
-    assert crash["passed"] == 0 and "crashed" in crash["results"][0]["reasons"][0]
+def _silent(c):
+    return {"text": c["model_answer"], "conflicts": []}
 
 
-def test_runner_reads_the_product_contract():
+def _flag_all(c):
+    return {"text": c["model_answer"],
+            "conflicts": [{"values": [{"value": "x", "document": r["doc_name"]} for r in c["rows"]]}]}
+
+
+def _crash(c):
+    raise RuntimeError("producer failed")
+
+
+@pytest.mark.parametrize("name, produce, expected_passed", [
+    ("perfect", good_output, len(CASES)),
+    ("silent pick", _silent, len(NO_CONFLICT)),
+    ("flag everything", _flag_all, 0),
+    ("crash", _crash, 0),
+])
+def test_exam_neither_passes_nor_fails_everything(name, produce, expected_passed):
+    report = score(CASES, produce)
+    assert report["total"] == len(CASES)
+    assert report["passed"] == expected_passed, name
+    if name == "crash":
+        assert all("crashed" in r["reasons"][0] for r in report["results"])
+
+
+@pytest.mark.parametrize("subset", [DIFFER, NO_CONFLICT], ids=["differ", "no_conflict"])
+def test_runner_reads_the_product_contract(subset):
     """The product adapter runs on every case and yields the exam's shape;
     the score itself is measured, not asserted, here."""
-    report = score(CASES, product_output)
-    assert report["total"] == len(CASES)
+    report = score(subset, product_output)
+    assert report["total"] == len(subset)
     assert not any("crashed" in "".join(r["reasons"]) for r in report["results"])
