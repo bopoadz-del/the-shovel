@@ -34,7 +34,7 @@
   "construction_calc",
   "standards_lookup"
  ],
- "available_tools": ["construction_calc", "delegate_to_agent", "fetch_document", "list_project_documents", "remember_fact", "search_general_knowledge", "search_project_documents"],
+ "available_tools": ["bill_rows_aggregate", "construction_calc", "delegate_to_agent", "fetch_document", "list_project_documents", "remember_fact", "search_general_knowledge", "search_project_documents"],
  "memory": {
   "save_on_turn_end": [
    "user_intent",

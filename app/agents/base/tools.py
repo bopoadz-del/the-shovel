@@ -300,6 +300,45 @@ async def handle_fetch_document(call: ToolCall) -> dict:
     }
 
 
+@tool("bill_rows_aggregate", owner="base", display_name='Bill row count and total', params={
+    "terms": Param(label="description words", kind="text", required=False),
+    "section": Param(label="section words", kind="text", required=False),
+    "measure": Param(label="quantity or amount", kind="text", required=False),
+    "document_id": Param(label="document id", kind="text", required=False),
+})
+async def handle_bill_rows_aggregate(call: ToolCall) -> dict:
+    """The ``bill_rows_aggregate`` tool: a deterministic count and sum over
+    every row of the derived bill sheet (``app.core.bill_aggregate``)."""
+    from app.core import bill_aggregate
+    from app.core.offload import off_loop
+    args = call.args
+    name = call.name
+    project_id = call.project_id
+    if not project_id:
+        return {
+            "name": name,
+            "ok": False,
+            "result": {
+                "status": "error",
+                "error": "no project in scope",
+                "hint": "This tool requires a project-scoped chat.",
+            },
+        }
+    measure = (str(args.get("measure") or "") or bill_aggregate.MEASURE_QUANTITY).strip().lower()
+    try:
+        result = await off_loop(
+            bill_aggregate.aggregate_project_bills,
+            project_id,
+            terms=str(args.get("terms") or ""),
+            section=str(args.get("section") or ""),
+            measure=measure,
+            document_id=(str(args.get("document_id") or "").strip() or None),
+        )
+    except ValueError as exc:
+        return {"name": name, "ok": False, "result": {"status": "error", "error": str(exc)}}
+    return {"name": name, "ok": result.get("status") == "success", "result": result}
+
+
 @tool("remember_fact", owner="base", display_name='Project memory', params={
     "key": Param(label="fact name", kind="text", required=True),
     "value": Param(label="fact", kind="text", required=True),
