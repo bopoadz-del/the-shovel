@@ -311,7 +311,10 @@ def _apply_rag_context(
                 "Do not cite a clause or a standard as the basis of the "
                 "calculation unless the excerpts state it. Do not compare the "
                 "result with a limit the request and the excerpts never state. "
-                "Never write an internal id; the reader sees the display name."
+                "Never write an internal id, and never name the calculator or "
+                "any tool in the answer. Open with the figure and its unit, "
+                "then the working in one line (the formula with the numbers "
+                "substituted); add nothing the question did not ask for."
                 "\n\nCALCULATION REQUEST: "
             )
         elif _message_wants_boq_scope_wbs_ask(question):

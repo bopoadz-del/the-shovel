@@ -1,0 +1,66 @@
+# Restore drill (P-I1 (2)): compare a Neon restore branch with live, counts
+# only. With restore_endpoint empty the job makes a scratch branch of live at
+# minutes_back minutes ago (read-only endpoint, secret NEON_API_KEY), times it,
+# compares, and deletes that branch. With restore_endpoint set it compares an
+# existing restore branch. Both databases are read in READ ONLY transactions.
+# Live is never written; no row text, URL or secret is printed.
+name: restore-drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_endpoint:
+        description: "Existing restore branch endpoint (ep-...); empty = make a scratch branch"
+        type: string
+        default: ""
+      minutes_back:
+        description: "Scratch branch restore point, minutes before now"
+        type: string
+        default: "60"
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  ECS_SERVICE: the-fork
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Requirements
+        run: python -m pip install -q -r requirements.txt
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Load live task env (values masked, never printed)
+        run: |
+          set +x
+          python scripts/load_live_task_env.py --github-env "$GITHUB_ENV"
+
+      - name: Compare restore branch with live (counts only)
+        env:
+          DRILL_ENDPOINT: ${{ inputs.restore_endpoint }}
+          DRILL_MINUTES_BACK: ${{ inputs.minutes_back }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        run: |
+          set +x
+          if [ -n "$DRILL_ENDPOINT" ]; then
+            python scripts/restore_drill.py --endpoint "$DRILL_ENDPOINT"
+          else
+            python scripts/restore_drill.py --create --minutes-back "$DRILL_MINUTES_BACK"
+          fi

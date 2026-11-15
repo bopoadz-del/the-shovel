@@ -1,0 +1,153 @@
+# Durable document store rollout: one stage per dispatch, in the order
+# deploy/aws/README.md gives.
+#
+#   efs      DOCUMENT_BYTE_STORE=efs, DOCUMENT_STORE_ROOT=<the task's EFS mount>
+#   enforce  REQUIRE_DURABLE_DOCUMENT_STORE=1 (refused unless efs is already on
+#            the task definition)
+#   off      removes all three (rollback to the pre-rollout settings)
+#
+# deploy-aws.yml reuses the task definition already on the service, so a
+# revision registered here stays in force across later deploys.
+#
+# apply=false (default) only renders and prints setting names and the three
+# non-secret values. apply=true registers a new revision for the web family
+# and the ingest family. The web service is rolled onto it and must become
+# stable, answer /livez, and (efs / enforce) log "efs mount verified" from the
+# new boot; otherwise it is put back on the revision that was serving and the
+# run fails. The ingest service is never started here: its desired count stays
+# 0 and ingest-run-once.yml picks the new family revision on its next run.
+name: durable-store-rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "efs, then enforce; off to roll back"
+        required: true
+        type: choice
+        options: [efs, enforce, off]
+      apply:
+        description: "Register and roll. False only renders."
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  WEB_SERVICE: the-fork
+  INGEST_SERVICE: the-fork-ingest
+
+# Same group as deploy-aws: a task definition change and an image roll must
+# not overlap.
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Render both task definitions
+        env:
+          STAGE: ${{ inputs.stage }}
+        run: |
+          set -euo pipefail
+          web_td=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$WEB_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          # ingest-run-once.yml starts the family's latest revision.
+          ingest_family=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$INGEST_SERVICE" \
+            --query 'services[0].taskDefinition' --output text | sed 's#.*/##; s#:[0-9]*$##')
+          aws ecs describe-task-definition --task-definition "$web_td" --include TAGS \
+            --output json > "$RUNNER_TEMP/web-described.json"
+          aws ecs describe-task-definition --task-definition "$ingest_family" --include TAGS \
+            --output json > "$RUNNER_TEMP/ingest-described.json"
+          python3 scripts/durable_store_rollout.py "$RUNNER_TEMP/web-described.json" \
+            --stage "$STAGE" --out "$RUNNER_TEMP/web-register.json"
+          python3 scripts/durable_store_rollout.py "$RUNNER_TEMP/ingest-described.json" \
+            --stage "$STAGE" --out "$RUNNER_TEMP/ingest-register.json"
+
+      - name: Record the serving web task definition
+        if: inputs.apply
+        run: |
+          set -euo pipefail
+          aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$WEB_SERVICE" \
+            --output json > "$RUNNER_TEMP/web-service.json"
+          python3 scripts/ecs_rollback.py capture "$RUNNER_TEMP/web-service.json" \
+            > "$RUNNER_TEMP/prior-web-taskdef"
+
+      - name: Register the new revisions
+        if: inputs.apply
+        run: |
+          set -euo pipefail
+          for which in web ingest; do
+            arn=$(aws ecs register-task-definition \
+              --cli-input-json "file://$RUNNER_TEMP/$which-register.json" \
+              --query 'taskDefinition.taskDefinitionArn' --output text)
+            echo "$arn" > "$RUNNER_TEMP/$which-new"
+            echo "$which: registered ${arn##*/}"
+          done
+
+      - name: Roll the web service onto the new revision
+        if: inputs.apply
+        run: |
+          set -euo pipefail
+          date +%s000 > "$RUNNER_TEMP/roll-start-ms"
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$WEB_SERVICE" \
+            --task-definition "$(cat "$RUNNER_TEMP/web-new")" >/dev/null
+          echo started > "$RUNNER_TEMP/web-roll-started"
+          timeout 600 aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" --services "$WEB_SERVICE"
+
+      - name: The new boot answers and logged the stage
+        if: inputs.apply
+        timeout-minutes: 5
+        env:
+          STAGE: ${{ inputs.stage }}
+          BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          base="${BASE_URL:-}"; base="${base%/}"
+          case "$base" in https://*) ;; *) echo "::error::PUBLIC_BASE_URL unset or not https"; exit 1 ;; esac
+          code=$(curl --proto '=https' --max-time 15 -sS -o /dev/null -w '%{http_code}' "$base/livez" || echo 000)
+          echo "/livez HTTP $code"
+          [ "$code" = "200" ] || exit 1
+          if [ "$STAGE" = "off" ]; then
+            exit 0
+          fi
+          group=$(jq -r '.taskDefinition.containerDefinitions[0].logConfiguration.options["awslogs-group"]' \
+            "$RUNNER_TEMP/web-described.json")
+          hits=$(aws logs filter-log-events --log-group-name "$group" \
+            --start-time "$(cat "$RUNNER_TEMP/roll-start-ms")" \
+            --filter-pattern '"efs mount verified"' \
+            --query 'length(events)' --output text)
+          echo "efs mount verified lines since the roll: $hits"
+          [ "${hits:-0}" != "0" ] && [ "$hits" != "None" ]
+
+      - name: Put the web service back on the serving revision
+        if: failure() && inputs.apply
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/web-roll-started" ]; then
+            echo "::error::failed before the web service changed; no rollback"
+            exit 1
+          fi
+          prior=$(tr -d '[:space:]' < "$RUNNER_TEMP/prior-web-taskdef")
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$WEB_SERVICE" \
+            --task-definition "$prior" --force-new-deployment >/dev/null
+          timeout 600 aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" --services "$WEB_SERVICE"
+          echo "::error::rollout failed; web service is back on ${prior##*/}. Re-dispatch stage=off to also reset the ingest family."
+          exit 1
