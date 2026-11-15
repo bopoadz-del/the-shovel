@@ -166,9 +166,28 @@ def live_endpoint_id(live_url: str) -> str:
     return label
 
 
+def _projects(http: Callable) -> list:
+    """Every project the key can see. Neon refuses an unscoped project list
+    (HTTP 400) for a key whose account belongs to an organisation; the list
+    is then taken per organisation the key belongs to. Any other refusal,
+    or a 400 with no organisation to scope by, stands."""
+    try:
+        return http("GET", "/projects?limit=400").get("projects", [])
+    except Refused as exc:
+        if not exc.code.startswith("neon_http_400:"):
+            raise
+        orgs = http("GET", "/users/me/organizations").get("organizations", [])
+        if not orgs:
+            raise
+        found: list = []
+        for org in orgs:
+            found.extend(http("GET", f"/projects?limit=400&org_id={org['id']}").get("projects", []))
+        return found
+
+
 def _locate(http: Callable, endpoint_id: str) -> tuple:
     """(project id, branch id) of the live endpoint."""
-    for proj in http("GET", "/projects?limit=400").get("projects", []):
+    for proj in _projects(http):
         for ep in http("GET", f"/projects/{proj['id']}/endpoints").get("endpoints", []):
             if ep.get("id") == endpoint_id:
                 return proj["id"], ep["branch_id"]
