@@ -369,7 +369,7 @@ def test_any_value_that_stays_inside_passes_whatever_the_name(name, value, table
 
 @pytest.mark.parametrize(
     "value",
-    ["3.11.9", "qwen2.5:14b-instruct", "BAAI/bge-small-en-v1.5", "/app/data", "C.UTF-8", "curated_kb"],
+    ["3.11.9", "qwen2.5:14b-instruct", "BAAI/bge-small-en-v1.5", "/app/data", "C.UTF-8", "mill_pond"],
 )
 def test_values_that_are_not_hosts_never_reach_dns(value):
     env = {**_CLEAN_ONPREM, "GRANARY_SETTING": value}
