@@ -2001,6 +2001,485 @@
       },
       "credibility_tier": 4,
       "needs_review": false
+    },
+    {
+      "id": "earthworks.loader_buckets_per_truck",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Loader buckets needed to fill one truck",
+      "statement": "Number of loader passes (buckets) to fill one truck = truck body capacity / loader bucket capacity, rounded UP to a whole bucket (a part bucket is still a pass); the loader also reports the unrounded quotient. Both capacities in the same volume unit (loose m3). WORKED EXAMPLE: bucket 3.1 m3, 6-wheel truck body 18 m3: 18 / 3.1 = 5.81, say 6 buckets. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(truck_capacity / bucket_capacity)",
+      "variables": {
+        "truck_capacity": {
+          "unit": "meter**3",
+          "desc": "Truck body capacity (loose volume)"
+        },
+        "bucket_capacity": {
+          "unit": "meter**3",
+          "desc": "Loader bucket capacity (loose volume)"
+        }
+      },
+      "thresholds": {
+        "unit": "buckets"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p3",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.wet_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Wet (bulk) density from a weighed sample of known volume",
+      "statement": "Wet density = (mass of container + soil - mass of container) / volume. In the compaction (Proctor) test the container is the mould and the volume is the mould volume; in the sand-replacement field test the soil from the hole is weighed net (container_mass = 0, stated) and the volume is the hole volume (earthworks.sand_cone_hole_volume). Masses in g and volume in cm3 give g/cm3, numerically equal to Mg/m3 (t/m3). WORKED EXAMPLE (compaction worksheet, point 1): (8764 - 4562) / 2114 = 1.988 Mg/m3. The worksheet prints no unit on the mould volume; cm3 is inferred from the result. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(gross_mass - container_mass) / volume",
+      "variables": {
+        "gross_mass": {
+          "unit": "gram",
+          "desc": "Mass of container (mould) plus wet soil"
+        },
+        "container_mass": {
+          "unit": "gram",
+          "desc": "Mass of the empty container (mould); 0 when the soil is weighed net"
+        },
+        "volume": {
+          "unit": "centimeter**3",
+          "desc": "Volume the soil occupies (mould volume or test-hole volume)"
+        }
+      },
+      "thresholds": {
+        "unit": "megagram/meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p11 (formula p9-10)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.moisture_content",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Moisture content from container weighings",
+      "statement": "Moisture content w (%) = (A - B) / (B - C) x 100, where A = container + wet soil, B = container + oven-dry soil, C = container. Used by both the laboratory compaction test and the field density test. WORKED EXAMPLE (compaction worksheet, point 1): (117.0 - 111.9) / (111.9 - 16.2) x 100 = 5.33%, printed 5.3. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(wet_with_container - dry_with_container) / (dry_with_container - container_mass) * 100",
+      "variables": {
+        "wet_with_container": {
+          "unit": "gram",
+          "desc": "A: container plus wet soil"
+        },
+        "dry_with_container": {
+          "unit": "gram",
+          "desc": "B: container plus oven-dry soil"
+        },
+        "container_mass": {
+          "unit": "gram",
+          "desc": "C: empty container"
+        }
+      },
+      "thresholds": {
+        "unit": "percent"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180",
+          "AASHTO T 191"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.dry_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Dry density from wet density and moisture content",
+      "statement": "Dry density = wet density / (1 + w / 100), the course form W = W1 / (w + 100) x 100, with w the moisture content in percent (earthworks.moisture_content). The result is in the unit of the wet density. WORKED EXAMPLES: compaction worksheet point 1: 1.988 / 1.0533 = 1.887 Mg/m3; field density position 1: 2.267 / 1.0776 = 2.104 Mg/m3 (98.7% of a 2.131 laboratory maximum via compaction.field_density). The worksheets print the unit as mg/m3; Mg/m3 is meant. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "wet_density / (1 + moisture_percent / 100)",
+      "variables": {
+        "wet_density": {
+          "unit": "megagram/meter**3",
+          "desc": "Wet (bulk) density"
+        },
+        "moisture_percent": {
+          "unit": "percent",
+          "desc": "Moisture content w in percent"
+        }
+      },
+      "thresholds": {
+        "unit": "megagram/meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180",
+          "AASHTO T 191"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11, p15",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.sand_cone_hole_volume",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Sand-replacement test: volume of the test hole",
+      "statement": "Hole volume V = (mass of sand before test - mass of sand after test - mass of sand held in the cone) / calibrated sand density. Masses in g and sand density in g/cm3 give V in cm3. The in-place wet density is then the net wet soil mass / V (earthworks.wet_density), dry density via earthworks.dry_density and the percentage via compaction.field_density. WORKED EXAMPLE (field density worksheet, position 1): (8000 - 2514 - 1564) / 1.512 = 2593.9 cm3. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(sand_before - sand_after - sand_in_cone) / sand_density",
+      "variables": {
+        "sand_before": {
+          "unit": "gram",
+          "desc": "Mass of sand and jar before the test"
+        },
+        "sand_after": {
+          "unit": "gram",
+          "desc": "Mass of sand and jar after the test"
+        },
+        "sand_in_cone": {
+          "unit": "gram",
+          "desc": "Mass of sand that fills the cone (calibration)"
+        },
+        "sand_density": {
+          "unit": "gram/centimeter**3",
+          "desc": "Calibrated bulk density of the test sand"
+        }
+      },
+      "thresholds": {
+        "unit": "centimeter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 191"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14-15",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "ground_improvement.dynamic_compaction_vibration_radius",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Dynamic compaction: radius beyond which vibration is not harmful",
+      "statement": "R = 130 x sqrt(M x H), with M the falling mass in tonnes and H the drop height in metres; R in metres is the distance beyond which the course states there is no harmful vibration. The coefficient 130 is the course's empirical constant (it carries the unit m per sqrt(t x m)); the pairing depth formula is ground_improvement.dynamic_compaction. WORKED EXAMPLE: M = 25 t, H = 20 m: 130 x sqrt(500) = 2,907 m, printed 2.9 km. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "130 * sqrt(M * H)",
+      "variables": {
+        "M": {
+          "unit": "tonne",
+          "desc": "Falling (pounder) mass"
+        },
+        "H": {
+          "unit": "meter",
+          "desc": "Drop height"
+        }
+      },
+      "thresholds": {
+        "unit": "meter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p33",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.truck_cycle_time",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Haul truck cycle time",
+      "statement": "Truck cycle time (min) = fixed time + 60 x haul distance / loaded speed + 60 x return distance / empty speed. The fixed time is loading + manoeuvre at the tip + weighing (the course's borrow-pit example: 6 + 3 + 3 = 12 min) and is an input, not assumed. Distances in km, speeds in km/hr; 60 converts hours to minutes. Course average speeds (loaded / empty): asphalt road 65 / 75, well graded and compacted 45 / 50, fair haul road 35 / 40, narrow poorly graded dusty 25 / 30 km/hr. Trips per hour and hourly output follow from equipment.cycle_production. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "fixed_time + 60 * haul_distance / loaded_speed + 60 * return_distance / empty_speed",
+      "variables": {
+        "fixed_time": {
+          "unit": "minute",
+          "desc": "Fixed time per cycle: loading + manoeuvre + weighing/tipping"
+        },
+        "haul_distance": {
+          "unit": "kilometer",
+          "desc": "One-way loaded haul distance"
+        },
+        "loaded_speed": {
+          "unit": "kilometer/hour",
+          "desc": "Average loaded speed"
+        },
+        "return_distance": {
+          "unit": "kilometer",
+          "desc": "Empty return distance"
+        },
+        "empty_speed": {
+          "unit": "kilometer/hour",
+          "desc": "Average empty speed"
+        }
+      },
+      "thresholds": {
+        "unit": "minute"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2 p24 and section 3, p26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.cycle_production",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Hourly production of one machine from its cycle time",
+      "statement": "Production per machine per hour = (60 / cycle time in minutes) x capacity per cycle; 60 / cycle time is the number of trips (cycles) per hour. The result is in the capacity's unit per hour (m3/hr for a bucket or body in m3, t/hr for a water tanker load in t). Apply any job efficiency to the cycle time or the result explicitly; none is assumed here. Machines needed follow from equipment.machines_required. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "60 / cycle_time * unit_capacity",
+      "variables": {
+        "cycle_time": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine"
+        },
+        "unit_capacity": {
+          "unit": "meter**3",
+          "desc": "Quantity moved per cycle (m3, or t for a tanker)"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.machines_required",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Number of machines for a required hourly rate",
+      "statement": "Machines required = required hourly rate / production per machine per hour, rounded UP (a fraction of a machine is a machine); the loader also reports the unrounded quotient. Required rate = total quantity / working days / working hours per day; production per machine from equipment.cycle_production (trucks, scrapers, loaders, water tankers) or a production norm (graders in m2/hr, rollers). Both rates in the same unit. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(required_rate / production_per_machine)",
+      "variables": {
+        "required_rate": {
+          "unit": "meter**3/hour",
+          "desc": "Required output per hour"
+        },
+        "production_per_machine": {
+          "unit": "meter**3/hour",
+          "desc": "Output of one machine per hour"
+        }
+      },
+      "thresholds": {
+        "unit": "machines"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-27",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.fill_layers",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Number of compacted fill layers",
+      "statement": "Layers = fill volume / (plan area x compacted layer thickness), rounded UP to a whole layer; the loader also reports the unrounded quotient. Total area to spread and compact = layers x plan area; the area rate per hour (for grader and roller counts via equipment.machines_required) = total area / (days x hours per day). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(fill_volume / (area * layer_thickness))",
+      "variables": {
+        "fill_volume": {
+          "unit": "meter**3",
+          "desc": "Compacted fill volume"
+        },
+        "area": {
+          "unit": "meter**2",
+          "desc": "Plan area of the fill"
+        },
+        "layer_thickness": {
+          "unit": "meter",
+          "desc": "Compacted layer thickness"
+        }
+      },
+      "thresholds": {
+        "unit": "layers"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p27",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.compaction_water",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Water to add for compaction per day",
+      "statement": "Water to add (t/day) = daily fill quantity x material density x (optimum moisture - natural moisture) / 100, moisture in percent. Water per hour = daily water / working hours; tankers = water per hour / (tanker load x trips per hour) rounded up (equipment.cycle_production then equipment.machines_required, with the tanker load in t). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "daily_quantity * density * (optimum_moisture - natural_moisture) / 100",
+      "variables": {
+        "daily_quantity": {
+          "unit": "meter**3",
+          "desc": "Fill quantity placed per day"
+        },
+        "density": {
+          "unit": "tonne/meter**3",
+          "desc": "Material density the daily quantity is measured at"
+        },
+        "optimum_moisture": {
+          "unit": "percent",
+          "desc": "Optimum moisture content (laboratory)"
+        },
+        "natural_moisture": {
+          "unit": "percent",
+          "desc": "Natural moisture content of the fill"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p27-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
     }
   ]
 }
