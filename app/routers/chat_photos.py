@@ -15,6 +15,8 @@ approved project. This endpoint:
   * writes the photo to an ephemeral temp file
   * runs YOLO-Worldv2 ONNX inference via the image block
   * returns observations + tiered vest/hat verdicts
+  * returns the text the image block's OCR read off the photo, and the
+    ready-made ``[attached: ...]`` marker that carries it to the model
   * deletes the temp file before returning
 
 Confidence tiers (operator-defined, NEVER label as violations):
@@ -162,6 +164,51 @@ def _empty_scan_observation(body: Dict[str, Any]) -> str:
     return "photo detector unavailable -- image not scanned"
 
 
+# The text read off the image (OCR) travels to the model inside the composer's
+# ``[attached: NAME | ...]`` marker, the only attachment evidence a photo turn
+# carries. The marker grammar (``ATTACHED_MARKER_RE``) ends the payload at the
+# first ``]`` and the name at the first ``|``, so both are made marker-safe
+# here, on the server, where the rule can be tested. The cap keeps one
+# screenshot from crowding out the question; a cut is said, never silent.
+_IMAGE_TEXT_MAX_CHARS = 6000
+_IMAGE_TEXT_LABEL = "text read from image"
+
+
+def _marker_safe(text: str) -> str:
+    """``text`` with the marker's delimiters swapped for look-alikes."""
+    return (text or "").replace("[", "(").replace("]", ")")
+
+
+def _image_text(body: Dict[str, Any]) -> tuple:
+    """(text, truncated) read off the image by the block's OCR pass.
+
+    Blank lines and trailing spaces are dropped; line breaks stay, because a
+    screenshot of a table keeps its rows only through them.
+    """
+    raw = body.get("extracted_text")
+    if not isinstance(raw, str):
+        return "", False
+    lines = [ln.rstrip() for ln in raw.splitlines()]
+    text = _marker_safe("\n".join(ln for ln in lines if ln.strip()))
+    if len(text) <= _IMAGE_TEXT_MAX_CHARS:
+        return text, False
+    return text[:_IMAGE_TEXT_MAX_CHARS].rstrip(), True
+
+
+def _attachment_marker(name: str, observations: List[str], text: str, truncated: bool) -> str:
+    """The ``[attached: ...]`` marker the composer inserts for this photo."""
+    safe_name = _marker_safe(name).replace("|", "/").strip() or "photo"
+    segments: List[str] = []
+    if observations:
+        segments.append("observations: " + _marker_safe("; ".join(observations)).replace("|", "/"))
+    if text:
+        cut = " (cut at %d characters)" % _IMAGE_TEXT_MAX_CHARS if truncated else ""
+        segments.append(f"{_IMAGE_TEXT_LABEL}{cut}:\n{text}")
+    if not segments:
+        return f"[attached: {safe_name}]"
+    return f"[attached: {safe_name} | " + " | ".join(segments) + "]"
+
+
 @router.post("/v1/chat/analyze-photo")
 async def analyze_chat_photo(
     file: UploadFile = File(...),
@@ -234,6 +281,8 @@ async def analyze_chat_photo(
             )[:8]
             summary = {"count": len(detections), "top": top}
 
+        image_text, image_text_truncated = _image_text(body)
+
         return {
             "filename": original_name,
             "size_bytes": len(data),
@@ -242,6 +291,11 @@ async def analyze_chat_photo(
             "observations": observations,
             "vest": vest_tier,
             "hat": hat_tier,
+            "image_text": image_text,
+            "image_text_truncated": image_text_truncated,
+            "attachment_marker": _attachment_marker(
+                original_name, observations, image_text, image_text_truncated,
+            ),
             "_product_name": "Safety Observation AI v2",
         }
     finally:
