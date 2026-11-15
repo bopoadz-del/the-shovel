@@ -244,6 +244,9 @@ def test_f45_b_flat_ground_refused(phi):
 
 
 # ------------------------------------------ F46 uplift check to stop dewatering
+# required_fos is passed explicitly in every value case: the 11:17Z ruling
+# moves the product's default to the course value, and these cases test the
+# equation, not a default.
 
 F46 = "dewatering_uplift_check"
 
@@ -257,7 +260,8 @@ F46 = "dewatering_uplift_check"
     (4, 1.5, 2, 4.0, 5.25, 1.3125, True, 2),
 ])
 def test_f46_t(h, raft, n, up, cw, fos, stop, nmin):
-    r = _ok(F46, {"water_depth": h, "raft_thickness": raft, "floor_count": n})
+    r = _ok(F46, {"water_depth": h, "raft_thickness": raft, "floor_count": n,
+                  "required_fos": 1.25})
     assert r["uplift_force_t_m2"] == pytest.approx(up, rel=_REL)
     assert r["counter_weight_t_m2"] == pytest.approx(cw, rel=_REL)
     assert r["fos"] == pytest.approx(fos, rel=_REL)
@@ -273,7 +277,7 @@ def test_f46_t(h, raft, n, up, cw, fos, stop, nmin):
     ({"water_depth": 5, "raft_thickness": "3 ft", "floor_count": 4}, 1.0572, False),
 ])
 def test_f46_u(params, fos, stop):
-    r = _ok(F46, params)
+    r = _ok(F46, {**params, "required_fos": 1.25})
     assert r["fos"] == pytest.approx(fos, rel=_REL)
     assert r["can_stop"] is stop
 
@@ -293,7 +297,21 @@ def test_f46_m(params, missing):
     (3.21, False),
 ])
 def test_f46_b_on_required_fos(h, stop):
-    r = _ok(F46, {"water_depth": h, "raft_thickness": 1, "floor_count": 2})
+    r = _ok(F46, {"water_depth": h, "raft_thickness": 1, "floor_count": 2,
+                  "required_fos": 1.25})
+    assert r["can_stop"] is stop
+
+
+@pytest.mark.parametrize("required, stop", [
+    # W = 4.0, h = 3.25: FoS = 1.23077 -- passes a 1.2 requirement,
+    # fails a 1.25 one. The threshold is the caller's input, not a constant.
+    (1.2, True),
+    (1.25, False),
+])
+def test_f46_b_threshold_is_the_input(required, stop):
+    r = _ok(F46, {"water_depth": 3.25, "raft_thickness": 1, "floor_count": 2,
+                  "required_fos": required})
+    assert r["fos"] == pytest.approx(1.23077, rel=_REL)
     assert r["can_stop"] is stop
 
 
