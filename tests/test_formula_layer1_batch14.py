@@ -263,10 +263,13 @@ def test_f105_b_ec_large_bar(db, lap):
     assert r["lap_length_mm"] == pytest.approx(lap, abs=0.1)
 
 
-def test_f105_b_confinement_on_cap():
-    # (cb + Ktr)/db = 2.5, the declared cap: 420 / (1.1 x 5.47723 x 2.5) x 25 x 1.3
-    r = _ok(F105, {**_F105_BASE, "confinement_ratio": 2.5})
-    assert r["lap_length_mm"] == pytest.approx(906.2, abs=0.1)
+@pytest.mark.parametrize("conf, lap", [
+    (2.5, 906.2),    # the declared cap: 420 / (1.1 x 5.47723 x 2.5) x 25 x 1.3
+    (2.0, 1132.8),   # under it: 420 / (1.1 x 5.47723 x 2.0) x 25 x 1.3 = 1132.79
+])
+def test_f105_b_confinement_on_cap(conf, lap):
+    r = _ok(F105, {**_F105_BASE, "confinement_ratio": conf})
+    assert r["lap_length_mm"] == pytest.approx(lap, abs=0.1)
 
 
 @pytest.mark.parametrize("params", [
@@ -315,9 +318,12 @@ def test_f106_b_zero_force(v_kn, v):
     assert r["shear_stress_n_mm2"] == pytest.approx(v, abs=1e-3)
 
 
-def test_f106_b_width_on_floor():
-    # b = 20 mm, the declared floor: 100000 / (20 x 500) = 10.0
-    assert _ok(F106, {"v_kn": 100, "b_mm": 20, "d_mm": 500})["shear_stress_n_mm2"] == pytest.approx(10.0)
+@pytest.mark.parametrize("b, v", [
+    (20, 10.0),   # the declared floor: 100000 / (20 x 500)
+    (25, 8.0),    # just above it: 100000 / (25 x 500)
+])
+def test_f106_b_width_on_floor(b, v):
+    assert _ok(F106, {"v_kn": 100, "b_mm": b, "d_mm": 500})["shear_stress_n_mm2"] == pytest.approx(v)
 
 
 @pytest.mark.parametrize("b", [19, 0])
@@ -384,9 +390,13 @@ def test_f107_b_ec_class_from_fub(fub, cap):
     assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
 
 
-def test_f107_b_four_planes_on_limit():
-    # 4 shear planes, the declared limit: 0.75 x 372 x 300 x 4 = 334.80
-    assert _ok(F107, {"bolt_area_mm2": 300, "n_shear_planes": 4})["capacity_kn"] == pytest.approx(334.80)
+@pytest.mark.parametrize("planes, cap", [
+    (4, 334.80),   # the declared limit: 0.75 x 372 x 300 x 4
+    (3, 251.10),   # under it: 0.75 x 372 x 300 x 3
+])
+def test_f107_b_four_planes_on_limit(planes, cap):
+    r = _ok(F107, {"bolt_area_mm2": 300, "n_shear_planes": planes})
+    assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
 
 
 @pytest.mark.parametrize("params", [
@@ -450,9 +460,13 @@ def test_f108_b_ec_parent_metal_table(grade, cap):
     assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
 
 
-def test_f108_b_leg_on_floor():
-    # 2 mm leg, the declared floor: 0.45 x 490 x 1.414 x 200 = 62.36
-    assert _ok(F108, {"leg_size_mm": 2, "length_mm": 200})["capacity_kn"] == pytest.approx(62.36, abs=0.01)
+@pytest.mark.parametrize("leg, cap", [
+    (2, 62.36),   # the declared floor: 0.45 x 490 x 1.414 x 200
+    (3, 93.54),   # above it: 0.45 x 490 x 2.121 x 200 = 93.536
+])
+def test_f108_b_leg_on_floor(leg, cap):
+    r = _ok(F108, {"leg_size_mm": leg, "length_mm": 200})
+    assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
 
 
 @pytest.mark.parametrize("params", [
