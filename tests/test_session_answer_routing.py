@@ -35,6 +35,7 @@ ASK_Y = "What is the total length of the southern culvert?"
 ANSWER_Y = "The southern culvert measures three hundred metres overall."
 
 _HOLD_SECONDS = 30
+_PAIRS = ((ASK_X, ANSWER_X), (ASK_Y, ANSWER_Y))
 
 
 def _register(client) -> dict:
@@ -90,9 +91,10 @@ def _assert_only_own(text: str, own_ask: str, own_answer: str, other_ask: str,
 
 
 class _Order:
-    """X's model call waits until Y's whole turn has come back."""
+    """The slow ask's model call waits until the other whole turn has come back."""
 
     def __init__(self) -> None:
+        self.slow_ask = ASK_X
         self.y_done = threading.Event()
         self.x_started = threading.Event()
         self.x_finished_at: float | None = None
@@ -102,16 +104,15 @@ class _Order:
 def _routing_llm(order: _Order):
     async def _inner(self, messages, api_key, project_id=None, **kwargs):
         seen = "\n".join(str(m.get("content") or "") for m in messages or [])
-        if ASK_X in seen:
+        text = next(
+            (answer for ask, answer in _PAIRS if ask in seen),
+            "No figure for this question.",
+        )
+        if order.slow_ask in seen:
             order.x_started.set()
             deadline = time.monotonic() + _HOLD_SECONDS
             while not order.y_done.is_set() and time.monotonic() < deadline:
                 await asyncio.sleep(0.02)
-            text = ANSWER_X
-        elif ASK_Y in seen:
-            text = ANSWER_Y
-        else:
-            text = "No figure for this question."
         return {
             "status": "success",
             "choice": {"message": {"content": text, "tool_calls": []}},
@@ -143,8 +144,13 @@ def _restart(monkeypatch) -> None:
     monkeypatch.setattr(agent_memory, "_initialized_for_url", None)
 
 
-def test_a_late_answer_stays_in_its_own_session(_llm, monkeypatch):
+@pytest.mark.parametrize("late", [0, 1])
+def test_a_late_answer_stays_in_its_own_session(late, _llm, monkeypatch):
+    """Session X is opened first and its answer arrives last. ``late`` picks
+    which ask/answer pair X carries, so both answers are tried as the late one."""
     order = _llm
+    (ask_x, answer_x), (ask_y, answer_y) = _PAIRS[late], _PAIRS[1 - late]
+    order.slow_ask = ask_x
     with TestClient(app) as client:
         headers = _register(client)
         pid = _project(client, headers)
@@ -156,7 +162,7 @@ def test_a_late_answer_stays_in_its_own_session(_llm, monkeypatch):
 
         def _ask_x() -> None:
             try:
-                out["x"] = _stream(client, headers, pid, sx, ASK_X)
+                out["x"] = _stream(client, headers, pid, sx, ask_x)
                 order.x_finished_at = time.monotonic()
             except BaseException as exc:  # noqa: BLE001 - reported below
                 errors.append(exc)
@@ -166,7 +172,7 @@ def test_a_late_answer_stays_in_its_own_session(_llm, monkeypatch):
         assert order.x_started.wait(_HOLD_SECONDS), "X's turn never reached the model"
 
         # Y is opened and asked while X is still waiting on its model call.
-        out["y"] = _stream(client, headers, pid, sy, ASK_Y)
+        out["y"] = _stream(client, headers, pid, sy, ask_y)
         order.y_finished_at = time.monotonic()
         order.y_done.set()
         worker.join(_HOLD_SECONDS + 30)
@@ -178,22 +184,22 @@ def test_a_late_answer_stays_in_its_own_session(_llm, monkeypatch):
         assert order.x_finished_at > order.y_finished_at
 
         # Live stream: each response carries only its own session's answer.
-        _assert_only_own(out["x"], None, ANSWER_X, ASK_Y, ANSWER_Y, "X stream")
-        _assert_only_own(out["y"], None, ANSWER_Y, ASK_X, ANSWER_X, "Y stream")
+        _assert_only_own(out["x"], None, answer_x, ask_y, answer_y, "X stream")
+        _assert_only_own(out["y"], None, answer_y, ask_x, answer_x, "Y stream")
 
         # Reload: the history the workspace fetches when a session is reopened.
         _assert_only_own(_contents(_stored(client, headers, sx)),
-                         ASK_X, ANSWER_X, ASK_Y, ANSWER_Y, "X after reload")
+                         ask_x, answer_x, ask_y, answer_y, "X after reload")
         _assert_only_own(_contents(_stored(client, headers, sy)),
-                         ASK_Y, ANSWER_Y, ASK_X, ANSWER_X, "Y after reload")
+                         ask_y, answer_y, ask_x, answer_x, "Y after reload")
 
     # Restart: a new app process on the same database.
     _restart(monkeypatch)
     with TestClient(app) as client:
         _assert_only_own(_contents(_stored(client, headers, sx)),
-                         ASK_X, ANSWER_X, ASK_Y, ANSWER_Y, "X after restart")
+                         ask_x, answer_x, ask_y, answer_y, "X after restart")
         _assert_only_own(_contents(_stored(client, headers, sy)),
-                         ASK_Y, ANSWER_Y, ASK_X, ANSWER_X, "Y after restart")
+                         ask_y, answer_y, ask_x, answer_x, "Y after restart")
         listed = client.get(f"/v1/projects/{pid}/conversations", headers=headers)
         assert listed.status_code == 200, listed.text
         assert {sx, sy} <= {row["id"] for row in listed.json()["conversations"]}
