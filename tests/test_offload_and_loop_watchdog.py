@@ -195,3 +195,24 @@ def test_a_late_waking_watchdog_does_not_charge_its_delay_to_the_loop(
     else:
         assert not mon.stalls
         assert mon.max_lag_ms < 200, mon.max_lag_ms
+
+
+@pytest.mark.parametrize("block_s", [0.6, 0.9])
+def test_a_stall_is_timed_to_when_the_loop_finally_serves_the_heartbeat(block_s):
+    """``LagMonitor._run`` keeps waiting on a late heartbeat until the loop
+    serves it, and ``_serve`` stamps that moment on the loop, so the recorded
+    stall is the whole block, not the threshold at which it was first seen."""
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=200,
+                                       tick_ms=10, log=False).start()
+        await asyncio.sleep(0.05)
+        time.sleep(block_s)
+        await asyncio.sleep(0.3)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.stalls, "a blocked loop must record a stall"
+    worst = max(lag for lag, _ in mon.stalls)
+    assert worst >= block_s * 1000 * 0.8, (worst, block_s)
+    assert worst == pytest.approx(mon.max_lag_ms)
