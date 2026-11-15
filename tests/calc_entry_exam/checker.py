@@ -16,6 +16,16 @@ rules are checked at that door for every calculator the registry declares:
      The expected set is read from the function signature here, never from
      the product's disclosure code.
 
+  C  no unstated constant: a NAMED numeric constant the calculator's own
+     body reads as an arithmetic operand on the lines the run executed (a
+     local assigned a number, or a module-level number) shapes the result as
+     much as a default does, so the envelope must state it -- a disclosure
+     row naming it or carrying its value, or the note naming it. Found by
+     tracing the run, never from the product's disclosure code. Additive and
+     multiplicative identities (0, 1), accumulators and inline coefficients
+     of a written formula (the 8 of wL^2/8) are formula structure, not
+     constants; tables of rates are D2's audit and are not probed here.
+
 Where a calculator cannot be exercised (a required input that is not a
 number, or no in-range call that runs) the sweep reports the stage that
 stopped it -- ``baseline`` -- rather than skipping it silently.
@@ -25,8 +35,12 @@ Run: ``python -m tests.calc_entry_exam.checker``
 
 from __future__ import annotations
 
+import ast
 import inspect
 import math
+import re
+import sys
+import textwrap
 from collections.abc import Callable
 from typing import Any
 
@@ -121,6 +135,182 @@ def check_disclosed(env: dict[str, Any], expected: set[str]) -> tuple[bool, str]
     return True, ""
 
 
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _literal(node: ast.AST) -> float | None:
+    if isinstance(node, ast.Constant) and _is_num(node.value):
+        return float(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        inner = _literal(node.operand)
+        if inner is not None:
+            return -inner if isinstance(node.op, ast.USub) else inner
+    return None
+
+
+def _operand_names(node: ast.AST, literals: list[float] | None = None) -> set[str]:
+    """Names read as an arithmetic operand anywhere under ``node``; inline
+    number operands are appended to ``literals`` (an exponent is formula
+    structure, not a constant, and is left out)."""
+    out: set[str] = set()
+    for n in ast.walk(node):
+        sides: list[ast.AST] = []
+        if isinstance(n, ast.BinOp):
+            sides = [n.left] if isinstance(n.op, ast.Pow) else [n.left, n.right]
+        elif isinstance(n, ast.AugAssign):
+            sides = [n.value]
+        for s in sides:
+            lit = _literal(s)
+            if lit is not None and literals is not None:
+                literals.append(lit)
+            while isinstance(s, ast.UnaryOp):
+                s = s.operand
+            if isinstance(s, ast.Name):
+                out.add(s.id)
+    return out
+
+
+def _structural(v: float) -> bool:
+    """Identities and decimal unit scales (0, 1, 10^k) are not constants."""
+    if v == 0:
+        return True
+    k = math.log10(abs(v))
+    return abs(k - round(k)) < 1e-12
+
+
+def named_constants(fn: Callable[..., Any], lines_run: set[int] | None = None) -> dict[str, float]:
+    """Named numeric constants ``fn``'s own body reads as arithmetic operands.
+
+    ``lines_run`` (absolute line numbers) restricts the probe to what one run
+    executed; None reads the whole body.
+    """
+    fn = inspect.unwrap(fn)
+    code = getattr(fn, "__code__", None)
+    try:
+        src = textwrap.dedent(inspect.getsource(fn))
+    except (OSError, TypeError):
+        return {}
+    tree = ast.parse(src)
+    func = tree.body[0] if tree.body else None
+    if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) or code is None:
+        return {}
+    # getsource starts at the first decorator line, which is co_firstlineno.
+    first = code.co_firstlineno - 1  # ast line -> file line offset
+    stmts = [s for top in func.body for s in ast.walk(top) if isinstance(s, ast.stmt)]
+
+    def ran(node: ast.AST) -> bool:
+        return lines_run is None or (getattr(node, "lineno", 0) + first) in lines_run
+
+    params = set(inspect.signature(fn).parameters)
+    operands: set[str] = set()
+    inline: list[float] = []
+    accumulators: set[str] = set()
+    local_names: set[str] = set()
+    assigned: dict[str, list[float | None]] = {}  # executed assignments only
+    for s in stmts:
+        if isinstance(s, ast.AugAssign) and isinstance(s.target, ast.Name):
+            accumulators.add(s.target.id)
+        targets: list[ast.AST] = []
+        value: ast.AST | None = None
+        if isinstance(s, ast.Assign):
+            targets, value = list(s.targets), s.value
+        elif isinstance(s, ast.AnnAssign):
+            targets, value = [s.target], s.value
+        elif isinstance(s, (ast.For, ast.AsyncFor)):
+            targets = [s.target]
+        for t in targets:
+            for n in ast.walk(t):
+                if not isinstance(n, ast.Name):
+                    continue
+                local_names.add(n.id)
+                if ran(s):
+                    lit = _literal(value) if t is n and value is not None else None
+                    assigned.setdefault(n.id, []).append(lit)
+        if ran(s):
+            # A statement's operands, but not those of a nested block body:
+            # walk only the expression fields of this statement.
+            for field_name, value in ast.iter_fields(s):
+                if field_name in ("body", "orelse", "finalbody", "handlers"):
+                    continue
+                for v in value if isinstance(value, list) else [value]:
+                    if isinstance(v, ast.AST):
+                        operands |= _operand_names(v, inline)
+    out: dict[str, float] = {}
+    for name in sorted(operands - params - accumulators):
+        if name in local_names:
+            values = assigned.get(name, [])
+            if len(values) == 1 and values[0] is not None:
+                out[name] = values[0]
+            continue
+        g = getattr(fn, "__globals__", {}).get(name)
+        if _is_num(g):
+            out[name] = float(g)
+    for v in inline:
+        out.setdefault(f"literal {v:g}", v)
+    return {k: v for k, v in out.items() if not _structural(v)}
+
+
+def traced_lines(call: Callable[[], Any], fn: Callable[..., Any]) -> tuple[Any, set[int]]:
+    """Run ``call`` and return (its value, the lines of ``fn`` it executed)."""
+    code = getattr(inspect.unwrap(fn), "__code__", None)
+    lines: set[int] = set()
+
+    def local(frame, event, arg):
+        if event == "line":
+            lines.add(frame.f_lineno)
+        return local
+
+    def tracer(frame, event, arg):
+        return local if frame.f_code is code else None
+
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        value = call()
+    finally:
+        sys.settrace(previous)
+    return value, lines
+
+
+def _strings(obj: Any) -> list[str]:
+    if isinstance(obj, str):
+        return [obj]
+    if isinstance(obj, dict):
+        return [s for v in obj.values() for s in _strings(v)]
+    if isinstance(obj, (list, tuple)):
+        return [s for v in obj for s in _strings(v)]
+    return []
+
+
+def check_stated(env: dict[str, Any], constants: dict[str, float]) -> tuple[bool, str]:
+    """Rule C: every named constant the run read is stated in the envelope."""
+    result = env.get("result") if isinstance(env, dict) else None
+    result = result if isinstance(result, dict) else {}
+    rows = [r for key in ("defaults_used", "assumptions", "constants_used")
+            for r in (result.get(key) or []) if isinstance(r, dict)]
+    names = {str(r.get(k)).casefold() for r in rows for k in ("parameter", "name") if r.get(k)}
+    values = [float(r["value"]) for r in rows if _is_num(r.get("value"))]
+    note = " ".join(str(x) for x in (env.get("note"), result.get("note")) if x).casefold()
+    written = " ".join(_strings(env)).casefold()
+    silent = []
+    for name, value in sorted(constants.items()):
+        bare = name.strip("_").casefold()
+        if bare in names or name.casefold() in names:
+            continue
+        if any(math.isclose(value, v, rel_tol=_REL, abs_tol=1e-12) for v in values):
+            continue
+        if not name.startswith("literal ") and (bare in note or bare.replace("_", " ") in note):
+            continue
+        # Written in the envelope's own words (its formula, basis or note).
+        if re.search(rf"(?<![\d.]){re.escape(f'{value:g}')}(?![\d])", written):
+            continue
+        silent.append(name if name.startswith("literal ") else f"{name}={value:g}")
+    if silent:
+        return False, "constant used unstated: " + ", ".join(silent)
+    return True, ""
+
+
 # ---------------------------------------------------------------- the sweep
 def _value(p: Any) -> Any:
     lo, hi = p.lo, p.hi
@@ -212,6 +402,15 @@ def sweep(specs: list[Any], parameters: Callable[[Any], dict], run: Callable[...
         if expected:
             ok, why = check_disclosed(base, expected)
             rows.append({"calc": spec.name, "rule": "D", "passed": ok, "why": why})
+        traced, lines = traced_lines(lambda: _run(run, spec.name, call), spec.fn)
+        if not lines:
+            rows.append({"calc": spec.name, "rule": "C", "passed": False,
+                         "why": "the door ran without executing the calculator's body"})
+        else:
+            consts = named_constants(spec.fn, lines)
+            if consts:
+                ok, why = check_stated(traced, consts)
+                rows.append({"calc": spec.name, "rule": "C", "passed": ok, "why": why})
     by_rule: dict[str, list[int]] = {}
     for r in rows:
         k = by_rule.setdefault(r["rule"], [0, 0])

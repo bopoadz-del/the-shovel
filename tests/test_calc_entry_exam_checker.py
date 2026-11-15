@@ -79,8 +79,12 @@ class _Spec:
     required_groups: tuple = ()
 
 
+#: invented module-level norm the slab reads (rule C must see it)
+_SLAB_LAP = 1.08
+
+
 def _slab(length_m, width_m, thick_mm, loss_fraction=0.05):
-    return length_m * width_m * thick_mm / 1000 * (1 + loss_fraction)
+    return length_m * width_m * thick_mm / 1000 * (1 + loss_fraction) * _SLAB_LAP
 
 
 def _beam(span_m, udl_kn_m, point_kn, load_factor=1.5, extra_knm=2.0):
@@ -93,6 +97,7 @@ class _Calc:
     fn: Any
     params: dict
     defaults: dict  # optional input -> the value the calculator falls back on
+    formula: str = ""  # the calculator's written basis, constants included
 
 
 # Two invented calculators with different units, different required inputs
@@ -103,14 +108,14 @@ _SLAB = _Calc("slab", _slab, {
     "width_m": _P("number", "m", 1, 100, "width"),
     "thick_mm": _P("number", "mm", 50, 600, "thickness"),
     "loss_fraction": _P("number", "fraction", 0, 0.2, required=False),
-}, {"loss_fraction": 0.05})
+}, {"loss_fraction": 0.05}, "L x W x t / 1000 x (1 + loss) x lap 1.08")
 _BEAM = _Calc("beam", _beam, {
     "span_m": _P("number", "m", 2, 20, "span"),
     "udl_kn_m": _P("number", "kN/m", 1, 80, "distributed load"),
     "point_kn": _P("number", "kN", 0, 300, "point load"),
     "load_factor": _P("number", "-", 1, 2, required=False),
     "extra_knm": _P("number", "kNm", 0, 50, required=False),
-}, {"load_factor": 1.5, "extra_knm": 2.0})
+}, {"load_factor": 1.5, "extra_knm": 2.0}, "M = lf (w L^2 / 8 + P L / 4) + extra")
 _CALCS = [_SLAB, _BEAM]
 _IDS = [c.name for c in _CALCS]
 
@@ -134,7 +139,8 @@ def _good_door(calc: _Calc):
             return {"status": "needs_input", "needs_input": missing}
         vals = {k: _to_number(v, calc.params[k].unit) for k, v in params.items()}
         rows = [{"parameter": k, "value": v} for k, v in calc.defaults.items() if k not in vals]
-        return {"status": "success", "result": {"value": calc.fn(**vals), "defaults_used": rows}}
+        return {"status": "success", "result": {"value": calc.fn(**vals), "defaults_used": rows,
+                                                "formula": calc.formula}}
     return door
 
 
@@ -162,8 +168,9 @@ def test_sweep_passes_a_door_that_keeps_all_three_rules(calc):
     rep = _sweep(calc, _good_door(calc))
     assert rep["passed"] == rep["total"], [r for r in rep["rows"] if not r["passed"]]
     # Both invented calculators have three required inputs, each in a unit the
-    # exam's table can rewrite, and at least one fall-back default.
-    assert rep["by_rule"] == {"baseline": [1, 1], "M": [3, 3], "U": [3, 3], "D": [1, 1]}
+    # exam's table can rewrite, at least one fall-back default and at least
+    # one body constant.
+    assert rep["by_rule"] == {"baseline": [1, 1], "M": [3, 3], "U": [3, 3], "D": [1, 1], "C": [1, 1]}
 
 
 @pytest.mark.parametrize("calc", _CALCS, ids=_IDS)
@@ -172,6 +179,87 @@ def test_sweep_fails_a_door_that_breaks_each_rule(calc):
     assert rep["by_rule"]["M"] == [0, 3]
     assert rep["by_rule"]["U"] == [0, 3]
     assert rep["by_rule"]["D"] == [0, 1]
+    assert rep["by_rule"]["C"] == [0, 1]
+
+
+# ---------------------------------------------------------------- rule C
+_RATE = 2.75  # invented module-level scalar
+
+
+def _two_branch(a, b, mode=0):
+    total = 0.0
+    total += a
+    lap = 1.15
+    if mode:
+        hidden = 3.3
+        return total * hidden
+    return (total * lap + b * _RATE) ** 2 / 1000
+
+
+def _plain(x, y):
+    scale = 1
+    return x * y * scale + 10 - 0
+
+
+def _expected_constants(fn, call):
+    _, lines = ck.traced_lines(lambda: fn(**call), fn)
+    return ck.named_constants(fn, lines)
+
+
+def test_constants_found_on_the_lines_the_run_executed():
+    took_main = _expected_constants(_two_branch, {"a": 2.0, "b": 3.0})
+    took_side = _expected_constants(_two_branch, {"a": 2.0, "b": 3.0, "mode": 1})
+    assert took_main == {"lap": 1.15, "_RATE": 2.75}
+    assert took_side == {"hidden": 3.3}
+
+
+def test_identities_scales_exponents_accumulators_and_inputs_are_not_constants():
+    assert _expected_constants(_plain, {"x": 4.0, "y": 5.0}) == {}
+    assert _expected_constants(_plain, {"x": 0.5, "y": 9.0}) == {}
+    assert "total" not in ck.named_constants(_two_branch)  # accumulator, whole body
+    assert "literal 2" not in ck.named_constants(_two_branch)  # exponent
+
+
+def test_inline_literal_operand_is_a_constant():
+    def stair(rise_mm, going_mm):
+        return 2 * rise_mm + going_mm - 630
+
+    def ramp(rise_m):
+        return rise_m * 12.5
+
+    assert _expected_constants(stair, {"rise_mm": 170.0, "going_mm": 280.0}) == {"literal 2": 2.0, "literal 630": 630.0}
+    assert _expected_constants(ramp, {"rise_m": 0.4}) == {"literal 12.5": 12.5}
+
+
+def test_stated_passes_by_row_name_row_value_or_written_basis():
+    consts = {"lap": 1.15, "_RATE": 2.75}
+    by_rows = {"status": "success", "result": {"v": 1, "assumptions": [
+        {"name": "lap", "value": 9}, {"parameter": "x", "value": 2.75}]}}
+    by_text = {"status": "success", "result": {"v": 1, "formula": "v = a x 1.15 + b x 2.75"}}
+    by_note = {"status": "success", "note": "uses lap and rate", "result": {"v": 1}}
+    assert ck.check_stated(by_rows, consts)[0]
+    assert ck.check_stated(by_text, consts)[0]
+    assert ck.check_stated(by_note, consts)[0]
+
+
+def test_stated_fails_when_any_constant_is_unstated():
+    consts = {"lap": 1.15, "literal 630": 630.0}
+    half = {"status": "success", "result": {"v": 1, "formula": "v = a x 1.15"}}
+    near = {"status": "success", "result": {"v": 1, "formula": "v = a x 1.155 + 6300"}}
+    assert ck.check_stated(half, consts) == (False, "constant used unstated: literal 630")
+    assert not ck.check_stated(near, consts)[0]
+    assert not ck.check_stated({"status": "success", "result": {"v": 1}}, {"_RATE": 2.75})[0]
+
+
+def test_sweep_fails_c_when_the_door_never_runs_the_body():
+    # The door answers through another function than the registered one: the
+    # registered body never runs, so rule C cannot be judged and must be
+    # reported as failed, never passed silently.
+    for calc in _CALCS:
+        rep = ck.sweep([_Spec(calc.name, lambda **k: 0.0, calc.params)],
+                       lambda s: {k: _named(k, p) for k, p in s.params.items()}, _good_door(calc))
+        c_rows = [r for r in rep["rows"] if r["rule"] == "C"]
+        assert c_rows and not c_rows[0]["passed"], rep["rows"]
 
 
 @pytest.mark.parametrize("calc", _CALCS, ids=_IDS)
