@@ -24,11 +24,13 @@ from app.routers.hat_frames import _decode, _encode
 _LOG = logging.getLogger(__name__)
 
 
-async def with_answer_exit(frames: AsyncIterator[str]) -> AsyncIterator[str]:
+async def with_answer_exit(frames: AsyncIterator[str], question: str = "") -> AsyncIterator[str]:
+    """``question`` is the user's turn as asked; the answer contract reads it
+    to tell which evidence values answer the asked thing."""
     from app.agents import answer_exit
     from app.core.offload import off_loop
 
-    own = answer_exit.open_turn()
+    own = answer_exit.open_turn(question)
     streamed: list[str] = []
     async for frame in frames:
         try:
@@ -40,6 +42,9 @@ async def with_answer_exit(frames: AsyncIterator[str]) -> AsyncIterator[str]:
                 # The agent opens its own record in this same context; read
                 # whichever is current so its evidence resolves citations.
                 turn = answer_exit.current_turn() or own
+                # The router knows the asked text even when the agent's own
+                # record was opened without it.
+                turn.question = turn.question or own.question
                 frame = _encode(await off_loop(answer_exit.check_end_event, event, "".join(streamed), turn))
         except Exception:  # noqa: BLE001 - the exit check must never eat a frame
             _LOG.exception("exit_frames: frame passed through unmodified")
