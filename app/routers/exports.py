@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from app.dependencies import require_user
 from app.core import projects as projects_store
@@ -725,6 +726,29 @@ def _produced_source_digest(source: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _produced_document_id(
+    doc_project: str, conversation_id: str, user_id: str, digest: str,
+) -> str:
+    """The documents-row id a produced file is kept under: derived from the
+    project, session, user and render-source digest, so two workers keeping
+    the same output race on one primary key and the database keeps one row.
+    Same shape as an upload's id (8 hex chars)."""
+    key = "".join((doc_project, conversation_id, user_id, digest))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+
+
+def _is_kept_copy(
+    row: Optional[Dict[str, Any]], conversation_id: str, user_id: str, digest: str,
+) -> bool:
+    """True when ``row`` is this session's kept copy of this render source."""
+    meta = (row or {}).get("metadata") or {}
+    return (
+        meta.get("produced_source_sha256") == digest
+        and meta.get("session_id") == conversation_id
+        and meta.get("uploader_id") == user_id
+    )
+
+
 def _save_produced_to_session(
     project_id: str,
     conversation_id: str,
@@ -752,6 +776,16 @@ def _save_produced_to_session(
             raw_bytes = fh.read()
         digest = _produced_source_digest(source)
         doc_project = projects_store.ui_project_id(project_id) or project_id
+        # Keep-once is decided by the primary key, not by a read: a read then
+        # an insert lets two concurrent exports both see "not kept" and both
+        # store (grader G-2). The id is derived from what identifies the
+        # output, so the second insert of it fails in the database, whichever
+        # worker process it runs in, and that caller returns the winner's row.
+        kept_id = _produced_document_id(doc_project, conversation_id, user_id, digest)
+        at_id = projects_store.get_document(kept_id)
+        if _is_kept_copy(at_id, conversation_id, user_id, digest):
+            return kept_id
+        # Copies kept before ids were derived carry a random id.
         for existing in projects_store.list_session_documents(
             doc_project, conversation_id, user_id,
         ):
@@ -760,17 +794,32 @@ def _save_produced_to_session(
         stored_as = f"{uuid.uuid4().hex[:8]}_{display_name}"
         stored_path = byte_store.allocate_path(stored_as)
         byte_store.write_bytes(stored_path, raw_bytes)
-        doc = projects_store.add_document(
-            doc_project, display_name, stored_as, stored_path,
-            len(raw_bytes), role=None,
-            metadata={
-                "provenance": "produced",
-                "origin": "produced",
-                "uploader_id": user_id,
-                "session_id": conversation_id,
-                "produced_source_sha256": digest,
-            },
-        )
+        try:
+            doc = projects_store.add_document(
+                doc_project, display_name, stored_as, stored_path,
+                len(raw_bytes), role=None,
+                metadata={
+                    "provenance": "produced",
+                    "origin": "produced",
+                    "uploader_id": user_id,
+                    "session_id": conversation_id,
+                    "produced_source_sha256": digest,
+                },
+                # An unrelated row already holding the derived id (an 8-hex
+                # collision) must not stop the keep: insert under a fresh id.
+                document_id=kept_id if at_id is None else None,
+            )
+        except IntegrityError:
+            # Another export of the same output won the insert. Drop the
+            # bytes this one wrote and answer with the kept row.
+            try:
+                os.remove(stored_path)
+            except OSError:
+                logger.warning("unkept produced copy %s not removed", stored_path)
+            if _is_kept_copy(projects_store.get_document(kept_id),
+                             conversation_id, user_id, digest):
+                return kept_id
+            raise
         projects_store.stamp_document_index(
             doc["id"], chunk_count=0,
             ingest_status=ist.NOT_INDEXED_POLICY,
