@@ -1,8 +1,9 @@
 """Restore drill: compare a restored database with live, counts only.
 
-The owner (or the advisor) makes a Neon branch from a restore point (the
-backup); its endpoint id (``ep-...``) is the one input. This script opens the
-restore branch and the live database, each in a READ ONLY transaction, and
+Either ``--create`` makes a scratch Neon branch of live at a restore point
+(read-only endpoint, ``NEON_API_KEY``), times it and deletes it after the
+comparison, or ``--endpoint ep-...`` names an existing restore branch. The
+comparison opens the restore branch and the live database, each in a READ ONLY transaction, and
 prints row counts per table plus documents per ingest status and chunks per
 table, side by side. It never writes to either database and never prints a
 connection string, a row or any row text.
@@ -112,12 +113,127 @@ def run(endpoint: str, *, restore_factory: Optional[Callable] = None,
     return result
 
 
+# ── scratch restore branch (Neon) ────────────────────────────────────────────
+NEON_API = "https://console.neon.tech/api/v2"
+
+
+def neon_http(api_key: str) -> Callable:
+    """``http(method, path, body) -> dict`` against the Neon API. The key is
+    sent as a bearer header and never printed."""
+    import json
+    import urllib.request
+
+    def call(method: str, path: str, body: Optional[dict] = None) -> dict:
+        req = urllib.request.Request(
+            NEON_API + path, method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json",
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 -- fixed https host
+                raw = resp.read()
+        except Exception as exc:  # noqa: BLE001 -- status code only, never the body
+            raise Refused(f"neon_http_{getattr(exc, 'code', 'error')}") from None
+        return json.loads(raw or b"{}")
+    return call
+
+
+def live_endpoint_id(live_url: str) -> str:
+    """The Neon endpoint id in the live host (``ep-...``; a ``-pooler``
+    suffix is the same endpoint)."""
+    from urllib.parse import urlsplit
+
+    label = (urlsplit(live_url).hostname or "").split(".", 1)[0]
+    if label.endswith("-pooler"):
+        label = label[: -len("-pooler")]
+    if not label.startswith("ep-"):
+        raise Refused("live_host_not_neon")
+    return label
+
+
+def _locate(http: Callable, endpoint_id: str) -> tuple:
+    """(project id, branch id) of the live endpoint."""
+    for proj in http("GET", "/projects?limit=400").get("projects", []):
+        for ep in http("GET", f"/projects/{proj['id']}/endpoints").get("endpoints", []):
+            if ep.get("id") == endpoint_id:
+                return proj["id"], ep["branch_id"]
+    raise Refused("live_endpoint_not_found")
+
+
+def scratch_drill(http: Callable, live_url: str, minutes_back: int,
+                  compare_fn: Callable[[str], Dict[str, object]], *,
+                  clock: Callable[[], float], sleep: Callable[[float], None],
+                  now_utc: Callable, ready_timeout_s: float = 900.0,
+                  poll_s: float = 5.0) -> Dict[str, object]:
+    """Branch the live database at ``minutes_back`` minutes ago with a
+    read-only endpoint, wait until it serves, compare counts, then delete
+    the branch -- always, and only the branch made here. Times are seconds."""
+    import datetime as dt
+
+    if minutes_back < 1:
+        raise Refused("minutes_back_below_1")
+    live_ep = live_endpoint_id(live_url)
+    project, parent = _locate(http, live_ep)
+    point = (now_utc() - dt.timedelta(minutes=minutes_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t0 = clock()
+    made = http("POST", f"/projects/{project}/branches", {
+        "branch": {"parent_id": parent, "parent_timestamp": point,
+                   "name": f"restore-drill-{int(t0)}"},
+        "endpoints": [{"type": "read_only"}]})
+    branch = (made.get("branch") or {}).get("id")
+    eps = [e.get("id") for e in made.get("endpoints") or []]
+    if not branch or branch == parent:
+        raise Refused("branch_not_created")
+    times: Dict[str, object] = {"restore_point": point}
+    try:
+        if len(eps) != 1 or not eps[0] or eps[0] == live_ep:
+            raise Refused("restore_endpoint_unusable")
+        pending = [o["id"] for o in made.get("operations") or []]
+        while pending:
+            if clock() - t0 > ready_timeout_s:
+                raise Refused("branch_not_ready")
+            still = []
+            for op in pending:
+                status = http("GET", f"/projects/{project}/operations/{op}")["operation"]["status"]
+                if status in ("failed", "error", "cancelled"):
+                    raise Refused("branch_operation_failed")
+                if status != "finished":
+                    still.append(op)
+            pending = still
+            if pending:
+                sleep(poll_s)
+        times["ready_s"] = round(clock() - t0, 1)
+        result = compare_fn(eps[0])
+        times["compared_s"] = round(clock() - t0, 1)
+    finally:
+        http("DELETE", f"/projects/{project}/branches/{branch}")
+        times["deleted_s"] = round(clock() - t0, 1)
+        _emit(**{k: v for k, v in times.items()})
+    return {**result, "times": times}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    import datetime as dt
+    import os
+    import time
+
     ap = argparse.ArgumentParser(description="Restore drill: restore branch vs live, counts only.")
-    ap.add_argument("--endpoint", required=True, help="Neon endpoint id of the restore branch (ep-...)")
+    ap.add_argument("--endpoint", default="", help="Neon endpoint id of an existing restore branch (ep-...)")
+    ap.add_argument("--create", action="store_true",
+                    help="make a scratch restore branch, compare, delete it (needs NEON_API_KEY)")
+    ap.add_argument("--minutes-back", type=int, default=60, help="restore point, minutes before now")
     a = ap.parse_args(argv)
     try:
-        result = run(a.endpoint)
+        if a.create:
+            key = os.environ.get("NEON_API_KEY", "")
+            if not key:
+                raise Refused("neon_api_key_missing")
+            from scripts import scrub_verify as sv
+            result = scratch_drill(neon_http(key), sv._live_url(), a.minutes_back, run,
+                                   clock=time.monotonic, sleep=time.sleep,
+                                   now_utc=lambda: dt.datetime.now(dt.timezone.utc))
+        else:
+            result = run(a.endpoint)
     except Exception as exc:  # noqa: BLE001 -- refusal codes only, never a URL
         code = getattr(exc, "code", type(exc).__name__)
         _emit(refused=code)

@@ -1,17 +1,22 @@
 # Restore drill (P-I1 (2)): compare a Neon restore branch with live, counts
-# only. The restore branch is made from a restore point (the backup) by the
-# owner or the advisor; its endpoint id is the one input. Both databases are
-# read in READ ONLY transactions. Nothing is written; no row text, URL or
-# secret is printed.
+# only. With restore_endpoint empty the job makes a scratch branch of live at
+# minutes_back minutes ago (read-only endpoint, secret NEON_API_KEY), times it,
+# compares, and deletes that branch. With restore_endpoint set it compares an
+# existing restore branch. Both databases are read in READ ONLY transactions.
+# Live is never written; no row text, URL or secret is printed.
 name: restore-drill
 
 on:
   workflow_dispatch:
     inputs:
       restore_endpoint:
-        description: "Neon endpoint id on the restore-point branch (ep-...)"
+        description: "Existing restore branch endpoint (ep-...); empty = make a scratch branch"
         type: string
-        required: true
+        default: ""
+      minutes_back:
+        description: "Scratch branch restore point, minutes before now"
+        type: string
+        default: "60"
 
 permissions:
   contents: read
@@ -50,6 +55,12 @@ jobs:
       - name: Compare restore branch with live (counts only)
         env:
           DRILL_ENDPOINT: ${{ inputs.restore_endpoint }}
+          DRILL_MINUTES_BACK: ${{ inputs.minutes_back }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
         run: |
           set +x
-          python scripts/restore_drill.py --endpoint "$DRILL_ENDPOINT"
+          if [ -n "$DRILL_ENDPOINT" ]; then
+            python scripts/restore_drill.py --endpoint "$DRILL_ENDPOINT"
+          else
+            python scripts/restore_drill.py --create --minutes-back "$DRILL_MINUTES_BACK"
+          fi

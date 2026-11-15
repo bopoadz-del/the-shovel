@@ -81,3 +81,176 @@ def test_main_refuses_the_live_endpoint(monkeypatch, capsys):
     monkeypatch.setattr(sv, "_live_url", lambda: "postgresql://u:p@ep-live-1.example.neon.tech/db")
     assert rd.main(["--endpoint", "ep-live-1"]) == 2
     assert "refused=restore_endpoint_is_live" in capsys.readouterr().out
+
+
+# ── scratch branch lifecycle: a fake Neon API built per test ─────────────────
+import datetime as _dt  # noqa: E402
+
+LIVE = "postgresql://u:p@ep-live-1.c-2.us-west-2.aws.neon.tech/db"
+
+
+class FakeNeon:
+    def __init__(self, statuses=("running", "finished"), made_branch="br-new",
+                 made_endpoint="ep-new-9", projects=None):
+        self.calls = []
+        self.statuses = list(statuses)
+        self.made_branch, self.made_endpoint = made_branch, made_endpoint
+        self.projects = projects or {"p-other": [{"id": "ep-x", "branch_id": "br-x"}],
+                                     "p-live": [{"id": "ep-live-1", "branch_id": "br-main"}]}
+
+    def __call__(self, method, path, body=None):
+        self.calls.append((method, path, body))
+        if path.startswith("/projects?"):
+            return {"projects": [{"id": p} for p in self.projects]}
+        if path.endswith("/endpoints"):
+            return {"endpoints": self.projects[path.split("/")[2]]}
+        if method == "POST":
+            return {"branch": {"id": self.made_branch},
+                    "endpoints": [{"id": self.made_endpoint}],
+                    "operations": [{"id": "op-1"}]}
+        if "/operations/" in path:
+            return {"operation": {"status": self.statuses.pop(0) if self.statuses else "finished"}}
+        return {}
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def NOW():
+    return _dt.datetime(2026, 11, 15, 10, 0, tzinfo=_dt.timezone.utc)
+
+
+def _drill(neon, minutes=60, compare=None, **kw):
+    clk = Clock()
+    seen = []
+
+    def cmp(ep):
+        seen.append(ep)
+        return compare(ep) if compare else {"ok": True}
+    r = rd.scratch_drill(neon, LIVE, minutes, cmp, clock=clk, sleep=clk.sleep, now_utc=NOW, **kw)
+    return r, seen
+
+
+@pytest.mark.parametrize("url,ep", [(LIVE, "ep-live-1"),
+                                    ("postgresql://u:p@ep-live-1-pooler.x.neon.tech/db", "ep-live-1"),
+                                    ("postgresql://u:p@ep-other-2.x.neon.tech:5432/db", "ep-other-2")])
+def test_live_endpoint_id(url, ep):
+    assert rd.live_endpoint_id(url) == ep
+
+
+@pytest.mark.parametrize("url", ["postgresql://u:p@db.internal/db", "sqlite:///x.db"])
+def test_live_endpoint_id_refuses_a_non_neon_host(url):
+    with pytest.raises(rd.Refused) as e:
+        rd.live_endpoint_id(url)
+    assert e.value.code == "live_host_not_neon"
+
+
+@pytest.mark.parametrize("minutes,point", [(60, "2026-11-15T09:00:00Z"), (5, "2026-11-15T09:55:00Z")])
+def test_branch_made_on_the_live_branch_at_the_point_compared_then_deleted(minutes, point):
+    neon = FakeNeon()
+    r, seen = _drill(neon, minutes)
+    post = [c for c in neon.calls if c[0] == "POST"][0]
+    assert post[1] == "/projects/p-live/branches"
+    assert post[2]["branch"]["parent_id"] == "br-main" and post[2]["branch"]["parent_timestamp"] == point
+    assert post[2]["endpoints"] == [{"type": "read_only"}]
+    assert seen == ["ep-new-9"]
+    assert neon.calls[-1][:2] == ("DELETE", "/projects/p-live/branches/br-new")
+    assert [c for c in neon.calls if c[0] == "DELETE"] == [neon.calls[-1]]
+    assert r["times"]["restore_point"] == point and r["times"]["ready_s"] == 5.0
+    assert r["ok"] is True
+
+
+@pytest.mark.parametrize("statuses,ready", [(("finished",), 0.0), (("running", "running", "finished"), 10.0)])
+def test_ready_time_counts_the_polls(statuses, ready):
+    r, _ = _drill(FakeNeon(statuses=statuses))
+    assert r["times"]["ready_s"] == ready
+
+
+def test_branch_is_deleted_even_when_the_comparison_raises():
+    neon = FakeNeon()
+
+    def boom(ep):
+        raise RuntimeError("db down")
+    with pytest.raises(RuntimeError):
+        _drill(neon, compare=boom)
+    assert neon.calls[-1][:2] == ("DELETE", "/projects/p-live/branches/br-new")
+
+
+@pytest.mark.parametrize("statuses,code", [(("running", "failed"), "branch_operation_failed"),
+                                           (("running",) * 1000, "branch_not_ready")])
+def test_a_branch_that_never_serves_is_refused_and_deleted(statuses, code):
+    neon = FakeNeon(statuses=statuses)
+    with pytest.raises(rd.Refused) as e:
+        _drill(neon, ready_timeout_s=60)
+    assert e.value.code == code
+    assert neon.calls[-1][:2] == ("DELETE", "/projects/p-live/branches/br-new")
+
+
+@pytest.mark.parametrize("endpoint", ["", "ep-live-1"])
+def test_an_unusable_restore_endpoint_is_refused_never_compared(endpoint):
+    neon = FakeNeon(made_endpoint=endpoint)
+    with pytest.raises(rd.Refused) as e:
+        _drill(neon)
+    assert e.value.code == "restore_endpoint_unusable"
+    assert neon.calls[-1][:2] == ("DELETE", "/projects/p-live/branches/br-new")
+
+
+@pytest.mark.parametrize("branch", ["", "br-main"])
+def test_no_delete_when_no_new_branch_was_made(branch):
+    neon = FakeNeon(made_branch=branch)
+    with pytest.raises(rd.Refused) as e:
+        _drill(neon)
+    assert e.value.code == "branch_not_created"
+    assert not [c for c in neon.calls if c[0] == "DELETE"]
+
+
+def test_live_endpoint_not_in_any_project_is_refused_before_any_write():
+    neon = FakeNeon(projects={"p-other": [{"id": "ep-x", "branch_id": "br-x"}]})
+    with pytest.raises(rd.Refused) as e:
+        _drill(neon)
+    assert e.value.code == "live_endpoint_not_found"
+    assert all(c[0] == "GET" for c in neon.calls)
+
+
+@pytest.mark.parametrize("minutes", [0, -5])
+def test_minutes_back_below_one_is_refused(minutes):
+    neon = FakeNeon()
+    with pytest.raises(rd.Refused) as e:
+        _drill(neon, minutes)
+    assert e.value.code == "minutes_back_below_1" and neon.calls == []
+
+
+@pytest.mark.parametrize("set_empty", [True, False])
+def test_create_without_a_key_refuses(monkeypatch, capsys, set_empty):
+    if set_empty:
+        monkeypatch.setenv("NEON_API_KEY", "")
+    else:
+        monkeypatch.delenv("NEON_API_KEY", raising=False)
+    assert rd.main(["--create"]) == 2
+    assert "refused=neon_api_key_missing" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("compare_ok,code", [(True, 0), (False, 1)])
+def test_create_with_a_key_runs_the_scratch_drill(monkeypatch, capsys, compare_ok, code):
+    from scripts import scrub_verify as sv
+    monkeypatch.setenv("NEON_API_KEY", "k-test")
+    monkeypatch.setattr(sv, "_live_url", lambda: LIVE)
+    got = {}
+
+    def fake_http(key):
+        got["key"] = key
+        return FakeNeon()
+    monkeypatch.setattr(rd, "neon_http", fake_http)
+    monkeypatch.setattr(rd, "run", lambda ep: {"ok": compare_ok and ep == "ep-new-9"})
+    assert rd.main(["--create", "--minutes-back", "30"]) == code
+    out = capsys.readouterr().out
+    assert got["key"] == "k-test" and "k-test" not in out
+    assert "restore_point=2026-" in out and "deleted_s=" in out
