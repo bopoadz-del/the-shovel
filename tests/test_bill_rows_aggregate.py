@@ -251,3 +251,11 @@ def test_tool_is_in_the_base_manifest_and_registry():
     assert "bill_rows_aggregate" in manifest["available_tools"]
     tool_registry.load()
     assert "bill_rows_aggregate" in tool_registry.tools_of("base")
+
+
+@pytest.mark.parametrize("cell, expected", [
+    (7, 7), ("12", 12), (3.0, 3), ("4.0", 4),          # a recorded page
+    (None, None), ("", None), ("p7", None), ("7-8", None), ("n/a", None),  # no page recorded
+])
+def test_source_page_cell_is_read_without_guessing(cell, expected):
+    assert agg._page(cell) == expected

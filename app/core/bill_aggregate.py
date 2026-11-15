@@ -74,11 +74,19 @@ def _cell(value: Any) -> str:
     return str(value).strip()
 
 
+_PAGE_RE = re.compile(r"\d+(?:\.0+)?")
+
+
 def _page(value: Any) -> int | None:
-    try:
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
+    """The page number a ``Source Page`` cell holds; ``None`` when it holds none.
+
+    A blank or non-numeric cell is a row whose page the sheet did not record,
+    not an error, so it is told apart by its text rather than by catching.
+    """
+    text = "" if value is None else str(value).strip()
+    if not _PAGE_RE.fullmatch(text):
         return None
+    return int(float(text))
 
 
 def read_sheet_rows(xlsx_path: str) -> list[SheetRow]:
