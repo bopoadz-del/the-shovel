@@ -6188,6 +6188,59 @@ def _recover_answer_from_tool_messages(
     return error_fallback or text
 
 
+#: The one plain line that stands in for the model's explanation when the
+#: model could not be reached and a computed result is shown on its own.
+MODEL_UNREACHED_NOTE = (
+    "The explanation is unavailable because the language model could not be reached."
+)
+
+
+def _missing_model_error(cfg: dict[str, Any], api_key: str | None) -> str | None:
+    """The error a model call WOULD return when no provider key is configured.
+
+    Read once per turn, but acted on only at the first model call, so every
+    deterministic stage before it (calculator pre-dispatch, capability answer,
+    fast paths) still answers a turn it can answer without a model.
+    """
+    if cfg.get("env_key") and not (api_key or os.getenv(cfg["env_key"])):
+        return f"No {cfg['env_key']} configured."
+    return None
+
+
+def _recover_after_provider_failure(messages: list[dict[str, Any]] | None) -> str:
+    """A provider failure of ANY kind -- no key, refused connection, timeout,
+    exhausted balance, an HTTP error, an empty reply -- recovers the tool or
+    pre-dispatch result already in the thread, followed by one plain line that
+    the explanation is unavailable. Returns "" when the thread holds nothing
+    the user can be given, so the caller keeps its honest failure message.
+    """
+    # A pre-dispatch bubble is addressed to the model (the raw result plus
+    # instructions on how to present it). Where the same run was also recorded
+    # as a tool result, that record is what the user is shown, through the
+    # result formatters; the bubble is the fallback for drafts recorded only
+    # as a bubble.
+    tool_only = [
+        m for m in (messages or [])
+        if not (
+            m.get("role") == "user"
+            and "PLATFORM PRE-DISPATCH:" in str(m.get("content") or "")[:80]
+        )
+    ]
+    for thread in (tool_only, messages):
+        recovered = _recover_answer_from_tool_messages("", thread)
+        if recovered and not _text_needs_tool_recovery(recovered):
+            return recovered
+    return ""
+
+
+def _with_model_unreached_note(text: str) -> str:
+    """Append the unreached-model line once, after the result."""
+    body = (text or "").rstrip()
+    if MODEL_UNREACHED_NOTE in body:
+        return body
+    return f"{body}\n\n{MODEL_UNREACHED_NOTE}"
+
+
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:
     """Return the calculator result dict that carries ``volume_m3``."""
     if not isinstance(payload, dict):

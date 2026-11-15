@@ -135,6 +135,7 @@ async def _chat_impl(
         _predispatch_resource_histogram, _predispatch_wbs_duration_override,
         _predispatch_wir_form, _project_has_non_rag_context, _project_is_rag_ready_off_process,
         _rag_inject_off_process, _recover_answer_from_tool_messages,
+        _missing_model_error, _recover_after_provider_failure, _with_model_unreached_note,
         _recover_tool_calls_from_content, _recovered_calls_are_search_only,
         _requested_char_offset, _sanitize_citation_labels, _sanitize_final_text,
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
@@ -194,18 +195,11 @@ async def _chat_impl(
         }
 
     cfg = _llm_config()
-    # A provider with no env_key (none today) would need no auth — the
-    # empty-bearer guard downstream omits the header. DeepSeek/OpenRouter
-    # both declare an env_key, so this check requires their API key.
-    if cfg["env_key"]:
-        api_key = api_key or os.getenv(cfg["env_key"])
-        if not api_key:
-            return {
-                "status": "error",
-                "error": f"No {cfg['env_key']} configured. Set it in .env or pass via env.",
-            }
-    else:
-        api_key = api_key or ""
+    # A missing provider key is acted on at the FIRST model call, not here:
+    # the deterministic stages below (capability answer, pre-dispatch, fast
+    # paths) answer the turns they can answer with no model configured.
+    _model_missing = _missing_model_error(cfg, api_key)
+    api_key = api_key or (os.getenv(cfg["env_key"]) if cfg["env_key"] else "") or ""
 
     _call_stack = _call_stack or [self.name]
 
@@ -272,7 +266,8 @@ async def _chat_impl(
     # whose first pass is uncovered runs the #163 plan -> actions -> coverage
     # -> <=3 rounds loop before the answer, so a figure outside the default
     # top-k is still fetched (never a refusal dressed as grounding).
-    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
+    # The re-query planner is a model call: with no model, keep the first pass.
+    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id and not _model_missing:
         _rag_sys_msg = await _agentic_figure_retrieval_augment(
             self, user_message, project_id, api_key, user_id, _rag_sys_msg,
             audit_rec=_rag_audit,
@@ -512,15 +507,19 @@ async def _chat_impl(
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         await _emit("iteration", {"n": iteration + 1})
-        resp = await self._call_llm(
-            messages, api_key, project_id=project_id, user_id=user_id,
-            exclude_tools=excluded_tools or None,
-            with_tools=not force_synthesis,
-        )
+        if _model_missing:
+            resp = {"status": "error", "error": _model_missing}
+        else:
+            resp = await self._call_llm(
+                messages, api_key, project_id=project_id, user_id=user_id,
+                exclude_tools=excluded_tools or None,
+                with_tools=not force_synthesis,
+            )
         if resp.get("status") == "error":
-            err = resp.get("error") or _EMPTY_RESPONSE_FALLBACK
-            recovered = _recover_answer_from_tool_messages(err, messages)
-            if recovered != err and not (await _off_loop(_text_needs_tool_recovery, recovered)):
+            # Any provider failure: a result already in the thread is the
+            # answer, with one line that the explanation is unavailable.
+            recovered = await _off_loop(_recover_after_provider_failure, messages)
+            if recovered:
                 final_text = _sanitize_inline_paths(
                     _sanitize_citation_labels(recovered)
                 )
@@ -530,6 +529,7 @@ async def _chat_impl(
                     project_id=project_id,
                     audit_rec=_rag_audit,
                 ))
+                final_text = _with_model_unreached_note(final_text)
                 messages.append({"role": "assistant", "content": final_text})
                 if conversation_id:
                     from app.core import agent_memory
