@@ -56,10 +56,12 @@ def _answer(cid: str, pid: str, text: str) -> None:
 
 
 def _export(client, headers, pid, cid, fmt):
-    return client.post(
-        f"/v1/projects/{pid}/conversations/{cid}/export?format={fmt}",
-        headers=headers,
+    # Addressed by route name so the request provably reaches the handler
+    # under test (exports.export_conversation_message), not a look-alike path.
+    path = app.url_path_for(
+        "export_conversation_message", project_id=pid, conversation_id=cid,
     )
+    return client.post(f"{path}?format={fmt}", headers=headers)
 
 
 def _session_docs(client, headers, pid, sid):
@@ -222,10 +224,33 @@ def test_a_sessions_schedule_workbook_is_kept_as_produced(client, staged,
         assert stage_conversation_wbs(sid, _staged_wbs(staged))
 
     res = client.post(
-        f"/v1/projects/{pid}/conversations/{sid}/export/schedule", headers=headers,
+        app.url_path_for(
+            "export_conversation_schedule", project_id=pid, conversation_id=sid,
+        ),
+        headers=headers,
     )
     assert res.status_code == status, res.text
     listed = _session_docs(client, headers, pid, sid)
     assert [d["origin"] for d in listed] == ["produced"] * kept
     if kept:
         assert listed[0]["original_name"].endswith("_schedule.xlsx")
+
+
+@pytest.mark.parametrize("user_turns", [0, 1])
+def test_a_session_with_no_answer_produces_and_keeps_nothing(client, user_turns):
+    """Nothing to export -> 404, and no Produced document is kept for the session."""
+    from app.core import agent_memory
+
+    headers = _register(client, f"none{user_turns}")
+    pid = _project(client, headers, f"W2p-none-{user_turns}-{_RUN}")
+    sid = f"ws-{pid}-9000"
+    agent_memory.get_or_create_conversation(sid, "project_assistant", pid)
+    for _ in range(user_turns):
+        agent_memory.append_message(sid, "user", "Summarise the pour sequence.")
+
+    res = _export(client, headers, pid, sid, "docx")
+    assert res.status_code == 404, res.text
+    # The reason names the missing answer, not an index error from a later step.
+    detail = res.json()["detail"].lower()
+    assert "no assistant messages" in detail and "out of range" not in detail
+    assert _session_docs(client, headers, pid, sid) == []
