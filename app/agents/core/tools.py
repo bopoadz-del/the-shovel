@@ -163,6 +163,38 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
             },
         })
 
+    # ── synthetic tool: bill_rows_aggregate (project-scoped) ─────────────
+    # A count or a total over bill rows is computed over EVERY row of the
+    # derived bill sheet (app.core.bill_aggregate), never by adding the row
+    # chunks a top-K search happened to return.
+    if project_id:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "bill_rows_aggregate",
+                "description": (
+                    "Count, or total the quantity or amount of, the bill of "
+                    "quantities rows whose description contains every given "
+                    "term (optionally only inside a section). Use this for "
+                    "'how many items ...' and 'what is the total quantity / "
+                    "amount of ...' over a bill: it reads every row of the "
+                    "bill and lists the rows it used with reference and page. "
+                    "Report its count, sum and rows as given; do not add "
+                    "figures yourself."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "terms": {"type": "string", "description": "Words every matching row's description contains."},
+                        "section": {"type": "string", "description": "Words of the bill section (heading path) to stay inside. Optional."},
+                        "measure": {"type": "string", "enum": ["quantity", "amount"], "description": "What to sum (default quantity)."},
+                        "document_id": {"type": "string", "description": "The bill document (source PDF or its derived sheet). Optional: default every derived bill."},
+                    },
+                    "required": [],
+                },
+            },
+        })
+
     # ── synthetic tool: generate_wbs (when construction is allowed) ──────
     # Exposed as a top-level tool with an explicit param schema so the
     # agent never has to guess the params shape. The generic `construction`
