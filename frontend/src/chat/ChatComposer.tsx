@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { getToken } from '../lib/token'
 import { asciiUploadName, isImageUpload, unreadableFileMessage } from './uploadName'
+import { withSessionId } from './sessionDocuments'
 import './ChatComposer.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8000'
@@ -73,6 +74,9 @@ interface Props {
   disabled: boolean
   disabledReason?: string
   projectId: string
+  /** The open chat session (W2): a document attached here is recorded on
+   *  it, listed under "This session" and pinned to its questions. */
+  sessionId?: string | null
   /** A file attached here was stored: its name, id and the stored record
    *  the server returned (so the documents list can show it at once). */
   onAttached?: (docName: string, docId?: string, document?: unknown) => void
@@ -93,7 +97,7 @@ interface Props {
 }
 
 export default function ChatComposer({
-  onSend, disabled, disabledReason, projectId,
+  onSend, disabled, disabledReason, projectId, sessionId,
   onAttached, onClear, hasHistory, onOpenDrive,
   agents, pinnedAgent, onPinAgent,
   pinnedDocuments, onUnpinDocument,
@@ -260,7 +264,10 @@ export default function ChatComposer({
       const endpoint = isImage
         ? `${API_BASE}/v1/chat/analyze-photo`
         : `${API_BASE}/v1/projects/${projectId}/documents`
-      if (!isImage) fd.append('role', role)
+      if (!isImage) {
+        fd.append('role', role)
+        withSessionId(fd, sessionId)
+      }
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
