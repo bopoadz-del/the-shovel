@@ -1,6 +1,6 @@
 # Construction Knowledge Base
 
-_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 62 entries._
+_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 68 entries._
 
 
 **General construction-engineering priors** — NOT code-of-practice design values. Every entry is kept GENERAL (not tied to a location or project). Values are site-experience references; **verify against your project specification and applicable standards** before use. Entries at credibility tier <=3 surface this warning automatically via the loader.
@@ -34,13 +34,19 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `thermal.ice_cost_coeff` | reference_design | Decision aid for lowering fresh-concrete placing temperature: the choice between supplemen | 3 |  |
 | `thermal.monitoring_protocol` | checklist | Thermocouple monitoring protocol for mass-concrete pours, used to enforce thermal.core_tem | 3 |  |
 
-## construction.concrete  (3 entries)
+## construction.concrete  (9 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
+| `concrete.equivalent_temperature_drop` | formula | Thermal strain = alpha x dT, so a strain (for example a shrinkage strain) equals a tempera | 3 |  |
 | `concrete.grade_selection` | rule | Select compressive strength grade by element function. Core walls, columns and other prima | 3 |  |
+| `concrete.modulus_of_rupture_beam` | formula | Flexural tensile strength fr = M / Z with M = P x L / 4 (central load P at failure, span L | 3 |  |
+| `concrete.split_cylinder_tensile` | formula | Splitting tensile strength f = 2P / (pi x D x L), cylinder loaded along its full length (c | 3 |  |
+| `concrete.target_mean_strength` | formula | Target mean strength fm = characteristic strength fk + 1.64 x standard deviation S of the  | 3 |  |
+| `concrete.workability_water` | formula | Water added for workability = mix water (w/c x cement) - water needed for hydration (hydra | 3 |  |
 | `rcc.compaction_95spd` | threshold | Roller-compacted concrete must be compacted to greater than 95% of Standard Proctor Densit | 3 |  |
 | `rcc.mix_design` | reference_design | Reference RCC mix and placement envelope. Aggregate grading (percent passing): 38 mm = 100 | 3 |  |
+| `structure.axial_shortening` | formula | Elastic shortening (or elongation) of an axially loaded member dL = P x L / (A x E), with  | 3 |  |
 
 ## construction.procurement  (3 entries)
 

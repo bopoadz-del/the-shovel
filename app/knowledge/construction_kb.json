@@ -2644,6 +2644,264 @@
       },
       "credibility_tier": 3,
       "needs_review": false
+    },
+    {
+      "id": "concrete.target_mean_strength",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Target mean strength of a concrete mix",
+      "statement": "Target mean strength fm = characteristic strength fk + 1.64 x standard deviation S of the test results (fk = fm - 1.64 S; 1.64 S is the current margin, the 5 % defective fractile). Strengths in N/mm2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "characteristic_strength + 1.64*standard_deviation",
+      "variables": {
+        "characteristic_strength": {
+          "unit": "N/mm**2",
+          "desc": "Specified characteristic 28-day strength fk (the grade)"
+        },
+        "standard_deviation": {
+          "unit": "N/mm**2",
+          "desc": "Standard deviation S of the strength test results"
+        }
+      },
+      "thresholds": {
+        "unit": "N/mm**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, p28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.workability_water",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Mix water beyond what hydration needs",
+      "statement": "Water added for workability = mix water (w/c x cement) - water needed for hydration (hydration fraction x cement). The course states hydration needs about 20-25 % of the cement weight as water; the fraction is an input, not fixed. Cement in kg gives litres of water. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "water_cement_ratio*cement_content - hydration_fraction*cement_content",
+      "variables": {
+        "water_cement_ratio": {
+          "unit": "dimensionless",
+          "desc": "Free water / cement ratio of the mix"
+        },
+        "cement_content": {
+          "unit": "kilogram",
+          "desc": "Cement in the batch or per m3"
+        },
+        "hydration_fraction": {
+          "unit": "dimensionless",
+          "desc": "Water needed for hydration as a fraction of cement weight (course: 0.20-0.25)"
+        }
+      },
+      "thresholds": {
+        "unit": "liter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp25-26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "structure.axial_shortening",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Elastic axial shortening of a member",
+      "statement": "Elastic shortening (or elongation) of an axially loaded member dL = P x L / (A x E), with E the concrete modulus (the course gives Ec = 15000 sqrt(f'c) in kg/cm2). Consistent units: P in N, L in mm, A in mm2, E in N/mm2 give dL in mm. Creep adds to this under sustained load. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "axial_load*member_length/(section_area*elastic_modulus)",
+      "variables": {
+        "axial_load": {
+          "unit": "newton",
+          "desc": "Axial load P on the member"
+        },
+        "member_length": {
+          "unit": "millimeter",
+          "desc": "Member length L"
+        },
+        "section_area": {
+          "unit": "millimeter**2",
+          "desc": "Cross-section area A"
+        },
+        "elastic_modulus": {
+          "unit": "N/mm**2",
+          "desc": "Modulus of elasticity E"
+        }
+      },
+      "thresholds": {
+        "unit": "millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp33-34",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.equivalent_temperature_drop",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Temperature drop equivalent to a strain",
+      "statement": "Thermal strain = alpha x dT, so a strain (for example a shrinkage strain) equals a temperature drop dT = strain / alpha. The course quotes alpha 7.2e-6 to 10.8e-6 per C, 10e-6 per C usually used; alpha is an input. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "strain/thermal_coefficient",
+      "variables": {
+        "strain": {
+          "unit": "dimensionless",
+          "desc": "Strain to express as a temperature change"
+        },
+        "thermal_coefficient": {
+          "unit": "1/delta_degC",
+          "desc": "Coefficient of thermal expansion alpha"
+        }
+      },
+      "thresholds": {
+        "unit": "delta_degC"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, p35",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.modulus_of_rupture_beam",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Modulus of rupture from a centre-point beam test",
+      "statement": "Flexural tensile strength fr = M / Z with M = P x L / 4 (central load P at failure, span L) and Z = b x d^2 / 6. The course's standard beam is 15 x 15 cm on a 55 cm span (Z = 562.5 cm3). P in kgf and lengths in cm give kgf/cm2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(failure_load*span/4)/(beam_width*beam_depth**2/6)",
+      "variables": {
+        "failure_load": {
+          "unit": "kilogram_force",
+          "desc": "Central load P at failure"
+        },
+        "span": {
+          "unit": "centimeter",
+          "desc": "Test span L"
+        },
+        "beam_width": {
+          "unit": "centimeter",
+          "desc": "Beam width b"
+        },
+        "beam_depth": {
+          "unit": "centimeter",
+          "desc": "Beam depth d"
+        }
+      },
+      "thresholds": {
+        "unit": "kilogram_force/centimeter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.split_cylinder_tensile",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Splitting tensile strength of a cylinder",
+      "statement": "Splitting tensile strength f = 2P / (pi x D x L), cylinder loaded along its full length (course standard cylinder 15 cm dia x 30 cm). P in kgf and lengths in cm give kgf/cm2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "2*failure_load/(pi*cylinder_diameter*cylinder_length)",
+      "variables": {
+        "failure_load": {
+          "unit": "kilogram_force",
+          "desc": "Load P at splitting failure"
+        },
+        "cylinder_diameter": {
+          "unit": "centimeter",
+          "desc": "Cylinder diameter D"
+        },
+        "cylinder_length": {
+          "unit": "centimeter",
+          "desc": "Cylinder length L"
+        }
+      },
+      "thresholds": {
+        "unit": "kilogram_force/centimeter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
     }
   ]
 }
