@@ -31,6 +31,26 @@ export interface ExportDescriptor {
   payload: Record<string, unknown>
 }
 
+/** One cited passage behind a numbered marker in the answer text (the answer
+ *  contract, ``app/agents/answer_contract.py``). The text carries only the
+ *  marker; document, section, passage and tier live in the Sources panel. */
+export interface AnswerCitation {
+  marker: number
+  document: string
+  section?: string
+  passage?: string
+  /** Visible tier wording copied from the turn's own evidence, or null. */
+  tier?: string | null
+  /** ``document`` or ``calculation`` (a calculation's passage is its inputs). */
+  kind?: string
+}
+
+/** How much of the project was searchable for this answer. */
+export interface AnswerCoverage {
+  indexed: number
+  total: number
+}
+
 export interface ChatMessage {
   id: string
   role: MessageRole
@@ -43,4 +63,8 @@ export interface ChatMessage {
   sources?: CitedSource[]
   /** Data-backed download offers from the SSE 'end' event (e.g. cost BOQ). */
   exports?: ExportDescriptor[]
+  /** Marker entries from the SSE 'end' event; shown in the Sources panel. */
+  citations?: AnswerCitation[]
+  /** Coverage from the SSE 'end' event; a Sources panel line, never answer text. */
+  coverage?: AnswerCoverage
 }

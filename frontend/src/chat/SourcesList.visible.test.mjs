@@ -142,3 +142,85 @@ test('a tool with no dedicated sentence is still plain words', () => {
   assert.doesNotMatch(line, SNAKE)
   assert.doesNotMatch(line, KEY_VALUE)
 })
+
+// ── W3: citations live in the side panel only ──────────────────────────────
+// The answer text carries numbered markers; each marker opens its entry in
+// the Sources panel, where document, section, passage and tier are shown.
+// Coverage (N of M documents indexed) is a panel line, never answer text.
+// Every case builds its own invented answer and evidence.
+
+const W3_CASES = [
+  {
+    content: 'The slab is 250 mm thick [1] and the cover is 40 mm [2].',
+    citations: [
+      { marker: 1, document: 'Alpha Structural Notes.pdf', section: 'p. 7', passage: 'slab thickness 250 mm', tier: 'Project document', kind: 'document' },
+      { marker: 2, document: 'Beta Concrete Spec.docx', section: 'Section 3.2', passage: 'nominal cover 40 mm', tier: 'Reference knowledge', kind: 'document' },
+    ],
+    coverage: { indexed: 4, total: 6 },
+  },
+  {
+    content: 'Retention is 5 % [1].\n\nThe excavation is 96 m³ [2].',
+    citations: [
+      { marker: 1, document: 'Gamma Conditions of Contract.pdf', section: 'Clause 14.3', passage: 'retention of five percent', tier: 'Benchmark', kind: 'document' },
+      { marker: 2, document: 'Excavation volume', section: '', passage: 'length 8 m, width 4 m, depth 3 m', tier: null, kind: 'calculation' },
+    ],
+    coverage: { indexed: 11, total: 11 },
+  },
+]
+
+function bubble(c) {
+  return renderToStaticMarkup(React.createElement(ChatBubble, {
+    message: { id: 'a1', role: 'assistant', content: c.content, citations: c.citations, coverage: c.coverage },
+  }))
+}
+
+function panel(c) {
+  return renderToStaticMarkup(React.createElement(SourcesList, { citations: c.citations, coverage: c.coverage }))
+}
+
+for (const [i, c] of W3_CASES.entries()) {
+  test(`W3 case ${i}: each marker in the answer is a control that opens its Sources entry`, () => {
+    const html = bubble(c)
+    for (const cite of c.citations) {
+      assert.match(html, new RegExp(`<button[^>]*data-citation-marker="${cite.marker}"`),
+        `marker ${cite.marker} is not a control`)
+    }
+  })
+
+  test(`W3 case ${i}: the answer text names no document and carries no source line or coverage`, () => {
+    const text = visibleText(bubble(c))
+    for (const cite of c.citations) assert.ok(!text.includes(cite.document), `answer shows ${cite.document}`)
+    assert.doesNotMatch(text, /\bsources?\s*:/i)
+    assert.doesNotMatch(text, /documents indexed/i)
+    assert.doesNotMatch(text, /\[\d+\]/, 'a bare [n] is left in the text')
+  })
+
+  test(`W3 case ${i}: the panel shows every entry by its marker with document, section, passage and tier`, () => {
+    const html = panel(c)
+    const text = visibleText(html)
+    for (const cite of c.citations) {
+      assert.match(html, new RegExp(`data-citation-marker="${cite.marker}"`))
+      assert.ok(text.includes(cite.document), `panel lacks ${cite.document}`)
+      if (cite.section) assert.ok(text.includes(cite.section), `panel lacks ${cite.section}`)
+      assert.ok(text.includes(cite.passage), `panel lacks the passage ${cite.passage}`)
+      if (cite.tier) assert.ok(text.includes(cite.tier), `panel lacks the tier ${cite.tier}`)
+      if (cite.kind === 'calculation') assert.match(text, /calculation/i)
+    }
+    const order = c.citations.map((cite) => html.indexOf(`data-citation-marker="${cite.marker}"`))
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'entries are not in marker order')
+    assert.doesNotMatch(text, SNAKE)
+    assert.doesNotMatch(text, KEY_VALUE)
+  })
+
+  test(`W3 case ${i}: coverage is a panel line`, () => {
+    const text = visibleText(panel(c))
+    assert.match(text, new RegExp(String.raw`\b${c.coverage.indexed}\s+of\s+${c.coverage.total}\b`))
+  })
+
+  test(`W3 case ${i}: a bracketed number with no entry stays plain text, never a control`, () => {
+    const stray = c.citations.length + 5
+    const html = bubble({ ...c, content: `${c.content} See figure [${stray}].` })
+    assert.doesNotMatch(html, new RegExp(`data-citation-marker="${stray}"`))
+    assert.ok(visibleText(html).includes(`[${stray}]`))
+  })
+}

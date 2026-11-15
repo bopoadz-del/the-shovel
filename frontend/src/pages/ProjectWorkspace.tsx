@@ -35,6 +35,8 @@ import { activityForTool, plainMetadata } from '../chat/userFacingText'
 import { sessionDocumentsFor, withSessionId, type SessionDocumentRow } from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
+import { readCoverage } from '../chat/citationMarkers'
+import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
 
@@ -166,6 +168,10 @@ interface ChatMessage {
    *  answer came from (a calculator run with its envelope badge, the operator's
    *  own words, or a retrieved chunk). Drives the "Why this answer" panel. */
   provenance?: ProvenanceEntry[]
+  /** Marker entries from the SSE 'end' event (W3: shown in the Sources panel only). */
+  citations?: AnswerCitation[]
+  /** Coverage from the SSE 'end' event (a Sources panel line, never answer text). */
+  coverage?: AnswerCoverage
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -953,6 +959,17 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   const [rightExpanded, setRightExpanded] = useState(false)
   const [driveModalOpen, setDriveModalOpen] = useState(false)
   const [previewRequest, setPreviewRequest] = useState<{ docId: string; nonce: number } | null>(null)
+  // W3: a marker clicked in an answer opens the Sources tab on its entry.
+  const [sourcesRequest, setSourcesRequest] = useState<{ marker: number; nonce: number } | null>(null)
+  const openCitation = useCallback((marker: number) => {
+    setSourcesRequest({ marker, nonce: Date.now() })
+  }, [])
+  useEffect(() => {
+    if (!sourcesRequest) return
+    document
+      .getElementById(`citation-entry-${sourcesRequest.marker}`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [sourcesRequest])
 
   // ── / agent-picker: available agents + the user's pinned choice ───────────
   // A pinned agent is sent as `agent` on /v1/chat/stream and runs directly
@@ -1489,10 +1506,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawSources = Array.isArray(evt['sources']) ? (evt['sources'] as ChatMessage['sources']) : []
               const rawExports = Array.isArray(evt['exports']) ? (evt['exports'] as ChatMessage['exports']) : []
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
+              const rawCitations = Array.isArray(evt['citations']) ? (evt['citations'] as AnswerCitation[]) : []
+              const rawCoverage = readCoverage(evt['coverage'])
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage }
                     : m
                 )
               )
@@ -1850,6 +1869,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                   }
                 : undefined
             }
+            onCitation={openCitation}
             onExport={(descriptor) => {
               // Data-backed download offer (e.g. cost BOQ / A1–A9 Word). The
               // descriptor's endpoint is server-relative; generation happens
@@ -1934,11 +1954,15 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           }))}
           citedDocuments={citedPreviewDocs}
           previewRequest={previewRequest}
+          sourcesRequest={sourcesRequest}
           onPreviewHydrated={handlePreviewHydrated}
           sources={
             <>
               <SourcesList
                 sources={latestSources}
+                citations={latestAssistant?.citations}
+                coverage={latestAssistant?.coverage}
+                activeMarker={sourcesRequest?.marker ?? null}
                 streaming={latestAssistant?.streaming}
                 activeDocId={previewRequest?.docId}
                 onOpenSource={openSource}
