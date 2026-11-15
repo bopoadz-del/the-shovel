@@ -1,7 +1,9 @@
 """Formula Layer 1, batch 13 (exam 5): beam moments, payment, cash flow,
 concrete mix design, mix proportions, slip-form mix, mass-concrete thermal
 check, crane count, electrical programme, LEED level, manhours S-curve,
-floor-cycle weighting, interior finishes (more follow in this batch).
+floor-cycle weighting, interior finishes, simple-beam moment and shear,
+fixed-end moments, point-load moment, simple-beam UDL deflection (more
+follow in this batch).
 
 Same rules as batches 1-12 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -56,6 +58,10 @@ its parametrize row:
                                  = face - doors - windows (floor 0);
                                  blockwork = paint x shared fraction;
                                  skirting = perimeter - door widths
+  * simple-beam moment / shear   beam tables: SS UDL wL^2/8; V = wL/2 + P/2
+  * fixed-end moments            wL^2/12 at the supports, wL^2/24 midspan
+  * point-load moment            SS: Pab/L under the load; central PL/4
+  * SS UDL deflection            5wL^4/(384EI), N/mm, mm, MPa, mm4 -> mm
 None was copied from the product's output. A case where the product
 disagrees with the hand value would be marked ``xfail(strict=True)`` with a
 one-line reason and reported as a suspected defect; the expected value is
@@ -784,3 +790,222 @@ def test_f92_b_shared_fraction_ends(frac, block):
     r = _ok(F92, {"floor_area_m2": 100, "perimeter_m": 40, "room_count": 1,
                   "floor_to_ceiling_m": 3, "shared_wall_fraction": frac})
     assert r["blockwork_m2"] == pytest.approx(block, abs=0.01)
+
+
+# ---------------------------------------------------------------- F93 simple beam moment
+# Hand source (beam table): simply supported, uniform load: M = w L^2 / 8 at
+# midspan.
+F93 = "beam_moment_simple"
+_F93_OUT = ("max_moment_kn_m",)
+
+
+@pytest.mark.parametrize("w, span, moment", [
+    (10, 6, 45.0),      # 10 x 36 / 8 = 45
+    (12.5, 8, 100.0),   # 12.5 x 64 / 8 = 100
+])
+def test_f93_t(w, span, moment):
+    assert _ok(F93, {"udl_w_kn_m": w, "span_m": span})["max_moment_kn_m"] == pytest.approx(moment, abs=1e-3)
+
+
+@pytest.mark.parametrize("span, moment", [
+    ("20 ft", 46.452),   # 6.096 m: 10 x 37.161216 / 8 = 46.4515
+    ("600 cm", 45.0),    # 6 m: 10 x 36 / 8 = 45
+])
+def test_f93_u(span, moment):
+    assert _ok(F93, {"udl_w_kn_m": 10, "span_m": span})["max_moment_kn_m"] == pytest.approx(moment, abs=1e-3)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"udl_w_kn_m": 10}, "span_m"),
+    ({"span_m": 6}, "udl_w_kn_m"),
+])
+def test_f93_m(params, missing):
+    _asks(F93, params, missing, _F93_OUT)
+
+
+@pytest.mark.parametrize("params", [
+    {"udl_w_kn_m": 10, "span_m": 0},     # no span: no beam
+    {"udl_w_kn_m": 10, "span_m": -3},
+])
+def test_f93_b_no_span_refused(params):
+    _refuses(F93, params, _F93_OUT)
+
+
+@pytest.mark.parametrize("span", [6, 9])
+def test_f93_b_no_load_gives_zero(span):
+    # w = 0 is on the input range: 0 x L^2 / 8 = 0
+    assert _ok(F93, {"udl_w_kn_m": 0, "span_m": span})["max_moment_kn_m"] == 0
+
+
+# ---------------------------------------------------------------- F94 simple beam shear
+# Hand source (statics): simply supported; each support reaction is half the
+# total load: V = w L / 2 + P / 2 for a central point load P.
+F94 = "beam_shear_simple"
+_F94_OUT = ("max_shear_kn",)
+
+
+@pytest.mark.parametrize("params, shear", [
+    ({"udl_w_kn_m": 10, "span_m": 6}, 30.0),                                # 10 x 6 / 2
+    ({"udl_w_kn_m": 10, "span_m": 6, "central_point_load_kn": 20}, 40.0),   # 30 + 20 / 2
+    ({"central_point_load_kn": 50, "span_m": 4}, 25.0),                     # 50 / 2, no UDL
+])
+def test_f94_t(params, shear):
+    assert _ok(F94, params)["max_shear_kn"] == pytest.approx(shear, abs=1e-3)
+
+
+@pytest.mark.parametrize("span, shear", [
+    ("20 ft", 30.48),   # 6.096 m: 10 x 6.096 / 2
+    ("500 cm", 25.0),   # 5 m: 10 x 5 / 2
+])
+def test_f94_u(span, shear):
+    assert _ok(F94, {"udl_w_kn_m": 10, "span_m": span})["max_shear_kn"] == pytest.approx(shear, abs=1e-3)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"udl_w_kn_m": 10}, "span_m"),
+    ({"span_m": 6}, "udl_w_kn_m"),   # neither load given: ask for the load
+])
+def test_f94_m(params, missing):
+    _asks(F94, params, missing, _F94_OUT)
+
+
+@pytest.mark.parametrize("params", [
+    {"udl_w_kn_m": 10, "span_m": -1},
+    {"udl_w_kn_m": -10, "span_m": 6},
+])
+def test_f94_b_negative_refused(params):
+    _refuses(F94, params, _F94_OUT)
+
+
+# ---------------------------------------------------------------- F95 fixed-end beam moments
+# Hand source (beam table): fixed both ends, uniform load: hogging w L^2 / 12
+# at the supports (the governing value); sagging w L^2 / 24 at midspan.
+F95 = "beam_moment_fixed_udl"
+_F95_OUT = ("support_moment_kn_m", "midspan_moment_kn_m", "max_moment_kn_m")
+
+
+@pytest.mark.parametrize("w, span, sup, mid", [
+    (12, 6, 36.0, 18.0),     # 12 x 36 / 12 = 36; / 24 = 18
+    (10, 4.8, 19.2, 9.6),    # 10 x 23.04 / 12 = 19.2; / 24 = 9.6
+])
+def test_f95_t(w, span, sup, mid):
+    r = _ok(F95, {"udl_w_kn_m": w, "span_m": span})
+    assert r["support_moment_kn_m"] == pytest.approx(sup, abs=1e-3)
+    assert r["midspan_moment_kn_m"] == pytest.approx(mid, abs=1e-3)
+    assert r["max_moment_kn_m"] == pytest.approx(sup, abs=1e-3)
+
+
+@pytest.mark.parametrize("span, sup", [
+    ("480 cm", 19.2),     # 4.8 m
+    ("20 ft", 30.968),    # 6.096 m: 10 x 37.161216 / 12 = 30.9677
+])
+def test_f95_u(span, sup):
+    assert _ok(F95, {"udl_w_kn_m": 10, "span_m": span})["support_moment_kn_m"] == pytest.approx(sup, abs=1e-3)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"udl_w_kn_m": 10}, "span_m"),
+    ({"span_m": 6}, "udl_w_kn_m"),
+])
+def test_f95_m(params, missing):
+    _asks(F95, params, missing, _F95_OUT)
+
+
+@pytest.mark.parametrize("span", [0, -6])
+def test_f95_b_no_span_refused(span):
+    _refuses(F95, {"udl_w_kn_m": 10, "span_m": span}, _F95_OUT)
+
+
+# ---------------------------------------------------------------- F96 point-load moment
+# Hand source (beam table): simply supported, one point load P at a from the
+# left support: M = P a b / L under the load (b = L - a); central: P L / 4.
+F96 = "beam_moment_point_load"
+_F96_OUT = ("max_moment_kn_m",)
+
+
+@pytest.mark.parametrize("params, moment", [
+    ({"point_load_kn": 40, "span_m": 8}, 80.0),                                # 40 x 8 / 4
+    ({"point_load_kn": 40, "span_m": 8, "distance_from_left_m": 2}, 60.0),     # 40 x 2 x 6 / 8
+    ({"point_load_kn": 30, "span_m": 6, "distance_from_left_m": 1.5}, 33.75),  # 30 x 1.5 x 4.5 / 6
+])
+def test_f96_t(params, moment):
+    assert _ok(F96, params)["max_moment_kn_m"] == pytest.approx(moment, abs=1e-3)
+
+
+@pytest.mark.parametrize("span, moment", [
+    ("20 ft", 15.24),    # 10 x 6.096 / 4
+    ("800 cm", 20.0),    # 10 x 8 / 4
+])
+def test_f96_u(span, moment):
+    assert _ok(F96, {"point_load_kn": 10, "span_m": span})["max_moment_kn_m"] == pytest.approx(moment, abs=1e-3)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"span_m": 8}, "point_load_kn"),
+    ({"point_load_kn": 40}, "span_m"),
+])
+def test_f96_m(params, missing):
+    _asks(F96, params, missing, _F96_OUT)
+
+
+@pytest.mark.parametrize("a", [0, 8])
+def test_f96_b_load_on_a_support_gives_zero(a):
+    # a = 0 or a = L: one of a, b is 0, so P a b / L = 0
+    assert _ok(F96, {"point_load_kn": 40, "span_m": 8, "distance_from_left_m": a})["max_moment_kn_m"] == 0
+
+
+@pytest.mark.parametrize("a", [8.1, -0.1])
+def test_f96_b_load_off_the_span_refused(a):
+    _refuses(F96, {"point_load_kn": 40, "span_m": 8, "distance_from_left_m": a}, _F96_OUT)
+
+
+# ---------------------------------------------------------------- F97 SS UDL deflection
+# Hand source (beam table): simply supported, uniform load: midspan
+# deflection = 5 w L^4 / (384 E I); w in N/mm (= kN/m), L in mm, E in MPa,
+# I in mm4 gives mm. The calculator returns the bare figure as ``value``.
+F97 = "beam_deflection_ss_udl"
+_F97_OUT = ("value", "deflection")
+
+
+@pytest.mark.parametrize("w, span, E, I, mm", [
+    # 5 x 10 x 6000^4 / (384 x 30000 x 5e8) = 6.48e16 / 5.76e15 = 11.25
+    (10, 6, 30000, 5e8, 11.25),
+    # 5 x 20 x 5000^4 / (384 x 25000 x 4e8) = 6.25e16 / 3.84e15 = 16.276
+    (20, 5, 25000, 4e8, 16.28),
+    # twice the I of the row above: half the deflection, 8.138
+    (20, 5, 25000, 8e8, 8.14),
+])
+def test_f97_t(w, span, E, I, mm):
+    r = _ok(F97, {"w_kn_m": w, "span_m": span, "ec_mpa": E, "i_mm4": I})
+    assert r["value"] == pytest.approx(mm, abs=0.01)
+
+
+@pytest.mark.parametrize("span, mm", [
+    ("500 cm", 16.28),        # 5 m
+    ("16.4042 ft", 16.28),    # 16.4042 x 0.3048 = 5.0000 m
+])
+def test_f97_u(span, mm):
+    r = _ok(F97, {"w_kn_m": 20, "span_m": span, "ec_mpa": 25000, "i_mm4": 4e8})
+    assert r["value"] == pytest.approx(mm, abs=0.01)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"w_kn_m": 10, "span_m": 6, "i_mm4": 5e8}, "ec_mpa"),
+    ({"w_kn_m": 10, "span_m": 6, "ec_mpa": 30000}, "i_mm4"),
+])
+def test_f97_m(params, missing):
+    _asks(F97, params, missing, _F97_OUT)
+
+
+@pytest.mark.parametrize("w, span", [
+    (10, 0),   # no span: 5 x 10 x 0 / (384 E I) = 0
+    (0, 6),    # no load: 0
+])
+def test_f97_b_zero_span_or_load_gives_zero(w, span):
+    r = _ok(F97, {"w_kn_m": w, "span_m": span, "ec_mpa": 30000, "i_mm4": 5e8})
+    assert r["value"] == 0
+
+
+@pytest.mark.parametrize("E", [0, -30000])
+def test_f97_b_no_stiffness_refused(E):
+    _refuses(F97, {"w_kn_m": 10, "span_m": 6, "ec_mpa": E, "i_mm4": 5e8}, _F97_OUT)
