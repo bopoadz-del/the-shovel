@@ -151,8 +151,6 @@ def _words(text: str) -> set[str]:
 
 
 def _terms(terms: Iterable[str] | str | None) -> set[str]:
-    if terms is None:
-        return set()
     if isinstance(terms, str):
         return _words(terms)
     return set().union(*(_words(t) for t in terms)) if terms else set()
