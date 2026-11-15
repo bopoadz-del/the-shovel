@@ -88,11 +88,16 @@ def test_trace_carries_the_stored_kind_of_handed_and_left_out_chunks(
     assert "text" not in got_h and "text" not in got_o
 
 
-def test_a_chunk_with_no_documents_row_traces_an_empty_kind(one_project, caplog):
+@pytest.mark.parametrize("orphan_id,orphan_name", [
+    ("no-such-doc", "pour sequence programme.xer"),
+    ("gone-doc-7", "kerb drainage specification clause 3.pdf"),
+])
+def test_a_chunk_with_no_documents_row_traces_an_empty_kind(
+        one_project, caplog, orphan_id, orphan_name):
     """An id the store does not know is traced with no kind, not a guess
-    from its file name."""
-    orphan = _chunk("no-such-doc", 1)
-    orphan.source_name = "pour sequence programme.xer"
+    from its file name (one name reads like a programme, one like a spec)."""
+    orphan = _chunk(orphan_id, 1)
+    orphan.source_name = orphan_name
     payload = _trace_line(caplog, retrieved=[orphan], handed=[])
     (got,) = payload["not_handed"]
     assert (got["doc_type"], got["doc_role"]) == ("", "")
@@ -132,18 +137,23 @@ def test_trace_chunk_reports_the_kind_it_holds(doc_type, doc_role):
     assert (got["doc_type"], got["doc_role"]) == (doc_type.strip(), doc_role.strip())
 
 
-def test_a_failed_kind_read_still_writes_the_line(monkeypatch, caplog):
+@pytest.mark.parametrize("error,doc,idx", [
+    (RuntimeError("store unavailable"), "d-x", 2),
+    (OSError("disk gone"), "d-y", 5),
+])
+def test_a_failed_kind_read_still_writes_the_line(monkeypatch, caplog,
+                                                  error, doc, idx):
     """Instrumentation never costs a turn: the line is written, kind empty."""
     monkeypatch.setenv("RAG_RETRIEVAL_TRACE", "1")
     from app.core import projects
 
     def _boom(ids):
-        raise RuntimeError("store unavailable")
+        raise error
 
     monkeypatch.setattr(projects, "document_kinds", _boom)
-    c = _chunk("d-x", 2)
+    c = _chunk(doc, idx)
     payload = _trace_line(caplog, retrieved=[c], handed=[c])
     (got,) = payload["chunks"]
-    assert got["chunk_id"] == "p:d-x:2"
+    assert got["chunk_id"] == f"p:{doc}:{idx}"
     assert (got["doc_type"], got["doc_role"]) == ("", "")
     assert inject.retrieval_trace_enabled()
