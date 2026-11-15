@@ -192,8 +192,7 @@ def _dialled_hosts(value: str) -> list[str]:
     Raises ValueError for a part that looks like a URL but cannot be read."""
     hosts: list[str] = []
     for part in _VALUE_PARTS.split(value):
-        if not part:
-            continue
+        # an empty part (leading or trailing separator) matches neither form
         if "://" in part:
             host = _url_host(part)
             if host:
