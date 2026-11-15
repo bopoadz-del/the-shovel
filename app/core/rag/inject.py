@@ -9,6 +9,7 @@ Kept in its own module so:
 from __future__ import annotations
 
 import datetime as _dt
+import itertools
 import json
 import logging
 import os
@@ -164,44 +165,36 @@ def break_score_ties_by_kind(chunks: List[Chunk], query: str) -> List[Chunk]:
     Scores are not changed, no chunk is dropped here, and different
     scores keep their order. The kind is the stored doc_type.
     """
-    if len(chunks) < 2:
-        return list(chunks)
-    scores = [c.score or 0 for c in chunks]
-    if len(set(scores)) == len(scores):
-        return list(chunks)
     try:
         annotate_document_kinds(chunks)
         yielding = _progress_kinds_not_asked_about(query)
     except Exception:  # noqa: BLE001 -- the tie keeps its retrieval order
         _LOG.debug("kind tie-break skipped", exc_info=True)
-        return list(chunks)
-    if not yielding:
-        return list(chunks)
+        yielding = set()
 
     def _yields(c) -> bool:
         return (getattr(c, "doc_type", "") or "").strip() in yielding
 
     out: List[Chunk] = []
-    i = 0
-    while i < len(chunks):
-        j = i
-        while j < len(chunks) and (chunks[j].score or 0) == (chunks[i].score or 0):
-            j += 1
-        band = chunks[i:j]
-        out += [c for c in band if not _yields(c)] + [c for c in band if _yields(c)]
-        i = j
+    # ``chunks`` is in score order, so each run of one score is one tie; the
+    # sort is stable, so inside a tie the retrieval order is kept otherwise.
+    for _score, band in itertools.groupby(chunks, key=lambda c: c.score or 0):
+        out += sorted(band, key=_yields)
     return out
 
 
 def apply_token_cap(
     chunks: List[Chunk],
     query: str = "",
+    reasons: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Chunk], int]:
     """Drop whole chunks from the bottom (lowest score) until total
     estimated tokens are <= MAX_RAG_TOKENS.
 
     Never truncates mid-chunk; a chunk is included or excluded whole.
-    Returns ``(kept_chunks, total_estimated_tokens)``.
+    Returns ``(kept_chunks, total_estimated_tokens)``. When ``reasons`` is
+    a dict, each chunk left out gets the rule that dropped it (chunk_id ->
+    code, see ``_cap_drop_reasons``) for the retrieval trace.
 
     When ``query`` is a daily delay-damages ask, keep the
     Contract Data 0.1% and standalone excl-VAT operands even if Cosine
@@ -251,6 +244,7 @@ def apply_token_cap(
             daily_damages_ask = False
     protected = [c for c in chunks if c.chunk_id in protect_ids]
     rest = [c for c in chunks if c.chunk_id not in protect_ids]
+    before_noise = list(rest)
     if daily_damages_ask and protect_ids:
         try:
             from app.core.rag.retriever import _is_daily_damages_cap_noise
@@ -262,8 +256,10 @@ def apply_token_cap(
             )
     protected.sort(key=lambda c: -(c.score or 0))
     rest.sort(key=lambda c: -(c.score or 0))
+    by_score = list(rest)
     rest = break_score_ties_by_kind(rest, query)
     kept: List[Chunk] = []
+    skipped: List[Chunk] = []
     total = 0
     # Always keep the daily-amount operands — even when a single scanned page
     # exceeds the leftover cap. Refusing to inject 0.1% / excl-VAT is the
@@ -276,10 +272,98 @@ def apply_token_cap(
     for c in rest:
         t = _estimate_tokens(c.text)
         if total + t > cap:
+            skipped.append(c)
             continue
         kept.append(c)
         total += t
+    if reasons is not None:
+        reasons.update(_cap_drop_reasons(before_noise, rest, by_score, kept, skipped))
     return kept, total
+
+
+def _cap_drop_reasons(
+    before_noise: List[Chunk],
+    after_noise: List[Chunk],
+    by_score: List[Chunk],
+    kept: List[Chunk],
+    skipped: List[Chunk],
+) -> Dict[str, str]:
+    """Why the token cap left each chunk out (chunk_id -> code).
+
+    * ``noise_filter``   removed as noise before the budget was walked
+    * ``kind_tie_yield`` an exact score tie, and the kind tie-break put it
+                         behind a tied chunk that was kept
+    * ``score_tie_order`` an exact score tie, and a tied chunk ahead of it in
+                         retrieval order was kept
+    * ``token_budget``   it did not fit what was left of MAX_RAG_TOKENS
+    """
+    out: Dict[str, str] = {}
+    left = {c.chunk_id for c in after_noise}
+    for c in before_noise:
+        if c.chunk_id not in left:
+            out[c.chunk_id] = "noise_filter"
+    pos = {c.chunk_id: i for i, c in enumerate(by_score)}
+    for c in skipped:
+        tied = [pos[x.chunk_id] for x in kept
+                if x.chunk_id in pos and (x.score or 0) == (c.score or 0)]
+        if any(p > pos[c.chunk_id] for p in tied):
+            out[c.chunk_id] = "kind_tie_yield"
+        elif tied:
+            out[c.chunk_id] = "score_tie_order"
+        else:
+            out[c.chunk_id] = "token_budget"
+    return out
+
+
+def not_handed_reasons(
+    pool: List[Chunk],
+    handed_pool: List[Chunk],
+    kept: List[Chunk],
+    cap_reasons: Dict[str, str],
+    *,
+    k: int,
+) -> Dict[str, str]:
+    """The rule that left out each retrieved chunk not handed to the model
+    (chunk_id -> code), so a trace alone explains a missing passage.
+
+    * ``duplicate``     the same text again inside one document family; the
+                        handed set's diversity pass keeps the first copy
+    * ``family_share``  deferred behind other documents by the diversity
+                        pass (one family's share of the slots), then out of
+                        the character budget
+    * ``char_budget``   did not fit RAG_HANDED_CHAR_BUDGET in score order
+    * any ``apply_token_cap`` code (``_cap_drop_reasons``)
+
+    The diversity pass is ``handed_set.diversify`` itself, re-run on the same
+    pool with the same settings, so this never re-implements its rules.
+    """
+    from app.core.rag import handed_set as hs
+    kept_ids = {c.chunk_id for c in kept}
+    handed_ids = {c.chunk_id for c in handed_pool}
+    ordered = hs.diversify(pool, slots=k, share=hs.doc_share(), margin=hs.doc_margin())
+    ordered_ids = {c.chunk_id for c in ordered}
+    # Deferred = placed behind a chunk that scores LOWER. Lead and deferred
+    # are each in score order, so only a deferral puts a lower score first.
+    deferred: set = set()
+    lowest_before = float("inf")
+    for c in ordered:
+        if lowest_before < hs._score(c):
+            deferred.add(c.chunk_id)
+        lowest_before = min(lowest_before, hs._score(c))
+    out: Dict[str, str] = {}
+    for c in pool:
+        cid = c.chunk_id
+        if cid in kept_ids:
+            continue
+        if cid not in ordered_ids:
+            out[cid] = "duplicate"
+        elif cid in handed_ids:
+            out[cid] = cap_reasons.get(cid, "token_budget")
+        elif cid in deferred:
+            out[cid] = "family_share"
+        else:
+            out[cid] = "char_budget"
+    return out
 
 
 def _source_class(chunk) -> str:
@@ -1071,6 +1155,15 @@ def _trace_chunk(rank: int, c) -> Dict[str, Any]:
     }
 
 
+def _dropped_by(c, drop_reasons: Optional[Dict[str, str]],
+                threshold_fired: bool) -> str:
+    """The trace's ``dropped_by`` code for one chunk that was not handed."""
+    code = (drop_reasons or {}).get(getattr(c, "chunk_id", None) or "", "")
+    if code:
+        return code
+    return "below_threshold" if threshold_fired else "unexplained"
+
+
 def _emit_retrieval_trace(
     *,
     query_label: str,
@@ -1083,8 +1176,13 @@ def _emit_retrieval_trace(
     identifier_miss: bool,
     top_score: float,
     k_info: Optional[Dict[str, Any]] = None,
+    drop_reasons: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write the trace line. Best-effort: a logging failure never costs a turn.
+
+    Every ``not_handed`` entry carries ``dropped_by``: the rule that left it
+    out (``drop_reasons``, see ``not_handed_reasons``), ``below_threshold``
+    when the threshold fired and nothing was handed, else ``unexplained``.
 
     ``k_info`` carries requested_k, effective_k, the pool depth, whether the
     day's token budget was spent, and the handed set's allotment (character
@@ -1132,7 +1230,9 @@ def _emit_retrieval_trace(
             "top_score": round(float(top_score or 0.0), 6),
             "chunks": [_trace_chunk(i + 1, c) for i, c in enumerate(handed)],
             "not_handed": [
-                _trace_chunk(i + 1, c) for i, c in enumerate(retrieved)
+                {**_trace_chunk(i + 1, c),
+                 "dropped_by": _dropped_by(c, drop_reasons, threshold_fired)}
+                for i, c in enumerate(retrieved)
                 if getattr(c, "chunk_id", None) not in handed_ids
             ],
         }
@@ -1427,7 +1527,9 @@ def rag_inject(
         return None, audit_rec
 
     handed_pool, allotment = _handed_set.select_handed(chunks, k=effective_k)
-    kept, total_tokens = apply_token_cap(handed_pool, query=user_message or "")
+    cap_reasons: Dict[str, str] = {}
+    kept, total_tokens = apply_token_cap(
+        handed_pool, query=user_message or "", reasons=cap_reasons)
     sys_msg = format_chunks_as_system_message(
         kept, total_candidates=len(chunks), query=user_message or "",
     )
@@ -1452,6 +1554,8 @@ def rag_inject(
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,
+        drop_reasons=not_handed_reasons(
+            chunks, handed_pool, kept, cap_reasons, k=effective_k),
         k_info={"requested_k": requested_k, "effective_k": effective_k,
                 "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
                 "budget_consumed": budget_consumed,
