@@ -9596,6 +9596,86 @@ _POST_GATE_ANSWER_COMPOSERS: list[tuple[str, Any]] = [
 ]
 
 
+#: A tool result whose top-level ``ok`` is true, and the first ``filename``
+#: key it reports, read from the head of its JSON so a result cut at the
+#: tool-result cap still counts (a key inside a string value is escaped).
+_TOOL_OK_HEAD_RE = re.compile(r'^\s*\{[^{}]*?"ok":\s*true\b')
+_TOOL_FILENAME_RE = re.compile(r'"filename":\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _read_tool_result(content: str) -> tuple[bool, str]:
+    """(succeeded, the filename the result reports or ``""``)."""
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError):
+        found = _TOOL_FILENAME_RE.search(content or "")
+        return (bool(_TOOL_OK_HEAD_RE.search(content or "")),
+                json.loads(f'"{found.group(1)}"') if found else "")
+    if not isinstance(parsed, dict):
+        return False, ""
+    inner = parsed.get("result")
+    name = inner.get("filename") if isinstance(inner, dict) else ""
+    return parsed.get("ok") is True, str(name or "").strip()
+
+
+def _documents_read_this_turn(
+    text: str,
+    messages: list[dict[str, Any]] | None,
+    attached_documents: list[dict[str, Any]] | None,
+) -> list[str]:
+    """Names of the documents this turn's answer was built from, those it
+    cites first.
+
+    A resolved attachment is a pointer, not a read (the attachment note asks
+    the model to read it). A document counts as read when this turn's
+    successful tool evidence names it, a document read reports it, the
+    composer marker carries its content, or the answer cites it by name.
+    The turn starts at the operator's latest message."""
+    msgs = list(messages or [])
+    start = 0
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i] or {}
+        content = str(m.get("content") or "")
+        if m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            start = i
+            break
+    from app.core.rag.retriever import ATTACHED_MARKER_RE
+
+    operator = str((msgs[start] or {}).get("content") or "") if msgs else ""
+    turn = msgs[start + 1:] if msgs else []
+    succeeded: dict[str, bool] = {}
+    evidence: list[str] = []
+    read: list[str] = []
+    for m in turn:
+        m = m or {}
+        content = str(m.get("content") or "")
+        ok, reported = _read_tool_result(content) if m.get("role") == "tool" else (False, "")
+        if ok:
+            succeeded[str(m.get("tool_call_id") or "")] = True
+            evidence.append(content)
+            if m.get("name") == "fetch_document":
+                read.append(reported)
+        elif m.get("role") == "user" and content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            evidence.append(content)
+    for m in turn:
+        for call in (m or {}).get("tool_calls") or []:
+            if succeeded.get(str((call or {}).get("id") or "")):
+                evidence.append(str(((call or {}).get("function") or {}).get("arguments") or ""))
+    joined = "\n".join(evidence)
+    for d in attached_documents or []:
+        name = str(d.get("original_name") or d.get("filename") or "").strip()
+        did = str(d.get("id") or d.get("document_id") or "").strip()
+        if name and ((name in joined) or (did and did in joined) or name in (text or "")):
+            read.append(name)
+    read.extend(
+        (mk.group(1) or "").strip()
+        for mk in ATTACHED_MARKER_RE.finditer(operator)
+        if (mk.group(2) or "").strip()
+    )
+    names = list(dict.fromkeys(n for n in read if n))
+    return sorted(names, key=lambda n: n not in (text or ""))
+
+
 def _run_answer_composers(
     text: str,
     composers: list[tuple[str, Any]],
@@ -9704,20 +9784,17 @@ def _postprocess_answer(
         # Live: pe_unit_convert ran and the answer still opened with it.
         text = _MASTER_CORPUS_FALLBACK_NOTE + text
     from app.core.rag.coverage_honesty import apply_coverage_honesty
-    # Name the tier that actually answered. An answer is "attached" tier only
-    # when it cites an attached document's name; otherwise the void line keeps
-    # the general-reference wording. Names only, no ids.
-    attached_names = [
-        (str(d.get("original_name") or d.get("filename") or "")).strip()
-        for d in (attached_documents or [])
-    ]
-    cited = [n for n in attached_names if n and n in text]
+    # Name the tier that actually answered. An answer is "attached" tier when
+    # this turn read a document, whether or not the answer repeats its name;
+    # otherwise the void line keeps the general-reference wording. Names
+    # only, no ids.
+    read_names = _documents_read_this_turn(text, messages, attached_documents)
     text = apply_coverage_honesty(
         text,
         project_id=project_id or (audit_rec or {}).get("project_id"),
         coverage=coverage,
-        source_tier="attached" if cited else None,
-        attached_names=cited,
+        source_tier="attached" if read_names else None,
+        attached_names=read_names,
     )
     # After graft: #587's INTERNAL GUIDANCE did not stop extract from
     # electing the ENGINEER APPOINTMENT heading. Strip leftover steering
