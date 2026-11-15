@@ -1,6 +1,7 @@
 """Formula Layer 1, batch 14 (exam 5): concrete beam bending capacity,
 concrete section shear capacity, reinforcement lap length, nominal shear
-stress (more formulas follow in later parts of this batch).
+stress, bolt shear capacity, fillet weld capacity (more formulas follow
+in later parts of this batch).
 
 Same rules as batches 1-13 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -323,3 +324,141 @@ def test_f106_b_width_on_floor():
 def test_f106_b_width_under_floor_refused(b):
     # under the 20 mm floor (0 would divide by zero): refused, no stress
     _refuses(F106, {"v_kn": 100, "b_mm": b, "d_mm": 500}, _F106_OUT)
+
+
+# ---------------------------------------------------------------- F107 bolt shear
+# Hand source: AISC 360-16 J3.6 (LRFD): phi Rn = 0.75 Fnv Ab n;
+# EN 1993-1-8 Table 3.4: Fv,Rd = av fub A n / 1.25, av 0.6 for classes
+# 4.6/5.6/8.8 and 0.5 for 4.8/5.8/6.8/10.9/12.9; ISO 898-1: M20 tensile
+# stress area 245 mm2, fub 800 (8.8) and 1000 (10.9).
+F107 = "bolt_shear_capacity"
+_F107_OUT = ("capacity_kn",)
+
+
+@pytest.mark.parametrize("params, cap", [
+    ({"bolt_area_mm2": 300}, 83.70),                                 # 0.75 x 372 x 300 (stated Fnv)
+    ({"bolt_area_mm2": 300, "n_shear_planes": 2}, 167.40),           # x 2 planes
+    ({"bolt_area_mm2": "M20", "shear_strength_mpa": 469}, 86.18),    # 0.75 x 469 x 245
+    ({"bolt_area_mm2": "M20", "code": "EC", "grade": "8.8"}, 94.08),   # 0.6 x 800 x 245 / 1.25
+    ({"bolt_area_mm2": "M20", "code": "EC", "grade": "10.9"}, 98.0),   # 0.5 x 1000 x 245 / 1.25
+])
+def test_f107_t(params, cap):
+    assert _ok(F107, params)["capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.parametrize("params, cap", [
+    # 53.954 ksi = 371.9997 MPa: 0.75 x 372.0 x 300 = 83.70
+    ({"bolt_area_mm2": 300, "shear_strength_mpa": "53.954 ksi"}, 83.70),
+    # 68.0215 ksi = 468.992 MPa: 0.75 x 468.992 x 245 = 86.18
+    ({"bolt_area_mm2": "M20", "shear_strength_mpa": "68.0215 ksi"}, 86.18),
+])
+def test_f107_u_strength(params, cap):
+    assert _ok(F107, params)["capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "suspected defect: a bolt area given with a unit is refused as 'not a "
+    "tensile stress area or a nominal metric size'; other area inputs convert it"))
+@pytest.mark.parametrize("area", [
+    "3 cm2",       # = 300 mm2 -> 0.75 x 372 x 300 = 83.70
+    "0.465 in2",   # x 645.16 = 299.999 mm2 -> 83.70
+])
+def test_f107_u_area_with_unit(area):
+    assert _ok(F107, {"bolt_area_mm2": area})["capacity_kn"] == pytest.approx(83.70, abs=0.01)
+
+
+@pytest.mark.parametrize("params", [{}, {"shear_strength_mpa": 372, "n_shear_planes": 2}])
+def test_f107_m(params):
+    _asks(F107, params, "bolt_area_mm2", _F107_OUT)
+
+
+@pytest.mark.parametrize("fub, cap", [
+    # 1000 MPa is class 10.9 only: av 0.5 -> 0.5 x 1000 x 245 / 1.25 = 98.0
+    (1000, 98.0),
+    # 400 MPa is class 4.6 (0.6) and class 4.8 (0.5): no class given, the
+    # stated 0.6 stays -> 0.6 x 400 x 245 / 1.25 = 47.04
+    (400, 47.04),
+])
+def test_f107_b_ec_class_from_fub(fub, cap):
+    r = _ok(F107, {"bolt_area_mm2": "M20", "code": "EC", "shear_strength_mpa": fub})
+    assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+def test_f107_b_four_planes_on_limit():
+    # 4 shear planes, the declared limit: 0.75 x 372 x 300 x 4 = 334.80
+    assert _ok(F107, {"bolt_area_mm2": 300, "n_shear_planes": 4})["capacity_kn"] == pytest.approx(334.80)
+
+
+@pytest.mark.parametrize("params", [
+    {"bolt_area_mm2": 300, "n_shear_planes": 5},          # past the 4-plane limit
+    {"bolt_area_mm2": 0},                                 # no area
+    {"bolt_area_mm2": "M21"},                             # not an ISO coarse size
+    {"bolt_area_mm2": "M20", "code": "EC", "grade": "9.9"},   # class not in the table
+])
+def test_f107_b_refused(params):
+    _refuses(F107, params, _F107_OUT)
+
+
+# ---------------------------------------------------------------- F108 fillet weld
+# Hand source: throat = 0.707 x leg (equal-leg fillet);
+# AISC 360-16 J2.4 (LRFD): phi Rn = 0.75 x 0.60 FEXX x throat x L (stated
+# FEXX 490 MPa when none is given);
+# EN 1993-1-8 4.5.3.3: fvw,d = fu / (sqrt 3 x bw x 1.25); EN 1993-1-1
+# Table 3.1 / EN 1993-1-8 Table 4.1: S235 (360, 0.80), S275 (430, 0.85),
+# S355 (510, 0.90).
+F108 = "weld_capacity"
+_F108_OUT = ("capacity_kn", "capacity_per_mm_kn")
+
+
+@pytest.mark.parametrize("params, cap", [
+    # throat 5.656; 0.45 x 490 x 5.656 = 1247.148 N/mm x 200 = 249.43 kN
+    ({"leg_size_mm": 8, "length_mm": 200}, 249.43),
+    # throat 4.242; 0.45 x 480 x 4.242 = 916.272 x 150 = 137.44
+    ({"leg_size_mm": 6, "length_mm": 150, "electrode_strength_mpa": 480}, 137.44),
+    # EC: 510 / (1.73205 x 0.9 x 1.25) = 261.729 x 5.656 x 200 = 296.07
+    ({"leg_size_mm": 8, "length_mm": 200, "code": "EC", "electrode_strength_mpa": 510,
+      "beta_w": 0.9}, 296.07),
+])
+def test_f108_t(params, cap):
+    assert _ok(F108, params)["capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.parametrize("params", [
+    {"leg_size_mm": "0.8 cm", "length_mm": "20 cm"},       # 8 mm, 200 mm
+    {"leg_size_mm": 8, "length_mm": "7.874016 in"},        # 200.000 mm
+])
+def test_f108_u(params):
+    assert _ok(F108, params)["capacity_kn"] == pytest.approx(249.43, abs=0.01)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"length_mm": 200}, "leg_size_mm"),
+    ({"leg_size_mm": 8}, "length_mm"),
+])
+def test_f108_m(params, missing):
+    _asks(F108, params, missing, _F108_OUT)
+
+
+@pytest.mark.parametrize("grade, cap", [
+    # S275: 430 / (1.73205 x 0.85 x 1.25) = 233.659 x 5.656 x 200 = 264.31
+    ("S275", 264.31),
+    # S235: 360 / (1.73205 x 0.80 x 1.25) = 207.846 x 5.656 x 200 = 235.12
+    ("S235", 235.12),
+])
+def test_f108_b_ec_parent_metal_table(grade, cap):
+    r = _ok(F108, {"leg_size_mm": 8, "length_mm": 200, "code": "EC", "steel_grade": grade})
+    assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+def test_f108_b_leg_on_floor():
+    # 2 mm leg, the declared floor: 0.45 x 490 x 1.414 x 200 = 62.36
+    assert _ok(F108, {"leg_size_mm": 2, "length_mm": 200})["capacity_kn"] == pytest.approx(62.36, abs=0.01)
+
+
+@pytest.mark.parametrize("params", [
+    {"leg_size_mm": 1.9, "length_mm": 200},                                  # under the 2 mm floor
+    {"leg_size_mm": 8, "length_mm": 0},                                      # no length
+    {"leg_size_mm": 8, "length_mm": 200, "code": "EC", "steel_grade": "S300"},  # grade not tabulated
+])
+def test_f108_b_refused(params):
+    _refuses(F108, params, _F108_OUT)
