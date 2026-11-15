@@ -1685,6 +1685,25 @@ def _apply_answer_tier(env: dict[str, Any]) -> dict[str, Any]:
     return env
 
 
+def _apply_contract(env: dict[str, Any], key: str, rows: Any) -> dict[str, Any]:
+    """The answer contract (``app.agents.answer_contract``) on the text that
+    leaves: citations become numbered markers whose entries ride out as
+    ``citations``, the coverage footer rides out as ``coverage``, machinery
+    wording and padding go. Form only -- nothing it does adds a claim."""
+    from app.agents import answer_contract
+
+    text = env.get(key)
+    if not isinstance(text, str):
+        return env
+    done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None)
+    env[key] = done.text
+    if done.citations:
+        env["citations"] = done.citations
+    if done.coverage is not None:
+        env["coverage"] = done.coverage
+    return env
+
+
 def check_result(result: Any, turn: Turn | None = None) -> Any:
     """A whole-turn result (``answer`` and ``sources``) as it may leave."""
     if not isinstance(result, dict):
@@ -1694,6 +1713,7 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
         fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
+        fixed = _apply_contract(fixed, "answer", rows)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
         # turn answered. A reader (the route observer) trusts this over any
@@ -1724,6 +1744,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
         checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
+            fixed = _apply_contract(fixed, "content", rows)
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
     # The turn's awaiting-inputs STATE rides out on the end event: the field
