@@ -185,6 +185,11 @@ def sweep(specs: list[Any], parameters: Callable[[Any], dict], run: Callable[...
                     call[first] = _value(params[first])
         base = _run(run, spec.name, call)
         if base.get("status") != "success":
+            # Some calculators need one of a pair of optional inputs (length
+            # OR weight): retry with every numeric input given.
+            call = {**{k: _value(p) for k, p in params.items() if p.kind in NUMERIC}, **call}
+            base = _run(run, spec.name, call)
+        if base.get("status") != "success":
             rows.append({"calc": spec.name, "rule": "baseline", "passed": False,
                          "why": f"in-range call not run: {base.get('status')} {str(base.get('error') or '')[:120]}"})
             continue
