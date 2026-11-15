@@ -198,7 +198,8 @@
 }
 
 /* ── / agent-picker ─────────────────────────────────────────────────────── */
-.chat-composer__pin {
+.chat-composer__pin,
+.chat-composer__docpin {
   display: inline-flex;
   align-items: center;
   gap: 6px;

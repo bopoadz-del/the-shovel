@@ -12,7 +12,10 @@ import './ChatList.css'
 
 interface Props {
   messages: ChatMessage[]
-  documentCount: number
+  /** Documents the project holds (server total, not one page). */
+  heldDocumentCount: number | null
+  /** How many of them project search reaches (server total). */
+  searchableDocumentCount: number | null
   onSuggestion: (text: string) => void
   suggestionsDisabled: boolean
   onDownloadMessage?: (assistantIndex: number, format: 'docx' | 'xlsx') => void
@@ -25,9 +28,23 @@ const EMPTY_SUGGESTIONS = [
   'What are the main project risks?',
 ]
 
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/** The chat pane's document line, from the server's two totals. */
+function documentTotalsLine(held: number | null, searchable: number | null): string {
+  if (held === null) return 'Documents in this project are listed on the left'
+  if (held === 0) return 'This project holds no documents yet'
+  const holds = `This project holds ${plural(held, 'document', 'documents')}`
+  if (searchable === null) return holds
+  return `${holds}; ${searchable} ${searchable === 1 ? 'is' : 'are'} searchable`
+}
+
 export default function ChatList({
   messages,
-  documentCount,
+  heldDocumentCount,
+  searchableDocumentCount,
   onSuggestion,
   suggestionsDisabled,
   onDownloadMessage,
@@ -40,12 +57,7 @@ export default function ChatList({
   }, [messages])
 
   if (messages.length === 0) {
-    const docLabel =
-      documentCount === 0
-        ? 'No documents indexed yet for this project'
-        : documentCount === 1
-          ? 'I have access to 1 document in this project'
-          : `I have access to ${documentCount} documents in this project`
+    const docLabel = documentTotalsLine(heldDocumentCount, searchableDocumentCount)
     return (
       <div className="chat-list__empty">
         <p className="chat-list__empty-title">Ask anything about your project</p>

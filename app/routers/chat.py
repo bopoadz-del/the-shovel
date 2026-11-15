@@ -500,6 +500,28 @@ def _resolve_attached_documents(
     return out
 
 
+def _attach_client_documents(
+    attached_docs: List[Dict[str, Any]], document_ids: List[Any]
+) -> List[Dict[str, Any]]:
+    """The turn's attached documents: the marker-resolved ones, then each
+    client-sent id the markers did not cover, looked up by id.
+
+    Call only after :func:`raise_if_inaccessible_document_ids` has passed
+    for ``document_ids``; this does no access check of its own."""
+    from app.core import projects as projects_store
+
+    out = list(attached_docs)
+    have = {d.get("id") for d in out}
+    for did in document_ids:
+        if not isinstance(did, str) or did in have:
+            continue
+        doc = projects_store.get_document(did)
+        if doc:
+            out.append(doc)
+            have.add(did)
+    return out
+
+
 async def _stream_from_pinned_agent(
     agent_name: str,
     prompt: str,
@@ -1333,6 +1355,10 @@ async def chat_stream_v1(
             document_ids.append(_d["id"])
     from app.core.privileges import raise_if_inaccessible_document_ids
     raise_if_inaccessible_document_ids(auth, {"document_ids": document_ids})
+    # A pinned id is an attachment too: the model is told which document
+    # "this document" means even when no marker names it. After the access
+    # check, so only ids this caller can read get here.
+    attached_docs = _attach_client_documents(attached_docs, document_ids)
 
     async def event_stream():
         rid = get_request_id()

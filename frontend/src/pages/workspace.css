@@ -258,6 +258,42 @@
   min-width: 0;
 }
 
+/* The name is a button: a click pins the document to the next question. */
+button.doc-row__name {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.doc-row__name:hover {
+  text-decoration: underline;
+}
+
+.doc-row--pinned {
+  border-color: var(--accent, var(--border));
+}
+
+/* One plain status line per card, in words. */
+.doc-row__state {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-subtle);
+  white-space: normal;
+}
+
+.doc-row__state--failed {
+  color: var(--danger);
+}
+
+.doc-row__ask {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
 .doc-row__meta {
   display: flex;
   gap: 3px;

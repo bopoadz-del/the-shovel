@@ -9618,6 +9618,68 @@ def _read_tool_result(content: str) -> tuple[bool, str]:
     return parsed.get("ok") is True, str(name or "").strip()
 
 
+def _operator_turn_start(msgs: list[dict[str, Any]]) -> int:
+    """Index of the operator's latest message; a PRE-DISPATCH bubble is the
+    platform's, not a new turn."""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i] or {}
+        content = str(m.get("content") or "")
+        if m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            return i
+    return 0
+
+
+#: A document read that stopped at the fetch cap, from text no index holds.
+#: Read from the head of the tool message, where fetch_document puts its
+#: flags, so a message cut at the tool-result cap still reports them.
+_FETCH_CUT_RE = re.compile(r'"truncated":\s*true\b')
+_FETCH_EXTRACTED_RE = re.compile(r'"source":\s*"extracted"')
+
+
+def _opening_part_reads(messages: list[dict[str, Any]] | None) -> list[str]:
+    """Names of the documents this turn read only the opening part of.
+
+    A fetch_document result that came back ``truncated`` from raw extraction
+    (``source: extracted``: the document has no indexed text) ends at the
+    fetch cap, and nothing can search the rest. A cut read of an indexed
+    document is not listed: search still reaches all of its text."""
+    msgs = list(messages or [])
+    names: list[str] = []
+    for m in msgs[_operator_turn_start(msgs) + 1:]:
+        m = m or {}
+        if m.get("role") != "tool" or m.get("name") != "fetch_document":
+            continue
+        head = str(m.get("content") or "")
+        try:
+            parsed = json.loads(head)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict) and not isinstance(parsed.get("preview"), str):
+            if parsed.get("truncated") is True and parsed.get("source") == "extracted":
+                names.append(str(parsed.get("filename") or "").strip())
+            continue
+        if isinstance(parsed, dict):
+            head = parsed["preview"]
+        found = _TOOL_FILENAME_RE.search(head)
+        if found and _FETCH_CUT_RE.search(head) and _FETCH_EXTRACTED_RE.search(head):
+            names.append(json.loads(f'"{found.group(1)}"').strip())
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def _note_opening_part_reads(text: str, messages: list[dict[str, Any]] | None) -> str:
+    """Say so when the answer rests on the opening part of a document only."""
+    names = [n for n in _opening_part_reads(messages)
+             if f"read only the opening part of {n}" not in (text or "")]
+    if not names or not (text or "").strip():
+        return text
+    lines = [
+        f"Note: I read only the opening part of {n}. It is stored but not "
+        "searchable, so anything further in was not read."
+        for n in names
+    ]
+    return text.rstrip() + "\n\n" + "\n".join(lines)
+
+
 def _documents_read_this_turn(
     text: str,
     messages: list[dict[str, Any]] | None,
@@ -9632,13 +9694,7 @@ def _documents_read_this_turn(
     composer marker carries its content, or the answer cites it by name.
     The turn starts at the operator's latest message."""
     msgs = list(messages or [])
-    start = 0
-    for i in range(len(msgs) - 1, -1, -1):
-        m = msgs[i] or {}
-        content = str(m.get("content") or "")
-        if m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX):
-            start = i
-            break
+    start = _operator_turn_start(msgs)
     from app.core.rag.retriever import ATTACHED_MARKER_RE
 
     operator = str((msgs[start] or {}).get("content") or "") if msgs else ""
@@ -9796,6 +9852,7 @@ def _postprocess_answer(
         source_tier="attached" if read_names else None,
         attached_names=read_names,
     )
+    text = _note_opening_part_reads(text, messages)
     # After graft: #587's INTERNAL GUIDANCE did not stop extract from
     # electing the ENGINEER APPOINTMENT heading. Strip leftover steering
     # so EXAMPLAR (or any other particular) is what the user sees.

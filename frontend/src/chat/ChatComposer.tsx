@@ -73,7 +73,9 @@ interface Props {
   disabled: boolean
   disabledReason?: string
   projectId: string
-  onAttached?: (docName: string, docId?: string) => void
+  /** A file attached here was stored: its name, id and the stored record
+   *  the server returned (so the documents list can show it at once). */
+  onAttached?: (docName: string, docId?: string, document?: unknown) => void
   onClear?: () => void
   hasHistory?: boolean
   /** Open the Google Drive picker (parent renders DrivePanel as a modal). */
@@ -84,12 +86,17 @@ interface Props {
   pinnedAgent?: string | null
   /** Pin an agent (or null to return to automatic routing). */
   onPinAgent?: (name: string | null) => void
+  /** Documents pinned to the next question ("Ask about this document"). */
+  pinnedDocuments?: Array<{ id: string; name: string }>
+  /** Unpin one document from the next question. */
+  onUnpinDocument?: (id: string) => void
 }
 
 export default function ChatComposer({
   onSend, disabled, disabledReason, projectId,
   onAttached, onClear, hasHistory, onOpenDrive,
   agents, pinnedAgent, onPinAgent,
+  pinnedDocuments, onUnpinDocument,
 }: Props) {
   const [text, setText] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -275,7 +282,7 @@ export default function ChatComposer({
         ? `Attached: ${docName} -- ${observations.join('; ')}`
         : `Attached: ${docName}`
       setAttachStatus(statusMsg)
-      onAttached?.(docName, docId)
+      onAttached?.(docName, docId, body?.document)
       // A photo's marker comes ready-made from the server: it carries the
       // text read off the image (OCR) as well as the observations, made safe
       // for the marker grammar there.
@@ -404,6 +411,25 @@ export default function ChatComposer({
             </button>
           </div>
         )}
+
+        {(pinnedDocuments ?? []).map((d) => (
+          <div
+            key={d.id}
+            className="chat-composer__docpin"
+            data-testid="composer-pinned-doc"
+            title="The next question is asked about this document"
+          >
+            <span>Asking about: {d.name}</span>
+            <button
+              type="button"
+              className="chat-composer__pin-x"
+              aria-label={`Unpin ${d.name}`}
+              onClick={() => onUnpinDocument?.(d.id)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
 
         {slashOpen && (
           <div className="chat-composer__slash" role="listbox" aria-label="Pick an agent">
