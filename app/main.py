@@ -858,7 +858,13 @@ async def _validation_exception_handler(_request: Request, exc: RequestValidatio
             422,
             "Request validation failed",
             "VALIDATION_ERROR",
-            {"errors": jsonable_encoder(exc.errors())},
+            # A rejected request never echoes what was submitted: pydantic's
+            # `input` is the submitted value itself (a short password, a
+            # token, a document body). `loc` and `msg` already say what to fix.
+            {"errors": [
+                {k: v for k, v in err.items() if k != "input"}
+                for err in jsonable_encoder(exc.errors())
+            ]},
         ),
     )
 
