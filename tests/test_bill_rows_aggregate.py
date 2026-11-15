@@ -219,7 +219,14 @@ def runtime():
     ("p", {"terms": "paint", "document_id": "s9"}, False, "reason", agg.NO_DERIVED_SHEET),
 ], ids=["no-project", "quantity", "amount", "bad-measure", "no-sheet"])
 async def test_tool_handler(runtime, two_bills, project_id, args, ok, field, value):
+    from app.agents.base.tools import handle_bill_rows_aggregate
+    from app.agents.core.tool_registry import ToolCall
+
+    direct = await handle_bill_rows_aggregate(ToolCall(
+        agent=runtime, name="bill_rows_aggregate", args=args, project_id=project_id,
+    ))
     out = await runtime._run_tool_call(_tool_call(args), project_id=project_id)
+    assert out == direct
     assert out["ok"] is ok
     result = out["result"]
     got = result["bills"][0][field] if "bills" in result else result[field]
@@ -228,7 +235,9 @@ async def test_tool_handler(runtime, two_bills, project_id, args, ok, field, val
 
 @pytest.mark.parametrize("project_id, advertised", [("p", True), (None, False)])
 def test_tool_is_advertised_only_in_a_project(runtime, project_id, advertised):
-    names = [t["function"]["name"] for t in runtime.tool_definitions(project_id=project_id)]
+    from app.agents.core.tools import tool_definitions
+
+    names = [t["function"]["name"] for t in tool_definitions(runtime, project_id=project_id)]
     assert ("bill_rows_aggregate" in names) is advertised
 
 
