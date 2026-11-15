@@ -29,6 +29,14 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
         block_class = BLOCK_REGISTRY.get(block_name)
         if not block_class or not caller_may_use_block(block_name):
             continue  # a tool the caller would be refused is not offered
+        # A block whose tool is registered with a declared schema (see
+        # app.agents.core.tool_registry) is offered with that schema; the
+        # registry's handler answers its calls.
+        from app.agents.core import tool_registry as _tool_registry
+        _spec = _tool_registry.get(block_name)
+        if _spec is not None and _spec.schema:
+            tools.append(_spec.schema)
+            continue
         # File-consuming blocks get a typed schema with required file_path.
         override = _FILE_TOOL_SCHEMAS.get(block_name)
         if override:

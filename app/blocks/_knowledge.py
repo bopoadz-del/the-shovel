@@ -194,7 +194,11 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
         raise ValueError(f"entry {rule_id!r} has no expression")
     # evaluate=False keeps sympy from collapsing the parsed tree before
     # substitution; we run .evalf() once at the end for the final float.
-    expr = sympy.sympify(expr_str, evaluate=False)
+    # The entry's declared variables are symbols, whatever their name: without
+    # ``locals`` sympify reads a name sympy reserves (S, Q, E, I, N, O) as its
+    # own object, so the stated value is never substituted.
+    declared = {name: sympy.Symbol(name) for name in (entry.get("variables") or {})}
+    expr = sympy.sympify(expr_str, locals=declared, evaluate=False)
     subs = {sympy.Symbol(name): value for name, value in values.items()}
     result = expr.subs(subs).evalf()
     try:

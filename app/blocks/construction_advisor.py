@@ -53,16 +53,26 @@ class ConstructionAdvisorBlock(UniversalBlock):
         if not results:
             out["note"] = "no matching construction-KB rule for that query"
 
-        # Optional: if the caller supplied variable values and the top match is
-        # a formula, evaluate it (cited + tier + warnings included).
+        # Optional: if the caller supplied variable values, evaluate a formula
+        # (cited + tier + warnings included). The caller may name the rule it
+        # means (``rule_id``, e.g. an id a previous search returned); without
+        # one, the top match is evaluated when it is a formula.
         values = params.get("values")
         if isinstance(input_data, dict) and not values:
             values = input_data.get("values")
-        if values and matches and matches[0].get("type") == "formula":
-            try:
-                out["evaluation"] = kb.evaluate(matches[0]["id"], **values)
-            except Exception as exc:  # noqa: BLE001
-                out["evaluation_error"] = str(exc)[:120]
+        rule_id = params.get("rule_id")
+        if isinstance(input_data, dict) and not rule_id:
+            rule_id = input_data.get("rule_id")
+        if values and not isinstance(values, dict):
+            out["evaluation_error"] = "values must be an object of variable -> number"
+        elif values:
+            target = rule_id or (
+                matches[0]["id"] if matches and matches[0].get("type") == "formula" else None)
+            if target:
+                try:
+                    out["evaluation"] = kb.evaluate(target, **values)
+                except Exception as exc:  # noqa: BLE001
+                    out["evaluation_error"] = str(exc)[:120]
         return out
 
     @staticmethod
