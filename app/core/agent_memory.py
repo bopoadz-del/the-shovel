@@ -490,8 +490,8 @@ def append_message(
     return _message_as_dict(message)  # type: ignore[arg-type]
 
 
-def get_messages(conversation_id: str, limit: int = 40) -> List[Dict[str, Any]]:
-    """Return messages oldest-first. If limit is set, return the most recent `limit` rows, still oldest-first."""
+def get_messages(conversation_id: str, limit: Optional[int] = 40) -> List[Dict[str, Any]]:
+    """Return messages oldest-first. If limit is set, return the most recent `limit` rows, still oldest-first; None returns them all."""
     _ensure_db()
     with SessionLocal() as session:
         rows = session.scalars(

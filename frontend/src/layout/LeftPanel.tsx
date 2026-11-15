@@ -3,22 +3,23 @@
  * Sections, top-to-bottom:
  *   • Brand: "The Shovel"
  *   • PROJECTS — real list from /v1/projects, active row highlighted.
+ *   • SESSIONS — this project's chat sessions for the signed-in user,
+ *     newest first, above the documents; each can be renamed and deleted
+ *     (delete asks first) by its owner.
  *   • DOCUMENTS — the active project's uploaded files. Slot-rendered
  *     so the existing DocumentsPanel (in ProjectWorkspace) provides
  *     upload + delete + status. Hidden when no project is active.
  *   • CONVERSATION — message count plus Export and Clear for the
  *     session open in the composer.
- *   • CHAT HISTORY — this project's sessions for the signed-in user,
- *     newest first, each renameable by its owner.
  *   • Sign out — bottom of rail.
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { Plus, LogOut, Download, RotateCcw, Settings, MessageSquare, Pencil, LifeBuoy } from 'lucide-react'
+import { Plus, LogOut, Download, RotateCcw, Settings, MessageSquare, Pencil, LifeBuoy, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiGet, ApiError } from '../lib/api'
 import { useSupportEmail } from '../lib/support'
-import { renameTitleError, sessionListTitle } from '../chat/session'
+import { deleteSessionQuestion, renameTitleError, sessionListTitle } from '../chat/session'
 import './LeftPanel.css'
 
 interface ProjectRow {
@@ -77,6 +78,8 @@ interface Props {
   onNewConversation?: () => void
   /** Persist a new name for a session the caller owns. */
   onRenameConversation?: (id: string, title: string) => Promise<void>
+  /** Delete a session the caller owns (asks first). */
+  onDeleteConversation?: (id: string) => Promise<void>
 }
 
 /** "Today" / "Yesterday" / "N days ago" — matches the standalone's history
@@ -124,6 +127,7 @@ export default function LeftPanel({
   onSelectConversation,
   onNewConversation,
   onRenameConversation,
+  onDeleteConversation,
 }: Props) {
   const { logout, user, loading: authLoading } = useAuth()
   const supportEmail = useSupportEmail()
@@ -131,6 +135,7 @@ export default function LeftPanel({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameError, setRenameError] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     if (authLoading || !user) return
@@ -215,56 +220,9 @@ export default function LeftPanel({
         </Link>
       </section>
 
-      {showDocsSection && (
-        <section className="left-panel__section">
-          <header className="left-panel__section-head">Documents</header>
-          <div className="left-panel__slot">{documents}</div>
-        </section>
-      )}
-
-      {showConvoSection && (
-        <section className="left-panel__section">
-          <header className="left-panel__section-head">Conversation</header>
-          {messageCount && messageCount > 0 ? (
-            <>
-              <p className="left-panel__convo-summary">
-                {messageCount} message{messageCount === 1 ? '' : 's'} in the
-                current thread.
-              </p>
-              <div className="left-panel__convo-actions">
-                {onExportConversation && (
-                  <button
-                    type="button"
-                    className="left-panel__convo-btn"
-                    onClick={onExportConversation}
-                    title="Export this conversation as a .docx file"
-                  >
-                    <Download size={13} />
-                    <span>Export</span>
-                  </button>
-                )}
-                {onClearConversation && (
-                  <button
-                    type="button"
-                    className="left-panel__convo-btn left-panel__convo-btn--danger"
-                    onClick={onClearConversation}
-                    title="Clear server-side history (cannot be undone)"
-                  >
-                    <RotateCcw size={13} />
-                    <span>Clear</span>
-                  </button>
-                )}
-              </div>
-            </>
-          ) : (
-            <p className="left-panel__empty">No messages yet. Start the chat.</p>
-          )}
-        </section>
-      )}
-
       {activeProjectId && onSelectConversation && (
         <section className="left-panel__section">
-          <header className="left-panel__section-head">Chat history</header>
+          <header className="left-panel__section-head">Sessions</header>
           {onNewConversation && (
             <button
               type="button"
@@ -357,6 +315,23 @@ export default function LeftPanel({
                           <Pencil size={12} />
                         </button>
                       ) : null}
+                      {onDeleteConversation ? (
+                        <button
+                          type="button"
+                          className="left-panel__history-rename-btn left-panel__history-delete-btn"
+                          aria-label={`Delete session ${sessionListTitle(c.title)}`}
+                          title="Delete session"
+                          onClick={() => {
+                            if (!window.confirm(deleteSessionQuestion(c.title))) return
+                            setDeleteError(null)
+                            void onDeleteConversation(c.id).catch((err: unknown) => {
+                              setDeleteError(err instanceof Error ? err.message : 'Could not delete')
+                            })
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      ) : null}
                     </div>
                   )}
                 </li>
@@ -364,6 +339,54 @@ export default function LeftPanel({
             </ul>
           ) : (
             <p className="left-panel__empty">No past sessions yet.</p>
+          )}
+          {deleteError ? <p className="left-panel__empty">{deleteError}</p> : null}
+        </section>
+      )}
+
+      {showDocsSection && (
+        <section className="left-panel__section">
+          <header className="left-panel__section-head">Documents</header>
+          <div className="left-panel__slot">{documents}</div>
+        </section>
+      )}
+
+      {showConvoSection && (
+        <section className="left-panel__section">
+          <header className="left-panel__section-head">Conversation</header>
+          {messageCount && messageCount > 0 ? (
+            <>
+              <p className="left-panel__convo-summary">
+                {messageCount} message{messageCount === 1 ? '' : 's'} in the
+                current thread.
+              </p>
+              <div className="left-panel__convo-actions">
+                {onExportConversation && (
+                  <button
+                    type="button"
+                    className="left-panel__convo-btn"
+                    onClick={onExportConversation}
+                    title="Export this conversation as a .docx file"
+                  >
+                    <Download size={13} />
+                    <span>Export</span>
+                  </button>
+                )}
+                {onClearConversation && (
+                  <button
+                    type="button"
+                    className="left-panel__convo-btn left-panel__convo-btn--danger"
+                    onClick={onClearConversation}
+                    title="Clear server-side history (cannot be undone)"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Clear</span>
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <p className="left-panel__empty">No messages yet. Start the chat.</p>
           )}
         </section>
       )}
