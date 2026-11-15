@@ -209,10 +209,34 @@ def scan_client_text(
     """
     hits: list[tuple[int, int]] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
+        forms = (line, decode_escapes(line))
         for index, pattern in enumerate(patterns):
-            if pattern.search(line):
+            if any(pattern.search(form) for form in forms):
                 hits.append((line_number, index))
     return hits
+
+
+_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})")
+
+
+def decode_escapes(line: str) -> str:
+    r"""Spell out ``\uXXXX`` / ``\UXXXXXXXX`` escapes as the characters they name.
+
+    A denylisted word written in a non-Latin script is just as present in a
+    source file when it is written as escapes (a Python or JS string literal
+    with ``\u....``) as when it is written literally, but a regex over the raw
+    text only ever sees the backslashes. Matching the decoded form too closes
+    that path for every pattern, whatever script it is in. An escape that
+    names no character (beyond U+10FFFF) is left as written.
+    """
+
+    def _char(match: re.Match[str]) -> str:
+        try:
+            return chr(int(match.group(1) or match.group(2), 16))
+        except (ValueError, OverflowError):
+            return match.group(0)
+
+    return _ESCAPE.sub(_char, line)
 
 
 def scan_client_paths(
