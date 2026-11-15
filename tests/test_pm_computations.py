@@ -162,7 +162,10 @@ def test_compute_cpm_free_float():
 def test_compute_cpm_near_critical():
     acts = [_act("A", 3), _act("B", 5, ["A"]), _act("C", 4, ["A"]),
             _act("D", 2, ["B", "C"])]
-    assert "C" in compute_cpm(CPMInput(activities=acts)).near_critical
+    assert "C" in compute_cpm(
+        CPMInput(activities=acts, near_critical_band_days=5)).near_critical
+    # no band supplied -> near-criticality is not computed
+    assert compute_cpm(CPMInput(activities=acts)).near_critical is None
 
 
 def test_compute_cpm_projects_dates():
