@@ -28,8 +28,12 @@ plan counts pages by source; it never names one.
 
 Pieces this module only joins, never re-implements:
 
-* ``bill_classify.classify_bill_pdf`` / ``rows_indexed_as_rows`` - is it a
-  bill, and are its rows already in the index;
+* ``bill_classify.verdict_of_reads`` / ``rows_indexed_as_rows`` - is it a
+  bill, and are its rows already in the index. The verdict is computed over
+  every page the plan or derivation READS (its range), not over the small
+  spread ``classify_bill_pdf`` samples: a priced bill is a bundle whose
+  covers, preambles and summaries can fill any five pages. The sampled
+  verdict stays the cheap gate for an automatic hook;
 * ``bill_table_geometry.extract_bill_rows`` / ``write_bill_workbook`` - word
   boxes to rows to sheets;
 * ``projects.materialize_document_path`` - readable bytes for a row (local,
@@ -68,7 +72,8 @@ SKIP_PARTIAL_PLAN = "plan_not_whole_document"
 #: Word boxes saved before page sources were recorded came from OCR only.
 _LEGACY_CACHE_SOURCE = bc.SOURCE_OCR
 
-Classify = Callable[[str], bc.BillVerdict]
+#: The verdict over the pages read (``bill_classify.verdict_of_reads``).
+Classify = Callable[[Sequence[bc.PageRead]], bc.BillVerdict]
 PageSource = bc.PageSource
 
 
@@ -207,10 +212,6 @@ def _prepare(
     if not file_path:
         return {"derived": False, "reason": SKIP_NO_BYTES}
 
-    verdict = (classify or bc.classify_bill_pdf)(file_path)
-    if not verdict.is_bill:
-        return {"derived": False, "reason": verdict.reason}
-
     total = _page_count(file_path)
     first, stop = pages if pages is not None else (0, total)
     first, stop = max(0, first), min(total, stop)
@@ -221,7 +222,11 @@ def _prepare(
         for index in range(first, stop)
     ]
     sources = _source_counts(reads)
-    rows = g.extract_bill_rows([w for r, _c in reads for w in r.words], block)
+    page_reads = [r for r, _c in reads]
+    verdict = (classify or (lambda rs: bc.verdict_of_reads(rs, block)))(page_reads)
+    if not verdict.is_bill:
+        return {"derived": False, "reason": verdict.reason, **sources}
+    rows = g.extract_bill_rows([w for r in page_reads for w in r.words], block)
     if not rows:
         return {"derived": False, "reason": SKIP_NO_ROWS,
                 "bill_verdict": verdict.reason, **sources}

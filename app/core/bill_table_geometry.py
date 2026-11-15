@@ -221,22 +221,39 @@ def _resolver():
     return BOQProcessorBlock()
 
 
+#: Why a line is not a column-header line (the order :func:`header_test`
+#: checks them in). Codes only: a diagnostic counts them, it never prints labels.
+HEADER_FEW_CELLS = "fewer_than_3_cells"
+HEADER_NO_DESCRIPTION = "no_description_column"
+HEADER_NO_FIGURE = "no_figure_column"
+HEADER_REJECTIONS = (HEADER_FEW_CELLS, HEADER_NO_DESCRIPTION, HEADER_NO_FIGURE)
+
+
 def detect_header(line: Sequence[Word], block=None) -> list[_Column] | None:
     """Columns of ``line`` if it is a bill column-header line, else ``None``.
 
     A header must resolve a description column and at least one figure column
     through the BOQ processor's aliasing.
     """
+    return header_test(line, block)[0]
+
+
+def header_test(
+    line: Sequence[Word], block=None,
+) -> tuple[list[_Column] | None, str | None]:
+    """``(columns, None)`` for a header line, else ``(None, reason)`` with
+    ``reason`` one of :data:`HEADER_REJECTIONS`. The one test both
+    :func:`detect_header` and the classifier's diagnostic counts run."""
     block = block or _resolver()
     cells = _cells_by_gap(line)
     labels = [" ".join(w.text for w in c) for c in cells]
     if len(labels) < 3:
-        return None
+        return None, HEADER_FEW_CELLS
     resolved = block._resolve_columns(labels)
     if "description" not in resolved:
-        return None
+        return None, HEADER_NO_DESCRIPTION
     if not any(f in resolved for f in _FIGURE_FIELDS):
-        return None
+        return None, HEADER_NO_FIGURE
     field_of: dict[int, str] = {}
     for fld, label in resolved.items():
         field_of.setdefault(labels.index(label), fld)
@@ -248,7 +265,7 @@ def detect_header(line: Sequence[Word], block=None) -> list[_Column] | None:
             right=max(w.right for w in c),
         )
         for i, c in enumerate(cells)
-    ]
+    ], None
 
 
 def _assign(word: Word, columns: Sequence[_Column]) -> int:
