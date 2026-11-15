@@ -94,13 +94,17 @@ def test_hosted_profile_is_untouched(env):
 # ── the clean on-prem box passes ────────────────────────────────────────────
 
 
-def test_clean_onprem_passes():
-    assert _offenders(_CLEAN_ONPREM) == [], "stage=boot: a clean box must start"
-    assert dp.assert_onprem_ready(_CLEAN_ONPREM, resolve=_no_dns) == []
+@pytest.mark.parametrize("profile", ["onprem", "on-premise"])
+def test_clean_onprem_passes(profile):
+    env = {**_CLEAN_ONPREM, "DEPLOYMENT_PROFILE": profile}
+    assert _offenders(env) == [], "stage=boot: a clean box must start"
+    assert dp.assert_onprem_ready(env, resolve=_no_dns) == []
 
 
-def test_clean_onprem_with_local_embedder_dir_passes(tmp_path):
-    env = {**_CLEAN_ONPREM, "RAG_EMBEDDING_MODEL": str(tmp_path)}
+@pytest.mark.parametrize("sub", ["weights", "bge-small"])
+def test_clean_onprem_with_local_embedder_dir_passes(tmp_path, sub):
+    (tmp_path / sub).mkdir()
+    env = {**_CLEAN_ONPREM, "RAG_EMBEDDING_MODEL": str(tmp_path / sub)}
     env.pop("HF_HUB_OFFLINE")
     env.pop("TRANSFORMERS_OFFLINE")
     assert _offenders(env) == [], "stage=embedder: a local weights dir needs no hub"
@@ -142,8 +146,9 @@ def test_unset_provider_with_default_key_is_refused():
     assert "LLM_PROVIDER" in _settings(offs), f"stage=model_provider: {offs}"
 
 
-def test_unset_provider_without_key_is_model_free_and_passes():
-    env = {k: v for k, v in _CLEAN_ONPREM.items() if k != "LLM_PROVIDER"}
+@pytest.mark.parametrize("provider_value", ["", "   "])
+def test_unset_provider_without_key_is_model_free_and_passes(provider_value):
+    env = {**_CLEAN_ONPREM, "LLM_PROVIDER": provider_value, "DEEPSEEK_API_KEY": ""}
     assert _offenders(env) == [], "stage=model_provider: no model configured = no call"
 
 
@@ -158,9 +163,10 @@ def test_hub_embedder_without_offline_flag_is_refused(missing):
     assert missing in offs[0].reason
 
 
-def test_unset_embedder_uses_the_default_and_is_checked():
+@pytest.mark.parametrize("missing", ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"])
+def test_unset_embedder_uses_the_default_and_is_checked(missing):
     env = {k: v for k, v in _CLEAN_ONPREM.items()
-           if k not in ("RAG_EMBEDDING_MODEL", "HF_HUB_OFFLINE")}
+           if k not in ("RAG_EMBEDDING_MODEL", missing)}
     assert _settings(_offenders(env)) == ["RAG_EMBEDDING_MODEL"], "stage=embedder"
 
 
@@ -182,8 +188,9 @@ def test_remote_service_credential_is_refused(name):
     assert name in _settings(offs), f"stage=credential: {offs}"
 
 
-def test_empty_credential_is_not_an_offender():
-    env = {**_CLEAN_ONPREM, "RESEND_API_KEY": "", "SENTRY_DSN": "  "}
+@pytest.mark.parametrize("name,value", [("RESEND_API_KEY", ""), ("SENTRY_DSN", "  ")])
+def test_empty_credential_is_not_an_offender(name, value):
+    env = {**_CLEAN_ONPREM, name: value}
     assert _offenders(env) == [], "stage=credential: an empty value calls nothing"
 
 
@@ -245,29 +252,41 @@ def test_endpoint_values_that_are_not_plain_addresses(url, table, expected):
     assert _settings(_offenders(env, _resolver(table))) == expected, f"stage=endpoint: {url}"
 
 
-def test_inbound_self_address_is_not_an_endpoint():
+@pytest.mark.parametrize("name", ["PUBLIC_BASE_URL", "FRONTEND_URL"])
+def test_inbound_self_address_is_not_an_endpoint(name):
     """The service's own public address is where users reach it, not a call out."""
-    env = {**_CLEAN_ONPREM, "PUBLIC_BASE_URL": "https://shovel.client.example",
-           "FRONTEND_URL": "https://shovel.client.example"}
+    env = {**_CLEAN_ONPREM, name: "https://shovel.client.example"}
     assert _offenders(env) == [], "stage=endpoint: inbound addresses are not dialled"
 
 
-def test_any_dialled_url_setting_is_checked():
-    env = {**_CLEAN_ONPREM, "ACONEX_LOBBY_URL": "https://lobby.vendor.example/x"}
+@pytest.mark.parametrize("name", ["ACONEX_LOBBY_URL", "SOME_NEW_SERVICE_URL"])
+def test_any_dialled_url_setting_is_checked(name):
+    env = {**_CLEAN_ONPREM, name: "https://lobby.vendor.example/x"}
     offs = _offenders(env, _resolver({"lobby.vendor.example": ["1.0.0.1"]}))
-    assert _settings(offs) == ["ACONEX_LOBBY_URL"], "stage=endpoint"
+    assert _settings(offs) == [name], "stage=endpoint"
 
 
 # ── stage: boot ─────────────────────────────────────────────────────────────
 
 
-def test_assert_names_every_offender_at_once():
-    env = {**_CLEAN_ONPREM, "LLM_PROVIDER": "ollama", "SENTRY_DSN": "https://a@b.io/1"}
-    env.pop("HF_HUB_OFFLINE")
+@pytest.mark.parametrize(
+    "extra,drop,expected",
+    [
+        ({"LLM_PROVIDER": "ollama", "SENTRY_DSN": "https://a@b.io/1"}, "HF_HUB_OFFLINE",
+         {"LLM_PROVIDER", "SENTRY_DSN", "RAG_EMBEDDING_MODEL"}),
+        ({"LLM_FALLBACK_PROVIDER": "kimi", "SERPER_API_KEY": "x"}, "TRANSFORMERS_OFFLINE",
+         {"LLM_FALLBACK_PROVIDER", "SERPER_API_KEY", "RAG_EMBEDDING_MODEL"}),
+    ],
+)
+def test_assert_names_every_offender_at_once(extra, drop, expected):
+    env = {**_CLEAN_ONPREM, **extra}
+    env.pop(drop)
     with pytest.raises(dp.DeploymentProfileError) as err:
         dp.assert_onprem_ready(env, resolve=_no_dns)
     names = {o.setting for o in err.value.offenders}
-    assert names == {"LLM_PROVIDER", "SENTRY_DSN", "RAG_EMBEDDING_MODEL"}, "stage=boot"
+    assert names == expected, "stage=boot"
+    for name in expected:
+        assert name in str(err.value)
 
 
 def test_lifespan_guard_reads_the_process_env(monkeypatch):
