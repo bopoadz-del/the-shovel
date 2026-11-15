@@ -97,14 +97,29 @@ def _course_test_texts():
 # ---------------------------------------------------------------------------
 
 
+def _domain(entry):
+    return entry["id"].split(".", 1)[0]
+
+
+def _course_domains():
+    return sorted({_domain(e) for e in course_entries(kb.load_knowledge())})
+
+
 def test_course_entries_exist():
-    # The knowledge base carries course-sourced entries; an empty selection
-    # would make the coverage check below pass vacuously.
-    assert len(course_entries(kb.load_knowledge())) >= 30
+    # The knowledge base carries course-sourced entries in more than one
+    # domain; an empty or single-domain selection would make the per-domain
+    # coverage check below pass vacuously or run on one input only.
+    entries = course_entries(kb.load_knowledge())
+    assert len(entries) >= 30
+    assert len(_course_domains()) >= 2
 
 
-def test_every_course_entry_is_tested_against_the_course():
-    assert untested_ids(kb.load_knowledge(), _course_test_texts()) == []
+@pytest.mark.parametrize("domain", _course_domains())
+def test_every_course_entry_is_tested_against_the_course(domain):
+    # One case per course domain, so a failure names the domain whose
+    # course entries lack a course test.
+    in_domain = [e for e in kb.load_knowledge() if _domain(e) == domain]
+    assert untested_ids(in_domain, _course_test_texts()) == []
 
 
 @pytest.mark.parametrize(
@@ -168,10 +183,19 @@ def test_disagreements_pass_and_fail(pairs, expected):
     assert disagreements(pairs) == expected
 
 
-def test_uplift_course_value_is_read_from_the_entry():
-    # Course: FOS >= 1.2 (roads and earthworks section 1, p10; owner ruling #333).
-    entry = kb.get_rule("foundation.uplift_fos")
-    assert course_value(entry, "thresholds.min_fos") == pytest.approx(1.2)
+@pytest.mark.parametrize(
+    "entry_id, field_path, course_figure",
+    [
+        # Course: FOS >= 1.2 (roads and earthworks section 1, p10; owner ruling #333).
+        ("foundation.uplift_fos", "thresholds.min_fos", 1.2),
+        # Course: temporary truss fillet welds 10 mm minimum (high-rise
+        # structure part 3, p27 and p30 general notes).
+        ("steelwork.temporary_truss_min_fillet_weld", "thresholds.value", 10),
+    ],
+)
+def test_course_value_is_read_from_the_entry(entry_id, field_path, course_figure):
+    entry = kb.get_rule(entry_id)
+    assert course_value(entry, field_path) == pytest.approx(course_figure)
     assert entry["provenance"]["course_reference"].lower().startswith(COURSE_PREFIX)
 
 
@@ -184,10 +208,18 @@ def test_uplift_course_value_is_read_from_the_entry():
         "app/agents/hats/design (SHOVEL's scope), not fixed here."
     ),
 )
-def test_uplift_calculator_default_follows_the_course():
-    pairs = [
-        (kb.get_rule("foundation.uplift_fos"), "thresholds.min_fos", dewatering_uplift_check, "required_fos"),
-    ]
+@pytest.mark.parametrize(
+    "entry_id, field_path",
+    [
+        # the uplift criterion itself: FOS >= 1.2 (section 1, p10)
+        ("foundation.uplift_fos", "thresholds.min_fos"),
+        # the same page's remedy trigger: tension piles below FOS 1.2; the
+        # calculator's required factor decides the same pass/fail line
+        ("foundation.uplift_remediation_tension_piles", "thresholds.trigger_below"),
+    ],
+)
+def test_uplift_calculator_default_follows_the_course(entry_id, field_path):
+    pairs = [(kb.get_rule(entry_id), field_path, dewatering_uplift_check, "required_fos")]
     assert disagreements(pairs) == []
 
 
