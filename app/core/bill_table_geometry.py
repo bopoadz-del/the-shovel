@@ -626,6 +626,7 @@ class ColumnStats:
             "rows_figures_not_reconciling": sum(1 for r in priced if r.check),
             "priced_rows_empty_description": sum(
                 1 for r in priced if not (r.fields.get("description") or "").strip()),
+            "priced_rows_empty_path": sum(1 for r in priced if not any(t.strip() for t in r.path)),
             "header_conflicts": self.header_conflicts,
             "labels_reread_as_rows": self.labels_reread_as_rows,
             "section_paths": len({tuple(r.path) or (r.section,) for r in rows}),

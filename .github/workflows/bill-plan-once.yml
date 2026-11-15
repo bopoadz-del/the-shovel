@@ -1,4 +1,14 @@
-# PLAN (never write) the derived bill sheet for ONE document, as a one-off task.
+# PLAN the derived bill sheet for ONE document, as a one-off task; with
+# `execute_hash` set, EXECUTE it (see below).
+#
+# EXECUTE: with `execute_hash` (64 hex) the script rebuilds the whole-document
+# plan from the saved word boxes and writes the derived sheet through
+# bill_derived.derive_bill_sheet ONLY when the rebuilt plan's hash equals
+# `execute_hash` and every run condition holds (scripts/bill_plan_once.py
+# Gates: priced verdict, every page from the cache, shares of unreconciled and
+# description-less priced rows under their ceilings, no header conflict, no
+# priced row without a section path, and the optional `min_reconciled_rows`
+# floor). Without `execute_hash` nothing below writes.
 #
 # Runs inside the `the-fork-ingest` task definition (same image, env, network
 # and data mount as doc-reindex-once.yml), never in the web task: the plan
@@ -37,6 +47,14 @@ on:
         description: "Optional 0-based half-open page range first:stop (empty = every page)"
         required: false
         type: string
+      execute_hash:
+        description: "EXECUTE: the 64-hex plan hash to write (empty = plan only). The run rebuilds the whole-document plan from saved boxes and writes only if its hash and every run condition hold"
+        required: false
+        type: string
+      min_reconciled_rows:
+        description: "EXECUTE: floor of priced, reconciled rows for this run (empty = no floor)"
+        required: false
+        type: string
       wait:
         description: "Wait for the task to stop and report"
         type: boolean
@@ -59,9 +77,23 @@ jobs:
       - name: Validate inputs
         env:
           PAGES: ${{ inputs.pages }}
+          EXECUTE_HASH: ${{ inputs.execute_hash }}
+          MIN_RECONCILED: ${{ inputs.min_reconciled_rows }}
         run: |
           if [ -n "$PAGES" ] && ! printf '%s' "$PAGES" | grep -Eq '^[0-9]{1,5}:[0-9]{1,5}$'; then
             echo "::error::pages must be first:stop (0-based, half-open)"
+            exit 1
+          fi
+          if [ -n "$EXECUTE_HASH" ] && ! printf '%s' "$EXECUTE_HASH" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::execute_hash must be 64 lowercase hex"
+            exit 1
+          fi
+          if [ -n "$EXECUTE_HASH" ] && [ -n "$PAGES" ]; then
+            echo "::error::an execute is whole-document: leave pages empty"
+            exit 1
+          fi
+          if [ -n "$MIN_RECONCILED" ] && ! printf '%s' "$MIN_RECONCILED" | grep -Eq '^[0-9]{1,7}$'; then
+            echo "::error::min_reconciled_rows must be a whole number"
             exit 1
           fi
 
@@ -77,6 +109,8 @@ jobs:
           PROJECT_ID: ${{ inputs.project_id }}
           DOCUMENT_ID: ${{ inputs.document_id }}
           PAGES: ${{ inputs.pages }}
+          EXECUTE_HASH: ${{ inputs.execute_hash }}
+          MIN_RECONCILED: ${{ inputs.min_reconciled_rows }}
         run: |
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
             --services "$SERVICE_FOR_NETWORK" \
@@ -94,10 +128,13 @@ jobs:
           fi
           env_json=$(jq -cn \
             --arg pid "$PROJECT_ID" --arg did "$DOCUMENT_ID" --arg pages "$PAGES" \
+            --arg xh "$EXECUTE_HASH" --arg minr "$MIN_RECONCILED" \
             '[{name:"P1B_KEEP_ALIVE",value:"0"},
               {name:"BILL_PLAN_PROJECT_ID",value:$pid},
               {name:"BILL_PLAN_DOCUMENT_ID",value:$did}] +
-             (if ($pages | length) > 0 then [{name:"BILL_PLAN_PAGES",value:$pages}] else [] end)')
+             (if ($pages | length) > 0 then [{name:"BILL_PLAN_PAGES",value:$pages}] else [] end) +
+             (if ($xh | length) > 0 then [{name:"BILL_PLAN_EXECUTE_HASH",value:$xh}] else [] end) +
+             (if ($minr | length) > 0 then [{name:"BILL_EXECUTE_MIN_RECONCILED",value:$minr}] else [] end)')
           overrides=$(jq -cn --arg c "$container" --argjson env "$env_json" \
             '{containerOverrides:[{name:$c, environment:$env}]}')
           arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \
