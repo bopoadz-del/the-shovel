@@ -6128,6 +6128,12 @@ def _recover_answer_from_tool_messages(
             inner = payload
         if not isinstance(inner, dict):
             continue
+        kind, stated = _declared_tool_result(m, inner)
+        if kind == "search":
+            # Passages are evidence for an answer, never the answer (G-8).
+            continue
+        if stated:
+            return stated
         action = inner.get("action")
         if action == "commissioning_checklist_generated":
             return _format_commissioning_tool(inner)
@@ -6265,6 +6271,57 @@ def _with_model_unreached_note(text: str) -> str:
     if MODEL_UNREACHED_NOTE in body:
         return body
     return f"{body}\n\n{MODEL_UNREACHED_NOTE}"
+
+
+def _figure_text(value: float) -> str:
+    return f"{value:,.3f}".rstrip("0").rstrip(".")
+
+
+def _render_statements(display_name: str, statements: list[Any]) -> str:
+    """A computed tool's statements as the answer: each figure with its unit,
+    what was counted or summed, the source, and the source rows."""
+    lines: list[str] = []
+    for st in statements:
+        figure = f"{_figure_text(st.figure)} {st.unit}".strip()
+        if st.count is not None:
+            figure = f"{st.count} row" + ("" if st.count == 1 else "s")
+        line = f"- {st.what[:1].upper()}{st.what[1:]}: **{figure}**"
+        if st.source:
+            line += f" (source: {st.source})"
+        lines.append(line)
+        if st.rows:
+            lines.append("  Rows: " + "; ".join(st.rows))
+    if not lines:
+        return ""
+    return "\n".join([f"{display_name}:", *lines])
+
+
+def _declared_tool_result(
+    msg: dict[str, Any], payload: dict[str, Any],
+) -> tuple[str, str]:
+    """(declared result kind, the answer a computed tool's result states).
+
+    The kind comes from the tool's own declaration in the registry, not from
+    a list of tool names here. A computed tool that failed, or whose result
+    states no figure, gives ``""`` so the turn keeps its honest fallback.
+    """
+    from app.agents.core import tool_registry
+
+    name = str((msg or {}).get("name") or "")
+    spec = tool_registry.get(name) if name else None
+    if spec is None:
+        return "", ""
+    if spec.kind != "computed" or spec.statement is None or payload.get("ok") is False:
+        return spec.kind, ""
+    body = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+    if _tool_error_payload(body):
+        return spec.kind, ""
+    try:
+        statements = spec.statement(body)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        _LOG.warning("computed tool %s: its result states no figure", name, exc_info=True)
+        return spec.kind, ""
+    return spec.kind, _render_statements(spec.display_name or name, statements)
 
 
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:

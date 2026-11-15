@@ -7,6 +7,14 @@ looks the name up here; a hat's manifest lists exactly the tools its package
 registers. Adding a hat is a new package -- no core edit. ``display_name`` is
 what a user reads when an answer credits the tool; the name is internal.
 
+A tool may declare the KIND of result it returns (``kind=``, one of
+``RESULT_KINDS``). A ``"computed"`` tool returns figures it worked out
+deterministically and declares ``statement=``: a function from its result to
+the figures it states (``Statement``). When the model's synthesis is missing,
+that statement is the answer -- by kind, never by a list of tool names. A
+``"search"`` tool returns passages: its result is evidence for an answer and
+is never shown as the answer itself.
+
 A block that needs its arguments shaped before it runs registers an adapter
 the same way, in its owner's ``blocks`` module: ``@block_args("name",
 owner=...)`` on ``async def adapt(call, block_input, block_params)``, which
@@ -43,6 +51,27 @@ class ToolCall:
 
 Handler = Callable[[ToolCall], Awaitable[Dict[str, Any]]]
 
+#: "computed": deterministic figures (needs ``statement``); "search":
+#: passages, never an answer on their own; "": undeclared.
+RESULT_KINDS = ("", "computed", "search")
+
+
+@dataclass(frozen=True)
+class Statement:
+    """One figure a computed tool states, in the answer contract's terms:
+    the figure and its unit, what was counted or summed, the source it was
+    computed from, and the source rows behind it."""
+    figure: float
+    what: str
+    unit: str = ""
+    source: str = ""
+    rows: Tuple[str, ...] = ()
+    #: The figure is a count of rows, not a sum of a measure.
+    count: Optional[int] = None
+
+
+Stater = Callable[[Dict[str, Any]], List[Statement]]
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -56,6 +85,10 @@ class ToolSpec:
     #: Each parameter as declared (app.lib.formula_registry.Param: label,
     #: kind, unit, range, required). None until the tool declares them.
     params: Optional[Dict[str, Any]] = None
+    #: The kind of result the tool returns (``RESULT_KINDS``).
+    kind: str = ""
+    #: For a ``"computed"`` tool: its result -> the figures it states.
+    statement: Optional[Stater] = None
 
 
 _TOOLS: Dict[str, ToolSpec] = {}
@@ -63,18 +96,24 @@ _TOOLS: Dict[str, ToolSpec] = {}
 
 def tool(name: str, *, owner: str, display_name: str,
          schema: Optional[Dict[str, Any]] = None,
-         params: Optional[Dict[str, Any]] = None) -> Callable[[Handler], Handler]:
+         params: Optional[Dict[str, Any]] = None, kind: str = "",
+         statement: Optional[Stater] = None) -> Callable[[Handler], Handler]:
     if owner not in OWNERS:
         raise ValueError(f"unknown tool owner {owner!r}; one of {OWNERS}")
     if not (display_name or "").strip():
         raise ValueError(f"tool {name!r} needs a display_name")
+    if kind not in RESULT_KINDS:
+        raise ValueError(f"tool {name!r}: unknown result kind {kind!r}; one of {RESULT_KINDS}")
+    if (kind == "computed") != (statement is not None):
+        raise ValueError(f"tool {name!r}: a computed tool, and only a computed tool, declares a statement")
 
     def register(fn: Handler) -> Handler:
         existing = _TOOLS.get(name)
         if existing is not None and existing.handler is not fn:
             raise ValueError(f"tool {name!r} is registered twice")
         _TOOLS[name] = ToolSpec(name, owner, fn, display_name.strip(), schema,
-                                dict(params) if params is not None else None)
+                                dict(params) if params is not None else None,
+                                kind, statement)
         return fn
     return register
 
@@ -118,6 +157,11 @@ def block_args_of(owner: str) -> List[str]:
 def get(name: str) -> Optional[ToolSpec]:
     load()
     return _TOOLS.get(name)
+
+
+def tools_of_kind(kind: str) -> List[str]:
+    load()
+    return sorted(n for n, s in _TOOLS.items() if s.kind == kind)
 
 
 def tools_of(owner: str) -> List[str]:
