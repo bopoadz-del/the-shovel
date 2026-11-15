@@ -250,7 +250,10 @@ async def test_chat_source_labels_do_not_expose_raw_paths(monkeypatch):
     result = await agent.chat("What does the spec say?", project_id="proj_a")
 
     assert "X:\\Example Drive" not in result["answer"]
-    assert "(Source: SomeDoc.pdf)" in result["answer"]
+    # The answer contract (rule 4): the text carries a numbered marker only;
+    # the clean document name travels beside it as a structured citation.
+    assert "SomeDoc.pdf" not in result["answer"] and "[1]" in result["answer"]
+    assert [c.get("document") for c in result.get("citations") or []] == ["SomeDoc.pdf"]
     assert "chunk" not in result["answer"]
     assert result["sources"][0]["doc_name"] == "SomeDoc.pdf"
 
