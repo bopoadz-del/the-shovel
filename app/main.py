@@ -204,8 +204,6 @@ def _warn_when_the_llm_has_no_fallback() -> None:
 async def lifespan(app: FastAPI):
     """Initialize all blocks + load runtime agents at startup."""
     _validate_startup_env()
-    from app.core.deployment_profile import enforce_deployment_profile
-    enforce_deployment_profile()
     _warn_when_the_llm_has_no_fallback()
     from app.routers import support as _support_router
     _support_router.log_support_mx()
