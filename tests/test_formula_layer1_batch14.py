@@ -2,8 +2,9 @@
 concrete section shear capacity, reinforcement lap length, nominal shear
 stress, bolt shear capacity, fillet weld capacity, precast member erection
 demand, plumbing installation programme, BIM clash tolerance, critical
-path of an activity network, weighted tender evaluation (more formulas
-follow in later parts of this batch).
+path of an activity network, weighted tender evaluation, mobilisation
+cost, productivity benchmark lookup, quantity / productivity / manpower /
+duration.
 
 Same rules as batches 1-13 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -40,6 +41,13 @@ its parametrize row:
                                  LS = LF - d, TF = LS - ES, FF = min ES of
                                  successors - EF
   * tender evaluation            weighted sum of 0-100 criterion scores
+  * mobilisation cost            sum of the project's own rates x people x
+                                 months, plus lump sums, x remote factor
+  * productivity benchmark       the table in the project-control spec,
+                                 section B (owner template, unverified)
+  * productivity / duration      qty / man-hours, qty / productivity,
+                                 man-hours / available hours, qty / daily
+                                 production, remaining qty / remaining days
 None was copied from the product's output. A case where the product
 disagrees with the hand value would be marked ``xfail(strict=True)`` with a
 one-line reason and reported as a suspected defect; the expected value is
@@ -826,3 +834,253 @@ def test_f113_b_no_scores_refused(tenderers):
 def test_f113_b_single_submission_scored(tenderer, total):
     r = _ok(F113, {"tenderers": [tenderer]})
     assert r["recommended"]["weighted_total"] == pytest.approx(total, abs=0.01)
+
+
+# ---------------------------------------------------------------- F114 mobilisation cost
+# Hand formula (the calculator's declared composition; every rate is an input):
+#   monthly   = (office + camp + transport + safety) x N x f
+#   recurring = monthly x months
+#   fixed     = (office set-up + camp set-up + demob + safety set-up
+#                + N x IT x months + warehouse) x f
+#   total     = recurring + fixed
+F114 = "mobilization_cost_estimate"
+_F114_OUT = ("grand_total", "total_recurring", "total_fixed")
+_F114_A = {
+    "num_personnel": 50, "duration_months": 12,
+    "office_rate_per_person_month": 100, "camp_rate_per_person_month": 300,
+    "transport_rate_per_person_month": 80, "safety_medical_rate_per_person_month": 20,
+    "it_rate_per_person_month": 15, "office_setup_cost": 20000, "camp_setup_cost": 50000,
+    "safety_setup_cost": 5000, "warehouse_equipment_cost": 10000, "demobilization_cost": 15000,
+}
+_F114_B = {
+    "num_personnel": 20, "duration_months": 6, "remote_area_factor": 1.2,
+    "office_rate_per_person_month": 150, "camp_rate_per_person_month": 250,
+    "transport_rate_per_person_month": 50, "safety_medical_rate_per_person_month": 30,
+    "it_rate_per_person_month": 10, "office_setup_cost": 10000, "camp_setup_cost": 30000,
+    "safety_setup_cost": 4000, "warehouse_equipment_cost": 6000, "demobilization_cost": 8000,
+}
+
+
+@pytest.mark.parametrize("params, recurring, fixed, total", [
+    # (100+300+80+20) x 50 = 25 000 / month; x 12 = 300 000;
+    # IT 50 x 15 x 12 = 9 000; fixed 20 000+50 000+15 000+5 000+9 000+10 000 = 109 000
+    (_F114_A, 300000, 109000, 409000),
+    # (150+250+50+30) x 20 x 1.2 = 11 520 / month; x 6 = 69 120;
+    # IT 20 x 10 x 6 = 1 200; fixed (10 000+30 000+8 000+4 000+1 200+6 000) x 1.2 = 71 040
+    (_F114_B, 69120, 71040, 140160),
+])
+def test_f114_t(params, recurring, fixed, total):
+    r = _ok(F114, params)
+    assert r["total_recurring"] == pytest.approx(recurring, abs=1)
+    assert r["total_fixed"] == pytest.approx(fixed, abs=1)
+    assert r["grand_total"] == pytest.approx(total, abs=1)
+
+
+@pytest.mark.parametrize("params, total", [
+    # 1 year = 12 months: same as the 12-month case, 409 000
+    ({**_F114_A, "duration_months": "1 year"}, 409000),
+    # 0.5 year = 6 months: same as the 6-month case, 140 160
+    ({**_F114_B, "duration_months": "0.5 year"}, 140160),
+])
+def test_f114_u(params, total):
+    assert _ok(F114, params)["grand_total"] == pytest.approx(total, abs=1)
+
+
+@pytest.mark.parametrize("drop", ["demobilization_cost", "camp_rate_per_person_month"])
+def test_f114_m(drop):
+    params = {k: v for k, v in _F114_A.items() if k != drop}
+    _asks(F114, params, drop, _F114_OUT)
+
+
+@pytest.mark.parametrize("params, total", [
+    # camp excluded: its rates are not asked for and add nothing:
+    # 200 x 50 x 12 = 120 000; fixed 20 000+15 000+5 000+9 000+10 000 = 59 000
+    ({k: v for k, v in {**_F114_A, "include_camp": False}.items()
+      if k not in ("camp_rate_per_person_month", "camp_setup_cost")}, 179000),
+    # transport excluded: 420 x 50 x 12 = 252 000; fixed unchanged 109 000
+    ({k: v for k, v in {**_F114_A, "include_transport": False}.items()
+      if k != "transport_rate_per_person_month"}, 361000),
+])
+def test_f114_b_excluded_item_not_asked(params, total):
+    assert _ok(F114, params)["grand_total"] == pytest.approx(total, abs=1)
+
+
+@pytest.mark.parametrize("factor, total", [
+    (1.0, 409000),   # lower end of the declared 1-3 range
+    (3.0, 1227000),  # upper end: 900 000 + 109 000 x 3 = 1 227 000
+])
+def test_f114_b_factor_range_ends(factor, total):
+    assert _ok(F114, {**_F114_A, "remote_area_factor": factor})["grand_total"] == pytest.approx(total, abs=1)
+
+
+@pytest.mark.parametrize("factor", [0.5, 3.5])
+def test_f114_b_factor_outside_range_refused(factor):
+    _refuses(F114, {**_F114_A, "remote_area_factor": factor}, _F114_OUT)
+
+
+@pytest.mark.parametrize("people, total", [
+    # lower end of the declared 1-100000 range: 500 x 1 x 12 = 6 000;
+    # IT 1 x 15 x 12 = 180; fixed 100 000 + 180 = 100 180; total 106 180
+    (1, 106180),
+    # 500 x 2 x 12 = 12 000; IT 2 x 15 x 12 = 360; fixed 100 360; total 112 360
+    (2, 112360),
+])
+def test_f114_b_smallest_crews_priced(people, total):
+    assert _ok(F114, {**_F114_A, "num_personnel": people})["grand_total"] == pytest.approx(total, abs=1)
+
+
+@pytest.mark.parametrize("people", ["0", -5])
+def test_f114_b_below_range_personnel_refused(people):
+    # below the declared 1-100000 range, given as text or as a negative number
+    _refuses(F114, {**_F114_A, "num_personnel": people}, _F114_OUT)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "suspected defect: a NUMERIC num_personnel of 0 (below the declared "
+    "1-100000 range) is not refused; through run_calculation it is replaced "
+    "by 100 and priced. The text '0' and -5 are refused"))
+@pytest.mark.parametrize("people", [0, 0.0])
+def test_f114_b_zero_personnel_refused(people):
+    _refuses(F114, {**_F114_A, "num_personnel": people}, _F114_OUT)
+
+
+# ---------------------------------------------------------------- F115 productivity benchmark
+# Hand source: the benchmark table in SPEC_09NOV_PROJECT_CONTROL_FORMULAS_AND_RATES
+# section B (owner-supplied planner template, unverified; m2 per crew-day).
+# The values below are read from that table, not from the product.
+F115 = "productivity_benchmark"
+_F115_OUT = ("rate_per_crew_day",)
+
+
+@pytest.mark.parametrize("item, rate", [
+    ("blockwork walls", 12.0),       # table B row 1
+    ("ceramic tiles floors", 40.0),  # table B row 7
+])
+def test_f115_t(item, rate):
+    r = _ok(F115, {"work_item": item})
+    assert r["rate_per_crew_day"] == pytest.approx(rate)
+    assert r["unit"] == "m2"
+
+
+@pytest.mark.parametrize("item, rate", [
+    ("Blockwork (walls)", 12.0),        # the table's own spelling
+    ("INTERNAL-WALL  plaster", 20.0),   # case, hyphen and spacing do not matter
+])
+def test_f115_u_name_forms(item, rate):
+    assert _ok(F115, {"work_item": item})["rate_per_crew_day"] == pytest.approx(rate)
+
+
+@pytest.mark.parametrize("params", [{}, {"work_item": ""}])
+def test_f115_m_asks_for_work_item(params):
+    _asks(F115, params, "work item", _F115_OUT)
+
+
+@pytest.mark.parametrize("item", ["curtain wall glazing", "structural steel erection"])
+def test_f115_m_unlisted_item_gets_no_rate(item):
+    r = _ok(F115, {"work_item": item})
+    assert r["rate_per_crew_day"] is None
+    assert "project" in r["flag"].lower()
+
+
+@pytest.mark.parametrize("item", ["ceiling plaster", "epoxy paint floors"])
+def test_f115_b_never_a_project_figure(item):
+    # section B: tier GENERAL, confidence MEDIUM at most, provenance says unverified
+    r = _ok(F115, {"work_item": item})
+    assert r["tier"] == "GENERAL"
+    assert r["confidence"] == "MEDIUM"
+    assert "unverified" in r["provenance"].lower()
+
+
+@pytest.mark.parametrize("item, flagged", [
+    ("ceramic tiles walls", True),    # table B note: "optimistic vs floor; flag"
+    ("ceramic tiles floors", False),  # same rate, no note in the table
+])
+def test_f115_b_wall_tiling_flag(item, flagged):
+    flag = _ok(F115, {"work_item": item})["flag"] or ""
+    assert ("optimistic" in flag.lower()) is flagged
+
+
+# ---------------------------------------------------------------- F116 productivity / manpower / duration
+# Hand formulas (planner's sheet): productivity = qty / man-hours;
+# man-hours = qty / productivity; manpower = man-hours / available hours;
+# duration = qty / daily production; cost = duration x crew cost per day;
+# daily required production = remaining qty / remaining days.
+F116 = "productivity_manpower_duration"
+_F116_OUT = ("duration", "productivity", "manhours_required", "required_manpower",
+             "daily_required_production", "total_cost")
+
+
+@pytest.mark.parametrize("params, duration, cost", [
+    # 3000 / 120 = 25 d; 25 x 1500 = 37 500
+    ({"quantity": 3000, "daily_production": 120, "crew_cost_per_day": 1500}, 25.0, 37500.0),
+    # 1800 / 90 = 20 d; 20 x 2000 = 40 000
+    ({"quantity": 1800, "daily_production": 90, "crew_cost_per_day": 2000}, 20.0, 40000.0),
+])
+def test_f116_t_duration_and_cost(params, duration, cost):
+    r = _ok(F116, params)
+    assert r["duration"] == pytest.approx(duration)
+    assert r["total_cost"] == pytest.approx(cost)
+
+
+@pytest.mark.parametrize("params, manhours, crew", [
+    # 1200 / 2.5 = 480 mh; 480 / 80 = 6
+    ({"quantity": 1200, "productivity": 2.5, "available_hours": 80}, 480.0, 6.0),
+    # 900 / 1.5 = 600 mh; 600 / 120 = 5
+    ({"quantity": 900, "productivity": 1.5, "available_hours": 120}, 600.0, 5.0),
+])
+def test_f116_t_manpower(params, manhours, crew):
+    r = _ok(F116, params)
+    assert r["manhours_required"] == pytest.approx(manhours)
+    assert r["required_manpower"] == pytest.approx(crew)
+
+
+@pytest.mark.parametrize("params, daily", [
+    ({"remaining_qty": 3000, "remaining_days": 15}, 200.0),  # 3000 / 15
+    ({"remaining_qty": 1000, "remaining_days": 8}, 125.0),   # 1000 / 8
+])
+def test_f116_t_daily_required(params, daily):
+    assert _ok(F116, params)["daily_required_production"] == pytest.approx(daily)
+
+
+@pytest.mark.parametrize("params, prod", [
+    # 15 000 min = 250 h; 500 / 250 = 2
+    ({"quantity_executed": 500, "man_hours": "15000 min"}, 2.0),
+    # 10 800 min = 180 h; 720 / 180 = 4
+    ({"quantity_executed": 720, "man_hours": "10800 min"}, 4.0),
+])
+def test_f116_u_minutes(params, prod):
+    assert _ok(F116, params)["productivity"] == pytest.approx(prod)
+
+
+@pytest.mark.parametrize("rate, field, value", [
+    # a rate written per gang-day is daily production: 3000 / 120 = 25 d
+    ("120 m2 per gang-day", "duration", 25.0),
+    # a rate written per hour is productivity: 3000 / 2.5 = 1200 mh
+    ("2.5 m2 per hour", "manhours_required", 1200.0),
+])
+def test_f116_u_unit_on_the_rate_decides(rate, field, value):
+    r = _ok(F116, {"quantity": 3000, "productivity": rate})
+    assert r[field] == pytest.approx(value)
+
+
+@pytest.mark.parametrize("params", [{"quantity": 3000}, {"manpower": 12}])
+def test_f116_m_no_pair_no_figure(params):
+    _refuses(F116, params, _F116_OUT)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"quantity_executed": 500, "man_hours": 0}, "man_hours"),
+    ({"remaining_qty": 3000, "remaining_days": 0}, "remaining_days"),
+])
+def test_f116_b_zero_divisor_asks(params, missing):
+    _asks(F116, params, missing, _F116_OUT)
+
+
+@pytest.mark.parametrize("params, field, value", [
+    # 500 / 0.5 = 1000
+    ({"quantity_executed": 500, "man_hours": 0.5}, "productivity", 1000.0),
+    # 3000 / 1 = 3000
+    ({"remaining_qty": 3000, "remaining_days": 1}, "daily_required_production", 3000.0),
+])
+def test_f116_b_smallest_divisor_computes(params, field, value):
+    assert _ok(F116, params)[field] == pytest.approx(value)
