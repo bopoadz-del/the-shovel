@@ -332,7 +332,7 @@ def test_a_real_sdk_event_leaves_scrubbed(secret_text):
     sentry_sdk.init(**kwargs)
     try:
         # Built at run time so the value exists only as a local, not in source context.
-        local_doc_text = " ".join(["inv3nted", "local", "document", "text"])  # noqa: F841
+        local_doc_text = " ".join(["inv3nted", "local", "document", "text"])  # noqa: F841, FLY002
         try:
             raise RuntimeError(f"connect failed: {secret_text}")
         except RuntimeError:
@@ -359,3 +359,14 @@ def test_hex_identifiers_are_kept(ident):
     event = {"event_id": ident, "contexts": {"trace": {"trace_id": ident}}, "release": ident}
     out = scrub_error_event(event, {})
     assert out == event
+
+
+@_needs_sdk
+@pytest.mark.parametrize("dsn", ["", "   "])
+def test_no_dsn_means_no_error_reporting(dsn):
+    from app.infra import monitoring
+
+    with patch.dict(os.environ, {"SENTRY_DSN": dsn}), patch("sentry_sdk.init") as init:
+        assert monitoring.init_sentry() is False
+    init.assert_not_called()
+    assert monitoring.sentry_enabled() is False
