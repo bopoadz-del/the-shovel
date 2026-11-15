@@ -32,7 +32,7 @@ Nothing here names a bill, a section, an item, a page or a file.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.core import bill_table_geometry as g
 
@@ -59,6 +59,14 @@ class BillVerdict:
     measured_rows: int = 0
     priced_rows: int = 0
     reconciled_rows: int = 0
+    #: Diagnostic counts (no labels, no text): lines the header test saw
+    #: across the sample, sampled pages that gave no words at all, and the
+    #: sampled pages read from each word source. They explain a verdict; the
+    #: verdict never reads them.
+    lines_tested: int = 0
+    pages_without_words: int = 0
+    sampled_text_layer: int = 0
+    sampled_ocr: int = 0
 
 
 def _is_measured(row: g.BillRow) -> bool:
@@ -87,10 +95,13 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
         by_page.setdefault(w.page, []).append(w)
 
     header_pages = 0
+    lines_tested = 0
     rows: list[g.BillRow] = []
     for page in sorted(by_page):
         page_words = by_page[page]
-        if any(g.detect_header(line, block) for line in g.group_lines(page_words)):
+        lines = g.group_lines(page_words)
+        lines_tested += len(lines)
+        if any(g.detect_header(line, block) for line in lines):
             header_pages += 1
             rows += g.extract_bill_rows(page_words, block)
 
@@ -103,6 +114,7 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
         "measured_rows": len(measured),
         "priced_rows": len(priced),
         "reconciled_rows": len(reconciled),
+        "lines_tested": lines_tested,
     }
     if header_pages == 0:
         return BillVerdict(False, NOT_BILL_NO_HEADER, **counts)
@@ -235,4 +247,18 @@ def classify_bill_pdf(
             doc.close()
     indices = doc_index._sample_page_indices(total, sample_pages)
     reads = (page_source or read_pages)(file_path, indices)
-    return bill_verdict([w for r in reads for w in r.words], block)
+    verdict = bill_verdict([w for r in reads for w in r.words], block)
+    return replace(verdict, **sample_source_counts(reads))
+
+
+def sample_source_counts(reads: Sequence[PageRead]) -> dict[str, int]:
+    """Per-source counts of the sampled pages, and how many gave no words.
+
+    ``bill_verdict`` sees only words, so a sampled page with none (a blank
+    page, or one OCR could not read) is invisible to its ``pages_sampled``;
+    this counts it from the reads themselves."""
+    return {
+        "pages_without_words": sum(1 for r in reads if not r.words),
+        "sampled_text_layer": sum(1 for r in reads if r.source == SOURCE_TEXT_LAYER),
+        "sampled_ocr": sum(1 for r in reads if r.source == SOURCE_OCR),
+    }

@@ -353,3 +353,28 @@ def test_p1b_main_hands_over_only_when_document_id_is_set(monkeypatch, value, ha
         code = None
     assert calls == (["plan"] if hands_over else ["walk"])
     assert code == (7 if hands_over else None)
+
+
+@pytest.mark.parametrize("counts", [
+    {"pages_sampled": 5, "lines_tested": 0, "pages_without_words": 0, "sampled_text_layer": 5, "sampled_ocr": 0},
+    {"pages_sampled": 3, "lines_tested": 41, "pages_without_words": 2, "sampled_text_layer": 1, "sampled_ocr": 4},
+])
+def test_a_refused_verdict_still_reports_what_the_sample_was_read_from(tmp_path, counts):
+    lines: list[str] = []
+
+    def plan(project_id, document_id, *, pages, classify, work_dir):
+        verdict = classify("unused-path")
+        return {"derived": False, "reason": verdict.reason}
+
+    def classify(path):
+        return bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER, **counts)
+
+    deps = _deps({"d1": {"project_id": "p1"}}, plan, lines, classify=classify)
+    env = {"BILL_PLAN_PROJECT_ID": "p1", "BILL_PLAN_DOCUMENT_ID": "d1",
+           "BILL_PLAN_WORK_DIR": str(tmp_path / "wd"), "BILL_PLAN_PAGES": "0:5"}
+    assert bpo.main_from_env(env, deps=deps) == 1
+    rep = _summary(lines)
+    assert rep["error"] == bpo.ERR_NO_PLAN
+    assert rep["verdict"]["reason"] == bc.NOT_BILL_NO_HEADER
+    for name, value in counts.items():
+        assert rep["verdict"][name] == value

@@ -63,9 +63,12 @@ SOURCE_FIELDS = (
     "pages_text_layer", "pages_without_text_layer",
     "pages_read_text_layer", "pages_read_ocr", "pages_read_cache",
 )
-#: Classifier counts the summary carries.
+#: Classifier counts the summary carries, with its diagnostic counts (lines
+#: tested, empty sampled pages, sampled pages per word source) so a refused
+#: verdict still says what the sample was read from.
 VERDICT_FIELDS = (
     "pages_sampled", "header_pages", "measured_rows", "priced_rows", "reconciled_rows",
+    "lines_tested", "pages_without_words", "sampled_text_layer", "sampled_ocr",
 )
 #: A plan hash is a sha256 hex digest; no summary string may be longer.
 HASH_LEN = 64
