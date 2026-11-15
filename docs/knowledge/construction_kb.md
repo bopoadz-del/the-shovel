@@ -1,6 +1,6 @@
 # Construction Knowledge Base
 
-_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 71 entries._
+_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 73 entries._
 
 
 **General construction-engineering priors** — NOT code-of-practice design values. Every entry is kept GENERAL (not tied to a location or project). Values are site-experience references; **verify against your project specification and applicable standards** before use. Entries at credibility tier <=3 surface this warning automatically via the loader.
@@ -59,7 +59,7 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `procurement.interim_payment_flow` | workflow | Governs the progress / interim payment cycle from a registered contractor payment request  | 4 |  |
 | `procurement.tender_lifecycle` | workflow | Job Requisition -> Sole Source justification (optional) -> Request for Authority to Tender | 4 |  |
 
-## construction.roads  (36 entries)
+## construction.roads  (38 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
@@ -88,6 +88,8 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `equipment.crane_rating_check` | reference_design | Always check the required lifted capacity per crane against the crane's rated-load (capaci | 3 |  |
 | `equipment.cycle_production` | formula | Production per machine per hour = (60 / cycle time in minutes) x capacity per cycle; 60 /  | 3 |  |
 | `equipment.machines_required` | formula | Machines required = required hourly rate / production per machine per hour, rounded UP (a  | 3 |  |
+| `equipment.fleet_study_hourly_rate` | formula | Fleet study method of the course: for each of the three haul distances of the study, outpu | 3 |  |
+| `equipment.fleet_study_machines` | formula | Fleet study method of the course: machines = required hourly rate / hourly rate per machin | 3 |  |
 | `equipment.required_daily_rate` | formula | Required daily output = total quantity / working days. Split by shift with equipment.shift | 3 |  |
 | `equipment.required_hourly_rate` | formula | Required hourly output = total quantity / (working days x working hours per day). Equal to | 3 |  |
 | `equipment.shift_quantity` | formula | Shift quantity = daily output x shift hours / working hours per day (the course splits a 2 | 3 |  |
