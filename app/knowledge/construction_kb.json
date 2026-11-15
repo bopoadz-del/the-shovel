@@ -7,12 +7,12 @@
       "domain": "construction.buildings",
       "type": "formula",
       "title": "Mass concrete pour equilibrium time",
-      "statement": "Time for a mass concrete pour of half-thickness X (m) to reach thermal equilibrium with ambient. Result is hours; the constant 168 carries the hour unit while (X / 1.5) is dimensionless (meter/meter).",
+      "statement": "Time for a mass concrete pour of full thickness X (m) to reach thermal equilibrium with ambient. Result is hours; the constant 168 carries the hour unit while (X / 1.5) is dimensionless (meter/meter): a 1.5 m thick pour takes 168 h (one week). WORKED EXAMPLES: a 1.2 m thick slab gives 168 x (1.2 / 1.5)^2 = 107.52 h; a 150 m thick dam gives 168 x 100^2 = 1,680,000 h = 10,000 weeks (about 192 years).",
       "expression": "168 * (X / 1.5)**2",
       "variables": {
         "X": {
           "unit": "meter",
-          "desc": "Half-thickness of the pour"
+          "desc": "Full thickness of the pour (not the half-thickness)"
         }
       },
       "thresholds": {
@@ -30,6 +30,7 @@
       "remediation": [],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure and mass concrete notes, part 1 p55-56",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -390,23 +391,30 @@
     {
       "id": "foundation.dewatering_stop_floors",
       "domain": "construction.buildings",
-      "type": "rule",
+      "type": "formula",
       "title": "Dewatering can stop once enough floors are built to counter uplift",
-      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift; once enough floors (and their dead load) are in place to satisfy the uplift FOS, dewatering can be switched off and the water table allowed to recover. [CHECK] The exact number-of-floors trigger / the precise dead-load-vs-uplift formula was ambiguous in the source scan and is project- and groundwater-specific. Do NOT act on a fixed floor count from this entry; recompute via foundation.uplift_fos using the actual staged dead load and design water table before stopping dewatering.",
-      "expression": null,
+      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift. Floors required before dewatering can stop = (min_fos x uplift - raft_weight) / floor_weight, rounded UP to a whole floor (zero when the raft alone already satisfies the factor of safety). All loads are per unit plan area in the same unit: uplift = water unit weight x head (t/m2), raft_weight = raft thickness x concrete unit weight (t/m2), floor_weight = equivalent concrete thickness of one floor x concrete unit weight (t/m2 per floor). min_fos is the required uplift factor of safety (see foundation.uplift_fos); it is an input, not assumed here. The count includes basement levels: the above-ground level at which dewatering may stop = floors required - number of basement levels. WORKED EXAMPLE: head 23 m -> uplift 23 t/m2; 1.25 x 23 = 28.75 t/m2; raft 4 m x 2.5 t/m3 = 10 t/m2; floor 0.60 m equivalent x 2.5 t/m3 = 1.5 t/m2; (28.75 - 10) / 1.5 = 12.5, say 13 floors; less 5 basement levels = level 8. Recompute with the actual staged dead load and design water table before stopping dewatering.",
+      "expression": "Max(0, ceiling((min_fos * uplift - raft_weight) / floor_weight))",
       "variables": {
-        "floors_built": {
-          "unit": "floors",
-          "desc": "Number of floors (and their dead load) completed"
+        "min_fos": {
+          "unit": "dimensionless",
+          "desc": "Required uplift factor of safety (counterweight / uplift)"
         },
         "uplift": {
-          "unit": "kN",
-          "desc": "Design uplift force at the dewatering-stop check"
+          "unit": "ton/meter**2",
+          "desc": "Uplift pressure under the raft = water unit weight x head"
+        },
+        "raft_weight": {
+          "unit": "ton/meter**2",
+          "desc": "Raft self-weight per unit area = raft thickness x concrete unit weight"
+        },
+        "floor_weight": {
+          "unit": "ton/meter**2",
+          "desc": "Dead load of one floor per unit area = equivalent concrete thickness x concrete unit weight"
         }
       },
       "thresholds": {
-        "unit": "floors",
-        "note": "trigger ambiguous in source scan"
+        "unit": "floors"
       },
       "applicability": {
         "applies_to": [
@@ -419,12 +427,13 @@
       "remediation": [],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p9-10",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
       },
-      "credibility_tier": 2,
-      "needs_review": true
+      "credibility_tier": 3,
+      "needs_review": false
     },
     {
       "id": "foundation.shrinkage_strip_1200mm",
@@ -461,7 +470,7 @@
       "domain": "construction.buildings",
       "type": "reference_design",
       "title": "Diaphragm wall panel sequence and guide-wall geometry",
-      "statement": "Reference construction for a cast-in-situ diaphragm (slurry) wall, built as a 5-step panel sequence (the source gives a 5-step sequence but did not itemise the individual steps, so they are not enumerated here). Panels are excavated and cast in a Primary/Secondary (P/S) sequence with primary panels cast first and secondaries closing the gaps. Typical panel layout 2.0 / 6.53 / 2.0 m (P / S-bite / P). Guide walls are 250 / 1500 / 250 mm (toe / clear gap / toe) and 1400 mm deep. CRITICAL: install/prop the support system BEFORE backfilling against the wall - prop before backfill - to avoid over-stressing the wall.",
+      "statement": "Reference construction for a cast-in-situ diaphragm (slurry) wall, built as a 5-step panel sequence: (1) build the guide walls and make the first-pass excavation under bentonite; (2) make the second pass and excavate the middle bite; (3) recycle the bentonite, place the stop-ends and lower the reinforcement cage; (4) place the concrete by tremie while recovering the displaced bentonite; (5) excavate the follower panel, remove the stop-end and repeat. Panels are excavated and cast in a Primary/Secondary (P/S) sequence with primary panels cast first and secondaries closing the gaps. Typical panel layout 2.0 / 6.53 / 2.0 m (P / S-bite / P). Guide walls are 250 / 1500 / 250 mm (toe / clear gap / toe) and 1400 mm deep. CRITICAL: install/prop the support system BEFORE backfilling against the wall - prop before backfill - to avoid over-stressing the wall.",
       "expression": null,
       "variables": {
         "panel_layout": {
@@ -479,6 +488,13 @@
       },
       "thresholds": {
         "panel_sequence_steps": 5,
+        "panel_sequence": [
+          "guide walls and first-pass excavation under bentonite",
+          "second pass and middle bite excavation",
+          "bentonite recycling, stop-ends and reinforcement cage",
+          "tremie concrete with bentonite recovery",
+          "follower panel excavation, stop-end removal, repeat"
+        ],
         "panel_layout_m": [
           2.0,
           6.53,
@@ -503,6 +519,7 @@
       "remediation": [],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p6",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -1662,21 +1679,15 @@
       "domain": "construction.roads",
       "type": "reference_design",
       "title": "Asphalt bitumen content by course",
-      "statement": "Reference bitumen content by asphalt course: base course 3-6%, binder course approximately 4.15%, wearing course approximately 4.45% (by mass of total mix). Typical budget/material allowances: 4.5% for 60/70 penetration-grade bitumen, and 4-8% for 40/50 penetration-grade bitumen. Final binder content must be set by Marshall/Superpave mix design and confirmed on the trial section.",
+      "statement": "Reference bitumen content by asphalt course: base course approximately 3.6%, binder course approximately 4.15%, wearing course approximately 4.45% (by mass of total mix). Typical budget/material allowances: 4.5% for 60/70 penetration-grade bitumen, and 4.8% for 40/50 penetration-grade bitumen. Theoretical bitumen consumption = tonnage laid x course bitumen percentage / 100. Note: a retyped copy of the source sheet shows the base course and 40/50 figures as \"3-6%\" and \"4-8%\"; the typed original reads 3.6% and 4.8% (decimal points lost in retyping), consistent with the neighbouring 4.15%, 4.45% and 4.5%. Final binder content must be set by Marshall/Superpave mix design and confirmed on the trial section.",
       "expression": null,
       "variables": {},
       "thresholds": {
-        "base_course_percent_range": [
-          3,
-          6
-        ],
+        "base_course_percent": 3.6,
         "binder_course_percent": 4.15,
         "wearing_course_percent": 4.45,
         "allowance_60_70_percent": 4.5,
-        "allowance_40_50_percent_range": [
-          4,
-          8
-        ],
+        "allowance_40_50_percent": 4.8,
         "unit": "percent_by_mass"
       },
       "applicability": {
@@ -1693,6 +1704,7 @@
       ],
       "provenance": {
         "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, asphalt section 3 p35 (typed sheet; p39 is the retyped copy)",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
