@@ -28,12 +28,15 @@ here names a bill, a section, a row or a question.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.core import bill_table_geometry as g
+
+_LOG = logging.getLogger(__name__)
 
 MEASURE_QUANTITY = "quantity"
 MEASURE_AMOUNT = "amount"
@@ -90,7 +93,19 @@ def _page(value: Any) -> int | None:
 
 
 def read_sheet_rows(xlsx_path: str) -> list[SheetRow]:
-    """Every row of every sheet of a derived bill workbook, in sheet order."""
+    """Every row of every sheet of a derived bill workbook, in sheet order.
+
+    ``xlsx_path`` is a stored document: ``bill_derived`` writes the sheet
+    through the byte store, which encrypts it when a data key is set, so the
+    workbook is read from its plaintext (``file_crypto.open_plaintext``).
+    """
+    from app.core import file_crypto
+
+    with file_crypto.open_plaintext(xlsx_path) as readable:
+        return _read_workbook_rows(readable)
+
+
+def _read_workbook_rows(xlsx_path: str) -> list[SheetRow]:
     import openpyxl
 
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
@@ -227,6 +242,20 @@ def aggregate(
 
 NO_DERIVED_SHEET = "no_derived_bill_sheet"
 NO_READABLE_BYTES = "derived_sheet_has_no_readable_bytes"
+UNREADABLE_SHEET = "derived_sheet_is_not_a_readable_workbook"
+
+
+def _unreadable_sheet_errors() -> tuple[type[BaseException], ...]:
+    """What reading a stored sheet raises when its bytes are not a workbook
+    this key can open: not a zip (or a cut one), not an xlsx inside, or
+    encrypted under another key. That is the bill's error, not the turn's."""
+    import zipfile
+
+    from openpyxl.utils.exceptions import InvalidFileException
+
+    from app.core import file_crypto
+
+    return (zipfile.BadZipFile, InvalidFileException, file_crypto.DecryptionError)
 
 
 def derived_bill_documents(project_id: str, document_id: str | None = None) -> list[dict[str, Any]]:
@@ -271,6 +300,12 @@ def aggregate_project_bills(
         if not path:
             bills.append({**head, "status": "error", "reason": NO_READABLE_BYTES})
             continue
-        result = aggregate(read_sheet_rows(path), terms=terms, section=section, measure=measure)
+        try:
+            rows = read_sheet_rows(path)
+        except _unreadable_sheet_errors() as exc:
+            _LOG.warning("derived bill sheet %s is not readable: %s", doc.get("id"), type(exc).__name__)
+            bills.append({**head, "status": "error", "reason": UNREADABLE_SHEET})
+            continue
+        result = aggregate(rows, terms=terms, section=section, measure=measure)
         bills.append({**head, "status": "success", **result})
     return {"status": "success", "bills": bills}
