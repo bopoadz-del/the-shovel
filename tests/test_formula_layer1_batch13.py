@@ -2,8 +2,9 @@
 concrete mix design, mix proportions, slip-form mix, mass-concrete thermal
 check, crane count, electrical programme, LEED level, manhours S-curve,
 floor-cycle weighting, interior finishes, simple-beam moment and shear,
-fixed-end moments, point-load moment, simple-beam UDL deflection (more
-follow in this batch).
+fixed-end moments, point-load moment, simple-beam UDL deflection, steel
+member tension, post-tensioning force, progress quantity, resource line
+cost, embodied carbon of concrete.
 
 Same rules as batches 1-12 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -62,6 +63,16 @@ its parametrize row:
   * fixed-end moments            wL^2/12 at the supports, wL^2/24 midspan
   * point-load moment            SS: Pab/L under the load; central PL/4
   * SS UDL deflection            5wL^4/(384EI), N/mm, mm, MPa, mm4 -> mm
+  * steel tension                AISC 360-16 D2: min(0.90 Fy Ag, 0.75 Fu Ae);
+                                 EN 1993-1-1 6.2.3: min(A fy, 0.9 Anet fu /
+                                 1.25)
+  * post-tensioning              load balancing P = w L^2 / (8 e), on the
+                                 share the calculator states (0.75 DL)
+  * progress quantity            % = qty / total x 100; remaining = total -
+                                 actual; variance = actual % - planned %
+  * resource line cost           labour = qty / output x day rate; plant =
+                                 fraction x labour; material = qty x rate
+  * embodied carbon              volume x supplier EPD factor
 None was copied from the product's output. A case where the product
 disagrees with the hand value would be marked ``xfail(strict=True)`` with a
 one-line reason and reported as a suspected defect; the expected value is
@@ -70,12 +81,14 @@ the same way.
 
 No U case for the payment, cash flow or mix design calculators: they take
 money in the project's own currency, or dimensionless ratios. No M or U
-case for the slip-form mix (it takes no input). A bare "158 F" is refused
+case for the slip-form mix (it takes no input), progress quantity or
+resource line cost (like quantities and money). A bare "158 F" is refused
 as an unrecognised unit (an honest ask, not a defect); the U case writes
 "degF".
 
 Unit factors (exact by definition): 1 ft = 0.3048 m; 1 cm = 0.01 m;
-1 ft3 = 0.028316846592 m3.
+1 ft3 = 0.028316846592 m3;
+1 in = 25.4 mm; 1 ksi = 6.894757 MPa.
 
 All inputs are invented numbers; no project, person or document is named.
 """
@@ -1009,3 +1022,299 @@ def test_f97_b_zero_span_or_load_gives_zero(w, span):
 @pytest.mark.parametrize("E", [0, -30000])
 def test_f97_b_no_stiffness_refused(E):
     _refuses(F97, {"w_kn_m": 10, "span_m": 6, "ec_mpa": E, "i_mm4": 5e8}, _F97_OUT)
+
+
+# ---------------------------------------------------------------- F98 steel tension
+# Hand source: AISC 360-16 D2 (LRFD): yield = 0.90 Fy Ag, rupture = 0.75 Fu Ae;
+# EN 1993-1-1 6.2.3: yield = A fy / 1.0, rupture = 0.9 Anet fu / 1.25.
+# Capacity = the lesser; a tie is reported as yield (yield <= rupture).
+F98 = "steel_tension_capacity"
+_F98_OUT = ("capacity_kn", "yield_capacity_kn", "rupture_capacity_kn")
+
+
+@pytest.mark.parametrize("params, cap, governs", [
+    # 0.90 x 345 x 2000 = 621.0; 0.75 x 450 x 1700 = 573.75 -> rupture
+    ({"gross_area_mm2": 2000, "net_area_mm2": 1700, "fy_mpa": 345, "fu_mpa": 450}, 573.75, "rupture"),
+    # no net area: Ae = Ag; 0.75 x 450 x 2000 = 675.0 > 621.0 -> yield
+    ({"gross_area_mm2": 2000, "fy_mpa": 345, "fu_mpa": 450}, 621.0, "yield"),
+    # EC: 2000 x 355 = 710.0; 0.9 x 1700 x 510 / 1.25 = 624.24 -> rupture
+    ({"gross_area_mm2": 2000, "net_area_mm2": 1700, "fy_mpa": 355, "fu_mpa": 510, "code": "EC"},
+     624.24, "rupture"),
+])
+def test_f98_t(params, cap, governs):
+    r = _ok(F98, params)
+    assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
+    assert r["governing_limit_state"] == governs
+
+
+@pytest.mark.parametrize("params, cap", [
+    # 20 cm2 = 2000 mm2 -> 573.75 as the first T row
+    ({"gross_area_mm2": "20 cm2", "net_area_mm2": 1700, "fy_mpa": 345, "fu_mpa": 450}, 573.75),
+    # 3.1 in2 = 2000.0 mm2; 2.6 in2 = 1677.42 mm2; 65 ksi = 448.16 MPa:
+    # rupture 0.75 x 448.16 x 1677.42 = 563.81 < yield 620.53
+    ({"gross_area_mm2": "3.1 in2", "net_area_mm2": "2.6 in2", "fy_mpa": "50 ksi", "fu_mpa": "65 ksi"},
+     563.81),
+])
+def test_f98_u(params, cap):
+    assert _ok(F98, params)["capacity_kn"] == pytest.approx(cap, abs=0.05)
+
+
+@pytest.mark.parametrize("params", [
+    {"net_area_mm2": 1700},
+    {"fy_mpa": 345, "fu_mpa": 450},
+])
+def test_f98_m(params):
+    _asks(F98, params, "gross_area_mm2", _F98_OUT)
+
+
+@pytest.mark.parametrize("net, cap, governs", [
+    (750, 225.0, "yield"),     # 0.9 x 250 x 1000 = 225 = 0.75 x 400 x 750: a tie
+    (740, 222.0, "rupture"),   # 0.75 x 400 x 740 = 222 < 225
+])
+def test_f98_b_yield_rupture_tie(net, cap, governs):
+    r = _ok(F98, {"gross_area_mm2": 1000, "net_area_mm2": net, "fy_mpa": 250, "fu_mpa": 400})
+    assert r["capacity_kn"] == pytest.approx(cap, abs=0.01)
+    assert r["governing_limit_state"] == governs
+
+
+@pytest.mark.parametrize("ag", [0, -5])
+def test_f98_b_no_area_refused(ag):
+    _refuses(F98, {"gross_area_mm2": ag}, _F98_OUT)
+
+
+# ---------------------------------------------------------------- F99 post-tensioning
+# Hand source: load balancing (parabolic tendon): P = w L^2 / (8 e), with the
+# share the calculator states it balances: w = 0.75 x dead load; e =
+# eccentricity ratio x slab thickness (stated default 0.15); a dead load not
+# given is the self-weight h x 25 kN/m3. Area = P / tendon stress (stated
+# default 1300 N/mm2); strands = ceil(area / (0.78 x pi x 6.35^2 = 98.81)).
+F99 = "post_tensioning_force"
+_F99_OUT = ("tendon_force_kn", "tendon_area_mm2", "num_strands")
+
+
+@pytest.mark.parametrize("params, force, area, strands", [
+    # w = 6.0; e = 0.0375; 6 x 100 / 0.3 = 2000; 2e6 / 1300 = 1538.5; 15.57 -> 16
+    ({"span_m": 10, "slab_thickness_m": 0.25, "live_load_kn_m2": 3, "dead_load_kn_m2": 8},
+     2000.0, 1538.5, 16),
+    # DL = 0.2 x 25 = 5; w = 3.75; e = 0.03; 3.75 x 64 / 0.24 = 1000; 769.2; 7.78 -> 8
+    ({"span_m": 8, "slab_thickness_m": 0.2, "live_load_kn_m2": 2.5}, 1000.0, 769.2, 8),
+])
+def test_f99_t(params, force, area, strands):
+    r = _ok(F99, params)
+    assert r["tendon_force_kn"] == pytest.approx(force, abs=0.1)
+    assert r["tendon_area_mm2"] == pytest.approx(area, abs=0.1)
+    assert r["num_strands"] == strands
+
+
+@pytest.mark.parametrize("span, thick", [
+    ("1000 cm", "250 mm"),     # 10 m, 0.25 m
+    ("32.8084 ft", 0.25),      # 32.8084 x 0.3048 = 10.0000 m
+])
+def test_f99_u(span, thick):
+    r = _ok(F99, {"span_m": span, "slab_thickness_m": thick, "live_load_kn_m2": 3,
+                  "dead_load_kn_m2": 8})
+    assert r["tendon_force_kn"] == pytest.approx(2000.0, rel=_REL)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"slab_thickness_m": 0.25, "live_load_kn_m2": 3}, "span_m"),
+    ({"span_m": 10, "live_load_kn_m2": 3}, "slab_thickness_m"),
+])
+def test_f99_m(params, missing):
+    _asks(F99, params, missing, _F99_OUT)
+
+
+@pytest.mark.parametrize("span, force", [
+    (0, 0.0),      # no span: w x 0 / (8 e) = 0
+    (4, 320.0),    # 6 x 16 / 0.3 = 320
+])
+def test_f99_b_span(span, force):
+    r = _ok(F99, {"span_m": span, "slab_thickness_m": 0.25, "live_load_kn_m2": 3,
+                  "dead_load_kn_m2": 8})
+    assert r["tendon_force_kn"] == pytest.approx(force, abs=0.1)
+
+
+def test_f99_b_negative_span_refused():
+    _refuses(F99, {"span_m": -2, "slab_thickness_m": 0.25, "live_load_kn_m2": 3,
+                   "dead_load_kn_m2": 8}, _F99_OUT)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "suspected defect: with no tendon drape (e = 0) P = w L^2 / (8 e) has no "
+    "finite value, so no prestress can balance the load; the calculator "
+    "returns success with 0 kN and 0 strands instead of refusing"))
+@pytest.mark.parametrize("extra", [
+    {"eccentricity_ratio": 0},     # e = 0 x 0.25
+    {"slab_thickness_m": 0},       # e = 0.15 x 0
+])
+def test_f99_b_no_drape_refused(extra):
+    params = {"span_m": 10, "slab_thickness_m": 0.25, "live_load_kn_m2": 3,
+              "dead_load_kn_m2": 8}
+    params.update(extra)
+    _refuses(F99, params, _F99_OUT)
+
+
+# ---------------------------------------------------------------- F100 progress quantity
+# Hand source: planned % = planned / total x 100; actual % = actual / total
+# x 100; remaining = total - actual; variance = actual % - planned %.
+# No U case: every input is a quantity in the same unit, the outputs are
+# percentages of like quantities.
+F100 = "progress_quantity"
+_F100_OUT = ("planned_percent", "actual_percent", "remaining_qty", "progress_variance_percent")
+
+
+@pytest.mark.parametrize("total, planned, actual, pp, ap, rem, var", [
+    (400, 120, 100, 30.0, 25.0, 300.0, -5.0),    # 120/400, 100/400, 400-100, 25-30
+    (250, 50, 75, 20.0, 30.0, 175.0, 10.0),      # 50/250, 75/250, 250-75, 30-20
+])
+def test_f100_t(total, planned, actual, pp, ap, rem, var):
+    r = _ok(F100, {"total_qty": total, "planned_qty": planned, "actual_qty": actual})
+    assert r["planned_percent"] == pytest.approx(pp)
+    assert r["actual_percent"] == pytest.approx(ap)
+    assert r["remaining_qty"] == pytest.approx(rem)
+    assert r["progress_variance_percent"] == pytest.approx(var)
+
+
+@pytest.mark.parametrize("params", [
+    {"planned_qty": 4},
+    {"actual_qty": 4},
+])
+def test_f100_m_no_total(params):
+    _asks(F100, params, "total_qty", _F100_OUT)
+
+
+@pytest.mark.parametrize("total", [400, 10])
+def test_f100_m_no_planned_or_actual(total):
+    _asks(F100, {"total_qty": total}, "planned_qty", _F100_OUT)
+
+
+@pytest.mark.parametrize("total", [0, -1])
+def test_f100_b_no_total_refused(total):
+    _refuses(F100, {"total_qty": total, "actual_qty": 1}, _F100_OUT)
+
+
+@pytest.mark.parametrize("actual, ap, rem", [
+    (400, 100.0, 0.0),      # on the limit: all done, nothing remains
+    (450, 112.5, -50.0),    # past it: an overrun is reported, not capped
+])
+def test_f100_b_complete_and_overrun(actual, ap, rem):
+    r = _ok(F100, {"total_qty": 400, "actual_qty": actual})
+    assert r["actual_percent"] == pytest.approx(ap)
+    assert r["remaining_qty"] == pytest.approx(rem)
+    assert r.get("progress_variance_percent") is None   # no planned qty given
+
+
+# ---------------------------------------------------------------- F101 resource line cost
+# Hand source (estimate build-up): crew days = quantity / daily output;
+# labour = crew days x day rate; plant = labour x plant fraction; material =
+# quantity x material rate; total = labour + plant + material. A missing
+# material rate is never priced: the total is flagged partial.
+# No U case: money in the project's own currency, quantities in one unit.
+F101 = "resource_line_cost"
+_F101_OUT = ("labour_cost", "total_cost", "crew_days")
+
+
+@pytest.mark.parametrize("params, days, labour, plant, mat, total", [
+    # 120/15 = 8; 8 x 800 = 6400; 0.1 x 6400 = 640; 120 x 25 = 3000; 10040
+    ({"quantity": 120, "daily_output": 15, "day_rate": 800, "material_rate_per_unit": 25,
+      "plant_fraction_of_labour": 0.1}, 8.0, 6400.0, 640.0, 3000.0, 10040.0),
+    # 90/12 = 7.5; 7.5 x 1000 = 7500; 0.2 x 7500 = 1500; 90 x 40 = 3600; 12600
+    ({"quantity": 90, "daily_output": 12, "day_rate": 1000, "material_rate_per_unit": 40,
+      "plant_fraction_of_labour": 0.2}, 7.5, 7500.0, 1500.0, 3600.0, 12600.0),
+])
+def test_f101_t(params, days, labour, plant, mat, total):
+    r = _ok(F101, params)
+    assert r["crew_days"] == pytest.approx(days)
+    assert r["labour_cost"] == pytest.approx(labour)
+    assert r["plant_cost"] == pytest.approx(plant)
+    assert r["material_cost"] == pytest.approx(mat)
+    assert r["total_cost"] == pytest.approx(total)
+    assert r["total_is_partial"] is False
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"quantity": 120, "daily_output": 15}, "day_rate"),
+    ({"quantity": 120, "day_rate": 800}, "daily_output"),
+])
+def test_f101_m(params, missing):
+    _asks(F101, params, missing, _F101_OUT)
+
+
+@pytest.mark.parametrize("params", [
+    {"quantity": 120, "daily_output": 0, "day_rate": 800},
+    {"quantity": 120, "daily_output": 15, "day_rate": 0},
+])
+def test_f101_b_no_output_or_rate_refused(params):
+    _refuses(F101, params, _F101_OUT)
+
+
+@pytest.mark.parametrize("qty, labour", [
+    (120, 6400.0),   # 120/15 x 800
+    (30, 1600.0),    # 30/15 x 800
+])
+def test_f101_b_no_material_rate_is_partial(qty, labour):
+    r = _ok(F101, {"quantity": qty, "daily_output": 15, "day_rate": 800})
+    assert r["total_cost"] == pytest.approx(labour)
+    assert r["total_is_partial"] is True
+    assert not isinstance(r["material_cost"], (int, float))
+
+
+@pytest.mark.parametrize("rate", [25, 40])
+def test_f101_b_zero_quantity_costs_nothing(rate):
+    r = _ok(F101, {"quantity": 0, "daily_output": 15, "day_rate": 800,
+                   "material_rate_per_unit": rate})
+    assert r["total_cost"] == 0
+
+
+# ---------------------------------------------------------------- F102 embodied carbon
+# Hand source: embodied CO2e = volume x the supplier EPD factor (kgCO2e/m3);
+# t = kg / 1000. Every T and U row passes its own factor, so no value
+# depends on the calculator's indicative grade table.
+F102 = "carbon_footprint_concrete"
+_F102_OUT = ("total_kgco2e", "total_tco2e")
+
+
+@pytest.mark.parametrize("vol, factor, kg, t", [
+    (50, 300, 15000.0, 15.0),     # 50 x 300
+    (12.5, 250, 3125.0, 3.125),   # 12.5 x 250
+])
+def test_f102_t(vol, factor, kg, t):
+    r = _ok(F102, {"volume_m3": vol, "embodied_kgco2e_m3": factor})
+    assert r["total_kgco2e"] == pytest.approx(kg, abs=0.1)
+    assert r["total_tco2e"] == pytest.approx(t, abs=0.001)
+
+
+@pytest.mark.parametrize("vol, kg", [
+    ("100 ft3", 849.5),        # 2.8316846592 m3 x 300 = 849.505
+    ("353.1467 ft3", 3000.0),  # 10.0000 m3 x 300
+])
+def test_f102_u(vol, kg):
+    r = _ok(F102, {"volume_m3": vol, "embodied_kgco2e_m3": 300})
+    assert r["total_kgco2e"] == pytest.approx(kg, abs=0.1)
+
+
+@pytest.mark.parametrize("params", [
+    {"embodied_kgco2e_m3": 300},
+    {"grade": "c30"},
+])
+def test_f102_m(params):
+    _asks(F102, params, "volume_m3", _F102_OUT)
+
+
+@pytest.mark.parametrize("vol, kg", [
+    (0, 0.0),     # no concrete, no carbon
+    (1, 300.0),   # one cubic metre: the factor itself
+])
+def test_f102_b_volume(vol, kg):
+    r = _ok(F102, {"volume_m3": vol, "embodied_kgco2e_m3": 300})
+    assert r["total_kgco2e"] == pytest.approx(kg)
+
+
+@pytest.mark.parametrize("vol", [-1, -50])
+def test_f102_b_negative_volume_refused(vol):
+    _refuses(F102, {"volume_m3": vol, "embodied_kgco2e_m3": 300}, _F102_OUT)
+
+
+@pytest.mark.parametrize("grade", ["zz99", "c99"])
+def test_f102_b_unknown_grade_without_epd_refused(grade):
+    _refuses(F102, {"volume_m3": 10, "grade": grade}, _F102_OUT)
