@@ -366,6 +366,10 @@ async def get_project(project_id: str, auth: dict = Depends(require_user)):
     # (a cheap COUNT). Gate enrichment on the TOTAL, not the page length.
     doc_count = proj.get("document_count") or 0
     proj["documents_truncated"] = len(proj.get("documents") or []) < doc_count
+    # The chat pane states these two totals, never the length of one page:
+    # the documents the project holds, and how many of them search reaches.
+    proj["held_document_count"] = store.count_documents(project_id, visible_only=True)
+    proj["searchable_document_count"] = None
 
     # Live chunk counts come from the vector store, not the legacy doc_index
     # JSON blob. Bulk-inserted chunks (the master-corpus migration) never touch
@@ -401,6 +405,8 @@ async def get_project(project_id: str, auth: dict = Depends(require_user)):
                 doc["searchable"] = False
     else:
         chunk_counts = chunk_store.count_by_doc(resolved_id)
+        # One row per document that holds chunks (a GROUP BY never yields 0).
+        proj["searchable_document_count"] = len(chunk_counts)
         for doc in documents:
             doc["chunk_count"] = chunk_counts.get(doc.get("id"), 0)
             if doc.get("bytes_state") == byte_store.MISSING:

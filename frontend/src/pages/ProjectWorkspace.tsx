@@ -38,6 +38,23 @@ import './workspace.css'
 interface ProjectDetail extends Project {
   documents?: DocumentRecord[]
   readiness?: ProjectReadiness
+  /** Documents the project holds (hidden copies left out); the server's total. */
+  held_document_count?: number | null
+  /** Documents project search reaches; null when the index is unavailable. */
+  searchable_document_count?: number | null
+}
+
+/** A document pinned to the next question ("Ask about this document"). */
+interface PinnedDocument {
+  id: string
+  name: string
+}
+
+/** True for a stored document record as the upload routes return it. */
+function isDocumentRecord(value: unknown): value is DocumentRecord {
+  if (!value || typeof value !== 'object') return false
+  const row = value as { id?: unknown; original_name?: unknown }
+  return typeof row.id === 'string' && typeof row.original_name === 'string'
 }
 
 interface DocumentRecord {
@@ -61,6 +78,12 @@ interface DocumentRecord {
    * chunks are still stored.
    */
   panel_status?: { label: string; detail: string; status?: string } | null
+  /**
+   * The card's plain status line, set by the server from the same status:
+   * searchable / stored, not searchable (with the reason) / waiting to be
+   * read / failed (with the reason).
+   */
+  document_state?: { state: string; line: string } | null
 }
 
 interface DriveFile {
@@ -325,6 +348,10 @@ interface DocumentsPanelProps {
   onDocumentAdded: (doc: DocumentRecord) => void
   onDocumentRemoved: (docId: string) => void
   onDocumentReplaced: (doc: DocumentRecord) => void
+  /** Pin this document to the next question. */
+  onAsk: (doc: DocumentRecord) => void
+  /** Ids of the documents pinned to the next question. */
+  pinnedIds: string[]
 }
 
 // Cap how many document rows we render at once. The master-corpus alias backs
@@ -339,6 +366,8 @@ function DocumentsPanel({
   onDocumentAdded,
   onDocumentRemoved,
   onDocumentReplaced,
+  onAsk,
+  pinnedIds,
 }: DocumentsPanelProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -431,12 +460,23 @@ function DocumentsPanel({
           {documents.slice(0, MAX_VISIBLE_DOCS).map((doc) => {
             const typeBadge = fileTypeBadge(doc.original_name)
             const indexNote = doc.panel_status
+            const pinned = pinnedIds.includes(doc.id)
+            const state = doc.document_state
             return (
-              <li key={doc.id} className="doc-row">
+              <li
+                key={doc.id}
+                className={`doc-row${pinned ? ' doc-row--pinned' : ''}`}
+                data-doc-id={doc.id}
+              >
                 <div className="doc-row__main">
-                  <span className="doc-row__name" title={doc.original_name}>
+                  <button
+                    type="button"
+                    className="doc-row__name"
+                    title={`Ask about ${doc.original_name}`}
+                    onClick={() => onAsk(doc)}
+                  >
                     {doc.original_name}
-                  </span>
+                  </button>
                   <span className="doc-row__meta">
                     {indexNote ? (
                       <span
@@ -457,6 +497,11 @@ function DocumentsPanel({
                     )}
                   </span>
                 </div>
+                {state?.line && (
+                  <span className={`doc-row__state doc-row__state--${state.state}`}>
+                    {state.line}
+                  </span>
+                )}
                 <div className="doc-row__data">
                   {doc.size != null && (
                     <span className="mono doc-row__size">
@@ -483,12 +528,23 @@ function DocumentsPanel({
                   )}
                   <button
                     type="button"
+                    className="btn btn--ghost doc-row__ask"
+                    aria-label={`Ask about ${doc.original_name}`}
+                    aria-pressed={pinned}
+                    disabled={pinned}
+                    onClick={() => onAsk(doc)}
+                  >
+                    {pinned ? 'Pinned' : 'Ask'}
+                  </button>
+                  <button
+                    type="button"
                     className="doc-row__delete"
                     aria-label={`Delete ${doc.original_name}`}
+                    title="Delete this document"
                     disabled={deletingId === doc.id}
                     onClick={() => void handleDeleteDirect(doc)}
                   >
-                    {deletingId === doc.id ? '…' : '×'}
+                    {deletingId === doc.id ? '…' : '× Delete'}
                   </button>
                 </div>
               </li>
@@ -933,6 +989,29 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // fallback), then cleared once the send goes out.
   const pendingAttachedDocIdsRef = useRef<string[]>([])
 
+  // Documents pinned from the sidebar ("Ask about this document"). The
+  // next send carries their ids as document_ids, the same path a composer
+  // upload uses; the server resolves each id to the document after its
+  // access check. The ref mirrors the state for the send callback.
+  const [pinnedDocs, setPinnedDocs] = useState<PinnedDocument[]>([])
+  const pinnedDocsRef = useRef<PinnedDocument[]>([])
+  const updatePinnedDocs = useCallback((next: (prev: PinnedDocument[]) => PinnedDocument[]) => {
+    setPinnedDocs((prev) => {
+      const value = next(prev)
+      pinnedDocsRef.current = value
+      return value
+    })
+  }, [])
+
+  // The list as last rendered, for handlers that must not double-count.
+  const documentsRef = useRef<DocumentRecord[]>([])
+  useEffect(() => { documentsRef.current = documents }, [documents])
+
+  // The chat pane's totals come from the server, never from one page.
+  const [docTotals, setDocTotals] = useState<{ held: number | null; searchable: number | null }>(
+    { held: null, searchable: null },
+  )
+
   // ── Load project ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -945,6 +1024,10 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         if (cancelled) return
         setWsState({ tag: 'ready', project })
         setDocuments(project.documents ?? [])
+        setDocTotals({
+          held: project.held_document_count ?? null,
+          searchable: project.searchable_document_count ?? null,
+        })
       } catch (err) {
         if (cancelled) return
         if (err instanceof ApiError && err.status === 404) {
@@ -1010,14 +1093,39 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   // ── Document mutation callbacks ───────────────────────────────────────────
 
+  // The list is newest first, so a new document goes on top. The totals
+  // move with the list; a new upload is not searchable yet.
   const handleDocumentAdded = useCallback((doc: DocumentRecord) => {
-    setDocuments((prev) => [...prev, doc])
+    if (documentsRef.current.some((d) => d.id === doc.id)) return
+    documentsRef.current = [doc, ...documentsRef.current]
+    setDocuments((prev) => (prev.some((d) => d.id === doc.id) ? prev : [doc, ...prev]))
+    setDocTotals((t) => ({ ...t, held: t.held === null ? null : t.held + 1 }))
   }, [])
 
   // PR #104: DocumentsPanel is back in the LeftPanel — handler used again.
   const handleDocumentRemoved = useCallback((docId: string) => {
+    const gone = documentsRef.current.find((d) => d.id === docId)
+    documentsRef.current = documentsRef.current.filter((d) => d.id !== docId)
     setDocuments((prev) => prev.filter((d) => d.id !== docId))
-  }, [])
+    if (gone) {
+      const wasSearchable = (gone.chunk_count ?? 0) > 0
+      setDocTotals((t) => ({
+        held: t.held === null ? null : Math.max(0, t.held - 1),
+        searchable: t.searchable === null || !wasSearchable ? t.searchable : Math.max(0, t.searchable - 1),
+      }))
+    }
+    updatePinnedDocs((prev) => prev.filter((d) => d.id !== docId))
+  }, [updatePinnedDocs])
+
+  const handleAskAboutDocument = useCallback((doc: DocumentRecord) => {
+    updatePinnedDocs((prev) => (
+      prev.some((d) => d.id === doc.id) ? prev : [...prev, { id: doc.id, name: doc.original_name }]
+    ))
+  }, [updatePinnedDocs])
+
+  const handleUnpinDocument = useCallback((docId: string) => {
+    updatePinnedDocs((prev) => prev.filter((d) => d.id !== docId))
+  }, [updatePinnedDocs])
 
   const handleDocumentReplaced = useCallback((doc: DocumentRecord) => {
     setDocuments((prev) => prev.map((row) => (row.id === doc.id ? doc : row)))
@@ -1047,6 +1155,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       role: m.role,
       content: m.content,
     }))
+    // Files attached in the composer and documents pinned from the sidebar,
+    // each id once.
+    const requestDocumentIds = Array.from(new Set([
+      ...pendingAttachedDocIdsRef.current,
+      ...pinnedDocsRef.current.map((d) => d.id),
+    ]))
 
     // Append user message + empty streaming assistant bubble.
     // Drop any stale error bubbles from a prior turn so they don't linger.
@@ -1135,9 +1249,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           // / agent-picker: omit (or "auto") = today's automatic routing.
           agent: pinnedAgent ?? undefined,
           // S4: real ids for files attached this turn (marker is the fallback).
-          document_ids: pendingAttachedDocIdsRef.current.length
-            ? [...pendingAttachedDocIdsRef.current]
-            : undefined,
+          document_ids: requestDocumentIds.length ? requestDocumentIds : undefined,
         }),
         signal: controller.signal,
       }),
@@ -1157,7 +1269,9 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         prev.map((m) => (m.id === assistantMsgId ? { ...m, toolStatus: undefined } : m))
       )
       // Sent (ok or not) — the server-side marker parser covers any retry.
+      // A pin is for one question: it is cleared with the send.
       pendingAttachedDocIdsRef.current = []
+      updatePinnedDocs(() => [])
 
       if (!res.ok || !res.body) {
         let errMsg = `HTTP ${res.status}`
@@ -1396,7 +1510,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       // sidebar CHAT HISTORY list so the new session appears named.
       refreshConversations()
     }
-  }, [id, conversationId, streaming, refreshConversations, pinnedAgent])
+  }, [id, conversationId, streaming, refreshConversations, pinnedAgent, updatePinnedDocs])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1599,6 +1713,8 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               onDocumentAdded={handleDocumentAdded}
               onDocumentRemoved={handleDocumentRemoved}
               onDocumentReplaced={handleDocumentReplaced}
+              onAsk={handleAskAboutDocument}
+              pinnedIds={pinnedDocs.map((d) => d.id)}
             />
           }
         />
@@ -1607,7 +1723,8 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         <div className="workspace-main">
           <ChatList
             messages={messages}
-            documentCount={documents.length}
+            heldDocumentCount={docTotals.held}
+            searchableDocumentCount={docTotals.searchable}
             onSuggestion={(text) => void handleSend(text)}
             suggestionsDisabled={streaming || composerIsBlocked}
             onDownloadMessage={(assistantIndex, format) => {
@@ -1693,10 +1810,14 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
             agents={agents}
             pinnedAgent={pinnedAgent}
             onPinAgent={setPinnedAgent}
-            onAttached={(_name, docId) => {
+            pinnedDocuments={pinnedDocs}
+            onUnpinDocument={handleUnpinDocument}
+            onAttached={(_name, docId, stored) => {
               // S4: keep the real document_id so the next send carries it as
               // document_ids — the [attached: name] marker alone is lossy.
               if (docId) pendingAttachedDocIdsRef.current.push(docId)
+              // The stored file shows in the documents list at once.
+              if (isDocumentRecord(stored)) handleDocumentAdded(stored)
             }}
           />
         </div>

@@ -358,13 +358,50 @@ def panel_status_for(doc: Dict[str, Any]) -> Optional[Dict[str, str]]:
     }
 
 
+#: Panel statuses that mean reading the document failed.
+_FAILED_PANEL_STATUSES = frozenset({
+    byte_store.BYTES_MISSING, EXTRACT_FAILED, ZERO_CHUNK, "error",
+})
+#: Panel statuses that mean the document has not been read yet.
+_WAITING_PANEL_STATUSES = frozenset({UNVERIFIED, "pending", "queued", "running"})
+_ASK_STILL_WORKS = "You can still ask about it."
+
+
+def document_state_for(
+    doc: Dict[str, Any], note: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """One plain line for a document card: searchable, stored but not
+    searchable (with the reason), waiting to be read, or failed (with the
+    reason). Chosen by the panel status family, never by the document.
+
+    ``note`` is the document's :func:`panel_status_for` result when the
+    caller already has it."""
+    note = note if note is not None else panel_status_for(doc)
+    if not note:
+        return {"state": "searchable", "line": "Searchable"}
+    status = str(note.get("status") or "")
+    detail = str(note.get("detail") or "").strip()
+    if status == PARTIAL_OCR:
+        return {"state": "searchable", "line": f"Searchable in part: {detail}"}
+    if status in _FAILED_PANEL_STATUSES:
+        return {"state": "failed", "line": f"Failed: {detail}"}
+    if status in _WAITING_PANEL_STATUSES:
+        return {"state": "reading", "line": "Waiting to be read"}
+    return {
+        "state": "stored",
+        "line": f"Stored, not searchable: {detail} {_ASK_STILL_WORKS}",
+    }
+
+
 def attach_panel_status(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """Set or clear ``panel_status`` from the document's current fields."""
+    """Set or clear ``panel_status`` from the document's current fields, and
+    set the card's plain ``document_state`` line from the same note."""
     note = panel_status_for(doc)
     if note:
         doc["panel_status"] = note
     else:
         doc.pop("panel_status", None)
+    doc["document_state"] = document_state_for(doc, note)
     return doc
 
 
@@ -2520,20 +2557,24 @@ def list_document_names(project_id: str) -> List[Dict[str, Any]]:
             if not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
 
 
-def count_documents(project_id: str) -> int:
+def count_documents(project_id: str, visible_only: bool = False) -> int:
     """Total document count for a project — a cheap indexed COUNT, so a
-    paginated listing can report the total without serializing every row."""
+    paginated listing can report the total without serializing every row.
+
+    ``visible_only`` leaves out the rows retrieval hides
+    (``retrieval_visible`` false: an owner-excluded file, a retired copy of
+    a re-ingested one), so the count is the documents the project holds."""
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
+    stmt = (
+        select(func.count())
+        .select_from(Document)
+        .where(Document.project_id == source_id)
+    )
+    if visible_only:
+        stmt = stmt.where(Document.retrieval_visible.is_(True))
     with SessionLocal() as session:
-        return int(
-            session.scalar(
-                select(func.count())
-                .select_from(Document)
-                .where(Document.project_id == source_id)
-            )
-            or 0
-        )
+        return int(session.scalar(stmt) or 0)
 
 
 def audit_document_sizes(project_id: Optional[str] = None) -> Dict[str, Any]:

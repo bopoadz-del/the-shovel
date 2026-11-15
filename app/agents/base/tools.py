@@ -289,10 +289,13 @@ async def handle_fetch_document(call: ToolCall) -> dict:
             "document_id": doc.get("id"),
             "filename": doc.get("original_name"),
             "doc_type": doc.get("doc_type"),
-            "content": content["text"],
+            # The read's flags come before the text: past the tool-result cap
+            # the message keeps only the head of this object, and how much of
+            # the document was read must survive the cut.
             "truncated": content["truncated"],
             "source": content["source"],
             "partial_read": content.get("partial_read"),
+            "content": content["text"],
         },
     }
 
