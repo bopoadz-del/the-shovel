@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.core import agent_memory as am
 from app.main import app
+from app.routers.projects import delete_project_conversation
 from tests._fixture_values import PW_06
 
 _RUN = uuid.uuid4().hex[:8]
@@ -51,6 +52,13 @@ def _session(pid: str, owner: str, turns: list[tuple[str, str]]) -> str:
     return cid
 
 
+def _endpoint(method: str, path: str):
+    for route in app.routes:
+        if getattr(route, "path", None) == path and method in getattr(route, "methods", ()):
+            return route.endpoint
+    return None
+
+
 def _listed(client, headers, pid: str) -> list[str]:
     res = client.get(f"/v1/projects/{pid}/conversations", headers=headers)
     assert res.status_code == 200, res.text
@@ -84,6 +92,10 @@ def test_owner_deletes_one_session_and_keeps_the_other(client, first, second):
     headers = _register(client, f"del-{first[:5]}")
     pid = _project(client, headers, f"Delete-{first[:5]}-{_RUN}")
     owner = _owner_id(client, headers)
+    # The sidebar's delete action is served by the project session route.
+    assert _endpoint(
+        "DELETE", "/v1/projects/{project_id}/conversations/{conversation_id}"
+    ) is delete_project_conversation
     gone = _session(pid, owner, [("user", first), ("assistant", "noted")])
     kept = _session(pid, owner, [("user", second), ("assistant", "noted")])
 
@@ -117,3 +129,25 @@ def test_delete_answers_404_outside_the_callers_own_project_session(client, labe
     assert res.status_code == 404, res.text
     assert am.get_conversation(cid) is not None
     assert [m["content"] for m in am.get_messages(cid, limit=None)] == [f"kept for {label}"]
+
+
+@pytest.mark.parametrize("text", ["sheet pile toe level", "blinding concrete grade"])
+def test_a_session_removed_by_a_concurrent_request_is_not_reported_deleted(
+    client, monkeypatch, text
+):
+    """Another request (a second tab) deletes the row after this request's
+    access check passed: this request answers 404, not "deleted"."""
+    headers = _register(client, f"race-{text[:5]}")
+    pid = _project(client, headers, f"Race-{text[:5]}-{_RUN}")
+    cid = _session(pid, _owner_id(client, headers), [("user", text)])
+
+    real_delete = am.delete_conversation
+
+    def _other_tab_won(conversation_id: str) -> bool:
+        real_delete(conversation_id)  # the other request's delete lands first
+        return real_delete(conversation_id)
+
+    monkeypatch.setattr(am, "delete_conversation", _other_tab_won)
+    res = client.delete(f"/v1/projects/{pid}/conversations/{cid}", headers=headers)
+    assert res.status_code == 404, res.text
+    assert am.get_conversation(cid) is None
