@@ -1,5 +1,14 @@
 # EGRESS LEDGER — The Fork
 
+> **Status 2026-11-15:** this ledger predates the current code. The Ollama
+> branch (E-L2) and the per-feature gates it calls for are **not** in this
+> repository. What exists is the profile switch and the boot check
+> (`app/core/deployment_profile.py`, see `docs/onprem-profile.md`): under
+> `DEPLOYMENT_PROFILE=onprem` it refuses to start on any model provider the
+> runtime would route outside the box (including `ollama`), on remote-service
+> credentials, on `*_URL` settings outside the box, and on a hub embedder
+> without the offline flags. Line numbers below are historical.
+
 STEP 1 of the on-prem sovereignty program (owner directive 2026-07-17). Read-only
 audit: **every** call the app makes to something outside the host, its call site,
 its trigger, and its on-prem disposition. This is the checklist STEP 2
