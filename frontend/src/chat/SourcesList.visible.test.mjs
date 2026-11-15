@@ -30,6 +30,24 @@ const { default: ChatBubble } = await server.ssrLoadModule('/src/chat/ChatBubble
 const { SOURCE_CLASS_LABELS } = await server.ssrLoadModule('/src/chat/sourceClassLabels.ts')
 const { activityForTool } = await server.ssrLoadModule('/src/chat/userFacingText.ts')
 
+// jsdom for the W3 click and tab tests below; every module is loaded here,
+// before the first test runs (a later top-level await lets the runner
+// finish and close the vite server first).
+const { JSDOM } = await import('jsdom')
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
+globalThis.window = dom.window
+globalThis.document = dom.window.document
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+for (const k of ['HTMLElement', 'Element', 'Node', 'Text', 'Event', 'MouseEvent', 'DocumentFragment',
+  'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage']) {
+  if (dom.window[k] !== undefined) globalThis[k] = dom.window[k]
+}
+globalThis.fetch = async () => new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } })
+const { createRoot } = await import('react-dom/client')
+const { act } = await import('react')
+const { default: RightPanel } = await server.ssrLoadModule('/src/layout/RightPanel.tsx')
+const { readCoverage } = await server.ssrLoadModule('/src/chat/citationMarkers.ts')
+
 function visibleText(html) {
   return html
     .replace(/<[^>]+>/g, ' ')
@@ -224,3 +242,92 @@ for (const [i, c] of W3_CASES.entries()) {
     assert.ok(visibleText(html).includes(`[${stray}]`))
   })
 }
+
+// ── W3, driven: a click on a marker, and the tab the side panel shows ───────
+// Mounted in jsdom and clicked, not only rendered: marker 1 then marker 2
+// reach the workspace's handler with their own numbers; the side panel
+// shows Sources or the preview by whichever request is NEWER; and the
+// coverage reader refuses malformed input.
+
+
+async function mountLive(element) {
+  const container = dom.window.document.createElement('div')
+  dom.window.document.body.appendChild(container)
+  const root = createRoot(container)
+  await act(async () => { root.render(element) })
+  return {
+    container,
+    async rerender(next) { await act(async () => { root.render(next) }) },
+    async click(el) {
+      await act(async () => { el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+    },
+    activeTab: () => container.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(),
+    tab: (label) => [...container.querySelectorAll('[role="tab"]')].find((t) => t.textContent.trim() === label),
+    unmount() { act(() => root.unmount()); container.remove() },
+  }
+}
+
+for (const [i, c] of W3_CASES.entries()) {
+  test(`W3 case ${i}: clicking marker 1 then marker 2 hands each number to the handler`, async () => {
+    const got = []
+    const view = await mountLive(React.createElement(ChatBubble, {
+      message: { id: `m${i}`, role: 'assistant', content: c.content, citations: c.citations, coverage: c.coverage },
+      onCitation: (n) => got.push(n),
+    }))
+    const markerButton = (n) => view.container.querySelector(`button[data-citation-marker="${n}"]`)
+    for (const cite of c.citations) {
+      assert.ok(markerButton(cite.marker), `marker ${cite.marker} rendered as a control`)
+      await view.click(markerButton(cite.marker))
+    }
+    assert.deepEqual(got, c.citations.map((cite) => cite.marker))
+    view.unmount()
+  })
+}
+
+const DOC = { id: 'doc-a', name: 'Alpha Structural Notes.xlsx', type: 'xlsx', size: 10 }
+const sidePanel = (sourcesRequest, previewRequest) => React.createElement(RightPanel, {
+  sources: React.createElement('p', null, 'sources-body'),
+  graph: React.createElement('p', null, 'graph-body'),
+  projectId: 'p1', documents: [DOC], citedDocuments: [DOC],
+  sourcesRequest, previewRequest,
+})
+
+test('W3: the newer of a marker request and a preview request picks the side panel tab', async () => {
+  // preview first (lower nonce), marker second (higher): Sources
+  let view = await mountLive(sidePanel({ marker: 1, nonce: 20 }, { docId: DOC.id, nonce: 10 }))
+  assert.equal(view.activeTab(), 'Sources')
+  // a newer preview then wins over that marker
+  await view.rerender(sidePanel({ marker: 1, nonce: 20 }, { docId: DOC.id, nonce: 30 }))
+  assert.equal(view.activeTab(), 'Sheet')
+  view.unmount()
+
+  // marker first (lower nonce), preview second (higher): the preview's tab
+  view = await mountLive(sidePanel({ marker: 2, nonce: 10 }, { docId: DOC.id, nonce: 20 }))
+  assert.equal(view.activeTab(), 'Sheet')
+  view.unmount()
+})
+
+test('W3: a marker opens Sources from another tab, and again after the user moved away', async () => {
+  const view = await mountLive(sidePanel(null, null))
+  await view.click(view.tab('Doc'))
+  assert.equal(view.activeTab(), 'Doc')
+  await view.rerender(sidePanel({ marker: 1, nonce: 1 }, null))
+  assert.equal(view.activeTab(), 'Sources', 'a marker click switches to Sources')
+  await view.click(view.tab('Doc'))
+  assert.equal(view.activeTab(), 'Doc', 'the user can leave Sources')
+  await view.rerender(sidePanel({ marker: 1, nonce: 2 }, null))
+  assert.equal(view.activeTab(), 'Sources', 'the same marker clicked again reopens Sources')
+  view.unmount()
+})
+
+test('W3: the coverage reader keeps a well-formed value and refuses malformed ones', () => {
+  assert.deepEqual(readCoverage({ indexed: 3, total: 9 }), { indexed: 3, total: 9 })
+  for (const bad of [
+    { indexed: '3', total: 9 },
+    { indexed: 3, total: 0 },
+    { indexed: Number.NaN, total: 4 },
+    { total: 4 },
+    'indexed 3 of 9',
+    null,
+  ]) assert.equal(readCoverage(bad), undefined, `accepted ${JSON.stringify(bad)}`)
+})
