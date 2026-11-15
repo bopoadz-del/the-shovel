@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
 _LOG = logging.getLogger(__name__)
