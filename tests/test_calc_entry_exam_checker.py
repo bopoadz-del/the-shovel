@@ -206,50 +206,61 @@ def _expected_constants(fn, call):
     return ck.named_constants(fn, lines)
 
 
-def test_constants_found_on_the_lines_the_run_executed():
-    took_main = _expected_constants(_two_branch, {"a": 2.0, "b": 3.0})
-    took_side = _expected_constants(_two_branch, {"a": 2.0, "b": 3.0, "mode": 1})
-    assert took_main == {"lap": 1.15, "_RATE": 2.75}
-    assert took_side == {"hidden": 3.3}
+@pytest.mark.parametrize("call,expected", [
+    ({"a": 2.0, "b": 3.0}, {"lap": 1.15, "_RATE": 2.75}),
+    ({"a": 2.0, "b": 3.0, "mode": 1}, {"hidden": 3.3}),
+], ids=["main_branch", "side_branch"])
+def test_constants_found_on_the_lines_the_run_executed(call, expected):
+    assert _expected_constants(_two_branch, call) == expected
 
 
-def test_identities_scales_exponents_accumulators_and_inputs_are_not_constants():
-    assert _expected_constants(_plain, {"x": 4.0, "y": 5.0}) == {}
-    assert _expected_constants(_plain, {"x": 0.5, "y": 9.0}) == {}
-    assert "total" not in ck.named_constants(_two_branch)  # accumulator, whole body
-    assert "literal 2" not in ck.named_constants(_two_branch)  # exponent
+def _stair(rise_mm, going_mm):
+    return 2 * rise_mm + going_mm - 630
 
 
-def test_inline_literal_operand_is_a_constant():
-    def stair(rise_mm, going_mm):
-        return 2 * rise_mm + going_mm - 630
-
-    def ramp(rise_m):
-        return rise_m * 12.5
-
-    assert _expected_constants(stair, {"rise_mm": 170.0, "going_mm": 280.0}) == {"literal 2": 2.0, "literal 630": 630.0}
-    assert _expected_constants(ramp, {"rise_m": 0.4}) == {"literal 12.5": 12.5}
+def _ramp(rise_m):
+    return rise_m * 12.5
 
 
-def test_stated_passes_by_row_name_row_value_or_written_basis():
-    consts = {"lap": 1.15, "_RATE": 2.75}
-    by_rows = {"status": "success", "result": {"v": 1, "assumptions": [
-        {"name": "lap", "value": 9}, {"parameter": "x", "value": 2.75}]}}
-    by_text = {"status": "success", "result": {"v": 1, "formula": "v = a x 1.15 + b x 2.75"}}
-    by_note = {"status": "success", "note": "uses lap and rate", "result": {"v": 1}}
-    assert ck.check_stated(by_rows, consts)[0]
-    assert ck.check_stated(by_text, consts)[0]
-    assert ck.check_stated(by_note, consts)[0]
+@pytest.mark.parametrize("fn,call,expected", [
+    (_plain, {"x": 4.0, "y": 5.0}, {}),
+    (_plain, {"x": 0.5, "y": 9.0}, {}),
+    (_stair, {"rise_mm": 170.0, "going_mm": 280.0}, {"literal 2": 2.0, "literal 630": 630.0}),
+    (_ramp, {"rise_m": 0.4}, {"literal 12.5": 12.5}),
+], ids=["plain_a", "plain_b", "stair", "ramp"])
+def test_structure_is_not_a_constant_and_an_inline_operand_is(fn, call, expected):
+    # identities, decimal scales, exponents, accumulators and inputs are
+    # structure; an inline operand literal is a constant
+    assert _expected_constants(fn, call) == expected
 
 
-def test_stated_fails_when_any_constant_is_unstated():
-    consts = {"lap": 1.15, "literal 630": 630.0}
-    half = {"status": "success", "result": {"v": 1, "formula": "v = a x 1.15"}}
-    near = {"status": "success", "result": {"v": 1, "formula": "v = a x 1.155 + 6300"}}
-    assert ck.check_stated(half, consts) == (False, "constant used unstated: literal 630")
-    assert not ck.check_stated(near, consts)[0]
-    assert not ck.check_stated({"status": "success", "result": {"v": 1}}, {"_RATE": 2.75})[0]
+@pytest.mark.parametrize("excluded", ["total", "literal 2", "a", "mode"])
+def test_whole_body_probe_excludes_accumulators_exponents_and_inputs(excluded):
+    assert excluded not in ck.named_constants(_two_branch)
 
+
+_CONSTS = {"lap": 1.15, "_RATE": 2.75}
+
+
+@pytest.mark.parametrize("env", [
+    {"status": "success", "result": {"v": 1, "assumptions": [
+        {"name": "lap", "value": 9}, {"parameter": "x", "value": 2.75}]}},
+    {"status": "success", "result": {"v": 1, "formula": "v = a x 1.15 + b x 2.75"}},
+    {"status": "success", "note": "uses lap and rate", "result": {"v": 1}},
+], ids=["rows", "written_basis", "note"])
+def test_stated_passes_by_row_name_row_value_or_written_basis(env):
+    assert ck.check_stated(env, _CONSTS)[0]
+
+
+@pytest.mark.parametrize("env,consts,why", [
+    ({"status": "success", "result": {"v": 1, "formula": "v = a x 1.15"}},
+     {"lap": 1.15, "literal 630": 630.0}, "constant used unstated: literal 630"),
+    ({"status": "success", "result": {"v": 1, "formula": "v = a x 1.155 + 6300"}},
+     {"lap": 1.15, "literal 630": 630.0}, "constant used unstated: lap=1.15, literal 630"),
+    ({"status": "success", "result": {"v": 1}}, {"_RATE": 2.75}, "constant used unstated: _RATE=2.75"),
+], ids=["half", "near_miss", "nothing"])
+def test_stated_fails_when_any_constant_is_unstated(env, consts, why):
+    assert ck.check_stated(env, consts) == (False, why)
 
 def test_sweep_fails_c_when_the_door_never_runs_the_body():
     # The door answers through another function than the registered one: the
