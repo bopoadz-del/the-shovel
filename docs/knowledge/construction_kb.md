@@ -1,6 +1,6 @@
 # Construction Knowledge Base
 
-_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 58 entries._
+_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 62 entries._
 
 
 **General construction-engineering priors** — NOT code-of-practice design values. Every entry is kept GENERAL (not tied to a location or project). Values are site-experience references; **verify against your project specification and applicable standards** before use. Entries at credibility tier <=3 surface this warning automatically via the loader.
@@ -50,7 +50,7 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `procurement.interim_payment_flow` | workflow | Governs the progress / interim payment cycle from a registered contractor payment request  | 4 |  |
 | `procurement.tender_lifecycle` | workflow | Job Requisition -> Sole Source justification (optional) -> Request for Authority to Tender | 4 |  |
 
-## construction.roads  (32 entries)
+## construction.roads  (36 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
@@ -72,12 +72,16 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `earthworks.method_correction_lesson` | decision_pattern | Context-aware equipment selection by material. Holland loaders suit DUNE SAND ONLY -- thei | 3 |  |
 | `earthworks.moisture_content` | formula | Moisture content w (%) = (A - B) / (B - C) x 100, where A = container + wet soil, B = cont | 3 |  |
 | `earthworks.production_rates` | reference_design | Indicative production rates and specifications. Dozers: D8K 130-200 m3/hr, D9H 160-230 m3/ | 3 |  |
+| `earthworks.sand_bulk_density` | formula | Sand bulk density = mass of sand filling the calibration container / container volume (the | 3 |  |
 | `earthworks.sand_cone_hole_volume` | formula | Hole volume V = (mass of sand before test - mass of sand after test - mass of sand held in | 3 |  |
 | `earthworks.swelling_factor` | formula | Swelling factor = (Proctor density A x Compaction factor C) / Loose density B. Reference t | 3 |  |
 | `earthworks.wet_density` | formula | Wet density = (mass of container + soil - mass of container) / volume. In the compaction ( | 3 |  |
 | `equipment.crane_rating_check` | reference_design | Always check the required lifted capacity per crane against the crane's rated-load (capaci | 3 |  |
 | `equipment.cycle_production` | formula | Production per machine per hour = (60 / cycle time in minutes) x capacity per cycle; 60 /  | 3 |  |
 | `equipment.machines_required` | formula | Machines required = required hourly rate / production per machine per hour, rounded UP (a  | 3 |  |
+| `equipment.required_daily_rate` | formula | Required daily output = total quantity / working days. Split by shift with equipment.shift | 3 |  |
+| `equipment.required_hourly_rate` | formula | Required hourly output = total quantity / (working days x working hours per day). Equal to | 3 |  |
+| `equipment.shift_quantity` | formula | Shift quantity = daily output x shift hours / working hours per day (the course splits a 2 | 3 |  |
 | `equipment.truck_cycle_time` | formula | Truck cycle time (min) = fixed time + 60 x haul distance / loaded speed + 60 x return dist | 3 |  |
 | `ground_improvement.dynamic_compaction` | formula | Depth of ground improvement from dynamic (drop-weight) compaction: D = 0.5 * sqrt(M * H),  | 4 |  |
 | `ground_improvement.dynamic_compaction_vibration_radius` | formula | R = 130 x sqrt(M x H), with M the falling mass in tonnes and H the drop height in metres;  | 3 |  |

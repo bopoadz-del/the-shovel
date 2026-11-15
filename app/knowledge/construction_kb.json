@@ -2480,6 +2480,170 @@
       },
       "credibility_tier": 3,
       "needs_review": false
+    },
+    {
+      "id": "equipment.required_daily_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Required daily output from quantity and working days",
+      "statement": "Required daily output = total quantity / working days. Split by shift with equipment.shift_quantity; hourly target with equipment.required_hourly_rate. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "total_quantity / working_days",
+      "variables": {
+        "total_quantity": {
+          "unit": "meter**3",
+          "desc": "Total quantity to move or place"
+        },
+        "working_days": {
+          "unit": "day",
+          "desc": "Working days available"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/day"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.shift_quantity",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Share of the daily output for one shift",
+      "statement": "Shift quantity = daily output x shift hours / working hours per day (the course splits a 20 h day as 11 h day shift and 9 h night shift). The hourly rate is then the same on every shift: shift quantity / shift hours = daily output / working hours per day. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "daily_quantity * shift_hours / hours_per_day",
+      "variables": {
+        "daily_quantity": {
+          "unit": "meter**3/day",
+          "desc": "Required daily output"
+        },
+        "shift_hours": {
+          "unit": "hour",
+          "desc": "Working hours of this shift"
+        },
+        "hours_per_day": {
+          "unit": "hour",
+          "desc": "Working hours per day, all shifts"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.required_hourly_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Required hourly output from quantity, days and hours per day",
+      "statement": "Required hourly output = total quantity / (working days x working hours per day). Equal to each shift's quantity divided by its hours (see equipment.shift_quantity). Feeds equipment.machines_required. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "total_quantity / (working_days * hours_per_day)",
+      "variables": {
+        "total_quantity": {
+          "unit": "meter**3",
+          "desc": "Total quantity to move or place"
+        },
+        "working_days": {
+          "unit": "day",
+          "desc": "Working days available"
+        },
+        "hours_per_day": {
+          "unit": "hour",
+          "desc": "Working hours per day, all shifts"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.sand_bulk_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Calibrated bulk density of the sand-cone sand",
+      "statement": "Sand bulk density = mass of sand filling the calibration container / container volume (the calibration step of the sand-cone field density test; the course's lb-unit form is W1 = 62.427 W2 / V1, with V1 from the water calibration). The result feeds earthworks.sand_cone_hole_volume. Masses in g and volume in cm3 give g/cm3 (= t/m3). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "sand_mass / container_volume",
+      "variables": {
+        "sand_mass": {
+          "unit": "gram",
+          "desc": "Mass of sand filling the calibration container"
+        },
+        "container_volume": {
+          "unit": "centimeter**3",
+          "desc": "Calibrated volume of the container"
+        }
+      },
+      "thresholds": {
+        "unit": "gram/centimeter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
     }
   ]
 }
