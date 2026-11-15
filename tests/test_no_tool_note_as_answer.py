@@ -169,23 +169,53 @@ def test_final_text_after_a_tool_result_is_the_answer(answer, make_result):
         assert note not in shown, (note, shown)
 
 
-def test_recovery_still_reads_a_calculator_note():
+@pytest.mark.parametrize(
+    "name,calc,expected",
+    [
+        pytest.param(
+            "construction_calc",
+            {"calculation": "duration", "result": {"note": "Duration is 12 days."}},
+            "Duration is 12 days.",
+            id="calculator-by-tool-name",
+        ),
+        pytest.param(
+            "construction",
+            {"result": {"calculation": "excavation_volume",
+                        "summary": "Excavation volume is 84 m3."}},
+            "Excavation volume is 84 m3.",
+            id="calculator-by-named-calculation",
+        ),
+        pytest.param(
+            "construction",
+            {"calculation": "concrete_volume",
+             "result": {"message": "Concrete volume is 945 m3."}},
+            "Concrete volume is 945 m3.",
+            id="calculator-by-envelope-calculation",
+        ),
+    ],
+)
+def test_recovery_still_reads_a_calculator_note(name, calc, expected):
     """The guard is on the tool's kind, not on the note field: a calculator's
     own note is still recovered when the model returns nothing."""
-    calc = {"calculation": "duration", "result": {"note": "Duration is 12 days."}}
-    msgs = [{"role": "tool", "name": "construction_calc", "content": json.dumps(calc)}]
-    assert _recover_answer_from_tool_messages("", msgs) == "Duration is 12 days."
+    msgs = [{"role": "tool", "name": name, "content": json.dumps(calc)}]
+    assert _recover_answer_from_tool_messages("", msgs) == expected
 
 
-def test_recovery_ignores_a_search_note_and_a_window_envelope():
-    search = _withheld_search_result()
+def _withheld_message() -> str:
+    return json.dumps(_withheld_search_result())
+
+
+def _window_message() -> str:
     window = _tool_result_content(_oversized_search_result())
     assert json.loads(window).get("truncated")
-    msgs = [
-        {"role": "tool", "name": "search_project_documents", "content": json.dumps(search)},
-        {"role": "tool", "name": "search_project_documents", "content": window},
-    ]
-    assert _recover_answer_from_tool_messages("", msgs) == ""
-    assert _recover_answer_from_tool_messages(
-        _EMPTY_RESPONSE_FALLBACK, msgs,
-    ) == _EMPTY_RESPONSE_FALLBACK
+    return window
+
+
+@pytest.mark.parametrize("make_content", [
+    pytest.param(_withheld_message, id="rows-withheld-note"),
+    pytest.param(_window_message, id="window-envelope"),
+])
+@pytest.mark.parametrize("text", ["", _EMPTY_RESPONSE_FALLBACK])
+def test_recovery_ignores_a_search_note_and_a_window_envelope(make_content, text):
+    msgs = [{"role": "tool", "name": "search_project_documents", "content": make_content()}]
+    assert _recover_answer_from_tool_messages(text, msgs) == text
