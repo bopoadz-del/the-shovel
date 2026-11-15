@@ -14,9 +14,24 @@ so the selectors travel as distinct environment names:
   OCRing again.
 * ``BILL_PLAN_WORK_DIR`` (optional; default ``$DATA_DIR/bill_plan/<id>``).
 
-This calls :func:`app.core.bill_derived.plan_bill_sheet` only. It adds no
-document row, indexes nothing and writes no database row; the only bytes it
-keeps are the per-page word boxes under the work directory.
+Without ``BILL_PLAN_EXECUTE_HASH`` this calls
+:func:`app.core.bill_derived.plan_bill_sheet` only. It adds no document row,
+indexes nothing and writes no database row; the only bytes it keeps are the
+per-page word boxes under the work directory.
+
+EXECUTE (``BILL_PLAN_EXECUTE_HASH``, a 64-hex plan hash): the run rebuilds
+the whole-document plan from the saved word boxes, refuses unless the rebuilt
+plan's hash equals the given hash AND every run condition (:class:`Gates`)
+holds on that rebuilt plan, and only then calls the existing
+:func:`app.core.bill_derived.derive_bill_sheet` with that hash (which checks
+the hash again). The conditions are parameters with defaults, never tied to
+one document: a priced verdict; every page read back from the work dir (no
+OCR, no fresh text-layer read); at most a stated share of priced rows not
+reconciling and of priced rows with an empty description; no header
+conflict and no priced row without a section path; and an optional floor of
+priced, reconciled rows given for the run (``BILL_EXECUTE_MIN_RECONCILED``).
+It reports counts only: rows written, chunks added, chunks longer than the
+embedder window, the derived document's status and the superseded id.
 
 The last line is ``BILLPLANSUMMARY <json>``. That line reaches a GitHub job
 summary, which is world-readable, so it carries counts, codes and hashes
@@ -95,6 +110,8 @@ SUMMARY_KEYS = (
     "requested_pages", "pages_cached_before", "pages_cached_after", "wall_s",
     "peak_rss_mb", "verdict", *PLAN_FIELDS, *SOURCE_FIELDS, "section_paths", "rows_by_path_depth",
     "private_plan_saved", "work_dir_durable", "geometry",
+    "mode", "execute_hash", "gates", "refused", "derived_document_id", "superseded",
+    "rows_written", "chunks_added", "chunks_over_window", "document_status", "index_status",
 )
 #: Error codes (the summary never carries a message).
 ERR_MISSING_IDS = "missing_ids"
@@ -104,6 +121,113 @@ ERR_WRONG_PROJECT = "document_not_in_project"
 ERR_RAISED = "plan_raised"
 ERR_NO_PLAN = "no_plan"
 ERR_NOT_SAVED = "plan_not_saved"
+ERR_BAD_EXECUTE = "bad_execute_params"
+ERR_REFUSED = "execute_refused"
+ERR_NOT_DERIVED = "not_derived"
+
+MODE_EXECUTE = "execute"
+#: An execute hash is exactly a lowercase sha256 hex digest.
+_HASH_RE = re.compile(r"[0-9a-f]{64}")
+
+#: Refusal codes of an execute (each names the condition that failed).
+REFUSE_NO_PLAN = "no_plan"
+REFUSE_HASH = "plan_hash_mismatch"
+REFUSE_NOT_WHOLE = "plan_not_whole_document"
+REFUSE_NOT_PRICED = "verdict_not_priced"
+REFUSE_NOT_CACHED = "pages_not_all_from_cache"
+REFUSE_COUNTS_MISSING = "plan_counts_missing"
+REFUSE_FEW_RECONCILED = "reconciled_rows_below_floor"
+REFUSE_UNRECONCILED = "unreconciled_share_over_ceiling"
+REFUSE_NO_DESCRIPTION = "empty_description_share_over_ceiling"
+REFUSE_CONFLICTS = "header_conflicts_over_ceiling"
+REFUSE_NO_PATH = "priced_rows_without_path_over_ceiling"
+#: The plan's column counts every condition reads.
+_GATE_COUNTS = ("rows_priced_reconciled", "rows_figures_not_reconciling",
+                "priced_rows_empty_description", "priced_rows_empty_path", "header_conflicts")
+
+
+@dataclass(frozen=True)
+class Gates:
+    """The conditions an execute enforces on the rebuilt plan.
+
+    Shares are of the plan's priced rows (reconciling or not). The floor of
+    priced, reconciled rows is given per run; 0 means no floor."""
+
+    min_reconciled_rows: int = 0
+    max_unreconciled_share: float = 0.005
+    max_empty_description_share: float = 0.02
+    max_header_conflicts: int = 0
+    max_priced_rows_without_path: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+def gate_refusals(plan: Mapping[str, Any], execute_hash: str, gates: Gates) -> list[str]:
+    """Every condition the rebuilt ``plan`` fails, as refusal codes (empty =
+    the write may go ahead)."""
+    from app.core import bill_classify
+
+    if plan.get("sections") is None or "plan_hash" not in plan:
+        return [REFUSE_NO_PLAN]
+    out: list[str] = []
+    if plan["plan_hash"] != execute_hash:
+        out.append(REFUSE_HASH)
+    pages_in_file = plan.get("pages_in_file")
+    if list(plan.get("pages") or []) != [0, pages_in_file]:
+        out.append(REFUSE_NOT_WHOLE)
+    if plan.get("reason") != bill_classify.BILL_PRICED:
+        out.append(REFUSE_NOT_PRICED)
+    if (plan.get("pages_read_cache") != pages_in_file
+            or plan.get("pages_read_ocr") != 0
+            or plan.get("pages_read_text_layer") != 0):
+        out.append(REFUSE_NOT_CACHED)
+    cols = plan.get("columns") or {}
+    if any(not isinstance(cols.get(k), int) for k in _GATE_COUNTS):
+        return [*out, REFUSE_COUNTS_MISSING]
+    reconciled = cols["rows_priced_reconciled"]
+    unreconciled = cols["rows_figures_not_reconciling"]
+    priced = reconciled + unreconciled
+    if reconciled < gates.min_reconciled_rows:
+        out.append(REFUSE_FEW_RECONCILED)
+    if unreconciled > gates.max_unreconciled_share * priced:
+        out.append(REFUSE_UNRECONCILED)
+    if cols["priced_rows_empty_description"] > gates.max_empty_description_share * priced:
+        out.append(REFUSE_NO_DESCRIPTION)
+    if cols["header_conflicts"] > gates.max_header_conflicts:
+        out.append(REFUSE_CONFLICTS)
+    if cols["priced_rows_empty_path"] > gates.max_priced_rows_without_path:
+        out.append(REFUSE_NO_PATH)
+    return out
+
+
+def _env_number(env: Mapping[str, str], name: str, default, kind):
+    value = (env.get(name) or "").strip()
+    if not value:
+        return default
+    out = kind(value)  # ValueError on a non-number
+    if out < 0 or (kind is float and out > 1):
+        raise ValueError(f"{name} out of range")
+    return out
+
+
+def parse_execute(env: Mapping[str, str]) -> tuple[str, Gates] | None:
+    """``(hash, gates)`` when ``BILL_PLAN_EXECUTE_HASH`` is set, else None.
+    Raises ValueError on a malformed hash or parameter."""
+    raw = (env.get("BILL_PLAN_EXECUTE_HASH") or "").strip()
+    if not raw:
+        return None
+    if not _HASH_RE.fullmatch(raw):
+        raise ValueError("execute hash must be 64 lowercase hex")
+    d = Gates()
+    return raw, Gates(
+        min_reconciled_rows=_env_number(
+            env, "BILL_EXECUTE_MIN_RECONCILED", d.min_reconciled_rows, int),
+        max_unreconciled_share=_env_number(
+            env, "BILL_EXECUTE_MAX_UNRECONCILED_SHARE", d.max_unreconciled_share, float),
+        max_empty_description_share=_env_number(
+            env, "BILL_EXECUTE_MAX_EMPTY_DESCRIPTION_SHARE", d.max_empty_description_share, float),
+    )
 
 
 @dataclass
@@ -124,6 +248,11 @@ class Deps:
     #: Counts-only geometry diagnostic over the saved word boxes of a page
     #: range ``(work_dir, first, stop)``; None = not run.
     geometry: Callable[[str, int, int], dict[str, Any]] | None = None
+    #: EXECUTE only: ``bill_derived.derive_bill_sheet``.
+    derive: Callable[..., dict[str, Any]] | None = None
+    #: EXECUTE only: the length summary of one document's stored chunks
+    #: ``(project_id, document_id)`` (``chunk_bounds.bounds_summary``).
+    chunk_bounds: Callable[[str, str], dict[str, Any]] | None = None
 
 
 def parse_pages(raw: str | None) -> tuple[int, int] | None:
@@ -282,6 +411,98 @@ def plan_one(
     return report
 
 
+def _failed(report: dict[str, Any], work_dir: str, exc: Exception) -> dict[str, Any]:
+    # The message may quote the document; it stays in the private work dir.
+    _write_private(work_dir, "last_error.json",
+                   {"error_class": type(exc).__name__, "message": str(exc)})
+    report.update(error=ERR_RAISED, error_class=type(exc).__name__)
+    return report
+
+
+def execute_one(
+    project_id: str,
+    document_id: str,
+    *,
+    execute_hash: str,
+    gates: Gates,
+    work_dir: str,
+    deps: Deps,
+) -> dict[str, Any]:
+    """Rebuild the whole-document plan, and derive the bill sheet only when its
+    hash is ``execute_hash`` and every condition in ``gates`` holds."""
+    report: dict[str, Any] = {
+        "mode": MODE_EXECUTE,
+        "project_id": project_id,
+        "document_id": document_id,
+        "build_sha": deps.build_sha(),
+        "execute_hash": execute_hash,
+        "gates": gates.as_dict(),
+        "ok": False,
+    }
+    doc = deps.get_document(document_id)
+    if doc is None:
+        report["error"] = ERR_NOT_FOUND
+        return report
+    if doc.get("project_id") != project_id:
+        report["error"] = ERR_WRONG_PROJECT
+        return report
+    if deps.derive is None:
+        report["error"] = ERR_BAD_EXECUTE
+        return report
+    report["pages_cached_before"] = cached_pages(work_dir)
+    classify, verdict = verdict_counts(deps.classify) if deps.classify else (None, {})
+    started = deps.clock()
+    try:
+        plan = deps.plan(project_id, document_id, pages=None, classify=classify,
+                         work_dir=work_dir)
+    except Exception as exc:  # noqa: BLE001 - reported as its class
+        return _failed(report, work_dir, exc)
+    report["verdict"] = verdict
+    for name in (*PLAN_FIELDS, *SOURCE_FIELDS):
+        if name in plan:
+            report[name] = plan[name]
+    refused = gate_refusals(plan, execute_hash, gates)
+    report["refused"] = refused
+    if refused:
+        report["error"] = ERR_REFUSED
+        report["wall_s"] = round(deps.clock() - started, 1)
+        return report
+    try:
+        result = deps.derive(project_id, document_id, plan_hash=execute_hash,
+                             classify=classify, work_dir=work_dir)
+    except Exception as exc:  # noqa: BLE001 - reported as its class
+        return _failed(report, work_dir, exc)
+    report["wall_s"] = round(deps.clock() - started, 1)
+    report["peak_rss_mb"] = deps.peak_rss_mb()
+    if not result.get("derived"):
+        report["error"] = ERR_NOT_DERIVED
+        report["refused"] = [str(result.get("reason") or "")]
+        return report
+    new_id = str(result.get("document_id") or "")
+    report["derived_document_id"] = new_id
+    report["superseded"] = result.get("superseded")
+    report["rows_written"] = result.get("rows")
+    report["chunks_added"] = result.get("chunks")
+    report["index_status"] = result.get("index_status")
+    report["document_status"] = (deps.get_document(new_id) or {}).get("status")
+    if deps.chunk_bounds is not None:
+        try:
+            report["chunks_over_window"] = deps.chunk_bounds(project_id, new_id).get("over_ceiling")
+        except Exception as exc:  # noqa: BLE001 - a count never undoes the write
+            report["chunks_over_window"] = None
+            report["error_class"] = type(exc).__name__
+    report["ok"] = True
+    return report
+
+
+def _document_chunk_bounds(project_id: str, document_id: str) -> dict[str, Any]:
+    from app.core.chunk_bounds_plan import document_chunk_bounds
+    from app.core.db import SessionLocal
+
+    with SessionLocal() as session:
+        return document_chunk_bounds(session, project_id, document_id)
+
+
 def saved_geometry(work_dir: str, first: int, stop: int) -> dict[str, Any]:
     """The geometry diagnostic over the word boxes saved for ``first:stop``.
     Reads the work dir only; a page with no saved boxes is counted, not read."""
@@ -322,6 +543,8 @@ def production_deps() -> Deps:
         peak_rss_mb=_peak_rss_mb,
         durable=byte_store.is_durable_mount,
         geometry=saved_geometry,
+        derive=bill_derived.derive_bill_sheet,
+        chunk_bounds=_document_chunk_bounds,
     )
 
 
@@ -345,10 +568,23 @@ def main_from_env(
     except ValueError:
         log(SUMMARY_PREFIX + json.dumps({"ok": False, "error": ERR_BAD_PAGES}))
         return 2
+    try:
+        execute = parse_execute(env)
+    except ValueError:
+        log(SUMMARY_PREFIX + json.dumps({"ok": False, "error": ERR_BAD_EXECUTE}))
+        return 2
+    if execute is not None and pages is not None:  # a write is whole-document only
+        log(SUMMARY_PREFIX + json.dumps({"ok": False, "error": ERR_BAD_EXECUTE}))
+        return 2
     work_dir = (env.get("BILL_PLAN_WORK_DIR") or "").strip() or default_work_dir(
         document_id, env.get("DATA_DIR"))
     deps = deps or production_deps()
-    report = plan_one(project_id, document_id, pages=pages, work_dir=work_dir, deps=deps)
+    if execute is not None:
+        execute_hash, gates = execute
+        report = execute_one(project_id, document_id, execute_hash=execute_hash,
+                             gates=gates, work_dir=work_dir, deps=deps)
+    else:
+        report = plan_one(project_id, document_id, pages=pages, work_dir=work_dir, deps=deps)
     deps.log(SUMMARY_PREFIX + json.dumps(public_summary(report), sort_keys=True))
     return 0 if report["ok"] else 1
 

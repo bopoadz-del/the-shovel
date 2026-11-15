@@ -69,6 +69,26 @@ def plan_chunk_bounds(session, project_id: str) -> dict[str, Any]:
     }
 
 
+def document_chunk_bounds(session, project_id: str, document_id: str) -> dict[str, Any]:
+    """Read-only: the length summary of ONE document's stored chunks, over the
+    active and legacy chunk tables (``over_ceiling`` = chunks longer than the
+    embedder window's ``CHUNK_MAX_CHARS``)."""
+    from sqlalchemy import text
+
+    from app.core.ingest_reconcile import _guard_chunk_tables
+
+    lengths: list[int] = []
+    for table in _guard_chunk_tables(session):
+        lengths += [
+            int(n or 0) for (n,) in session.execute(
+                text(f"SELECT length(text) FROM {table} "
+                     "WHERE project_id = :pid AND doc_id = :did"),
+                {"pid": project_id, "did": document_id},
+            )
+        ]
+    return bounds_summary(lengths)
+
+
 def chunk_bounds_plan(*, project_id: str) -> dict[str, Any]:
     """Open a session and return :func:`plan_chunk_bounds`."""
     from app.core.db import SessionLocal
