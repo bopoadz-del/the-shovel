@@ -6173,6 +6173,9 @@ def _recover_answer_from_tool_messages(
         formatted = _format_construction_calc(inner)
         if formatted:
             return formatted
+        kb_figure = _format_kb_evaluation(inner)
+        if kb_figure:
+            return kb_figure
         # The generic note/summary reader is for a calculator's result only.
         # Any other tool's note (a search's rows-withheld count, an "already
         # handed" notice) is addressed to the model, not the user.
@@ -12703,21 +12706,46 @@ def _user_supplied_registered_calculation(
     this, even when the same sentence also contains numbers.
     """
     raw = text or ""
-    if not raw.strip():
-        return None
-    if _message_wants_inline_boq(raw) or _message_is_schedule_or_programme_deliverable(raw):
-        return None
-    if (
-        _message_wants_drawing_qto(raw)
-        or _message_wants_rfi_draft(raw)
-        or _message_wants_vo_draft(raw)
-    ):
+    if _not_a_supplied_calculation(raw):
         return None
     try:
         from app.lib.construction_formulas import formula_completed_by_user_text
         return formula_completed_by_user_text(raw)
     except Exception:  # noqa: BLE001 — routing must still classify
         _LOG.exception("supplied-input formula selection failed")
+        return None
+
+
+def _not_a_supplied_calculation(raw: str) -> bool:
+    """True for an empty ask or a deliverable that merely contains numbers
+    (a bill, a schedule, a drawing take-off, an RFI or a variation)."""
+    if not raw.strip():
+        return True
+    if _message_wants_inline_boq(raw) or _message_is_schedule_or_programme_deliverable(raw):
+        return True
+    return bool(
+        _message_wants_drawing_qto(raw)
+        or _message_wants_rfi_draft(raw)
+        or _message_wants_vo_draft(raw)
+    )
+
+
+#: The chat tool that searches and evaluates the construction knowledge base.
+_KB_TOOL = "construction_advisor"
+
+
+def _user_supplied_kb_formula(text: str) -> tuple[str, dict[str, Any]] | None:
+    """``(rule_id, values)`` for the one knowledge-base formula entry whose
+    title and every input are in ``text``; the same contract and the same
+    vetoes as the registry selector above. None on any doubt."""
+    raw = text or ""
+    if _not_a_supplied_calculation(raw):
+        return None
+    try:
+        from app.blocks._knowledge import formula_completed_by_user_text
+        return formula_completed_by_user_text(raw)
+    except Exception:  # noqa: BLE001 — routing must still classify
+        _LOG.exception("supplied-input knowledge formula selection failed")
         return None
 
 
@@ -13023,7 +13051,7 @@ def _message_is_formula_style_ask(text: str) -> bool:
     # User-supplied operands complete a registered formula before any
     # document-lookup veto. The numbers are the inputs; the excerpts
     # are not required to repeat them.
-    if _user_supplied_registered_calculation(raw):
+    if _user_supplied_registered_calculation(raw) or _user_supplied_kb_formula(raw):
         return True
     if not _formula_ask_force_enabled():
         return False
@@ -13336,6 +13364,10 @@ async def _predispatch_formula_calc(
         if await _off_loop(_document_question_without_operands, detect):
             return None
         completed = await _off_loop(_user_supplied_registered_calculation, detect)
+        if not completed:
+            kb_pre = await _predispatch_kb_formula(agent, messages, detect)
+            if kb_pre:
+                return kb_pre
         bound: dict[str, Any] = {}
         if completed:
             calc_name, bound = completed
@@ -13409,6 +13441,113 @@ async def _predispatch_formula_calc(
             exc_info=True,
         )
         return None
+
+
+async def _predispatch_kb_formula(
+    agent: "Agent",
+    messages: list,
+    detect: str,
+) -> dict[str, Any] | None:
+    """Evaluate the knowledge-base formula the ask names and fully supplies.
+
+    The registry selector comes first; this runs only when no registered
+    calculator is completed by the ask. The evaluation is recorded as a tool
+    result like a calculator run, so the answer, the Sources panel and the
+    no-model recovery read it from the thread. Anything short of an evaluated
+    figure returns None and the turn continues as before.
+    """
+    from app.agents.core import tool_registry
+
+    # Offered on the same terms as the model's tool list: the agent allows it.
+    if (tool_registry.get(_KB_TOOL) is None
+            or _KB_TOOL not in getattr(agent, "allowed_blocks", ())):
+        return None
+    completed = await _off_loop(_user_supplied_kb_formula, detect)
+    if not completed:
+        return None
+    rule_id, values = completed
+    tc = {
+        "id": f"predispatch-{_KB_TOOL}",
+        "type": "function",
+        "function": {
+            "name": _KB_TOOL,
+            "arguments": json.dumps({
+                "query": detect, "rule_id": rule_id, "values": values,
+            }),
+        },
+    }
+    result = await agent._run_tool_call(tc)
+    inner = result.get("result") if isinstance(result, dict) else None
+    if not (isinstance(inner, dict) and _kb_evaluation(inner)):
+        return None
+    inner = {**inner, "values": values}
+    rendered = json.dumps(inner, default=str)
+    messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
+    messages.append({
+        "role": "tool", "name": _KB_TOOL, "tool_call_id": tc["id"],
+        "content": rendered,
+    })
+    _inject_predispatch(
+        messages, _KB_TOOL, rendered[:4000],
+        "The knowledge-base formula has already been evaluated with the "
+        "values the user stated. Answer from that result: the figure with "
+        "its unit first, then the working in one line. Do not recompute it.",
+    )
+    return {
+        "name": _KB_TOOL,
+        "ok": True,
+        "predispatched": True,
+        "result": inner,
+        "falls_to_retrieval": False,
+    }
+
+
+def _kb_evaluation(inner: dict[str, Any]) -> dict[str, Any] | None:
+    """The evaluated figure in a knowledge-base tool result, or None."""
+    ev = inner.get("evaluation")
+    if not isinstance(ev, dict) or ev.get("result") is None or not ev.get("rule_id"):
+        return None
+    return ev
+
+
+def _format_kb_evaluation(inner: dict[str, Any]) -> str:
+    """Figure first, then the working with the stated values substituted.
+
+    Title and expression come from the matched entry the result carries; an
+    entry absent from the matches still yields the figure and its unit.
+    """
+    ev = _kb_evaluation(inner)
+    if ev is None:
+        return ""
+    entry = next(
+        (m for m in inner.get("matches") or []
+         if isinstance(m, dict) and m.get("id") == ev["rule_id"]),
+        {},
+    )
+    unit = str(ev.get("unit") or "").strip()
+    figure = f"{_round_display(ev['result'])}{(' ' + unit) if unit else ''}"
+    title = str(entry.get("title") or "").strip()
+    lines = [f"{title}: {figure}" if title else figure]
+    expression = str(entry.get("expression") or "").strip()
+    values = inner.get("values") if isinstance(inner.get("values"), dict) else {}
+    if expression and values:
+        stated = ", ".join(f"{k} = {_round_display(v)}" for k, v in values.items())
+        working = f"{expression} with {stated}"
+        if ev.get("unrounded") is not None:
+            working += f" (= {_round_display(ev['unrounded'])} before rounding up)"
+        lines.append(working)
+    return "\n".join(lines)
+
+
+def _round_display(value: Any) -> str:
+    """A number as a reader writes it: no float noise, no trailing zeros."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if num == int(num) and abs(num) < 1e15:
+        return str(int(num))
+    return f"{round(num, 4):g}"
 
 
 def _message_names_registered_calculator(text: str) -> bool:
