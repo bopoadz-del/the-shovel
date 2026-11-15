@@ -1,6 +1,6 @@
 # Construction Knowledge Base
 
-_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 80 entries._
+_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 84 entries._
 
 
 **General construction-engineering priors** — NOT code-of-practice design values. Every entry is kept GENERAL (not tied to a location or project). Values are site-experience references; **verify against your project specification and applicable standards** before use. Entries at credibility tier <=3 surface this warning automatically via the loader.
@@ -9,7 +9,7 @@ _Generated from `app/knowledge/construction_kb.json` (single source of truth) �
 Four domains: `construction.buildings` · `construction.concrete` · `construction.roads` (incl. earthworks + geotech) · `construction.procurement`.
 
 
-## construction.buildings  (22 entries)
+## construction.buildings  (24 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
@@ -20,8 +20,10 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `enabling.tech_limits` | reference_design | Indicative technology envelopes used on high-rise enabling/superstructure works. Deep foun | 3 |  |
 | `facade.sealant_joint_rules` | rule | Rules for facade weatherseal (movement-joint) sealant. Minimum sealant depth 6 mm; minimum | 3 |  |
 | `foundation.dewatering_stop_floors` | formula | Construction dewatering must continue until the permanent structure's accumulated dead loa | 3 |  |
+| `foundation.floor_counterweight` | formula | Counterweight per unit area that resists uplift = concrete unit weight x (raft thickness + | 3 |  |
 | `foundation.shrinkage_strip_1200mm` | threshold | A 1.2 m (1200 mm) wide shrinkage/pour strip is left open at the raft-to-podium junction to | 3 |  |
 | `foundation.uplift_fos` | formula | Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + | 4 |  |
+| `foundation.uplift_pressure` | formula | Uplift pressure on the underside of a basement raft = unit weight of water x water head h  | 3 |  |
 | `foundation.uplift_remediation_tension_piles` | decision_pattern | Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (coun | 3 |  |
 | `highrise.definition_contextual` | rule | There is no single universal floor-count that defines a 'high-rise'. The threshold is juri | 3 |  |
 | `highrise.pt_floor_five_day_cycle_chart` | table | Bar positions of a post-tensioned floor cycle chart titled a five-day cycle time program:  | 3 |  |
@@ -59,7 +61,7 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `procurement.interim_payment_flow` | workflow | Governs the progress / interim payment cycle from a registered contractor payment request  | 4 |  |
 | `procurement.tender_lifecycle` | workflow | Job Requisition -> Sole Source justification (optional) -> Request for Authority to Tender | 4 |  |
 
-## construction.roads  (45 entries)
+## construction.roads  (47 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
@@ -83,6 +85,8 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `earthworks.dry_density` | formula | Dry density = wet density / (1 + w / 100), the course form W = W1 / (w + 100) x 100, with  | 3 |  |
 | `earthworks.equipment_by_haul` | decision_pattern | Select earthmoving equipment by haul distance: haul <= 200 m, straight dozing (push with d | 3 |  |
 | `earthworks.fill_layers` | formula | Layers = fill volume / (plan area x compacted layer thickness), rounded UP to a whole laye | 3 |  |
+| `earthworks.grader_volume_rate` | formula | Grader volume rate (m3/hr) = grader area rate (m2/hr) x compacted layer thickness (m), use | 3 |  |
+| `earthworks.grading_area_rate` | formula | Area rate (m2/hr) = number of layers x fill area (m2) / (working days x working hours per  | 3 |  |
 | `earthworks.loader_buckets_per_truck` | formula | Number of loader passes (buckets) to fill one truck = truck body capacity / loader bucket  | 3 |  |
 | `earthworks.material_properties_table` | reference_design | Reference properties per material layer. Columns: A = Modified Proctor density (t/m3), B = | 3 |  |
 | `earthworks.method_correction_lesson` | decision_pattern | Context-aware equipment selection by material. Holland loaders suit DUNE SAND ONLY -- thei | 3 |  |
