@@ -1714,17 +1714,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // without duplicating fetch wiring. Drive still opens as a modal from
   // the ChatComposer's + popover.
 
-  async function exportConversation() {
-    if (!id || !conversationId) return
+  // Every export the page offers goes through here. The server keeps what
+  // it serves in a session as that session's Produced document (W2), so
+  // after ANY successful export the session's list is re-read at once; a
+  // control that skipped this left "No files in this session yet" showing.
+  async function downloadExport(
+    url: string,
+    init: RequestInit,
+    fallbackName: string,
+    failLabel: string,
+  ) {
     const token = getToken() || ''
     try {
-      const res = await fetch(
-        `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=docx`,
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
-      )
+      const res = await fetch(url, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+      })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
-        alert(`Export failed (${res.status}): ${detail.slice(0, 200)}`)
+        alert(`${failLabel} failed (${res.status}): ${detail.slice(0, 200)}`)
         return
       }
       const blob = await res.blob()
@@ -1733,14 +1741,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       a.href = objUrl
       const cd = res.headers.get('Content-Disposition') || ''
       const m = /filename="?([^";]+)"?/.exec(cd)
-      a.download = m?.[1] || `the-fork-${conversationId.slice(0, 8)}.docx`
+      a.download = m?.[1] || fallbackName
       document.body.appendChild(a)
       a.click()
       a.remove()
       URL.revokeObjectURL(objUrl)
+      refreshSessionDocuments()
     } catch (err) {
-      alert(`Export error: ${(err as Error).message}`)
+      alert(`${failLabel} error: ${(err as Error).message}`)
     }
+  }
+
+  async function exportConversation() {
+    if (!id || !conversationId) return
+    await downloadExport(
+      `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=docx`,
+      { method: 'POST' },
+      `the-fork-${conversationId.slice(0, 8)}.docx`,
+      'Export',
+    )
   }
 
   async function clearConversation() {
@@ -1815,31 +1834,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
             suggestionsDisabled={streaming || composerIsBlocked}
             onDownloadMessage={(assistantIndex, format) => {
               if (!id || !conversationId) return
-              const token = getToken() || ''
-              const url = `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}`
-              void fetch(url, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-              })
-                .then(async (res) => {
-                  if (!res.ok) {
-                    const detail = await res.text().catch(() => '')
-                    alert(`Download failed (${res.status}): ${detail.slice(0, 200)}`)
-                    return
-                  }
-                  const blob = await res.blob()
-                  const a = document.createElement('a')
-                  const objUrl = URL.createObjectURL(blob)
-                  a.href = objUrl
-                  const cd = res.headers.get('Content-Disposition') || ''
-                  const m = /filename="?([^";]+)"?/.exec(cd)
-                  a.download = m?.[1] || `the-fork-${conversationId.slice(0, 8)}.${format}`
-                  document.body.appendChild(a)
-                  a.click()
-                  a.remove()
-                  URL.revokeObjectURL(objUrl)
-                })
-                .catch((e) => alert(`Download error: ${(e as Error).message}`))
+              void downloadExport(
+                `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}`,
+                { method: 'POST' },
+                `the-fork-${conversationId.slice(0, 8)}.${format}`,
+                'Download',
+              )
             }}
             feedback={
               id && conversationId
@@ -1856,37 +1856,17 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               // server-side on click (bounded), not in the chat hot path.
               // Rewrite a remapped RAG corpus id (drive_archive) to the
               // workspace the user is actually in.
-              const token = getToken() || ''
               const endpoint = exportEndpointForWorkspace(descriptor.endpoint, id)
-              void fetch(`${API_BASE}${endpoint}`, {
-                method: descriptor.method || 'POST',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'Content-Type': 'application/json',
+              void downloadExport(
+                `${API_BASE}${endpoint}`,
+                {
+                  method: descriptor.method || 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(descriptor.payload ?? {}),
                 },
-                body: JSON.stringify(descriptor.payload ?? {}),
-              })
-                .then(async (res) => {
-                  if (!res.ok) {
-                    const detail = await res.text().catch(() => '')
-                    alert(`Export failed (${res.status}): ${detail.slice(0, 200)}`)
-                    return
-                  }
-                  const blob = await res.blob()
-                  const a = document.createElement('a')
-                  const objUrl = URL.createObjectURL(blob)
-                  a.href = objUrl
-                  const cd = res.headers.get('Content-Disposition') || ''
-                  const m = /filename="?([^";]+)"?/.exec(cd)
-                  a.download = m?.[1] || `the-fork-export.${descriptor.format || 'xlsx'}`
-                  document.body.appendChild(a)
-                  a.click()
-                  a.remove()
-                  URL.revokeObjectURL(objUrl)
-                  // W2: a session's export is kept as its Produced file.
-                  refreshSessionDocuments()
-                })
-                .catch((e) => alert(`Export error: ${(e as Error).message}`))
+                `the-fork-export.${descriptor.format || 'xlsx'}`,
+                'Export',
+              )
             }}
           />
           <ChatComposer
