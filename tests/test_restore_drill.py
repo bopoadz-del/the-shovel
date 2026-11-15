@@ -296,7 +296,12 @@ def test_a_refused_neon_call_names_its_route_without_ids_or_body(monkeypatch, me
         assert leak not in e.value.code
 
 
-def test_a_successful_neon_call_returns_its_json(monkeypatch):
+@pytest.mark.parametrize("path, raw, parsed", [
+    ("/projects?limit=400", b'{"projects": []}', {"projects": []}),
+    ("/projects/p-1/branches", b'{"branch": {"id": "br-1"}, "operations": [{"id": "op-1"}]}',
+     {"branch": {"id": "br-1"}, "operations": [{"id": "op-1"}]}),
+])
+def test_a_successful_neon_call_returns_its_json(monkeypatch, path, raw, parsed):
     import io
     import urllib.request
 
@@ -307,8 +312,8 @@ def test_a_successful_neon_call_returns_its_json(monkeypatch):
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resp(b'{"projects": []}'))
-    assert rd.neon_http("k")("GET", "/projects?limit=400") == {"projects": []}
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resp(raw))
+    assert rd.neon_http("k")("GET", path) == parsed
 
 
 @pytest.mark.parametrize("path, route", [
