@@ -104,19 +104,28 @@ def _page_count(file_path: str) -> int:
             doc.close()
 
 
+def cached_page_read(path: str, index: int) -> bc.PageRead:
+    """One page's saved word boxes and source, read back from ``path``."""
+    with open(path, encoding="utf-8") as fh:
+        body = json.load(fh)
+    if isinstance(body, list):  # saved before sources were recorded
+        body = {"source": _LEGACY_CACHE_SOURCE, "words": body}
+    words = tuple(g.Word(**w) for w in body["words"])
+    return bc.PageRead(index, body["source"], words)
+
+
+def cached_page_path(work_dir: str, index: int) -> str:
+    return os.path.join(work_dir, f"page_{index:05d}.json")
+
+
 def _page_read(
     file_path: str, index: int, page_source: PageSource, work_dir: str | None,
 ) -> tuple[bc.PageRead, bool]:
     """One page's word boxes and source: read back from ``work_dir`` (True)
     or read from the page and saved (False)."""
-    cached = os.path.join(work_dir, f"page_{index:05d}.json") if work_dir else None
+    cached = cached_page_path(work_dir, index) if work_dir else None
     if cached and os.path.exists(cached):
-        with open(cached, encoding="utf-8") as fh:
-            body = json.load(fh)
-        if isinstance(body, list):  # saved before sources were recorded
-            body = {"source": _LEGACY_CACHE_SOURCE, "words": body}
-        words = tuple(g.Word(**w) for w in body["words"])
-        return bc.PageRead(index, body["source"], words), True
+        return cached_page_read(cached, index), True
     (read,) = page_source(file_path, [index])
     if cached:
         tmp = cached + ".part"
