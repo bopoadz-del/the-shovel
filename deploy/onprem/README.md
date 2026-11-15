@@ -5,12 +5,17 @@ The whole platform as a self-contained stack that runs on your own hardware with
 local Ollama LLM server, and bundled models. No cloud, no HuggingFace, no
 telemetry.
 
-> **Status:** authored + validated by inspection and unit tests in this session.
-> The stack was **not built/run on a Docker host here** (this dev box has no
-> Docker/GPU). Build + first-boot happen on the target box. The
-> `DEPLOYMENT_PROFILE=onprem` app logic, boot assertion, gates, boot manifest,
-> and disk canary are all unit-tested and were exercised in a real Python
-> process (see `tests/test_deployment_profile_onprem.py`).
+> **Status (2026-11-15): NOT RUNNABLE AS A MODEL STACK YET.** What exists in
+> code today is part 1 only: the `DEPLOYMENT_PROFILE=onprem` switch and the
+> boot check in `app/core/deployment_profile.py` (tests:
+> `tests/test_deployment_profile_onprem.py`). There is **no local model
+> provider**: the runtime supports only cloud providers, so `LLM_PROVIDER` must
+> stay unset on the box (the boot check refuses `ollama` or any cloud provider)
+> and the app runs model-free, where the registered calculators still answer.
+> The `ollama` service in `docker-compose.yml` is unused until part 2. The
+> per-feature gates, boot manifest and disk canary an earlier version of this
+> file described are not in this repository. The stack has not been built on a
+> Docker host.
 
 ## Contents
 
