@@ -109,28 +109,30 @@ def test_a_session_id_from_another_project_is_refused(client, bad):
     assert good.status_code == 201, good.text
 
 
-def test_listing_a_session_of_another_project_is_refused(client):
-    headers = _register(client, "listbad")
-    pid = _project(client, headers, f"W2-listbad-{_RUN}")
-    other_pid = _project(client, headers, f"W2-listbad-o-{_RUN}")
-    res = client.get(
-        f"/v1/projects/{pid}/conversations/ws-{other_pid}-1/documents", headers=headers,
-    )
-    assert res.status_code == 404
-    assert _session_docs(client, headers, pid, f"ws-{pid}-1") == []
+@pytest.mark.parametrize("asked,status", [("own", 200), ("foreign", 404), ("malformed", 404)])
+def test_listing_a_session_of_another_project_is_refused(client, asked, status):
+    headers = _register(client, f"listbad{asked[:3]}")
+    pid = _project(client, headers, f"W2-listbad-{asked}-{_RUN}")
+    other_pid = _project(client, headers, f"W2-listbad-o-{asked}-{_RUN}")
+    sid = {"own": f"ws-{pid}-1", "foreign": f"ws-{other_pid}-1",
+           "malformed": "not-a-session"}[asked]
+    res = client.get(f"/v1/projects/{pid}/conversations/{sid}/documents", headers=headers)
+    assert res.status_code == status, res.text
 
 
-def test_another_users_session_files_are_not_listed(client):
-    owner = _register(client, "own")
-    pid = _project(client, owner, f"W2-own-{_RUN}")
+@pytest.mark.parametrize("who,status,count", [("owner", 200, 1), ("stranger", 404, None)])
+def test_another_users_session_files_are_not_listed(client, who, status, count):
+    owner = _register(client, f"own{who[:3]}")
+    pid = _project(client, owner, f"W2-own-{who}-{_RUN}")
     sid = f"ws-{pid}-5000"
     assert _upload(client, owner, pid, "crane_lift_plan.txt", b"Lift 12 t at 30 m.",
                    session_id=sid).status_code == 201
-    stranger = _register(client, "stranger")
-    res = client.get(f"/v1/projects/{pid}/conversations/{sid}/documents", headers=stranger)
-    # The stranger cannot open the project at all, so the session is not theirs.
-    assert res.status_code == 404
-    assert len(_session_docs(client, owner, pid, sid)) == 1
+    asker = owner if who == "owner" else _register(client, f"stranger{_RUN[:3]}")
+    res = client.get(f"/v1/projects/{pid}/conversations/{sid}/documents", headers=asker)
+    # A stranger cannot open the project at all, so the session is not theirs.
+    assert res.status_code == status, res.text
+    if count is not None:
+        assert len(res.json()["documents"]) == count
 
 
 # ── a session upload is stored and pinned, never indexed ─────────────────────
