@@ -1755,6 +1755,279 @@
       "needs_review": false
     },
     {
+      "id": "asphalt.theoretical_bitumen",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Theoretical bitumen consumption of laid asphalt",
+      "statement": "Theoretical bitumen (t) = tonnage of asphalt laid x the course's bitumen content (% by mass of mix) / 100, per course layer. The bitumen content is an input (the course's sheet notes base 3.6 %, binder 4.15 %, wearing 4.45 %; see asphalt.bitumen_content). The monthly material sheet sets this against the bitumen actually consumed and the budget. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "tonnage_laid * bitumen_content / 100",
+      "variables": {
+        "tonnage_laid": {
+          "unit": "tonne",
+          "desc": "Asphalt laid in the period for one course layer"
+        },
+        "bitumen_content": {
+          "unit": "percent",
+          "desc": "Bitumen content of that course, % by mass of total mix"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.bitumen_budget",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Budgeted bitumen for laid asphalt",
+      "statement": "Budget bitumen (t) = tonnage of asphalt laid x the budget allowance (%) / 100. The allowance is an input and depends on the bitumen grade (the course's sheet notes 4.5 % for 60/70 and 4.8 % for 40/50). The material sheet sets the budget against theoretical and actual consumption. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "tonnage_laid * budget_allowance / 100",
+      "variables": {
+        "tonnage_laid": {
+          "unit": "tonne",
+          "desc": "Asphalt laid in the period"
+        },
+        "budget_allowance": {
+          "unit": "percent",
+          "desc": "Budget bitumen allowance for the grade used, % of mix"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.material_overconsumption",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Material consumed beyond the theoretical quantity",
+      "statement": "Over-consumption = actual consumption - theoretical consumption, for one material row of the monthly asphalt material sheet (this period or cumulative). A positive result is material used beyond what the laid tonnage accounts for; a negative result means the actual figure is below theory and should be checked. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "actual_consumption - theoretical_consumption",
+      "variables": {
+        "actual_consumption": {
+          "unit": "tonne",
+          "desc": "Material actually consumed (from issues / stock count)"
+        },
+        "theoretical_consumption": {
+          "unit": "tonne",
+          "desc": "Material the laid tonnage should have used"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.material_stock",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Material in stock on the asphalt material sheet",
+      "statement": "Quantity in stock = cumulative quantity received - cumulative actual consumption, for one material row of the monthly asphalt material sheet. The course's plant rules stop production on any shortage, so the stock is tracked for every material (bitumen grades, cutback, emulsion, diesel, aggregate sizes). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "cumulative_received - cumulative_consumption",
+      "variables": {
+        "cumulative_received": {
+          "unit": "tonne",
+          "desc": "Quantity received since the start, weighbridge-checked"
+        },
+        "cumulative_consumption": {
+          "unit": "tonne",
+          "desc": "Quantity actually consumed since the start"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p18",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.haul_ton_km",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Ton-kilometres of asphalt haulage",
+      "statement": "Ton-km = asphalt quantity laid (t) x average haul distance (km) from the plant, per course layer; the monthly summary of asphalt operations reports it with the tonnage laid and the average haul distance. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "quantity_laid * average_haul_distance",
+      "variables": {
+        "quantity_laid": {
+          "unit": "tonne",
+          "desc": "Asphalt laid in the period"
+        },
+        "average_haul_distance": {
+          "unit": "kilometer",
+          "desc": "Average haul distance from plant to laying point"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne*kilometer"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p36 and p40",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.marshall_stiffness",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Marshall stiffness of an asphalt mix",
+      "statement": "Marshall stiffness (kg/mm) = Marshall stability (kg) / Marshall flow (mm), the quotient behind the course's mix requirement of at least 500 kg/mm for base, binder and wearing courses (with stability at least 1000 kg and flow 2-4 mm). The course's mix design result, stability 1633 kg at flow 2.6 mm, gives about 628 kg/mm. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "marshall_stability / marshall_flow",
+      "variables": {
+        "marshall_stability": {
+          "unit": "kilogram_force",
+          "desc": "Marshall stability of the compacted specimen"
+        },
+        "marshall_flow": {
+          "unit": "millimeter",
+          "desc": "Marshall flow at failure"
+        }
+      },
+      "thresholds": {
+        "unit": "kilogram_force/millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p12 and p13",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.paving_hours",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Paver hours to lay an asphalt quantity",
+      "statement": "Paving time (hr) = asphalt tonnage to lay / paver production rate (t/hr). The rate is an input taken from the cited production norm for the layer (the course's paver norms: stabilized sub-base 280, asphalt base course 320, wearing course 240 t/hr); truck numbers follow from plant and paver capacity, paver speed and the haul distance. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "tonnage_to_lay / paver_rate",
+      "variables": {
+        "tonnage_to_lay": {
+          "unit": "tonne",
+          "desc": "Asphalt (or stabilized material) to be laid"
+        },
+        "paver_rate": {
+          "unit": "tonne/hour",
+          "desc": "Paver production rate for the layer"
+        }
+      },
+      "thresholds": {
+        "unit": "hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p20 and p23",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
       "id": "roads.tunnel_cross_section",
       "domain": "construction.roads",
       "type": "reference_design",
