@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import logging
 import os
 import re
 import tempfile
 import uuid
-import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 from datetime import datetime, timezone
@@ -709,32 +709,20 @@ PRODUCED_SESSION_DETAIL = (
 )
 
 
-#: OOXML part that carries only the write time (dcterms:created/modified);
-#: two renders of the same content differ in nothing else.
-_OOXML_WRITE_TIME_PART = "docProps/core.xml"
+def _produced_source_digest(source: Any) -> str:
+    """Identity of a produced file: a digest of what it was rendered FROM.
 
-
-def _produced_content_digest(raw: bytes) -> str:
-    """Digest of what a produced file says, not when it was written.
-
-    docx/xlsx are zip archives whose ``docProps/core.xml`` and member
-    timestamps change on every render, so two exports of the same answer a
-    second apart differ byte-for-byte. For an archive the digest covers each
-    member's name and bytes, minus the write-time part; anything else is
-    hashed as raw bytes.
+    A rendered file is not a stable identity. OOXML stamps its write time
+    in ``docProps/core.xml``, and a renderer may stamp the export time into
+    the body itself (the answer sheet carries "Exported ... HH:MM UTC"). So
+    the same answer exported a minute apart differs in its bytes and in its
+    text. The render inputs do not change: the format, the answer or staged
+    plan rendered, and the range or heading. Two exports with equal inputs
+    are the same output. ``source`` is canonicalised as sorted-key JSON.
     """
-    try:
-        archive = zipfile.ZipFile(io.BytesIO(raw))
-    except zipfile.BadZipFile:
-        return hashlib.sha256(raw).hexdigest()
-    h = hashlib.sha256()
-    with archive:
-        for name in sorted(archive.namelist()):
-            if name == _OOXML_WRITE_TIME_PART:
-                continue
-            h.update(name.encode("utf-8") + b"\0")
-            h.update(archive.read(name) + b"\0")
-    return h.hexdigest()
+    canonical = json.dumps(source, sort_keys=True, default=str,
+                           ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _save_produced_to_session(
@@ -743,14 +731,17 @@ def _save_produced_to_session(
     user_id: str,
     path: str,
     display_name: str,
+    *,
+    source: Any,
 ) -> Optional[str]:
     """Keep a file the product produced in a chat session as that session's
     document (W2): listed under the session tagged Produced, downloadable
     again and askable by pin, but never indexed, so the product's own output
     is not evidence for a later answer.
 
-    The same content produced twice in one session is kept once, however
-    far apart the two renders were. Best-effort:
+    ``source`` is what the file was rendered from (see
+    ``_produced_source_digest``). The same source produced twice in one
+    session is kept once, whenever the second render happened. Best-effort:
     a storage failure is logged and the download is still served. Returns
     the document id, or None when nothing was stored.
     """
@@ -759,12 +750,12 @@ def _save_produced_to_session(
     try:
         with open(path, "rb") as fh:
             raw_bytes = fh.read()
-        digest = _produced_content_digest(raw_bytes)
+        digest = _produced_source_digest(source)
         doc_project = projects_store.ui_project_id(project_id) or project_id
         for existing in projects_store.list_session_documents(
             doc_project, conversation_id, user_id,
         ):
-            if (existing.get("metadata") or {}).get("produced_content_sha256") == digest:
+            if (existing.get("metadata") or {}).get("produced_source_sha256") == digest:
                 return existing.get("id")
         stored_as = f"{uuid.uuid4().hex[:8]}_{display_name}"
         stored_path = byte_store.allocate_path(stored_as)
@@ -777,7 +768,7 @@ def _save_produced_to_session(
                 "origin": "produced",
                 "uploader_id": user_id,
                 "session_id": conversation_id,
-                "produced_content_sha256": digest,
+                "produced_source_sha256": digest,
             },
         )
         projects_store.stamp_document_index(
@@ -1461,7 +1452,9 @@ async def export_conversation_schedule(
     wb.save(path)
     download_name = f"{name.replace(' ', '_')}_schedule.xlsx"
     _save_produced_to_session(
-        project_id, conversation_id, auth["user_id"], path, download_name)
+        project_id, conversation_id, auth["user_id"], path, download_name,
+        source={"render": "schedule_workbook", "project": name,
+                "staged": staged})
     return FileResponse(
         path, media_type=_XLSX_MEDIA,
         filename=download_name,
@@ -1556,7 +1549,9 @@ async def export_conversation_message(
         safe_name = _sanitize_filename(project_name)
         download_name = f"{safe_name}-{_sanitize_filename(heading)}.{ext}"
         _save_produced_to_session(
-            project_id, conversation_id, auth["user_id"], path, download_name)
+            project_id, conversation_id, auth["user_id"], path, download_name,
+            source={"render": "answers", "format": ext, "project": project_name,
+                    "heading": heading, "pairs": pairs})
         return FileResponse(path, media_type=media, filename=download_name)
 
     # message_index is the position within assistant_msgs; -1 means newest.
@@ -1565,6 +1560,10 @@ async def export_conversation_message(
     except IndexError:
         raise HTTPException(404, f"message_index {message_index} out of range")
 
+    render_source: Dict[str, Any] = {
+        "render": "message", "format": fmt, "project": project_name,
+        "answer": chosen.get("content") or "",
+    }
     if fmt == "docx":
         path = _render_message_docx(
             project_name,
@@ -1586,6 +1585,7 @@ async def export_conversation_message(
             and message_looks_like_wbs_answer(chosen.get("content") or "")
         ):
             acts = staged.get("activities") or []
+            render_source["staged"] = staged
             wb = _workbook_from_wbs_activities(
                 acts, project_name,
                 start_date=staged.get("start_date"),
@@ -1617,7 +1617,8 @@ async def export_conversation_message(
     safe_name = _sanitize_filename(project_name)
     download_name = f"{safe_name}-{conversation_id[:8]}.{ext}"
     _save_produced_to_session(
-        project_id, conversation_id, auth["user_id"], path, download_name)
+        project_id, conversation_id, auth["user_id"], path, download_name,
+        source=render_source)
     return FileResponse(path, media_type=media, filename=download_name)
 
 
