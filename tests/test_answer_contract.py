@@ -222,3 +222,27 @@ def test_result_envelope_carries_citations_and_coverage():
     assert out["answer"].endswith("[1]")
     assert out["coverage"] == {"indexed": 9, "total": 10}
     assert out["citations"][0]["document"] == "Earthworks Specification.pdf"
+
+
+# ── A turn asking for inputs keeps its question as asked ────────────────────
+
+def test_input_question_is_left_as_asked_two_turns():
+    for missing, question in (
+        (["span"], "The beam needs the span. What span should I use?"),
+        (["rate", "quantity"], "The line cost needs the rate and quantity. What values should I use for the rate and quantity?"),
+    ):
+        turn = answer_exit.Turn(questions=[question], awaiting_inputs=missing)
+        out = answer_exit.check_end_event({"type": "end", "content": question + "\n4 of 5 project documents indexed"},
+                                          "", turn)
+        assert out["content"] == question
+        assert out["coverage"] == {"indexed": 4, "total": 5}
+
+
+def test_a_document_cited_inline_and_on_a_source_line_gets_one_marker():
+    for text in (
+        "The period is 42 days (Programme Notes.pdf, p. 2).\nSource: Programme Notes.pdf, p. 2\n",
+        "Cover is 50 mm [Concrete Spec.docx, p. 7].\nSources: Concrete Spec.docx, p. 7\n",
+    ):
+        out = answer_contract.apply(text)
+        assert out.text.count("[1]") == 1 and "[2]" not in out.text
+        assert len(out.citations) == 1

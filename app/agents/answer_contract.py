@@ -161,16 +161,19 @@ def _move_citations(text: str, markers: _Markers) -> str:
         if not m:
             out.append(_INLINE_FILE_CITE_RE.sub(lambda c: " " + markers.marker(c.group("body")), line).rstrip())
             continue
-        tags = "".join(markers.marker(p) for p in _split_parts(m.group("body")))
+        tags = [t for t in dict.fromkeys(markers.marker(p) for p in _split_parts(m.group("body"))) if t]
         if not tags:
             continue
-        # The marker sits on the nearest line of the answer above the Source line.
+        # The marker sits on the nearest line of the answer above the Source
+        # line, once: a marker that line already carries is not repeated.
         for i in range(len(out) - 1, -1, -1):
             if out[i].strip():
-                out[i] = out[i].rstrip() + " " + tags
+                new = "".join(t for t in tags if t not in out[i])
+                if new:
+                    out[i] = out[i].rstrip() + " " + new
                 break
         else:
-            out.append(tags)
+            out.append("".join(tags))
     return "\n".join(out)
 
 
@@ -342,10 +345,14 @@ def apply(
     *,
     sources: Iterable[dict[str, Any]] | None = None,
     computed: bool = False,
+    asking: bool = False,
 ) -> Contracted:
     """The answer in contract form. ``sources`` are the turn's Sources rows
     (used only to fill a citation's page, passage and tier); ``computed`` is
-    True when a calculation ran this turn."""
+    True when a calculation ran this turn; ``asking`` is True when the turn
+    ends on its own question for inputs a step still needs -- that question
+    is the user's next action, so its wording is left as asked (citations and
+    the coverage footer still leave the text)."""
     if not isinstance(text, str) or not text.strip():
         return Contracted(text=text)
     try:
@@ -359,9 +366,10 @@ def apply(
         body = _move_citations(body, markers)
         computed = computed or any(e["kind"] == "calculation" for e in markers.entries) or any(
             str(r.get("page_or_section") or "").lower() == "calculated" for r in rows)
-        body = _strip_machinery(body)
-        body = _drop_padding(body)
-        body = _answer_first(body, computed)
+        if not asking:
+            body = _strip_machinery(body)
+            body = _drop_padding(body)
+            body = _answer_first(body, computed)
         body = _tidy(body)
         if not body:
             # Nothing but machinery and padding: the original stands, so the
