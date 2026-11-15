@@ -1,6 +1,7 @@
 """Formula Layer 1, batch 13 (exam 5): beam moments, payment, cash flow,
 concrete mix design, mix proportions, slip-form mix, mass-concrete thermal
-check, crane count, electrical programme (more follow in this batch).
+check, crane count, electrical programme, LEED level, manhours S-curve,
+floor-cycle weighting, interior finishes (more follow in this batch).
 
 Same rules as batches 1-12 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -45,6 +46,16 @@ its parametrize row:
                                  cost = cranes x the caller's rate
   * electrical programme         days per stage = ceil(area x floors /
                                  that stage's m2 per day); total = sum
+  * LEED level                   LEED v4 bands: Certified 40, Silver 50,
+                                 Gold 60, Platinum 80; scorecard 110 points
+  * manhours S-curve             cumulative planned and actual % of the
+                                 PLANNED total; index = planned % / actual %
+  * floor-cycle weighting        completed / total per element; weighted =
+                                 sum(progress x weight) / sum(weight)
+  * interior finishes            geometry: face = perimeter x height; paint
+                                 = face - doors - windows (floor 0);
+                                 blockwork = paint x shared fraction;
+                                 skirting = perimeter - door widths
 None was copied from the product's output. A case where the product
 disagrees with the hand value would be marked ``xfail(strict=True)`` with a
 one-line reason and reported as a suspected defect; the expected value is
@@ -559,3 +570,217 @@ def test_f88_b_part_day_rounds_up(rate, days):
 def test_f88_b_zero_rate_stage_is_not_dropped(rates):
     env = run_calculation(F88, {"floor_area_m2": 1000, "num_floors": 1, "stage_output_rates": rates})
     assert env.get("status") != "success", env
+
+
+# ---------------------------------------------------------------- F89 LEED level
+# Hand source: the LEED v4 BD+C certification bands -- Certified 40-49,
+# Silver 50-59, Gold 60-79, Platinum 80 and over; the scorecard has 110
+# points, so a total past 110 cannot exist. No U case: points are a count.
+F89 = "leed_points_estimate"
+_F89_OUT = ("certification_level",)
+
+
+@pytest.mark.parametrize("points, level", [
+    (45, "Certified"),   # 40 <= 45 <= 49
+    (55, "Silver"),      # 50 <= 55 <= 59
+    (70, "Gold"),        # 60 <= 70 <= 79
+    (85, "Platinum"),    # 85 >= 80
+])
+def test_f89_t(points, level):
+    assert _ok(F89, {"points": points})["certification_level"] == level
+
+
+def test_f89_m():
+    _asks(F89, {}, "points", _F89_OUT)
+
+
+@pytest.mark.parametrize("points, level", [
+    (0, "Not certified"),
+    (39, "Not certified"),   # one point under the first band
+    (40, "Certified"),       # on the band edge
+    (49, "Certified"),
+    (50, "Silver"),
+    (59, "Silver"),
+    (60, "Gold"),
+    (79, "Gold"),
+    (80, "Platinum"),        # on the top band edge
+    (110, "Platinum"),       # the whole scorecard
+])
+def test_f89_b_band_edges(points, level):
+    assert _ok(F89, {"points": points})["certification_level"] == level
+
+
+@pytest.mark.parametrize("points", [111, -1])
+def test_f89_b_off_the_scorecard_refused(points):
+    _refuses(F89, {"points": points}, _F89_OUT)
+
+
+# ---------------------------------------------------------------- F90 manhours S-curve
+# Hand source (the calculator's stated planner rule): both cumulative
+# percentages are taken against the PLANNED total over the periods reported
+# so far; productivity index = cumulative planned % / cumulative actual %.
+F90 = "manhours_scurve"
+_F90_OUT = ("cum_planned_pct", "cum_actual_pct", "productivity_index")
+
+
+@pytest.mark.parametrize("planned, actual, cp, ca, pi", [
+    # total 1000; 2 periods reported: 300 -> 30 %, 350 -> 35 %; 30/35 = 0.857
+    ([100, 200, 300, 400], [120, 230], 30.0, 35.0, 0.857),
+    # total 1000; 3 periods: 1000 -> 100 %, 900 -> 90 %; 100/90 = 1.111
+    ([250, 250, 500], [200, 300, 400], 100.0, 90.0, 1.111),
+])
+def test_f90_t(planned, actual, cp, ca, pi):
+    r = _ok(F90, {"planned_mh": planned, "actual_mh": actual})
+    assert r["cum_planned_pct"] == pytest.approx(cp, abs=0.05)
+    assert r["cum_actual_pct"] == pytest.approx(ca, abs=0.05)
+    assert r["productivity_index"] == pytest.approx(pi, abs=5e-4)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"planned_mh": [100, 200]}, "actual_mh"),
+    ({"actual_mh": [100, 200]}, "planned_mh"),
+])
+def test_f90_m(params, missing):
+    _asks(F90, params, missing, _F90_OUT)
+
+
+@pytest.mark.parametrize("planned", [[0, 0], [0]])
+def test_f90_b_no_planned_hours_refused(planned):
+    # a percentage of a zero plan does not exist
+    _refuses(F90, {"planned_mh": planned, "actual_mh": [10]}, _F90_OUT)
+
+
+@pytest.mark.parametrize("actual, cp", [
+    ([0], 10.0),       # 100 / 1000 planned so far; nothing spent: no index
+    ([0, 0], 30.0),    # 300 / 1000
+])
+def test_f90_b_no_actual_hours_gives_no_index(actual, cp):
+    r = _ok(F90, {"planned_mh": [100, 200, 700], "actual_mh": actual})
+    assert r["cum_planned_pct"] == pytest.approx(cp, abs=0.05)
+    assert r["cum_actual_pct"] == 0
+    assert r["productivity_index"] is None
+
+
+# ---------------------------------------------------------------- F91 floor-cycle weighting
+# Hand source: element progress = completed / total; weighted progress =
+# sum(progress x weight) / sum(weight).
+F91 = "floor_cycle_progress"
+_F91_OUT = ("weighted_progress", "element_progress")
+
+
+@pytest.mark.parametrize("comp, tot, wt, elems, weighted", [
+    # 0.9, 0.5, 0; (0.9x1 + 0.5x2 + 0x1) / 4 = 1.9 / 4 = 0.475
+    ([9, 5, 0], [10, 10, 10], [1, 2, 1], [0.9, 0.5, 0.0], 0.475),
+    # 0.75, 0.5; (0.75x3 + 0.5x1) / 4 = 2.75 / 4 = 0.6875
+    ([3, 4], [4, 8], [3, 1], [0.75, 0.5], 0.6875),
+])
+def test_f91_t(comp, tot, wt, elems, weighted):
+    r = _ok(F91, {"completed_units": comp, "total_units": tot, "weights": wt})
+    assert r["element_progress"] == pytest.approx(elems, abs=5e-4)
+    assert r["weighted_progress"] == pytest.approx(weighted, abs=5e-4)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"completed_units": [1], "total_units": [2]}, "weights"),
+    ({"completed_units": [1], "weights": [1]}, "total_units"),
+])
+def test_f91_m(params, missing):
+    _asks(F91, params, missing, _F91_OUT)
+
+
+@pytest.mark.parametrize("tot", [[10, 0], [0]])
+def test_f91_b_element_with_no_units_refused(tot):
+    comp = [0] * len(tot)
+    _refuses(F91, {"completed_units": comp, "total_units": tot, "weights": [1] * len(tot)}, _F91_OUT)
+
+
+@pytest.mark.parametrize("comp, tot, wt", [
+    ([1, 2], [2, 4], [1]),        # two elements, one weight
+    ([1], [2, 4], [1, 1]),        # one completed count for two elements
+])
+def test_f91_b_unequal_series_refused(comp, tot, wt):
+    _refuses(F91, {"completed_units": comp, "total_units": tot, "weights": wt}, _F91_OUT)
+
+
+@pytest.mark.parametrize("wt", [[0, 0], [0]])
+def test_f91_b_zero_weights_give_no_weighted_figure(wt):
+    n = len(wt)
+    r = _ok(F91, {"completed_units": [1] * n, "total_units": [2] * n, "weights": wt})
+    assert r["weighted_progress"] is None
+    assert r["element_progress"] == [0.5] * n
+
+
+# ---------------------------------------------------------------- F92 interior finishes
+# Hand source (geometry): screed = tiling = ceiling = floor area; gross wall
+# face = perimeter x height; doors = rooms x doors/room x w x h; paint =
+# gross - doors - windows (never below 0); blockwork = paint x shared
+# fraction; skirting = perimeter - rooms x doors/room x door width.
+F92 = "interior_finishes_takeoff"
+_F92_OUT = ("wall_paint_m2", "blockwork_m2", "skirting_m", "gross_wall_face_m2")
+
+
+@pytest.mark.parametrize("params, exp", [
+    # 40 x 3 = 120 face; no doors or windows: paint 120, block 60, skirting 40
+    ({"floor_area_m2": 100, "perimeter_m": 40, "room_count": 1, "floor_to_ceiling_m": 3},
+     {"floor_screed_m2": 100, "ceiling_finish_m2": 100, "gross_wall_face_m2": 120,
+      "door_deduction_m2": 0, "wall_paint_m2": 120, "blockwork_m2": 60, "skirting_m": 40}),
+    # 120 x 2.8 = 336; doors 4 x 1 x 0.9 x 2.1 = 7.56; paint 336 - 7.56 - 10
+    # = 318.44; block x 0.5 = 159.22; skirting 120 - 4 x 0.9 = 116.4
+    ({"floor_area_m2": 250, "perimeter_m": 120, "room_count": 4, "floor_to_ceiling_m": 2.8,
+      "door_width_m": 0.9, "door_height_m": 2.1, "doors_per_room": 1,
+      "shared_wall_fraction": 0.5, "window_deduction_m2": 10},
+     {"floor_screed_m2": 250, "ceiling_finish_m2": 250, "gross_wall_face_m2": 336,
+      "door_deduction_m2": 7.56, "wall_paint_m2": 318.44, "blockwork_m2": 159.22,
+      "skirting_m": 116.4}),
+])
+def test_f92_t(params, exp):
+    r = _ok(F92, params)
+    for key, val in exp.items():
+        assert r[key] == pytest.approx(val, abs=0.01), key
+
+
+@pytest.mark.parametrize("height, paint", [
+    ("300 cm", 120.0),   # 3.0 m x 40 m
+    ("10 ft", 121.92),   # 3.048 m x 40 m
+])
+def test_f92_u(height, paint):
+    r = _ok(F92, {"floor_area_m2": "1076.391 ft2", "perimeter_m": "131.234 ft",
+                  "room_count": 1, "floor_to_ceiling_m": height})
+    # 1076.391 ft2 x 0.09290304 = 100.0 m2; 131.234 ft x 0.3048 = 40.0 m
+    assert r["floor_screed_m2"] == pytest.approx(100.0, abs=0.01)
+    assert r["wall_paint_m2"] == pytest.approx(paint, abs=0.01)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"floor_area_m2": 100, "perimeter_m": 40, "room_count": 1}, "floor_to_ceiling"),
+    ({"floor_area_m2": 100, "room_count": 1, "floor_to_ceiling_m": 3}, "perimeter"),
+])
+def test_f92_m(params, missing):
+    _asks(F92, params, missing, _F92_OUT)
+
+
+@pytest.mark.parametrize("height", [0, -2.8])
+def test_f92_b_no_height_refused(height):
+    _refuses(F92, {"floor_area_m2": 100, "perimeter_m": 40, "room_count": 1,
+                   "floor_to_ceiling_m": height}, _F92_OUT)
+
+
+@pytest.mark.parametrize("window", [
+    120,   # deductions equal the face: 120 - 120 = 0
+    200,   # deductions past the face: never a negative paint area
+])
+def test_f92_b_paint_floors_at_zero(window):
+    r = _ok(F92, {"floor_area_m2": 100, "perimeter_m": 40, "room_count": 1,
+                  "floor_to_ceiling_m": 3, "window_deduction_m2": window})
+    assert r["wall_paint_m2"] == 0
+    assert r["blockwork_m2"] == 0
+
+
+@pytest.mark.parametrize("frac, block", [
+    (1.0, 120.0),   # every face is its own wall: 120 x 1
+    (0.0, 0.0),     # no wall of its own
+])
+def test_f92_b_shared_fraction_ends(frac, block):
+    r = _ok(F92, {"floor_area_m2": 100, "perimeter_m": 40, "room_count": 1,
+                  "floor_to_ceiling_m": 3, "shared_wall_fraction": frac})
+    assert r["blockwork_m2"] == pytest.approx(block, abs=0.01)
