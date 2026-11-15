@@ -128,10 +128,15 @@ def test_execute_params_are_read_with_their_defaults(env, want):
     assert bpo.parse_execute(env) == (env["BILL_PLAN_EXECUTE_HASH"], want)
 
 
-def test_default_gates_are_shares_with_no_floor():
-    g = bpo.Gates()
-    assert (g.min_reconciled_rows, g.max_unreconciled_share, g.max_empty_description_share,
-            g.max_header_conflicts, g.max_priced_rows_without_path) == (0, 0.005, 0.02, 0, 0)
+@pytest.mark.parametrize("name,default", [
+    ("min_reconciled_rows", 0),
+    ("max_unreconciled_share", 0.005),
+    ("max_empty_description_share", 0.02),
+    ("max_header_conflicts", 0),
+    ("max_priced_rows_without_path", 0),
+])
+def test_default_gates_are_shares_with_no_floor(name, default):
+    assert getattr(bpo.Gates(), name) == default
 
 
 # --- every condition holds: the write goes ahead ----------------------------
