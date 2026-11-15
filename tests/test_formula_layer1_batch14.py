@@ -1,7 +1,8 @@
 """Formula Layer 1, batch 14 (exam 5): concrete beam bending capacity,
 concrete section shear capacity, reinforcement lap length, nominal shear
-stress, bolt shear capacity, fillet weld capacity (more formulas follow
-in later parts of this batch).
+stress, bolt shear capacity, fillet weld capacity, precast member erection
+demand, plumbing installation programme, BIM clash tolerance (more
+formulas follow in later parts of this batch).
 
 Same rules as batches 1-13 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -476,3 +477,158 @@ def test_f108_b_leg_on_floor(leg, cap):
 ])
 def test_f108_b_refused(params):
     _refuses(F108, params, _F108_OUT)
+
+
+# ---------------------------------------------------------------- F109 precast erection
+# Lift planning practice (BS 7121-1 / ASME B30.5 pick charts): effective
+# hook load = (member weight + rigging) x dynamic allowance; utilisation =
+# effective / allowable pick weight at the radius x 100; safe while <= 100 %.
+F109 = "precast_beam_erection_check"
+_F109_OUT = ("effective_lift_weight_t", "utilization_pct", "is_safe")
+_F109_BASE = {"beam_weight_t": 12, "beam_length_m": 10, "crane_capacity_t": 25,
+              "lift_radius_m": 15}
+
+
+@pytest.mark.parametrize("params, eff, util", [
+    # (12 + 0.5) x 1.25 = 15.625 t; 15.625 / 25 = 62.5 %
+    (_F109_BASE, 15.625, 62.5),
+    # (20 + 1.0) x 1.1 = 23.1 t; 23.1 / 30 = 77.0 %
+    ({"beam_weight_t": 20, "beam_length_m": 14, "crane_capacity_t": 30,
+      "lift_radius_m": 18, "rigging_weight_t": 1.0, "dynamic_factor": 1.1}, 23.1, 77.0),
+])
+def test_f109_t(params, eff, util):
+    r = _ok(F109, params)
+    assert r["effective_lift_weight_t"] == pytest.approx(eff, abs=0.01)
+    assert r["utilization_pct"] == pytest.approx(util, abs=0.1)
+    assert r["is_safe"] is True
+
+
+@pytest.mark.parametrize("params", [
+    dict(_F109_BASE, beam_weight_t="12000 kg"),                       # 12 t
+    dict(_F109_BASE, crane_capacity_t="25000 kg", beam_length_m="393.7 in"),  # 25 t, 10.0 m
+])
+def test_f109_u(params):
+    r = _ok(F109, params)
+    assert r["effective_lift_weight_t"] == pytest.approx(15.625, abs=0.01)
+    assert r["utilization_pct"] == pytest.approx(62.5, abs=0.1)
+
+
+@pytest.mark.parametrize("missing", ["crane_capacity_t", "beam_weight_t"])
+def test_f109_m(missing):
+    params = {k: v for k, v in _F109_BASE.items() if k != missing}
+    _asks(F109, params, missing, _F109_OUT)
+
+
+@pytest.mark.parametrize("weight, util, safe", [
+    # (19.5 + 0.5) x 1.25 = 25.0 t = 100.0 % of 25 t: on the limit, still safe
+    (19.5, 100.0, True),
+    # (19.6 + 0.5) x 1.25 = 25.125 t = 100.5 %: past it, not safe
+    (19.6, 100.5, False),
+])
+def test_f109_b_on_and_past_capacity(weight, util, safe):
+    r = _ok(F109, dict(_F109_BASE, beam_weight_t=weight))
+    assert r["utilization_pct"] == pytest.approx(util, abs=0.1)
+    assert r["is_safe"] is safe
+
+
+@pytest.mark.parametrize("params", [
+    dict(_F109_BASE, crane_capacity_t=0),       # no allowable pick weight
+    dict(_F109_BASE, dynamic_factor=0.9),       # an allowance below 1 lightens the load
+])
+def test_f109_b_refused(params):
+    _refuses(F109, params, _F109_OUT)
+
+
+# ---------------------------------------------------------------- F110 plumbing programme
+# The calculator's declared sequence: submittal 7 d, procurement 21 d,
+# 1st fix ceil(A/40), 2nd fix ceil(A/60), final fix ceil(A/80), water
+# connection 7 d, testing ceil(A/50), handover 3 d, each worked stage at
+# least 1 d; A = floor area x floors. Fixed stages: 7 + 21 + 7 + 3 = 38 d.
+F110 = "plumbing_flow_programme"
+_F110_OUT = ("total_days", "stages")
+
+
+@pytest.mark.parametrize("params, total", [
+    # A 2400: 60 + 40 + 30 + 48 + 38 = 216
+    ({"floor_area_m2": 1200, "num_floors": 2}, 216),
+    # A 900: ceil 22.5 = 23, 15, ceil 11.25 = 12, 18; 23 + 15 + 12 + 18 + 38 = 106
+    ({"floor_area_m2": 300, "num_floors": 3}, 106),
+])
+def test_f110_t(params, total):
+    r = _ok(F110, params)
+    assert r["total_days"] == total
+    last = list(r["stages"].values())[-1]
+    assert last["cumulative_days"] == total
+
+
+@pytest.mark.parametrize("params", [
+    # 12000 ft2 x 0.09290304 = 1114.836 m2: 28 + 19 + 14 + 23 + 38 = 122
+    {"floor_area_m2": "12000 ft2"},
+    # 0.1114836 ha = 1114.836 m2, same programme
+    {"floor_area_m2": "0.1114836 ha"},
+])
+def test_f110_u(params):
+    assert _ok(F110, params)["total_days"] == 122
+
+
+@pytest.mark.parametrize("params", [{}, {"num_floors": 4}])
+def test_f110_m(params):
+    _asks(F110, params, "floor_area_m2", _F110_OUT)
+
+
+@pytest.mark.parametrize("area, total", [
+    (40, 42),   # every worked stage exactly 1 d: 4 + 38
+    (41, 43),   # 1st fix past one day's output: ceil(41/40) = 2; 5 + 38
+])
+def test_f110_b_one_day_step(area, total):
+    assert _ok(F110, {"floor_area_m2": area})["total_days"] == total
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "suspected defect: zero floor area returns a 42-day programme with four "
+    "1-day installation stages instead of refusing; no area means no work"))
+@pytest.mark.parametrize("params", [
+    {"floor_area_m2": 0},
+    {"floor_area_m2": 0, "num_floors": 5},
+])
+def test_f110_b_zero_area_refused(params):
+    _refuses(F110, params, _F110_OUT)
+
+
+# ---------------------------------------------------------------- F111 clash tolerance
+# No standard publishes a clash tolerance per LOD: the calculator says the
+# project BEP governs. So no tolerance VALUE is asserted here. What is
+# checked has a source: the LOD scale itself (BIMForum LOD Specification:
+# 100, 200, 300, 350, 400, 500) and that a more developed model is checked
+# to a tolerance no looser than a less developed one.
+F111 = "bim_clash_tolerance"
+_F111_OUT = ("clash_tolerance_mm",)
+
+
+@pytest.mark.parametrize("lower, higher", [(200, 300), (350, 400)])
+def test_f111_t_tolerance_does_not_loosen_with_development(lower, higher):
+    lo = _ok(F111, {"lod": lower})["clash_tolerance_mm"]
+    hi = _ok(F111, {"lod": higher})["clash_tolerance_mm"]
+    assert lo is not None and hi is not None
+    assert hi <= lo
+
+
+@pytest.mark.parametrize("lod", [300, 500])
+def test_f111_t_lod_echoed(lod):
+    assert _ok(F111, {"lod": lod})["lod"] == lod
+
+
+def test_f111_m_default_is_disclosed():
+    # lod has a default; when omitted the result must say a default was used
+    r = _ok(F111, {})
+    assert any(d.get("parameter") == "lod" for d in r.get("defaults_used") or [])
+    r2 = _ok(F111, {"lod": 400})
+    assert not any(d.get("parameter") == "lod" for d in r2.get("defaults_used") or [])
+
+
+@pytest.mark.parametrize("lod", [
+    250,   # inside the range but not a level on the LOD scale
+    600,   # past the top of the scale
+])
+def test_f111_b_refused(lod):
+    _refuses(F111, {"lod": lod}, _F111_OUT)
