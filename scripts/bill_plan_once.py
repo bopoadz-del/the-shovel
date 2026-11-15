@@ -63,12 +63,17 @@ SOURCE_FIELDS = (
     "pages_text_layer", "pages_without_text_layer",
     "pages_read_text_layer", "pages_read_ocr", "pages_read_cache",
 )
-#: Classifier counts the summary carries, with its diagnostic counts (lines
-#: tested, empty sampled pages, sampled pages per word source) so a refused
-#: verdict still says what the sample was read from.
+#: Verdict counts the summary carries. The PLAN judges every page it read
+#: (``bill_classify.verdict_of_reads``), and the diagnostic counts say what
+#: those pages were read from and why their lines were not header lines (by
+#: reason code), so a refused verdict separates "no table on these pages"
+#: from "the word boxes do not form a header line the aliasing resolves".
 VERDICT_FIELDS = (
-    "pages_sampled", "header_pages", "measured_rows", "priced_rows", "reconciled_rows",
-    "lines_tested", "pages_without_words", "sampled_text_layer", "sampled_ocr",
+    "pages_read", "pages_sampled", "pages_text_layer", "pages_ocr", "pages_without_words",
+    "header_pages", "lines_tested", "header_lines",
+    "rejected_fewer_than_3_cells", "rejected_no_description_column",
+    "rejected_no_figure_column",
+    "measured_rows", "priced_rows", "reconciled_rows",
 )
 #: A plan hash is a sha256 hex digest; no summary string may be longer.
 HASH_LEN = 64
@@ -98,7 +103,8 @@ class Deps:
 
     get_document: Callable[[str], dict[str, Any] | None]
     plan: Callable[..., dict[str, Any]]
-    classify: Callable[[str], Any] | None = None
+    #: The verdict over the pages the plan read (``verdict_of_reads``).
+    classify: Callable[[Any], Any] | None = None
     log: Callable[[str], None] = field(default=print)
     build_sha: Callable[[], str | None] = field(default=lambda: None)
     peak_rss_mb: Callable[[], float | None] = field(default=lambda: None)
@@ -142,12 +148,12 @@ def depth_distribution(sections: list[dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(out.items()))
 
 
-def verdict_counts(classify: Callable[[str], Any]) -> tuple[Callable[[str], Any], dict[str, Any]]:
+def verdict_counts(classify: Callable[[Any], Any]) -> tuple[Callable[[Any], Any], dict[str, Any]]:
     """Wrap ``classify`` so the run can report the verdict's counts."""
     seen: dict[str, Any] = {}
 
-    def wrapped(path: str):
-        verdict = classify(path)
+    def wrapped(reads):
+        verdict = classify(reads)
         seen["is_bill"] = bool(verdict.is_bill)
         seen["reason"] = verdict.reason
         for name in VERDICT_FIELDS:
@@ -274,7 +280,7 @@ def production_deps() -> Deps:
     return Deps(
         get_document=projects.get_document,
         plan=bill_derived.plan_bill_sheet,
-        classify=bill_classify.classify_bill_pdf,
+        classify=bill_classify.verdict_of_reads,
         build_sha=_health._deployed_build_sha,
         peak_rss_mb=_peak_rss_mb,
         durable=byte_store.is_durable_mount,

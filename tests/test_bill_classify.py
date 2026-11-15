@@ -275,7 +275,7 @@ def test_classify_reports_sampled_pages_per_source_without_changing_the_verdict(
     page_source = _mixed_reads(spec)
     path = _image_pdf(tmp_path / "m.pdf", len(spec))
     v = bc.classify_bill_pdf(path, sample_pages=len(spec), page_source=page_source)
-    assert (v.sampled_text_layer, v.sampled_ocr, v.pages_without_words) == (text_layer, ocr, empty)
+    assert (v.pages_text_layer, v.pages_ocr, v.pages_without_words) == (text_layer, ocr, empty)
     # the diagnostics explain the verdict; they never move it
     words = [w for r in page_source(path, list(range(len(spec)))) for w in r.words]
     plain = bc.bill_verdict(words)
@@ -300,6 +300,52 @@ def test_real_mixed_pdf_counts_each_sampled_page_by_its_source(tmp_path, monkeyp
     doc.save(path)
     doc.close()
     v = bc.classify_bill_pdf(path)
-    assert (v.sampled_text_layer, v.sampled_ocr, v.pages_without_words) == (1, 1, empty)
+    assert (v.pages_text_layer, v.pages_ocr, v.pages_without_words) == (1, 1, empty)
     assert v.reason == bc.NOT_BILL_NO_HEADER
     assert v.pages_sampled == 2 - empty
+
+
+# --- why a line is not a header: one test, reason codes ---------------------
+
+
+def _line(cells, page: int = 1, y: float = 100.0) -> list[g.Word]:
+    words: list[g.Word] = []
+    for text, x in cells:
+        words += _cell(text, x, y, page)
+    return words
+
+
+@pytest.mark.parametrize("cells, reason", [
+    ([("The parties agree to the terms below", 60)], g.HEADER_FEW_CELLS),
+    ([("Description", 60), ("Qty", 600)], g.HEADER_FEW_CELLS),
+    ([("Qty", 60), ("Rate", 300), ("Amount", 600)], g.HEADER_NO_DESCRIPTION),
+    ([("Quantity", 60), ("Unit Rate", 300), ("Total", 600)], g.HEADER_NO_DESCRIPTION),
+    ([("Item", 40), ("Description", 120), ("Unit", 600)], g.HEADER_NO_FIGURE),
+    ([("Ref", 40), ("Description", 160), ("Remarks", 600)], g.HEADER_NO_FIGURE),
+    (COLS_A, None),
+    (COLS_B, None),
+])
+def test_header_test_names_the_first_bar_a_line_fails(cells, reason):
+    columns, why = g.header_test(_line(cells))
+    assert why == reason
+    assert (columns is None) is (reason is not None)
+    assert g.detect_header(_line(cells)) == columns
+
+
+@pytest.mark.parametrize("extra, field", [
+    ([("Qty", 60), ("Rate", 300), ("Amount", 600)], "rejected_no_description_column"),
+    ([("Item", 40), ("Description", 120), ("Unit", 600)], "rejected_no_figure_column"),
+    ([("Prices exclude tax", 60)], "rejected_fewer_than_3_cells"),
+])
+def test_verdict_counts_every_tested_line_under_one_outcome(extra, field):
+    base = _page(COLS_A, _priced_a(4), page=1) + _prose(2)
+    before = bc.bill_verdict(base)
+    after = bc.bill_verdict(base + _line(extra, page=2, y=900.0))
+    for v in (before, after):
+        rejected = (v.rejected_fewer_than_3_cells + v.rejected_no_description_column
+                    + v.rejected_no_figure_column)
+        assert v.header_lines + rejected == v.lines_tested
+    assert after.lines_tested == before.lines_tested + 1
+    assert getattr(after, field) == getattr(before, field) + 1
+    assert (after.is_bill, after.reason, after.header_lines) == (
+        before.is_bill, before.reason, before.header_lines)

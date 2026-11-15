@@ -225,15 +225,21 @@ def test_document_with_rows_already_indexed_is_not_a_candidate(tmp_path, monkeyp
 def test_document_whose_row_parse_did_not_succeed_is_classified(tmp_path, monkeypatch, meta):
     docs = _Docs({**_source(), "metadata": meta})
     docs.install(monkeypatch, tmp_path)
-    seen: list[str] = []
+    read_from: list[str] = []
+    seen: list[list[int]] = []
 
-    def classify(path):
-        seen.append(path)
+    def page_source(path, indices):
+        read_from.append(path)
+        return [bc.PageRead(i, bc.SOURCE_OCR, ()) for i in indices]
+
+    def classify(reads):
+        seen.append([r.index for r in reads])
         return bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER)
 
-    out = bd.plan_bill_sheet("p1", "src1", classify=classify)
-    assert seen == ["/store/src1.pdf"]
-    assert out == {"derived": False, "reason": bc.NOT_BILL_NO_HEADER}
+    out = bd.plan_bill_sheet("p1", "src1", classify=classify, page_source=page_source)
+    assert read_from == ["/store/src1.pdf"] * docs.pages
+    assert seen == [list(range(docs.pages))]
+    assert out["derived"] is False and out["reason"] == bc.NOT_BILL_NO_HEADER
 
 
 @pytest.mark.parametrize("kinds", [["text"] * 3, ["text", "scan", "text"]])
@@ -273,3 +279,67 @@ def test_text_layer_words_drop_blank_words_and_scale_boxes(raw, kept):
         assert w.page == 4
         assert (w.left, w.top) == pytest.approx((x0 * SCALE, y0 * SCALE))
         assert (w.width, w.height) == pytest.approx(((x1 - x0) * SCALE, (y1 - y0) * SCALE))
+
+
+# -- PLAN verdict: every page read, not the 5-page spread ----------------------
+
+
+def _prose_words(page: int) -> list[g.Word]:
+    """A cover / preamble page: sentences, no table."""
+    out: list[g.Word] = []
+    for k, sentence in enumerate(["Conditions of tender and preambles",
+                                  "Rates include all labour and plant"]):
+        x = 60.0
+        for tok in sentence.split():
+            out.append(g.Word(tok, page, x, 100.0 + 40 * k, 9.0 * len(tok), 20.0))
+            x += 9.0 * (len(tok) + 1)
+    return out
+
+
+def _bundle(total: int, table_pages: set[int]):
+    """A ``total``-page bundle: a priced table on ``table_pages`` (0-based),
+    prose on every other page."""
+    def page_source(path, indices):
+        return [bc.PageRead(i, bc.SOURCE_OCR, tuple(
+            _bill_page_words(COLS_A, _row_a, "Section", 4, i + 1, 10 * i)
+            if i in table_pages else _prose_words(i + 1))) for i in indices]
+    return page_source
+
+
+@pytest.mark.parametrize("total, with_table", [(12, True), (31, True), (12, False), (31, False)])
+def test_plan_judges_every_page_it_reads_and_the_gate_only_its_sample(
+    tmp_path, monkeypatch, total, with_table,
+):
+    from app.core import doc_index
+
+    sample = set(doc_index._sample_page_indices(total, 5))
+    table_pages = (set(range(total)) - sample) if with_table else set()
+    source = _bundle(total, table_pages)
+    path = str(tmp_path / "bundle.pdf")
+    doc = fitz.open()
+    for _ in range(total):
+        doc.new_page()
+    doc.save(path)
+    doc.close()
+
+    # The cheap gate sees only the spread: covers and preambles, no header.
+    gate = bc.classify_bill_pdf(path, page_source=source)
+    assert (gate.is_bill, gate.reason) == (False, bc.NOT_BILL_NO_HEADER)
+    assert gate.pages_read == len(sample) and gate.header_pages == 0
+
+    # The PLAN reads every page of its range and judges all of them.
+    docs = _Docs(_source(), pages=total)
+    docs.install(monkeypatch, tmp_path)
+    plan = bd.plan_bill_sheet("p1", "src1", page_source=source)
+    if with_table:
+        assert plan["reason"] == bc.BILL_PRICED
+        assert plan["rows"] == 4 * len(table_pages)
+        assert plan["pages"] == [0, total]
+    else:
+        assert plan["derived"] is False and plan["reason"] == bc.NOT_BILL_NO_HEADER
+        assert "rows" not in plan
+    assert plan["pages_without_text_layer"] == total
+    v = bc.verdict_of_reads(source(path, range(total)))
+    assert (v.is_bill, v.pages_read, v.header_pages) == (
+        with_table, total, len(table_pages))
+    assert docs.added == []

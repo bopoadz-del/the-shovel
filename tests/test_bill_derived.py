@@ -439,14 +439,14 @@ def test_bytes_come_from_local_file_or_drive_pointer(tmp_path, monkeypatch, wher
     monkeypatch.setattr(projects, "_fetch_remote_document_bytes", fake_fetch)
     read: list[bytes] = []
 
-    def classify(path):
+    def page_source(path, indices):
         with open(path, "rb") as fh:
             read.append(fh.read())
-        return bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER)
+        return [bc.PageRead(i, bc.SOURCE_OCR, ()) for i in indices]
 
-    out = bd.plan_bill_sheet("p1", "src1", classify=classify)
-    assert out == {"derived": False, "reason": bc.NOT_BILL_NO_HEADER}
-    assert read == [payload]
+    out = bd.plan_bill_sheet("p1", "src1", page_source=page_source)
+    assert out["derived"] is False and out["reason"] == bc.NOT_BILL_NO_HEADER
+    assert read == [payload] * docs.pages
     assert fetched == ([] if where == "local" else ["src1"])
 
 
@@ -476,16 +476,23 @@ def test_no_readable_bytes_only_when_nothing_materialises(tmp_path, monkeypatch,
     bc.BillVerdict(False, bc.NOT_BILL_NO_HEADER),
 ])
 def test_not_a_bill_gets_no_derived_row(tmp_path, monkeypatch, verdict):
+    words, _, _ = _bill_b()
     docs = _Docs(_source())
     docs.install(monkeypatch, tmp_path)
+    judged: list[list[int]] = []
 
-    def no_ocr(path, idx):
-        raise AssertionError("OCR'd every page of a document that is not a bill")
+    def classify(reads):
+        judged.append([r.index for r in reads])
+        return verdict
 
     out = bd.derive_bill_sheet("p1", "src1", plan_hash="x",
-                               classify=lambda p: verdict, page_source=no_ocr)
+                               classify=classify, page_source=_by_page(words))
 
-    assert out == {"derived": False, "reason": verdict.reason}
+    # The verdict is taken over every page read; a refusal reports those
+    # pages' sources and writes nothing.
+    assert judged == [list(range(docs.pages))]
+    assert out["derived"] is False and out["reason"] == verdict.reason
+    assert out["pages_without_text_layer"] == docs.pages
     assert docs.added == [] and docs.indexed == [] and docs.meta_updates == []
     assert list(tmp_path.iterdir()) == []
 

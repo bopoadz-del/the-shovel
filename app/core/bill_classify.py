@@ -59,14 +59,21 @@ class BillVerdict:
     measured_rows: int = 0
     priced_rows: int = 0
     reconciled_rows: int = 0
-    #: Diagnostic counts (no labels, no text): lines the header test saw
-    #: across the sample, sampled pages that gave no words at all, and the
-    #: sampled pages read from each word source. They explain a verdict; the
-    #: verdict never reads them.
-    lines_tested: int = 0
+    #: Diagnostic counts (no labels, no text). They explain a verdict; the
+    #: verdict never reads them. ``pages_read`` counts every page judged
+    #: (``pages_sampled`` only those that gave words), by word source, and
+    #: the pages that gave none. ``lines_tested`` lines met the header test;
+    #: ``header_lines`` passed it and every other line is counted under the
+    #: first reason it failed (``bill_table_geometry.HEADER_REJECTIONS``).
+    pages_read: int = 0
+    pages_text_layer: int = 0
+    pages_ocr: int = 0
     pages_without_words: int = 0
-    sampled_text_layer: int = 0
-    sampled_ocr: int = 0
+    lines_tested: int = 0
+    header_lines: int = 0
+    rejected_fewer_than_3_cells: int = 0
+    rejected_no_description_column: int = 0
+    rejected_no_figure_column: int = 0
 
 
 def _is_measured(row: g.BillRow) -> bool:
@@ -96,12 +103,22 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
 
     header_pages = 0
     lines_tested = 0
+    header_lines = 0
+    rejected = dict.fromkeys(g.HEADER_REJECTIONS, 0)
     rows: list[g.BillRow] = []
     for page in sorted(by_page):
         page_words = by_page[page]
         lines = g.group_lines(page_words)
         lines_tested += len(lines)
-        if any(g.detect_header(line, block) for line in lines):
+        page_headers = 0
+        for line in lines:
+            columns, why = g.header_test(line, block)
+            if columns:
+                page_headers += 1
+            else:
+                rejected[why] += 1
+        header_lines += page_headers
+        if page_headers:
             header_pages += 1
             rows += g.extract_bill_rows(page_words, block)
 
@@ -115,6 +132,8 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
         "priced_rows": len(priced),
         "reconciled_rows": len(reconciled),
         "lines_tested": lines_tested,
+        "header_lines": header_lines,
+        **{f"rejected_{why}": n for why, n in rejected.items()},
     }
     if header_pages == 0:
         return BillVerdict(False, NOT_BILL_NO_HEADER, **counts)
@@ -246,19 +265,29 @@ def classify_bill_pdf(
         finally:
             doc.close()
     indices = doc_index._sample_page_indices(total, sample_pages)
-    reads = (page_source or read_pages)(file_path, indices)
+    return verdict_of_reads((page_source or read_pages)(file_path, indices), block)
+
+
+def verdict_of_reads(reads: Sequence[PageRead], block=None) -> BillVerdict:
+    """The verdict over exactly the pages in ``reads``, with their source counts.
+
+    :func:`classify_bill_pdf` passes its small page sample (the cheap gate);
+    the bill PLAN and the derivation pass every page they read, so a bundle
+    whose covers, preambles and summaries fall on the sample is judged by its
+    measured pages too. Same tests, same bars, either way."""
     verdict = bill_verdict([w for r in reads for w in r.words], block)
-    return replace(verdict, **sample_source_counts(reads))
+    return replace(verdict, **read_source_counts(reads))
 
 
-def sample_source_counts(reads: Sequence[PageRead]) -> dict[str, int]:
-    """Per-source counts of the sampled pages, and how many gave no words.
+def read_source_counts(reads: Sequence[PageRead]) -> dict[str, int]:
+    """Pages judged, by word source, and how many gave no words.
 
-    ``bill_verdict`` sees only words, so a sampled page with none (a blank
-    page, or one OCR could not read) is invisible to its ``pages_sampled``;
-    this counts it from the reads themselves."""
+    ``bill_verdict`` sees only words, so a page with none (a blank page, or
+    one OCR could not read) is invisible to its ``pages_sampled``; this
+    counts it from the reads themselves."""
     return {
+        "pages_read": len(reads),
+        "pages_text_layer": sum(1 for r in reads if r.source == SOURCE_TEXT_LAYER),
+        "pages_ocr": sum(1 for r in reads if r.source == SOURCE_OCR),
         "pages_without_words": sum(1 for r in reads if not r.words),
-        "sampled_text_layer": sum(1 for r in reads if r.source == SOURCE_TEXT_LAYER),
-        "sampled_ocr": sum(1 for r in reads if r.source == SOURCE_OCR),
     }
