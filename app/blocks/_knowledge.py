@@ -221,6 +221,43 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
     return out
 
 
+def lookup_table(rule_id: str, **match: Any) -> Dict[str, Any]:
+    """Return the rows of a ``type=table`` entry whose cells equal every given value.
+
+    The columns come from the entry's own ``table.columns``; a filter on a
+    column the table does not declare is refused, not silently matched to
+    nothing. A cell held for the owner's reading is stored as null and named
+    in ``table.held``, which is returned with the rows so an answer can say
+    the cell is not read rather than present a gap as a value.
+    """
+    entry = get_rule(rule_id)
+    if entry is None:
+        raise KeyError(f"unknown rule_id: {rule_id}")
+    kind = entry.get("type")
+    if kind != "table":
+        raise ValueError(f"lookup_table() only supports type=table (got {kind!r})")
+    table = entry.get("table") or {}
+    columns = table.get("columns") or []
+    names = {c.get("name") for c in columns}
+    unknown = sorted(set(match) - names)
+    if unknown:
+        raise ValueError(f"table {rule_id!r} has no column(s) {unknown}")
+    rows = [
+        row
+        for row in table.get("rows") or []
+        if all(row.get(name) == value for name, value in match.items())
+    ]
+    return {
+        "rule_id": rule_id,
+        "columns": columns,
+        "rows": rows,
+        "held": table.get("held") or [],
+        "provenance": entry.get("provenance", {}),
+        "credibility_tier": entry.get("credibility_tier"),
+        "warnings": _build_warnings(entry),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Safe guard evaluator
 # ---------------------------------------------------------------------------
