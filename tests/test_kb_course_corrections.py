@@ -135,10 +135,31 @@ def test_dewatering_stop_floors_requires_every_input(missing):
         ("foundation.uplift_remediation_tension_piles", "trigger_below"),
     ],
 )
-def test_uplift_fos_threshold_is_unchanged(rule_id, key):
-    # The course parts differ on this threshold (1.25 vs 1.2); it is reported
-    # to the owner and NOT changed by this correction.
-    assert kb.get_rule(rule_id)["thresholds"][key] == 1.25
+def test_uplift_fos_threshold_follows_the_course(rule_id, key):
+    # The course parts differ on this threshold (1.25 vs 1.2). Owner ruling:
+    # the course governs, and the threshold is the 1.2 of section 1 p10.
+    entry = kb.get_rule(rule_id)
+    assert entry["thresholds"][key] == 1.2
+    assert entry["provenance"]["course_reference"] == (
+        "owner-supplied course material, roads and earthworks section 1, p10"
+    )
+
+
+@pytest.mark.parametrize(
+    "counterweight, uplift, passes",
+    [
+        # 28 / 23 = 1.217 -> passes at 1.2 (it failed at the old 1.25)
+        (28.0, 23.0, True),
+        # 27 / 23 = 1.174 -> below 1.2 -> tension piles
+        (27.0, 23.0, False),
+    ],
+)
+def test_uplift_fos_judged_against_the_course_threshold(counterweight, uplift, passes):
+    fos = kb.evaluate("foundation.uplift_fos", counterweight=counterweight, uplift=uplift)["result"]
+    min_fos = kb.get_rule("foundation.uplift_fos")["thresholds"]["min_fos"]
+    trigger = kb.get_rule("foundation.uplift_remediation_tension_piles")["thresholds"]["trigger_below"]
+    assert (fos >= min_fos) is passes
+    assert (fos < trigger) is (not passes)
 
 
 # ---------------------------------------------------------------------------

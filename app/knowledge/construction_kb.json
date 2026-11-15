@@ -314,7 +314,7 @@
       "domain": "construction.buildings",
       "type": "formula",
       "title": "Foundation uplift factor of safety (counterweight vs uplift)",
-      "statement": "Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + ballast) divided by the uplift force. Result is dimensionless (force/force). Acceptance criterion: FOS >= 1.25. WORKED EXAMPLE: counterweight = 34 (kN), uplift = 100 (kN) gives FOS = 34/100 = 0.34, which is far below 1.25, so the basement/raft would float -> tension (anchor) piles are required. Units must be consistent on both inputs; the ratio cancels them.",
+      "statement": "Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + ballast) divided by the uplift force. Result is dimensionless (force/force). Acceptance criterion: FOS >= 1.2 (owner-supplied course material, roads and earthworks section 1, p10). WORKED EXAMPLE: counterweight = 34 (kN), uplift = 100 (kN) gives FOS = 34/100 = 0.34, which is far below 1.2, so the basement/raft would float -> tension (anchor) piles are required. Units must be consistent on both inputs; the ratio cancels them.",
       "expression": "counterweight / uplift",
       "variables": {
         "counterweight": {
@@ -328,8 +328,8 @@
       },
       "thresholds": {
         "unit": "dimensionless",
-        "min_fos": 1.25,
-        "criterion": ">= 1.25"
+        "min_fos": 1.2,
+        "criterion": ">= 1.2"
       },
       "applicability": {
         "applies_to": [
@@ -340,10 +340,11 @@
         "standards_cross_ref": []
       },
       "remediation": [
-        "If FOS < 1.25, provide tension/anchor piles to make up the deficit (see foundation.uplift_remediation_tension_piles)."
+        "If FOS < 1.2, provide tension/anchor piles to make up the deficit (see foundation.uplift_remediation_tension_piles)."
       ],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -355,8 +356,8 @@
       "id": "foundation.uplift_remediation_tension_piles",
       "domain": "construction.buildings",
       "type": "decision_pattern",
-      "title": "Uplift remediation: provide tension/anchor piles when FOS < 1.25",
-      "statement": "Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (counterweight / uplift) falls below 1.25, THEN the gravity counterweight alone is insufficient and tension/anchor piles must be provided to resist the residual uplift. Size the tension-pile group for the deficit (uplift x 1.25 - available counterweight).",
+      "title": "Uplift remediation: provide tension/anchor piles when FOS < 1.2",
+      "statement": "Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (counterweight / uplift) falls below 1.2, THEN the gravity counterweight alone is insufficient and tension/anchor piles must be provided to resist the residual uplift. Size the tension-pile group for the deficit (uplift x 1.2 - available counterweight).",
       "expression": null,
       "variables": {
         "fos": {
@@ -366,7 +367,7 @@
       },
       "thresholds": {
         "unit": "dimensionless",
-        "trigger_below": 1.25
+        "trigger_below": 1.2
       },
       "applicability": {
         "applies_to": [
@@ -381,6 +382,7 @@
       ],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -393,7 +395,7 @@
       "domain": "construction.buildings",
       "type": "formula",
       "title": "Dewatering can stop once enough floors are built to counter uplift",
-      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift. Floors required before dewatering can stop = (min_fos x uplift - raft_weight) / floor_weight, rounded UP to a whole floor (zero when the raft alone already satisfies the factor of safety). All loads are per unit plan area in the same unit: uplift = water unit weight x head (t/m2), raft_weight = raft thickness x concrete unit weight (t/m2), floor_weight = equivalent concrete thickness of one floor x concrete unit weight (t/m2 per floor). min_fos is the required uplift factor of safety (see foundation.uplift_fos); it is an input, not assumed here. The count includes basement levels: the above-ground level at which dewatering may stop = floors required - number of basement levels. WORKED EXAMPLE: head 23 m -> uplift 23 t/m2; 1.25 x 23 = 28.75 t/m2; raft 4 m x 2.5 t/m3 = 10 t/m2; floor 0.60 m equivalent x 2.5 t/m3 = 1.5 t/m2; (28.75 - 10) / 1.5 = 12.5, say 13 floors; less 5 basement levels = level 8. Recompute with the actual staged dead load and design water table before stopping dewatering.",
+      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift. Floors required before dewatering can stop = (min_fos x uplift - raft_weight) / floor_weight, rounded UP to a whole floor (zero when the raft alone already satisfies the factor of safety). All loads are per unit plan area in the same unit: uplift = water unit weight x head (t/m2), raft_weight = raft thickness x concrete unit weight (t/m2), floor_weight = equivalent concrete thickness of one floor x concrete unit weight (t/m2 per floor). min_fos is the required uplift factor of safety, 1.2 per foundation.uplift_fos (owner-supplied course material, roads and earthworks section 1, p10); it is an input, not assumed here. The count includes basement levels: the above-ground level at which dewatering may stop = floors required - number of basement levels. WORKED EXAMPLE: head 23 m -> uplift 23 t/m2; 1.25 x 23 = 28.75 t/m2; raft 4 m x 2.5 t/m3 = 10 t/m2; floor 0.60 m equivalent x 2.5 t/m3 = 1.5 t/m2; (28.75 - 10) / 1.5 = 12.5, say 13 floors; less 5 basement levels = level 8 (that page applies 1.25). At the required 1.2: 1.2 x 23 = 27.6 t/m2; (27.6 - 10) / 1.5 = 11.73, say 12 floors; less 5 basement levels = level 7. Recompute with the actual staged dead load and design water table before stopping dewatering.",
       "expression": "Max(0, ceiling((min_fos * uplift - raft_weight) / floor_weight))",
       "variables": {
         "min_fos": {
