@@ -8,7 +8,8 @@ question, a formula, a project or a document.
 2. LENGTH FOLLOWS THE QUESTION. Offers of further help, closing summaries,
    restatements of the question and "notes" blocks are padding and go. A
    note survives only when it is an assumption the result depends on: a line
-   labelled as an assumption, or one that states a value the working uses.
+   stating a value the working uses or an assumption with no value of its
+   own. A closing summary goes only when it repeats figures already given.
 3. NO MACHINERY IN THE TEXT. Status words about how a figure was produced
    ("deterministic", "certified" as a status, "pre-dispatch", the platform's
    calculator and pipeline names) and narration of the search ("the search
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -117,10 +119,10 @@ def _name_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", stem.lower())
 
 
+@dataclass
 class _Markers:
-    def __init__(self, rows: list[dict[str, Any]]):
-        self.rows = rows
-        self.entries: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]]
+    entries: list[dict[str, Any]] = field(default_factory=list)
 
     def marker(self, body: str) -> str:
         entry = _entry_from_body(body, self.rows)
@@ -197,7 +199,7 @@ _MACHINE_RE = re.compile("|".join(_MACHINE_TERMS), re.IGNORECASE)
 #: also states the figure: removed, the figure stays.
 _MACHINE_CLAUSE_RE = re.compile(
     r"(?:[ \t]*[,;(—–-][ \t]*|[ \t]+)(?:(?:computed|calculated|obtained|produced|derived|checked|verified)[ \t]+)?"
-    r"(?:by|via|using|with|from|per|through)[ \t]+(?:the[ \t]+|a[ \t]+)?[^,.;()\n]*?"
+    r"(?:by|via|using|with|from|through)[ \t]+(?:the[ \t]+|a[ \t]+)?[^,.;()\n]*?"
     r"(?:" + "|".join(_MACHINE_TERMS) + r")[^,.;()\n]*[)]?",
     re.IGNORECASE,
 )
@@ -205,15 +207,36 @@ _LEAD_IN_RE = re.compile(
     r"^(?:according\s+to|based\s+on|from|per|in)\s+(?:the\s+)?[^,]*?(?:" + "|".join(_MACHINE_TERMS) + r")[^,]*,\s*",
     re.IGNORECASE,
 )
-_SENTENCE_RE = re.compile(r"[^.!?\n]+(?:[.!?]+(?=\s|$)|$)")
+#: A sentence ends at ``.``/``!``/``?`` followed by space or the end; a point
+#: inside a figure (``12.5``) or a name (``p.12``) does not end it.
+_SENTENCE_RE = re.compile(r"(?:[^.!?\n]|[.!?](?![.!?]*(?:\s|$)))+(?:[.!?]+(?=\s|$)|$)")
 _FIGURE_RE = re.compile(r"\d")
+_MARKER_RE = re.compile(r"\[\d+\]")
+#: A figure with the unit word that follows it: ``45 kN·m``, ``12.6 m³``, ``10%``.
+_FIGURE_UNIT_RE = re.compile(r"(\d(?:[\d,.]*\d)?)[ \t]*([^\s\d,.;:!?()\[\]]*)")
+#: A sentence that reports something absent is the refusal itself: it stays
+#: as written even when it narrates the search.
+_NEGATIVE_RE = re.compile(
+    r"\b(?:no|not|none|nothing|neither|nor|cannot|can't|could\s+not|couldn't|unable|without|missing)\b",
+    re.IGNORECASE,
+)
+
+
+def _figures(text: str) -> Counter:
+    """Each figure with its unit word, counted. Citation markers are not figures."""
+    return Counter((n.replace(",", ""), u) for n, u in _FIGURE_UNIT_RE.findall(_MARKER_RE.sub("", text)))
 
 
 def _strip_machinery_sentence(sentence: str) -> str:
+    """The sentence without its machinery. A machinery-only sentence goes,
+    unless it reports something absent (that is the refusal itself). A
+    sentence that also states a figure keeps every figure with its unit: if
+    removing the machinery would lose one, the sentence stays as written."""
     if not _MACHINE_RE.search(sentence):
         return sentence
-    if not _FIGURE_RE.search(_MACHINE_RE.sub("", sentence)):
-        return ""
+    rest = _MACHINE_RE.sub("", sentence)
+    if not _FIGURE_RE.search(rest):
+        return sentence if _NEGATIVE_RE.search(rest) else ""
     s = _LEAD_IN_RE.sub("", sentence.lstrip())
     s = _MACHINE_CLAUSE_RE.sub("", s)
     s = _MACHINE_RE.sub("", s)
@@ -222,6 +245,8 @@ def _strip_machinery_sentence(sentence: str) -> str:
     s = re.sub(r"\s+([,.;:])", r"\1", s)
     if s and s[0].islower():
         s = s[0].upper() + s[1:]
+    if _figures(rest) - _figures(s):
+        return sentence
     return s
 
 
@@ -234,8 +259,12 @@ def _strip_machinery(text: str) -> str:
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
         body = line[len(lead):]
         kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _SENTENCE_RE.findall(body)) if k]
-        if kept:
-            out.append(lead + " ".join(kept))
+        new = lead + " ".join(kept)
+        if _figures(_MACHINE_RE.sub("", line)) - _figures(new):
+            # Removing the machinery would lose a figure: the line stays as written.
+            out.append(line)
+        elif kept:
+            out.append(new)
     return "\n".join(out)
 
 
@@ -271,18 +300,21 @@ def _working_numbers(lines: list[str]) -> set[str]:
     return nums
 
 
-def _changes_result(line: str, working: set[str]) -> bool:
-    """A note the result depends on: an assumption that states a value the
-    working uses. An assumption about something the working did not use
-    (an unasked caveat) does not change the result."""
-    if not _ASSUMPTION_RE.search(line):
-        return False
+def _changes_result(line: str, working: set[str], computed: bool = True) -> bool:
+    """A note that stays: one that states a value the working uses, an
+    assumption that states no value of its own, or -- on a turn that did not
+    compute, where there is no working to judge it by -- any note carrying a
+    figure. A note stating a value the working did not use (an unasked
+    caveat on a calculation) and a figure-less remark go."""
     nums = {n.replace(",", "") for n in _NUMBER_RE.findall(line)}
-    labelled = bool(re.match(r"^[ \t]*(?:[-*•][ \t]+)?(?:\*\*)?assum", line, re.IGNORECASE))
-    return bool(nums & working) or (labelled and not nums)
+    if nums & working:
+        return True
+    if nums and not computed:
+        return True
+    return bool(_ASSUMPTION_RE.search(line)) and not nums
 
 
-def _drop_padding(text: str) -> str:
+def _drop_padding(text: str, computed: bool = True) -> str:
     lines = text.split("\n")
     working = _working_numbers(lines)
     out: list[str] = []
@@ -298,13 +330,14 @@ def _drop_padding(text: str) -> str:
             # an assumption the result depends on.
             in_notes = True
             continue
-        if in_notes and not _changes_result(line, working):
+        if in_notes and not _changes_result(line, working, computed):
             continue
         sentences = [s.strip() for s in _SENTENCE_RE.findall(bare)] or [bare]
         kept = [s for s in sentences if not (_OFFER_RE.match(s) or _RESTATE_RE.match(s))]
         if not kept:
             continue
-        if _SUMMARY_RE.match(bare) and len(out) > 0:
+        if _SUMMARY_RE.match(bare) and out and not (_figures(bare) - _figures("\n".join(out))):
+            # A closing summary goes only when every figure in it was already given.
             continue
         if len(kept) != len(sentences):
             lead = line[: len(line) - len(line.lstrip())] + (_BULLET_RE.match(line).group(0).strip() + " "
@@ -368,12 +401,18 @@ def apply(
             str(r.get("page_or_section") or "").lower() == "calculated" for r in rows)
         if not asking:
             body = _strip_machinery(body)
-            body = _drop_padding(body)
+            body = _drop_padding(body, computed)
             body = _answer_first(body, computed)
         body = _tidy(body)
-        if not body:
+        # A marker whose line went (padding, a dropped note) is not lost: it
+        # rides on the last line, so every citation entry has its marker.
+        lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)
+        if body and lost:
+            body = body + " " + lost
+        if not body or body == _tidy(text):
             # Nothing but machinery and padding: the original stands, so the
-            # user is never left with an empty answer.
+            # user is never left with an empty answer. Nothing to change: the
+            # original stands byte for byte.
             return Contracted(text=text)
         return Contracted(text=body, citations=markers.entries, coverage=coverage)
     except Exception:  # noqa: BLE001 -- the contract must never break an answer
