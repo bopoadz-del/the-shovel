@@ -199,3 +199,76 @@ def test_the_sessions_files_are_pinned_to_its_questions(client, seen_messages,
     assert res.status_code == 200, res.text
     note = _attached_note(seen_messages)
     assert (doc["id"] in note) is expect_pinned
+
+
+# ── the mechanism, function by function ──────────────────────────────────────
+
+@pytest.mark.parametrize("project_id,expected", [("p-attachable", ["d-1"]), (None, [])])
+def test_session_document_ids_pins_nothing_without_an_attachable_project(
+        monkeypatch, project_id, expected):
+    from app.routers import chat as chat_router
+
+    monkeypatch.setattr(
+        "app.core.projects.list_session_documents",
+        lambda _p, _s, _u: [{"id": "d-1", "original_name": "grout_log.txt"}],
+    )
+    assert chat_router._session_document_ids(project_id, "ws-p-1", "u-1") == expected
+
+
+@pytest.mark.parametrize("session_id,uploader_id,expected", [
+    ("own", "own", 1), ("own", "other", 0), ("other", "own", 0), (None, None, 0),
+])
+def test_list_session_documents_matches_session_and_uploader(
+        client, session_id, uploader_id, expected):
+    from app.core import projects as store
+
+    headers = _register(client, f"store{session_id}{uploader_id}")
+    pid = _project(client, headers, f"W2-store-{session_id}-{uploader_id}-{_RUN}")
+    sid = f"ws-{pid}-9000"
+    doc = _upload(client, headers, pid, "piling_record_p7.txt", b"Pile 7 set 12 mm.",
+                  session_id=sid).json()["document"]
+    # A document carrying neither a session nor an uploader (a seeded row) is
+    # never a session document, whatever the caller asks for.
+    store.add_document(pid, "seeded_spec.txt", "seeded_spec.txt", None, 10, metadata={})
+    me = doc["metadata"]["uploader_id"]
+    rows = store.list_session_documents(
+        pid,
+        {"own": sid, "other": f"ws-{pid}-9001", None: None}[session_id],
+        {"own": me, "other": "someone-else", None: None}[uploader_id],
+    )
+    assert len(rows) == expected
+    if expected:
+        assert rows[0]["id"] == doc["id"] and rows[0]["origin"] == "uploaded"
+
+
+@pytest.mark.parametrize("which,ok", [("own", True), ("foreign", False)])
+def test_session_id_for_upload_accepts_only_this_projects_sessions(client, which, ok):
+    from fastapi import HTTPException
+
+    from app.routers import projects as projects_router
+
+    headers = _register(client, f"sfu{which}")
+    pid = _project(client, headers, f"W2-sfu-{which}-{_RUN}")
+    other = _project(client, headers, f"W2-sfu-o-{which}-{_RUN}")
+    me = _upload(client, headers, pid, "temp_works_note.txt", b"Props at 1.2 m.",
+                 session_id=f"ws-{pid}-1").json()["document"]["metadata"]["uploader_id"]
+    sid = f"ws-{pid}-77" if which == "own" else f"ws-{other}-77"
+    if ok:
+        assert projects_router._session_id_for_upload(pid, f" {sid} ", me) == sid
+    else:
+        with pytest.raises(HTTPException) as err:
+            projects_router._session_id_for_upload(pid, sid, me)
+        assert err.value.status_code == 400
+
+
+@pytest.mark.parametrize("path,endpoint", [
+    ("/v1/projects/{project_id}/conversations/{conversation_id}/documents",
+     "list_conversation_documents"),
+    ("/v1/projects/{project_id}/documents", "list_project_documents"),
+])
+def test_the_session_documents_route_is_its_own_endpoint(path, endpoint):
+    from app.routers import projects as projects_router
+
+    gets = {r.path: r.endpoint for r in app.routes
+            if getattr(r, "methods", None) and "GET" in r.methods}
+    assert gets[path] is getattr(projects_router, endpoint)
