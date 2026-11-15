@@ -998,6 +998,11 @@ def _trace_chunk(rank: int, c) -> Dict[str, Any]:
         "score": round(float(score), 6) if score is not None else None,
         **_leg_fields(c),
         "layer": getattr(c, "layer", "own"),
+        # What kind of document the chunk came from (doc_typing / S-R11),
+        # so a trace shows which document kinds held the handed slots.
+        # Empty when the kind is unknown; never guessed from the name here.
+        "doc_type": (getattr(c, "doc_type", "") or "").strip(),
+        "doc_role": (getattr(c, "doc_role", "") or "").strip(),
     }
 
 
@@ -1026,6 +1031,11 @@ def _emit_retrieval_trace(
 
         rid = request_id_ctx.get()
         handed_ids = {getattr(c, "chunk_id", None) for c in handed}
+        # The handed chunks were annotated when their excerpts were built;
+        # the ones left out were not. One batch read gives them their kind
+        # too (a chunk that already has one is skipped, so nothing is read
+        # twice); a failed read leaves the fields empty.
+        annotate_document_kinds(retrieved)
         from app.core.rag.fusion_trace import public_view
         from app.core.rag.retriever import retrievable_project_ids
         from app.core.rag.vector_store import (
