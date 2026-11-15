@@ -73,6 +73,43 @@ def sample_stacks(loop_ident: Optional[int]) -> str:
     return " || ".join(parts)
 
 
+#: Linux exposes each thread's CPU time; elsewhere the CPU delta is omitted.
+_TASK_DIR = "/proc/self/task"
+#: Per-thread CPU is snapshotted at most this often (each read costs a file
+#: per thread), so a stall's delta spans the stall plus at most this much.
+_CPU_SNAPSHOT_S = 0.1
+
+
+def thread_cpu_ms(task_dir: str = _TASK_DIR) -> dict:
+    """CPU milliseconds (user + system) used so far by each thread, keyed by the
+    thread's native id; empty where the OS gives no per-thread figures."""
+    try:
+        tids = os.listdir(task_dir)
+    except OSError:
+        return {}
+    tick = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    out = {}
+    for tid in tids:
+        try:
+            with open(os.path.join(task_dir, tid, "stat"), "rb") as fh:
+                fields = fh.read().rsplit(b")", 1)[1].split()
+            out[int(tid)] = (int(fields[11]) + int(fields[12])) * 1000.0 / tick
+        except (OSError, ValueError, IndexError):
+            continue
+    return out
+
+
+def busiest_threads(before: dict, after: dict, names: dict, top: int = 4) -> str:
+    """The threads that burned the most CPU between two snapshots, by name.
+
+    A loop that is late while parked in ``select`` is waiting for the GIL;
+    the thread that burned CPU across that window held it. Threads that used
+    no CPU are left out."""
+    deltas = sorted(((after[t] - before.get(t, 0.0), t) for t in after), reverse=True)
+    parts = [f"{names.get(t, t)}={d:.0f}ms" for d, t in deltas[:top] if d > 0]
+    return ("cpu " + " ".join(parts)) if parts else ""
+
+
 def heartbeat_lag_ms(posted: float, served_at: Optional[float], now: float) -> float:
     """How late the LOOP served a heartbeat posted at ``posted``.
 
@@ -108,6 +145,8 @@ class LagMonitor:
         #: deterministically (event, not a wall-clock guess) instead of racing
         #: the sampler thread -- see tests/test_offload_and_loop_watchdog.
         self.stall_recorded = threading.Event()
+        self._cpu_at = 0.0
+        self._cpu_before: dict = {}
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
@@ -131,6 +170,8 @@ class LagMonitor:
                 served.set()
 
             posted = time.monotonic()
+            if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
+                self._cpu_before, self._cpu_at = thread_cpu_ms(), posted
             try:
                 self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
@@ -164,6 +205,13 @@ class LagMonitor:
                 # stall can never carry an empty trace.
                 if not sample:
                     sample = sample_stacks(self._loop_ident)
+                # Which threads burned CPU across the stall: the GIL holder
+                # when the loop itself was idle-but-late. Leads the sample, so
+                # a truncated message still names it.
+                names = {t.native_id: t.name for t in threading.enumerate()}
+                cpu = busiest_threads(self._cpu_before, thread_cpu_ms(), names)
+                if cpu:
+                    sample = f"{cpu} :: {sample}"
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:

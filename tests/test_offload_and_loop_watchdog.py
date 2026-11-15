@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import os
 import threading
 import time
 
@@ -216,3 +217,45 @@ def test_a_stall_is_timed_to_when_the_loop_finally_serves_the_heartbeat(block_s)
     worst = max(lag for lag, _ in mon.stalls)
     assert worst >= block_s * 1000 * 0.8, (worst, block_s)
     assert worst == pytest.approx(mon.max_lag_ms)
+
+
+# --- Which thread burned the CPU across a stall -------------------------------
+# CI 3261ed1 (631 ms): the loop was idle in select() and the 1500-char message
+# held only the loop's own frames, so nothing named the thread that kept the
+# loop from the GIL. Per-thread CPU over the stall names it.
+
+def _write_task(root, tid: int, comm: str, utime: int, stime: int) -> None:
+    d = root / str(tid)
+    d.mkdir(parents=True)
+    rest = ["S", "1", "1", "1", "0", "-1", "0", "0", "0", "0", "0", str(utime), str(stime), "0", "0"]
+    (d / "stat").write_bytes(f"{tid} ({comm}) {' '.join(rest)}\n".encode())
+
+
+@pytest.mark.parametrize("tasks,expected_ticks", [
+    ([(101, "python", 30, 20), (102, "turn-io) x", 7, 0)], {101: 50, 102: 7}),
+    ([], {}),
+])
+def test_thread_cpu_is_read_per_thread_from_the_task_dir(tmp_path, tasks, expected_ticks):
+    for tid, comm, ut, st in tasks:
+        _write_task(tmp_path, tid, comm, ut, st)
+    tick = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    got = loop_watchdog.thread_cpu_ms(str(tmp_path))
+    assert got == {tid: t * 1000.0 / tick for tid, t in expected_ticks.items()}
+
+
+@pytest.mark.parametrize("make", ["absent", "a_file"])
+def test_thread_cpu_is_empty_where_the_os_has_no_task_dir(tmp_path, make):
+    target = tmp_path / make
+    if make == "a_file":
+        target.write_text("not a directory")
+    assert loop_watchdog.thread_cpu_ms(str(target)) == {}
+
+
+@pytest.mark.parametrize("after,expected", [
+    ({1: 100.0, 2: 690.0, 3: 40.0}, "cpu turn-io_2=600ms loop=50ms"),
+    ({1: 50.0, 2: 90.0, 3: 40.0}, ""),
+])
+def test_the_stall_names_the_threads_that_burned_cpu_across_it(after, expected):
+    before = {1: 50.0, 2: 90.0, 3: 40.0}
+    names = {1: "loop", 2: "turn-io_2", 3: "idle"}
+    assert loop_watchdog.busiest_threads(before, after, names) == expected
