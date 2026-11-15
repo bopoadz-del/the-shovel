@@ -500,6 +500,21 @@ def _resolve_attached_documents(
     return out
 
 
+def _session_document_ids(
+    project_id: Optional[str], conversation_id: Optional[str], user_id: Optional[str],
+) -> List[str]:
+    """Ids of the files this user attached or produced in this chat session.
+
+    ``project_id`` is the project the caller may attach to (None otherwise),
+    so a session of a project the caller cannot open pins nothing."""
+    if not project_id or not conversation_id or not user_id:
+        return []
+    from app.core import projects as projects_store
+
+    return [d["id"] for d in projects_store.list_session_documents(
+        project_id, conversation_id, user_id) if d.get("id")]
+
+
 def _attach_client_documents(
     attached_docs: List[Dict[str, Any]], document_ids: List[Any]
 ) -> List[Dict[str, Any]]:
@@ -1350,6 +1365,13 @@ async def chat_stream_v1(
     # Explicit client-sent document_ids win; marker resolution fills the gap
     # for clients (and history replays) that only carry the inline marker.
     document_ids: List[str] = list(body.get("document_ids") or [])
+    # W2: the files attached in this session are pinned to its questions by
+    # default, so "the attached drawing" still means them three turns later.
+    # Only this caller's files of this session: another session of the same
+    # project never reads them unless the user pins them there.
+    for _sid in _session_document_ids(owned_pid, conversation_id, user_id):
+        if _sid not in document_ids:
+            document_ids.append(_sid)
     for _d in attached_docs:
         if _d.get("id") and _d["id"] not in document_ids:
             document_ids.append(_d["id"])

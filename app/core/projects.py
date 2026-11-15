@@ -2557,6 +2557,46 @@ def list_document_names(project_id: str) -> List[Dict[str, Any]]:
             if not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
 
 
+def list_session_documents(
+    project_id: str, session_id: str, uploader_id: str,
+) -> List[Dict[str, Any]]:
+    """The documents one user's chat session holds, newest first.
+
+    A document belongs to a session when its metadata records that session
+    and the caller uploaded or produced it there. Each row carries ``origin``
+    ("uploaded" or "produced") for the sidebar's tag. One narrow query: the
+    columns the session list and the chat pin need, no per-file stat.
+    """
+    if not project_id or not session_id or not uploader_id:
+        return []
+    _ensure_db()
+    source_id = _master_corpus_source(project_id) or project_id
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(Document.id, Document.original_name, Document.doc_type,
+                   Document.size, Document.uploaded_at, Document.metadata_,
+                   Document.ingest_status, Document.ingest_status_reason,
+                   Document.chunk_count)
+            .where(Document.project_id == source_id)
+            .order_by(Document.uploaded_at.desc())
+        ).all()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        meta = coerce_document_metadata(r.metadata_)
+        if meta.get("session_id") != session_id or meta.get("uploader_id") != uploader_id:
+            continue
+        out.append({
+            "id": r.id, "original_name": r.original_name, "doc_type": r.doc_type,
+            "size": r.size, "uploaded_at": r.uploaded_at,
+            "origin": meta.get("origin") or "uploaded",
+            "metadata": meta,
+            "ingest_status": r.ingest_status,
+            "ingest_status_reason": r.ingest_status_reason,
+            "chunk_count": int(r.chunk_count or 0),
+        })
+    return out
+
+
 def count_documents(project_id: str, visible_only: bool = False) -> int:
     """Total document count for a project — a cheap indexed COUNT, so a
     paginated listing can report the total without serializing every row.
