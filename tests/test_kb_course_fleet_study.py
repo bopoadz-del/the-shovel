@@ -49,13 +49,20 @@ def test_entry_carries_course_source_and_declared_units(rule_id):
         _UREG(e["thresholds"]["unit"])
 
 
-def test_rate_unit_is_volume_per_hour_from_declared_variables():
+@pytest.mark.parametrize(
+    "cycle_var, cycle, load, per_hour",
+    [
+        ("cycle_time_short", 1, 1, 60.0),  # hand: 60 / 1 x 1 = 60 m3/hr
+        ("cycle_time_long", 4, 2, 30.0),   # hand: 60 / 4 x 2 = 30 m3/hr
+    ],
+)
+def test_rate_unit_is_volume_per_hour_from_declared_variables(cycle_var, cycle, load, per_hour):
     e = kb.get_rule(RATE)
     # the 60 is minutes per hour: (60 min/hr / cycle min) x load m3 -> m3/hr
-    q = (60 * _UREG("minute/hour") / _UREG(e["variables"]["cycle_time_short"]["unit"])) * _UREG(
-        e["variables"]["unit_capacity"]["unit"]
+    q = (60 * _UREG("minute/hour") / (cycle * _UREG(e["variables"][cycle_var]["unit"]))) * (
+        load * _UREG(e["variables"]["unit_capacity"]["unit"])
     )
-    assert q.to(e["thresholds"]["unit"]).magnitude == pytest.approx(60.0)
+    assert q.to(e["thresholds"]["unit"]).magnitude == pytest.approx(per_hour)
 
 
 @pytest.mark.parametrize(
@@ -127,9 +134,13 @@ def test_missing_required_input_raises_not_defaulted(rule_id, partial):
         ev(rule_id, **partial)
 
 
-def test_single_haul_calculators_are_left_as_they_are():
+@pytest.mark.parametrize(
+    "rule_id, expression",
+    [
+        ("equipment.cycle_production", "60 / cycle_time * unit_capacity"),
+        ("equipment.machines_required", "ceiling(required_rate / production_per_machine)"),
+    ],
+)
+def test_single_haul_calculators_are_left_as_they_are(rule_id, expression):
     # Ruling 2: the general cycle formulas stay separate calculators.
-    assert kb.get_rule("equipment.cycle_production")["expression"] == "60 / cycle_time * unit_capacity"
-    assert kb.get_rule("equipment.machines_required")["expression"] == (
-        "ceiling(required_rate / production_per_machine)"
-    )
+    assert kb.get_rule(rule_id)["expression"] == expression
