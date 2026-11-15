@@ -92,124 +92,84 @@ BASE = {
     "tests/test_alpha.py": _tests("test_a1", "test_a2"),
     "tests/test_beta.py": _tests("test_b1"),
     "tests/data/sample.txt": "fixture\n",
+    "tests/test_cls.py": (
+        "class TestThing:\n"
+        "    def test_one(self):\n        assert 1\n"
+        "    async def test_two(self):\n        assert 1\n"
+    ),
 }
+_ALPHA = BASE["tests/test_alpha.py"]
+_CLS_ONE = "class TestThing:\n    def test_one(self):\n        assert 1\n"
 
 
-# -- deleting a file under tests/ ---------------------------------------------
-
-
-@pytest.mark.parametrize("deleted", ["tests/test_beta.py", "tests/data/sample.txt"])
-def test_deleting_a_file_under_tests_fails(tmp_path, deleted):
-    """Mutation killed: a guard that only counts functions, or only .py files."""
-    repo, b, h = _repo(tmp_path, BASE, {deleted: None})
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert f"deleted test file: {deleted}" in r.stdout
-    assert "TEST REMOVAL APPROVED" in r.stdout
-
-
-def test_deleting_a_file_outside_tests_passes(tmp_path):
-    """Mutation killed: a guard that fails on ANY deleted file."""
-    repo, b, h = _repo(tmp_path, BASE, {"app/thing.py": None})
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
-def test_moving_a_test_out_of_tests_counts_as_deletion(tmp_path):
-    """Mutation killed: renames ignored, so a move out of tests/ slips by."""
-    repo, b, h = _repo(
-        tmp_path,
-        BASE,
-        {
-            "tests/test_alpha.py": None,
-            "attic/test_alpha.py": BASE["tests/test_alpha.py"],
-        },
-    )
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "deleted test file: tests/test_alpha.py" in r.stdout
-
-
-def test_renaming_a_test_file_inside_tests_passes(tmp_path):
-    """Mutation killed: a rename within tests/ treated as a deletion."""
-    repo, b, h = _repo(
-        tmp_path,
-        BASE,
-        {
-            "tests/test_alpha.py": None,
-            "tests/unit/test_alpha.py": BASE["tests/test_alpha.py"],
-        },
-    )
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
-# -- removing more test functions than are added -------------------------------
-
-
-def test_removing_more_test_functions_than_added_fails(tmp_path):
-    """Mutation killed: a guard that only looks at whole-file deletions."""
-    repo, b, h = _repo(tmp_path, BASE, {"tests/test_alpha.py": _tests("test_a1")})
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "removed test: tests/test_alpha.py::test_a2" in r.stdout
-
-
-def test_removed_tests_offset_by_new_tests_elsewhere_passes(tmp_path):
-    """Mutation killed: 'any removal fails' instead of 'net removal fails'."""
-    repo, b, h = _repo(
-        tmp_path,
-        BASE,
+# -- one rule, both directions: (change, exit code, line the log must carry) ----
+#
+# Mutations killed, by row:
+#   delete .py / delete data file -> a guard that only counts functions or .py
+#   delete outside tests          -> a guard that fails on ANY deleted file
+#   move out of tests             -> renames ignored, a move out slips by
+#   rename inside tests           -> a rename within tests/ treated as deletion
+#   net function loss             -> a guard that only sees whole-file deletes
+#   loss offset elsewhere         -> "any removal fails" instead of net removal
+#   rename a test function        -> removed counted but added not counted
+#   class / async method lost     -> only module-level sync defs counted
+#   normal code + tests PR        -> a guard that fails every PR touching tests/
+SCENARIOS = [
+    ({"tests/test_beta.py": None}, 1, "deleted test file: tests/test_beta.py"),
+    ({"tests/data/sample.txt": None}, 1, "deleted test file: tests/data/sample.txt"),
+    ({"app/thing.py": None}, 0, "No test removal."),
+    (
+        {"tests/test_alpha.py": None, "attic/test_alpha.py": _ALPHA},
+        1,
+        "deleted test file: tests/test_alpha.py",
+    ),
+    (
+        {"tests/test_alpha.py": None, "tests/unit/test_alpha.py": _ALPHA},
+        0,
+        "No test removal.",
+    ),
+    (
+        {"tests/test_alpha.py": _tests("test_a1")},
+        1,
+        "removed test: tests/test_alpha.py::test_a2",
+    ),
+    (
         {
             "tests/test_alpha.py": _tests("test_a1"),
             "tests/test_gamma.py": _tests("test_g1"),
         },
-    )
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
-def test_renaming_a_test_function_passes(tmp_path):
-    """Mutation killed: removed counted but added not counted."""
-    repo, b, h = _repo(
-        tmp_path, BASE, {"tests/test_alpha.py": _tests("test_a1", "test_a2_renamed")}
-    )
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
-def test_class_methods_and_async_tests_are_counted(tmp_path):
-    """Mutation killed: only module-level sync ``def test_*`` are counted."""
-    base = {
-        **BASE,
-        "tests/test_cls.py": (
-            "class TestThing:\n"
-            "    def test_one(self):\n        assert 1\n"
-            "    async def test_two(self):\n        assert 1\n"
-        ),
-    }
-    change = {
-        "tests/test_cls.py": "class TestThing:\n    def test_one(self):\n        assert 1\n"
-    }
-    repo, b, h = _repo(tmp_path, base, change)
-    r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "TestThing.test_two" in r.stdout
-
-
-def test_normal_pr_that_adds_tests_and_code_passes(tmp_path):
-    """Mutation killed: a guard that fails every PR touching tests/."""
-    repo, b, h = _repo(
-        tmp_path,
-        BASE,
+        0,
+        "test functions removed: 1, added: 1",
+    ),
+    (
+        {"tests/test_alpha.py": _tests("test_a1", "test_a2_renamed")},
+        0,
+        "test functions removed: 1, added: 1",
+    ),
+    (
+        {"tests/test_cls.py": _CLS_ONE},
+        1,
+        "removed test: tests/test_cls.py::TestThing.test_two",
+    ),
+    (
         {
             "app/thing.py": "X = 2\n",
             "tests/test_alpha.py": _tests("test_a1", "test_a2", "test_a3"),
         },
-    )
+        0,
+        "No test removal.",
+    ),
+]
+
+
+@pytest.mark.parametrize(("change", "code", "line"), SCENARIOS)
+def test_change_without_approval(tmp_path, change, code, line):
+    repo, b, h = _repo(tmp_path, BASE, change)
     r = _run(repo, b, h, body="Ordinary change.", head_sha=h)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "No test removal." in r.stdout
+    assert r.returncode == code, r.stdout + r.stderr
+    assert line in r.stdout
+    # A failing run always tells the author how to approve; a pass never does.
+    assert ("TEST REMOVAL APPROVED" in r.stdout) == (code == 1)
 
 
 # -- the approval line ---------------------------------------------------------
@@ -241,12 +201,16 @@ def test_approval_line_not_naming_the_head_still_fails(tmp_path, body_for):
     assert r.returncode == 1, r.stdout + r.stderr
 
 
-def test_stale_base_merge_that_drops_newer_tests_fails(tmp_path):
-    """The squash a stale branch would apply: the merge result loses a test
-    file that the base gained after the branch was cut.
+# -- a stale branch merged onto a base that moved on -----------------------------
+
+
+@pytest.mark.parametrize(("drop_newer_test", "code"), [(True, 1), (False, 0)])
+def test_stale_base_merge(tmp_path, drop_newer_test, code):
+    """Main gains a test after the branch was cut; the merge result either
+    loses it (what a careless conflict resolution does) or keeps it.
 
     Mutation killed: comparing the branch to its own fork point instead of
-    the merged result to the current base.
+    the merged result to the current base -- that sees no deletion at all.
     """
     repo = tmp_path / "r"
     repo.mkdir()
@@ -261,23 +225,24 @@ def test_stale_base_merge_that_drops_newer_tests_fails(tmp_path):
     _write(repo, {"tests/test_new.py": _tests("test_n1")})
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "main gains a test")
-    # The feature side "resolves" by keeping its own tree: the merge result
-    # no longer has tests/test_new.py.
-    _git(repo, "merge", "-q", "-s", "ours", "--no-edit", "feature")
-    _git(repo, "checkout", "-q", "feature", "--", "app/thing.py")
-    _git(repo, "rm", "-q", "tests/test_new.py")
-    _git(repo, "commit", "-q", "--amend", "--no-edit")
+    _git(repo, "merge", "-q", "--no-edit", "feature")
+    if drop_newer_test:
+        _git(repo, "rm", "-q", "tests/test_new.py")
+        _git(repo, "commit", "-q", "--amend", "--no-edit")
     merge = _git(repo, "rev-parse", "HEAD")
     head = _git(repo, "rev-parse", "feature")
     r = _run(repo, f"{merge}^1", merge, body="Ordinary change.", head_sha=head)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "deleted test file: tests/test_new.py" in r.stdout
+    assert r.returncode == code, r.stdout + r.stderr
+    assert ("deleted test file: tests/test_new.py" in r.stdout) == drop_newer_test
 
 
-def test_bad_revision_is_an_error_not_a_pass(tmp_path):
+@pytest.mark.parametrize("bad_side", ["base", "head"])
+def test_bad_revision_is_an_error_not_a_pass(tmp_path, bad_side):
     """Mutation killed: a diff failure swallowed into exit 0."""
-    repo, _b, h = _repo(tmp_path, BASE, {})
-    r = _run(repo, "0" * 40, h, body="", head_sha=h)
+    repo, b, h = _repo(tmp_path, BASE, {})
+    missing = "0" * 40
+    base, head = (missing, h) if bad_side == "base" else (b, missing)
+    r = _run(repo, base, head, body="", head_sha=h)
     assert r.returncode == 2, r.stdout + r.stderr
 
 
@@ -299,7 +264,13 @@ def test_is_test_path(path, expected):
     assert guard.is_test_path(path) is expected
 
 
-def test_unparseable_test_file_still_counts_its_tests():
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("def test_a():\n    pass\n\ndef test_b(:\n", 2),  # does not parse
+        ("def test_a():\n    pass\n\ndef helper():\n    pass\n", 1),  # parses
+    ],
+)
+def test_test_functions_are_counted_parsed_or_not(src, expected):
     """Mutation killed: a syntax error hides every test in the file."""
-    src = "def test_a():\n    pass\n\ndef test_b(:\n"
-    assert sum(guard.count_test_functions(src).values()) == 2
+    assert sum(guard.count_test_functions(src).values()) == expected
