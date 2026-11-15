@@ -14,7 +14,10 @@ Every project, user, session and answer here is created by the test.
 """
 from __future__ import annotations
 
+import io
+import time
 import uuid
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -125,6 +128,9 @@ def test_the_same_output_twice_is_kept_once(client, second_answer, kept):
     assert _export(client, headers, pid, sid, "xlsx").status_code == 200
     if second_answer:
         _answer(sid, pid, second_answer)
+    # The second render lands in a later second, so its write time differs:
+    # the same answer must still be recognised as the same output.
+    time.sleep(1.1)
     assert _export(client, headers, pid, sid, "xlsx").status_code == 200
 
     assert len(_session_docs(client, headers, pid, sid)) == kept
@@ -254,3 +260,42 @@ def test_a_session_with_no_answer_produces_and_keeps_nothing(client, user_turns)
     detail = res.json()["detail"].lower()
     assert "no assistant messages" in detail and "out of range" not in detail
     assert _session_docs(client, headers, pid, sid) == []
+
+
+def _ooxml(parts: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, body in parts.items():
+            zf.writestr(name, body)
+    return buf.getvalue()
+
+
+_CORE = "<cp:coreProperties><dcterms:modified>{}</dcterms:modified></cp:coreProperties>"
+
+
+@pytest.mark.parametrize("second_sheet,second_stamp,same", [
+    ("<row>bay 1</row>", "2026-01-01T00:00:09Z", True),    # only write time moved
+    ("<row>bay 2</row>", "2026-01-01T00:00:00Z", False),   # the content moved
+])
+def test_the_produced_digest_reads_content_not_write_time(second_sheet,
+                                                          second_stamp, same):
+    from app.routers import exports
+
+    first = _ooxml({"xl/worksheets/sheet1.xml": "<row>bay 1</row>",
+                    "docProps/core.xml": _CORE.format("2026-01-01T00:00:00Z")})
+    second = _ooxml({"xl/worksheets/sheet1.xml": second_sheet,
+                     "docProps/core.xml": _CORE.format(second_stamp)})
+    assert first != second
+    assert (exports._produced_content_digest(first)
+            == exports._produced_content_digest(second)) is same
+
+
+@pytest.mark.parametrize("first,second,same", [
+    (b"plain report v1", b"plain report v1", True),
+    (b"plain report v1", b"plain report v2", False),
+])
+def test_a_non_archive_output_is_compared_byte_for_byte(first, second, same):
+    from app.routers import exports
+
+    assert (exports._produced_content_digest(first)
+            == exports._produced_content_digest(second)) is same

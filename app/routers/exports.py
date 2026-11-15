@@ -21,6 +21,7 @@ import os
 import re
 import tempfile
 import uuid
+import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
 from datetime import datetime, timezone
@@ -708,6 +709,34 @@ PRODUCED_SESSION_DETAIL = (
 )
 
 
+#: OOXML part that carries only the write time (dcterms:created/modified);
+#: two renders of the same content differ in nothing else.
+_OOXML_WRITE_TIME_PART = "docProps/core.xml"
+
+
+def _produced_content_digest(raw: bytes) -> str:
+    """Digest of what a produced file says, not when it was written.
+
+    docx/xlsx are zip archives whose ``docProps/core.xml`` and member
+    timestamps change on every render, so two exports of the same answer a
+    second apart differ byte-for-byte. For an archive the digest covers each
+    member's name and bytes, minus the write-time part; anything else is
+    hashed as raw bytes.
+    """
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        return hashlib.sha256(raw).hexdigest()
+    h = hashlib.sha256()
+    with archive:
+        for name in sorted(archive.namelist()):
+            if name == _OOXML_WRITE_TIME_PART:
+                continue
+            h.update(name.encode("utf-8") + b"\0")
+            h.update(archive.read(name) + b"\0")
+    return h.hexdigest()
+
+
 def _save_produced_to_session(
     project_id: str,
     conversation_id: str,
@@ -720,7 +749,8 @@ def _save_produced_to_session(
     again and askable by pin, but never indexed, so the product's own output
     is not evidence for a later answer.
 
-    The same bytes produced twice in one session are kept once. Best-effort:
+    The same content produced twice in one session is kept once, however
+    far apart the two renders were. Best-effort:
     a storage failure is logged and the download is still served. Returns
     the document id, or None when nothing was stored.
     """
@@ -729,12 +759,12 @@ def _save_produced_to_session(
     try:
         with open(path, "rb") as fh:
             raw_bytes = fh.read()
-        digest = hashlib.sha256(raw_bytes).hexdigest()
+        digest = _produced_content_digest(raw_bytes)
         doc_project = projects_store.ui_project_id(project_id) or project_id
         for existing in projects_store.list_session_documents(
             doc_project, conversation_id, user_id,
         ):
-            if (existing.get("metadata") or {}).get("produced_sha256") == digest:
+            if (existing.get("metadata") or {}).get("produced_content_sha256") == digest:
                 return existing.get("id")
         stored_as = f"{uuid.uuid4().hex[:8]}_{display_name}"
         stored_path = byte_store.allocate_path(stored_as)
@@ -747,7 +777,7 @@ def _save_produced_to_session(
                 "origin": "produced",
                 "uploader_id": user_id,
                 "session_id": conversation_id,
-                "produced_sha256": digest,
+                "produced_content_sha256": digest,
             },
         )
         projects_store.stamp_document_index(
