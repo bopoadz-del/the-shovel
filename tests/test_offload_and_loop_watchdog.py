@@ -259,3 +259,48 @@ def test_the_stall_names_the_threads_that_burned_cpu_across_it(after, expected):
     before = {1: 50.0, 2: 90.0, 3: 40.0}
     names = {1: "loop", 2: "turn-io_2", 3: "idle"}
     assert loop_watchdog.busiest_threads(before, after, names) == expected
+
+
+@pytest.mark.parametrize("threshold_ms,tick_ms", [(250.0, 50.0), (120.0, 10.0)])
+def test_a_new_monitor_starts_clean_with_no_cpu_snapshot(threshold_ms, tick_ms):
+    """``LagMonitor.__init__`` stores the limits in seconds and starts with no
+    stall, no lag and no CPU snapshot (the first heartbeat takes one)."""
+    loop = asyncio.new_event_loop()
+    try:
+        mon = loop_watchdog.LagMonitor(loop, threshold_ms=threshold_ms, tick_ms=tick_ms, log=False)
+        assert (mon.threshold, mon.tick) == (threshold_ms / 1000, tick_ms / 1000)
+        assert (mon.max_lag_ms, mon.stalls, mon._cpu_before) == (0.0, [], {})
+        assert not mon.stall_recorded.is_set()
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("grows_ms,named", [
+    (0.0, False),    # a thread that burned CPU only BEFORE the stall is not named
+    (500.0, True),   # a thread that burned CPU ACROSS the stall is named
+])
+def test_a_stall_names_only_cpu_burned_across_it_not_before_it(monkeypatch, grows_ms, named):
+    """``_run`` snapshots per-thread CPU when it posts a heartbeat, so the
+    figure on a stall is the delta across the stall, not the thread's lifetime
+    total (without the snapshot a long-lived busy thread would be blamed)."""
+    clock = {"ms": 1000.0}
+
+    def fake_cpu():
+        clock["ms"] += grows_ms
+        return {4242: clock["ms"]}
+
+    monkeypatch.setattr(loop_watchdog, "thread_cpu_ms", fake_cpu)
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=150,
+                                       tick_ms=10, log=False).start()
+        await asyncio.sleep(0.05)
+        time.sleep(0.5)
+        await asyncio.sleep(0.3)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.stalls, "a blocked loop must record a stall"
+    _, worst = max(mon.stalls)
+    assert worst.startswith("cpu 4242=") is named, worst[:200]

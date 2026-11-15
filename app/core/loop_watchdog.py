@@ -85,7 +85,8 @@ def thread_cpu_ms(task_dir: str = _TASK_DIR) -> dict:
     thread's native id; empty where the OS gives no per-thread figures."""
     try:
         tids = os.listdir(task_dir)
-    except OSError:
+    except OSError as exc:
+        _LOG.debug("per-thread CPU unavailable (%s): stalls carry no cpu figures", exc)
         return {}
     tick = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
     out = {}
