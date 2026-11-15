@@ -307,3 +307,17 @@ def test_a_read_from_an_earlier_turn_is_not_this_turns(name):
     assert _opening_part_reads(_fetch_turn(cut)) == [name]
     assert _opening_part_reads(messages) == []
     assert runtime_mod._note_opening_part_reads("", _fetch_turn(cut)) == ""
+
+
+@pytest.mark.parametrize("tool", ["search_project_documents", "boq_processor"])
+def test_only_a_document_fetch_counts_as_a_cut_read(tool):
+    """Another tool's result can carry the same keys; it is not a read of
+    the document's own text, so it never earns the note."""
+    lookalike = {"document_id": "d-6", "filename": "tender_addendum_2.txt",
+                 "truncated": True, "source": "extracted", "content": "x"}
+    messages = _fetch_turn({"result": lookalike})
+    messages[1]["tool_calls"][0]["function"]["name"] = tool
+    messages[2]["name"] = tool
+    assert _opening_part_reads(messages) == []
+    messages[2]["name"] = "fetch_document"
+    assert _opening_part_reads(messages) == ["tender_addendum_2.txt"]
