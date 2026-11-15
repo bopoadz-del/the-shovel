@@ -129,8 +129,9 @@ def test_too_few_witnesses_under_a_partial_header_stays_unpriced(cols, lines):
     assert stats.pages == {"header": 1, "inferred": 0, "none": 0}
 
 
-def test_no_carry_of_inferred_columns_to_another_page():
-    words = _layout(COLS_1, PRICED_1, page=1) + _layout(COLS_1, PRICED_1[:2], page=2)
+@pytest.mark.parametrize("cols,lines", [(COLS_1, PRICED_1), (COLS_2, PRICED_2)])
+def test_no_carry_of_inferred_columns_to_another_page(cols, lines):
+    words = _layout(cols, lines, page=1) + _layout(cols, lines[:2], page=2)
     stats = g.ColumnStats()
     rows = _rows(words, stats)
     assert {r.source_page for r in rows} == {1}
