@@ -395,6 +395,14 @@ class LabelEvent:
     figure_number: bool
 
 
+def has_letter(text: str) -> bool:
+    """The label test's letter rule, the one place it lives: ``text`` holds a
+    letter of any script (the Unicode letter categories ``L*``, which is what
+    ``str.isalpha`` tests). Digits, punctuation and symbols are not letters, so
+    a figure-only or punctuation-only line is never a label."""
+    return any(ch.isalpha() for ch in text)
+
+
 def _has_figure_number(fields: dict[str, str]) -> bool:
     return any(
         parse_number(tok) is not None
@@ -616,6 +624,8 @@ class ColumnStats:
             "witness_lines": self.witness_lines,
             "rows_priced_reconciled": sum(1 for r in priced if not r.check),
             "rows_figures_not_reconciling": sum(1 for r in priced if r.check),
+            "priced_rows_empty_description": sum(
+                1 for r in priced if not (r.fields.get("description") or "").strip()),
             "header_conflicts": self.header_conflicts,
             "labels_reread_as_rows": self.labels_reread_as_rows,
             "section_paths": len({tuple(r.path) or (r.section,) for r in rows}),
@@ -630,7 +640,7 @@ def _header_label(line: Sequence[Word], columns: Sequence[_Column] | None, refs:
     letter (:data:`LABEL_BEFORE_HEADER`); a letter-free line was dropped, not
     labelled, so it is not a label re-read as a row."""
     if columns is None:
-        return bool(re.search(r"[A-Za-z]", " ".join(w.text for w in line)))
+        return has_letter(" ".join(w.text for w in line))
     f = _bucket_line(line, columns, refs).fields
     return not (any(f.get(k) for k in _FIGURE_FIELDS) and f.get("description"))
 
@@ -740,7 +750,7 @@ def extract_bill_rows(
                 cur = _bucket_inferred(li, line, inferred)
                 line_refs: set[int] = set()
             elif columns is None:
-                if re.search(r"[A-Za-z]", " ".join(w.text for w in line)):
+                if has_letter(" ".join(w.text for w in line)):
                     label(_label_of(line), page, LABEL_BEFORE_HEADER)
                 continue
             else:
@@ -774,7 +784,7 @@ def extract_bill_rows(
             # section label, even one that prints a number such as "Bill 3")
             # is a heading label of the rows that follow.
             if not has_figure or not has_desc:
-                if re.search(r"[A-Za-z]", cur.text):
+                if has_letter(cur.text):
                     label(cur.label, page,
                           LABEL_NO_FIGURE if not has_figure else LABEL_NO_DESCRIPTION,
                           figure_number=_has_figure_number(cur.fields))
