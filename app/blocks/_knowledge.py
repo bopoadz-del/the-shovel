@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 import re
 import threading
 from typing import Any, Dict, List, Optional
+
+_LOG = logging.getLogger(__name__)
 
 # sympy is imported lazily in evaluate() — it costs ~1.0s at BOOT and only
 # `formula` entries need it, so a service that never evaluates a formula should
@@ -525,6 +528,7 @@ def _parse_unit(text: str):
     try:
         return _unit_registry().parse_units(raw)
     except Exception:  # noqa: BLE001 -- not a unit: the figure has none
+        _LOG.debug("not a unit: %r", raw, exc_info=True)
         return None
 
 
