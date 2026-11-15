@@ -4,17 +4,22 @@
 // tagged Uploaded or Produced. Every case has an input that must pass and
 // one that must fail.
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import { test } from 'node:test'
 
-import { sessionDocumentTag, sessionDocumentsFor, withSessionId } from './sessionDocuments.js'
+import {
+  readSessionDocuments,
+  sessionDocumentTag,
+  sessionDocumentsFailed,
+  sessionDocumentsFor,
+  sessionDocumentsLoaded,
+  sessionDocumentsView,
+  withSessionId,
+} from './sessionDocuments.js'
 
 class FakeForm {
   constructor() { this.fields = [] }
   append(k, v) { this.fields.push([k, v]) }
 }
-
-const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
 
 test('an upload in a session carries its id; without one it carries none', () => {
   const inSession = withSessionId(new FakeForm(), 'ws-p1-abc')
@@ -52,18 +57,45 @@ test('a row without an id is dropped; a malformed payload is no rows', () => {
   assert.deepEqual(sessionDocumentsFor('s', 's', null), [])
 })
 
-test('both upload paths send the open session id', () => {
-  const workspace = read('../pages/ProjectWorkspace.tsx')
-  const composer = read('./ChatComposer.tsx')
-  assert.ok(workspace.includes('withSessionId(form, sessionId)'), 'documents panel upload')
-  assert.ok(composer.includes('withSessionId(fd, sessionId)'), 'composer upload')
-  assert.ok(workspace.includes('sessionId={conversationId}'), 'open session wired to both')
+// G-1: a failed read is an error state, never an empty session. The two
+// source-grep tests that stood here are replaced by rendered behaviour in
+// SessionDocuments.visible.test.mjs (upload paths and the sidebar order).
+
+const ROWS = { documents: [{ id: 'd1', original_name: 'a.md', origin: 'uploaded' }] }
+const EMPTY = { documents: [] }
+
+test('a failed read shows an error, an empty read shows "no files"', async () => {
+  const fail = async () => { throw new Error('503') }
+  const ok = (payload) => async () => payload
+  const failed = await readSessionDocuments(fail, '/p', 's1', () => 's1', null)
+  assert.deepEqual(sessionDocumentsView(failed, 's1'), { kind: 'error', rows: [] })
+  const empty = await readSessionDocuments(ok(EMPTY), '/p', 's1', () => 's1', null)
+  assert.deepEqual(sessionDocumentsView(empty, 's1'), { kind: 'empty', rows: [] })
+  const listed = await readSessionDocuments(ok(ROWS), '/p', 's1', () => 's1', null)
+  assert.equal(sessionDocumentsView(listed, 's1').kind, 'list')
 })
 
-test('"This session" sits above the project documents in the sidebar', () => {
-  const panel = read('../layout/LeftPanel.tsx')
-  const sessionAt = panel.indexOf('>This session</header>')
-  const docsAt = panel.indexOf('>Documents</header>')
-  assert.ok(sessionAt > 0 && docsAt > 0, 'both groups present')
-  assert.ok(sessionAt < docsAt, 'This session above Documents')
+test('a failed re-read keeps the rows already shown for that session only', () => {
+  for (const [previous, kept] of [
+    [sessionDocumentsLoaded('s1', 's1', ROWS), 1],
+    [sessionDocumentsLoaded('s0', 's0', ROWS), 0],
+  ]) {
+    const state = sessionDocumentsFailed('s1', 's1', previous)
+    const view = sessionDocumentsView(state, 's1')
+    assert.equal(view.kind, 'error')
+    assert.equal(view.rows.length, kept)
+  }
+})
+
+test('a reply for a session the user has left is dropped, success or failure', async () => {
+  const fail = async () => { throw new Error('timeout') }
+  for (const getJson of [fail, async () => ROWS]) {
+    assert.equal(await readSessionDocuments(getJson, '/p', 's1', () => 's2', null), null)
+  }
+})
+
+test('before the first reply the group is loading, not empty', () => {
+  for (const [state, active] of [[null, 's1'], [sessionDocumentsLoaded('s0', 's0', EMPTY), 's1']]) {
+    assert.equal(sessionDocumentsView(state, active).kind, 'loading')
+  }
 })

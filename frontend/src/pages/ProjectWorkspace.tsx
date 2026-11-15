@@ -32,7 +32,12 @@ import {
   renameTitleError,
 } from '../chat/session'
 import { activityForTool, plainMetadata } from '../chat/userFacingText'
-import { sessionDocumentsFor, withSessionId, type SessionDocumentRow } from '../chat/sessionDocuments'
+import {
+  readSessionDocuments,
+  sessionDocumentsView,
+  withSessionId,
+  type SessionDocumentsState,
+} from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
 import './pages.css'
@@ -368,7 +373,7 @@ interface DocumentsPanelProps {
 // ample for the pilot; the remainder are summarised in a footer.
 const MAX_VISIBLE_DOCS = 200
 
-function DocumentsPanel({
+export function DocumentsPanel({
   projectId,
   sessionId,
   documents,
@@ -991,18 +996,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // the session changes, after an upload and after each answer; a reply for
   // a session the user has since left is dropped.
   // Rows are stored with the session they belong to, so another session's
-  // rows are never shown while the new session's reply is in flight.
-  const [sessionDocsOf, setSessionDocsOf] = useState<{ sid: string; rows: SessionDocumentRow[] } | null>(null)
-  const sessionDocs = sessionDocsOf && sessionDocsOf.sid === activeConversationId ? sessionDocsOf.rows : []
+  // rows are never shown while the new session's reply is in flight. A
+  // failed read is kept as an error state (G-1), never shown as "no files".
+  const [sessionDocsState, setSessionDocsState] = useState<SessionDocumentsState | null>(null)
+  const sessionDocsStateRef = useRef<SessionDocumentsState | null>(null)
+  const sessionDocs = sessionDocumentsView(sessionDocsState, activeConversationId)
   const refreshSessionDocuments = useCallback(() => {
     const cid = activeIdRef.current
     if (!id || !cid) return
-    apiGet<unknown>(`/v1/projects/${id}/conversations/${encodeURIComponent(cid)}/documents`)
-      .then((payload) => {
-        const rows = sessionDocumentsFor(cid, activeIdRef.current, payload)
-        if (rows) setSessionDocsOf({ sid: cid, rows })
-      })
-      .catch(() => { /* the session group is progressive enhancement */ })
+    void readSessionDocuments(
+      apiGet,
+      `/v1/projects/${id}/conversations/${encodeURIComponent(cid)}/documents`,
+      cid,
+      () => activeIdRef.current,
+      sessionDocsStateRef.current,
+    ).then((next) => {
+      if (!next) return
+      sessionDocsStateRef.current = next
+      setSessionDocsState(next)
+    })
   }, [id])
   useEffect(() => {
     refreshSessionDocuments()
@@ -1788,6 +1800,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           onDeleteConversation={handleDeleteConversation}
           onClearConversation={clearConversation}
           sessionDocuments={sessionDocs}
+          onRetrySessionDocuments={refreshSessionDocuments}
           documents={
             <DocumentsPanel
               projectId={id ?? ''}
