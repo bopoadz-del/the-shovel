@@ -129,6 +129,70 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _progress_kinds_not_asked_about(query: str) -> set[str]:
+    """Document types the type table marks ``records_progress`` whose own
+    match keywords do not appear in the question. Read from the table
+    (config/document_types.yaml plus custom types), never from code."""
+    from app.core import doc_types
+    q = " " + re.sub(r"[^a-z0-9]+", " ", (query or "").casefold()) + " "
+    out: set[str] = set()
+    for t in doc_types.list_types():
+        if not t.get("records_progress"):
+            continue
+        match = t.get("match") or {}
+        words = [str(w) for w in (match.get("filename") or [])]
+        words += [str(w) for w in (match.get("content") or [])]
+        named = any(
+            f" {re.sub(r'[^a-z0-9]+', ' ', w.casefold()).strip()} " in q
+            for w in words if w.strip()
+        )
+        if not named:
+            out.add(str(t.get("name") or ""))
+    out.discard("")
+    return out
+
+
+def break_score_ties_by_kind(chunks: List[Chunk], query: str) -> List[Chunk]:
+    """Order chunks of EXACTLY equal score so a chunk from a progress-record
+    kind (a programme, a report, minutes) the question does not name comes
+    after the other chunks of that score.
+
+    The cap walks chunks in score order and drops what does not fit, so
+    within a tie the order alone decided which document was handed. A
+    question that names none of those kinds is not asking when or what
+    happened; the tied chunk that states the requirement goes first.
+    Scores are not changed, no chunk is dropped here, and different
+    scores keep their order. The kind is the stored doc_type.
+    """
+    if len(chunks) < 2:
+        return list(chunks)
+    scores = [c.score or 0 for c in chunks]
+    if len(set(scores)) == len(scores):
+        return list(chunks)
+    try:
+        annotate_document_kinds(chunks)
+        yielding = _progress_kinds_not_asked_about(query)
+    except Exception:  # noqa: BLE001 -- the tie keeps its retrieval order
+        _LOG.debug("kind tie-break skipped", exc_info=True)
+        return list(chunks)
+    if not yielding:
+        return list(chunks)
+
+    def _yields(c) -> bool:
+        return (getattr(c, "doc_type", "") or "").strip() in yielding
+
+    out: List[Chunk] = []
+    i = 0
+    while i < len(chunks):
+        j = i
+        while j < len(chunks) and (chunks[j].score or 0) == (chunks[i].score or 0):
+            j += 1
+        band = chunks[i:j]
+        out += [c for c in band if not _yields(c)] + [c for c in band if _yields(c)]
+        i = j
+    return out
+
+
 def apply_token_cap(
     chunks: List[Chunk],
     query: str = "",
@@ -198,6 +262,7 @@ def apply_token_cap(
             )
     protected.sort(key=lambda c: -(c.score or 0))
     rest.sort(key=lambda c: -(c.score or 0))
+    rest = break_score_ties_by_kind(rest, query)
     kept: List[Chunk] = []
     total = 0
     # Always keep the daily-amount operands — even when a single scanned page

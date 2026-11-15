@@ -21,6 +21,11 @@ document_types:
       filename: ["schedule", "programme", "program", "p6", "primavera", "baseline"]
       extensions: [".xer", ".mpp"]
       content: ["critical path", "milestone", "baseline", "early start"]
+    # records_progress: the document records when or what happened (dates,
+    # progress, decisions), not what is required. At the injection token
+    # cap such a chunk yields an EXACT score tie to a chunk of another kind,
+    # unless the question itself names this kind (app/core/rag/inject.py).
+    records_progress: true
     expected_fields: ["commencement_date", "completion_date"]
 
   - name: boq
@@ -88,6 +93,11 @@ document_types:
       filename: ["report", "daily", "weekly"]
       extensions: []
       content: ["progress", "site instruction", "weather", "manpower"]
+    # records_progress: the document records when or what happened (dates,
+    # progress, decisions), not what is required. At the injection token
+    # cap such a chunk yields an EXACT score tie to a chunk of another kind,
+    # unless the question itself names this kind (app/core/rag/inject.py).
+    records_progress: true
     expected_fields: []
 
   - name: minutes
@@ -96,6 +106,11 @@ document_types:
       filename: ["minutes", "mom", "meeting"]
       extensions: []
       content: ["attendees", "action by", "next meeting", "apologies"]
+    # records_progress: the document records when or what happened (dates,
+    # progress, decisions), not what is required. At the injection token
+    # cap such a chunk yields an EXACT score tie to a chunk of another kind,
+    # unless the question itself names this kind (app/core/rag/inject.py).
+    records_progress: true
     expected_fields: []
 
   - name: correspondence
