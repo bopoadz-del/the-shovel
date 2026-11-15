@@ -1883,6 +1883,8 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                   a.click()
                   a.remove()
                   URL.revokeObjectURL(objUrl)
+                  // W2: a session's export is kept as its Produced file.
+                  refreshSessionDocuments()
                 })
                 .catch((e) => alert(`Export error: ${(e as Error).message}`))
             }}
