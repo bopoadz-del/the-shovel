@@ -108,3 +108,61 @@ def test_concurrent_exports_keep_one_document_per_output(client, tmp_path, monke
     root = byte_store.ensure_root()
     on_disk = [n for n in os.listdir(root) if n.endswith(f"_{display}")]
     assert len(on_disk) == kept, on_disk
+
+
+def _session(client, suffix: str) -> tuple[str, str, str]:
+    headers, user_id = _owner(client, suffix)
+    res = client.post("/v1/projects", json={"name": f"G2-{suffix}-{_RUN}"}, headers=headers)
+    assert res.status_code in (200, 201), res.text
+    pid = res.json()["id"]
+    return pid, f"ws-{pid}-1700000000000", user_id
+
+
+def _produced(store, pid, sid, user_id) -> list[str]:
+    return [d["id"] for d in store.list_session_documents(pid, sid, user_id)
+            if d["origin"] == "produced"]
+
+
+@pytest.mark.parametrize("earlier_answer,kept", [("pour C30 bay 1", 1), ("pour C40 bay 2", 2)])
+def test_a_copy_kept_before_ids_were_derived_is_still_kept_once(client, tmp_path, earlier_answer, kept):
+    """A copy kept by the earlier code has a random id; exporting the same
+    output again returns it instead of storing a second copy."""
+    from app.core import projects as store
+    from app.routers import exports
+
+    pid, sid, user_id = _session(client, f"legacy{kept}")
+    source = {"format": "xlsx", "answer": "pour C30 bay 1"}
+    earlier = store.add_document(pid, "answer.xlsx", metadata={
+        "origin": "produced", "provenance": "produced", "uploader_id": user_id,
+        "session_id": sid,
+        "produced_source_sha256": exports._produced_source_digest(
+            {"format": "xlsx", "answer": earlier_answer}),
+    })["id"]
+    render = tmp_path / "answer.xlsx"
+    render.write_bytes(b"PK\x03\x04 pour C30 bay 1")
+
+    got = exports._save_produced_to_session(pid, sid, user_id, str(render), "answer.xlsx", source=source)
+    assert len(_produced(store, pid, sid, user_id)) == kept
+    assert (got == earlier) is (kept == 1)
+
+
+@pytest.mark.parametrize("taken", [False, True])
+def test_a_row_already_holding_the_derived_id_does_not_stop_the_keep(client, tmp_path, taken):
+    """An unrelated document that happens to hold the derived id (an 8-hex
+    collision) is left alone and the copy is kept under a fresh id."""
+    from app.core import projects as store
+    from app.routers import exports
+
+    pid, sid, user_id = _session(client, f"taken{int(taken)}")
+    source = {"format": "docx", "answer": "pour C30 bay 1"}
+    derived = exports._produced_document_id(
+        pid, sid, user_id, exports._produced_source_digest(source))
+    if taken:
+        store.add_document(pid, "unrelated.pdf", document_id=derived)
+    render = tmp_path / "answer.docx"
+    render.write_bytes(b"PK\x03\x04 pour C30 bay 1")
+
+    got = exports._save_produced_to_session(pid, sid, user_id, str(render), "answer.docx", source=source)
+    assert got and _produced(store, pid, sid, user_id) == [got]
+    assert (got == derived) is (not taken)
+    assert store.get_document(derived) is not None
