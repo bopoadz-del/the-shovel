@@ -34,6 +34,12 @@ one-line reason and is a suspected defect for the advisor; the expected
 value is never moved to match. Every value test runs on two inputs worked
 by hand the same way.
 
+No M case for F52: every input has a stated default (fraction 0.70,
+a = 4.0, b = 0.85 -- the ACI 209R-92 moist-cured type I constants), so
+nothing can be missing; instead ``test_f52_defaults_disclosed`` checks that
+each input left out is named in ``defaults_used`` and each input given is
+not, the same class as F68 and F71 in batch 11.
+
 Scaffold tolerance: OSHA states the duty loads in psf (25 psf =
 1.19701 kPa); a kPa table that keeps one decimal is within 0.3 %, so the
 F54 value cases use 0.5 % and say so. Every other case uses 0.1 %.
@@ -263,6 +269,19 @@ def test_f52_b_full_strength(f, days):
 ])
 def test_f52_b_refused(params):
     _refuses(F52, params, (_D,))
+
+
+@pytest.mark.parametrize("params, defaulted, days", [
+    # f = 0.9 given, a and b default: 3.6/(1 - 0.765) = 3.6/0.235
+    ({"target_strength_fraction": 0.9}, {"gain_a", "gain_b"}, 15.31915),
+    # a and b given, f defaults to 0.70: 1.61/(1 - 0.644) = 1.61/0.356
+    ({"gain_a": 2.3, "gain_b": 0.92}, {"target_strength_fraction"}, 4.52247),
+])
+def test_f52_defaults_disclosed(params, defaulted, days):
+    r = _ok(F52, params)
+    listed = {row["parameter"] for row in r.get("defaults_used") or []}
+    assert listed == defaulted, r
+    assert r[_D] == pytest.approx(days, rel=_REL)
 
 
 # ---------------------------------------------------------------- F53 wind on formwork
