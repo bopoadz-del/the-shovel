@@ -1,8 +1,9 @@
 """Formula Layer 1, batch 14 (exam 5): concrete beam bending capacity,
 concrete section shear capacity, reinforcement lap length, nominal shear
 stress, bolt shear capacity, fillet weld capacity, precast member erection
-demand, plumbing installation programme, BIM clash tolerance (more
-formulas follow in later parts of this batch).
+demand, plumbing installation programme, BIM clash tolerance, critical
+path of an activity network, weighted tender evaluation (more formulas
+follow in later parts of this batch).
 
 Same rules as batches 1-13 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -35,6 +36,10 @@ its parametrize row:
                                  for db <= 32 else (132 - db)/100, lb,rqd =
                                  db/4 x fyd/fbd, l0 = 1.5 lb,rqd
   * nominal shear stress         v = V / (b d), kN -> N: x 1000
+  * critical path                CPM forward/backward pass: EF = ES + d,
+                                 LS = LF - d, TF = LS - ES, FF = min ES of
+                                 successors - EF
+  * tender evaluation            weighted sum of 0-100 criterion scores
 None was copied from the product's output. A case where the product
 disagrees with the hand value would be marked ``xfail(strict=True)`` with a
 one-line reason and reported as a suspected defect; the expected value is
@@ -632,3 +637,192 @@ def test_f111_m_default_is_disclosed():
 ])
 def test_f111_b_refused(lod):
     _refuses(F111, {"lod": lod}, _F111_OUT)
+
+
+# ---------------------------------------------------------------- F112 CPM network
+# Forward pass ES = max EF of predecessors (0 at the start), EF = ES + d;
+# backward pass LF = min LS of successors (project end for the last),
+# LS = LF - d; TF = LS - ES; FF = min ES of successors - EF. Offsets are
+# working days from the start of the first activity.
+F112 = "cpm_network"
+_F112_OUT = ("project_duration", "critical_path")
+_F112_NET1 = [
+    {"id": "A", "duration": 3},
+    {"id": "B", "duration": 4, "predecessors": ["A"]},
+    {"id": "C", "duration": 2, "predecessors": ["A"]},
+    {"id": "D", "duration": 5, "predecessors": ["B", "C"]},
+]
+_F112_NET2 = [
+    {"id": "P", "duration": 2},
+    {"id": "Q", "duration": 6, "predecessors": ["P"]},
+    {"id": "R", "duration": 3, "predecessors": ["P"]},
+    {"id": "S", "duration": 4, "predecessors": ["R"]},
+    {"id": "T", "duration": 1, "predecessors": ["Q", "S"]},
+]
+
+
+def _f112_rows(result: dict) -> dict:
+    return {row["id"]: row for row in result["activities"]}
+
+
+@pytest.mark.parametrize("net, duration, critical, floats", [
+    # A 0-3; B 3-7; C 3-5; D max(7, 5) = 7 -> 12. Backward: D LS 7; B LS 3;
+    # C LS 5; A LS 0. TF: A 0, B 0, C 5 - 3 = 2, D 0; FF C = 7 - 5 = 2
+    (_F112_NET1, 12, ["A", "B", "D"], {"A": (0, 0), "B": (0, 0), "C": (2, 2), "D": (0, 0)}),
+    # P 0-2; Q 2-8; R 2-5; S 5-9; T max(8, 9) = 9 -> 10. Backward: T LS 9;
+    # Q LS 3, TF 1; S LS 5; R LS 2; P LS 0. FF Q = 9 - 8 = 1
+    (_F112_NET2, 10, ["P", "R", "S", "T"],
+     {"P": (0, 0), "Q": (1, 1), "R": (0, 0), "S": (0, 0), "T": (0, 0)}),
+])
+def test_f112_t(net, duration, critical, floats):
+    r = _ok(F112, {"activities": net})
+    assert r["project_duration"] == duration
+    assert list(r["critical_path"]) == critical
+    rows = _f112_rows(r)
+    for aid, (tf, ff) in floats.items():
+        assert (rows[aid]["total_float"], rows[aid]["free_float"]) == (tf, ff), aid
+
+
+@pytest.mark.parametrize("params", [
+    # predecessors as one comma-separated string instead of a list
+    {"activities": [{"id": "A", "duration": 3},
+                    {"id": "B", "duration": 4, "predecessors": "A"},
+                    {"id": "C", "duration": 2, "predecessors": "A"},
+                    {"id": "D", "duration": 5, "predecessors": "B, C"}]},
+    # durations as text, the network as one JSON string
+    {"activities": '[{"id": "A", "duration": "3"}, '
+                   '{"id": "B", "duration": "4", "predecessors": ["A"]}, '
+                   '{"id": "C", "duration": "2", "predecessors": ["A"]}, '
+                   '{"id": "D", "duration": "5", "predecessors": ["B", "C"]}]'},
+])
+def test_f112_u_other_forms_same_network(params):
+    r = _ok(F112, params)   # same network as _F112_NET1 worked above
+    assert r["project_duration"] == 12
+    assert list(r["critical_path"]) == ["A", "B", "D"]
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({}, "activities"),
+    ({"activities": [{"id": "A", "duration": 3},
+                     {"id": "B", "predecessors": ["A"]}]}, "duration"),
+])
+def test_f112_m(params, missing):
+    _asks(F112, params, missing, _F112_OUT)
+
+
+@pytest.mark.parametrize("net, duration", [
+    # a zero-day milestone M between A and B: A 0-3, M 3-3, B 3-5 -> 5
+    ([{"id": "A", "duration": 3}, {"id": "M", "duration": 0, "predecessors": ["A"]},
+      {"id": "B", "duration": 2, "predecessors": ["M"]}], 5),
+    # the same chain without the milestone: still 5
+    ([{"id": "A", "duration": 3}, {"id": "B", "duration": 2, "predecessors": ["A"]}], 5),
+])
+def test_f112_b_zero_duration_milestone(net, duration):
+    r = _ok(F112, {"activities": net})
+    assert r["project_duration"] == duration
+    assert all(row["total_float"] == 0 for row in r["activities"])
+
+
+@pytest.mark.parametrize("net", [
+    # a loop: A waits for B and B waits for A
+    [{"id": "A", "duration": 2, "predecessors": ["B"]},
+     {"id": "B", "duration": 2, "predecessors": ["A"]}],
+    # a duration that is not a whole working day
+    [{"id": "A", "duration": 2.5}],
+    # a negative duration
+    [{"id": "A", "duration": -1}],
+])
+def test_f112_b_refused(net):
+    _refuses(F112, {"activities": net}, _F112_OUT)
+
+
+# ---------------------------------------------------------------- F113 tender evaluation
+# Weighted total = sum(score_c x weight_c); a missing criterion scores 0.
+# Declared default weights: technical 0.45, commercial 0.45, hse 0.07,
+# local_content 0.03. Highest total ranks first.
+F113 = "evaluate_tender"
+_F113_OUT = ("ranked_tenderers", "recommended")
+_F113_AB = [
+    {"name": "A", "technical_score": 80, "commercial_score": 70, "hse_score": 90,
+     "local_content_score": 50},
+    {"name": "B", "technical_score": 70, "commercial_score": 85, "hse_score": 80,
+     "local_content_score": 100},
+]
+_F113_CD = [
+    {"name": "C", "technical_score": 90, "commercial_score": 60},
+    {"name": "D", "technical_score": 75, "commercial_score": 80},
+]
+
+
+def _f113_totals(result: dict) -> dict:
+    return {t["name"]: t["weighted_total"] for t in result["ranked_tenderers"]}
+
+
+@pytest.mark.parametrize("params, totals, winner", [
+    # A: 36 + 31.5 + 6.3 + 1.5 = 75.3; B: 31.5 + 38.25 + 5.6 + 3.0 = 78.35
+    ({"tenderers": _F113_AB}, {"A": 75.3, "B": 78.35}, "B"),
+    # default weights, hse and local content absent (0): C 40.5 + 27 = 67.5;
+    # D 33.75 + 36 = 69.75
+    ({"tenderers": _F113_CD}, {"C": 67.5, "D": 69.75}, "D"),
+    # the user's weights 0.6 / 0.4 flip the ranking: C 54 + 24 = 78; D 45 + 32 = 77
+    ({"tenderers": _F113_CD, "weights": {"technical": 0.6, "commercial": 0.4}},
+     {"C": 78.0, "D": 77.0}, "C"),
+])
+def test_f113_t(params, totals, winner):
+    r = _ok(F113, params)
+    assert _f113_totals(r) == pytest.approx(totals, abs=0.01)
+    assert r["recommended"]["name"] == winner
+    assert [t["rank"] for t in r["ranked_tenderers"]] == [1, 2]
+
+
+@pytest.mark.parametrize("tenderers", [
+    # bare criterion keys, read when <c>_score is absent (the declared fallback)
+    [{"name": "C", "technical": 90, "commercial": 60},
+     {"name": "D", "technical": 75, "commercial": 80}],
+    # scores written as text
+    [{"name": "C", "technical_score": "90", "commercial_score": "60"},
+     {"name": "D", "technical_score": "75", "commercial_score": "80"}],
+])
+def test_f113_u_other_forms_same_scores(tenderers):
+    r = _ok(F113, {"tenderers": tenderers})   # same as _F113_CD worked above
+    assert _f113_totals(r) == pytest.approx({"C": 67.5, "D": 69.75}, abs=0.01)
+
+
+@pytest.mark.parametrize("params", [{}, {"weights": {"technical": 0.5, "commercial": 0.5}}])
+def test_f113_m(params):
+    _asks(F113, params, "tenderers", _F113_OUT)
+
+
+@pytest.mark.parametrize("low, high", [
+    (0, 100),     # 0 x 0.45 = 0; 100 x 0.45 = 45.0
+    (0, 0),       # both 0: totals 0 and 0, still ranked 1 and 2
+])
+def test_f113_b_scale_ends(low, high):
+    r = _ok(F113, {"tenderers": [{"name": "L", "technical_score": low},
+                                 {"name": "H", "technical_score": high}]})
+    assert _f113_totals(r) == pytest.approx({"L": low * 0.45, "H": high * 0.45}, abs=0.01)
+    assert sorted(t["rank"] for t in r["ranked_tenderers"]) == [1, 2]
+
+
+@pytest.mark.parametrize("tenderers", [
+    # no submission carries any weighted criterion
+    [{"name": "X"}, {"name": "Y"}],
+    [{"name": "X", "price": 5000}, {"name": "Y", "programme_weeks": 40}],
+])
+def test_f113_b_no_scores_refused(tenderers):
+    _refuses(F113, {"tenderers": tenderers}, _F113_OUT)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "suspected defect: through run_calculation a single scored submission is "
+    "refused ('Which scores does each tenderer have') although the kernel "
+    "scores it; two or more submissions are scored"))
+@pytest.mark.parametrize("tenderer, total", [
+    # 80 x 0.45 + 70 x 0.45 = 67.5
+    ({"name": "X", "technical_score": 80, "commercial_score": 70}, 67.5),
+    # 100 x 0.45 = 45.0
+    ({"name": "Y", "technical_score": 100}, 45.0),
+])
+def test_f113_b_single_submission_scored(tenderer, total):
+    r = _ok(F113, {"tenderers": [tenderer]})
+    assert r["recommended"]["weighted_total"] == pytest.approx(total, abs=0.01)
