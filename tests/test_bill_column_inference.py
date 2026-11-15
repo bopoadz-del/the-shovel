@@ -249,3 +249,16 @@ def test_column_counts_pass_the_public_summary(cols, lines):
     counts = stats.as_dict(rows)
     assert "columns" in bpo.PLAN_FIELDS
     assert bpo.public_summary({"columns": counts})["columns"] == counts
+
+
+# --- the shared bands as the geometry diag counts them -------------------------
+
+@pytest.mark.parametrize("cols,lines", [(COLS_1, PRICED_1), (COLS_2, PRICED_2)])
+def test_diag_counts_only_lines_with_three_band_figures(cols, lines):
+    from app.core import bill_geometry_diag as d
+
+    # Two more lines print figures in only two of the bands (no rate).
+    two_band = [[f"Extra item {c}", ln[1], ln[2], "", ln[4]] for c, ln in zip("ab", lines)]
+    out = d.band_counts(d._pages(_layout(cols, [*lines, *two_band])))
+    assert out["lines_three_bands"] == len(lines)
+    assert out["lines_product"] == len(lines)
