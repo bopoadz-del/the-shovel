@@ -1,0 +1,325 @@
+"""Formula Layer 1, batch 14 (exam 5): concrete beam bending capacity,
+concrete section shear capacity, reinforcement lap length, nominal shear
+stress (more formulas follow in later parts of this batch).
+
+Same rules as batches 1-13 (tests/test_formula_layer1_batch1.py):
+  T  typical;
+  U  different units that must convert to the formula's own unit;
+  M  one required input missing -- the calculator must ASK for it and must
+     NOT return the figure it would have needed that input for;
+  B  boundary -- zero, a value on a limit or cap, a value past it.
+
+Every expected value is a HAND calculation, written in the comment beside
+its parametrize row:
+  * beam bending capacity        ACI 318-19 22.2: a = As fy / (0.85 fc b);
+                                 phi Mn = 0.9 As fy (d - a/2);
+                                 EN 1992-1-1 6.1: fcd = fc/1.5, fyd = fy/1.15,
+                                 x = As fyd / (0.8 b fcd), z = d - 0.4 x,
+                                 MRd = As fyd z
+  * section shear capacity       ACI 318-19 Table 22.5.5.1 (Av < Av,min):
+                                 phi Vc = 0.75 x 0.66 ls rho^(1/3) sqrt(fc)
+                                 bw d, ls = sqrt(2/(1 + 0.004 d)) <= 1,
+                                 sqrt(fc) <= 8.3 MPa;
+                                 EN 1992-1-1 6.2.2: VRd,c = 0.12 k
+                                 (100 rho fck)^(1/3) bw d, k = 1 +
+                                 sqrt(200/d) <= 2, rho <= 0.02
+  * lap length                   ACI 318-19 25.4.2: ld = fy ps pg / (1.1
+                                 sqrt(fc) (cb+Ktr)/db) x db, ps = 0.8 for
+                                 db <= 19 mm else 1.0, pg (Table 25.4.2.5)
+                                 1.0 to 420 MPa, 1.15 to 550, 1.3 above;
+                                 Class B lap = 1.3 ld;
+                                 EN 1992-1-1 8.4/8.7: fctd = 0.7 x 0.3
+                                 fck^(2/3) / 1.5, fbd = 2.25 n2 fctd, n2 = 1
+                                 for db <= 32 else (132 - db)/100, lb,rqd =
+                                 db/4 x fyd/fbd, l0 = 1.5 lb,rqd
+  * nominal shear stress         v = V / (b d), kN -> N: x 1000
+None was copied from the product's output. A case where the product
+disagrees with the hand value would be marked ``xfail(strict=True)`` with a
+one-line reason and reported as a suspected defect; the expected value is
+never moved to match. Every value test runs on two inputs worked by hand
+the same way.
+
+The design code is a word, not a unit, so the U cases convert lengths,
+areas and stresses only.
+
+Unit factors (exact by definition): 1 in = 25.4 mm; 1 cm = 10 mm;
+1 cm2 = 100 mm2; 1 ksi = 6.894757 MPa; 1 kN = 1000 N.
+
+All inputs are invented numbers; no project, person or document is named.
+"""
+from __future__ import annotations
+
+import pytest
+
+from app.lib.construction_formulas import run_calculation
+
+
+def _ok(name: str, params: dict) -> dict:
+    env = run_calculation(name, params)
+    assert env.get("status") == "success", env
+    return env["result"]
+
+
+def _asks(name: str, params: dict, missing: str, withheld: tuple[str, ...]) -> dict:
+    """The call must ask for ``missing`` and withhold every key in ``withheld``."""
+    env = run_calculation(name, params)
+    assert env.get("status") in ("needs_input", "error"), env
+    text = " ".join(str(env.get(k) or "") for k in ("error", "question", "message", "note"))
+    text += " " + " ".join(str(m) for m in (env.get("missing") or []))
+    assert missing.lower() in text.lower(), (missing, env)
+    result = env.get("result") or {}
+    for key in withheld:
+        assert result.get(key) is None, (key, env)
+    return env
+
+
+def _refuses(name: str, params: dict, withheld: tuple[str, ...]) -> dict:
+    """A refusal: not success, no number in the withheld keys, no exception."""
+    env = run_calculation(name, params)
+    assert env.get("status") != "success", env
+    result = env.get("result") or {}
+    for key in withheld:
+        assert result.get(key) is None, (key, env)
+    return env
+
+
+# ---------------------------------------------------------------- F103 RC bending
+F103 = "rc_beam_moment_capacity"
+_F103_OUT = ("moment_capacity_kn_m",)
+_F103_BASE = {"steel_area_mm2": 1500, "fy_mpa": 420, "width_mm": 300,
+              "eff_depth_mm": 500, "fc_mpa": 30}
+
+
+@pytest.mark.parametrize("params, cap", [
+    # a = 1500 x 420 / (0.85 x 30 x 300) = 630000 / 7650 = 82.353;
+    # 0.9 x 1500 x 420 x (500 - 41.176) = 567000 x 458.824 = 260.153e6 N.mm
+    (_F103_BASE, 260.15),
+    # a = 2000 x 500 / (0.85 x 40 x 400) = 1e6 / 13600 = 73.529;
+    # 0.9 x 2000 x 500 x (600 - 36.765) = 900000 x 563.235 = 506.912e6
+    ({"steel_area_mm2": 2000, "fy_mpa": 500, "width_mm": 400, "eff_depth_mm": 600,
+      "fc_mpa": 40}, 506.91),
+    # EC: fcd 20, fyd 434.783; x = 652174 / 4800 = 135.870; z = 445.652;
+    # 652174 x 445.652 = 290.643e6
+    ({**_F103_BASE, "fy_mpa": 500, "code": "EC"}, 290.64),
+])
+def test_f103_t(params, cap):
+    assert _ok(F103, params)["moment_capacity_kn_m"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.parametrize("params", [
+    # 15 cm2 = 1500 mm2, 30 cm = 300 mm, 50 cm = 500 mm -> 260.15 as above
+    {**_F103_BASE, "steel_area_mm2": "15 cm2", "width_mm": "30 cm", "eff_depth_mm": "50 cm"},
+    # 60.915852 ksi = 420.000 MPa; 19.685039 in = 500.000 mm -> 260.15
+    {**_F103_BASE, "fy_mpa": "60.915852 ksi", "eff_depth_mm": "19.685039 in"},
+])
+def test_f103_u(params):
+    assert _ok(F103, params)["moment_capacity_kn_m"] == pytest.approx(260.15, abs=0.02)
+
+
+@pytest.mark.parametrize("missing", ["steel_area_mm2", "eff_depth_mm"])
+def test_f103_m(missing):
+    params = {k: v for k, v in _F103_BASE.items() if k != missing}
+    _asks(F103, params, missing, _F103_OUT)
+
+
+@pytest.mark.parametrize("area, cap", [
+    (0, 0.0),        # no steel: a = 0, phi Mn = 0 (the declared floor 0 mm2)
+    # a = 42000 / 7650 = 5.490; 0.9 x 100 x 420 x (500 - 2.745) = 37800 x
+    # 497.255 = 18.796e6 N.mm
+    (100, 18.80),
+])
+def test_f103_b_steel_floor(area, cap):
+    r = _ok(F103, {**_F103_BASE, "steel_area_mm2": area})
+    assert r["moment_capacity_kn_m"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.parametrize("area", [-1, -1500])
+def test_f103_b_negative_steel_refused(area):
+    _refuses(F103, {**_F103_BASE, "steel_area_mm2": area}, _F103_OUT)
+
+
+# ---------------------------------------------------------------- F104 RC shear
+F104 = "rc_beam_shear_capacity"
+_F104_OUT = ("shear_capacity_kn",)
+_F104_BASE = {"width_mm": 300, "eff_depth_mm": 500, "fc_mpa": 30, "rho_l": 0.01}
+
+
+@pytest.mark.parametrize("params, cap", [
+    # ls = sqrt(2/3) = 0.8165; 0.66 x 0.8165 x 0.21544 x 5.4772 = 0.63591;
+    # 0.75 x 0.63591 x 150000 = 71539 N
+    (_F104_BASE, 71.54),
+    # ls = sqrt(2/3.4) = 0.76696; 0.015^(1/3) = 0.24662; sqrt 40 = 6.3246;
+    # 0.66 x 0.76696 x 0.24662 x 6.3246 = 0.78955; 0.75 x 0.78955 x 240000
+    ({"width_mm": 400, "eff_depth_mm": 600, "fc_mpa": 40, "rho_l": 0.015}, 142.12),
+    # EC: k = 1 + sqrt(0.4) = 1.63246; (100 x 0.01 x 30)^(1/3) = 3.10723;
+    # 0.12 x 1.63246 x 3.10723 x 150000 = 91303 N (vmin 59.98 kN lower)
+    ({**_F104_BASE, "code": "EC"}, 91.30),
+])
+def test_f104_t(params, cap):
+    assert _ok(F104, params)["shear_capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.parametrize("params", [
+    {**_F104_BASE, "width_mm": "30 cm", "eff_depth_mm": "0.5 m"},           # 300, 500
+    {**_F104_BASE, "width_mm": "11.811024 in", "eff_depth_mm": "50 cm"},    # 300.000, 500
+])
+def test_f104_u(params):
+    assert _ok(F104, params)["shear_capacity_kn"] == pytest.approx(71.54, abs=0.02)
+
+
+@pytest.mark.parametrize("missing", ["width_mm", "eff_depth_mm"])
+def test_f104_m(missing):
+    params = {k: v for k, v in _F104_BASE.items() if k != missing}
+    _asks(F104, params, missing, _F104_OUT)
+
+
+@pytest.mark.parametrize("fc", [68.89, 80])
+def test_f104_b_sqrt_fc_cap(fc):
+    # sqrt(68.89) = 8.3 exactly, the cap; 80 is past it and is held at 8.3:
+    # 0.75 x 0.66 x 0.8165 x 0.21544 x 8.3 x 150000 = 108408 N for both
+    r = _ok(F104, {**_F104_BASE, "fc_mpa": fc})
+    assert r["shear_capacity_kn"] == pytest.approx(108.41, abs=0.01)
+
+
+@pytest.mark.parametrize("d, cap", [
+    (250, 43.81),   # ls = sqrt(2/2) = 1, the limit: 0.75 x 0.66 x 0.21544 x 5.4772 x 75000
+    (200, 35.05),   # ls = sqrt(2/1.8) = 1.054 held at 1: same stress x 60000
+])
+def test_f104_b_size_factor_limit(d, cap):
+    r = _ok(F104, {**_F104_BASE, "eff_depth_mm": d})
+    assert r["shear_capacity_kn"] == pytest.approx(cap, abs=0.01)
+
+
+@pytest.mark.parametrize("rho", [0.02, 0.03])
+def test_f104_b_ec_rho_cap(rho):
+    # rho held at 0.02: 0.12 x 1.63246 x (60)^(1/3) = 3.91487 x 150000 = 115035 N
+    r = _ok(F104, {**_F104_BASE, "rho_l": rho, "code": "EC"})
+    assert r["shear_capacity_kn"] == pytest.approx(115.04, abs=0.01)
+
+
+# ---------------------------------------------------------------- F105 lap length
+F105 = "rebar_lap_length"
+_F105_OUT = ("lap_length_mm",)
+_F105_BASE = {"bar_diameter_mm": 25, "fy_mpa": 420, "fc_mpa": 30}
+
+
+@pytest.mark.parametrize("params, lap", [
+    # db 16 (ps 0.8): 420 x 0.8 / (1.1 x 5.47723 x 1.5) x 16 = 594.860; x 1.3
+    ({**_F105_BASE, "bar_diameter_mm": 16}, 773.3),
+    # db 25 (ps 1.0): 420 / 9.03742 x 25 = 1161.836; x 1.3 = 1510.39
+    (_F105_BASE, 1510.4),
+    # EC db 16, fy 500, fck 30: fctd = 0.7 x 0.3 x 9.65489 / 1.5 = 1.35168;
+    # fbd = 3.04129; lb = 4 x 434.783 / 3.04129 = 571.84; x 1.5 = 857.76
+    ({"bar_diameter_mm": 16, "fy_mpa": 500, "fc_mpa": 30, "code": "EC"}, 857.8),
+])
+def test_f105_t(params, lap):
+    assert _ok(F105, params)["lap_length_mm"] == pytest.approx(lap, abs=0.1)
+
+
+@pytest.mark.parametrize("params, lap", [
+    # 0.625 in = 15.875 mm; 4 ksi = 27.579 MPa (sqrt 5.25158):
+    # 420 x 0.8 / (1.1 x 5.25158 x 1.5) x 15.875 = 615.573; x 1.3 = 800.24
+    ({**_F105_BASE, "bar_diameter_mm": "0.625 in", "fc_mpa": "4 ksi"}, 800.2),
+    # 60 ksi = 413.685 MPa (pg 1.0): 773.318 x 413.685 / 420 = 761.69
+    ({**_F105_BASE, "bar_diameter_mm": 16, "fy_mpa": "60 ksi"}, 761.7),
+])
+def test_f105_u(params, lap):
+    assert _ok(F105, params)["lap_length_mm"] == pytest.approx(lap, abs=0.1)
+
+
+@pytest.mark.parametrize("missing", ["bar_diameter_mm", "fy_mpa"])
+def test_f105_m(missing):
+    params = {k: v for k, v in _F105_BASE.items() if k != missing}
+    _asks(F105, params, missing, _F105_OUT)
+
+
+@pytest.mark.parametrize("db, lap", [
+    (19, 918.3),    # ps 0.8 on the limit: 420 x 0.8 / 9.03742 x 19 x 1.3
+    (20, 1208.3),   # ps 1.0 past it: 420 / 9.03742 x 20 x 1.3
+])
+def test_f105_b_bar_size_factor(db, lap):
+    r = _ok(F105, {**_F105_BASE, "bar_diameter_mm": db})
+    assert r["lap_length_mm"] == pytest.approx(lap, abs=0.1)
+
+
+@pytest.mark.parametrize("fy, lap", [
+    (420, 1510.4),   # pg 1.0 on the limit
+    (421, 1741.1),   # pg 1.15: 421 x 1.15 / 9.03742 x 25 x 1.3
+    (550, 2274.6),   # pg 1.15 on the next limit: 550 x 1.15 / 9.03742 x 32.5
+    (551, 2575.9),   # pg 1.3: 551 x 1.3 / 9.03742 x 32.5
+])
+def test_f105_b_grade_factor_steps(fy, lap):
+    r = _ok(F105, {**_F105_BASE, "fy_mpa": fy})
+    assert r["lap_length_mm"] == pytest.approx(lap, abs=0.1)
+
+
+@pytest.mark.parametrize("db, lap", [
+    (32, 1715.5),   # n2 = 1 on the limit: 8 x 434.783 / 3.04129 x 1.5
+    (40, 2330.9),   # n2 = 0.92: fbd 2.79799; 10 x 434.783 / 2.79799 x 1.5
+])
+def test_f105_b_ec_large_bar(db, lap):
+    r = _ok(F105, {**_F105_BASE, "bar_diameter_mm": db, "fy_mpa": 500, "code": "EC"})
+    assert r["lap_length_mm"] == pytest.approx(lap, abs=0.1)
+
+
+def test_f105_b_confinement_on_cap():
+    # (cb + Ktr)/db = 2.5, the declared cap: 420 / (1.1 x 5.47723 x 2.5) x 25 x 1.3
+    r = _ok(F105, {**_F105_BASE, "confinement_ratio": 2.5})
+    assert r["lap_length_mm"] == pytest.approx(906.2, abs=0.1)
+
+
+@pytest.mark.parametrize("params", [
+    {**_F105_BASE, "confinement_ratio": 3.0},   # past the 2.5 cap: ask, never stretch
+    {**_F105_BASE, "bar_diameter_mm": 3},       # under the 4 mm floor
+])
+def test_f105_b_past_declared_range_refused(params):
+    _refuses(F105, params, _F105_OUT)
+
+
+# ---------------------------------------------------------------- F106 shear stress
+F106 = "shear_stress_check"
+_F106_OUT = ("shear_stress_n_mm2",)
+
+
+@pytest.mark.parametrize("params, v", [
+    ({"v_kn": 150, "b_mm": 300, "d_mm": 500}, 1.0),     # 150000 / 150000
+    ({"v_kn": 300, "b_mm": 400, "d_mm": 600}, 1.25),    # 300000 / 240000
+])
+def test_f106_t(params, v):
+    assert _ok(F106, params)["shear_stress_n_mm2"] == pytest.approx(v, abs=1e-3)
+
+
+@pytest.mark.parametrize("params", [
+    {"v_kn": "150000 N", "b_mm": "30 cm", "d_mm": "0.5 m"},              # 150 kN, 300, 500
+    {"v_kn": 150, "b_mm": "11.811024 in", "d_mm": "19.685039 in"},       # 300.000, 500.000
+])
+def test_f106_u(params):
+    assert _ok(F106, params)["shear_stress_n_mm2"] == pytest.approx(1.0, abs=1e-3)
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"v_kn": 150, "b_mm": 300}, "d_mm"),
+    ({"b_mm": 300, "d_mm": 500}, "v_kn"),
+])
+def test_f106_m(params, missing):
+    _asks(F106, params, missing, _F106_OUT)
+
+
+@pytest.mark.parametrize("v_kn, v", [
+    (0, 0.0),      # no shear force: zero stress
+    (75, 0.5),     # 75000 / 150000
+])
+def test_f106_b_zero_force(v_kn, v):
+    r = _ok(F106, {"v_kn": v_kn, "b_mm": 300, "d_mm": 500})
+    assert r["shear_stress_n_mm2"] == pytest.approx(v, abs=1e-3)
+
+
+def test_f106_b_width_on_floor():
+    # b = 20 mm, the declared floor: 100000 / (20 x 500) = 10.0
+    assert _ok(F106, {"v_kn": 100, "b_mm": 20, "d_mm": 500})["shear_stress_n_mm2"] == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("b", [19, 0])
+def test_f106_b_width_under_floor_refused(b):
+    # under the 20 mm floor (0 would divide by zero): refused, no stress
+    _refuses(F106, {"v_kn": 100, "b_mm": b, "d_mm": 500}, _F106_OUT)
