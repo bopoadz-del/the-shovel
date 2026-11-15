@@ -14,10 +14,8 @@ Every project, user, session and answer here is created by the test.
 """
 from __future__ import annotations
 
-import io
-import time
 import uuid
-import zipfile
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -116,23 +114,42 @@ def test_a_produced_file_is_stored_never_indexed(client, monkeypatch, fmt):
     assert listed["metadata"]["provenance"] == "produced"
 
 
+class _MinuteApartClock(datetime):
+    """Every ``now()`` is two minutes after the previous one, so each render
+    stamps a different export time into the file it writes."""
+
+    calls = 0
+
+    @classmethod
+    def now(cls, tz=None):
+        cls.calls += 1
+        return datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc) + timedelta(
+            minutes=2 * cls.calls)
+
+
 @pytest.mark.parametrize("second_answer,kept", [
-    (None, 1),                                        # same bytes again
+    (None, 1),                                        # same answer again
     ("Pour bay 2 first; bay 1 waits for the cube results.", 2),
 ])
-def test_the_same_output_twice_is_kept_once(client, second_answer, kept):
+def test_the_same_output_twice_is_kept_once(client, monkeypatch,
+                                            second_answer, kept):
+    from app.routers import exports
+
+    monkeypatch.setattr(exports, "datetime", _MinuteApartClock)
     headers = _register(client, f"dup{kept}")
     pid = _project(client, headers, f"W2p-dup-{kept}-{_RUN}")
     sid = f"ws-{pid}-4000"
     _answer(sid, pid, "Pour bay 1 first, then bay 3, then bay 2.")
-    assert _export(client, headers, pid, sid, "xlsx").status_code == 200
+    first = _export(client, headers, pid, sid, "xlsx")
+    assert first.status_code == 200, first.text
     if second_answer:
         _answer(sid, pid, second_answer)
-    # The second render lands in a later second, so its write time differs:
-    # the same answer must still be recognised as the same output.
-    time.sleep(1.1)
-    assert _export(client, headers, pid, sid, "xlsx").status_code == 200
+    second = _export(client, headers, pid, sid, "xlsx")
+    assert second.status_code == 200, second.text
 
+    # The two files differ (each carries its own export time), yet the same
+    # answer rendered again is the same output and is kept once.
+    assert first.content != second.content
     assert len(_session_docs(client, headers, pid, sid)) == kept
 
 
@@ -186,7 +203,8 @@ def test_save_produced_to_session_is_keyed_on_session_and_user(
     produced.write_bytes(b"PK\x03\x04 bar marks 01 to 12")
 
     doc_id = exports._save_produced_to_session(
-        pid, sid, owner_id, str(produced), "rebar_schedule.xlsx")
+        pid, sid, owner_id, str(produced), "rebar_schedule.xlsx",
+        source={"render": "schedule_workbook", "staged": {"marks": [1, 12]}})
     assert doc_id
 
     reader = headers if who == "owner" else _register(client, f"key{who}2")
@@ -262,40 +280,28 @@ def test_a_session_with_no_answer_produces_and_keeps_nothing(client, user_turns)
     assert _session_docs(client, headers, pid, sid) == []
 
 
-def _ooxml(parts: dict) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        for name, body in parts.items():
-            zf.writestr(name, body)
-    return buf.getvalue()
+
+_ASKED = {"render": "message", "format": "xlsx", "project": "Tower A",
+          "answer": "Pour bay 1 first, then bay 3, then bay 2."}
 
 
-_CORE = "<cp:coreProperties><dcterms:modified>{}</dcterms:modified></cp:coreProperties>"
-
-
-@pytest.mark.parametrize("second_sheet,second_stamp,same", [
-    ("<row>bay 1</row>", "2026-01-01T00:00:09Z", True),    # only write time moved
-    ("<row>bay 2</row>", "2026-01-01T00:00:00Z", False),   # the content moved
+@pytest.mark.parametrize("second,same", [
+    # the same inputs, written in another key order
+    ({"answer": "Pour bay 1 first, then bay 3, then bay 2.", "project": "Tower A",
+      "format": "xlsx", "render": "message"}, True),
+    # one input moved: another answer
+    ({**_ASKED, "answer": "Pour bay 2 first."}, False),
 ])
-def test_the_produced_digest_reads_content_not_write_time(second_sheet,
-                                                          second_stamp, same):
+def test_a_produced_file_is_identified_by_what_it_was_rendered_from(second, same):
     from app.routers import exports
 
-    first = _ooxml({"xl/worksheets/sheet1.xml": "<row>bay 1</row>",
-                    "docProps/core.xml": _CORE.format("2026-01-01T00:00:00Z")})
-    second = _ooxml({"xl/worksheets/sheet1.xml": second_sheet,
-                     "docProps/core.xml": _CORE.format(second_stamp)})
-    assert first != second
-    assert (exports._produced_content_digest(first)
-            == exports._produced_content_digest(second)) is same
+    assert (exports._produced_source_digest(_ASKED)
+            == exports._produced_source_digest(second)) is same
 
 
-@pytest.mark.parametrize("first,second,same", [
-    (b"plain report v1", b"plain report v1", True),
-    (b"plain report v1", b"plain report v2", False),
-])
-def test_a_non_archive_output_is_compared_byte_for_byte(first, second, same):
+@pytest.mark.parametrize("fmt_b,same", [("xlsx", True), ("docx", False)])
+def test_the_same_answer_in_another_format_is_another_output(fmt_b, same):
     from app.routers import exports
 
-    assert (exports._produced_content_digest(first)
-            == exports._produced_content_digest(second)) is same
+    assert (exports._produced_source_digest(_ASKED)
+            == exports._produced_source_digest({**_ASKED, "format": fmt_b})) is same
