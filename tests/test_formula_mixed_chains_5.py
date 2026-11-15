@@ -292,13 +292,17 @@ def test_m26_unit_contradiction_is_flagged(unit, suspect, expected):
 @pytest.mark.xfail(strict=True, reason=(
     "suspected defect: kg and t share one unit class with no scale, so a "
     "per-tonne median prices a per-kg line 1,000 times over"))
-def test_m26_same_steel_in_kg_costs_the_same_as_in_t():
-    # 9 t = 9,000 kg: the two lines are the same steel and must cost the same.
+@pytest.mark.parametrize("tonnes, kilograms", [
+    (9, 9_000),      # plan: 9 t = 9,000 kg
+    (2.5, 2_500),    # invented: 2.5 t = 2,500 kg
+])
+def test_m26_same_steel_in_kg_costs_the_same_as_in_t(tonnes, kilograms):
+    # the two lines are the same steel and must cost the same.
     priced, _ = price_line_items([
-        {"description": "High yield steel reinforcement", "quantity": 9,
+        {"description": "High yield steel reinforcement", "quantity": tonnes,
          "unit": "t"},
-        {"description": "High yield steel reinforcement", "quantity": 9_000,
-         "unit": "kg"},
+        {"description": "High yield steel reinforcement",
+         "quantity": kilograms, "unit": "kg"},
     ], "Buildings/Towers", "AED")
     in_t, in_kg = (x["qty"] * x["rate"] for x in priced)
     assert in_kg == pytest.approx(in_t, rel=_REL)
@@ -316,25 +320,39 @@ def _cited_typical(row_label: str) -> float:
     raise AssertionError(f"row {row_label!r} not in {_NORMS.name}")
 
 
-def test_m31_slab_concrete_has_no_benchmark_so_none_is_invented():
-    out = _ok("productivity_benchmark", {"work_item": "slab concrete"})
-    assert out["rate_per_crew_day"] is None
-    assert "no benchmark entry" in out["flag"]
+@pytest.mark.parametrize("work_item, has_entry", [
+    ("slab concrete", False),       # plan: no row -> no rate, flagged
+    ("Blockwork (walls)", True),    # a row exists -> a rate, no flag
+])
+def test_m31_slab_concrete_has_no_benchmark_so_none_is_invented(
+        work_item, has_entry):
+    out = _ok("productivity_benchmark", {"work_item": work_item})
+    assert (out["rate_per_crew_day"] is not None) is has_entry
+    assert ("no benchmark entry" in out["flag"]) is (not has_entry)
     assert out["tier"] == "GENERAL"
 
 
-def test_m31_cited_norm_to_crews_plan_case():
+@pytest.mark.parametrize(
+    "quantity, crews, crews_up, crew_days, man_hours, identity", [
+        # plan: 640 / (10 * 35) = 1.829 -> 2 crews; crew-days 640/35 = 18.29;
+        # man-hours 18.29 * 8 = 146.3; identity 2 * 10 * 35 = 700 >= 640.
+        (640, 1.829, 2, 18.29, 146.3, 700),
+        # invented: 701 / 350 = 2.003 -> 3 crews (just over a whole crew);
+        # crew-days 701/35 = 20.03; man-hours 20.03 * 8 = 160.23;
+        # identity 3 * 10 * 35 = 1,050 >= 701.
+        (701, 2.003, 3, 20.03, 160.23, 1_050),
+    ])
+def test_m31_cited_norm_to_crews_plan_case(
+        quantity, crews, crews_up, crew_days, man_hours, identity):
     rate = _cited_typical("structural concrete place")
     assert rate == 35.0  # the table value read at write time (plan rule)
-    out = _ok("crew_sizing", {"quantity": 640, "duration_days": 10,
+    out = _ok("crew_sizing", {"quantity": quantity, "duration_days": 10,
                               "rate_per_crew_day": rate, "hours_per_day": 8})
-    # 640 / (10 * 35) = 1.829 -> 2 crews; crew-days 640/35 = 18.29;
-    # man-hours 18.29 * 8 = 146.3; identity 2 * 10 * 35 = 700 >= 640.
-    assert out["crews_required"] == pytest.approx(1.829, rel=_REL)
-    assert out["crews_required_rounded_up"] == 2
-    assert out["crew_days"] == pytest.approx(18.29, rel=_REL)
-    assert out["man_hours"] == pytest.approx(146.3, rel=_REL)
-    assert out["identity_check"] == pytest.approx(700, rel=_REL)
+    assert out["crews_required"] == pytest.approx(crews, rel=_REL)
+    assert out["crews_required_rounded_up"] == crews_up
+    assert out["crew_days"] == pytest.approx(crew_days, rel=_REL)
+    assert out["man_hours"] == pytest.approx(man_hours, rel=_REL)
+    assert out["identity_check"] == pytest.approx(identity, rel=_REL)
 
 
 @pytest.mark.parametrize("quantity, crews, crews_up, crew_days, man_hours", [
