@@ -1005,7 +1005,7 @@ async def chat_stream(
 
     # Opened before the producer task exists, so the task (and the threads it
     # offloads to) record this turn's evidence into the same record.
-    _exit_turn = answer_exit.open_turn(user_message)
+    _exit_turn = answer_exit.open_turn()
     # The user's own words reach every calculator run this turn makes.
     from app.lib import construction_formulas as _calc_words
 

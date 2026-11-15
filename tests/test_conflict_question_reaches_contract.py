@@ -133,7 +133,7 @@ def test_basis_outside_the_evidence_ends_without_a_marker(basis):
     assert structured[0]["basis_document"] == basis
 
 
-def test_contract_apply_takes_the_question_directly():
-    question, answer, rows, pairs = _CASES[0]
+@pytest.mark.parametrize("question, answer, rows, pairs", _CASES)
+def test_contract_apply_takes_the_question_directly(question, answer, rows, pairs):
     assert _pairs(answer_contract.apply(answer, sources=rows, question=question).conflicts[0]) == pairs
     assert answer_contract.apply(answer, sources=rows).conflicts == []
