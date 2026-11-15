@@ -32,6 +32,7 @@ import {
   renameTitleError,
 } from '../chat/session'
 import { activityForTool, plainMetadata } from '../chat/userFacingText'
+import { sessionDocumentsFor, withSessionId, type SessionDocumentRow } from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
 import './pages.css'
@@ -348,6 +349,9 @@ function friendlyErrorMessage(raw: string): string {
 
 interface DocumentsPanelProps {
   projectId: string
+  /** The open chat session (W2): an upload is recorded on it and listed
+   *  under "This session" as well as in the project's documents. */
+  sessionId?: string | null
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
   onDocumentRemoved: (docId: string) => void
@@ -366,6 +370,7 @@ const MAX_VISIBLE_DOCS = 200
 
 function DocumentsPanel({
   projectId,
+  sessionId,
   documents,
   onDocumentAdded,
   onDocumentRemoved,
@@ -390,6 +395,7 @@ function DocumentsPanel({
     try {
       const form = new FormData()
       form.append('file', file)
+      withSessionId(form, sessionId)
       const resp = await apiPostForm<{ document: DocumentRecord }>(
         `/v1/projects/${projectId}/documents`,
         form,
@@ -980,6 +986,28 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     rememberSession(id, activeConversationId, browserStorage())
   }, [id, activeConversationId])
 
+  // W2: the open session's own files (uploaded in it or produced by it),
+  // shown under "This session" above the project's documents. Re-read when
+  // the session changes, after an upload and after each answer; a reply for
+  // a session the user has since left is dropped.
+  // Rows are stored with the session they belong to, so another session's
+  // rows are never shown while the new session's reply is in flight.
+  const [sessionDocsOf, setSessionDocsOf] = useState<{ sid: string; rows: SessionDocumentRow[] } | null>(null)
+  const sessionDocs = sessionDocsOf && sessionDocsOf.sid === activeConversationId ? sessionDocsOf.rows : []
+  const refreshSessionDocuments = useCallback(() => {
+    const cid = activeIdRef.current
+    if (!id || !cid) return
+    apiGet<unknown>(`/v1/projects/${id}/conversations/${encodeURIComponent(cid)}/documents`)
+      .then((payload) => {
+        const rows = sessionDocumentsFor(cid, activeIdRef.current, payload)
+        if (rows) setSessionDocsOf({ sid: cid, rows })
+      })
+      .catch(() => { /* the session group is progressive enhancement */ })
+  }, [id])
+  useEffect(() => {
+    refreshSessionDocuments()
+  }, [refreshSessionDocuments, activeConversationId])
+
   const refreshConversations = useCallback(() => {
     if (!id) return
     apiGet<{ conversations: ConversationSummary[] }>(`/v1/projects/${id}/conversations`)
@@ -1560,8 +1588,9 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       // First message stamps the session title server-side — refresh the
       // sidebar CHAT HISTORY list so the new session appears named.
       refreshConversations()
+      refreshSessionDocuments()
     }
-  }, [id, conversationId, streaming, refreshConversations, pinnedAgent, updatePinnedDocs])
+  }, [id, conversationId, streaming, refreshConversations, refreshSessionDocuments, pinnedAgent, updatePinnedDocs])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1758,11 +1787,16 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           onRenameConversation={handleRenameConversation}
           onDeleteConversation={handleDeleteConversation}
           onClearConversation={clearConversation}
+          sessionDocuments={sessionDocs}
           documents={
             <DocumentsPanel
               projectId={id ?? ''}
+              sessionId={conversationId}
               documents={documents}
-              onDocumentAdded={handleDocumentAdded}
+              onDocumentAdded={(doc) => {
+                handleDocumentAdded(doc)
+                refreshSessionDocuments()
+              }}
               onDocumentRemoved={handleDocumentRemoved}
               onDocumentReplaced={handleDocumentReplaced}
               onAsk={handleAskAboutDocument}
@@ -1865,6 +1899,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
             disabled={streaming || composerIsBlocked}
             disabledReason={composerBlockedReason}
             projectId={id ?? ''}
+            sessionId={conversationId}
             hasHistory={messages.length > 0}
             onOpenDrive={() => setDriveModalOpen(true)}
             onClear={clearConversation}
@@ -1879,6 +1914,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               if (docId) pendingAttachedDocIdsRef.current.push(docId)
               // The stored file shows in the documents list at once.
               if (isDocumentRecord(stored)) handleDocumentAdded(stored)
+              refreshSessionDocuments()
             }}
           />
         </div>

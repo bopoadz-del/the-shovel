@@ -6,6 +6,8 @@
  *   • SESSIONS — this project's chat sessions for the signed-in user,
  *     newest first, above the documents; each can be renamed and deleted
  *     (delete asks first) by its owner.
+ *   • THIS SESSION — the open session's own files (W2), each tagged
+ *     Uploaded or Produced. Above the project's documents.
  *   • DOCUMENTS — the active project's uploaded files. Slot-rendered
  *     so the existing DocumentsPanel (in ProjectWorkspace) provides
  *     upload + delete + status. Hidden when no project is active.
@@ -20,6 +22,7 @@ import { useAuth } from '../auth/AuthContext'
 import { apiGet, ApiError } from '../lib/api'
 import { useSupportEmail } from '../lib/support'
 import { deleteSessionQuestion, renameTitleError, sessionListTitle } from '../chat/session'
+import type { SessionDocumentRow } from '../chat/sessionDocuments'
 import './LeftPanel.css'
 
 interface ProjectRow {
@@ -57,6 +60,8 @@ interface Props {
    *  existing upload + delete wiring is reused. Optional: render the
    *  Documents section only when both this and activeProjectId are set. */
   documents?: ReactNode
+  /** The open session's own files (W2), listed under "This session". */
+  sessionDocuments?: SessionDocumentRow[]
   /** Number of messages in the active conversation. Drives the "X messages"
    *  label and gates the Export + Clear actions. */
   messageCount?: number
@@ -119,6 +124,7 @@ export default function LeftPanel({
   activeProjectId,
   activeProjectName,
   documents,
+  sessionDocuments,
   messageCount,
   onExportConversation,
   onClearConversation,
@@ -344,9 +350,32 @@ export default function LeftPanel({
         </section>
       )}
 
+      {showDocsSection && activeConversationId && (
+        <section className="left-panel__section" aria-label="This session's documents">
+          <header className="left-panel__section-head">This session</header>
+          {sessionDocuments && sessionDocuments.length > 0 ? (
+            <ul className="left-panel__session-docs">
+              {sessionDocuments.map((d) => (
+                <li key={d.id} className="left-panel__session-doc" title={d.name}>
+                  <span className="left-panel__session-doc-name">{d.name}</span>
+                  <span
+                    className={`left-panel__session-doc-tag left-panel__session-doc-tag--${d.tag.toLowerCase()}`}
+                  >
+                    {d.tag}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="left-panel__empty">No files in this session yet.</p>
+          )}
+        </section>
+      )}
+
       {showDocsSection && (
         <section className="left-panel__section">
           <header className="left-panel__section-head">Documents</header>
+          <p className="left-panel__subhead">Project</p>
           <div className="left-panel__slot">{documents}</div>
         </section>
       )}

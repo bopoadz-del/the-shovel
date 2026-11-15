@@ -23,9 +23,12 @@ starts with the STAGE that failed (rule 5).
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.browser._llm_stub import _cases
 from tests.browser.test_ui_phys_nightly import (
     FIXTURE_DIR,
     _ask,
@@ -45,11 +48,11 @@ pytestmark = pytest.mark.browser
 _W2 = pytest.mark.xfail(strict=True, reason="W2 not landed: per-session documents")
 _W3 = pytest.mark.xfail(strict=True, reason="W3 not landed: citations in the side panel only")
 
-# Two invented questions per item; the stub answers any text.
-_PAIRS = [
-    ("What is the curing time for the east deck pour?", "List the open crane lift permits."),
-    ("Summarise the dewatering log for week 3.", "Which scaffold tags failed inspection?"),
-]
+# Two questions per item, taken from the UI-PHYS catalog: the stub answers
+# only catalog asks (an invented question gets its honest error bubble, which
+# turned every item red). These four are plain answers: no citation, no tool.
+_PAIR_IDS = (("G2", "G3"), ("G6", "G1"))
+_PAIRS = [tuple(_cases()[cid]["ask"] for cid in ids) for ids in _PAIR_IDS]
 
 # Records every status line the bubble ever shows, and every SSE body.
 _STATUS_RECORDER = """
@@ -66,6 +69,15 @@ new MutationObserver(() => {
 
 def _heads(page: Page) -> list[str]:
     return [h.strip() for h in page.locator(".left-panel__section-head").all_text_contents()]
+
+
+def _group(page: Page, title: str):
+    """The sidebar group whose heading (section head or subhead) is exactly
+    ``title``. Matching on any text inside a section is too loose: a status
+    note that mentions "this session" made the Documents group match too."""
+    exact = re.compile(rf"^\s*{re.escape(title)}\s*$", re.IGNORECASE)
+    heading = page.locator(".left-panel__section-head, .left-panel__subhead", has_text=exact)
+    return page.locator(".left-panel__section", has=heading)
 
 
 def _last_answer(page: Page) -> str:
@@ -128,7 +140,6 @@ def test_11_2_sessions_are_listed_above_documents(page: Page, live_app, pair):
     assert _PAIRS[pair][1][:20] in rows.first.inner_text(), "stage=newest-first"
 
 
-@_W2
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("fixture_name", ["S1_contract_data.md", "S5_batch_plant_letter.md"])
 def test_11_3_each_session_has_its_own_documents(page: Page, live_app, fixture_name):
@@ -139,7 +150,7 @@ def test_11_3_each_session_has_its_own_documents(page: Page, live_app, fixture_n
     _ask(page, _PAIRS[0][0])
     page.locator("#doc-file-input").set_input_files(str(FIXTURE_DIR / fixture_name))
 
-    this_session = page.locator(".left-panel__section", has_text="This session")
+    this_session = _group(page, "This session")
     expect(this_session, "stage=group-present").to_have_count(1, timeout=30_000)
     expect(this_session.filter(has_text=fixture_name), "stage=listed-in-session").to_have_count(1)
     expect(this_session.filter(has_text="Uploaded"), "stage=tagged-uploaded").to_have_count(1)
@@ -147,11 +158,11 @@ def test_11_3_each_session_has_its_own_documents(page: Page, live_app, fixture_n
     page.get_by_role("button", name="New chat").click()
     _ask(page, _PAIRS[0][1])
     expect(
-        page.locator(".left-panel__section", has_text="This session").filter(has_text=fixture_name),
+        _group(page, "This session").filter(has_text=fixture_name),
         "stage=not-in-other-session",
     ).to_have_count(0)
     expect(
-        page.locator(".left-panel__section", has_text="Project").filter(has_text=fixture_name),
+        _group(page, "Project").filter(has_text=fixture_name),
         "stage=listed-in-project",
     ).to_have_count(1)
 
@@ -168,7 +179,7 @@ def test_11_4_a_produced_file_is_saved_and_tagged(page: Page, live_app, pair):
     produced = [e for b in bodies for e in sse_events(b) if e.get("exports")]
     assert produced, "stage=produce: the turn produced no file"
     page.reload(wait_until="networkidle")
-    this_session = page.locator(".left-panel__section", has_text="This session")
+    this_session = _group(page, "This session")
     expect(this_session.filter(has_text="Produced"), "stage=saved-and-tagged").to_have_count(
         1, timeout=15_000
     )
