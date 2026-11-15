@@ -35,6 +35,13 @@ exception's message goes to ``last_error.json`` beside it. Neither is
 printed. ``work_dir_durable`` says whether that directory is on a durable
 mount (``byte_store.is_durable_mount``): only then do the word boxes and
 the private plan outlive the task.
+
+After a plan, ``geometry`` carries the counts-only geometry diagnostic
+(``bill_geometry_diag.geometry_diag``) over the SAVED word boxes of the
+planned range: it reads no page again (a page with no saved boxes is counted
+as ``pages_missing``, never read), and it fails soft: an exception is
+reported as its class under ``geometry.error_class`` and leaves the plan's
+own outcome unchanged.
 """
 from __future__ import annotations
 
@@ -85,7 +92,7 @@ SUMMARY_KEYS = (
     "ok", "error", "error_class", "project_id", "document_id", "build_sha",
     "requested_pages", "pages_cached_before", "pages_cached_after", "wall_s",
     "peak_rss_mb", "verdict", *PLAN_FIELDS, *SOURCE_FIELDS, "section_paths", "rows_by_path_depth",
-    "private_plan_saved", "work_dir_durable",
+    "private_plan_saved", "work_dir_durable", "geometry",
 )
 #: Error codes (the summary never carries a message).
 ERR_MISSING_IDS = "missing_ids"
@@ -112,6 +119,9 @@ class Deps:
     #: Whether the work dir is on a durable mount (the word boxes and the
     #: private plan outlive the task only then); None = not known.
     durable: Callable[[str], bool | None] = field(default=lambda _path: None)
+    #: Counts-only geometry diagnostic over the saved word boxes of a page
+    #: range ``(work_dir, first, stop)``; None = not run.
+    geometry: Callable[[str, int, int], dict[str, Any]] | None = None
 
 
 def parse_pages(raw: str | None) -> tuple[int, int] | None:
@@ -261,7 +271,32 @@ def plan_one(
     report["section_paths"] = len(sections)
     report["rows_by_path_depth"] = depth_distribution(sections)
     report["ok"] = True
+    if deps.geometry is not None:
+        first, stop = (plan.get("pages") or [0, 0])[:2]
+        try:
+            report["geometry"] = deps.geometry(work_dir, int(first), int(stop))
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never fails the plan
+            report["geometry"] = {"error_class": type(exc).__name__}
     return report
+
+
+def saved_geometry(work_dir: str, first: int, stop: int) -> dict[str, Any]:
+    """The geometry diagnostic over the word boxes saved for ``first:stop``.
+    Reads the work dir only; a page with no saved boxes is counted, not read."""
+    from app.core import bill_derived, bill_geometry_diag
+
+    words, read, missing = [], [], 0
+    for index in range(first, stop):
+        path = bill_derived.cached_page_path(work_dir, index)
+        if not os.path.exists(path):
+            missing += 1
+            continue
+        words.extend(bill_derived.cached_page_read(path, index).words)
+        read.append(index)
+    out = bill_geometry_diag.geometry_diag(words, read)
+    out["pages_read"] = len(read)
+    out["pages_missing"] = missing
+    return out
 
 
 def _peak_rss_mb() -> float | None:
@@ -284,6 +319,7 @@ def production_deps() -> Deps:
         build_sha=_health._deployed_build_sha,
         peak_rss_mb=_peak_rss_mb,
         durable=byte_store.is_durable_mount,
+        geometry=saved_geometry,
     )
 
 

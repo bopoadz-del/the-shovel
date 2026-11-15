@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 
@@ -299,10 +299,12 @@ def check_row(fields: dict[str, str]) -> str:
     a = parse_number(fields.get("total", ""))
     if q is None or r is None or a is None:
         return ""
-    expected = q * r
-    if abs(expected - a) <= max(_CHECK_ABS_TOL, abs(a) * _CHECK_REL_TOL):
-        return ""
-    return "qty x rate != amount"
+    return "" if reconciles(q, r, a) else "qty x rate != amount"
+
+
+def reconciles(quantity: float, rate: float, amount: float) -> bool:
+    """``quantity x rate == amount`` within the printed-bill rounding tolerance."""
+    return abs(quantity * rate - amount) <= max(_CHECK_ABS_TOL, abs(amount) * _CHECK_REL_TOL)
 
 
 def _ref_columns(columns: Sequence[_Column]) -> set[int]:
@@ -368,7 +370,38 @@ def _merge_wrapped(pending: Sequence[_Line], last: _Line) -> tuple[dict[str, str
     return fields, extra
 
 
-def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
+#: Why a line became a heading label (codes for :func:`extract_bill_rows`'s
+#: ``on_label`` observer; a diagnostic counts them, it never prints labels).
+LABEL_BEFORE_HEADER = "before_header"
+LABEL_UNCLOSED_CHAIN = "unclosed_chain"
+LABEL_NO_FIGURE = "no_figure"
+LABEL_NO_DESCRIPTION = "no_description"
+
+
+@dataclass(frozen=True)
+class LabelEvent:
+    """One heading label as :func:`extract_bill_rows` made it: the page, why,
+    how many printed lines it joins, and whether a figure-column cell of the
+    line held a number (a measured row read as a label)."""
+
+    page: int
+    reason: str
+    lines: int
+    figure_number: bool
+
+
+def _has_figure_number(fields: dict[str, str]) -> bool:
+    return any(
+        parse_number(tok) is not None
+        for f in _FIGURE_FIELDS for tok in (fields.get(f) or "").split()
+    )
+
+
+def extract_bill_rows(
+    words: Iterable[Word],
+    block=None,
+    on_label: Callable[[LabelEvent], None] | None = None,
+) -> list[BillRow]:
     """Rows of every bill table found in ``words`` (any number of pages).
 
     A line with no figure cell and some letters is a heading label. Labels
@@ -388,6 +421,9 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
     (vertical gap at most one median word height). Such a chain is one row. A chain that is not closed
     that way is a section label, as before. A page whose header has no
     reference column has no such evidence and keeps the line-per-row rule.
+
+    ``on_label`` (optional) observes every label as a :class:`LabelEvent`;
+    it changes nothing about the rows.
     """
     block = block or _resolver()
     by_page: dict[int, list[Word]] = {}
@@ -401,8 +437,10 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
     indent = 1.0
     pending: list[_Line] = []
 
-    def label(lab: _Label) -> None:
+    def label(lab: _Label, page: int, reason: str, lines: int = 1, figure_number: bool = False) -> None:
         path.push(lab, indent)
+        if on_label is not None:
+            on_label(LabelEvent(page, reason, lines, figure_number))
 
     def emit(page: int, fields: dict[str, str], extra: dict[str, str]) -> None:
         texts = path.texts()
@@ -417,10 +455,11 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
         rows.append(row)
         path.after_rows = True
 
-    def flush() -> None:
+    def flush(page: int) -> None:
         if pending:
             first = pending[0].label
-            label(_Label(" ".join(ln.text for ln in pending), first.left, first.height))
+            label(_Label(" ".join(ln.text for ln in pending), first.left, first.height),
+                  page, LABEL_UNCLOSED_CHAIN, len(pending))
             pending.clear()
 
     for page in sorted(by_page):
@@ -430,13 +469,13 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
         for line in group_lines(by_page[page]):
             header = detect_header(line, block)
             if header is not None:
-                flush()
+                flush(page)
                 columns = header
                 refs = _ref_columns(columns)
                 continue
             if columns is None:
                 if re.search(r"[A-Za-z]", " ".join(w.text for w in line)):
-                    label(_label_of(line))
+                    label(_label_of(line), page, LABEL_BEFORE_HEADER)
                 continue
             cur = _bucket_line(line, columns, refs)
             has_figure = any(cur.fields.get(f) for f in _FIGURE_FIELDS)
@@ -448,7 +487,7 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
             adjacent = bool(pending) and cur.top - pending[-1].bottom <= max_gap
             if not has_figure and has_desc:
                 if cur.ref:
-                    flush()
+                    flush(page)
                     pending.append(cur)
                     continue
                 if adjacent and not other_text:
@@ -461,17 +500,19 @@ def extract_bill_rows(words: Iterable[Word], block=None) -> list[BillRow]:
                 pending.clear()
                 emit(page, fields, extra)
                 continue
-            flush()
+            flush(page)
             # Same rule as the spreadsheet row chunker: a measured row has a
             # description AND a figure. Anything else with letters (a bill or
             # section label, even one that prints a number such as "Bill 3")
             # is a heading label of the rows that follow.
             if not has_figure or not has_desc:
                 if re.search(r"[A-Za-z]", cur.text):
-                    label(cur.label)
+                    label(cur.label, page,
+                          LABEL_NO_FIGURE if not has_figure else LABEL_NO_DESCRIPTION,
+                          figure_number=_has_figure_number(cur.fields))
                 continue
             emit(page, cur.fields, cur.extra)
-        flush()
+        flush(page)
     return rows
 
 
