@@ -38,6 +38,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http:
 globalThis.window = dom.window
 globalThis.document = dom.window.document
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+if (globalThis.navigator === undefined) globalThis.navigator = dom.window.navigator // Node 20 has none
 for (const k of ['HTMLElement', 'Element', 'Node', 'Text', 'Event', 'MouseEvent', 'DocumentFragment',
   'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage']) {
   if (dom.window[k] !== undefined) globalThis[k] = dom.window[k]
