@@ -276,9 +276,15 @@ export default function ChatComposer({
         : `Attached: ${docName}`
       setAttachStatus(statusMsg)
       onAttached?.(docName, docId)
-      const inlineTag = observations.length
-        ? `[attached: ${docName} | observations: ${observations.join('; ')}] `
-        : `[attached: ${docName}] `
+      // A photo's marker comes ready-made from the server: it carries the
+      // text read off the image (OCR) as well as the observations, made safe
+      // for the marker grammar there.
+      const serverMarker = typeof body?.attachment_marker === 'string' ? body.attachment_marker : ''
+      const inlineTag = serverMarker
+        ? `${serverMarker} `
+        : observations.length
+          ? `[attached: ${docName} | observations: ${observations.join('; ')}] `
+          : `[attached: ${docName}] `
       setText((prev) => (prev ? `${prev}\n` : '') + inlineTag)
       setTimeout(() => setAttachStatus(null), 6000)
     } catch (err) {
