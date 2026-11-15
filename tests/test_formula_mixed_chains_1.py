@@ -11,10 +11,13 @@ written beside its row; none was copied from the product's output. Each
 chain runs on two inputs: the plan's case and a second invented case worked
 by hand the same way. Plan tolerance: 0.5 % on any number unless stated.
 
-Chains here: M01, M02, M08, M12, M14 (with its pass twin) and M24.
+Chains here: M01 (+ zero-waste twin), M02, M04, M08, M11, M12, M14 (+ pass twin), M16,
+M21 and M24.
 All inputs are invented numbers; no project, person or document is named.
 """
 from __future__ import annotations
+
+import math
 
 import pytest
 
@@ -185,3 +188,109 @@ def test_m24_slab_quantity_to_seismic_base_shear(floors, dims, gamma, sds, r_, i
     shear = _ok("seismic_base_shear", {"seismic_weight_kn": w, "sds": sds, "r": r_, "ie": ie})
     assert shear["seismic_response_coefficient_cs"] == pytest.approx(cs, rel=_REL)
     assert shear["base_shear_kn"] == pytest.approx(v, rel=_REL)
+
+
+# ------------------------------- M04 footing -> pit excavation -> haul cost
+# q = P / (B x L); FoS = allowable / q; pit = (B + 2 x 0.5) x (L + 2 x 0.5) x depth;
+# loose = bank x (1 + bulking); haul priced on LOOSE volume.
+
+@pytest.mark.parametrize("b, load, allow, pit, depth, bulk, rate, q, fos, bank, loose, cost", [
+    (2.5, 1_500, 250, 3.5, 1.5, 0.25, 12,
+     240.0, 1.042, 18.375, 22.969, 275.63),  # 1500/6.25; 250/240; 3.5 x 3.5 x 1.5; x 1.25; x 12
+    (2.0, 800, 220, 3.0, 1.2, 0.20, 15,
+     200.0, 1.100, 10.800, 12.960, 194.40),  # 800/4; 220/200; 3 x 3 x 1.2; x 1.20; x 15
+])
+def test_m04_footing_check_then_pit_and_haul(b, load, allow, pit, depth, bulk, rate,
+                                             q, fos, bank, loose, cost):
+    # No soil unit weight is given, so the check is on the gross pressure (no depth passed).
+    check = _ok("foundation_bearing_pressure", {"foundation_width_m": b, "foundation_length_m": b,
+                                                "column_load_kn": load,
+                                                "soil_bearing_capacity_kn_m2": allow})
+    assert check["bearing_pressure_kn_m2"] == pytest.approx(q, rel=_REL)
+    assert check["fos_against_bearing"] == pytest.approx(fos, rel=_REL)
+    assert check["bearing_ok"] is True
+    dig = _ok("excavation_volume", {"length_m": pit, "width_m": pit, "depth_m": depth,
+                                    "bulking_factor": bulk})
+    assert dig["bank_volume_m3"] == pytest.approx(bank, rel=_REL)
+    assert dig["loose_volume_m3"] == pytest.approx(loose, rel=_REL)
+    priced = _ok("unit_cost_total", {"quantity": dig["loose_volume_m3"], "unit_rate": rate})
+    assert priced["total_cost"] == pytest.approx(cost, rel=_REL)
+
+
+@pytest.mark.xfail(strict=True, reason="suspected defect: with a footing depth and no soil unit weight, "
+                   "the bearing check subtracts an unstated overburden of depth x 18 kN/m3 "
+                   "(plan M04 convention: net pressure must not be invented)")
+@pytest.mark.parametrize("b, load, allow, depth, fos", [
+    (2.5, 1_500, 250, 1.5, 1.042),  # gross 240: 250/240 = 1.042 (an invented 18 kN/m3 gives 250/213 = 1.17)
+    (2.0, 800, 220, 1.2, 1.100),    # gross 200: 220/200 = 1.100 (an invented 18 kN/m3 gives 220/178.4 = 1.23)
+])
+def test_m04_depth_without_soil_weight_does_not_invent_overburden(b, load, allow, depth, fos):
+    env = run_calculation("foundation_bearing_pressure", {
+        "foundation_width_m": b, "foundation_length_m": b, "column_load_kn": load,
+        "soil_bearing_capacity_kn_m2": allow, "foundation_depth_m": depth})
+    if env.get("status") == "success":
+        assert env["result"]["fos_against_bearing"] == pytest.approx(fos, rel=_REL), env
+    else:
+        assert "unit weight" in str(env.get("question") or env.get("error") or "").lower(), env
+
+
+# ------------------------------- M11 cut / fill -> truck loads -> haul cost
+# balance = cut - fill (bank); loose = balance x (1 + bulking); loads = ceil(loose / 12).
+
+@pytest.mark.parametrize("cut, fill, bulk, truck, per_load, bal, loose, loads, cost", [
+    (4_200, 3_000, 0.20, 12, 45, 1_200, 1_440, 120, 5_400),  # 1,440 / 12 = 120 exact; x 45
+    (2_500, 1_800, 0.25, 12, 50, 700, 875, 73, 3_650),       # 875 / 12 = 72.92 -> 73 loads (UP); x 50
+])
+def test_m11_cut_fill_surplus_to_truck_loads(cut, fill, bulk, truck, per_load, bal, loose, loads, cost):
+    ear = _ok("cut_fill_balance", {"cut_volume_m3": cut, "fill_volume_m3": fill,
+                                   "bulking_factor": bulk})
+    assert ear["balance_bank_m3"] == pytest.approx(bal, rel=_REL)
+    assert ear["status"] == "export_surplus"
+    assert ear["haul_loose_m3"] == pytest.approx(loose, rel=_REL)
+    n = math.ceil(round(ear["haul_loose_m3"] / truck, 6))  # loads round UP
+    assert n == loads
+    priced = _ok("unit_cost_total", {"quantity": n, "unit_rate": per_load})
+    assert priced["total_cost"] == pytest.approx(cost, rel=_REL)
+
+
+# ------------------------------- M16 formwork wind -> overturning -> ballast
+# q = 0.5 x 1.225 x v^2 (0.613 v^2 is inside tolerance); F = q x A x Cs; M = F x h / 2;
+# ballast about the toe: W = factor x M / (base / 2).
+
+@pytest.mark.parametrize("v, area, h, cs, base, q_kpa, f_kn, m_knm, w_kn", [
+    (20, 80, 4, 1.3, 3, 0.245, 25.48, 50.96, 50.96),    # 245 Pa; 0.245 x 1.3 x 80; x 2; 1.5 x 50.96 / 1.5
+    (25, 30, 3, 1.2, 2, 0.3828, 13.781, 20.672, 31.01),  # 382.8 Pa; x 1.2 x 30; x 1.5; 1.5 x 20.672 / 1.0
+])
+def test_m16_formwork_wind_overturning_ballast(v, area, h, cs, base, q_kpa, f_kn, m_knm, w_kn):
+    wl = _ok("wind_load_on_formwork", {"wind_velocity_m_s": v, "formwork_area_m2": area,
+                                       "formwork_height_m": h, "shape_factor": cs})
+    assert wl["wind_pressure_kpa"] == pytest.approx(q_kpa, rel=_REL)
+    assert wl["wind_force_kn"] == pytest.approx(f_kn, rel=_REL)
+    assert wl["overturning_moment_kn_m"] == pytest.approx(m_knm, rel=_REL)
+    ballast = 1.5 * wl["overturning_moment_kn_m"] / (base / 2)  # arithmetic step of the chain
+    assert ballast == pytest.approx(w_kn, rel=_REL)
+
+
+# ------------------------------- M21 damages -> payment certificate -> deduction
+# damages = per day x days; retention = certified x rate; net = certified - retention;
+# cumulative = previous + certified; payable = net - damages.
+
+@pytest.mark.parametrize("claimed, certified, ret, prev, contract, per_day, days, "
+                         "damages, held, net, cum, pct, payable", [
+    (2_400_000, 2_250_000, 0.05, 3_000_000, 12_000_000, 15_000, 12,
+     180_000, 112_500, 2_137_500, 5_250_000, 43.75, 1_957_500),
+    (1_000_000, 900_000, 0.10, 2_000_000, 10_000_000, 5_000, 8,
+     40_000, 90_000, 810_000, 2_900_000, 29.0, 770_000),
+])
+def test_m21_damages_deducted_from_the_certificate(claimed, certified, ret, prev, contract, per_day,
+                                                   days, damages, held, net, cum, pct, payable):
+    dd = _ok("delay_damages_daily", {"amount_per_day": per_day, "days": days})
+    assert dd["total_amount"] == pytest.approx(damages, abs=0.01)
+    pay = _ok("calculate_payment", {"claimed_amount": claimed, "certified_amount": certified,
+                                    "retention_rate": ret, "cumulative_previous_certified": prev,
+                                    "contract_value": contract})
+    assert pay["retention_held"] == pytest.approx(held, abs=0.01)
+    assert pay["net_payment_due"] == pytest.approx(net, abs=0.01)
+    assert pay["cumulative_certified"] == pytest.approx(cum, abs=0.01)
+    assert pay["percent_complete"] == pytest.approx(pct, rel=_REL)
+    assert pay["net_payment_due"] - dd["total_amount"] == pytest.approx(payable, abs=0.01)
