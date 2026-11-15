@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import AppHeader from '../components/AppHeader'
 import { type Project } from './ProjectCard'
-import { apiGet, apiPatch, apiPost, apiPostForm, ApiError } from '../lib/api'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, ApiError } from '../lib/api'
 import { getToken } from '../lib/token'
 import { exportEndpointForWorkspace } from '../lib/exportEndpoint'
 import { ReconnectGaveUp, sendWithReconnect } from '../lib/reconnect'
@@ -21,10 +21,13 @@ import SourcesList, { type CitedSource } from '../chat/SourcesList'
 import WhyThisAnswer, { type ProvenanceEntry } from '../chat/WhyThisAnswer'
 import { sanitizeAssistantContent } from '../chat/toolJsonGuard'
 import {
+  afterSessionDeleted,
   freshSessionEntropy,
   historyBelongsToSession,
   mintConversationId,
   orderSessionsNewestFirst,
+  readRememberedSession,
+  rememberSession,
   renameTitleError,
 } from '../chat/session'
 import { activityForTool, plainMetadata } from '../chat/userFacingText'
@@ -916,6 +919,15 @@ export default function ProjectWorkspace() {
   return <ProjectWorkspaceInner key={id ?? 'none'} id={id} />
 }
 
+/** The browser's local storage, or null where it is unavailable. */
+function browserStorage(): Storage | null {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : null
+  } catch {
+    return null
+  }
+}
+
 function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   const [wsState, setWsState] = useState<WorkspaceState>(
@@ -948,17 +960,24 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     return () => { cancelled = true }
   }, [])
 
-  // Opening a project and "New chat" each mint a new id. The legacy
-  // stable id is never the composer thread, so the first send cannot
-  // append to an older conversation. Past sessions are reopened from
-  // the list. The list is GET /v1/projects/{id}/conversations.
+  // The open session is remembered per project in this browser: a reload,
+  // or leaving the workspace and coming back, reopens the same thread with
+  // its stored history. With nothing remembered, opening a project and
+  // "New chat" each mint a new id; the legacy stable id is never the
+  // composer thread. The list is GET /v1/projects/{id}/conversations.
+  const [restoredConversationId] = useState<string | null>(() =>
+    readRememberedSession(id, browserStorage()),
+  )
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() =>
-    id ? mintConversationId(id, freshSessionEntropy()) : null,
+    restoredConversationId ?? (id ? mintConversationId(id, freshSessionEntropy()) : null),
   )
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
   const conversationId = activeConversationId
   const activeIdRef = useRef<string | null>(activeConversationId)
   activeIdRef.current = activeConversationId
+  useEffect(() => {
+    rememberSession(id, activeConversationId, browserStorage())
+  }, [id, activeConversationId])
 
   const refreshConversations = useCallback(() => {
     if (!id) return
@@ -1045,11 +1064,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   // ── Chat session switching (Quarry CHAT HISTORY) ──────────────────────────
 
-  const handleSelectConversation = useCallback((convId: string) => {
-    abortRef.current?.abort()
-    activeIdRef.current = convId
-    setActiveConversationId(convId)
-    setMessages([])
+  const loadSessionHistory = useCallback((convId: string) => {
     apiGet<{ messages: Array<{ role: string; content: string }> }>(
       `/v1/agents/conversations/${convId}/messages`,
     )
@@ -1066,8 +1081,31 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         if (!kept) return
         setMessages(kept)
       })
-      .catch(() => { /* empty thread on failure — same as project load */ })
-  }, [])
+      .catch((err: unknown) => {
+        // A remembered session this caller can no longer open (deleted on
+        // another device, another user signed in on this browser) is not
+        // shown as an error: a fresh session takes its place.
+        if (err instanceof ApiError && err.status === 404 && id
+          && activeIdRef.current === convId) {
+          const next = mintConversationId(id, freshSessionEntropy())
+          activeIdRef.current = next
+          setActiveConversationId(next)
+        }
+      })
+  }, [id])
+
+  const handleSelectConversation = useCallback((convId: string) => {
+    abortRef.current?.abort()
+    activeIdRef.current = convId
+    setActiveConversationId(convId)
+    setMessages([])
+    loadSessionHistory(convId)
+  }, [loadSessionHistory])
+
+  // Reopen the remembered session once, when the workspace mounts.
+  useEffect(() => {
+    if (restoredConversationId) loadSessionHistory(restoredConversationId)
+  }, [restoredConversationId, loadSessionHistory])
 
   const handleNewConversation = useCallback(() => {
     if (!id) return
@@ -1090,6 +1128,18 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       prev.map((row) => (row.id === convId ? { ...row, title: updated.title } : row)),
     )
   }, [id])
+
+  const handleDeleteConversation = useCallback(async (convId: string) => {
+    if (!id) return
+    await apiDelete<{ status: string }>(
+      `/v1/projects/${id}/conversations/${encodeURIComponent(convId)}`,
+    )
+    // Read the open id before the list update: deleting the open session
+    // replaces it with a fresh one, deleting another leaves it alone.
+    const { replaceActive } = afterSessionDeleted([], convId, activeIdRef.current)
+    setConversationList((prev) => afterSessionDeleted(prev, convId, activeIdRef.current).rows)
+    if (replaceActive) handleNewConversation()
+  }, [id, handleNewConversation])
 
   // ── Document mutation callbacks ───────────────────────────────────────────
 
@@ -1705,6 +1755,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
           onRenameConversation={handleRenameConversation}
+          onDeleteConversation={handleDeleteConversation}
           onClearConversation={clearConversation}
           documents={
             <DocumentsPanel

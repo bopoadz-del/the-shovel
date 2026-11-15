@@ -1008,6 +1008,32 @@ async def rename_project_conversation(
     return _public_session(updated)
 
 
+@router.delete("/v1/projects/{project_id}/conversations/{conversation_id}")
+async def delete_project_conversation(
+    project_id: str,
+    conversation_id: str,
+    auth: dict = Depends(require_user),
+):
+    """Delete a session the caller owns: its messages, its remembered facts
+    and the session row. Someone else's session, or one on another project,
+    answers 404 exactly like a missing one.
+    """
+    from app.core import agent_memory
+
+    _session_for_caller(project_id, conversation_id, auth["user_id"])
+    cleared = agent_memory.clear_conversation(conversation_id)
+    if not agent_memory.delete_conversation(conversation_id):
+        raise HTTPException(404, "Conversation not found")
+    await audit.arecord(
+        "conversation.deleted",
+        project_id=project_id,
+        conversation_id=conversation_id,
+        user_id=auth["user_id"],
+        messages=cleared["messages"],
+    )
+    return {"status": "deleted", "conversation_id": conversation_id}
+
+
 # ── documents — store only, no analysis (Roadmap V2 · 0.3) ──────────────────
 
 @router.post("/v1/projects/{project_id}/documents", status_code=201)

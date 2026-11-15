@@ -192,7 +192,9 @@ def _reopened_messages(conversation_id: str) -> list[dict]:
     answer stored before the exit check existed passes it on the way out."""
     from app.agents import answer_exit
 
-    msgs = agent_memory.get_messages(conversation_id)
+    # A reopened session shows its whole thread, not only the recent window
+    # the model is given as context.
+    msgs = agent_memory.get_messages(conversation_id, limit=None)
     for m in msgs:
         if m.get("role") == "assistant" and isinstance(m.get("content"), str):
             m["content"] = answer_exit.check_text_or_fallback(m["content"])
