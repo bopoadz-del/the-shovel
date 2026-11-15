@@ -112,8 +112,6 @@ def _value(env: Mapping[str, str], name: str) -> str:
 def _as_ip(text: str):
     """The address a literal names, or None when the text is a host name."""
     literal = text.split("%", 1)[0]
-    if ":" not in literal and not (literal.count(".") == 3 and literal.replace(".", "").isdigit()):
-        return None
     try:
         return ipaddress.ip_address(literal)
     except ValueError:
@@ -127,8 +125,6 @@ def _address_is_inside(ip) -> bool:
 
 def _host_is_inside(host: str, resolve: Callable[[str], list[str]]) -> bool:
     host = host.strip("[]").lower()
-    if not host:
-        return True
     ip = _as_ip(host)
     if ip is not None:
         return _address_is_inside(ip)

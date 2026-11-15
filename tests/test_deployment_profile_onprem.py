@@ -139,11 +139,13 @@ def test_fallback_provider_is_checked_too(fallback):
     )
 
 
-def test_unset_provider_with_default_key_is_refused():
-    """No provider named, but the default provider's key is set: it would call."""
-    env = {**_CLEAN_ONPREM, "DEEPSEEK_API_KEY": "k"}
+@pytest.mark.parametrize("named", ["", "deepseek"])
+def test_default_provider_with_key_is_refused(named):
+    """The default provider's key is set: it would call. An unset fallback is
+    not an offender of its own."""
+    env = {**_CLEAN_ONPREM, "LLM_PROVIDER": named, "DEEPSEEK_API_KEY": "k"}
     offs = _offenders(env, _resolver({}))
-    assert "LLM_PROVIDER" in _settings(offs), f"stage=model_provider: {offs}"
+    assert _settings(offs) == ["DEEPSEEK_API_KEY", "LLM_PROVIDER"], f"stage=model_provider: {offs}"
 
 
 @pytest.mark.parametrize("provider_value", ["", "   "])
@@ -307,3 +309,27 @@ def test_lifespan_calls_the_guard():
     from app import main
 
     assert "enforce_deployment_profile" in inspect.getsource(main.lifespan), "stage=boot"
+
+
+# ── the plumbing the boot hook relies on ───────────────────────────────────
+
+
+@pytest.mark.parametrize("value,expected", [("onprem", "onprem"), ("hosted", "hosted")])
+def test_profile_reads_the_process_env_by_default(monkeypatch, value, expected):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", value)
+    assert dp._process_env()["DEPLOYMENT_PROFILE"] == value
+    assert dp.deployment_profile() == expected, "stage=profile"
+
+
+@pytest.mark.parametrize("host,expected", [("127.0.0.1", "127.0.0.1"), ("::1", "::1")])
+def test_resolve_host_returns_addresses(host, expected):
+    """Address literals resolve locally; no network is used."""
+    assert expected in dp._resolve_host(host), "stage=endpoint"
+
+
+@pytest.mark.parametrize("offenders", [[], [dp.Offender("SENTRY_DSN", "remote")]])
+def test_profile_error_carries_its_offenders(offenders):
+    err = dp.DeploymentProfileError("refused", offenders)
+    assert str(err) == "refused"
+    assert err.offenders == offenders, "stage=boot"
+    assert err.offenders is not offenders
