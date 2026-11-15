@@ -624,9 +624,13 @@ class ColumnStats:
 
 def _header_label(line: Sequence[Word], columns: Sequence[_Column] | None, refs: set[int]) -> bool:
     """True when the header path would not read ``line`` as a measured row
-    (no header in effect, or no figure or no description under its columns)."""
+    (no header in effect, or no figure or no description under its columns).
+
+    With no header in effect the header path labels only a line that holds a
+    letter (:data:`LABEL_BEFORE_HEADER`); a letter-free line was dropped, not
+    labelled, so it is not a label re-read as a row."""
     if columns is None:
-        return True
+        return bool(re.search(r"[A-Za-z]", " ".join(w.text for w in line)))
     f = _bucket_line(line, columns, refs).fields
     return not (any(f.get(k) for k in _FIGURE_FIELDS) and f.get("description"))
 

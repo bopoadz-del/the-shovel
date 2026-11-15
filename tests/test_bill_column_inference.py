@@ -262,3 +262,28 @@ def test_diag_counts_only_lines_with_three_band_figures(cols, lines):
     out = d.band_counts(d._pages(_layout(cols, [*lines, *two_band])))
     assert out["lines_three_bands"] == len(lines)
     assert out["lines_product"] == len(lines)
+
+
+# --- 4b. only lines the header path labelled count as labels re-read ------
+# With no header in effect the header path labels a line only when it holds
+# a letter; a letter-free line was dropped, so it is not a label re-read.
+
+def _coded(lines, lettered):
+    """``lines`` with the description replaced by a letter-free item code and
+    no unit, except the first ``lettered`` lines, which keep their words."""
+    return [ln if i < lettered else [f"{i + 1}.{i + 2}", ""] + ln[2:] for i, ln in enumerate(lines)]
+
+
+@pytest.mark.parametrize("cols,lines,lettered", [
+    (COLS_1, PRICED_1, 0),
+    (COLS_1, PRICED_1, 2),
+    (COLS_2, PRICED_2, 1),
+])
+def test_letter_free_rows_are_not_counted_as_relabelled(cols, lines, lettered):
+    coded = _coded(lines, lettered)
+    stats = g.ColumnStats()
+    rows = _rows(_layout(cols, coded), stats)
+    assert [r.fields["description"] for r in rows] == [ln[0] for ln in coded]
+    assert len(_priced(rows)) == len(lines)
+    assert stats.pages[g.SOURCE_INFERRED] == 1
+    assert stats.labels_reread_as_rows == lettered
