@@ -80,14 +80,17 @@ class Turn:
     #: The turn's authoritative "I asked for inputs" state, read on the end
     #: event by the route observer -- never a phrase match (S1c).
     awaiting_inputs: list[str] = field(default_factory=list)
+    #: The user's question for this turn, as asked. The answer contract reads
+    #: it to tell which evidence values answer the asked thing (C2).
+    question: str = ""
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
 
 
-def open_turn() -> Turn:
+def open_turn(question: str = "") -> Turn:
     """Start a turn's record. Tasks and threads started afterwards share it."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     _TURN.set(turn)
     return turn
 
@@ -100,9 +103,9 @@ def reset_turn(token: contextvars.Token) -> None:
     _TURN.reset(token)
 
 
-def begin_turn() -> tuple[Turn, contextvars.Token]:
+def begin_turn(question: str = "") -> tuple[Turn, contextvars.Token]:
     """``open_turn`` for a caller that restores the previous record afterwards."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     return turn, _TURN.set(turn)
 
 
@@ -1696,7 +1699,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     if not isinstance(text, str):
         return env
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
-    done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking)
+    done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
+                                 question=(turn.question or None) if turn else None)
     env[key] = done.text
     if done.citations:
         env["citations"] = done.citations

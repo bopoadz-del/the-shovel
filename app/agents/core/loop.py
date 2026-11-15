@@ -54,11 +54,12 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
     from app.core.rag.vector_store import end_turn_memo, start_turn_memo
 
     token = start_turn_memo()
-    turn, turn_token = answer_exit.begin_turn()
+    asked = _user_message_of(self, args, kwargs)
+    turn, turn_token = answer_exit.begin_turn(asked)
     from app.lib import construction_formulas as _calc_words
 
     # The user's own words reach every calculator run this turn makes.
-    ask_token = _calc_words.set_current_ask(_user_message_of(self, args, kwargs))
+    ask_token = _calc_words.set_current_ask(asked)
     try:
         result = await self._chat_impl(*args, **kwargs)
         # M4: the tier + confidence cap are applied on the SERVER envelope by
@@ -1004,7 +1005,7 @@ async def chat_stream(
 
     # Opened before the producer task exists, so the task (and the threads it
     # offloads to) record this turn's evidence into the same record.
-    _exit_turn = answer_exit.open_turn()
+    _exit_turn = answer_exit.open_turn(user_message)
     # The user's own words reach every calculator run this turn makes.
     from app.lib import construction_formulas as _calc_words
 
