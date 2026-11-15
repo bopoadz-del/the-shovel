@@ -263,3 +263,64 @@ def test_create_with_a_key_runs_the_scratch_drill(monkeypatch, capsys, compare_o
     out = capsys.readouterr().out
     assert got["key"] == "k-test" and "k-test" not in out
     assert "restore_point=2026-" in out and "deleted_s=" in out
+
+
+# ── a refused Neon call names the call that failed (exam rule 5: the stage) ──
+def _failing_urlopen(status):
+    import io
+    import urllib.error
+
+    def urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, status, "x", {}, io.BytesIO(b'{"message":"m"}'))
+    return urlopen
+
+
+@pytest.mark.parametrize("method, path, body, code", [
+    ("GET", "/projects?limit=400", None, "neon_http_400:GET:/projects"),
+    ("POST", "/projects/proj-abc-123/branches", {"branch": {}},
+     "neon_http_400:POST:/projects/*/branches"),
+    ("GET", "/projects/proj-abc-123/operations/op-9", None,
+     "neon_http_404:GET:/projects/*/operations/*"),
+    ("DELETE", "/projects/proj-abc-123/branches/br-x-1", None,
+     "neon_http_409:DELETE:/projects/*/branches/*"),
+])
+def test_a_refused_neon_call_names_its_route_without_ids_or_body(monkeypatch, method, path, body, code):
+    import urllib.request
+
+    status = int(code.split(":")[0].rsplit("_", 1)[1])
+    monkeypatch.setattr(urllib.request, "urlopen", _failing_urlopen(status))
+    with pytest.raises(rd.Refused) as e:
+        rd.neon_http("k-secret")(method, path, body)
+    assert e.value.code == code
+    for leak in ("proj-abc-123", "op-9", "br-x-1", "k-secret", '"m"', "message"):
+        assert leak not in e.value.code
+
+
+@pytest.mark.parametrize("path, raw, parsed", [
+    ("/projects?limit=400", b'{"projects": []}', {"projects": []}),
+    ("/projects/p-1/branches", b'{"branch": {"id": "br-1"}, "operations": [{"id": "op-1"}]}',
+     {"branch": {"id": "br-1"}, "operations": [{"id": "op-1"}]}),
+])
+def test_a_successful_neon_call_returns_its_json(monkeypatch, path, raw, parsed):
+    import io
+    import urllib.request
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Resp(raw))
+    assert rd.neon_http("k")("GET", path) == parsed
+
+
+@pytest.mark.parametrize("path, route", [
+    ("/projects", "/projects"),
+    ("/projects?limit=400&org_id=o-1", "/projects"),
+    ("/projects/p-1/endpoints", "/projects/*/endpoints"),
+    ("/projects/p-1/branches/b-2", "/projects/*/branches/*"),
+])
+def test_neon_route_blanks_ids_and_drops_the_query(path, route):
+    assert rd.neon_route(path) == route

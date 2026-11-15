@@ -132,10 +132,25 @@ def neon_http(api_key: str) -> Callable:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 -- fixed https host
                 raw = resp.read()
-        except Exception as exc:  # noqa: BLE001 -- status code only, never the body
-            raise Refused(f"neon_http_{getattr(exc, 'code', 'error')}") from None
+        except Exception as exc:  # noqa: BLE001 -- status code and route only, never the body
+            raise Refused(f"neon_http_{getattr(exc, 'code', 'error')}:"
+                          f"{method}:{neon_route(path)}") from None
         return json.loads(raw or b"{}")
     return call
+
+
+_ROUTE_COLLECTIONS = ("projects", "branches", "endpoints", "operations", "databases", "roles")
+
+
+def neon_route(path: str) -> str:
+    """The route of a Neon API path with its ids blanked and its query dropped
+    (``/projects/p-1/branches?x=1`` -> ``/projects/*/branches``), so a refusal
+    names the call that failed without printing an id."""
+    parts = path.split("?", 1)[0].strip("/").split("/")
+    out = []
+    for i, seg in enumerate(parts):
+        out.append("*" if i and parts[i - 1] in _ROUTE_COLLECTIONS else seg)
+    return "/" + "/".join(out)
 
 
 def live_endpoint_id(live_url: str) -> str:
