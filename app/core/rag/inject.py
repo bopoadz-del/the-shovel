@@ -172,14 +172,14 @@ def break_score_ties_by_kind(chunks: List[Chunk], query: str) -> List[Chunk]:
         _LOG.debug("kind tie-break skipped", exc_info=True)
         yielding = set()
 
-    def _yields(c) -> bool:
-        return (getattr(c, "doc_type", "") or "").strip() in yielding
-
     out: List[Chunk] = []
     # ``chunks`` is in score order, so each run of one score is one tie; the
     # sort is stable, so inside a tie the retrieval order is kept otherwise.
     for _score, band in itertools.groupby(chunks, key=lambda c: c.score or 0):
-        out += sorted(band, key=_yields)
+        out += sorted(
+            band,
+            key=lambda c: (getattr(c, "doc_type", "") or "").strip() in yielding,
+        )
     return out
 
 

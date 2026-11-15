@@ -19,6 +19,7 @@ import pytest
 
 from app.core.rag import handed_set
 from app.core.rag.inject import (
+    _cap_drop_reasons,
     _emit_retrieval_trace,
     apply_token_cap,
     not_handed_reasons,
@@ -130,6 +131,18 @@ def test_a_tie_the_kind_rule_gave_away_is_kind_tie_yield(
                               reasons=cap)
     assert [c.chunk_id for c in kept] == [o.chunk_id]
     assert cap == {p.chunk_id: "kind_tie_yield"}
+
+
+@pytest.mark.parametrize("noise_at", [0, 1])
+def test_a_chunk_the_noise_filter_removed_is_noise_filter(noise_at):
+    """The cap's noise filter runs before the budget walk; what it removed
+    is named as such, and nothing it kept is."""
+    a, b = _chunk("alpha", 0, 0.9), _chunk("beta", 0, 0.5)
+    pool = [a, b]
+    noise = pool[noise_at]
+    left = [c for c in pool if c is not noise]
+    why = _cap_drop_reasons(pool, left, left, left, [])
+    assert why == {noise.chunk_id: "noise_filter"}
 
 
 @pytest.mark.parametrize("top,low", [(0.9, 0.5), (0.7, 0.3)])
