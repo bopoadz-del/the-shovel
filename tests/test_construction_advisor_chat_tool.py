@@ -11,7 +11,9 @@ import json
 
 import pytest
 
+from app.agents.base import construction_advisor as advisor_tool
 from app.agents.core import tool_registry
+from app.agents.core import tools as core_tools
 from app.blocks import _knowledge as kb
 from app.blocks.construction_advisor import ConstructionAdvisorBlock
 
@@ -194,3 +196,49 @@ def test_without_the_block_installed_the_tool_refuses(invented_kb, monkeypatch, 
     out = _call({"query": query})
     assert out["ok"] is False
     assert "not installed" in out["result"]["error"]
+
+
+# -- the handler and the offer, called directly on their own modules ---------
+
+@pytest.mark.parametrize("raw,want", [
+    (json.dumps({"Q": 340, "S": 40}), {"Q": 340, "S": 40}),   # JSON text is decoded
+    ({"L": 3, "W": 4}, {"L": 3, "W": 4}),                     # an object passes as is
+])
+def test_values_decodes_json_text_and_keeps_an_object(raw, want):
+    assert advisor_tool._values(raw) == want
+
+
+@pytest.mark.parametrize("args,want_id", [
+    ({"query": "scaffold tie spacing windy facade"}, "scaffold.tie_spacing"),
+    ({"query": "formwork strip time cold slab"}, "formwork.strip_time"),
+])
+def test_handle_construction_advisor_answers_a_call_directly(invented_kb, args, want_id):
+    call = tool_registry.ToolCall(agent=None, name=TOOL, args=args)
+    out = asyncio.run(advisor_tool.handle_construction_advisor(call))
+    assert out["ok"] is True and out["name"] == TOOL
+    assert out["result"]["matches"][0]["id"] == want_id
+
+
+@pytest.mark.parametrize("allowed,offered", [([TOOL], True), (["sympy_reasoning"], False)])
+def test_core_tool_definitions_offers_the_declared_schema_only_when_allowed(invented_kb,
+                                                                            allowed, offered):
+    defs = core_tools.tool_definitions(_agent(allowed), project_id=None)
+    mine = [t for t in defs if (t.get("function") or {}).get("name") == TOOL]
+    assert mine == ([advisor_tool.SCHEMA] if offered else [])
+
+
+@pytest.mark.parametrize("name", [TOOL, "invented_block_never_installed"])
+def test_core_tool_definitions_never_offers_a_block_that_is_not_installed(invented_kb,
+                                                                          monkeypatch, name):
+    import app.blocks as blocks
+    monkeypatch.delitem(blocks.BLOCK_REGISTRY, TOOL)
+    defs = core_tools.tool_definitions(_agent([name]), project_id=None)
+    assert name not in [(t.get("function") or {}).get("name") for t in defs]
+
+
+@pytest.mark.parametrize("project_id,offered", [(None, False), ("p-advisor", True)])
+def test_core_tool_definitions_offers_project_search_only_with_a_project(invented_kb,
+                                                                         project_id, offered):
+    defs = core_tools.tool_definitions(_agent([TOOL]), project_id=project_id)
+    names = [(t.get("function") or {}).get("name") for t in defs]
+    assert ("search_project_documents" in names) is offered
