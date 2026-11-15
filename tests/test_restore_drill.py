@@ -27,11 +27,15 @@ def _db(tmp_path, name: str, rows: dict, statuses=()):
 TABLES = ("projects", "documents")
 
 
-def test_counts_reads_each_table_and_status(tmp_path):
-    f = _db(tmp_path, "a", {"projects": 2, "documents": 3, "chunks_x": 7}, ("INDEXED", "INDEXED", "OCR_REQUIRED"))
+@pytest.mark.parametrize("n,statuses,by_status", [
+    ((2, 3, 7), ("INDEXED", "INDEXED", "OCR_REQUIRED"), {"INDEXED": 2, "OCR_REQUIRED": 1}),
+    ((1, 2, 0), ("FAILED", None), {"FAILED": 1, "unset": 1}),
+])
+def test_counts_reads_each_table_and_status(tmp_path, n, statuses, by_status):
+    f = _db(tmp_path, "a", {"projects": n[0], "documents": n[1], "chunks_x": n[2]}, statuses)
     c = rd.counts(f, TABLES, "chunks_x")
-    assert c["projects"] == 2 and c["documents"] == 3 and c["chunks_x"] == 7
-    assert c["documents_by_status"] == {"INDEXED": 2, "OCR_REQUIRED": 1}
+    assert (c["projects"], c["documents"], c["chunks_x"]) == n
+    assert c["documents_by_status"] == by_status
 
 
 def test_a_missing_table_is_unreadable_not_skipped(tmp_path):
@@ -51,9 +55,10 @@ def test_compare_verdict(restore, live, ok, unreadable, empty):
     assert r["ok"] is ok and r["unreadable"] == unreadable and r["empty_on_restore"] == empty
 
 
-def test_compare_reports_the_delta():
-    r = rd.compare({"documents": 5}, {"documents": 9})
-    assert r["tables"]["documents"] == {"restore": 5, "live": 9, "delta": 4}
+@pytest.mark.parametrize("restore,live,delta", [(5, 9, 4), (7, 7, 0), (None, 3, None)])
+def test_compare_reports_the_delta(restore, live, delta):
+    r = rd.compare({"documents": restore}, {"documents": live})
+    assert r["tables"]["documents"] == {"restore": restore, "live": live, "delta": delta}
 
 
 def test_run_end_to_end_ok_and_fail(tmp_path, capsys):
@@ -76,10 +81,11 @@ def test_main_refuses_a_malformed_endpoint(monkeypatch, capsys, endpoint, code):
     assert f"refused={code}" in out and "u:p" not in out
 
 
-def test_main_refuses_the_live_endpoint(monkeypatch, capsys):
+@pytest.mark.parametrize("live", ["ep-live-1", "ep-other-7"])
+def test_main_refuses_the_live_endpoint(monkeypatch, capsys, live):
     from scripts import scrub_verify as sv
-    monkeypatch.setattr(sv, "_live_url", lambda: "postgresql://u:p@ep-live-1.example.neon.tech/db")
-    assert rd.main(["--endpoint", "ep-live-1"]) == 2
+    monkeypatch.setattr(sv, "_live_url", lambda: f"postgresql://u:p@{live}.example.neon.tech/db")
+    assert rd.main(["--endpoint", live]) == 2
     assert "refused=restore_endpoint_is_live" in capsys.readouterr().out
 
 
@@ -174,12 +180,13 @@ def test_ready_time_counts_the_polls(statuses, ready):
     assert r["times"]["ready_s"] == ready
 
 
-def test_branch_is_deleted_even_when_the_comparison_raises():
+@pytest.mark.parametrize("err", [RuntimeError, ConnectionError])
+def test_branch_is_deleted_even_when_the_comparison_raises(err):
     neon = FakeNeon()
 
     def boom(ep):
-        raise RuntimeError("db down")
-    with pytest.raises(RuntimeError):
+        raise err("db down")
+    with pytest.raises(err):
         _drill(neon, compare=boom)
     assert neon.calls[-1][:2] == ("DELETE", "/projects/p-live/branches/br-new")
 
@@ -212,8 +219,10 @@ def test_no_delete_when_no_new_branch_was_made(branch):
     assert not [c for c in neon.calls if c[0] == "DELETE"]
 
 
-def test_live_endpoint_not_in_any_project_is_refused_before_any_write():
-    neon = FakeNeon(projects={"p-other": [{"id": "ep-x", "branch_id": "br-x"}]})
+@pytest.mark.parametrize("projects", [{"p-other": [{"id": "ep-x", "branch_id": "br-x"}]},
+                                      {"p-a": [], "p-b": [{"id": "ep-live-1-old", "branch_id": "br-b"}]}])
+def test_live_endpoint_not_in_any_project_is_refused_before_any_write(projects):
+    neon = FakeNeon(projects=projects)
     with pytest.raises(rd.Refused) as e:
         _drill(neon)
     assert e.value.code == "live_endpoint_not_found"
