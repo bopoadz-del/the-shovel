@@ -198,13 +198,14 @@ def test_f3_b_crew_sizing_rounds_up(q, crews, whole):
     assert r["crews_required_rounded_up"] == whole
 
 
-@pytest.mark.xfail(strict=True, reason="plan F3-B2 wants 0 crews for quantity 0; product refuses quantity <= 0 (no wrong number)")
 @pytest.mark.parametrize("rate, days", [(30, 20), (15, 10)])
-def test_f3_b2_crew_sizing_zero_quantity(rate, days):
-    # 0 / (R x D) = 0 crews, no crash
-    r = _ok("crew_sizing", {"quantity": 0, "rate_per_crew_day": rate, "duration_days": days})
-    assert r["crews_required"] == 0
-    assert r["crews_required_rounded_up"] == 0
+def test_f3_b2_crew_sizing_zero_quantity_is_refused(rate, days):
+    # Advisor ruling (15 Nov): refusing quantity 0 is acceptable; no crews are
+    # computed and the refusal names the input. No wrong number, no crash.
+    env = run_calculation("crew_sizing", {"quantity": 0, "rate_per_crew_day": rate, "duration_days": days})
+    assert env.get("status") == "error", env
+    assert "quantity" in env.get("error", "")
+    assert "result" not in env
 
 
 # -------------------------------------------------------- F4 excavation volume
