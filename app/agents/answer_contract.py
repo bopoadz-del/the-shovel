@@ -49,6 +49,9 @@ class Contracted:
     citations: list[dict[str, Any]] = field(default_factory=list)
     #: ``{"indexed": N, "total": M}`` when the coverage footer was on the text.
     coverage: dict[str, int] | None = None
+    #: One entry per conflict between documents in the evidence (C2-C4):
+    #: ``{"values": [{"value", "document", "marker"}], "governs", "basis_document"}``.
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ── Rule 4: citations and the coverage footer ───────────────────────────────
@@ -135,6 +138,48 @@ class _Markers:
         entry["marker"] = len(self.entries) + 1
         self.entries.append(entry)
         return f"[{entry['marker']}]"
+
+    def for_row(self, row: dict[str, Any]) -> str:
+        """The marker for one evidence row (its document and section)."""
+        doc = str(row.get("doc_name") or row.get("document") or "")
+        sec = str(row.get("page_or_section") or "")
+        for existing in self.entries:
+            if existing["document"] == doc and existing["section"] in ("", sec):
+                return f"[{existing['marker']}]"
+        entry = {"document": doc, "section": sec,
+                 "passage": str(row.get("snippet") or row.get("passage") or ""),
+                 "tier": row.get("layer_label") or row.get("layer") or None, "kind": "document",
+                 "marker": len(self.entries) + 1}
+        self.entries.append(entry)
+        return f"[{entry['marker']}]"
+
+
+def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[list[str], list[dict[str, Any]]]:
+    """Each conflict as one plain sentence (every value with its marker; the
+    governing value and why, or that no document says) and as a structured
+    entry for the side panel."""
+    lines: list[str] = []
+    structured: list[dict[str, Any]] = []
+    for c in found:
+        said: dict[str, str] = {}
+        values = []
+        for v in c["values"]:
+            tag = markers.for_row(v["row"])
+            said[v["value"]] = said.get(v["value"], "") + ("" if tag in said.get(v["value"], "") else tag)
+            values.append({"value": v["value"], "document": v["document"], "marker": int(tag.strip("[]"))})
+        line = "The documents differ on this: " + "; ".join(f"{val} {tags}" for val, tags in said.items()) + "."
+        if c.get("governs"):
+            gval = next(v["value"] for v in c["values"] if v["document"] == c["governs"])
+            basis_row = next((r for r in markers.rows if str(r.get("doc_name") or "") == c["basis_document"]), None)
+            btag = markers.for_row(basis_row) if basis_row else ""
+            line += (f" {gval} governs: the stated order of precedence puts the {c['governing_kind']}"
+                     f" above the {c['lower_kind']} {btag}.").replace("  ", " ").replace(" .", ".")
+        else:
+            line += " No document states which of them governs."
+        lines.append(line)
+        structured.append({"values": values, "governs": c.get("governs"),
+                           "basis_document": c.get("basis_document")})
+    return lines, structured
 
 
 def _split_parts(body: str) -> list[str]:
@@ -379,13 +424,16 @@ def apply(
     sources: Iterable[dict[str, Any]] | None = None,
     computed: bool = False,
     asking: bool = False,
+    question: str | None = None,
 ) -> Contracted:
     """The answer in contract form. ``sources`` are the turn's Sources rows
     (used only to fill a citation's page, passage and tier); ``computed`` is
     True when a calculation ran this turn; ``asking`` is True when the turn
     ends on its own question for inputs a step still needs -- that question
     is the user's next action, so its wording is left as asked (citations and
-    the coverage footer still leave the text)."""
+    the coverage footer still leave the text). ``question`` is the user's
+    question when known: it sharpens which evidence values answer the same
+    thing when documents are checked for conflicts (C2)."""
     if not isinstance(text, str) or not text.strip():
         return Contracted(text=text)
     try:
@@ -404,6 +452,13 @@ def apply(
             body = _drop_padding(body, computed)
             body = _answer_first(body, computed)
         body = _tidy(body)
+        from app.agents.evidence_conflicts import detect
+
+        found = detect(text, rows, question)
+        structured: list[dict[str, Any]] = []
+        if found:
+            lines, structured = _conflict_lines(found, markers)
+            body = (body + "\n\n" + "\n".join(lines)).strip()
         # A marker whose line went (padding, a dropped note) is not lost: it
         # rides on the last line, so every citation entry has its marker.
         lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)
@@ -414,7 +469,7 @@ def apply(
             # user is never left with an empty answer. Nothing to change: the
             # original stands byte for byte.
             return Contracted(text=text)
-        return Contracted(text=body, citations=markers.entries, coverage=coverage)
+        return Contracted(text=body, citations=markers.entries, coverage=coverage, conflicts=structured)
     except Exception:  # noqa: BLE001 -- the contract must never break an answer
         _LOG.exception("answer_contract: failed; answer passed through")
         return Contracted(text=text)
