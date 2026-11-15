@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import queue
+import re
 import sys
 import threading
 import uuid
@@ -184,6 +185,103 @@ def structured_logging_enabled() -> bool:
     return _structured_logging_enabled
 
 
+# ── Error-report scrubbing ────────────────────────────────────────────────
+# One rule, applied to every event before it leaves the process: a value is
+# judged by the KIND of field that holds it and by the SHAPE of the text, never
+# by a particular name or value. send_default_pii=False alone still lets
+# exception messages, log breadcrumbs, extra context and frame locals through.
+
+_FILTERED = "[Filtered]"
+
+#: Field kinds whose value is a credential, a session, an identity or a
+#: connection (headers, query keys, context keys, user fields alike).
+_CREDENTIAL_FIELD = (
+    r"auth|cookie|token|secret|passw|pwd|credential|session|signature|"
+    r"api[-_]?key|private[-_]?key|access[-_]?key|(?:^|[-_])keys?$|"
+    r"dsn|conn(?:ection)?[-_]?str|(?:database|db)[-_]?ur[il]|e-?mail"
+)
+_CREDENTIAL_FIELD_RE = re.compile(_CREDENTIAL_FIELD, re.I)
+
+#: Field kinds that carry payload rather than diagnosis: request bodies,
+#: document text, prompts, and frame local variables.
+_PAYLOAD_FIELD_RE = re.compile(
+    r"(?:^|[-_])(?:vars|locals|data|body|text|content|chunks?|excerpts?|"
+    r"snippets?|prompts?|documents?|cookies)$",
+    re.I,
+)
+
+#: Shapes of secret material inside free text (messages, URLs, log lines).
+_TEXT_SCRUBS = (
+    # scheme://user:password@host -> scheme://[Filtered]@host
+    (re.compile(r"(\b[a-z][a-z0-9+.\-]*://)[^\s/@]+@", re.I), r"\1" + _FILTERED + "@"),
+    # name=value / name: value where the name is a credential kind
+    (re.compile(
+        r"(\b[\w-]*(?:" + _CREDENTIAL_FIELD.replace("(?:^|[-_])keys?$", r"(?<![a-z])keys?\b") + r")[\w-]*)"
+        r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s&,;]+)",
+        re.I,
+    ), r"\1\2" + _FILTERED),
+    # Authorization schemes inside text
+    (re.compile(r"\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{6,}", re.I), r"\1 " + _FILTERED),
+    # JSON web tokens
+    (re.compile(r"\beyJ[\w-]+\.[\w-]+\.[\w-]*"), _FILTERED),
+    # e-mail addresses
+    (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "[email]"),
+    # long opaque strings that mix letters and digits (keys, tokens). Pure
+    # hexadecimal is left alone: event, trace and span ids and commit shas are
+    # the report's own identifiers (a hex secret is still caught by its field
+    # kind or by its name=value shape above).
+    (re.compile(
+        r"\b(?![0-9a-fA-F]{32,}\b)(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[A-Za-z])[A-Za-z0-9_\-]{32,}\b"
+    ), _FILTERED),
+)
+
+#: Free text longer than this is treated as payload (document text, a pasted
+#: page) rather than a diagnostic message, and is not carried.
+_MAX_TEXT_CHARS = 1024
+
+
+def _scrub_text(text: str) -> str:
+    if len(text) > _MAX_TEXT_CHARS:
+        return f"[Filtered: {len(text)} chars]"
+    for pattern, repl in _TEXT_SCRUBS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def _scrub_field(key: Any, value: Any) -> Any:
+    if isinstance(key, str):
+        if _PAYLOAD_FIELD_RE.search(key) or _CREDENTIAL_FIELD_RE.search(key):
+            return _FILTERED if value not in (None, "", {}, []) else value
+    return _scrub_value(value)
+
+
+def _scrub_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, dict):
+        return {k: _scrub_field(k, v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        # Header lists arrive as [[name, value], ...]: the name is the field kind.
+        if value and all(isinstance(p, (list, tuple)) and len(p) == 2 and isinstance(p[0], str) for p in value):
+            return [[p[0], _scrub_field(p[0], p[1])] for p in value]
+        return [_scrub_value(v) for v in value]
+    return value
+
+
+def scrub_error_event(event: Dict[str, Any], hint: Any = None) -> Optional[Dict[str, Any]]:
+    """Sentry before_send / before_send_transaction hook.
+
+    Returns a scrubbed copy of ``event``; the input is not mutated. If the
+    scrub itself fails the event is dropped (None): an unscrubbed report must
+    never leave.
+    """
+    try:
+        return _scrub_value(event)
+    except Exception as exc:  # noqa: BLE001 -- fail closed, never send unscrubbed
+        logger.warning("error report dropped: scrub failed (%s)", type(exc).__name__)
+        return None
+
+
 def init_sentry() -> bool:
     """Initialize Sentry when SENTRY_DSN is set. No-op otherwise."""
     global _sentry_enabled
@@ -206,6 +304,10 @@ def init_sentry() -> bool:
         ],
         environment=os.getenv("ENV", os.getenv("ENVIRONMENT", "production")),
         send_default_pii=False,
+        include_local_variables=False,
+        max_request_body_size="never",
+        before_send=scrub_error_event,
+        before_send_transaction=scrub_error_event,
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0") or 0),
     )
     _sentry_enabled = True
