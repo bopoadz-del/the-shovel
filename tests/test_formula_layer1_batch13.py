@@ -1,5 +1,6 @@
 """Formula Layer 1, batch 13 (exam 5): beam moments, payment, cash flow,
-concrete mix design and mix proportions (more follow in this batch).
+concrete mix design, mix proportions, slip-form mix, mass-concrete thermal
+check, crane count, electrical programme (more follow in this batch).
 
 Same rules as batches 1-12 (tests/test_formula_layer1_batch1.py):
   T  typical;
@@ -34,6 +35,16 @@ its parametrize row:
                                  so C = 1 / (w/c + 1/SGc + f/SGf + c/SGcr)
   * concrete mix proportions     dry = wet x 1.54 (x (1 + waste));
                                  constituent = dry x parts / sum of parts
+  * slip-form mix                the absolute-volume rule above, on the mix
+                                 the calculator states (1:2:2.6, w/c 0.42)
+  * mass concrete thermal check  stated limits: core <= 70 C and core -
+                                 surface <= 20 C; F to C: (F - 32) / 1.8
+  * crane count                  lifts/h = 60 / cycle; t/day = capacity x
+                                 utilisation x lifts/h x h x shifts; cranes
+                                 = ceil(demand / (t/day x working days));
+                                 cost = cranes x the caller's rate
+  * electrical programme         days per stage = ceil(area x floors /
+                                 that stage's m2 per day); total = sum
 None was copied from the product's output. A case where the product
 disagrees with the hand value would be marked ``xfail(strict=True)`` with a
 one-line reason and reported as a suspected defect; the expected value is
@@ -41,7 +52,10 @@ never moved to match. Every value test runs on two inputs worked by hand
 the same way.
 
 No U case for the payment, cash flow or mix design calculators: they take
-money in the project's own currency, or dimensionless ratios.
+money in the project's own currency, or dimensionless ratios. No M or U
+case for the slip-form mix (it takes no input). A bare "158 F" is refused
+as an unrecognised unit (an honest ask, not a defect); the U case writes
+"degF".
 
 Unit factors (exact by definition): 1 ft = 0.3048 m; 1 cm = 0.01 m;
 1 ft3 = 0.028316846592 m3.
@@ -343,3 +357,205 @@ def test_f84_m(params, missing):
 ])
 def test_f84_b_nothing_to_mix_refused(params):
     _refuses(F84, params, _F84_OUT)
+
+
+# ---------------------------------------------------------------- F85 slip-form mix
+F85 = "concrete_mix_slip_form"
+
+
+@pytest.mark.parametrize("key, kg", [
+    # stated mix 1:2:2.6, w/c 0.42, default SGs 3.15 / 2.67 / 2.54:
+    # 0.42 + 1/3.15 + 2/2.67 + 2.6/2.54 = 0.42 + 0.31746 + 0.74906 + 1.02362
+    # = 2.51014; C = 398.4 -> 398 kg
+    ("cement_kg_m3", 398),
+    ("water_litres_m3", 167),            # 398 x 0.42 = 167.2 -> 167
+    ("fine_aggregate_kg_m3", 796),       # 398 x 2 = 796
+    ("coarse_aggregate_kg_m3", 1035),    # 398 x 2.6 = 1034.8 -> 1035
+])
+def test_f85_t(key, kg):
+    assert _ok(F85, {})[key] == pytest.approx(kg, abs=1)
+
+
+@pytest.mark.parametrize("key, value", [
+    ("retarder_20c_lit_m3", 3.8),   # stated in the calculator
+    ("retarder_10c_lit_m3", 2.9),
+    ("max_concrete_temp_c", 32),
+])
+def test_f85_t_stated_constants(key, value):
+    assert _ok(F85, {})[key] == pytest.approx(value, rel=_REL)
+
+
+@pytest.mark.parametrize("extra", [{"slump_mm": 200}, {"w_c_ratio": 0.6}])
+def test_f85_b_documented_mix_is_locked(extra):
+    # the calculator states its constants are locked; a stray input does
+    # not move the mix (398 kg as above)
+    assert _ok(F85, extra)["cement_kg_m3"] == pytest.approx(398, abs=1)
+
+
+# ---------------------------------------------------------------- F86 thermal check
+F86 = "concrete_thermal_cracking_check"
+_F86_OUT = ("delta_t_c", "thermal_cracking_risk")
+
+
+@pytest.mark.parametrize("core, surface, delta, core_ok, delta_ok", [
+    (65, 50, 15, True, True),     # 65 <= 70; 15 <= 20
+    (55, 42, 13, True, True),     # 55 <= 70; 13 <= 20
+    (75, 60, 15, False, True),    # core over 70
+    (60, 35, 25, True, False),    # difference over 20
+])
+def test_f86_t(core, surface, delta, core_ok, delta_ok):
+    r = _ok(F86, {"core_temp_c": core, "surface_temp_c": surface})
+    assert r["delta_t_c"] == pytest.approx(delta, abs=0.05)
+    assert r["core_ok"] is core_ok
+    assert r["delta_ok"] is delta_ok
+    assert r["thermal_cracking_risk"] is not (core_ok and delta_ok)
+
+
+@pytest.mark.parametrize("core, surface, delta, risk", [
+    ("158 degF", "122 degF", 20.0, False),   # (158-32)/1.8 = 70; (122-32)/1.8 = 50
+    ("140 degF", "86 degF", 30.0, True),     # 60 and 30 C: difference 30 > 20
+])
+def test_f86_u_fahrenheit(core, surface, delta, risk):
+    r = _ok(F86, {"core_temp_c": core, "surface_temp_c": surface})
+    assert r["delta_t_c"] == pytest.approx(delta, abs=0.05)
+    assert r["thermal_cracking_risk"] is risk
+
+
+@pytest.mark.parametrize("params", [{"core_temp_c": 65}, {"core_temp_c": 72}])
+def test_f86_m_surface(params):
+    _asks(F86, params, "surface", _F86_OUT)
+
+
+@pytest.mark.parametrize("core, surface, risk", [
+    (70, 50, False),      # core on the 70 limit, difference on the 20 limit
+    (70.1, 60, True),     # core just past 70
+    (50, 30, False),      # difference on 20
+    (50, 29.5, True),     # difference 20.5, just past 20
+])
+def test_f86_b_limits(core, surface, risk):
+    r = _ok(F86, {"core_temp_c": core, "surface_temp_c": surface})
+    assert r["thermal_cracking_risk"] is risk
+
+
+# ---------------------------------------------------------------- F87 crane count
+F87 = "crane_planning"
+_F87_OUT = ("cranes_required", "daily_tonnage_per_crane")
+_F87_SLOW = {"utilization_pct": 50, "shifts_per_day": 1, "hours_per_shift": 10,
+             "cycle_time_minutes": 30, "working_days": 25}
+
+
+@pytest.mark.parametrize("params, lph, daily, n, cost", [
+    # defaults 65 %, 2 x 9.5 h, 20 min, 26 d: 60/20 = 3 lifts/h;
+    # 10 x 0.65 = 6.5 t/lift; 3 x 9.5 x 2 = 57 lifts; 370.5 t/day;
+    # x 26 = 9633 t/month; ceil(10000 / 9633) = 2; 2 x 30000 = 60000
+    ({"total_lift_demand_tons": 10000, "crane_capacity_tons": 10,
+      "dry_hire_rate_per_month": 30000}, 3.0, 370.5, 2, 60000),
+    # 60/30 = 2 lifts/h; 20 x 0.5 = 10 t; 2 x 10 x 1 = 20 lifts; 200 t/day;
+    # x 25 = 5000 t/month; ceil(12000 / 5000) = 3; 3 x 25000 = 75000
+    ({"total_lift_demand_tons": 12000, "crane_capacity_tons": 20,
+      "dry_hire_rate_per_month": 25000, **_F87_SLOW}, 2.0, 200.0, 3, 75000),
+])
+def test_f87_t(params, lph, daily, n, cost):
+    r = _ok(F87, params)
+    assert r["lifts_per_hour_per_crane"] == pytest.approx(lph, rel=_REL)
+    assert r["daily_tonnage_per_crane"] == pytest.approx(daily, rel=_REL)
+    assert r["cranes_required"] == n
+    assert r["total_monthly_cost"] == pytest.approx(cost, rel=_REL)
+
+
+@pytest.mark.parametrize("cap, daily", [
+    ("10000 kg", 370.5),   # 10 t: as the first T case
+    ("20000 kg", 741.0),   # 20 t: 20 x 0.65 x 57 = 741
+])
+def test_f87_u_capacity(cap, daily):
+    r = _ok(F87, {"total_lift_demand_tons": 10000, "crane_capacity_tons": cap})
+    assert r["daily_tonnage_per_crane"] == pytest.approx(daily, rel=_REL)
+
+
+@pytest.mark.parametrize("params", [
+    {"total_lift_demand_tons": 10000},
+    {"total_lift_demand_tons": 12000, **_F87_SLOW},
+])
+def test_f87_m_capacity(params):
+    _asks(F87, params, "crane_capacity", _F87_OUT)
+
+
+@pytest.mark.parametrize("demand", [10000, 12000])
+def test_f87_m_rate_gives_count_without_cost(demand):
+    # no rate is built in: the count stands, the cost is withheld
+    r = _ok(F87, {"total_lift_demand_tons": demand, "crane_capacity_tons": 10})
+    assert r["cranes_required"] == 2      # ceil(10000 / 9633) = ceil(12000 / 9633) = 2
+    assert r["total_monthly_cost"] is None
+
+
+@pytest.mark.parametrize("demand, n", [
+    (5000, 1),   # exactly one crane-month at 5000 t: ceil(1.0) = 1
+    (5001, 2),   # one tonne past it: ceil(1.0002) = 2
+])
+def test_f87_b_capacity_edge(demand, n):
+    r = _ok(F87, {"total_lift_demand_tons": demand, "crane_capacity_tons": 20, **_F87_SLOW})
+    assert r["cranes_required"] == n
+
+
+@pytest.mark.parametrize("cap", [0, -5])
+def test_f87_b_no_capacity_refused(cap):
+    _refuses(F87, {"total_lift_demand_tons": 10000, "crane_capacity_tons": cap}, _F87_OUT)
+
+
+# ---------------------------------------------------------------- F88 electrical programme
+F88 = "electrical_installation_sequence"
+_F88_OUT = ("stages", "total_days")
+
+
+@pytest.mark.parametrize("area, floors, rates, stages, total", [
+    # 1000 x 5 = 5000 m2; 5000/250 = 20, /500 = 10, /1000 = 5; 35 days
+    (1000, 5, {"first_fix": 250, "second_fix": 500, "testing": 1000},
+     {"first_fix": 20, "second_fix": 10, "testing": 5}, 35),
+    # 800 x 3 = 2400 m2; ceil(2400/300) = 8, ceil(2400/700 = 3.43) = 4; 12
+    (800, 3, {"containment": 300, "terminations": 700},
+     {"containment": 8, "terminations": 4}, 12),
+])
+def test_f88_t(area, floors, rates, stages, total):
+    r = _ok(F88, {"floor_area_m2": area, "num_floors": floors, "stage_output_rates": rates})
+    assert r["total_area_m2"] == pytest.approx(area * floors, rel=_REL)
+    assert r["stages"] == stages
+    assert r["total_days"] == total
+
+
+@pytest.mark.parametrize("area, days", [
+    ("10763.9104 ft2", 20),   # x 0.09290304 = 1000.0 m2; x 5 / 250 = 20
+    ("5381.9552 ft2", 10),    # 500.0 m2; x 5 / 250 = 10
+])
+def test_f88_u_area(area, days):
+    r = _ok(F88, {"floor_area_m2": area, "num_floors": 5, "stage_output_rates": {"first_fix": 250}})
+    assert r["total_days"] == days
+
+
+@pytest.mark.parametrize("params, missing", [
+    ({"floor_area_m2": 1000, "num_floors": 5}, "stage_output_rates"),
+    ({"num_floors": 5, "stage_output_rates": {"first_fix": 250}}, "floor_area"),
+])
+def test_f88_m(params, missing):
+    _asks(F88, params, missing, _F88_OUT)
+
+
+@pytest.mark.parametrize("rate, days", [
+    (1000, 1),   # 1000 / 1000 = 1 day exactly
+    (999, 2),    # 1000 / 999 = 1.001 -> a part day is a whole day: 2
+])
+def test_f88_b_part_day_rounds_up(rate, days):
+    r = _ok(F88, {"floor_area_m2": 1000, "num_floors": 1, "stage_output_rates": {"stage": rate}})
+    assert r["total_days"] == days
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "suspected defect: a stage whose output rate is 0 is dropped from the "
+    "programme and the total is reported without it; a stage with no rate "
+    "cannot be programmed and must be asked for"))
+@pytest.mark.parametrize("rates", [
+    {"first_fix": 250, "second_fix": 0},
+    {"containment": 500, "testing": 0, "terminations": 100},
+])
+def test_f88_b_zero_rate_stage_is_not_dropped(rates):
+    env = run_calculation(F88, {"floor_area_m2": 1000, "num_floors": 1, "stage_output_rates": rates})
+    assert env.get("status") != "success", env
