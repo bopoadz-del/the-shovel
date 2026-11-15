@@ -109,3 +109,28 @@ def test_session_listing_reads_only_the_sessions_rows(client, others):
     with engine.connect() as conn:
         rows_read = conn.exec_driver_sql(statement, parameters).fetchall()
     assert len(rows_read) == len(mine), (len(rows_read), others)
+
+
+@pytest.mark.parametrize("session_known,uploader_known", [(False, False), (False, True), (True, False)])
+def test_no_session_or_no_uploader_lists_nothing(client, session_known, uploader_known):
+    """Without a session or an uploader there is no session to list: the
+    project's own uploads (no session metadata at all) must not appear."""
+    from app.core import projects as store
+
+    email = f"g3-none-{int(session_known)}{int(uploader_known)}-{_RUN}@x.com"
+    reg = client.post("/v1/users/register", json={"email": email, "password": PW_06})
+    assert reg.status_code in (200, 201, 409), reg.text
+    token = client.post("/v1/users/login", json={"email": email, "password": PW_06}).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    owner = client.get("/v1/users/me", headers=headers).json()
+    owner = owner.get("user_id") or owner.get("id")
+    res = client.post("/v1/projects", json={"name": f"G3-none-{email}"}, headers=headers)
+    assert res.status_code in (200, 201), res.text
+    pid = res.json()["id"]
+    sid = f"ws-{pid}-1700000000003"
+    store.add_document(pid, "project-upload.pdf")
+    store.add_document(pid, "in-session.md", metadata={"session_id": sid, "uploader_id": owner})
+
+    listed = store.list_session_documents(
+        pid, sid if session_known else None, owner if uploader_known else None)
+    assert listed == []
