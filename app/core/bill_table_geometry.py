@@ -16,7 +16,11 @@ row-major or column-major order give the same rows.
 
 Nothing here names a bill, a section, an item or a page. The columns are read
 from each page's header words; a page with no header line continues with the
-columns of the last page that had one (a section split across pages).
+columns of the last page that had one (a section split across pages). A page
+whose own lines prove its quantity, rate and total columns by arithmetic (the
+rightmost of three aligned figures is the product of the two before it) is
+read under those inferred columns instead, when they out-witness the header
+(see :func:`infer_page_columns`).
 
 Output is a list of :class:`BillRow` and, through :func:`write_bill_workbook`,
 an ``.xlsx`` with one sheet per bill section whose header row resolves through
@@ -31,6 +35,7 @@ import statistics
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
+from typing import Any
 
 # Output column order for the derived sheet. The labels resolve through
 # BOQProcessorBlock._resolve_columns (asserted by the tests), so the existing
@@ -397,10 +402,244 @@ def _has_figure_number(fields: dict[str, str]) -> bool:
     )
 
 
+
+# --- columns inferred from the rows (the reconciliation test) -------------
+#
+# A scanned bill may print its rate and amount columns under header words the
+# aliasing does not resolve, or print no header on the page at all. The page
+# geometry still holds the columns: on a priced line the rightmost of three
+# aligned figures is the product of the two before it. The rule below reads
+# that arithmetic from each page's own word boxes; it names no word, column
+# position, page or bill.
+
+#: A numeric right-edge cluster is a vertical band when at least this many
+#: lines of the page put a number in it.
+MIN_BAND_LINES = 3
+#: A page earns inferred columns only from at least this many witness lines
+#: agreeing on one (quantity, rate, total) band assignment...
+MIN_WITNESS_LINES = 3
+#: ...and only when that assignment has more than this many times the
+#: witness lines of the best competing assignment (a clear majority).
+WITNESS_MAJORITY = 2
+#: The unit is a single word of at most this many characters printed as its
+#: own cell between the description and the quantity band.
+UNIT_MAX_CHARS = 6
+#: Column label of words on an inferred page that fall in no figure band and
+#: right of the description (kept, never dropped).
+UNPLACED_LABEL = "Unplaced"
+
+#: Where a page's columns came from (codes for :class:`ColumnStats`).
+SOURCE_HEADER = "header"
+SOURCE_INFERRED = "inferred"
+SOURCE_NONE = "none"
+
+
+def numeric_bands(lines: Sequence[Sequence[Word]]) -> dict[int, dict[int, Word]]:
+    """Per line index, ``{band: word}`` for the numbers of one page that sit
+    in a vertical band (one word per band per line, the leftmost).
+
+    Numbers are clustered by right edge: sorted by right edge, a new cluster
+    starts where the gap to the previous right edge exceeds the page's median
+    word height. A cluster is a band when at least :data:`MIN_BAND_LINES`
+    lines put a number in it. Band ids grow left to right.
+    """
+    heights = [w.height for ln in lines for w in ln if w.height > 0]
+    tol = statistics.median(heights) if heights else 1.0
+    numeric = [(li, w) for li, ln in enumerate(lines) for w in ln if parse_number(w.text) is not None]
+    order = sorted(range(len(numeric)), key=lambda i: numeric[i][1].right)
+    cluster = [0] * len(numeric)
+    current, prev = -1, None
+    for i in order:
+        r = numeric[i][1].right
+        if prev is None or r - prev > tol:
+            current += 1
+        cluster[i] = current
+        prev = r
+    support: dict[int, set[int]] = {}
+    for (li, _w), c in zip(numeric, cluster):
+        support.setdefault(c, set()).add(li)
+    vertical = {c for c, ls in support.items() if len(ls) >= MIN_BAND_LINES}
+    per_line: dict[int, dict[int, Word]] = {}
+    for (li, w), c in sorted(zip(numeric, cluster), key=lambda t: t[0][1].left):
+        if c in vertical:
+            per_line.setdefault(li, {}).setdefault(c, w)
+    return per_line
+
+
+def witness_triples(tokens: dict[int, Word]) -> list[tuple[int, int, int]]:
+    """The band triples ``(q, r, t)``, left to right, for which this line's
+    rightmost figure of the three is the product of the two before it
+    (:func:`reconciles`). A factor of 0 or 1, or a total of 0, proves nothing
+    and is not a witness."""
+    bands = sorted(tokens)
+    out: list[tuple[int, int, int]] = []
+    for i, bq in enumerate(bands):
+        for j in range(i + 1, len(bands)):
+            br = bands[j]
+            for bt in bands[j + 1:]:
+                q, r, t = (parse_number(tokens[b].text) for b in (bq, br, bt))
+                if q in (0, 1) or r in (0, 1) or t == 0:
+                    continue
+                if reconciles(q, r, t):
+                    out.append((bq, br, bt))
+    return out
+
+
+@dataclass(frozen=True)
+class InferredColumns:
+    """A page's (quantity, rate, total) bands, as proved by its witness lines."""
+
+    bands: tuple[int, int, int]
+    witnesses: int        # lines that witness this assignment
+    quantity_left: float  # left edge of the quantity band on this page
+    band_of: dict[tuple[int, int], int]  # (line index, id(word)) -> band, figure bands only
+
+
+def infer_page_columns(lines: Sequence[Sequence[Word]]) -> tuple[InferredColumns | None, int]:
+    """``(columns, witness_lines)`` for one page, from its own word boxes.
+
+    ``witness_lines`` counts lines that witness any assignment. Columns are
+    ``None`` unless at least :data:`MIN_WITNESS_LINES` lines witness one
+    assignment and it has more than :data:`WITNESS_MAJORITY` times the witness
+    lines of every competing assignment. Nothing is carried from another page.
+    """
+    per_line = numeric_bands(lines)
+    votes: dict[tuple[int, int, int], int] = {}
+    witness_lines = 0
+    for toks in per_line.values():
+        triples = witness_triples(toks) if len(toks) >= 3 else []
+        witness_lines += bool(triples)
+        for t in triples:
+            votes[t] = votes.get(t, 0) + 1
+    if not votes:
+        return None, witness_lines
+    ranked = sorted(votes.items(), key=lambda kv: (-kv[1], kv[0]))
+    best, n = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else 0
+    if n < MIN_WITNESS_LINES or n <= WITNESS_MAJORITY * runner_up:
+        return None, witness_lines
+    figure = set(best)
+    band_of = {(li, id(w)): b for li, toks in per_line.items() for b, w in toks.items() if b in figure}
+    q_left = min(w.left for toks in per_line.values() for b, w in toks.items() if b == best[0])
+    return InferredColumns(best, n, q_left, band_of), witness_lines
+
+
+def _bucket_inferred(li: int, line: Sequence[Word], cols: InferredColumns) -> _Line:
+    """One printed line under inferred columns: figures from the bands; the
+    description is the text left of the quantity band; the unit is a short
+    single-word cell printed last before the quantity band, when present."""
+    names = dict(zip(cols.bands, _FIGURE_FIELDS))
+    figures: dict[str, list[str]] = {f: [] for f in _FIGURE_FIELDS}
+    left: list[Word] = []
+    unplaced: list[str] = []
+    for w in line:
+        band = cols.band_of.get((li, id(w)))
+        if band is not None:
+            figures[names[band]].append(w.text)
+        elif w.cx < cols.quantity_left:
+            left.append(w)
+        else:
+            unplaced.append(w.text)
+    cells = _cells_by_gap(left)
+    unit = ""
+    if len(cells) > 1 and len(cells[-1]) == 1:
+        tok = cells[-1][0].text
+        if len(tok) <= UNIT_MAX_CHARS and parse_number(tok) is None:
+            unit = tok
+            cells = cells[:-1]
+    fields = {"description": " ".join(w.text for c in cells for w in c), "unit": unit}
+    fields.update({f: " ".join(v) for f, v in figures.items()})
+    return _Line(
+        text=" ".join(w.text for w in line),
+        fields=fields,
+        extra={UNPLACED_LABEL: " ".join(unplaced)} if unplaced else {},
+        ref="",
+        top=min(w.top for w in line),
+        bottom=max(w.top + w.height for w in line),
+        label=_label_of(line),
+    )
+
+
+def _header_reconciling(lines: Sequence[Sequence[Word]], columns: Sequence[_Column]) -> int:
+    """Lines of a page on which ``columns`` read all three figures and they
+    reconcile with no factor of 0 or 1 (the header's own witness count)."""
+    n = 0
+    for line in lines:
+        f = _bucket_line(line, columns, set()).fields
+        q, r, t = (parse_number(f.get(k, "")) for k in _FIGURE_FIELDS)
+        if q is None or r is None or t is None or q in (0, 1) or r in (0, 1) or t == 0:
+            continue
+        n += reconciles(q, r, t)
+    return n
+
+
+def _header_conflicts(
+    lines: Sequence[Sequence[Word]], columns: Sequence[_Column], cols: InferredColumns,
+) -> int:
+    """Figure fields the header resolved whose column is not where most words
+    of that field's inferred band fall (or that the band never reaches)."""
+    names = dict(zip(cols.bands, _FIGURE_FIELDS))
+    under: dict[str, dict[int, int]] = {}
+    for li, line in enumerate(lines):
+        for w in line:
+            band = cols.band_of.get((li, id(w)))
+            if band is not None:
+                hits = under.setdefault(names[band], {})
+                idx = _assign(w, columns)
+                hits[idx] = hits.get(idx, 0) + 1
+    conflicts = 0
+    for idx, col in enumerate(columns):
+        if col.field in _FIGURE_FIELDS:
+            hits = under.get(col.field, {})
+            if not hits or max(hits, key=hits.__getitem__) != idx:
+                conflicts += 1
+    return conflicts
+
+
+@dataclass
+class ColumnStats:
+    """How each page's columns were chosen, as counts (no text)."""
+
+    pages: dict[str, int] = field(default_factory=lambda: dict.fromkeys(
+        (SOURCE_HEADER, SOURCE_INFERRED, SOURCE_NONE), 0))
+    witness_lines: int = 0
+    header_conflicts: int = 0
+    labels_reread_as_rows: int = 0
+
+    def as_dict(self, rows: Sequence[BillRow]) -> dict[str, Any]:
+        """The counts, with the rows' priced / not-reconciling split and the
+        number of section paths."""
+        priced = [r for r in rows
+                  if all(parse_number(r.fields.get(f, "")) is not None for f in _FIGURE_FIELDS)]
+        return {
+            "pages_by_source": dict(self.pages),
+            "witness_lines": self.witness_lines,
+            "rows_priced_reconciled": sum(1 for r in priced if not r.check),
+            "rows_figures_not_reconciling": sum(1 for r in priced if r.check),
+            "header_conflicts": self.header_conflicts,
+            "labels_reread_as_rows": self.labels_reread_as_rows,
+            "section_paths": len({tuple(r.path) or (r.section,) for r in rows}),
+        }
+
+
+def _header_label(line: Sequence[Word], columns: Sequence[_Column] | None, refs: set[int]) -> bool:
+    """True when the header path would not read ``line`` as a measured row
+    (no header in effect, or no figure or no description under its columns).
+
+    With no header in effect the header path labels only a line that holds a
+    letter (:data:`LABEL_BEFORE_HEADER`); a letter-free line was dropped, not
+    labelled, so it is not a label re-read as a row."""
+    if columns is None:
+        return bool(re.search(r"[A-Za-z]", " ".join(w.text for w in line)))
+    f = _bucket_line(line, columns, refs).fields
+    return not (any(f.get(k) for k in _FIGURE_FIELDS) and f.get("description"))
+
+
 def extract_bill_rows(
     words: Iterable[Word],
     block=None,
     on_label: Callable[[LabelEvent], None] | None = None,
+    stats: ColumnStats | None = None,
 ) -> list[BillRow]:
     """Rows of every bill table found in ``words`` (any number of pages).
 
@@ -422,8 +661,14 @@ def extract_bill_rows(
     that way is a section label, as before. A page whose header has no
     reference column has no such evidence and keeps the line-per-row rule.
 
+    A page whose own word boxes prove its figure columns by the
+    reconciliation test (:func:`infer_page_columns`) is read under those
+    inferred columns when they have more witness lines than the header in
+    effect on the page reconciles; otherwise the header path above applies.
+
     ``on_label`` (optional) observes every label as a :class:`LabelEvent`;
-    it changes nothing about the rows.
+    ``stats`` (optional) collects the column-source counts. Neither changes
+    the rows.
     """
     block = block or _resolver()
     by_page: dict[int, list[Word]] = {}
@@ -462,27 +707,50 @@ def extract_bill_rows(
                   page, LABEL_UNCLOSED_CHAIN, len(pending))
             pending.clear()
 
+    stats = stats if stats is not None else ColumnStats()
     for page in sorted(by_page):
         heights = [w.height for w in by_page[page] if w.height > 0]
         max_gap = statistics.median(heights) if heights else 1.0
         indent = max_gap
-        for line in group_lines(by_page[page]):
-            header = detect_header(line, block)
+        page_lines = group_lines(by_page[page])
+        headers = [detect_header(line, block) for line in page_lines]
+        inferred, witness_lines = infer_page_columns(page_lines)
+        stats.witness_lines += witness_lines
+        # The header in effect on this page: its own first header line, else
+        # the one carried from an earlier page.
+        page_header = next((h for h in headers if h is not None), columns)
+        use_inferred = False
+        if inferred is not None:
+            header_witnesses = 0
+            if page_header is not None:
+                stats.header_conflicts += _header_conflicts(page_lines, page_header, inferred)
+                header_witnesses = _header_reconciling(page_lines, page_header)
+            use_inferred = inferred.witnesses > header_witnesses
+        source = (SOURCE_INFERRED if use_inferred
+                  else SOURCE_HEADER if page_header is not None else SOURCE_NONE)
+        stats.pages[source] += 1
+        for li, line in enumerate(page_lines):
+            header = headers[li]
             if header is not None:
                 flush(page)
                 columns = header
                 refs = _ref_columns(columns)
                 continue
-            if columns is None:
+            if use_inferred:
+                cur = _bucket_inferred(li, line, inferred)
+                line_refs: set[int] = set()
+            elif columns is None:
                 if re.search(r"[A-Za-z]", " ".join(w.text for w in line)):
                     label(_label_of(line), page, LABEL_BEFORE_HEADER)
                 continue
-            cur = _bucket_line(line, columns, refs)
+            else:
+                cur = _bucket_line(line, columns, refs)
+                line_refs = refs
             has_figure = any(cur.fields.get(f) for f in _FIGURE_FIELDS)
             has_desc = bool(cur.fields.get("description"))
+            ref_labels = {columns[i].label for i in line_refs} if columns else set()
             other_text = any(
-                t for lbl, t in cur.extra.items()
-                if lbl not in {columns[i].label for i in refs}
+                t for lbl, t in cur.extra.items() if lbl not in ref_labels
             ) or cur.fields.get("unit")
             adjacent = bool(pending) and cur.top - pending[-1].bottom <= max_gap
             if not has_figure and has_desc:
@@ -511,6 +779,8 @@ def extract_bill_rows(
                           LABEL_NO_FIGURE if not has_figure else LABEL_NO_DESCRIPTION,
                           figure_number=_has_figure_number(cur.fields))
                 continue
+            if use_inferred and _header_label(line, columns, refs):
+                stats.labels_reread_as_rows += 1
             emit(page, cur.fields, cur.extra)
         flush(page)
     return rows
