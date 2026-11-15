@@ -238,7 +238,10 @@ def test_tool_is_advertised_only_in_a_project(runtime, project_id, advertised):
     from app.agents.core.tools import tool_definitions
 
     names = [t["function"]["name"] for t in tool_definitions(runtime, project_id=project_id)]
-    assert ("bill_rows_aggregate" in names) is advertised
+    # The bill tool joins the other project-scoped document tools.
+    for scoped in ("search_project_documents", "list_project_documents",
+                   "fetch_document", "bill_rows_aggregate"):
+        assert (scoped in names) is advertised, scoped
 
 
 def test_tool_is_in_the_base_manifest_and_registry():
