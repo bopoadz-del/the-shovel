@@ -6207,6 +6207,22 @@ def _missing_model_error(cfg: dict[str, Any], api_key: str | None) -> str | None
     return None
 
 
+def _resolve_model_key(cfg: dict[str, Any], api_key: str | None) -> tuple[str | None, str]:
+    """``(missing-key error or None, the key to use)`` for one turn."""
+    resolved = api_key or (os.getenv(cfg["env_key"]) if cfg.get("env_key") else "") or ""
+    return _missing_model_error(cfg, api_key), resolved
+
+
+async def _call_model_unless_missing(agent: Any, model_missing: str | None,
+                                     messages: list[dict[str, Any]], api_key: str,
+                                     **kwargs: Any) -> dict[str, Any]:
+    """The turn's model call. With no model configured the missing-key message
+    is that call's error, so the caller's provider-failure recovery runs."""
+    if model_missing:
+        return {"status": "error", "error": model_missing}
+    return await agent._call_llm(messages, api_key, **kwargs)
+
+
 def _recover_after_provider_failure(messages: list[dict[str, Any]] | None) -> str:
     """A provider failure of ANY kind -- no key, refused connection, timeout,
     exhausted balance, an HTTP error, an empty reply -- recovers the tool or

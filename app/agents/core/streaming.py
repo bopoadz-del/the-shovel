@@ -143,7 +143,8 @@ async def _chat_stream_impl(
         _predispatch_wbs_duration_override, _predispatch_wir_form,
         _project_has_non_rag_context, _project_is_rag_ready_off_process,
         _rag_inject_off_process, _recover_answer_from_tool_messages,
-        _missing_model_error, _recover_after_provider_failure, _with_model_unreached_note,
+        _resolve_model_key, _call_model_unless_missing, _recover_after_provider_failure,
+        _with_model_unreached_note,
         _recover_tool_calls_from_content, _recovered_calls_are_search_only,
         _requested_char_offset, _sanitize_citation_labels, _sanitize_final_text,
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
@@ -210,8 +211,7 @@ async def _chat_stream_impl(
     # A missing provider key is acted on at the FIRST model call, not here:
     # the deterministic stages below (capability answer, pre-dispatch, fast
     # paths) answer the turns they can answer with no model configured.
-    _model_missing = _missing_model_error(cfg, api_key)
-    api_key = api_key or (os.getenv(cfg["env_key"]) if cfg["env_key"] else "") or ""
+    _model_missing, api_key = _resolve_model_key(cfg, api_key)
 
     _call_stack = _call_stack or [self.name]
 
@@ -1133,15 +1133,11 @@ async def _chat_stream_impl(
         # iterations grow the prompt with tool results, so capture iter 0 only.
         if iteration == 0:
             _turn_timing.mark_value("prompt_tokens_in", _approx_prompt_tokens(messages))
-        if _model_missing:
-            resp = {"status": "error", "error": _model_missing}
-        else:
-            resp = await self._call_llm(
-                messages, api_key, project_id=project_id, user_id=user_id,
-                exclude_tools=excluded_tools or None,
-                with_tools=not force_synthesis,
-                deadline=_llm_deadline(),
-            )
+        resp = await _call_model_unless_missing(
+            self, _model_missing, messages, api_key, project_id=project_id, user_id=user_id,
+            exclude_tools=excluded_tools or None, with_tools=not force_synthesis,
+            deadline=_llm_deadline(),
+        )
         if _timing:
             _tcs = [((tc.get("function") or {}).get("name")) for tc in (resp.get("choice", {}).get("message", {}).get("tool_calls") or [])]
             _timing_log("TIMING chat_stream iter=%d call=%.1fs status=%s tools=%s cum=%.1fs",

@@ -9,8 +9,10 @@ import pytest
 
 from app.agents.runtime import (
     MODEL_UNREACHED_NOTE,
+    _call_model_unless_missing,
     _missing_model_error,
     _recover_after_provider_failure,
+    _resolve_model_key,
     _with_model_unreached_note,
 )
 
@@ -27,6 +29,44 @@ def test_a_missing_key_is_named_and_a_present_key_is_not(monkeypatch, env_key):
 @pytest.mark.parametrize("cfg", [{"env_key": ""}, {}])
 def test_a_provider_that_declares_no_key_is_never_missing(cfg):
     assert _missing_model_error(cfg, None) is None
+
+
+@pytest.mark.parametrize("env_key,env_val", [("GAMMA_TEST_KEY", "g-env"), ("DELTA_TEST_KEY", "d-env")])
+def test_the_key_resolves_passed_then_env_then_missing(monkeypatch, env_key, env_val):
+    cfg = {"env_key": env_key}
+    assert _resolve_model_key(cfg, "passed") == (None, "passed")
+    monkeypatch.setenv(env_key, env_val)
+    assert _resolve_model_key(cfg, None) == (None, env_val)
+    monkeypatch.delenv(env_key)
+    assert _resolve_model_key(cfg, None) == (f"No {env_key} configured.", "")
+
+
+class _Recorder:
+    def __init__(self):
+        self.calls = []
+
+    async def _call_llm(self, messages, api_key, **kwargs):
+        self.calls.append((messages, api_key, kwargs))
+        return {"status": "success", "echo": api_key}
+
+
+@pytest.mark.parametrize("missing", ["No EPS_TEST_KEY configured.", "No ZETA_TEST_KEY configured."])
+def test_a_missing_model_is_the_calls_error_and_no_call_is_made(missing):
+    import asyncio
+    agent = _Recorder()
+    resp = asyncio.run(_call_model_unless_missing(agent, missing, [{"role": "user"}], ""))
+    assert resp == {"status": "error", "error": missing}
+    assert agent.calls == []
+
+
+@pytest.mark.parametrize("key,kw", [("k1", {"with_tools": True}), ("k2", {"deadline": 9.5})])
+def test_a_present_model_is_called_with_the_turns_arguments(key, kw):
+    import asyncio
+    agent = _Recorder()
+    msgs = [{"role": "user", "content": key}]
+    resp = asyncio.run(_call_model_unless_missing(agent, None, msgs, key, **kw))
+    assert resp == {"status": "success", "echo": key}
+    assert agent.calls == [(msgs, key, kw)]
 
 
 @pytest.mark.parametrize("body", ["Volume: 36.00 m3", "Moment: 45 kN m\n"])
