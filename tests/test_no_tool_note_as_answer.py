@@ -24,6 +24,7 @@ from app.agents.runtime import (
     _EMPTY_RESPONSE_FALLBACK,
     _TOOL_RESULT_MAX_CHARS,
     Agent,
+    _format_tool_error_plain,
     _recover_answer_from_tool_messages,
     _tool_result_content,
 )
@@ -219,3 +220,46 @@ def _window_message() -> str:
 def test_recovery_ignores_a_search_note_and_a_window_envelope(make_content, text):
     msgs = [{"role": "tool", "name": "search_project_documents", "content": make_content()}]
     assert _recover_answer_from_tool_messages(text, msgs) == text
+
+
+def _calc_note_message(name: str = "construction_calc") -> dict:
+    return {"role": "tool", "name": name,
+            "content": json.dumps({"result": {"note": "Duration is 12 days."}})}
+
+
+@pytest.mark.parametrize("final", [
+    "The specification gives a slab thickness of 250 mm.",
+    "Two submittals are still open.",
+])
+def test_final_model_text_is_kept_over_a_recoverable_draft(final):
+    """Recovery only fills an empty turn: real final text is never replaced,
+    even when a calculator draft sits in the tool messages."""
+    assert _recover_answer_from_tool_messages(final, [_calc_note_message()]) == final
+
+
+@pytest.mark.parametrize("name,expected", [
+    pytest.param("construction_calc", "Duration is 12 days.", id="calculator-name"),
+    pytest.param("formula_executor_v2", "Duration is 12 days.", id="formula-name"),
+    pytest.param("search_project_documents", "", id="search-name"),
+])
+def test_the_tool_name_alone_decides_a_note_without_a_calculation_key(name, expected):
+    """A payload with no ``calculation`` key is a calculator's only by its
+    tool name; the same note from a search stays with the model."""
+    assert _recover_answer_from_tool_messages("", [_calc_note_message(name)]) == expected
+
+
+_PLAIN_ERROR = {"status": "error", "error": "Missing input: trench length"}
+
+
+@pytest.mark.parametrize("name,recovered", [
+    pytest.param("construction_calc", True, id="calculator-name"),
+    pytest.param("formula_executor", True, id="formula-name"),
+    pytest.param("search_project_documents", False, id="search-name"),
+])
+def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, recovered):
+    """A failed calculator still yields its one honest sentence; a failed
+    search's error text is never shown as the answer."""
+    msgs = [{"role": "tool", "name": name, "content": json.dumps(_PLAIN_ERROR)}]
+    expected = _format_tool_error_plain(_PLAIN_ERROR) if recovered else ""
+    assert expected != json.dumps(_PLAIN_ERROR)
+    assert _recover_answer_from_tool_messages("", msgs) == expected
