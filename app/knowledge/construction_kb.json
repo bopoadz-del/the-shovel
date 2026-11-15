@@ -391,6 +391,92 @@
       "needs_review": false
     },
     {
+      "id": "foundation.uplift_pressure",
+      "domain": "construction.buildings",
+      "type": "formula",
+      "title": "Hydrostatic uplift pressure under a basement raft",
+      "statement": "Uplift pressure on the underside of a basement raft = unit weight of water x water head h above the raft underside, the uplift term of the factor of safety in foundation.uplift_fos. WORKED EXAMPLE (course dewatering uplift check): h = 23.00 m at 1 t/m3 gives 1 x 23 = 23 t/m2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "water_unit_weight * water_head",
+      "variables": {
+        "water_unit_weight": {
+          "unit": "tonne/meter**3",
+          "desc": "Unit weight of groundwater"
+        },
+        "water_head": {
+          "unit": "meter",
+          "desc": "Water head above the raft underside"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne/meter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "foundation.floor_counterweight",
+      "domain": "construction.buildings",
+      "type": "formula",
+      "title": "Counterweight per unit area from the raft and the floor slabs above it",
+      "statement": "Counterweight per unit area that resists uplift = concrete unit weight x (raft thickness + number of floor slabs x slab thickness), the counterweight term of foundation.uplift_fos; dewatering stays on until this balances the uplift at the required factor. WORKED EXAMPLE (course dewatering uplift check): raft 0.9 m and 5 slabs of 0.3 m at 2.5 t/m3 give 2.5 x (0.9 + 5 x 0.3) = 2.25 + 3.75 = 6 t/m2; against an uplift of 23 t/m2 the factor is 6 / 23 = 0.26, below the course's 1.2, so tension piles anchor the foundation. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "concrete_unit_weight * (raft_thickness + slab_count * slab_thickness)",
+      "variables": {
+        "concrete_unit_weight": {
+          "unit": "tonne/meter**3",
+          "desc": "Unit weight of reinforced concrete"
+        },
+        "raft_thickness": {
+          "unit": "meter",
+          "desc": "Raft (foundation slab) thickness"
+        },
+        "slab_count": {
+          "unit": "dimensionless",
+          "desc": "Number of floor slabs cast above the raft"
+        },
+        "slab_thickness": {
+          "unit": "meter",
+          "desc": "Typical floor slab thickness"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne/meter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
       "id": "foundation.dewatering_stop_floors",
       "domain": "construction.buildings",
       "type": "formula",
@@ -1303,6 +1389,92 @@
       "remediation": [],
       "provenance": {
         "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.grader_volume_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Grader output in volume from its area rate and the layer thickness",
+      "statement": "Grader volume rate (m3/hr) = grader area rate (m2/hr) x compacted layer thickness (m), used to size graders against a volume target. WORKED EXAMPLES (course fleet studies): 750 m2/hr at 0.25 m = 187.5 m3/hr (printed 187); 700 m2/hr at 0.25 m = 175 m3/hr. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "grader_area_rate * layer_thickness",
+      "variables": {
+        "grader_area_rate": {
+          "unit": "meter**2/hour",
+          "desc": "Grader spreading/levelling rate per hour"
+        },
+        "layer_thickness": {
+          "unit": "meter",
+          "desc": "Compacted layer thickness"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.grading_area_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Area to grade and roll per working hour over the whole fill",
+      "statement": "Area rate (m2/hr) = number of layers x fill area (m2) / (working days x working hours per day); dividing it by one grader's area rate gives the graders needed (equipment.machines_required), and the course pairs one roller with every two graders. WORKED EXAMPLES (course fleet studies): 19 layers x 2,000,000 m2 / (210 x 20) = 9,047.6 m2/hr (printed 9,048); 20 layers x 2,000,000 m2 / (210 x 20) = 9,523.8 m2/hr (printed 9,524). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "layer_count * fill_area / (working_days * hours_per_day)",
+      "variables": {
+        "layer_count": {
+          "unit": "dimensionless",
+          "desc": "Number of compacted layers (earthworks.fill_layers)"
+        },
+        "fill_area": {
+          "unit": "meter**2",
+          "desc": "Plan area of the fill"
+        },
+        "working_days": {
+          "unit": "day",
+          "desc": "Working days in the programme"
+        },
+        "hours_per_day": {
+          "unit": "hour/day",
+          "desc": "Working hours per day, all shifts"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**2/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
