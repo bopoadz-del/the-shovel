@@ -260,3 +260,24 @@ def test_a_broken_pattern_is_reported_without_printing_the_pattern():
     message = str(excinfo.value)
     assert "not a valid regex" in message
     assert "unclosed(group" not in message, "the secret pattern was echoed"
+
+
+def test_a_denylisted_word_written_as_unicode_escapes_is_caught():
+    r"""A non-Latin word in a string literal is often written as \u escapes.
+
+    The raw line holds only backslashes and hex, so a pattern in the word's own
+    script never matched it. The scan matches the decoded form as well.
+    """
+    patterns = scan_secrets.load_client_patterns(
+        {scan_secrets.ENV_VAR: "\u0645\u0631\u0633\u0644\nzebra"}
+    )
+    text = r'name = "Document from \u0645\u0631\u0633\u0644"' + "\nplain line\n"
+    assert scan_secrets.scan_client_text(text, patterns) == [(1, 0)]
+    wide = r'x = "\U0001F1F8 \u007a\u0065bra"' + "\n"
+    assert scan_secrets.scan_client_text(wide, patterns) == [(1, 1)]
+
+
+def test_an_escape_that_names_no_character_is_left_as_written():
+    assert scan_secrets.decode_escapes(r"a \UFFFFFFFF b") == r"a \UFFFFFFFF b"
+    assert scan_secrets.decode_escapes(r"\u0041\U00000042") == "AB"
+    assert scan_secrets.decode_escapes("no escapes") == "no escapes"

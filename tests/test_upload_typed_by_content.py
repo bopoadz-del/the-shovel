@@ -93,8 +93,8 @@ def test_sniff_extension_reads_the_bytes(data, proven):
 @pytest.mark.parametrize(
     "name,data,typed",
     [
-        ("Document from \u0634\u0627\u062f\u064a Chadi \U0001F1F8\U0001F1E6", PDF,
-         "Document from \u0634\u0627\u062f\u064a Chadi \U0001F1F8\U0001F1E6.pdf"),
+        ("Document from \u0634\u0627\u062f\u064a Sender \U0001F1F8\U0001F1E6", PDF,
+         "Document from \u0634\u0627\u062f\u064a Sender \U0001F1F8\U0001F1E6.pdf"),
         ("Report v1.2", _ooxml("word"), "Report v1.2.docx"),
         ("minutes.txt", PDF, "minutes.pdf"),
         ("photo.jpeg", JPEG, "photo.jpeg"),
@@ -129,12 +129,12 @@ def test_describe_ext_names_a_missing_extension(ext, expected):
     "multipart_name,display_name,data,stored",
     [
         # The share-sheet name travels as the multipart filename itself.
-        ("Document from \u0634\u0627\u062f\u064a Chadi \U0001F1F8\U0001F1E6", None, PDF,
-         "Document from \u0634\u0627\u062f\u064a Chadi \U0001F1F8\U0001F1E6.pdf"),
+        ("Document from \u0634\u0627\u062f\u064a Sender \U0001F1F8\U0001F1E6", None, PDF,
+         "Document from \u0634\u0627\u062f\u064a Sender \U0001F1F8\U0001F1E6.pdf"),
         # The client sends an ASCII stand-in and the real name as a field.
-        ("Document_from_Chadi", "Document from \u0634\u0627\u062f\u064a Chadi \U0001F1F8\U0001F1E6",
+        ("Document_from_Sender", "Document from \u0634\u0627\u062f\u064a Sender \U0001F1F8\U0001F1E6",
          _ooxml("word"),
-         "Document from \u0634\u0627\u062f\u064a Chadi \U0001F1F8\U0001F1E6.docx"),
+         "Document from \u0634\u0627\u062f\u064a Sender \U0001F1F8\U0001F1E6.docx"),
         # A known extension the bytes contradict is corrected.
         ("site minutes.txt", None, PDF, "site minutes.pdf"),
     ],
@@ -233,10 +233,10 @@ class _CountingImageBlock:
 @pytest.mark.parametrize(
     "multipart_name,display_name,data,persons,typed,observation",
     [
-        ("Photo from شادي \U0001F1F8\U0001F1E6", None, JPEG, 2,
-         "Photo from شادي \U0001F1F8\U0001F1E6.jpg", "2 people visible"),
-        ("Photo_from_Chadi", "Photo from شادي", PNG, 1,
-         "Photo from شادي.png", "1 person visible"),
+        ("Photo from مرسل \U0001F1F8\U0001F1E6", None, JPEG, 2,
+         "Photo from مرسل \U0001F1F8\U0001F1E6.jpg", "2 people visible"),
+        ("Photo_from_Sender", "Photo from مرسل", PNG, 1,
+         "Photo from مرسل.png", "1 person visible"),
     ],
 )
 def test_extensionless_photo_is_analysed_by_content(
