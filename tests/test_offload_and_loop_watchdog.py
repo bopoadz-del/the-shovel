@@ -402,3 +402,15 @@ def test_a_recorded_stall_carries_the_process_and_host_totals(monkeypatch, host,
     head = worst.split(" :: ", 1)[0]
     assert " proc=" in head and "sum window=" in head, head
     assert ("host_busy=" in head and "running=4/4" in head) is has_host, head
+
+
+@pytest.mark.parametrize("text", ["\ncpu  1 0 1 8\n\nprocs_running 2\n", "cpu  1 0 1 8\n\n\n"])
+def test_blank_stat_lines_are_skipped_not_reported_unreadable(tmp_path, caplog, text):
+    """A blank line in ``/proc/stat`` is no figure at all, not a garbled one:
+    it is skipped without the 'unreadable' log a malformed line gets."""
+    f = tmp_path / "stat"
+    f.write_text(text)
+    with caplog.at_level(logging.DEBUG, logger=loop_watchdog.__name__):
+        got = loop_watchdog.host_cpu(str(f))
+    assert got["total"] == 10
+    assert not [r for r in caplog.records if "unreadable" in r.getMessage()]
