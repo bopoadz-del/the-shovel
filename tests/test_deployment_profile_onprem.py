@@ -228,7 +228,7 @@ def test_endpoint_inside_the_box_passes(url):
 @pytest.mark.parametrize(
     "url,table",
     [
-        ("postgresql://u:p@ep-x.neon.example/x", {"ep-x.neon.example": ["8.8.8.8"]}),
+        ("postgresql://u:p@ep-x.quillbase.example/x", {"ep-x.quillbase.example": ["8.8.8.8"]}),
         ("postgresql://u:p@8.8.4.4/x", {}),
         ("postgresql://u:p@mixed.example/x", {"mixed.example": ["10.0.0.1", "9.9.9.9"]}),
         ("postgresql://u:p@unknown.example/x", {}),  # cannot be shown to stay inside
@@ -261,11 +261,163 @@ def test_inbound_self_address_is_not_an_endpoint(name):
     assert _offenders(env) == [], "stage=endpoint: inbound addresses are not dialled"
 
 
-@pytest.mark.parametrize("name", ["ACONEX_LOBBY_URL", "SOME_NEW_SERVICE_URL"])
+@pytest.mark.parametrize("name", ["TARNWELL_LOBBY_URL", "SOME_NEW_SERVICE_URL"])
 def test_any_dialled_url_setting_is_checked(name):
     env = {**_CLEAN_ONPREM, name: "https://lobby.vendor.example/x"}
     offs = _offenders(env, _resolver({"lobby.vendor.example": ["1.0.0.1"]}))
     assert _settings(offs) == [name], "stage=endpoint"
+
+
+# ── G-6: judged by value and by word, not by a list of name endings ──────
+# Every name below is invented; none appears in the module.
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "BRAMBLE_SESSION_TOKEN",   # ends _TOKEN, not _ACCESS_TOKEN
+        "QUILLBASE_SECRET",        # _SECRET
+        "ORCHARDLY_SECRET_KEY",    # _SECRET_KEY
+        "FENWAY_DB_PASSWORD",      # PASSWORD
+        "LOOMKIT_PASSWD_HASH",     # PASSWD mid-name
+        "MARROW_CREDENTIALS_JSON", # CREDENTIAL mid-name, plural
+        "KESTRELAPIKEY",           # no separator at all
+        "tarn_refresh_token",      # lower case
+    ],
+)
+def test_any_name_carrying_a_credential_word_is_refused(name):
+    env = {**_CLEAN_ONPREM, name: "abc123-not-a-number"}
+    offs = _offenders(env)
+    assert _settings(offs) == [name], f"stage=credential: {name} -> {offs}"
+    assert "credential" in offs[0].reason
+
+
+@pytest.mark.parametrize("name", ["WHISTLER_MODE", "GRANARY_TIMEOUT_S"])
+def test_name_without_a_credential_word_is_not_a_credential(name):
+    env = {**_CLEAN_ONPREM, name: "abc123-not-a-number"}
+    assert _offenders(env) == [], f"stage=credential: {name}"
+
+
+@pytest.mark.parametrize("name", ["PEBBLE_MAX_TOKENS", "SIFT_DAILY_TOKEN_BUDGET"])
+def test_a_whole_number_is_a_count_not_a_credential(name):
+    env = {**_CLEAN_ONPREM, name: "4096"}
+    assert _offenders(env) == [], f"stage=credential: a count under {name}"
+    env[name] = "4096x"  # the same name with a non-count value is a secret
+    assert _settings(_offenders(env)) == [name], f"stage=credential: {name}"
+
+
+@pytest.mark.parametrize("value", ["generated-locally-abc", "Q9x_kL2-0pW"])
+def test_local_only_secrets_are_exactly_what_the_installer_generates(value):
+    """The allow list is the installer's own generated secrets (plus the base
+    image's public signing-key fingerprint): read from the installer itself."""
+    import pathlib
+    import re
+
+    script = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "onprem" / "install.sh"
+    generated = set(re.findall(r'echo "([A-Z0-9_]+)=\$\(gen\)"', script.read_text(encoding="utf-8")))
+    assert generated, "stage=credential: the installer generates no secret (parser stale?)"
+    assert generated <= dp._LOCAL_ONLY_SECRETS, f"stage=credential: {generated - dp._LOCAL_ONLY_SECRETS}"
+    for name in sorted(generated):
+        env = {**_CLEAN_ONPREM, name: value}
+        assert _offenders(env) == [], f"stage=credential: {name} is local-only"
+        # the same word in a name the installer does not generate is refused
+        twin = "REMOTE_" + name
+        assert _settings(_offenders({**_CLEAN_ONPREM, twin: value})) == [twin], (
+            f"stage=credential: {twin}"
+        )
+    leftover = dp._LOCAL_ONLY_SECRETS - generated - {"BOOTSTRAP_USER_PASSWORD", "GPG_KEY"}
+    assert not leftover, f"stage=credential: allow list grew past the installer: {leftover}"
+
+
+@pytest.mark.parametrize(
+    "name,value,table",
+    [
+        # an unlisted name, a URL value: checked though the name is not *_URL
+        ("HARROWGATE_ENDPOINT", "https://api.quillbase.example/v1", {"api.quillbase.example": ["1.0.0.1"]}),
+        ("MOSSPATH_URI", "amqp://broker.quillbase.example:5672", {"broker.quillbase.example": ["9.9.9.9"]}),
+        # no scheme: a bare host:port
+        ("TARN_HOST", "relay.quillbase.example:2525", {"relay.quillbase.example": ["1.0.0.1"]}),
+        ("CINDER_SERVER", "8.8.4.4", {}),
+        ("SPRIG_PEER", "[2001:4860::1]:443", {}),
+        # one bad entry in a list is enough
+        ("WICKET_ORIGINS", "http://10.0.0.2:3000, https://far.quillbase.example", {"far.quillbase.example": ["1.0.0.1"]}),
+        # a name that cannot be shown to stay inside
+        ("BURROW_TARGET", "nowhere.quillbase.example", {}),
+    ],
+)
+def test_any_value_that_dials_outside_is_refused_whatever_the_name(name, value, table):
+    env = {**_CLEAN_ONPREM, name: value}
+    offs = _offenders(env, _resolver(table))
+    assert _settings(offs) == [name], f"stage=endpoint: {name}={value} -> {offs}"
+    assert "outside" in offs[0].reason or "not shown" in offs[0].reason
+
+
+@pytest.mark.parametrize(
+    "name,value,table",
+    [
+        ("HARROWGATE_ENDPOINT", "https://api.corp.example/v1", {"api.corp.example": ["10.9.8.7"]}),
+        ("TARN_HOST", "relay.corp.example:2525", {"relay.corp.example": ["172.16.0.9"]}),
+        ("CINDER_SERVER", "192.168.1.20", {}),
+        ("SPRIG_PEER", "ollama:11434", {}),           # compose service name
+        ("WICKET_ORIGINS", "http://10.0.0.2:3000, http://localhost:5173", {}),
+    ],
+)
+def test_any_value_that_stays_inside_passes_whatever_the_name(name, value, table):
+    env = {**_CLEAN_ONPREM, name: value}
+    assert _offenders(env, _resolver(table)) == [], f"stage=endpoint: {name}={value}"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["3.11.9", "qwen2.5:14b-instruct", "BAAI/bge-small-en-v1.5", "/app/data", "C.UTF-8", "curated_kb"],
+)
+def test_values_that_are_not_hosts_never_reach_dns(value):
+    env = {**_CLEAN_ONPREM, "GRANARY_SETTING": value}
+    assert _offenders(env) == [], f"stage=endpoint: {value!r} is not a host"
+
+
+def _shipped_onprem_env():
+    """The on-prem box's environment as shipped: onprem.env.example, the
+    installer's generated secrets, and the compose file's app settings with
+    their defaults filled in."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "onprem"
+    env = {}
+    for line in (root / "onprem.env.example").read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    for name in re.findall(r'echo "([A-Z0-9_]+)=\$\(gen\)"', (root / "install.sh").read_text(encoding="utf-8")):
+        env[name] = "Zk3-generated-on-the-box-9qL"
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    for k, v in re.findall(r"^\s+([A-Z][A-Z0-9_]+):\s*(\S.*)$", compose, flags=re.MULTILINE):
+        env.setdefault(k, re.sub(r"\$\{[A-Z0-9_]+:-([^}]*)\}", r"", v).strip())
+    assert env.get("DEPLOYMENT_PROFILE") == "onprem" and "DATABASE_URL" in env, sorted(env)
+    return env
+
+
+def test_the_shipped_onprem_env_boots(monkeypatch):
+    """Through the real boot hook, with the box's real shipped settings."""
+    env = _shipped_onprem_env()
+    monkeypatch.setattr(dp, "_process_env", lambda: env)
+    monkeypatch.setattr(dp, "_resolve_host", _no_dns)
+    dp.enforce_deployment_profile()
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [("KESTREL_SESSION_TOKEN", "t0k-abc"), ("MOSSPATH_URI", "amqp://broker.quillbase.example")],
+)
+def test_the_shipped_onprem_env_refuses_one_unlisted_leak(monkeypatch, name, value):
+    env = {**_shipped_onprem_env(), name: value}
+    monkeypatch.setattr(dp, "_process_env", lambda: env)
+    monkeypatch.setattr(dp, "_resolve_host", _resolver({}))
+    with pytest.raises(dp.DeploymentProfileError) as err:
+        dp.enforce_deployment_profile()
+    assert [o.setting for o in err.value.offenders] == [name], "stage=boot"
 
 
 # ── stage: boot ─────────────────────────────────────────────────────────────

@@ -24,12 +24,19 @@ of services:
 * embedder: a model-hub id needs ``HF_HUB_OFFLINE`` and
   ``TRANSFORMERS_OFFLINE`` truthy (the weights pre-seeded); a local
   directory or ``fake`` needs neither.
-* credentials: a non-empty setting named ``*_API_KEY``, ``*_ACCESS_TOKEN`` or
-  ``*_DSN`` is a credential for a remote service.
-* endpoints: a non-empty ``*_URL`` setting with a host must point inside the
-  box: loopback, private or link-local addresses, a single-label (compose
-  service) name, or a name that resolves only to such addresses. The
-  service's own inbound addresses are not dialled and are not checked.
+* credentials: a non-empty setting whose name contains KEY, TOKEN, SECRET,
+  DSN, PASSWORD, PASSWD or CREDENTIAL is a credential for a remote service,
+  whatever the rest of the name says. Two exceptions, both stated here: the
+  box's own local secrets (generated on the box by the installer, never sent
+  anywhere) on a short allow list, and a value that is a plain whole number,
+  which is a count or a limit (a token budget), not a secret.
+* endpoints: judged by the VALUE, not the name. Every non-empty setting is
+  read; each part of it that is a URL with a host, or a bare ``host[:port]``
+  (a dotted name or an address literal, with or without a scheme), must
+  point inside the box: loopback, private or link-local addresses, a
+  single-label (compose service) name, or a name that resolves only to such
+  addresses. The service's own inbound addresses are not dialled and are not
+  checked.
 
 Network isolation itself is the deployment's job; this check only proves the
 configuration does not need egress. It never prints a setting's value.
@@ -40,6 +47,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import re
 import socket
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -63,8 +71,32 @@ _PROFILE_VALUES = {
 }
 
 _PROVIDER_ROLES = ("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER")
-_CREDENTIAL_SUFFIXES = ("_API_KEY", "_ACCESS_TOKEN", "_DSN")
-_ENDPOINT_SUFFIX = "_URL"
+# A name containing any of these words names a secret.
+_CREDENTIAL_WORDS = ("KEY", "TOKEN", "SECRET", "DSN", "PASSWORD", "PASSWD", "CREDENTIAL")
+# The box's own secrets: generated on the box (deploy/onprem/install.sh), used
+# only by this service and its local database, never sent anywhere. GPG_KEY is
+# set by the python base image: the public fingerprint of its release-signing
+# key, not a secret.
+_LOCAL_ONLY_SECRETS = frozenset({
+    "SECRET_KEY",
+    "DATA_ENCRYPTION_KEY",
+    "CEREBRUM_MASTER_KEY",
+    "POSTGRES_PASSWORD",
+    "BOOTSTRAP_USER_PASSWORD",
+    "GPG_KEY",
+})
+# A plain whole number is a count or a limit (MAX_TOKENS), never a secret.
+_COUNT = re.compile(r"\d{1,9}")
+# A bare host[:port]: an IPv4 literal, a bracketed IPv6 literal, or a dotted
+# name whose last label is alphabetic (so "3.11" or "qwen2.5" is not a host).
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_BARE_HOST = re.compile(
+    r"(?P<host>\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:.%]+\]|(?:" + _LABEL + r"\.)+[a-z]{2,63})"
+    r"(?::\d{1,5})?(?:/\S*)?",
+    re.IGNORECASE,
+)
+# A setting's value is read part by part: lists are comma, semicolon or space separated.
+_VALUE_PARTS = re.compile(r"[\s,;]+")
 # Where users reach this service; the service never dials them.
 _INBOUND_ADDRESS_SETTINGS = frozenset({"FRONTEND_URL", "PUBLIC_BASE_URL", "RENDER_EXTERNAL_URL"})
 _OFFLINE_FLAGS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
@@ -147,6 +179,32 @@ def _url_host(url: str) -> str | None:
     return parts.hostname if parts.scheme and parts.netloc else None
 
 
+def _is_credential(name: str, value: str) -> bool:
+    upper = name.upper()
+    if upper in _LOCAL_ONLY_SECRETS or _COUNT.fullmatch(value):
+        return False
+    return any(word in upper for word in _CREDENTIAL_WORDS)
+
+
+def _dialled_hosts(value: str) -> list[str]:
+    """Every host the value would dial: URL hosts and bare host[:port] parts.
+
+    Raises ValueError for a part that looks like a URL but cannot be read."""
+    hosts: list[str] = []
+    for part in _VALUE_PARTS.split(value):
+        if not part:
+            continue
+        if "://" in part:
+            host = _url_host(part)
+            if host:
+                hosts.append(host)
+            continue
+        bare = _BARE_HOST.fullmatch(part)
+        if bare:
+            hosts.append(bare.group("host"))
+    return hosts
+
+
 def _provider_offenders(env, resolve) -> Iterable[Offender]:
     from app.agents.runtime import _llm_config
 
@@ -205,16 +263,17 @@ def check_onprem_ready(
     for name in sorted(env):
         if not _value(env, name):
             continue
-        if name.endswith(_CREDENTIAL_SUFFIXES):
+        if _is_credential(name, _value(env, name)):
             add(Offender(name, "is a credential for a remote service; unset it."))
-        elif name.endswith(_ENDPOINT_SUFFIX) and name not in _INBOUND_ADDRESS_SETTINGS:
+        elif name not in _INBOUND_ADDRESS_SETTINGS:
             try:
-                host = _url_host(_value(env, name))
+                hosts = _dialled_hosts(_value(env, name))
             except ValueError:
                 add(Offender(name, "cannot be read as a URL, so it is not shown to be inside the box."))
                 continue
-            if host and not _host_is_inside(host, resolve):
-                add(Offender(name, f"points at {host}, which is not shown to be inside the box."))
+            outside = [h for h in hosts if not _host_is_inside(h, resolve)]
+            if outside:
+                add(Offender(name, f"points at {outside[0]}, which is not shown to be inside the box."))
     return [found[k] for k in sorted(found)]
 
 
