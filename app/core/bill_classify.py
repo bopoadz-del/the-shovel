@@ -59,6 +59,10 @@ class BillVerdict:
     measured_rows: int = 0
     priced_rows: int = 0
     reconciled_rows: int = 0
+    #: Pages read under columns inferred from their own rows by the
+    #: reconciliation test (``bill_table_geometry.SOURCE_INFERRED``): with
+    #: header pages, the evidence that the pages hold a bill table at all.
+    inferred_pages: int = 0
     #: Diagnostic counts (no labels, no text). They explain a verdict; the
     #: verdict never reads them. ``pages_read`` counts every page judged
     #: (``pages_sampled`` only those that gave words), by word source, and
@@ -90,11 +94,19 @@ def _is_priced(row: g.BillRow) -> bool:
     )
 
 
-def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
+def bill_verdict(
+    words: Iterable[g.Word],
+    block=None,
+    *,
+    rows: Sequence[g.BillRow] | None = None,
+    inferred_pages: int = 0,
+) -> BillVerdict:
     """Classify OCR word boxes from one or more sampled pages.
 
-    Each page is read on its own (columns are not carried between sampled
-    pages, which need not be adjacent).
+    The header counts are taken page by page. ``rows`` (optional) are the
+    rows judged, as :func:`rows_of_reads` extracts them; without it each
+    header page is read on its own. ``inferred_pages`` counts the pages whose
+    columns those rows were read under by inference.
     """
     block = block or g._resolver()
     by_page: dict[int, list[g.Word]] = {}
@@ -105,7 +117,7 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
     lines_tested = 0
     header_lines = 0
     rejected = dict.fromkeys(g.HEADER_REJECTIONS, 0)
-    rows: list[g.BillRow] = []
+    page_rows: list[g.BillRow] = []
     for page in sorted(by_page):
         page_words = by_page[page]
         lines = g.group_lines(page_words)
@@ -120,7 +132,8 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
         header_lines += page_headers
         if page_headers:
             header_pages += 1
-            rows += g.extract_bill_rows(page_words, block)
+            page_rows += g.extract_bill_rows(page_words, block)
+    rows = list(rows) if rows is not None else page_rows
 
     measured = [r for r in rows if _is_measured(r)]
     priced = [r for r in measured if _is_priced(r)]
@@ -131,11 +144,12 @@ def bill_verdict(words: Iterable[g.Word], block=None) -> BillVerdict:
         "measured_rows": len(measured),
         "priced_rows": len(priced),
         "reconciled_rows": len(reconciled),
+        "inferred_pages": inferred_pages,
         "lines_tested": lines_tested,
         "header_lines": header_lines,
         **{f"rejected_{why}": n for why, n in rejected.items()},
     }
-    if header_pages == 0:
+    if header_pages == 0 and inferred_pages == 0:
         return BillVerdict(False, NOT_BILL_NO_HEADER, **counts)
     if len(measured) < _MIN_MEASURED_ROWS:
         return BillVerdict(False, NOT_BILL_FEW_ROWS, **counts)
@@ -274,9 +288,43 @@ def verdict_of_reads(reads: Sequence[PageRead], block=None) -> BillVerdict:
     :func:`classify_bill_pdf` passes its small page sample (the cheap gate);
     the bill PLAN and the derivation pass every page they read, so a bundle
     whose covers, preambles and summaries fall on the sample is judged by its
-    measured pages too. Same tests, same bars, either way."""
-    verdict = bill_verdict([w for r in reads for w in r.words], block)
+    measured pages too. Same tests, same bars, either way.
+
+    The rows judged are :func:`rows_of_reads`: the rows the plan holds,
+    whatever the column source of their page (a header, or columns inferred
+    by the reconciliation test)."""
+    rows, inferred = rows_of_reads(reads, block)
+    verdict = bill_verdict([w for r in reads for w in r.words], block,
+                           rows=rows, inferred_pages=inferred)
     return replace(verdict, **read_source_counts(reads))
+
+
+def rows_of_reads(reads: Sequence[PageRead], block=None) -> tuple[list[g.BillRow], int]:
+    """The bill rows of ``reads`` and how many pages were read under inferred
+    columns.
+
+    Each run of consecutive page indices is one ``extract_bill_rows`` call,
+    the plan's own call, so a header carries onto the pages that follow it
+    as in the plan; it never carries across a gap between sampled pages that
+    are not adjacent. For a contiguous range (the plan) that is one call, and
+    the rows are the plan's rows."""
+    rows: list[g.BillRow] = []
+    inferred = 0
+    for run in _consecutive_runs(reads):
+        stats = g.ColumnStats()
+        rows += g.extract_bill_rows([w for r in run for w in r.words], block, stats=stats)
+        inferred += stats.pages[g.SOURCE_INFERRED]
+    return rows, inferred
+
+
+def _consecutive_runs(reads: Sequence[PageRead]) -> list[list[PageRead]]:
+    runs: list[list[PageRead]] = []
+    for r in sorted(reads, key=lambda r: r.index):
+        if runs and r.index == runs[-1][-1].index + 1:
+            runs[-1].append(r)
+        else:
+            runs.append([r])
+    return runs
 
 
 def read_source_counts(reads: Sequence[PageRead]) -> dict[str, int]:

@@ -82,7 +82,7 @@ VERDICT_FIELDS = (
     "header_pages", "lines_tested", "header_lines",
     "rejected_fewer_than_3_cells", "rejected_no_description_column",
     "rejected_no_figure_column",
-    "measured_rows", "priced_rows", "reconciled_rows",
+    "measured_rows", "priced_rows", "reconciled_rows", "inferred_pages",
 )
 #: A plan hash is a sha256 hex digest; no summary string may be longer.
 HASH_LEN = 64
