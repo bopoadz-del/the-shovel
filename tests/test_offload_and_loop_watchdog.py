@@ -304,3 +304,101 @@ def test_a_stall_names_only_cpu_burned_across_it_not_before_it(monkeypatch, grow
     assert mon.stalls, "a blocked loop must record a stall"
     _, worst = max(mon.stalls)
     assert worst.startswith("cpu 4242=") is named, worst[:200]
+
+
+# The busiest four threads do not tell a GIL convoy (many threads, process
+# total near the window) from a starved runner (process total far below the
+# window while the host is busy). The stall line carries both totals.
+
+_STAT_A = "cpu  100 5 50 800 10 3 2 30 0 0\ncpu0 1 2 3 4\nprocs_running 7\n"
+_STAT_B = "cpu  10 0 10 900\nprocs_running 1\n"
+
+
+@pytest.mark.parametrize("text,expected", [
+    (_STAT_A, {"busy": 160, "steal": 30, "total": 1000, "running": 7}),
+    (_STAT_B, {"busy": 20, "steal": 0, "total": 920, "running": 1}),
+])
+def test_host_cpu_is_read_from_the_stat_file(tmp_path, text, expected):
+    f = tmp_path / "stat"
+    f.write_text(text)
+    assert loop_watchdog.host_cpu(str(f)) == expected
+
+
+@pytest.mark.parametrize("make", ["absent", "garbled"])
+def test_host_cpu_without_a_readable_stat_carries_no_host_figures(tmp_path, make):
+    f = tmp_path / "stat"
+    if make == "garbled":
+        f.write_text("cpu x y z\nprocs_running ?\n")
+    assert loop_watchdog.host_cpu(str(f)) == {}
+
+
+def test_process_cpu_grows_with_work_done_on_any_thread():
+    before = loop_watchdog.process_cpu_ms()
+
+    def spin():
+        end = time.process_time() + 0.2
+        while time.process_time() < end:
+            pass
+
+    t = threading.Thread(target=spin)
+    t.start()
+    t.join()
+    assert loop_watchdog.process_cpu_ms() - before >= 150
+
+
+@pytest.mark.parametrize("threads_after,proc,host_after,expected", [
+    # convoy: 3 threads used CPU, process total near the window, host idle-ish
+    ({1: 110.0, 2: 200.0, 3: 140.0, 4: 5.0}, 260.0,
+     {"busy": 300, "steal": 0, "total": 1000, "running": 3},
+     "sum window=300ms proc=260ms threads=240ms/3 host_busy=30% steal=0% running=2/3"),
+    # starvation: almost no CPU in our process, host saturated and stolen from
+    ({1: 20.0, 2: 100.0, 3: 100.0, 4: 5.0}, 12.0,
+     {"busy": 800, "steal": 150, "total": 1000, "running": 9},
+     "sum window=300ms proc=12ms threads=10ms/1 host_busy=80% steal=15% running=2/9"),
+])
+def test_the_stall_summary_tells_a_convoy_from_a_starved_runner(threads_after, proc, host_after, expected):
+    threads_before = {1: 10.0, 2: 100.0, 3: 100.0, 4: 5.0}
+    host_before = {"busy": 0, "steal": 0, "total": 0, "running": 2}
+    got = loop_watchdog.stall_cpu_summary(threads_before, threads_after, proc,
+                                          host_before, host_after, 300.0)
+    assert got == expected
+
+
+@pytest.mark.parametrize("threads_after,host_after,expected", [
+    ({}, {}, "sum window=50ms proc=7ms"),
+    ({1: 3.0}, {"busy": 5, "total": 5}, "sum window=50ms proc=7ms threads=3ms/1 host_busy=100% steal=0%"),
+])
+def test_the_stall_summary_omits_figures_the_os_did_not_give(threads_after, host_after, expected):
+    assert loop_watchdog.stall_cpu_summary({}, threads_after, 7.0, {}, host_after, 50.0) == expected
+
+
+@pytest.mark.parametrize("host,has_host", [
+    ({"busy": 10, "steal": 1, "total": 100, "running": 4}, True),
+    ({}, False),
+])
+def test_a_recorded_stall_carries_the_process_and_host_totals(monkeypatch, host, has_host):
+    """``_run`` snapshots process and host CPU with the per-thread figures and
+    puts the totals across the stall on the recorded line."""
+    calls = {"n": 0}
+
+    def fake_host():
+        calls["n"] += 1
+        return {k: (v * calls["n"] if k != "running" else v) for k, v in host.items()}
+
+    monkeypatch.setattr(loop_watchdog, "host_cpu", fake_host)
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=150,
+                                       tick_ms=10, log=False).start()
+        await asyncio.sleep(0.05)
+        time.sleep(0.5)
+        await asyncio.sleep(0.3)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.stalls, "a blocked loop must record a stall"
+    _, worst = max(mon.stalls)
+    head = worst.split(" :: ", 1)[0]
+    assert " proc=" in head and "sum window=" in head, head
+    assert ("host_busy=" in head and "running=4/4" in head) is has_host, head

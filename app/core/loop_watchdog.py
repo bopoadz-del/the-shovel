@@ -111,6 +111,72 @@ def busiest_threads(before: dict, after: dict, names: dict, top: int = 4) -> str
     return ("cpu " + " ".join(parts)) if parts else ""
 
 
+#: Host-wide CPU counters (Linux). Read with the per-thread snapshot so a
+#: stall can say whether the whole box was busy (the runner starved us) or
+#: our own threads used the window (a GIL convoy).
+_HOST_STAT = "/proc/stat"
+
+
+def process_cpu_ms() -> float:
+    """CPU milliseconds (user + system) used so far by the whole process,
+    every thread included (also threads that have since exited)."""
+    t = os.times()
+    return (t.user + t.system) * 1000.0
+
+
+def host_cpu(stat_path: str = _HOST_STAT) -> dict:
+    """Host-wide CPU ticks since boot -- ``busy`` (user, nice, system, irq,
+    softirq), ``steal`` and ``total`` -- plus ``running`` (runnable tasks now).
+    Empty where the OS has no such file."""
+    try:
+        with open(stat_path, "r", encoding="ascii", errors="replace") as fh:
+            text = fh.read()
+    except OSError as exc:
+        _LOG.debug("host CPU unavailable (%s): stalls carry no host figures", exc)
+        return {}
+    out: dict = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            if parts[0] == "cpu":
+                v = [int(x) for x in parts[1:9]] + [0] * (8 - len(parts[1:9]))
+                user, nice, system, _idle, _iowait, irq, softirq, steal = v
+                out.update(busy=user + nice + system + irq + softirq, steal=steal, total=sum(v))
+            elif parts[0] == "procs_running":
+                out["running"] = int(parts[1])
+        except (ValueError, IndexError) as exc:
+            _LOG.debug("host CPU line unreadable (%s): %s", exc, parts[0])
+    return out
+
+
+def stall_cpu_summary(threads_before: dict, threads_after: dict, proc_ms: Optional[float],
+                      host_before: dict, host_after: dict, window_ms: float) -> str:
+    """Where the CPU went across a stall window, process-wide and host-wide.
+
+    ``threads`` is the sum over EVERY thread that used CPU and how many did
+    (not just the busiest four); ``proc`` the process total. Against the
+    window: a process total near the window with many threads is a GIL
+    convoy; a process total far below it while the host is busy (or stolen
+    from) is the runner starving the whole process."""
+    used = [after - threads_before.get(t, 0.0) for t, after in threads_after.items()]
+    used = [d for d in used if d > 0]
+    parts = [f"window={window_ms:.0f}ms"]
+    if proc_ms is not None:
+        parts.append(f"proc={proc_ms:.0f}ms")
+    if threads_after:
+        parts.append(f"threads={sum(used):.0f}ms/{len(used)}")
+    total = host_after.get("total", 0) - host_before.get("total", 0)
+    if total > 0:
+        busy = host_after.get("busy", 0) - host_before.get("busy", 0)
+        steal = host_after.get("steal", 0) - host_before.get("steal", 0)
+        parts.append(f"host_busy={100.0 * busy / total:.0f}% steal={100.0 * steal / total:.0f}%")
+    if "running" in host_after:
+        parts.append(f"running={host_before.get('running', '?')}/{host_after['running']}")
+    return "sum " + " ".join(parts)
+
+
 def heartbeat_lag_ms(posted: float, served_at: Optional[float], now: float) -> float:
     """How late the LOOP served a heartbeat posted at ``posted``.
 
@@ -148,6 +214,8 @@ class LagMonitor:
         self.stall_recorded = threading.Event()
         self._cpu_at = 0.0
         self._cpu_before: dict = {}
+        self._proc_before = 0.0
+        self._host_before: dict = {}
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
@@ -173,6 +241,7 @@ class LagMonitor:
             posted = time.monotonic()
             if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
                 self._cpu_before, self._cpu_at = thread_cpu_ms(), posted
+                self._proc_before, self._host_before = process_cpu_ms(), host_cpu()
             try:
                 self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
@@ -210,9 +279,14 @@ class LagMonitor:
                 # when the loop itself was idle-but-late. Leads the sample, so
                 # a truncated message still names it.
                 names = {t.native_id: t.name for t in threading.enumerate()}
-                cpu = busiest_threads(self._cpu_before, thread_cpu_ms(), names)
-                if cpu:
-                    sample = f"{cpu} :: {sample}"
+                threads_now = thread_cpu_ms()
+                cpu = busiest_threads(self._cpu_before, threads_now, names)
+                # Process- and host-wide totals over the same window, so the
+                # line itself tells a GIL convoy from a starved runner.
+                total = stall_cpu_summary(
+                    self._cpu_before, threads_now, process_cpu_ms() - self._proc_before,
+                    self._host_before, host_cpu(), (time.monotonic() - self._cpu_at) * 1000)
+                sample = f"{cpu} {total} :: {sample}" if cpu else f"{total} :: {sample}"
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:
