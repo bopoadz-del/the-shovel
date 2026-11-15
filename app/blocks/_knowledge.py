@@ -204,7 +204,7 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
             f"formula did not reduce to a scalar — missing variables? got {result!r}"
         ) from exc
 
-    return {
+    out = {
         "rule_id": rule_id,
         "result": result_f,
         "unit": (entry.get("thresholds") or {}).get("unit"),
@@ -212,6 +212,13 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
         "credibility_tier": entry.get("credibility_tier"),
         "warnings": _build_warnings(entry),
     }
+    # A count rounded UP (machines, layers, floors) shows the figure it was
+    # rounded from, so a reader sees 2.03 -> 3 and not only 3. Read from the
+    # expression's own structure: one ceiling() node, its argument evaluated.
+    ceilings = [n for n in sympy.preorder_traversal(expr) if isinstance(n, sympy.ceiling)]
+    if len(ceilings) == 1:
+        out["unrounded"] = float(ceilings[0].args[0].subs(subs).evalf())
+    return out
 
 
 # ---------------------------------------------------------------------------
