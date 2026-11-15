@@ -1036,6 +1036,53 @@ async def delete_project_conversation(
 
 # ── documents — store only, no analysis (Roadmap V2 · 0.3) ──────────────────
 
+SESSION_ONLY_DETAIL = (
+    "Attached to this chat session: it is read for this session's questions "
+    "and is not added to the project's search."
+)
+
+
+def _session_id_for_upload(project_id: str, session_id: str, user_id: str) -> str:
+    """The session id when it names a session of this project the caller may
+    use, else 400. A session need not have a stored message yet: a file is
+    often attached before the first question."""
+    from app.core import agent_memory
+
+    session_id = (session_id or "").strip()
+    project_ids, owner_id = _session_scope(project_id, user_id)
+    if not any(agent_memory.workspace_id_binds(session_id, pid) for pid in project_ids):
+        raise HTTPException(400, "session_id does not name a chat session of this project")
+    conv = agent_memory.get_conversation(session_id)
+    if conv is not None and not agent_memory.session_visible_to(conv, user_id, owner_id):
+        raise HTTPException(400, "session_id does not name a chat session of this project")
+    return session_id
+
+
+@router.get("/v1/projects/{project_id}/conversations/{conversation_id}/documents")
+async def list_conversation_documents(
+    project_id: str,
+    conversation_id: str,
+    auth: dict = Depends(require_user),
+):
+    """The files of one chat session: uploaded or produced in it, each tagged.
+
+    Only the caller's own session files are listed. A session id that names
+    another project is a 404 like any session the caller cannot open.
+    """
+    from app.core import agent_memory
+
+    project_ids, owner_id = _session_scope(project_id, auth["user_id"])
+    if not any(agent_memory.workspace_id_binds(conversation_id, pid) for pid in project_ids):
+        raise HTTPException(404, "Conversation not found")
+    conv = agent_memory.get_conversation(conversation_id)
+    if conv is not None and not agent_memory.session_visible_to(conv, auth["user_id"], owner_id):
+        raise HTTPException(404, "Conversation not found")
+    docs = store.list_session_documents(project_id, conversation_id, auth["user_id"])
+    for doc in docs:
+        store.attach_panel_status(doc)
+    return {"conversation_id": conversation_id, "documents": docs}
+
+
 @router.post("/v1/projects/{project_id}/documents", status_code=201)
 async def add_document(
     project_id: str,
@@ -1043,9 +1090,14 @@ async def add_document(
     file: UploadFile = File(...),
     role: Optional[str] = Form(None),
     display_name: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None),
     auth: dict = Depends(require_user),
 ):
     """Attach a document to a project.
+
+    ``session_id`` (W2) attaches the file to one chat session of this
+    project: it is listed under that session, pinned to its questions, and
+    kept out of the project's search.
 
     This STORES and CLASSIFIES the file — it runs no pipeline, no blocks, no
     analysis. Attaching a file is not the same as asking for analysis; run a
@@ -1061,6 +1113,10 @@ async def add_document(
         project_id, auth["user_id"], read_only=True,
         role=auth.get("role", "user"), doc_limit=0,
     )
+    # W2: a file attached inside a chat session belongs to that session. The
+    # id is checked before any byte is stored.
+    if session_id is not None:
+        session_id = _session_id_for_upload(project_id, session_id, auth["user_id"])
 
     original_name = upload_limits.upload_display_name(display_name, file.filename)
     if not original_name or original_name in (".", ".."):
@@ -1117,9 +1173,12 @@ async def add_document(
     # this interactive upload endpoint sets it; seeds/Drive imports do not, so
     # they keep classifying as shared_domain / project_record. Inert until
     # RAG_LAYERED is on (classify reads it only then).
+    upload_meta: Dict[str, Any] = {"provenance": "user_upload", "uploader_id": auth["user_id"]}
+    if session_id is not None:
+        upload_meta.update({"session_id": session_id, "origin": "uploaded"})
     doc = store.add_document(
         project_id, original_name, stored_as, filepath, size, role=role,
-        metadata={"provenance": "user_upload", "uploader_id": auth["user_id"]},
+        metadata=upload_meta,
     )
     await audit.arecord("document.added", project_id=project_id,
                  document_id=doc["id"], name=original_name, size=size, user_id=auth["user_id"])
@@ -1127,7 +1186,23 @@ async def add_document(
     # app/core/privileges.py). A user's upload is stored, not indexed.
     from app.core import privileges
 
-    if privileges.caller_may_add_to_project_rag(auth.get("role")):
+    if session_id is not None:
+        # W2: a session's file is pinned to that session's questions and is
+        # not silently searched from any other session, so it never enters
+        # the project's search, whoever uploads it.
+        from app.core import ingest_status as ist
+
+        store.stamp_document_index(
+            doc["id"], chunk_count=0,
+            ingest_status=ist.NOT_INDEXED_POLICY,
+            ingest_status_reason=ist.SESSION_ONLY_POLICY_REASON,
+            stamp_extractor_version=False,
+        )
+        doc = store.update_document_metadata(doc["id"], {"indexing": {
+            "status": "not_indexed",
+            "detail": SESSION_ONLY_DETAIL,
+        }}) or doc
+    elif privileges.caller_may_add_to_project_rag(auth.get("role")):
         # Index under the id the document was actually STORED under. For the
         # master-corpus alias that is the backing corpus, not the virtual id —
         # indexing under the alias would put the chunks in a different project

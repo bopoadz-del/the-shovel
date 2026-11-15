@@ -1,0 +1,274 @@
+"""W2 (exam 11.3, backend half): each chat session has its own documents.
+
+* A file uploaded inside a session records that session. It is listed under
+  that session and under no other.
+* A session id that names a different project is refused.
+* A session upload is stored and pinned. It is never handed to the project
+  indexer, even when the caller may add to the project's search.
+* A question asked in the session is told about the session's files without a
+  marker or a pin. A question in another session of the same project is not.
+* One user's session files never reach another user's session.
+
+Every project, user, session and document here is created by the test.
+"""
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.agents.runtime import Agent
+from app.main import app
+from tests._fixture_values import PW_06, STUB_TOKEN_02
+
+_RUN = uuid.uuid4().hex[:8]
+
+
+@pytest.fixture
+def client():
+    with TestClient(app) as c:
+        yield c
+
+
+def _register(client, suffix: str) -> dict:
+    email = f"w2-{suffix}-{_RUN}@x.com"
+    reg = client.post("/v1/users/register", json={"email": email, "password": PW_06})
+    assert reg.status_code in (200, 201, 409), reg.text
+    token = client.post(
+        "/v1/users/login", json={"email": email, "password": PW_06}
+    ).json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _project(client, headers, name: str) -> str:
+    res = client.post("/v1/projects", json={"name": name}, headers=headers)
+    assert res.status_code in (200, 201), res.text
+    return res.json()["id"]
+
+
+def _upload(client, headers, pid, name, body, session_id=None):
+    data = {"session_id": session_id} if session_id else None
+    return client.post(
+        f"/v1/projects/{pid}/documents", headers=headers, data=data,
+        files={"file": (name, body, "text/plain")},
+    )
+
+
+def _session_docs(client, headers, pid, sid):
+    res = client.get(
+        f"/v1/projects/{pid}/conversations/{sid}/documents", headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    return res.json()["documents"]
+
+
+# ── a session upload is listed under its session only ────────────────────────
+
+@pytest.mark.parametrize("name,body", [
+    ("kerb_setting_out.txt", b"Kerb line offset 450 mm from channel."),
+    ("formwork_strike_times.txt", b"Soffit forms struck after 7 days."),
+])
+def test_a_session_upload_is_listed_under_that_session_only(client, name, body):
+    headers = _register(client, f"list{name[:4]}")
+    pid = _project(client, headers, f"W2-list-{name[:4]}-{_RUN}")
+    mine, other = f"ws-{pid}-1000", f"ws-{pid}-2000"
+    res = _upload(client, headers, pid, name, body, session_id=mine)
+    assert res.status_code == 201, res.text
+    doc = res.json()["document"]
+
+    listed = _session_docs(client, headers, pid, mine)
+    assert [d["id"] for d in listed] == [doc["id"]]
+    assert listed[0]["origin"] == "uploaded"
+    assert listed[0]["original_name"] == name
+    assert _session_docs(client, headers, pid, other) == []
+
+
+@pytest.mark.parametrize("with_session", [False, True])
+def test_a_plain_upload_belongs_to_no_session(client, with_session):
+    headers = _register(client, f"plain{int(with_session)}")
+    pid = _project(client, headers, f"W2-plain-{int(with_session)}-{_RUN}")
+    sid = f"ws-{pid}-3000"
+    res = _upload(client, headers, pid, "site_diary_week_9.txt", b"Rain on day 2.",
+                  session_id=sid if with_session else None)
+    assert res.status_code == 201, res.text
+    listed = _session_docs(client, headers, pid, sid)
+    assert len(listed) == (1 if with_session else 0)
+
+
+@pytest.mark.parametrize("bad", ["foreign", "malformed"])
+def test_a_session_id_from_another_project_is_refused(client, bad):
+    headers = _register(client, f"bad{bad[:3]}")
+    pid = _project(client, headers, f"W2-bad-{bad}-{_RUN}")
+    other_pid = _project(client, headers, f"W2-other-{bad}-{_RUN}")
+    sid = f"ws-{other_pid}-4000" if bad == "foreign" else "not-a-session"
+    res = _upload(client, headers, pid, "pour_record.txt", b"Pour 3 complete.", session_id=sid)
+    assert res.status_code == 400, res.text
+    good = _upload(client, headers, pid, "pour_record.txt", b"Pour 3 complete.",
+                   session_id=f"ws-{pid}-4000")
+    assert good.status_code == 201, good.text
+
+
+@pytest.mark.parametrize("asked,status", [("own", 200), ("foreign", 404), ("malformed", 404)])
+def test_listing_a_session_of_another_project_is_refused(client, asked, status):
+    headers = _register(client, f"listbad{asked[:3]}")
+    pid = _project(client, headers, f"W2-listbad-{asked}-{_RUN}")
+    other_pid = _project(client, headers, f"W2-listbad-o-{asked}-{_RUN}")
+    sid = {"own": f"ws-{pid}-1", "foreign": f"ws-{other_pid}-1",
+           "malformed": "not-a-session"}[asked]
+    res = client.get(f"/v1/projects/{pid}/conversations/{sid}/documents", headers=headers)
+    assert res.status_code == status, res.text
+
+
+@pytest.mark.parametrize("who,status,count", [("owner", 200, 1), ("stranger", 404, None)])
+def test_another_users_session_files_are_not_listed(client, who, status, count):
+    owner = _register(client, f"own{who[:3]}")
+    pid = _project(client, owner, f"W2-own-{who}-{_RUN}")
+    sid = f"ws-{pid}-5000"
+    assert _upload(client, owner, pid, "crane_lift_plan.txt", b"Lift 12 t at 30 m.",
+                   session_id=sid).status_code == 201
+    asker = owner if who == "owner" else _register(client, f"stranger{_RUN[:3]}")
+    res = client.get(f"/v1/projects/{pid}/conversations/{sid}/documents", headers=asker)
+    # A stranger cannot open the project at all, so the session is not theirs.
+    assert res.status_code == status, res.text
+    if count is not None:
+        assert len(res.json()["documents"]) == count
+
+
+# ── a session upload is stored and pinned, never indexed ─────────────────────
+
+@pytest.mark.parametrize("with_session,indexed", [(False, True), (True, False)])
+def test_a_session_upload_is_not_handed_to_the_indexer(client, monkeypatch,
+                                                       with_session, indexed):
+    from app.core import doc_index, privileges
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(privileges, "caller_may_add_to_project_rag", lambda _role: True)
+    monkeypatch.setattr(doc_index, "maybe_eager_index", lambda *a, **k: calls.append(a))
+    headers = _register(client, f"idx{int(with_session)}")
+    pid = _project(client, headers, f"W2-idx-{int(with_session)}-{_RUN}")
+    res = _upload(client, headers, pid, "rebar_schedule_b2.txt", b"B2 bars T16 at 200.",
+                  session_id=f"ws-{pid}-6000" if with_session else None)
+    assert res.status_code == 201, res.text
+    assert bool(calls) is indexed
+    status = ((res.json()["document"].get("metadata") or {}).get("indexing") or {})
+    if with_session:
+        assert status.get("status") == "not_indexed"
+        assert "session" in (status.get("detail") or "").lower()
+
+
+# ── a question in the session is told about the session's files ──────────────
+
+@pytest.fixture
+def seen_messages(monkeypatch):
+    seen: list[list[dict]] = []
+
+    async def _fake_llm(self, messages, api_key, project_id=None, **kwargs):
+        seen.append([dict(m) for m in messages])
+        return {"status": "success",
+                "choice": {"message": {"content": "Read it.", "tool_calls": []}},
+                "raw": {}}
+
+    monkeypatch.setattr(Agent, "_call_llm", _fake_llm)
+    monkeypatch.setattr("app.agents.runtime.project_is_rag_ready", lambda _pid: True)
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_02)
+    return seen
+
+
+def _attached_note(seen: list[list[dict]]) -> str:
+    return "\n".join(
+        str(m.get("content") or "") for turn in seen for m in turn
+        if "ATTACHED DOCUMENT(S) THIS TURN" in str(m.get("content") or "")
+    )
+
+
+@pytest.mark.parametrize("ask_in,expect_pinned", [("same", True), ("other", False)])
+def test_the_sessions_files_are_pinned_to_its_questions(client, seen_messages,
+                                                        ask_in, expect_pinned):
+    headers = _register(client, f"pin{ask_in}")
+    pid = _project(client, headers, f"W2-pin-{ask_in}-{_RUN}")
+    sid = f"ws-{pid}-7000"
+    doc = _upload(client, headers, pid, "dewatering_log_march.txt",
+                  b"Well 4 drawdown 2.1 m.", session_id=sid).json()["document"]
+    res = client.post("/v1/chat/stream", headers=headers, json={
+        "message": "What does the log say about drawdown?",
+        "project_id": pid,
+        "conversation_id": sid if ask_in == "same" else f"ws-{pid}-8000",
+    })
+    assert res.status_code == 200, res.text
+    note = _attached_note(seen_messages)
+    assert (doc["id"] in note) is expect_pinned
+
+
+# ── the mechanism, function by function ──────────────────────────────────────
+
+@pytest.mark.parametrize("project_id,expected", [("p-attachable", ["d-1"]), (None, [])])
+def test_session_document_ids_pins_nothing_without_an_attachable_project(
+        monkeypatch, project_id, expected):
+    from app.routers import chat as chat_router
+
+    monkeypatch.setattr(
+        "app.core.projects.list_session_documents",
+        lambda _p, _s, _u: [{"id": "d-1", "original_name": "grout_log.txt"}],
+    )
+    assert chat_router._session_document_ids(project_id, "ws-p-1", "u-1") == expected
+
+
+@pytest.mark.parametrize("session_id,uploader_id,expected", [
+    ("own", "own", 1), ("own", "other", 0), ("other", "own", 0), (None, None, 0),
+])
+def test_list_session_documents_matches_session_and_uploader(
+        client, session_id, uploader_id, expected):
+    from app.core import projects as store
+
+    headers = _register(client, f"store{session_id}{uploader_id}")
+    pid = _project(client, headers, f"W2-store-{session_id}-{uploader_id}-{_RUN}")
+    sid = f"ws-{pid}-9000"
+    doc = _upload(client, headers, pid, "piling_record_p7.txt", b"Pile 7 set 12 mm.",
+                  session_id=sid).json()["document"]
+    # A document carrying neither a session nor an uploader (a seeded row) is
+    # never a session document, whatever the caller asks for.
+    store.add_document(pid, "seeded_spec.txt", "seeded_spec.txt", None, 10, metadata={})
+    me = doc["metadata"]["uploader_id"]
+    rows = store.list_session_documents(
+        pid,
+        {"own": sid, "other": f"ws-{pid}-9001", None: None}[session_id],
+        {"own": me, "other": "someone-else", None: None}[uploader_id],
+    )
+    assert len(rows) == expected
+    if expected:
+        assert rows[0]["id"] == doc["id"] and rows[0]["origin"] == "uploaded"
+
+
+@pytest.mark.parametrize("which,ok", [("own", True), ("foreign", False)])
+def test_session_id_for_upload_accepts_only_this_projects_sessions(client, which, ok):
+    from fastapi import HTTPException
+
+    from app.routers import projects as projects_router
+
+    headers = _register(client, f"sfu{which}")
+    pid = _project(client, headers, f"W2-sfu-{which}-{_RUN}")
+    other = _project(client, headers, f"W2-sfu-o-{which}-{_RUN}")
+    me = _upload(client, headers, pid, "temp_works_note.txt", b"Props at 1.2 m.",
+                 session_id=f"ws-{pid}-1").json()["document"]["metadata"]["uploader_id"]
+    sid = f"ws-{pid}-77" if which == "own" else f"ws-{other}-77"
+    if ok:
+        assert projects_router._session_id_for_upload(pid, f" {sid} ", me) == sid
+    else:
+        with pytest.raises(HTTPException) as err:
+            projects_router._session_id_for_upload(pid, sid, me)
+        assert err.value.status_code == 400
+
+
+@pytest.mark.parametrize("path,endpoint", [
+    ("/v1/projects/{project_id}/conversations/{conversation_id}/documents",
+     "list_conversation_documents"),
+    ("/v1/projects/{project_id}/documents", "list_project_documents"),
+])
+def test_the_session_documents_route_is_its_own_endpoint(path, endpoint):
+    from app.routers import projects as projects_router
+
+    gets = {r.path: r.endpoint for r in app.routes
+            if getattr(r, "methods", None) and "GET" in r.methods}
+    assert gets[path] is getattr(projects_router, endpoint)

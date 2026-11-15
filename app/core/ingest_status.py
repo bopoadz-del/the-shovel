@@ -139,6 +139,9 @@ RECOVERABLE = "recoverable"  # a richer source for this document exists
 # The NOT_INDEXED_POLICY reason for an upload by a caller who may not add to
 # the project RAG. ``<reason>:terminal``: no retry can change a policy.
 ADMIN_ONLY_POLICY_REASON = f"rag_admin_only:{TERMINAL}"
+# The NOT_INDEXED_POLICY reason for a file attached inside one chat session: it
+# is pinned to that session's questions and kept out of the project's search.
+SESSION_ONLY_POLICY_REASON = f"session_only:{TERMINAL}"
 
 # BOUNDED RETRIES. Every open outcome -- UNVERIFIED, ZERO_CHUNK,
 # EXTRACT_FAILED, and the RECOVERABLE qualifiers -- is retried only while the
