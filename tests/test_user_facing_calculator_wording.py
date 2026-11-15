@@ -226,7 +226,10 @@ def test_arithmetic_directive_forbids_unsupplied_basis_and_internal_ids():
     assert "they came from the user" in out
     assert "never invent" in out
     assert "Never write an internal id" in out
-    assert "display name" in out
+    # Answer contract rule 3: the directive no longer points the model at the
+    # calculator's display name ("Platform calculator"); it forbids naming it.
+    assert "never name the calculator or any tool in the answer" in out
+    assert "the working in one line" in out
     assert "Do not attach a currency or a unit" in out
     assert "Do not cite a clause or a standard as the basis" in out
     assert "Do not compare the result with a limit" in out
