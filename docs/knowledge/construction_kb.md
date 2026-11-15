@@ -1,6 +1,6 @@
 # Construction Knowledge Base
 
-_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 68 entries._
+_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 71 entries._
 
 
 **General construction-engineering priors** — NOT code-of-practice design values. Every entry is kept GENERAL (not tied to a location or project). Values are site-experience references; **verify against your project specification and applicable standards** before use. Entries at credibility tier <=3 surface this warning automatically via the loader.
@@ -9,7 +9,7 @@ _Generated from `app/knowledge/construction_kb.json` (single source of truth) �
 Four domains: `construction.buildings` · `construction.concrete` · `construction.roads` (incl. earthworks + geotech) · `construction.procurement`.
 
 
-## construction.buildings  (20 entries)
+## construction.buildings  (22 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
@@ -24,17 +24,19 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `foundation.uplift_fos` | formula | Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + | 4 |  |
 | `foundation.uplift_remediation_tension_piles` | decision_pattern | Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (coun | 3 |  |
 | `highrise.definition_contextual` | rule | There is no single universal floor-count that defines a 'high-rise'. The threshold is juri | 3 |  |
+| `highrise.pt_floor_five_day_cycle_chart` | table | Bar positions of a post-tensioned floor cycle chart titled a five-day cycle time program:  | 3 |  |
 | `mep.commissioning_sequence` | checklist | MEP commissioning is sequenced and driven by activity-interface charts that map the depend | 3 |  |
 | `posttension.five_day_cycle` | reference_design | Reference floor-cycle for a post-tensioned slab high-rise: a 5-day cycle per floor (form/r | 3 |  |
 | `posttension.storage_checklist` | checklist | Storage/handling checklist for post-tensioning (PT) components before stressing. | 3 |  |
 | `slabs.flat_vs_drophead` | decision_pattern | Decision pattern for high-rise floor slabs. A flat two-way plate gives the simplest soffit | 3 |  |
+| `steelwork.temporary_truss_min_fillet_weld` | threshold | General note on the course's temporary steel truss and strut detail drawings: welds are fu | 3 |  |
 | `thermal.core_temp_limit` | threshold | Peak internal (core) temperature of a mass-concrete pour must be kept at or below 70 degC  | 3 |  |
 | `thermal.equilibrium_time` | formula | Time for a mass concrete pour of full thickness X (m) to reach thermal equilibrium with am | 3 |  |
 | `thermal.gradient_limit` | threshold | The temperature differential between the concrete core and its surface (T_core - T_surface | 3 |  |
 | `thermal.ice_cost_coeff` | reference_design | Decision aid for lowering fresh-concrete placing temperature: the choice between supplemen | 3 |  |
 | `thermal.monitoring_protocol` | checklist | Thermocouple monitoring protocol for mass-concrete pours, used to enforce thermal.core_tem | 3 |  |
 
-## construction.concrete  (9 entries)
+## construction.concrete  (10 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
@@ -47,6 +49,7 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `rcc.compaction_95spd` | threshold | Roller-compacted concrete must be compacted to greater than 95% of Standard Proctor Densit | 3 |  |
 | `rcc.mix_design` | reference_design | Reference RCC mix and placement envelope. Aggregate grading (percent passing): 38 mm = 100 | 3 |  |
 | `structure.axial_shortening` | formula | Elastic shortening (or elongation) of an axially loaded member dL = P x L / (A x E), with  | 3 |  |
+| `thermal.mass_pour_mockup_peak_temperatures` | table | Recorded maximum temperature and the elapsed time at which it occurred, per embedded logge | 3 |  |
 
 ## construction.procurement  (3 entries)
 

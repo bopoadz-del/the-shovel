@@ -2914,6 +2914,721 @@
       },
       "credibility_tier": 3,
       "needs_review": false
+    },
+    {
+      "id": "thermal.mass_pour_mockup_peak_temperatures",
+      "domain": "construction.concrete",
+      "type": "table",
+      "title": "Mass-concrete mock-up: peak temperature and time of peak per logger",
+      "statement": "Recorded maximum temperature and the elapsed time at which it occurred, per embedded logger, for a mass-concrete mock-up instrumented on four lines (centre, side, intermediate, corner) at depth labels from bottom to top. The hottest zone is mid-depth on the centre line, peaking late; side and corner loggers peak earlier and lower; bottom loggers are coolest. One worked record from course material, not a limit: use it to read what a pour of this kind did, not what a project pour must do. Depth labels are as printed (no unit printed). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "table": {
+        "columns": [
+          {
+            "name": "line",
+            "unit": null,
+            "desc": "Logger line as printed: centre, side, intermediate, corner"
+          },
+          {
+            "name": "depth_label",
+            "unit": null,
+            "desc": "Logger position label as printed (bottom, top or a number; no unit printed)"
+          },
+          {
+            "name": "sensor",
+            "unit": null,
+            "desc": "Sensor number at that position (two sensors at one centre position)"
+          },
+          {
+            "name": "max_temperature",
+            "unit": "degree_Celsius",
+            "desc": "Maximum temperature recorded"
+          },
+          {
+            "name": "time_of_max",
+            "unit": "hour",
+            "desc": "Elapsed time at which the maximum was recorded"
+          }
+        ],
+        "rows": [
+          {
+            "line": "centre",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": null
+          },
+          {
+            "line": "centre",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 61,
+            "time_of_max": 37.92
+          },
+          {
+            "line": "centre",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 44.3
+          },
+          {
+            "line": "centre",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 53.07
+          },
+          {
+            "line": "centre",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 52.7
+          },
+          {
+            "line": "centre",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 51.3
+          },
+          {
+            "line": "centre",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": 66,
+            "time_of_max": 107.92
+          },
+          {
+            "line": "centre",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 66,
+            "time_of_max": 94.33
+          },
+          {
+            "line": "centre",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 59.3
+          },
+          {
+            "line": "centre",
+            "depth_label": "220",
+            "sensor": 2,
+            "max_temperature": 65,
+            "time_of_max": 65.18
+          },
+          {
+            "line": "centre",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 44.22
+          },
+          {
+            "line": "centre",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 49.38
+          },
+          {
+            "line": "centre",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 61,
+            "time_of_max": 37.87
+          },
+          {
+            "line": "centre",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 27.37
+          },
+          {
+            "line": "side",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 48,
+            "time_of_max": 29.27
+          },
+          {
+            "line": "side",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 58,
+            "time_of_max": 37.57
+          },
+          {
+            "line": "side",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 31.68
+          },
+          {
+            "line": "side",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 39.63
+          },
+          {
+            "line": "side",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 29.95
+          },
+          {
+            "line": "side",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 30.42
+          },
+          {
+            "line": "side",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 32.68
+          },
+          {
+            "line": "side",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 29.73
+          },
+          {
+            "line": "side",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 42.1
+          },
+          {
+            "line": "side",
+            "depth_label": "250",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 40.28
+          },
+          {
+            "line": "side",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 31.9
+          },
+          {
+            "line": "side",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 31.27
+          },
+          {
+            "line": "side",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 27.05
+          },
+          {
+            "line": "side",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": 24.4
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": 38.58
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 62,
+            "time_of_max": 41.08
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 45.82
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 38.55
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 52.02
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 63.1
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 59.1
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 42.1
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 41.87
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "250",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 41.85
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 40.07
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 41.05
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 62,
+            "time_of_max": 32.82
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 28.65
+          },
+          {
+            "line": "corner",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 49,
+            "time_of_max": null
+          },
+          {
+            "line": "corner",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": 21.83
+          },
+          {
+            "line": "corner",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 55,
+            "time_of_max": 23.27
+          },
+          {
+            "line": "corner",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 54,
+            "time_of_max": 23.45
+          },
+          {
+            "line": "corner",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 56,
+            "time_of_max": 25.9
+          },
+          {
+            "line": "corner",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 55,
+            "time_of_max": 24.35
+          },
+          {
+            "line": "corner",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": null,
+            "time_of_max": 25.98
+          },
+          {
+            "line": "corner",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 34.17
+          },
+          {
+            "line": "corner",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 26.88
+          },
+          {
+            "line": "corner",
+            "depth_label": "250",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 24.23
+          },
+          {
+            "line": "corner",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 21.77
+          },
+          {
+            "line": "corner",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 24.62
+          },
+          {
+            "line": "corner",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 19.95
+          },
+          {
+            "line": "corner",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 56,
+            "time_of_max": 20.02
+          }
+        ],
+        "held": [
+          {
+            "line": "centre",
+            "depth_label": "bottom",
+            "column": "time_of_max",
+            "reason": "digit not separable on the page (5/6/8 glyph); needs the owner's reading"
+          },
+          {
+            "line": "corner",
+            "depth_label": "bottom",
+            "column": "time_of_max",
+            "reason": "last digit not separable on the page; needs the owner's reading"
+          },
+          {
+            "line": "corner",
+            "depth_label": "160",
+            "column": "max_temperature",
+            "reason": "digit not separable on the page (5/6/8 glyph); needs the owner's reading"
+          }
+        ],
+        "not_present": [
+          {
+            "line": "centre",
+            "depth_label": "250",
+            "reason": "no logger printed at this position"
+          }
+        ]
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete",
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "mass concrete site-experience reference",
+        "course_reference": "owner-supplied course material, mass concrete mock-up results, pp12-13, 15-16, 18-19, 21-22",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "highrise.pt_floor_five_day_cycle_chart",
+      "domain": "construction.buildings",
+      "type": "table",
+      "title": "Post-tensioned floor: five-day cycle bar chart (quarter-day cells)",
+      "statement": "Bar positions of a post-tensioned floor cycle chart titled a five-day cycle time program: columns, slab formwork, anchorages, steel and tendons, concrete, stripping, grouting, and the next floor's column formwork. Each printed day column is divided into four equal cells; a bar is given as its day column and its first and last cell (1-4). The chart does not print what time one cell stands for. Two rows (strip edge, stress tendon) carry no bar on the chart and are recorded as such, not given a position. Day columns after the fifth hold the floor's tail activities overlapping the next cycle. Step references are as printed. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "table": {
+        "columns": [
+          {
+            "name": "chart_row",
+            "unit": null,
+            "desc": "Row order on the chart, top to bottom"
+          },
+          {
+            "name": "step_ref",
+            "unit": null,
+            "desc": "Step reference as printed (blank where none is printed)"
+          },
+          {
+            "name": "activity",
+            "unit": null,
+            "desc": "Activity as printed"
+          },
+          {
+            "name": "bar_printed",
+            "unit": null,
+            "desc": "False where the chart row carries no bar"
+          },
+          {
+            "name": "day",
+            "unit": null,
+            "desc": "Printed day column number of this bar segment"
+          },
+          {
+            "name": "first_quarter",
+            "unit": null,
+            "desc": "First of the four cells of the day column the bar covers (1-4)"
+          },
+          {
+            "name": "last_quarter",
+            "unit": null,
+            "desc": "Last of the four cells of the day column the bar covers (1-4)"
+          }
+        ],
+        "rows": [
+          {
+            "chart_row": 1,
+            "step_ref": "",
+            "activity": "Column Formwork",
+            "bar_printed": true,
+            "day": 1,
+            "first_quarter": 1,
+            "last_quarter": 2
+          },
+          {
+            "chart_row": 2,
+            "step_ref": "",
+            "activity": "Column Reinforcement",
+            "bar_printed": true,
+            "day": 1,
+            "first_quarter": 2,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 2,
+            "step_ref": "",
+            "activity": "Column Reinforcement",
+            "bar_printed": true,
+            "day": 2,
+            "first_quarter": 1,
+            "last_quarter": 2
+          },
+          {
+            "chart_row": 3,
+            "step_ref": "",
+            "activity": "Concrete Columns",
+            "bar_printed": true,
+            "day": 2,
+            "first_quarter": 2,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 4,
+            "step_ref": "1.2",
+            "activity": "Slab Formwork",
+            "bar_printed": true,
+            "day": 3,
+            "first_quarter": 1,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 4,
+            "step_ref": "1.2",
+            "activity": "Slab Formwork",
+            "bar_printed": true,
+            "day": 4,
+            "first_quarter": 1,
+            "last_quarter": 1
+          },
+          {
+            "chart_row": 5,
+            "step_ref": "3",
+            "activity": "Fix Anchorage",
+            "bar_printed": true,
+            "day": 4,
+            "first_quarter": 1,
+            "last_quarter": 2
+          },
+          {
+            "chart_row": 6,
+            "step_ref": "4-7",
+            "activity": "Steel and Tendons",
+            "bar_printed": true,
+            "day": 4,
+            "first_quarter": 1,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 7,
+            "step_ref": "8",
+            "activity": "Concrete",
+            "bar_printed": true,
+            "day": 5,
+            "first_quarter": 1,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 8,
+            "step_ref": "9,10",
+            "activity": "Strip Edge",
+            "bar_printed": false,
+            "day": null,
+            "first_quarter": null,
+            "last_quarter": null
+          },
+          {
+            "chart_row": 9,
+            "step_ref": "12",
+            "activity": "Stress Tendon",
+            "bar_printed": false,
+            "day": null,
+            "first_quarter": null,
+            "last_quarter": null
+          },
+          {
+            "chart_row": 10,
+            "step_ref": "13",
+            "activity": "Strip Forms and Back props",
+            "bar_printed": true,
+            "day": 8,
+            "first_quarter": 1,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 11,
+            "step_ref": "14",
+            "activity": "Grout and Finish",
+            "bar_printed": true,
+            "day": 9,
+            "first_quarter": 1,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 12,
+            "step_ref": "",
+            "activity": "Column Formwork",
+            "bar_printed": true,
+            "day": 6,
+            "first_quarter": 1,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 12,
+            "step_ref": "",
+            "activity": "Column Formwork",
+            "bar_printed": true,
+            "day": 9,
+            "first_quarter": 1,
+            "last_quarter": 3
+          }
+        ],
+        "held": []
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "steelwork.temporary_truss_min_fillet_weld",
+      "domain": "construction.buildings",
+      "type": "threshold",
+      "title": "Temporary steel truss and strut details: fillet welds 10 mm minimum",
+      "statement": "General note on the course's temporary steel truss and strut detail drawings: welds are full penetration butt welds unless otherwise stated, and fillet welds are 10 mm minimum weld size. An example drawing note from course material, not a code minimum: the governing weld sizes are those on the project's own drawings. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 10,
+        "unit": "millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p27 and p30 (general notes)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
     }
   ]
 }
