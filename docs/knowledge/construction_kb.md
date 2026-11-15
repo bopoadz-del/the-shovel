@@ -1,6 +1,6 @@
 # Construction Knowledge Base
 
-_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 73 entries._
+_Generated from `app/knowledge/construction_kb.json` (single source of truth) — version `2026.06.30-general-corpus`, 80 entries._
 
 
 **General construction-engineering priors** — NOT code-of-practice design values. Every entry is kept GENERAL (not tied to a location or project). Values are site-experience references; **verify against your project specification and applicable standards** before use. Entries at credibility tier <=3 surface this warning automatically via the loader.
@@ -59,14 +59,21 @@ Four domains: `construction.buildings` · `construction.concrete` · `constructi
 | `procurement.interim_payment_flow` | workflow | Governs the progress / interim payment cycle from a registered contractor payment request  | 4 |  |
 | `procurement.tender_lifecycle` | workflow | Job Requisition -> Sole Source justification (optional) -> Request for Authority to Tender | 4 |  |
 
-## construction.roads  (38 entries)
+## construction.roads  (45 entries)
 
 | id | type | statement | tier | review |
 |---|---|---|---|---|
+| `asphalt.bitumen_budget` | formula | Budget bitumen (t) = tonnage of asphalt laid x the budget allowance (%) / 100. The allowan | 3 |  |
 | `asphalt.bitumen_content` | reference_design | Reference bitumen content by asphalt course: base course approximately 3.6%, binder course | 3 |  |
 | `asphalt.compaction_trial_30m` | threshold | Before full hot-mix asphalt production paving, lay a compaction trial section of at least  | 3 |  |
+| `asphalt.haul_ton_km` | formula | Ton-km = asphalt quantity laid (t) x average haul distance (km) from the plant, per course | 3 |  |
+| `asphalt.marshall_stiffness` | formula | Marshall stiffness (kg/mm) = Marshall stability (kg) / Marshall flow (mm), the quotient be | 3 |  |
+| `asphalt.material_overconsumption` | formula | Over-consumption = actual consumption - theoretical consumption, for one material row of t | 3 |  |
+| `asphalt.material_stock` | formula | Quantity in stock = cumulative quantity received - cumulative actual consumption, for one  | 3 |  |
+| `asphalt.paving_hours` | formula | Paving time (hr) = asphalt tonnage to lay / paver production rate (t/hr). The rate is an i | 3 |  |
 | `asphalt.plant_layout` | reference_design | Reference hot-mix asphalt batch plant layout, in process order: cold feed bins, dryer drum | 3 |  |
 | `asphalt.rolling_rules` | checklist | Breakdown rolling checklist for hot-mix asphalt: keep breakdown-rolled layer thickness no  | 3 |  |
+| `asphalt.theoretical_bitumen` | formula | Theoretical bitumen (t) = tonnage of asphalt laid x the course's bitumen content (% by mas | 3 |  |
 | `compaction.aashto_t180_ref` | reference_design | AASHTO T 180-93 (Modified Proctor) determines the laboratory maximum dry density and optim | 4 |  |
 | `compaction.acceptance` | threshold | Minimum field compaction acceptance levels (percent of laboratory maximum dry density, Mod | 3 |  |
 | `compaction.field_density` | formula | Field compaction percentage = (field dry density / laboratory maximum dry density) * 100,  | 4 |  |
