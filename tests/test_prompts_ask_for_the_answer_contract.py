@@ -38,25 +38,43 @@ def _machinery_asks(text: str) -> list[str]:
     return [m.group(0) for rx in _ASKS_FOR_MACHINERY for m in rx.finditer(text)]
 
 
-def test_the_scanner_finds_an_invented_source_line_instruction():
-    prompt = (
-        "## Output\n"
-        '> *"The slab is 200 mm thick."*\n'
-        '> *Source: [filename from the header], chunks [N, M]."*\n'
-        "- Always cite the source block for every number.\n"
-    )
+@pytest.mark.parametrize(
+    "prompt, expect",
+    [
+        (
+            "## Output\n"
+            '> *"The slab is 200 mm thick."*\n'
+            '> *Source: [filename from the header], chunks [N, M]."*\n',
+            "Source:",
+        ),
+        (
+            "## Format\n"
+            "- Result: <value>\n"
+            "- Always cite the source block for every number.\n",
+            "block",
+        ),
+    ],
+    ids=["source-line", "cite-block"],
+)
+def test_the_scanner_finds_an_invented_machinery_instruction(prompt, expect):
     found = _machinery_asks(prompt)
-    assert any("Source:" in f for f in found)
-    assert any("block" in f for f in found)
+    assert any(expect in f for f in found), found
 
 
-def test_the_scanner_passes_an_invented_prompt_that_asks_for_tags():
-    prompt = (
+@pytest.mark.parametrize(
+    "prompt",
+    [
         "## Output\n"
         "Open with the figure and its unit. Tag a document figure with "
         "`[source: <filename>, p. N]` on its sentence. Never write a Source line.\n"
-        "- Result: <value with units>\n"
-    )
+        "- Result: <value with units>\n",
+        "## How to answer\n"
+        "State the quantity first, then the working on one line. Put "
+        "`[source: <file>, section S]` after a sentence that uses a document value.\n",
+    ],
+    ids=["tags-result", "tags-working"],
+)
+def test_the_scanner_passes_an_invented_prompt_that_asks_for_tags(prompt):
     assert _machinery_asks(prompt) == []
 
 
