@@ -21,18 +21,24 @@ from tests.browser.test_ui_phys_nightly import _create_project, _login
 
 pytestmark = pytest.mark.browser
 
-_DOCS = {
-    "slab_pour_sequence_notes.txt": "Pour bay 3 after bay 1 has cured for 48 hours.\n",
-    "scaffold_tag_register.txt": "Tag 41 inspected and passed on day 2.\n",
-}
+_DOC_SETS = [
+    {
+        "slab_pour_sequence_notes.txt": "Pour bay 3 after bay 1 has cured for 48 hours.\n",
+        "scaffold_tag_register.txt": "Tag 41 inspected and passed on day 2.\n",
+    },
+    {
+        "dewatering_log_east.txt": "Well 2 drawdown 1.8 m on day 5.\n",
+        "fire_stopping_schedule.txt": "Riser 3 sealed with a 2-hour collar.\n",
+    },
+]
 _STATE_PREFIXES = ("Searchable", "Stored, not searchable", "Waiting to be read", "Failed")
 
 
-def _upload_own(page: Page, tmp_path) -> dict[str, str]:
+def _upload_own(page: Page, tmp_path, docs: dict[str, str]) -> dict[str, str]:
     """Upload the test's own two files; return name -> document id."""
     picker = page.locator("#doc-file-input")
     ids: dict[str, str] = {}
-    for name, body in _DOCS.items():
+    for name, body in docs.items():
         path = tmp_path / name
         path.write_text(body, encoding="utf-8")
         picker.set_input_files(str(path))
@@ -62,15 +68,17 @@ def _send_and_capture(page: Page, text: str) -> dict:
 
 
 @pytest.mark.timeout(240)
-def test_ask_about_a_document_from_the_sidebar(page: Page, live_app, tmp_path):
+@pytest.mark.parametrize("set_index", [0, 1])
+def test_ask_about_a_document_from_the_sidebar(page: Page, live_app, tmp_path, set_index):
     base = live_app["base"]
+    docs = _DOC_SETS[set_index]
     _login(page, base)
-    _create_project(page, "Ask About Document UI")
-    ids = _upload_own(page, tmp_path)
-    first, second = list(_DOCS)
+    _create_project(page, f"Ask About Document UI {set_index}")
+    ids = _upload_own(page, tmp_path, docs)
+    first, second = list(docs)
 
     # Each card: a plain status line, an Ask action, and a delete labelled so.
-    for name in _DOCS:
+    for name in docs:
         row = _row(page, name)
         line = row.locator(".doc-row__state")
         expect(line).to_be_visible()

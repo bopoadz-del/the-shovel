@@ -114,12 +114,17 @@ def test_a_pinned_id_alone_tells_the_model_which_document(client, seen_messages,
     assert other["original_name"] not in note
 
 
-def test_a_pinned_id_from_another_users_project_is_refused(client, seen_messages):
-    owner = _register(client, "owner")
-    stranger = _register(client, "stranger")
-    theirs = _project(client, owner, f"Theirs-{_RUN}")
-    mine = _project(client, stranger, f"Mine-{_RUN}")
-    doc = _upload(client, owner, theirs, "valuation_no_7.txt", b"Gross 1,250,000")
+@pytest.mark.parametrize("name,body", [
+    ("valuation_no_7.txt", b"Gross 1,250,000"),
+    ("night_works_permit.txt", b"Permit valid 22:00 to 05:00"),
+])
+def test_a_pinned_id_from_another_users_project_is_refused(client, seen_messages, name, body):
+    tag = name[:5]
+    owner = _register(client, f"owner{tag}")
+    stranger = _register(client, f"stranger{tag}")
+    theirs = _project(client, owner, f"Theirs-{tag}-{_RUN}")
+    mine = _project(client, stranger, f"Mine-{tag}-{_RUN}")
+    doc = _upload(client, owner, theirs, name, body)
     res = client.post("/v1/chat/stream", headers=stranger, json={
         "message": "What does this document say?",
         "project_id": mine,
@@ -182,12 +187,17 @@ def test_the_panel_note_and_the_line_agree(doc):
 
 # ── the totals the chat pane states ──────────────────────────────────────────
 
-def test_held_count_leaves_out_hidden_rows_and_the_page_does_not_set_it():
-    pid = store.create_project(f"Totals-{_RUN}")["id"]
-    kept = store.add_document(pid, "earthworks_cut_fill.txt", content_sha256=f"a{_RUN}")
-    gone = store.add_document(pid, "superseded_drawing_list.txt", content_sha256=f"b{_RUN}")
-    old = store.add_document(pid, "crane_lift_plan.txt", content_sha256=f"c{_RUN}")
-    store.add_document(pid, "crane_lift_plan.txt", content_sha256=f"d{_RUN}",
+@pytest.mark.parametrize("names", [
+    ("earthworks_cut_fill.txt", "superseded_drawing_list.txt", "crane_lift_plan.txt"),
+    ("pump_test_record.txt", "old_access_route_plan.txt", "tower_crane_base.txt"),
+])
+def test_held_count_leaves_out_hidden_rows_and_the_page_does_not_set_it(names):
+    tag = names[0][:5]
+    pid = store.create_project(f"Totals-{tag}-{_RUN}")["id"]
+    kept = store.add_document(pid, names[0], content_sha256=f"a{tag}{_RUN}")
+    gone = store.add_document(pid, names[1], content_sha256=f"b{tag}{_RUN}")
+    old = store.add_document(pid, names[2], content_sha256=f"c{tag}{_RUN}")
+    store.add_document(pid, names[2], content_sha256=f"d{tag}{_RUN}",
                        reingest_of=old["id"])
     assert store.count_documents(pid) == 4
     assert store.count_documents(pid, visible_only=True) == 4 - 1
@@ -289,10 +299,11 @@ def test_a_whole_read_or_an_indexed_read_gets_no_note(monkeypatch, text, chunks)
         "Retention is 5 percent.")
 
 
-def test_a_read_from_an_earlier_turn_is_not_this_turns():
-    cut = {"result": {"document_id": "d-4", "filename": "old_minutes.txt",
+@pytest.mark.parametrize("name", ["old_minutes.txt", "progress_report_wk3.txt"])
+def test_a_read_from_an_earlier_turn_is_not_this_turns(name):
+    cut = {"result": {"document_id": "d-4", "filename": name,
                       "truncated": True, "source": "extracted", "content": "x"}}
     messages = _fetch_turn(cut) + [{"role": "user", "content": "and the next question"}]
-    assert _opening_part_reads(_fetch_turn(cut)) == ["old_minutes.txt"]
+    assert _opening_part_reads(_fetch_turn(cut)) == [name]
     assert _opening_part_reads(messages) == []
     assert runtime_mod._note_opening_part_reads("", _fetch_turn(cut)) == ""
