@@ -2406,6 +2406,104 @@
       "needs_review": false
     },
     {
+      "id": "equipment.fleet_study_hourly_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Fleet study: hourly rate per hauling machine from its outputs at three haul distances",
+      "statement": "Fleet study method of the course: for each of the three haul distances of the study, output per machine per hour = (60 / cycle time in minutes) x load per trip; the three outputs are combined (added) into the hourly rate per machine used for the fleet count. The count follows from equipment.fleet_study_machines. This is the course's fleet study route and is kept separate from equipment.cycle_production / equipment.machines_required, which size a fleet for a single haul. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "60 / cycle_time_short * unit_capacity + 60 / cycle_time_middle * unit_capacity + 60 / cycle_time_long * unit_capacity",
+      "variables": {
+        "unit_capacity": {
+          "unit": "meter**3",
+          "desc": "Quantity carried per load by one hauling machine (scraper bowl, truck body)"
+        },
+        "cycle_time_short": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the shortest haul distance of the study"
+        },
+        "cycle_time_middle": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the middle haul distance of the study"
+        },
+        "cycle_time_long": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the longest haul distance of the study"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.fleet_study_machines",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Fleet study: number of hauling machines by the course's route",
+      "statement": "Fleet study method of the course: machines = required hourly rate / hourly rate per machine, rounded UP, where the rate per machine is the combined output at the study's three haul distances (equipment.fleet_study_hourly_rate) and the required hourly rate is the cut quantity over the working days and all shift hours (equipment.required_hourly_rate). The loader also reports the unrounded quotient. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(required_rate / (60 / cycle_time_short * unit_capacity + 60 / cycle_time_middle * unit_capacity + 60 / cycle_time_long * unit_capacity))",
+      "variables": {
+        "required_rate": {
+          "unit": "meter**3/hour",
+          "desc": "Required output per hour, all shifts"
+        },
+        "unit_capacity": {
+          "unit": "meter**3",
+          "desc": "Quantity carried per load by one hauling machine (scraper bowl, truck body)"
+        },
+        "cycle_time_short": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the shortest haul distance of the study"
+        },
+        "cycle_time_middle": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the middle haul distance of the study"
+        },
+        "cycle_time_long": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the longest haul distance of the study"
+        }
+      },
+      "thresholds": {
+        "unit": "machines"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
       "id": "earthworks.fill_layers",
       "domain": "construction.roads",
       "type": "formula",
