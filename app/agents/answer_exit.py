@@ -1702,6 +1702,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
         env["citations"] = done.citations
     if done.coverage is not None:
         env["coverage"] = done.coverage
+    if done.conflicts:
+        env["conflicts"] = done.conflicts
     return env
 
 
