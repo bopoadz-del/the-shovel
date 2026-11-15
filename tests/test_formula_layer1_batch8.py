@@ -357,8 +357,13 @@ def test_f54_b_factor_is_the_input(sf, ratio):
     assert r[_C] / r["intended_load_kn"] == pytest.approx(ratio, rel=1e-9)
 
 
-def test_f54_b_zero_area():
-    r = _ok(F54, {"platform_area_m2": 0, "duty": "light", "safety_factor": 4.0})
+@pytest.mark.parametrize("duty, sf", [
+    ("light", 4.0),   # 0 m2 x 25 psf = 0 kN; 4 x 0 = 0
+    ("heavy", 6.0),   # 0 m2 x 75 psf = 0 kN; 6 x 0 = 0
+])
+def test_f54_b_zero_area(duty, sf):
+    r = _ok(F54, {"platform_area_m2": 0, "duty": duty, "safety_factor": sf})
+    assert r["intended_load_kn"] == 0.0
     assert r[_C] == 0.0
 
 
