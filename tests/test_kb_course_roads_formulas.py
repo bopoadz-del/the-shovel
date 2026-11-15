@@ -78,24 +78,39 @@ def test_missing_required_input_raises_not_defaulted(rule_id, partial):
 # ---------------------------------------------------------------------------
 
 
-def test_rounded_up_count_shows_unrounded_figure():
-    # Course W4: 18 / 3.1 = 5.806..., printed "5.8 say 6".
-    out = ev("earthworks.loader_buckets_per_truck", truck_capacity=18, bucket_capacity=3.1)
-    assert out["result"] == 6
-    assert out["unrounded"] == pytest.approx(18 / 3.1)
-    # Invented: 10 / 3 = 3.333 -> 4 (a part bucket is still a pass).
-    out = ev("earthworks.loader_buckets_per_truck", truck_capacity=10, bucket_capacity=3)
-    assert out["result"] == 4
-    assert out["unrounded"] == pytest.approx(10 / 3)
+@pytest.mark.parametrize(
+    "truck, bucket, passes, unrounded",
+    [
+        (18, 3.1, 6, 18 / 3.1),  # course W4: 18 / 3.1 = 5.806..., printed "5.8 say 6"
+        (10, 3, 4, 10 / 3),      # invented: 3.333 -> 4 (a part bucket is still a pass)
+    ],
+)
+def test_rounded_up_count_shows_unrounded_figure(truck, bucket, passes, unrounded):
+    out = ev("earthworks.loader_buckets_per_truck", truck_capacity=truck, bucket_capacity=bucket)
+    assert out["result"] == passes
+    assert out["unrounded"] == pytest.approx(unrounded)
 
 
-def test_exact_whole_count_is_not_rounded_up():
-    # Invented: 12 / 4 = 3 exactly -> 3, unrounded 3.
-    out = ev("earthworks.loader_buckets_per_truck", truck_capacity=12, bucket_capacity=4)
-    assert out["result"] == 3 and out["unrounded"] == 3
-    # Invented: 720 / 360 = 2 exactly -> 2 machines.
-    out = ev("equipment.machines_required", required_rate=720, production_per_machine=360)
-    assert out["result"] == 2 and out["unrounded"] == 2
+@pytest.mark.parametrize(
+    "rule_id, values, count",
+    [
+        # invented: 12 / 4 = 3 exactly -> 3, unrounded 3
+        ("earthworks.loader_buckets_per_truck", {"truck_capacity": 12, "bucket_capacity": 4}, 3),
+        # invented: 720 / 360 = 2 exactly -> 2 machines
+        ("equipment.machines_required", {"required_rate": 720, "production_per_machine": 360}, 2),
+    ],
+)
+def test_exact_whole_count_is_not_rounded_up(rule_id, values, count):
+    out = ev(rule_id, **values)
+    assert out["result"] == count
+    assert out["unrounded"] == count
+
+
+@pytest.mark.parametrize("rule_id", ["earthworks.no_such_formula", "equipment.not_registered"])
+def test_unknown_rule_id_raises_key_error(rule_id):
+    # invented ids, absent from the KB: refused by name, never evaluated as empty
+    with pytest.raises(KeyError):
+        kb.evaluate(rule_id, a=1)
 
 
 @pytest.mark.parametrize(
@@ -155,14 +170,23 @@ def test_proctor_worksheet_point(ms, cw, cd, c, wet_p, w_p, dry_p):
     assert round(dry, 3) == dry_p
 
 
-def test_proctor_point_values_exact():
-    # Point 4 by hand: 4683 / 2114 = 2.215232; w = 11.9 / 104.8 x 100 =
-    # 11.354962 %; dry = 2.215232 / 1.11354962 = 1.989343.
-    wet = ev("earthworks.wet_density", gross_mass=9245, container_mass=4562, volume=2114)["result"]
-    w = ev("earthworks.moisture_content", wet_with_container=132.7, dry_with_container=120.8, container_mass=16.0)["result"]
-    assert wet == pytest.approx(4683 / 2114)
-    assert w == pytest.approx(11.9 / 104.8 * 100)
-    assert ev("earthworks.dry_density", wet_density=wet, moisture_percent=w)["result"] == pytest.approx(1.989343, abs=1e-6)
+@pytest.mark.parametrize(
+    "ms, cw, cd, c, wet_hand, w_hand, dry_hand",
+    [
+        # point 4 by hand: 4683 / 2114 = 2.215232; w = 11.9 / 104.8 x 100 =
+        # 11.354962 %; dry = 2.215232 / 1.11354962 = 1.989343
+        (9245, 132.7, 120.8, 16.0, 4683 / 2114, 11.9 / 104.8 * 100, 1.989343),
+        # point 1 by hand: 4202 / 2114 = 1.987701; w = 5.1 / 95.7 x 100 =
+        # 5.329154 %; dry = 1.987701 / 1.05329154 = 1.887133
+        (8764, 117.0, 111.9, 16.2, 4202 / 2114, 5.1 / 95.7 * 100, 1.887133),
+    ],
+)
+def test_proctor_point_values_exact(ms, cw, cd, c, wet_hand, w_hand, dry_hand):
+    wet = ev("earthworks.wet_density", gross_mass=ms, container_mass=4562, volume=2114)["result"]
+    w = ev("earthworks.moisture_content", wet_with_container=cw, dry_with_container=cd, container_mass=c)["result"]
+    assert wet == pytest.approx(wet_hand)
+    assert w == pytest.approx(w_hand)
+    assert ev("earthworks.dry_density", wet_density=wet, moisture_percent=w)["result"] == pytest.approx(dry_hand, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -233,20 +257,40 @@ def test_truck_cycle_time(fixed, d_out, v_l, d_back, v_e, hand):
     assert out["unit"] == "minute"
 
 
-def test_fleet_chain_cycle_to_machine_count():
-    # Invented A: cycle 24.6667 min, 18 m3 body -> 60/24.6667 x 18 = 43.784 m3/hr;
-    # required 300 m3/hr -> 300/43.784 = 6.852 -> 7 trucks.
-    cyc = ev("equipment.truck_cycle_time", fixed_time=12, haul_distance=5, loaded_speed=45,
-             return_distance=5, empty_speed=50)["result"]
-    prod = ev("equipment.cycle_production", cycle_time=cyc, unit_capacity=18)["result"]
-    assert prod == pytest.approx(60 / (74 / 3) * 18)
-    n = ev("equipment.machines_required", required_rate=300, production_per_machine=prod)
-    assert n["result"] == 7 and n["unrounded"] == pytest.approx(300 / prod)
-    # Invented B: cycle 2.5 min, 15 m3 -> 24 x 15 = 360 m3/hr; 1000/360 = 2.778 -> 3.
-    prod = ev("equipment.cycle_production", cycle_time=2.5, unit_capacity=15)["result"]
-    assert prod == pytest.approx(360)
-    n = ev("equipment.machines_required", required_rate=1000, production_per_machine=prod)
-    assert n["result"] == 3 and n["unrounded"] == pytest.approx(1000 / 360)
+@pytest.mark.parametrize(
+    "cycle, capacity, prod_hand, rate, count",
+    [
+        # invented A: cycle 12 + 60x5/45 + 60x5/50 = 74/3 = 24.6667 min, 18 m3 body
+        # -> 60 / 24.6667 x 18 = 43.784 m3/hr; 300 / 43.784 = 6.852 -> 7 trucks
+        ({"fixed_time": 12, "haul_distance": 5, "loaded_speed": 45, "return_distance": 5, "empty_speed": 50},
+         18, 60 / (74 / 3) * 18, 300, 7),
+        # invented B: cycle 10 + 60x3/25 + 60x3/30 = 10 + 7.2 + 6 = 23.2 min, 20 m3
+        # -> 60 / 23.2 x 20 = 51.724 m3/hr; 100 / 51.724 = 1.933 -> 2 trucks
+        ({"fixed_time": 10, "haul_distance": 3, "loaded_speed": 25, "return_distance": 3, "empty_speed": 30},
+         20, 60 / 23.2 * 20, 100, 2),
+    ],
+)
+def test_fleet_chain_cycle_to_machine_count(cycle, capacity, prod_hand, rate, count):
+    cyc = ev("equipment.truck_cycle_time", **cycle)["result"]
+    prod = ev("equipment.cycle_production", cycle_time=cyc, unit_capacity=capacity)["result"]
+    assert prod == pytest.approx(prod_hand)
+    n = ev("equipment.machines_required", required_rate=rate, production_per_machine=prod)
+    assert n["result"] == count
+    assert n["unrounded"] == pytest.approx(rate / prod_hand)
+
+
+@pytest.mark.parametrize(
+    "cycle, capacity, rate, count",
+    [
+        (2.5, 15, 1000, 3),  # invented: 60/2.5 x 15 = 360 m3/hr; 1000/360 = 2.778 -> 3
+        (4.0, 10, 300, 2),   # invented: 60/4 x 10 = 150 m3/hr; 300/150 = 2 exactly -> 2
+    ],
+)
+def test_cycle_production_to_machine_count(cycle, capacity, rate, count):
+    prod = ev("equipment.cycle_production", cycle_time=cycle, unit_capacity=capacity)["result"]
+    assert prod == pytest.approx(60 / cycle * capacity)
+    n = ev("equipment.machines_required", required_rate=rate, production_per_machine=prod)
+    assert n["result"] == count
 
 
 # ---------------------------------------------------------------------------
@@ -281,18 +325,22 @@ def test_compaction_water(q, rho, omc, nmc, hand):
     assert out["unit"] == "tonne"
 
 
-def test_tanker_count_chain():
-    # 320 t/day over 10 h = 32 t/hr; tanker 12 t, cycle 30 min -> 24 t/hr each;
-    # 32 / 24 = 1.333 -> 2 tankers.
-    water = ev("earthworks.compaction_water", daily_quantity=2000, density=2.0,
-               optimum_moisture=12, natural_moisture=4)["result"]
-    per_tanker = ev("equipment.cycle_production", cycle_time=30, unit_capacity=12)["result"]
-    assert per_tanker == pytest.approx(24)
-    n = ev("equipment.machines_required", required_rate=water / 10, production_per_machine=per_tanker)
-    assert n["result"] == 2 and n["unrounded"] == pytest.approx(32 / 24)
-    # 213.75 t/day over 8 h = 26.72 t/hr; one 30 t tanker at 60 min -> 30 t/hr: 0.89 -> 1.
-    water = ev("earthworks.compaction_water", daily_quantity=1500, density=1.9,
-               optimum_moisture=10.5, natural_moisture=3)["result"]
-    per_tanker = ev("equipment.cycle_production", cycle_time=60, unit_capacity=30)["result"]
-    n = ev("equipment.machines_required", required_rate=water / 8, production_per_machine=per_tanker)
-    assert n["result"] == 1 and n["unrounded"] == pytest.approx(213.75 / 8 / 30)
+@pytest.mark.parametrize(
+    "q, rho, omc, nmc, hours, tanker_t, tanker_cycle, per_tanker_hand, count, unrounded",
+    [
+        # 2000 x 2.0 x 8 / 100 = 320 t/day over 10 h = 32 t/hr; 12 t tanker at
+        # 30 min -> 24 t/hr each; 32 / 24 = 1.333 -> 2 tankers
+        (2000, 2.0, 12, 4, 10, 12, 30, 24.0, 2, 32 / 24),
+        # 1500 x 1.9 x 7.5 / 100 = 213.75 t/day over 8 h = 26.72 t/hr; one 30 t
+        # tanker at 60 min -> 30 t/hr; 0.89 -> 1
+        (1500, 1.9, 10.5, 3, 8, 30, 60, 30.0, 1, 213.75 / 8 / 30),
+    ],
+)
+def test_tanker_count_chain(q, rho, omc, nmc, hours, tanker_t, tanker_cycle, per_tanker_hand, count, unrounded):
+    water = ev("earthworks.compaction_water", daily_quantity=q, density=rho,
+               optimum_moisture=omc, natural_moisture=nmc)["result"]
+    per_tanker = ev("equipment.cycle_production", cycle_time=tanker_cycle, unit_capacity=tanker_t)["result"]
+    assert per_tanker == pytest.approx(per_tanker_hand)
+    n = ev("equipment.machines_required", required_rate=water / hours, production_per_machine=per_tanker)
+    assert n["result"] == count
+    assert n["unrounded"] == pytest.approx(unrounded)
