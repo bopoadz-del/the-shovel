@@ -248,12 +248,25 @@ def test_course_tables_cite_course_pages_and_cells_stay_in_range(rule_id):
             assert row["first_quarter"] <= row["last_quarter"]
 
 
-def test_truss_min_fillet_weld_note():
-    entry = _knowledge.get_rule(WELD)
-    assert entry["type"] == "threshold"
-    assert entry["thresholds"] == {"value": 10, "unit": "millimeter"}
-    assert entry["applicability"]["project_specific"] is True
-    assert "p27" in entry["provenance"]["course_reference"]
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("type", "threshold"),
+        ("thresholds.value", 10),
+        ("thresholds.unit", "millimeter"),
+        ("applicability.project_specific", True),
+    ],
+)
+def test_truss_min_fillet_weld_note(path, expected):
+    node = _knowledge.get_rule(WELD)
+    for key in path.split("."):
+        node = node[key]
+    assert node == expected
+
+
+@pytest.mark.parametrize("rule_id,page", [(WELD, "p27"), (CYCLE, "p10")])
+def test_reread_entries_cite_their_course_page(rule_id, page):
+    assert page in _knowledge.get_rule(rule_id)["provenance"]["course_reference"]
 
 
 @pytest.mark.parametrize(
