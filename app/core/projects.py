@@ -1292,8 +1292,13 @@ def add_document(
     metadata: Optional[Dict[str, Any]] = None,
     reingest_of: Optional[str] = None,
     drive_md5: Optional[str] = None,
+    document_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Register a document under a project. Storing only — runs no analysis.
+
+    ``document_id`` lets a caller that derives a stable id insert under it:
+    a second insert of the same id raises ``IntegrityError`` from the
+    primary key, in every worker process, so "keep once" is atomic.
 
     A non-empty ``content_sha256`` that already exists in this project is
     refused unless ``reingest_of`` names the old row. That path creates a
@@ -1322,7 +1327,7 @@ def add_document(
                 "reingest sha differs old_id=%s old_sha=%s new_sha=%s",
                 reingest_of, old_sha, content_sha256,
             )
-    did = str(uuid.uuid4())[:8]
+    did = document_id or str(uuid.uuid4())[:8]
     doc_type = classify_doc_type(original_name)
     doc_role = resolve_doc_role(original_name, metadata, role)
     with _lock:
