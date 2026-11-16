@@ -89,7 +89,7 @@ def _scripted_llm():
     return call
 
 
-def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeypatch):
+def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeypatch, request):
     from app.agents import runtime as rt
 
     rt.load_agents()
@@ -135,14 +135,22 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     worst = max(mon.stalls, default=(0, ""))
     excess = excess_over_baseline(mon.max_lag_ms, idle.max_lag_ms)
     during = max(mon.live_dumps, default=(0, ""))
-    # The control beside every result, pass or fail, uncaptured so CI shows it.
-    sys.__stderr__.write(
-        f"\nLOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
-        f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
-        f"live_dumps={len(mon.live_dumps)} near_misses={mon.live_near_misses} monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
-        f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms\n")
-    for lag, text in sorted(mon.live_dumps, reverse=True)[:3]:
-        sys.__stderr__.write(f"LOOP_LAG_LIVE_DUMP {lag:.0f}ms {text[:6000]}\n")
+    # The control beside every result, pass or fail. pytest captures fd 2,
+    # so a passing run would hide a stderr print: write through the terminal
+    # reporter, which writes to the real terminal past the capture.
+    lines = [f"LOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
+             f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
+             f"live_dumps={len(mon.live_dumps)} near_misses={mon.live_near_misses} "
+             f"monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
+             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms"]
+    lines += [f"LOOP_LAG_LIVE_DUMP {lag:.0f}ms {text[:6000]}"
+              for lag, text in sorted(mon.live_dumps, reverse=True)[:3]]
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    for line in lines:
+        if reporter is not None:
+            reporter.write_line(line)
+        else:
+            sys.__stderr__.write(line + "\n")
     assert excess < LIMIT_MS, (
         f"event loop lag under {USERS} concurrent users exceeded the limit ABOVE the "
         f"runner's idle noise: load_max={mon.max_lag_ms:.0f} ms, idle_baseline="

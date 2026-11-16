@@ -188,33 +188,58 @@ def test_a_thread_born_inside_the_window_is_not_summed_as_a_delta(threads_after,
     assert got == expected
 
 
-@pytest.mark.parametrize("loop_blocked", [False, True])
-def test_the_monitors_own_snapshot_is_not_counted_as_loop_lag(monkeypatch, loop_blocked):
-    """The per-thread CPU snapshot is slow under GIL contention. It is the
-    monitor's own work, done before the heartbeat is stamped: a slow snapshot
-    with a free loop is no stall; a loop really blocked as long still is."""
-    def slow_snapshot(*_a, **_k):
-        time.sleep(0.35)
+@pytest.mark.parametrize("snapshot_s,stalled", [(0.35, True), (0.0, False)])
+def test_the_heartbeat_is_stamped_before_the_monitors_snapshot(monkeypatch, snapshot_s, stalled):
+    """Ruling (advisor 04:18Z): the stamp stays BEFORE the CPU snapshot, so a
+    slow snapshot still counts as lag, exactly as the timing test measured it
+    since #380. The live timer is armed with the stamp, so such a stall
+    carries a dump naming what ran during it -- here the snapshot itself."""
+    def snapshot(*_a, **_k):
+        time.sleep(snapshot_s)
         return 0.0, {}
 
-    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", slow_snapshot)
+    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
     monkeypatch.setattr(loop_watchdog, "_CPU_SNAPSHOT_S", 0.0)
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
-                                       tick_ms=10, log=False).start()
+                                       tick_ms=10, log=False, live_ms=150).start()
         await asyncio.sleep(0.9)
-        if loop_blocked:
-            time.sleep(0.8)  # the loop itself, blocked longer than one snapshot
-            await asyncio.sleep(0.5)
         mon.stop()
         return mon
 
     mon = asyncio.run(run())
-    if loop_blocked:
-        assert mon.max_lag_ms >= 250, mon.max_lag_ms
+    if stalled:
+        assert mon.max_lag_ms >= 250 and mon.stalls, mon.max_lag_ms
+        assert any("snapshot" in text for _, text in mon.live_dumps), mon.live_dumps[:1]
     else:
-        assert mon.max_lag_ms < 250 and mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
+        assert mon.stalls == [] and mon.live_dumps == [], (mon.max_lag_ms, mon.stalls[:1])
+
+
+@pytest.mark.parametrize("lags,kept", [
+    ([5.0, 1.0, 9.0, 3.0], [9.0, 5.0, 3.0]),
+    ([2.0, 4.0], [4.0, 2.0]),
+])
+def test_live_dumps_keep_only_the_worst(lags, kept):
+    """A monitor lives as long as the process; its dump list is bounded and
+    keeps the latest-served (worst) entries."""
+    got: list = []
+    for lag in lags:
+        loop_watchdog.keep_worst(got, (lag, f"d{lag}"), cap=3)
+    assert sorted((lag for lag, _ in got), reverse=True) == kept
+
+
+@pytest.mark.parametrize("live_ms,armed", [(0.0, False), (150.0, True)])
+def test_live_capture_is_off_unless_asked(live_ms, armed):
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), log=False, live_ms=live_ms)
+        try:
+            return mon._live is not None and mon._live.active
+        finally:
+            if mon._live is not None:
+                mon._live.close()
+
+    assert asyncio.run(run()) is armed
 
 
 @pytest.mark.parametrize("cancelled,fired", [(True, False), (False, True)])
@@ -275,4 +300,6 @@ def test_a_served_heartbeat_is_never_a_near_miss(monkeypatch, monitor_slow, loop
 
     mon = asyncio.run(run())
     assert mon.stalls == [], mon.stalls[:1]
+    # A near miss is counted; its dump is dropped, never kept.
+    assert mon.live_dumps == [], mon.live_dumps[:1]
     assert (mon.live_near_misses > 0) is near, mon.live_near_misses

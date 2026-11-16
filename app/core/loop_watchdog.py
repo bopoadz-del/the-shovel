@@ -237,6 +237,9 @@ def heartbeat_lag_ms(posted: float, served_at: Optional[float], now: float) -> f
 #: limit on purpose, so the dump lands WHILE the loop is still blocked.
 DEFAULT_LIVE_MS = 150.0
 _LIVE_FRAMES = 12
+#: At most this many live dumps are kept per monitor (the worst ones); each is
+#: a whole-process stack text, and a monitor runs for the life of the process.
+LIVE_KEEP = 16
 _FH_THREAD = re.compile(r"^(Current thread|Thread) (0x[0-9a-fA-F]+)")
 _FH_FRAME = re.compile(r'^\s+File "(.*)", line (\d+) in (.*)$')
 #: faulthandler has ONE process-wide timer; one monitor at a time may own it.
@@ -267,6 +270,14 @@ def format_live_dump(text: str, names: dict, max_frames: int = _LIVE_FRAMES) -> 
             frames.append(f"{f.group(1)}:{f.group(2)} {f.group(3).strip()}")
     flush()
     return " || ".join(parts)
+
+
+def keep_worst(kept: list, item: tuple, cap: int = LIVE_KEEP) -> None:
+    """Add ``(lag_ms, text)`` to ``kept``, holding at most ``cap`` entries:
+    when full, the least late one is dropped, so the worst stalls survive."""
+    kept.append(item)
+    if len(kept) > cap:
+        kept.remove(min(kept, key=lambda e: e[0]))
 
 
 class LiveDump:
@@ -351,6 +362,7 @@ class LagMonitor:
         #: In-stall capture (``LiveDump``); off unless ``live_ms`` > 0.
         self._live = LiveDump(live_ms) if live_ms > 0 else None
         #: Stalls whose live dump fired: (lag_ms, dump) -- what ran DURING it.
+        #: Bounded to the LIVE_KEEP worst (``keep_worst``).
         self.live_dumps: list[tuple[float, str]] = []
         #: Worst oversleep of this thread past its tick: a GIL hold that began
         #: between heartbeats, which ``max_lag_ms`` cannot see (see
@@ -388,23 +400,22 @@ class LagMonitor:
                     live.cancel()
                 served.set()
 
-            # The monitor's own bookkeeping comes BEFORE the heartbeat is
-            # stamped. Reading /proc for every thread releases and retakes the
-            # GIL per file; under fifteen busy threads that took this thread
-            # hundreds of ms, and with the stamp taken first (as #380 did) it
-            # was counted as the LOOP's lag -- while the loop itself may have
-            # been free the whole time (CI #396: 283 ms "stall", live timer
-            # armed after the snapshot never fired, idle control 2 ms).
-            if time.monotonic() - self._cpu_at >= _CPU_SNAPSHOT_S:
-                self._proc_before, self._cpu_before = cpu_snapshot()
-                self._cpu_at, self._host_before = time.monotonic(), host_cpu()
+            # The heartbeat is stamped BEFORE the monitor's CPU snapshot, as
+            # #380 shipped it: what the timing test measures is unchanged here
+            # (advisor ruling 04:18Z; moving the stamp is its own proposal).
+            # The live timer is armed with the stamp, so a GIL hold that
+            # begins while the snapshot reads /proc -- each read releases the
+            # GIL -- is dumped too. Armed after the snapshot, that window was
+            # blind (CI #396 d3c7ef0: a 0.6 s hold, max_lag 2, no dump).
+            posted = time.monotonic()
             if live is not None:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
-            posted = time.monotonic()
-            if live is not None:
                 live.arm()
+            if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
+                self._proc_before, self._cpu_before = cpu_snapshot()
+                self._cpu_at, self._host_before = posted, host_cpu()
             try:
                 self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
@@ -454,7 +465,7 @@ class LagMonitor:
                 if dump:
                     idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
                     during = format_live_dump(dump, idents)
-                    self.live_dumps.append((lag_ms, during))
+                    keep_worst(self.live_dumps, (lag_ms, during))
                     sample = f"{sample} :: DURING {during}"
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
@@ -489,7 +500,7 @@ class LagMonitor:
             dump = live.take()
             if dump:
                 idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
-                self.live_dumps.append((late_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
+                keep_worst(self.live_dumps, (late_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
 
 
 def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> Optional[LagMonitor]:
