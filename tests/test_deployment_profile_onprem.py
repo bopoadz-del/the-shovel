@@ -740,3 +740,16 @@ def test_fail_closed_applies_only_to_the_onprem_profile(monkeypatch, profile, ex
         assert [o.setting for o in err.value.offenders] == expected
     else:
         dp.enforce_deployment_profile()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sha256:" + "4f" * 32,          # a pinned digest: one 64-character piece
+        "ref/" + "a1b2c3d4e5" * 8,      # an 80-character plain piece
+    ],
+)
+def test_a_long_plain_ascii_piece_is_plain_not_a_dns_label(value):
+    """Plain ASCII is not held to DNS label rules: a piece longer than a
+    label (63) is still a plain word, not an unclassifiable name."""
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": value}) == [], "stage=fail-closed"
