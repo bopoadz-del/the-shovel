@@ -55,7 +55,20 @@ const PROJECT = 'p9'
 const SESSION = 'ws-p9-1700000123000'
 const TITLE = 'Formwork striking times'
 
-const stub = { sent: [], kept: [] }
+const stub = { sent: [], kept: [], failExports: false }
+// The offer a finished answer carries (invented): generated server-side on click.
+const OFFER = {
+  label: 'Invented cost workbook', format: 'xlsx', method: 'POST',
+  endpoint: `/v1/projects/${PROJECT}/exports/invented-workbook`, payload: { conversation_id: SESSION },
+}
+
+function keepAndServe(name) {
+  // The server keeps what it serves as the session's Produced document.
+  stub.kept.push({ id: `prod-${stub.kept.length + 1}`, original_name: name, origin: 'produced' })
+  return new Response(new Blob(['PK']), {
+    status: 200, headers: { 'content-disposition': `attachment; filename="${name}"` },
+  })
+}
 
 function json(obj, status = 200, headers = {}) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', ...headers } })
@@ -66,15 +79,25 @@ globalThis.fetch = async (url, init = {}) => {
   const method = (init.method ?? 'GET').toUpperCase()
   const p = u.pathname
   stub.sent.push({ method, path: p })
+  const isExport = method === 'POST' && (
+    p === `/v1/projects/${PROJECT}/conversations/${SESSION}/export` || p === OFFER.endpoint)
+  if (isExport && stub.failExports) return json({ detail: 'invented failure' }, 500)
   if (method === 'POST' && p === `/v1/projects/${PROJECT}/conversations/${SESSION}/export`) {
-    // The server keeps what it serves as the session's Produced document.
     const fmt = u.searchParams.get('format') ?? 'docx'
-    const name = `Invented_Tower-${stub.kept.length + 1}.${fmt}`
-    stub.kept.push({ id: `prod-${stub.kept.length + 1}`, original_name: name, origin: 'produced' })
-    return new Response(new Blob(['PK']), {
-      status: 200, headers: { 'content-disposition': `attachment; filename="${name}"` },
+    return keepAndServe(`Invented_Tower-${stub.kept.length + 1}.${fmt}`)
+  }
+  if (method === 'POST' && p === OFFER.endpoint) {
+    return keepAndServe(`Invented_workbook-${stub.kept.length + 1}.${OFFER.format}`)
+  }
+  if (method === 'POST' && p === '/v1/chat/stream') {
+    const end = { type: 'end', content: 'The workbook can be generated from the priced bill.', exports: [OFFER] }
+    return new Response(`data: ${JSON.stringify(end)}
+
+`, {
+      status: 200, headers: { 'content-type': 'text/event-stream' },
     })
   }
+  if (p === '/livez') return json({ status: 'alive' })
   if (p === `/v1/projects/${PROJECT}/conversations/${encodeURIComponent(SESSION)}/documents`) {
     return json({ documents: [...stub.kept] })
   }
@@ -104,6 +127,9 @@ async function openWorkspaceOnTheSession() {
   dom.window.localStorage.clear()
   stub.sent = []
   stub.kept = []
+  stub.failExports = false
+  stub.alerts = []
+  globalThis.alert = dom.window.alert = (msg) => { stub.alerts.push(String(msg)) }
   const container = dom.window.document.createElement('div')
   dom.window.document.body.appendChild(container)
   const root = createRoot(container)
@@ -129,15 +155,47 @@ async function openWorkspaceOnTheSession() {
   }
 }
 
+async function askForTheOffer(ws) {
+  // A live answer carries the offer; it is never on a stored message.
+  const box = ws.container.querySelector('textarea[aria-label="Chat message"]')
+  assert.ok(box, 'the composer rendered')
+  const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set
+  await act(async () => {
+    setValue.call(box, 'Can I have the priced bill as a workbook?')
+    box.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  await ws.click(ws.container.querySelector('button[aria-label="Send message"]'))
+  return ws.container.querySelector(`button[aria-label="Download ${OFFER.label}"]`)
+}
+
 const exportControls = [
-  ['the Word button under an answer', (c) => c.querySelector('button[aria-label="Download as Word document"]')],
-  ['the sidebar conversation export', (c) => c.querySelector('button[title="Export this conversation as a .docx file"]')],
+  ['the Word button under an answer', async (ws) => ws.container.querySelector('button[aria-label="Download as Word document"]')],
+  ['the sidebar conversation export', async (ws) => ws.container.querySelector('button[title="Export this conversation as a .docx file"]')],
+  ['the download offer an answer carries', askForTheOffer],
 ]
 
+const sessionDocReads = () => stub.sent.filter((r) => r.method === 'GET'
+  && r.path === `/v1/projects/${PROJECT}/conversations/${encodeURIComponent(SESSION)}/documents`).length
+
 for (const [name, find] of exportControls) {
+  test(`a FAILED export from ${name} is reported and does not re-read the session`, async () => {
+    const ws = await openWorkspaceOnTheSession()
+    const control = await find(ws)
+    assert.ok(control, `${name} rendered`)
+    stub.failExports = true
+    const readsBefore = sessionDocReads()
+    await ws.click(control)
+    assert.equal(stub.kept.length, 0, 'nothing was produced')
+    assert.equal(stub.alerts.length, 1, `the failure is reported: ${stub.alerts}`)
+    assert.match(stub.alerts[0], /failed \(500\)/)
+    assert.equal(sessionDocReads(), readsBefore, 'a failed export re-read the session list')
+    assert.match(ws.sessionGroup(), /No files in this session yet/)
+    ws.unmount()
+  })
+
   test(`a file produced from ${name} is listed under This session at once`, async () => {
     const ws = await openWorkspaceOnTheSession()
-    const control = find(ws.container)
+    const control = await find(ws)
     assert.ok(control, `${name} rendered`)
     await ws.click(control)
     assert.equal(stub.kept.length, 1, 'the export ran')
