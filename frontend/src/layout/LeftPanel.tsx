@@ -22,7 +22,8 @@ import { useAuth } from '../auth/AuthContext'
 import { apiGet, ApiError } from '../lib/api'
 import { useSupportEmail } from '../lib/support'
 import { deleteSessionQuestion, renameTitleError, sessionListTitle } from '../chat/session'
-import type { SessionDocumentRow } from '../chat/sessionDocuments'
+import type { SessionDocumentsView } from '../chat/sessionDocuments'
+import SessionDocumentsGroup from './SessionDocumentsGroup'
 import './LeftPanel.css'
 
 interface ProjectRow {
@@ -60,8 +61,11 @@ interface Props {
    *  existing upload + delete wiring is reused. Optional: render the
    *  Documents section only when both this and activeProjectId are set. */
   documents?: ReactNode
-  /** The open session's own files (W2), listed under "This session". */
-  sessionDocuments?: SessionDocumentRow[]
+  /** The open session's own files (W2), listed under "This session":
+   *  loading, a failed read (G-1), empty, or the list. */
+  sessionDocuments?: SessionDocumentsView
+  /** Re-read the open session's files after a failed read. */
+  onRetrySessionDocuments?: () => void
   /** Number of messages in the active conversation. Drives the "X messages"
    *  label and gates the Export + Clear actions. */
   messageCount?: number
@@ -125,6 +129,7 @@ export default function LeftPanel({
   activeProjectName,
   documents,
   sessionDocuments,
+  onRetrySessionDocuments,
   messageCount,
   onExportConversation,
   onClearConversation,
@@ -351,25 +356,10 @@ export default function LeftPanel({
       )}
 
       {showDocsSection && activeConversationId && (
-        <section className="left-panel__section" aria-label="This session's documents">
-          <header className="left-panel__section-head">This session</header>
-          {sessionDocuments && sessionDocuments.length > 0 ? (
-            <ul className="left-panel__session-docs">
-              {sessionDocuments.map((d) => (
-                <li key={d.id} className="left-panel__session-doc" title={d.name}>
-                  <span className="left-panel__session-doc-name">{d.name}</span>
-                  <span
-                    className={`left-panel__session-doc-tag left-panel__session-doc-tag--${d.tag.toLowerCase()}`}
-                  >
-                    {d.tag}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="left-panel__empty">No files in this session yet.</p>
-          )}
-        </section>
+        <SessionDocumentsGroup
+          view={sessionDocuments ?? { kind: 'loading', rows: [] }}
+          onRetry={onRetrySessionDocuments}
+        />
       )}
 
       {showDocsSection && (

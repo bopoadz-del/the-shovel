@@ -134,7 +134,7 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         f"event loop lag under {USERS} concurrent users exceeded the limit ABOVE the "
         f"runner's idle noise: load_max={mon.max_lag_ms:.0f} ms, idle_baseline="
         f"{idle.max_lag_ms:.0f} ms, excess={excess:.0f} ms >= {LIMIT_MS} ms; "
-        f"at the worst stall: {worst[1][:1500]}")
+        f"at the worst stall (every thread): {worst[1][:12000]}")
 
 
 def test_the_monitor_sees_a_blocked_loop():
