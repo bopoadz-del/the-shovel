@@ -4738,8 +4738,10 @@ async def search_project_documents(
             exclude,
         )
     else:
-        results, trace = await asyncio.to_thread(
-            _search_project_documents_traced, project_id, query, top_k, exclude,
+        from app.core.offload import to_thread_in
+
+        results, trace = await to_thread_in(
+            "retrieval", _search_project_documents_traced, project_id, query, top_k, exclude,
         )
     if turn is not None:
         turn.record_search(
