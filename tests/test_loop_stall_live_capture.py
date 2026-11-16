@@ -185,3 +185,32 @@ def test_process_and_thread_cpu_are_read_on_one_clock(tmp_path, proc_ticks, pres
 def test_a_thread_born_inside_the_window_is_not_summed_as_a_delta(threads_after, expected):
     got = loop_watchdog.stall_cpu_summary({1: 10.0}, threads_after, 50.0, {}, {}, 400.0)
     assert got == expected
+
+
+@pytest.mark.parametrize("loop_blocked", [False, True])
+def test_the_monitors_own_snapshot_is_not_counted_as_loop_lag(monkeypatch, loop_blocked):
+    """The per-thread CPU snapshot is slow under GIL contention. It is the
+    monitor's own work, done before the heartbeat is stamped: a slow snapshot
+    with a free loop is no stall; a loop really blocked as long still is."""
+    def slow_snapshot(*_a, **_k):
+        time.sleep(0.35)
+        return 0.0, {}
+
+    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", slow_snapshot)
+    monkeypatch.setattr(loop_watchdog, "_CPU_SNAPSHOT_S", 0.0)
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
+                                       tick_ms=10, log=False).start()
+        await asyncio.sleep(0.9)
+        if loop_blocked:
+            time.sleep(0.8)  # the loop itself, blocked longer than one snapshot
+            await asyncio.sleep(0.5)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    if loop_blocked:
+        assert mon.max_lag_ms >= 250, mon.max_lag_ms
+    else:
+        assert mon.max_lag_ms < 250 and mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])

@@ -384,14 +384,22 @@ class LagMonitor:
                     live.cancel()
                 served.set()
 
-            posted = time.monotonic()
-            if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
+            # The monitor's own bookkeeping comes BEFORE the heartbeat is
+            # stamped. Reading /proc for every thread releases and retakes the
+            # GIL per file; under fifteen busy threads that took this thread
+            # hundreds of ms, and with the stamp taken first (as #380 did) it
+            # was counted as the LOOP's lag -- while the loop itself may have
+            # been free the whole time (CI #396: 283 ms "stall", live timer
+            # armed after the snapshot never fired, idle control 2 ms).
+            if time.monotonic() - self._cpu_at >= _CPU_SNAPSHOT_S:
                 self._proc_before, self._cpu_before = cpu_snapshot()
-                self._cpu_at, self._host_before = posted, host_cpu()
+                self._cpu_at, self._host_before = time.monotonic(), host_cpu()
             if live is not None:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
+            posted = time.monotonic()
+            if live is not None:
                 live.arm()
             try:
                 self.loop.call_soon_threadsafe(_serve)
