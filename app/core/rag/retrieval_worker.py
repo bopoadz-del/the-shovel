@@ -30,8 +30,6 @@ variables do not cross a process boundary.
 """
 from __future__ import annotations
 
-import asyncio
-import functools
 import logging
 import multiprocessing
 import os
@@ -188,9 +186,11 @@ def call_sync(job: Callable[..., Any], *args: Any) -> Any:
 
 
 async def call(job: Callable[..., Any], *args: Any) -> Any:
-    """``call_sync`` without blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, functools.partial(call_sync, job, *args))
+    """``call_sync`` without blocking the event loop, waited on from the
+    bounded, named retrieval thread pool -- never the loop's default executor."""
+    from app.core.offload import to_thread_in
+
+    return await to_thread_in("retrieval", call_sync, job, *args)
 
 
 def _measured(job: Callable[..., Any], *args: Any) -> tuple:
