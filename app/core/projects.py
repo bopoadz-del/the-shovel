@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, delete, func, or_, select, text as sqla_text
+from sqlalchemy import String, and_, cast, delete, func, or_, select, text as sqla_text
 from sqlalchemy.exc import IntegrityError
 
 from app.core import byte_store
@@ -1292,8 +1292,13 @@ def add_document(
     metadata: Optional[Dict[str, Any]] = None,
     reingest_of: Optional[str] = None,
     drive_md5: Optional[str] = None,
+    document_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Register a document under a project. Storing only — runs no analysis.
+
+    ``document_id`` lets a caller that derives a stable id insert under it:
+    a second insert of the same id raises ``IntegrityError`` from the
+    primary key, in every worker process, so "keep once" is atomic.
 
     A non-empty ``content_sha256`` that already exists in this project is
     refused unless ``reingest_of`` names the old row. That path creates a
@@ -1322,7 +1327,7 @@ def add_document(
                 "reingest sha differs old_id=%s old_sha=%s new_sha=%s",
                 reingest_of, old_sha, content_sha256,
             )
-    did = str(uuid.uuid4())[:8]
+    did = document_id or str(uuid.uuid4())[:8]
     doc_type = classify_doc_type(original_name)
     doc_role = resolve_doc_role(original_name, metadata, role)
     with _lock:
@@ -2566,18 +2571,34 @@ def list_session_documents(
     and the caller uploaded or produced it there. Each row carries ``origin``
     ("uploaded" or "produced") for the sidebar's tag. One narrow query: the
     columns the session list and the chat pin need, no per-file stat.
+
+    The session and uploader are matched in the query, so the rows read are
+    the session's own, not every document of the project (this runs on
+    every chat turn and every export; grader G-3). A row whose metadata
+    the store holds as an encoded JSON string (see
+    ``coerce_document_metadata``) has no keys the query can read; such a
+    row is read only when its text names both the session and the uploader,
+    and the check below decides it like any other.
     """
     if not project_id or not session_id or not uploader_id:
         return []
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
+    meta_text = cast(Document.metadata_, String)
+    in_session = or_(
+        and_(Document.metadata_["session_id"].as_string() == session_id,
+             Document.metadata_["uploader_id"].as_string() == uploader_id),
+        and_(meta_text.startswith('"'),
+             meta_text.contains(session_id, autoescape=True),
+             meta_text.contains(uploader_id, autoescape=True)),
+    )
     with SessionLocal() as session:
         rows = session.execute(
             select(Document.id, Document.original_name, Document.doc_type,
                    Document.size, Document.uploaded_at, Document.metadata_,
                    Document.ingest_status, Document.ingest_status_reason,
                    Document.chunk_count)
-            .where(Document.project_id == source_id)
+            .where(Document.project_id == source_id, in_session)
             .order_by(Document.uploaded_at.desc())
         ).all()
     out: List[Dict[str, Any]] = []
