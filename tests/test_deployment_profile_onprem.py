@@ -503,7 +503,7 @@ def _shipped_onprem_env():
         env[name] = "Zk3-generated-on-the-box-9qL"
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
     for k, v in re.findall(r"^\s+([A-Z][A-Z0-9_]+):\s*(\S.*)$", compose, flags=re.MULTILINE):
-        env.setdefault(k, re.sub(r"\$\{[A-Z0-9_]+:-([^}]*)\}", r"", v).strip())
+        env.setdefault(k, re.sub(r"\$\{[A-Z0-9_]+:-([^}]*)\}", r"\1", v).strip())
     assert env.get("DEPLOYMENT_PROFILE") == "onprem" and "DATABASE_URL" in env, sorted(env)
     return env
 
@@ -595,3 +595,148 @@ def test_profile_error_carries_its_offenders(offenders):
     assert str(err) == "refused"
     assert err.offenders == offenders, "stage=boot"
     assert err.offenders is not offenders
+
+
+# ── grader round 3 on #386: whole words, five more host forms, fail closed ──
+# Every name and host below is invented. Each decision has an outside value
+# (refused) and an inside value (passes).
+
+
+@pytest.mark.parametrize(
+    "inside_a_word,whole_word",
+    [
+        ("PLINTH_ADMIN_TOKEN", "PLINTH_MIN_TOKEN"),        # ADMIN holds MIN
+        ("LEDGER_ACCOUNT_TOKEN", "LEDGER_TOKEN_COUNT"),    # ACCOUNT holds COUNT
+        ("SPRUCE_MAXIMAL_TOKEN", "SPRUCE_MAX_TOKEN"),      # MAXIMAL holds MAX
+        ("TALLOW_SUBLIMITED_TOKEN", "TALLOW_TOKEN_LIMIT"),  # SUBLIMITED holds LIMIT
+    ],
+)
+def test_count_words_are_whole_words_only(inside_a_word, whole_word):
+    """A short number under a name whose count word is only inside another
+    word is a credential; under a whole count word it is a token budget."""
+    for value in ("123456", "7"):
+        offs = _offenders({**_CLEAN_ONPREM, inside_a_word: value})
+        assert _settings(offs) == [inside_a_word], f"stage=credential: {inside_a_word}={value}"
+        assert _offenders({**_CLEAN_ONPREM, whole_word: value}) == [], f"stage=credential: {whole_word}"
+
+
+@pytest.mark.parametrize(
+    "credential,not_credential",
+    [
+        ("KILN_PASSPHRASE", "KILN_PASSPHRASES_HELP"),
+        ("KILN_AUTH", "KILN_AUTHOR"),
+        ("KILN_BEARER", "KILN_BEARERS_SEEN"),
+        ("KILN_DB_PWD", "KILN_PWDX"),
+        ("KILN_SIGNATURE", "KILN_SIGNATURES_DIR"),
+        ("AUTH_HEADER", "OAUTH_FLOW_NAME"),
+    ],
+)
+def test_credential_whole_words(credential, not_credential):
+    """PASSPHRASE, AUTH, BEARER, PWD, SIGNATURE name a secret as whole words."""
+    assert _settings(_offenders({**_CLEAN_ONPREM, credential: "x7-q"})) == [credential], (
+        f"stage=credential: {credential}"
+    )
+    assert _offenders({**_CLEAN_ONPREM, not_credential: "x7-q"}) == [], f"stage=credential: {not_credential}"
+
+
+@pytest.mark.parametrize("value,expected", [("/home/worker/app", []), ("x7-q", ["PWD"])])
+def test_the_shells_working_directory_is_not_a_secret(value, expected):
+    """PWD (exactly that name) holding an absolute path is the shell's working
+    directory; any other value under it is a credential."""
+    assert _settings(_offenders({**_CLEAN_ONPREM, "PWD": value})) == expected, "stage=credential"
+
+
+_IDN_FAR = "mail.bücher.example"
+_IDN_NEAR = "relay.bücher.example"
+_ROUND3_TABLE = {
+    **_FAR,
+    **_NEAR,
+    "far_edge.quillbase.example": ["9.9.9.9"],
+    "near_edge.corp.example": ["10.4.4.4"],
+    _IDN_FAR.encode("idna").decode(): ["1.0.0.1"],
+    _IDN_NEAR.encode("idna").decode(): ["10.7.7.7"],
+}
+
+
+@pytest.mark.parametrize(
+    "form,outside,inside",
+    [
+        ("scheme-relative //host", "//far.quillbase.example/v1", "//near.corp.example/v1"),
+        ("scheme-relative //user@host:port", "//u@db.quillbase.example:5432", "//u@relay.corp.example:5432"),
+        ("host then ?query", "far.quillbase.example?region=1", "near.corp.example?region=1"),
+        ("host then #fragment", "far.quillbase.example#top", "near.corp.example#top"),
+        ("underscore in a label", "far_edge.quillbase.example:443", "near_edge.corp.example:443"),
+        ("non-ASCII host", f"{_IDN_FAR}:25", f"{_IDN_NEAR}:25"),
+        ("non-ASCII host in a URL", f"smtp://{_IDN_FAR}", f"smtp://{_IDN_NEAR}"),
+        ("bare decimal IP, no port", "134744072", "167772162"),   # 8.8.8.8 / 10.0.0.2
+        ("bare hex IP, no port", "0x08080808", "0x0a000002"),     # 8.8.8.8 / 10.0.0.2
+        ("encoded dots", "far%2Equillbase%2Eexample:443", "near%2Ecorp%2Eexample:443"),
+    ],
+)
+def test_round3_host_forms_are_checked(form, outside, inside):
+    resolve = _resolver(_ROUND3_TABLE)
+    offs = _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": outside}, resolve)
+    assert _settings(offs) == ["GRANARY_SETTING"], f"stage=endpoint: {form}: {outside!r} -> {offs}"
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": inside}, resolve) == [], (
+        f"stage=endpoint: {form}: {inside!r} stays inside"
+    )
+
+
+@pytest.mark.parametrize("value", ["134744072", "0x08080808"])
+def test_a_bare_number_under_a_count_name_is_a_count_not_an_address(value):
+    """The same bare number is an address under a plain name, a count under a
+    name with a whole count word."""
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_MAX_ROWS": value}) == [], "stage=endpoint"
+    assert _settings(_offenders({**_CLEAN_ONPREM, "GRANARY_ROWS": value})) == ["GRANARY_ROWS"]
+
+
+@pytest.mark.parametrize("stem", ["handover.pdf", "site_export.csv"])
+def test_a_file_name_is_written_as_a_path(stem):
+    """Convention (operator docs): a bare name.ext reads as a host and is
+    refused; written as ./name.ext it is a path and passes."""
+    unresolvable = _resolver({})
+    assert _settings(_offenders({**_CLEAN_ONPREM, "GRANARY_FILE": stem}, unresolvable)) == ["GRANARY_FILE"]
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_FILE": f"./{stem}"}) == [], "stage=endpoint: no DNS"
+
+
+@pytest.mark.parametrize("endpoint", ["https://far.quillbase.example/v1", "https://near.corp.example/v1"])
+def test_a_file_holding_an_endpoint_is_not_read(tmp_path, endpoint):
+    """Stated limit (operator docs): the check reads values, never the files
+    they point at. A path passes whatever the file holds."""
+    path = tmp_path / "endpoint.conf"
+    path.write_text(endpoint, encoding="utf-8")
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_CONFIG_FILE": str(path)}) == [], "stage=endpoint"
+
+
+@pytest.mark.parametrize(
+    "unclassified,plain",
+    [
+        ("mirror/far.quillbase.example", "mirror/latest"),         # a host where no host reading puts it
+        ("pull:near.corp.example:latest", "pull:stable:latest"),    # even a host that would be inside
+        ("fork\x01", "fork"),                                        # a control character
+        ("relay.\ud800x", "relay-x"),                                # a name IDNA cannot convert
+    ],
+)
+def test_a_value_the_parser_cannot_classify_is_refused(unclassified, plain):
+    """Fail closed: a value with a part that is none of the known-safe shapes
+    is refused with its setting name (and never its value)."""
+    resolve = _resolver({**_FAR, **_NEAR})
+    offs = _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": unclassified}, resolve)
+    assert _settings(offs) == ["GRANARY_SETTING"], f"stage=fail-closed: {unclassified!r} -> {offs}"
+    assert unclassified not in offs[0].reason
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": plain}, resolve) == [], (
+        f"stage=fail-closed: {plain!r} is plain"
+    )
+
+
+@pytest.mark.parametrize("profile,expected", [("hosted", []), ("onprem", ["GRANARY_SETTING"])])
+def test_fail_closed_applies_only_to_the_onprem_profile(monkeypatch, profile, expected):
+    env = {**_CLEAN_ONPREM, "DEPLOYMENT_PROFILE": profile, "GRANARY_SETTING": "mirror/far.quillbase.example"}
+    monkeypatch.setattr(dp, "_process_env", lambda: env)
+    monkeypatch.setattr(dp, "_resolve_host", _resolver(_FAR))
+    if expected:
+        with pytest.raises(dp.DeploymentProfileError) as err:
+            dp.enforce_deployment_profile()
+        assert [o.setting for o in err.value.offenders] == expected
+    else:
+        dp.enforce_deployment_profile()
