@@ -40,6 +40,8 @@ interface Props {
   citedDocuments?: PreviewDocument[]
   /** Click-to-preview from Sources — nonce lets the same doc reopen. */
   previewRequest?: { docId: string; nonce: number } | null
+  /** A marker opened from the answer: show the Sources tab (nonce reopens). */
+  sourcesRequest?: { marker: number; nonce: number } | null
   /** After a successful hydrate, persist repaired size into the left nav. */
   onPreviewHydrated?: (docId: string, size: number) => void
   /** Title slot kept for backwards compat — not rendered alongside tabs. */
@@ -74,11 +76,12 @@ const PREVIEW_EMPTY: Record<'sheet' | 'schedule' | 'chart', string> = {
 
 export default function RightPanel({
   sources, graph, projectId, documents = [], citedDocuments = [],
-  previewRequest = null, onPreviewHydrated, expanded = false, onToggleExpand,
+  previewRequest = null, sourcesRequest = null, onPreviewHydrated, expanded = false, onToggleExpand,
 }: Props) {
   const [tab, setTab] = useState<TabKey>('sources')
   const [pickedDocId, setPickedDocId] = useState<string | null>(null)
   const [appliedNonce, setAppliedNonce] = useState<number | null>(null)
+  const [appliedSourcesNonce, setAppliedSourcesNonce] = useState<number | null>(null)
 
   // Cited files first so opening a chat source previews THAT document,
   // not the newest upload sitting in the project list.
@@ -98,7 +101,13 @@ export default function RightPanel({
   const citePending = Boolean(
     previewRequest?.docId && previewRequest.nonce !== appliedNonce,
   )
-  const activeTab = citePending ? 'sheet' : tab
+  // A marker opened from the answer shows Sources the same way (derived, no
+  // effect) until the operator picks another tab.
+  const sourcesPending = Boolean(sourcesRequest && sourcesRequest.nonce !== appliedSourcesNonce)
+  // The newer of the two requests wins.
+  const sourcesWins =
+    sourcesPending && (!citePending || (sourcesRequest?.nonce ?? 0) > (previewRequest?.nonce ?? 0))
+  const activeTab = sourcesWins ? 'sources' : citePending ? 'sheet' : tab
   const preferredId = citePending && previewRequest ? previewRequest.docId : pickedDocId
 
   // Derive a valid picker id during render. Storing a stale id after
@@ -175,6 +184,7 @@ export default function RightPanel({
               }
               onClick={() => {
                 if (previewRequest) setAppliedNonce(previewRequest.nonce)
+                if (sourcesRequest) setAppliedSourcesNonce(sourcesRequest.nonce)
                 setTab(t.key)
               }}
             >

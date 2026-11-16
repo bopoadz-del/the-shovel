@@ -11,10 +11,17 @@
  * Each row shows: confidence chip + filename + chunk reference + the
  * #468 source class (this contract / master corpus / knowledge base /
  * template). Clicking a row opens that document in the preview pane.
+ *
+ * W3 — citations in the side panel only. When the answer carries numbered
+ * markers, each marker's entry is listed here by its number: document, page
+ * or section, the passage, and its tier (a calculation shows its inputs).
+ * The coverage line (N of M project documents indexed) is shown here too;
+ * neither ever appears in the answer text.
  */
 import { FileText } from 'lucide-react'
 import { visibleSourceClassLabel } from './sourceClassLabels'
 import { plainMetadata, textLeaksInternalCode } from './userFacingText'
+import type { AnswerCitation, AnswerCoverage } from './types'
 import './SourcesList.css'
 
 export interface CitedSource {
@@ -39,20 +46,65 @@ interface Props {
   activeDocId?: string | null
   /** Open this cited document in the right-panel preview. */
   onOpenSource?: (source: CitedSource) => void
+  /** The latest answer's marker entries, in marker order. */
+  citations?: AnswerCitation[]
+  /** The latest answer's coverage: a panel line, never answer text. */
+  coverage?: AnswerCoverage
+  /** The marker the user last opened from the answer. */
+  activeMarker?: number | null
 }
 
-export default function SourcesList({ sources, streaming, activeDocId, onOpenSource }: Props) {
+export default function SourcesList({
+  sources, streaming, activeDocId, onOpenSource, citations, coverage, activeMarker,
+}: Props) {
+  const entries = [...(citations ?? [])]
+    .filter((c) => Number.isInteger(Number(c.marker)) && (c.document || '').trim())
+    .sort((a, b) => Number(a.marker) - Number(b.marker))
+  const count = entries.length || sources?.length || 0
   return (
     <div className="sources-list">
       <header className="sources-list__head">
         <FileText size={14} />
         <span>Sources cited</span>
-        {sources && sources.length > 0 && (
-          <span className="sources-list__count">{sources.length}</span>
-        )}
+        {count > 0 && <span className="sources-list__count">{count}</span>}
       </header>
 
-      {streaming && !sources?.length ? (
+      {coverage && Number.isFinite(coverage.indexed) && Number.isFinite(coverage.total) && coverage.total > 0 ? (
+        <p className="sources-list__coverage">
+          {coverage.indexed} of {coverage.total} project documents indexed
+        </p>
+      ) : null}
+
+      {entries.length > 0 ? (
+        <ol className="sources-list__items sources-list__citations">
+          {entries.map((c) => {
+            const row = (sources ?? []).find((s) => s.doc_id && s.doc_name === c.document)
+            const isActive = Number(c.marker) === activeMarker
+            const body = <CitationRow citation={c} />
+            return (
+              <li
+                key={`cite-${c.marker}`}
+                id={`citation-entry-${c.marker}`}
+                data-citation-marker={c.marker}
+                className={'sources-list__item' + (isActive ? ' sources-list__item--active' : '')}
+              >
+                {row && onOpenSource ? (
+                  <button
+                    type="button"
+                    className="sources-list__open"
+                    onClick={() => onOpenSource(row)}
+                    aria-label={`Preview ${visibleDocumentName(row)}`}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className="sources-list__static">{body}</div>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      ) : streaming && !sources?.length ? (
         <p className="sources-list__empty">Sources appear once the answer completes.</p>
       ) : !sources?.length ? (
         <p className="sources-list__empty">No citations for the current answer.</p>
@@ -96,6 +148,31 @@ function visibleDocumentName(s: CitedSource): string {
   const id = (s.doc_id || '').trim()
   if (id && !textLeaksInternalCode(id)) return id
   return 'Document'
+}
+
+function CitationRow({ citation: c }: { citation: AnswerCitation }) {
+  const isCalc = (c.kind || '').toLowerCase() === 'calculation'
+  const tier = c.tier ? plainMetadata(String(c.tier)) : ''
+  const section = c.section ? plainMetadata(c.section) : ''
+  const passage = (c.passage || '').trim()
+  return (
+    <>
+      <span className="sources-list__marker" aria-hidden="true">{c.marker}</span>
+      <div className="sources-list__body">
+        <div className="sources-list__doc" title={c.document}>{c.document}</div>
+        {section || tier || isCalc ? (
+          <div className="sources-list__ref">
+            {[section, isCalc ? 'Calculation' : '', tier].filter(Boolean).join(' · ')}
+          </div>
+        ) : null}
+        {passage ? (
+          <blockquote className="sources-list__passage">
+            {isCalc ? `Inputs: ${passage}` : passage}
+          </blockquote>
+        ) : null}
+      </div>
+    </>
+  )
 }
 
 function SourceRow({ source: s }: { source: CitedSource }) {
