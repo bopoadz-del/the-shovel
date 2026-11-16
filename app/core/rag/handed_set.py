@@ -120,12 +120,19 @@ def _text_key(chunk: Any) -> str:
 
 # --- (b) diversity ---------------------------------------------------------
 
-def diversify(chunks: Sequence[Any], *, slots: int, share: float, margin: float) -> list:
+def diversify(
+    chunks: Sequence[Any], *, slots: int, share: float, margin: float,
+    reasons: dict[str, str] | None = None, deferred_ids: set | None = None,
+) -> list:
     """Reorder ``chunks`` (best first) so no family takes more than
     ``ceil(share * slots)`` of the leading positions while another family's
     best chunk scores within ``margin`` of the overall top. Deferred chunks
     follow, in score order; nothing is dropped except a repeated text inside
-    one family (the duplicate copy)."""
+    one family (the duplicate copy).
+
+    When given, ``reasons`` gets ``duplicate`` for each copy dropped and
+    ``deferred_ids`` the id of each chunk deferred, at the point each is
+    decided."""
     ordered = sorted(chunks, key=_score, reverse=True)
     if not ordered:
         return []
@@ -143,10 +150,14 @@ def diversify(chunks: Sequence[Any], *, slots: int, share: float, margin: float)
         fam = family_key(c)
         tkey = (fam, _text_key(c))
         if tkey[1] and tkey in seen_text:
+            if reasons is not None:
+                reasons[getattr(c, "chunk_id", None) or ""] = "duplicate"
             continue
         seen_text.add(tkey)
         crowded = len(competitors) > 1 and taken.get(fam, 0) >= cap
         if crowded:
+            if deferred_ids is not None:
+                deferred_ids.add(getattr(c, "chunk_id", None))
             deferred.append(c)
             continue
         taken[fam] = taken.get(fam, 0) + 1
@@ -156,15 +167,20 @@ def diversify(chunks: Sequence[Any], *, slots: int, share: float, margin: float)
 
 # --- (a) character budget --------------------------------------------------
 
-def fit_char_budget(chunks: Sequence[Any], budget: int) -> list:
+def fit_char_budget(
+    chunks: Sequence[Any], budget: int, skipped: list | None = None,
+) -> list:
     """Whole chunks, in order, while they fit ``budget`` characters. The first
     chunk is always kept (an over-long top excerpt is still the best one);
-    a chunk that does not fit is skipped so a shorter later one may."""
+    a chunk that does not fit is skipped so a shorter later one may (and
+    appended to ``skipped`` when given)."""
     kept: list = []
     used = 0
     for c in chunks:
         size = len(getattr(c, "text", "") or "")
         if kept and used + size > budget:
+            if skipped is not None:
+                skipped.append(c)
             continue
         kept.append(c)
         used += size
@@ -172,16 +188,27 @@ def fit_char_budget(chunks: Sequence[Any], budget: int) -> list:
 
 
 def select_handed(
-    chunks: Sequence[Any], *, k: int,
+    chunks: Sequence[Any], *, k: int, reasons: dict[str, str] | None = None,
 ) -> tuple[list, dict[str, Any]]:
     """The handed set: diversified, then fitted to the character budget.
 
     Returns ``(handed, allotment)`` where ``allotment`` is what the trace
     prints: the budget, the characters used, the per-layer and per-family
-    counts."""
+    counts. When ``reasons`` is a dict, each chunk left out gets its code
+    (chunk_id -> ``duplicate`` | ``family_share`` | ``char_budget``) where
+    it is left out: ``family_share`` is a chunk the diversity pass deferred
+    behind other documents that then did not fit the character budget."""
     budget = char_budget()
-    ordered = diversify(chunks, slots=k, share=doc_share(), margin=doc_margin())
-    handed = fit_char_budget(ordered, budget)
+    deferred_ids: set = set()
+    ordered = diversify(chunks, slots=k, share=doc_share(), margin=doc_margin(),
+                        reasons=reasons, deferred_ids=deferred_ids)
+    skipped: list = []
+    handed = fit_char_budget(ordered, budget, skipped)
+    if reasons is not None:
+        for c in skipped:
+            cid = getattr(c, "chunk_id", None)
+            reasons[cid or ""] = (
+                "family_share" if cid in deferred_ids else "char_budget")
     layers: dict[str, int] = {}
     families: dict[str, int] = {}
     for c in handed:

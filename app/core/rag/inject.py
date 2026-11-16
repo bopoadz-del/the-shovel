@@ -9,7 +9,6 @@ Kept in its own module so:
 from __future__ import annotations
 
 import datetime as _dt
-import itertools
 import json
 import logging
 import os
@@ -130,57 +129,35 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _progress_kinds_not_asked_about(query: str) -> set[str]:
-    """Document types the type table marks ``records_progress`` whose own
-    match keywords do not appear in the question. Read from the table
-    (config/document_types.yaml plus custom types), never from code."""
-    from app.core import doc_types
-    q = " " + re.sub(r"[^a-z0-9]+", " ", (query or "").casefold()) + " "
-    out: set[str] = set()
-    for t in doc_types.list_types():
-        if not t.get("records_progress"):
+_TERM_RE = re.compile(r"[a-z0-9]+")
+
+
+def _terms(text: str) -> set[str]:
+    """Distinct lower-case alphanumeric words of ``text``."""
+    return set(_TERM_RE.findall((text or "").casefold()))
+
+
+def tie_break_key(chunk: Chunk, query_terms: set[str]) -> Tuple[int, str]:
+    """Neutral order inside an EXACT score tie: more of the question's own
+    words in the passage text first, then the chunk id (a stable key).
+
+    Reads only the question and the passage; no document kind, name or
+    type is consulted, so no kind of document outranks another."""
+    return (-len(query_terms & _terms(chunk.text)), str(chunk.chunk_id or ""))
+
+
+def _walk_band(band: List[Chunk], room: int) -> Tuple[List[Chunk], List[Chunk]]:
+    """Greedy walk of one tie band through ``room`` tokens: (kept, skipped)."""
+    kept: List[Chunk] = []
+    skipped: List[Chunk] = []
+    for c in band:
+        t = _estimate_tokens(c.text)
+        if t > room:
+            skipped.append(c)
             continue
-        match = t.get("match") or {}
-        words = [str(w) for w in (match.get("filename") or [])]
-        words += [str(w) for w in (match.get("content") or [])]
-        named = any(
-            f" {re.sub(r'[^a-z0-9]+', ' ', w.casefold()).strip()} " in q
-            for w in words if w.strip()
-        )
-        if not named:
-            out.add(str(t.get("name") or ""))
-    out.discard("")
-    return out
-
-
-def break_score_ties_by_kind(chunks: List[Chunk], query: str) -> List[Chunk]:
-    """Order chunks of EXACTLY equal score so a chunk from a progress-record
-    kind (a programme, a report, minutes) the question does not name comes
-    after the other chunks of that score.
-
-    The cap walks chunks in score order and drops what does not fit, so
-    within a tie the order alone decided which document was handed. A
-    question that names none of those kinds is not asking when or what
-    happened; the tied chunk that states the requirement goes first.
-    Scores are not changed, no chunk is dropped here, and different
-    scores keep their order. The kind is the stored doc_type.
-    """
-    try:
-        annotate_document_kinds(chunks)
-        yielding = _progress_kinds_not_asked_about(query)
-    except Exception:  # noqa: BLE001 -- the tie keeps its retrieval order
-        _LOG.debug("kind tie-break skipped", exc_info=True)
-        yielding = set()
-
-    out: List[Chunk] = []
-    # ``chunks`` is in score order, so each run of one score is one tie; the
-    # sort is stable, so inside a tie the retrieval order is kept otherwise.
-    for _score, band in itertools.groupby(chunks, key=lambda c: c.score or 0):
-        out += sorted(
-            band,
-            key=lambda c: (getattr(c, "doc_type", "") or "").strip() in yielding,
-        )
-    return out
+        kept.append(c)
+        room -= t
+    return kept, skipped
 
 
 def apply_token_cap(
@@ -194,7 +171,19 @@ def apply_token_cap(
     Never truncates mid-chunk; a chunk is included or excluded whole.
     Returns ``(kept_chunks, total_estimated_tokens)``. When ``reasons`` is
     a dict, each chunk left out gets the rule that dropped it (chunk_id ->
-    code, see ``_cap_drop_reasons``) for the retrieval trace.
+    code) for the retrieval trace, written where the decision is made:
+
+    * ``noise_filter``      the daily-damages noise filter removed it
+    * ``token_budget``      it does not fit what was left of MAX_RAG_TOKENS
+                            even ahead of every chunk it ties with (its size)
+    * ``score_tie_overlap`` it would have fit ahead of the chunks it ties
+                            with, and the tie-break put them first
+
+    An exact score tie keeps its retrieval order unless the walk in that
+    order keeps one member of the tie and leaves another out. Only then is
+    that tie (and only that tie) reordered by ``tie_break_key``: overlap
+    with the question's words, then chunk id. When everything fits, or no
+    tie is split by the cut, the order handed to the model is unchanged.
 
     When ``query`` is a daily delay-damages ask, keep the
     Contract Data 0.1% and standalone excl-VAT operands even if Cosine
@@ -244,22 +233,26 @@ def apply_token_cap(
             daily_damages_ask = False
     protected = [c for c in chunks if c.chunk_id in protect_ids]
     rest = [c for c in chunks if c.chunk_id not in protect_ids]
-    before_noise = list(rest)
+    why: Dict[str, str] = {}
     if daily_damages_ask and protect_ids:
         try:
             from app.core.rag.retriever import _is_daily_damages_cap_noise
-            rest = [c for c in rest if not _is_daily_damages_cap_noise(c.text or "")]
+            clean: List[Chunk] = []
+            for c in rest:
+                if _is_daily_damages_cap_noise(c.text or ""):
+                    why[c.chunk_id] = "noise_filter"
+                else:
+                    clean.append(c)
+            rest = clean
         except Exception:  # noqa: BLE001 — keep rest if noise class fails
+            why.clear()
             _LOG.debug(
                 "e1 token-cap noise filter failed; keeping rest",
                 exc_info=True,
             )
     protected.sort(key=lambda c: -(c.score or 0))
     rest.sort(key=lambda c: -(c.score or 0))
-    by_score = list(rest)
-    rest = break_score_ties_by_kind(rest, query)
     kept: List[Chunk] = []
-    skipped: List[Chunk] = []
     total = 0
     # Always keep the daily-amount operands — even when a single scanned page
     # exceeds the leftover cap. Refusing to inject 0.1% / excl-VAT is the
@@ -269,101 +262,31 @@ def apply_token_cap(
         t = _estimate_tokens(c.text)
         kept.append(c)
         total += t
-    for c in rest:
-        t = _estimate_tokens(c.text)
-        if total + t > cap:
-            skipped.append(c)
-            continue
-        kept.append(c)
-        total += t
+    query_terms = _terms(query)
+    # ``rest`` is in score order (stable), so each run of one score is one
+    # exact tie. Each tie is walked whole against the room left when it
+    # starts, so every skip is decided, and named, right here.
+    i = 0
+    while i < len(rest):
+        j = i + 1
+        while j < len(rest) and (rest[j].score or 0) == (rest[i].score or 0):
+            j += 1
+        band = rest[i:j]
+        room = cap - total
+        band_kept, band_skipped = _walk_band(band, room)
+        split = bool(band_kept) and bool(band_skipped)
+        if split:
+            band = sorted(band, key=lambda c: tie_break_key(c, query_terms))
+            band_kept, band_skipped = _walk_band(band, room)
+        for c in band_skipped:
+            fits_alone = _estimate_tokens(c.text) <= room
+            why[c.chunk_id] = "score_tie_overlap" if fits_alone else "token_budget"
+        kept += band_kept
+        total += sum(_estimate_tokens(c.text) for c in band_kept)
+        i = j
     if reasons is not None:
-        reasons.update(_cap_drop_reasons(before_noise, rest, by_score, kept, skipped))
+        reasons.update(why)
     return kept, total
-
-
-def _cap_drop_reasons(
-    before_noise: List[Chunk],
-    after_noise: List[Chunk],
-    by_score: List[Chunk],
-    kept: List[Chunk],
-    skipped: List[Chunk],
-) -> Dict[str, str]:
-    """Why the token cap left each chunk out (chunk_id -> code).
-
-    * ``noise_filter``   removed as noise before the budget was walked
-    * ``kind_tie_yield`` an exact score tie, and the kind tie-break put it
-                         behind a tied chunk that was kept
-    * ``score_tie_order`` an exact score tie, and a tied chunk ahead of it in
-                         retrieval order was kept
-    * ``token_budget``   it did not fit what was left of MAX_RAG_TOKENS
-    """
-    out: Dict[str, str] = {}
-    left = {c.chunk_id for c in after_noise}
-    for c in before_noise:
-        if c.chunk_id not in left:
-            out[c.chunk_id] = "noise_filter"
-    pos = {c.chunk_id: i for i, c in enumerate(by_score)}
-    for c in skipped:
-        tied = [pos[x.chunk_id] for x in kept
-                if x.chunk_id in pos and (x.score or 0) == (c.score or 0)]
-        if any(p > pos[c.chunk_id] for p in tied):
-            out[c.chunk_id] = "kind_tie_yield"
-        elif tied:
-            out[c.chunk_id] = "score_tie_order"
-        else:
-            out[c.chunk_id] = "token_budget"
-    return out
-
-
-def not_handed_reasons(
-    pool: List[Chunk],
-    handed_pool: List[Chunk],
-    kept: List[Chunk],
-    cap_reasons: Dict[str, str],
-    *,
-    k: int,
-) -> Dict[str, str]:
-    """The rule that left out each retrieved chunk not handed to the model
-    (chunk_id -> code), so a trace alone explains a missing passage.
-
-    * ``duplicate``     the same text again inside one document family; the
-                        handed set's diversity pass keeps the first copy
-    * ``family_share``  deferred behind other documents by the diversity
-                        pass (one family's share of the slots), then out of
-                        the character budget
-    * ``char_budget``   did not fit RAG_HANDED_CHAR_BUDGET in score order
-    * any ``apply_token_cap`` code (``_cap_drop_reasons``)
-
-    The diversity pass is ``handed_set.diversify`` itself, re-run on the same
-    pool with the same settings, so this never re-implements its rules.
-    """
-    from app.core.rag import handed_set as hs
-    kept_ids = {c.chunk_id for c in kept}
-    handed_ids = {c.chunk_id for c in handed_pool}
-    ordered = hs.diversify(pool, slots=k, share=hs.doc_share(), margin=hs.doc_margin())
-    ordered_ids = {c.chunk_id for c in ordered}
-    # Deferred = placed behind a chunk that scores LOWER. Lead and deferred
-    # are each in score order, so only a deferral puts a lower score first.
-    deferred: set = set()
-    lowest_before = float("inf")
-    for c in ordered:
-        if lowest_before < hs._score(c):
-            deferred.add(c.chunk_id)
-        lowest_before = min(lowest_before, hs._score(c))
-    out: Dict[str, str] = {}
-    for c in pool:
-        cid = c.chunk_id
-        if cid in kept_ids:
-            continue
-        if cid not in ordered_ids:
-            out[cid] = "duplicate"
-        elif cid in handed_ids:
-            out[cid] = cap_reasons.get(cid, "token_budget")
-        elif cid in deferred:
-            out[cid] = "family_share"
-        else:
-            out[cid] = "char_budget"
-    return out
 
 
 def _source_class(chunk) -> str:
@@ -1181,7 +1104,8 @@ def _emit_retrieval_trace(
     """Write the trace line. Best-effort: a logging failure never costs a turn.
 
     Every ``not_handed`` entry carries ``dropped_by``: the rule that left it
-    out (``drop_reasons``, see ``not_handed_reasons``), ``below_threshold``
+    out (``drop_reasons``, written by ``select_handed`` and
+    ``apply_token_cap`` where each one leaves a chunk out), ``below_threshold``
     when the threshold fired and nothing was handed, else ``unexplained``.
 
     ``k_info`` carries requested_k, effective_k, the pool depth, whether the
@@ -1526,10 +1450,11 @@ def rag_inject(
         )
         return None, audit_rec
 
-    handed_pool, allotment = _handed_set.select_handed(chunks, k=effective_k)
-    cap_reasons: Dict[str, str] = {}
+    drop_reasons: Dict[str, str] = {}
+    handed_pool, allotment = _handed_set.select_handed(
+        chunks, k=effective_k, reasons=drop_reasons)
     kept, total_tokens = apply_token_cap(
-        handed_pool, query=user_message or "", reasons=cap_reasons)
+        handed_pool, query=user_message or "", reasons=drop_reasons)
     sys_msg = format_chunks_as_system_message(
         kept, total_candidates=len(chunks), query=user_message or "",
     )
@@ -1554,8 +1479,7 @@ def rag_inject(
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,
-        drop_reasons=not_handed_reasons(
-            chunks, handed_pool, kept, cap_reasons, k=effective_k),
+        drop_reasons=drop_reasons,
         k_info={"requested_k": requested_k, "effective_k": effective_k,
                 "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
                 "budget_consumed": budget_consumed,
