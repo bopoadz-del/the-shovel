@@ -438,6 +438,13 @@ _NEAR = {
         ("hex IP in a URL", "http://0x08080808/x", "http://0x7f000001/x"),    # 8.8.8.8 / 127.0.0.1
         ("decimal IP with a port", "134744072:443", "3232235777:443"),       # 8.8.8.8 / 192.168.1.1
         ("short dotted IP after @", "u@8.0x080808", "u@10.2"),               # 8.8.8.8 / 10.0.0.2
+        # JSON escapes are readable only once the value is parsed as JSON
+        ("json escaped slashes",
+         r'{"endpoint": "https:\/\/far.quillbase.example\/v1"}',
+         r'{"endpoint": "https:\/\/near.corp.example\/v1"}'),
+        ("json unicode escape",
+         r'["far.quillbase.example:443"]',
+         r'["near.corp.example:443"]'),
     ],
 )
 def test_a_host_anywhere_in_a_value_is_checked(form, outside, inside):
@@ -457,6 +464,8 @@ def test_a_host_anywhere_in_a_value_is_checked(form, outside, inside):
         "./report.final.pdf",       # a file name written as a path
         "/var/log/shovel/app.log",  # a path
         "C:\\data\\export.csv",     # a Windows path
+        "/srv/run/worker@svc.quillbase.example.sock",  # a path holding an @
+        "./exports/team@far.quillbase.example.csv",
         '{"retries": 3, "mode": "fast"}',
         "[not json, just text]",
     ],
@@ -469,7 +478,7 @@ def test_values_holding_no_host_never_reach_dns(value):
 @pytest.mark.parametrize(
     "text,expected",
     [("167772162", "10.0.0.2"), ("0x7f000001", "127.0.0.1"), ("10.2", "10.0.0.2"),
-     ("0177.1", "127.0.0.1"), ("300.1.1.1", None), ("4294967296", None), ("1.2.x", None)],
+     ("0177.1", "127.0.0.1"), ("300.1.1.1", None), ("1.2.3.4.0", None), ("1.2.3.4.5", None), ("4294967296", None), ("1.2.x", None)],
 )
 def test_numeric_ipv4_reads_like_the_system_resolver(text, expected):
     got = dp._numeric_ipv4(text)
