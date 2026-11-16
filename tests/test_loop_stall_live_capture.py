@@ -122,20 +122,22 @@ def test_a_gil_hold_that_begins_while_the_monitor_sleeps_is_not_invisible(hold):
         assert mon.max_wake_late_ms < 150 and mon.live_dumps == []
 
 
-def test_only_one_monitor_owns_the_process_wide_dump_timer():
+@pytest.mark.parametrize("first_closed,second_active", [(False, False), (True, True)])
+def test_only_one_monitor_owns_the_process_wide_dump_timer(first_closed, second_active):
+    """faulthandler has one timer per process: a second owner is refused
+    while the first holds it, and granted once the first lets it go."""
     first = loop_watchdog.LiveDump(150)
+    assert first.active
+    if first_closed:
+        first.close()
     second = loop_watchdog.LiveDump(150)
     try:
-        assert first.active and not second.active
-        assert second.take() == ""
+        assert second.active is second_active
+        if not second_active:
+            assert second.take() == ""
     finally:
         first.close()
         second.close()
-    third = loop_watchdog.LiveDump(150)
-    try:
-        assert third.active
-    finally:
-        third.close()
 
 
 @pytest.mark.parametrize("text,names,expected", [
