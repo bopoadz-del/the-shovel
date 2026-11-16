@@ -1304,6 +1304,66 @@ def _render_answers_docx(
     return path
 
 
+_NO_SOURCES_LINE = "No document was cited in this answer."
+#: A numbered citation marker the answer contract left in the text.
+_CITATION_MARKER_RE = re.compile(r"[ \t]*\[\d+\]")
+_OPENING_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.+?)\s*#*\s*$")
+
+
+def _requested_document(answer: str, question: str, fallback_title: str) -> Dict[str, Any]:
+    """The document a produced-file export of ``answer`` is (W2-a).
+
+    A file the user asked for is a document, not an export of the chat. The
+    answer passes through the same answer contract the live answer leaves by
+    (``app.agents.answer_contract``): inline file citations and ``Source:``
+    lines become structured entries, offers of further help and machinery
+    wording go. Then:
+
+    * the title is the answer's own opening heading, else the user's ask the
+      answer replied to, else ``fallback_title``;
+    * the numbered markers leave the body -- a document lists its sources
+      once, at the end;
+    * each source line is the cited document with its page or section, in
+      the order the answer cited them.
+
+    Returns ``{"title", "body", "citations"}``. Structural only: nothing here
+    names a document, a project or a question.
+    """
+    from app.agents import answer_contract
+    from app.lib.markdown_docx import strip_inline_markdown
+
+    done = answer_contract.apply(answer or "")
+    body = _CITATION_MARKER_RE.sub("", done.text or "")
+    title = ""
+    lines = body.split("\n")
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if first is not None:
+        m = _OPENING_HEADING_RE.match(lines[first])
+        if m:
+            title = strip_inline_markdown(m.group("text")).strip()
+            body = "\n".join(lines[first + 1:])
+    if not title:
+        title = agent_memory.title_from_message(question or "").strip().rstrip(".?!:;,").strip()
+    citations: List[str] = []
+    for entry in done.citations:
+        line = str(entry.get("document") or "").strip()
+        section = str(entry.get("section") or "").strip()
+        if line and section:
+            line = f"{line}, {section}"
+        if line and line not in citations:
+            citations.append(line)
+    return {"title": title or fallback_title, "body": body.strip(), "citations": citations}
+
+
+def _question_before(msgs: List[Dict[str, Any]], answer_msg: Dict[str, Any]) -> str:
+    """The user's message the given assistant message replied to."""
+    at = next((i for i, m in enumerate(msgs) if m is answer_msg), len(msgs))
+    for m in reversed(msgs[:at]):
+        if m.get("role") == "user":
+            return str(m.get("content") or "")
+    return ""
+
+
 def _render_message_docx(
     project_name: str,
     assistant_text: str,
@@ -1311,6 +1371,9 @@ def _render_message_docx(
     message_index: int,
     base_url: str = "",
     sources: list | None = None,
+    *,
+    title: str | None = None,
+    citations: List[str] | None = None,
 ) -> str:
     """Render a single assistant message to a temp DOCX and return its path.
 
@@ -1319,8 +1382,12 @@ def _render_message_docx(
     (``is:**SAR 1,234,567.00**``) in a client-facing deliverable. See
     ``app/lib/markdown_docx``. The URL goes in a real page footer part, not a
     trailing body paragraph -- the same run found no ``word/footer*.xml`` at
-    all. Sources are not yet persisted in agent_memory, so the Sources section
-    points at the live conversation.
+    all.
+
+    The file is a document, not a conversation excerpt (W2-a): ``title`` is
+    the document's own title (see ``_requested_document``) and
+    ``citations`` its source lines, listed once at the end. A document that
+    cites nothing says so; it never points the reader at the chat.
     """
     from docx import Document
     from docx.shared import Pt
@@ -1328,12 +1395,13 @@ def _render_message_docx(
     from app.lib.markdown_docx import render_markdown_into_docx
 
     doc = Document()
-    title = doc.add_heading(f"{project_name} - Conversation Excerpt", level=0)
-    for run in title.runs:
+    heading = doc.add_heading(title or project_name, level=0)
+    for run in heading.runs:
         run.font.size = Pt(18)
 
     subtitle = doc.add_paragraph(
-        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        f"{project_name} — "
+        + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     )
     subtitle.runs[0].italic = True
 
@@ -1343,7 +1411,10 @@ def _render_message_docx(
 
     doc.add_paragraph()
     doc.add_heading("Sources", level=2)
-    if sources:
+    if citations:
+        for line in citations:
+            doc.add_paragraph(line)
+    elif sources:
         from app.core.rag.source_class import visible_label
 
         for s in sources:
@@ -1356,12 +1427,7 @@ def _render_message_docx(
                 bit += f" — {visible_label(cls, s.get('source_class_label'))}"
             doc.add_paragraph(bit)
     else:
-        doc.add_paragraph(
-            "Sources are visible in the chat UI under each assistant message. "
-            "Long-term source persistence to the message store is a future "
-            "iteration; for now, refer to the live conversation"
-            + (f" at {base_url}." if base_url else ".")
-        )
+        doc.add_paragraph(_NO_SOURCES_LINE)
 
     _add_page_footer(doc, base_url, sources)
 
@@ -1406,12 +1472,20 @@ def _render_message_xlsx(
     project_name: str,
     assistant_text: str,
     conversation_id: str,
+    *,
+    title: str | None = None,
+    citations: List[str] | None = None,
 ) -> str:
     """Render an assistant message to a temp XLSX and return its path.
 
     Markdown pipe-tables (the shape cost/BOQ answers arrive in) become real
     worksheets with a bold header row; prose goes on a Message sheet. A
     message with no tables still exports — Message sheet only.
+
+    W2-a: ``title`` heads the Message sheet (it is kept whenever a title is
+    given, so a table-only document still carries its title), and when
+    ``citations`` is given a last sheet, Sources, lists them -- or says that
+    nothing was cited.
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -1423,15 +1497,16 @@ def _render_message_xlsx(
     wb = Workbook()
     wb.remove(wb.active)
 
-    if prose or not tables:
+    if prose or not tables or title:
         ws = wb.create_sheet("Message")
-        ws.cell(row=1, column=1, value=f"{project_name} - Conversation Excerpt").font = Font(bold=True)
+        ws.cell(row=1, column=1, value=title or project_name).font = Font(bold=True)
         ws.cell(
             row=2, column=1,
-            value=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            value=f"{project_name} — "
+            + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ).font = Font(italic=True)
         r = 4
-        for line in prose or [(assistant_text or "").strip()]:
+        for line in prose or ([] if tables else [(assistant_text or "").strip()]):
             # An Excel cell cannot carry mixed runs, so the markers are
             # stripped rather than rendered. H2 found "**Total activities:**
             # 204" sitting in a cell; either way a reader must never see the
@@ -1447,6 +1522,13 @@ def _render_message_xlsx(
                 out = ws.cell(row=r, column=c, value=strip_inline_markdown(cell))
                 if r == 1:
                     out.font = Font(bold=True)
+
+    if citations is not None:
+        ws = wb.create_sheet("Sources")
+        ws.cell(row=1, column=1, value="Sources").font = Font(bold=True)
+        for r, line in enumerate(citations or [_NO_SOURCES_LINE], start=2):
+            ws.cell(row=r, column=1, value=line)
+        ws.column_dimensions["A"].width = 100
 
     with tempfile.NamedTemporaryFile(
         suffix=".xlsx", delete=False, prefix=f"export-{conversation_id[:8]}-"
@@ -1608,17 +1690,21 @@ async def export_conversation_message(
     except IndexError:
         raise HTTPException(404, f"message_index {message_index} out of range")
 
+    question = _question_before(msgs, chosen)
+    document = _requested_document(chosen.get("content") or "", question, project_name)
     render_source: Dict[str, Any] = {
         "render": "message", "format": fmt, "project": project_name,
-        "answer": chosen.get("content") or "",
+        "answer": chosen.get("content") or "", "question": question,
     }
     if fmt == "docx":
         path = _render_message_docx(
             project_name,
-            chosen.get("content") or "",
+            document["body"],
             conversation_id,
             message_index,
             base_url,
+            title=document["title"],
+            citations=document["citations"],
         )
         media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ext = "docx"
@@ -1648,8 +1734,10 @@ async def export_conversation_message(
         else:
             path = _render_message_xlsx(
                 project_name,
-                chosen.get("content") or "",
+                document["body"],
                 conversation_id,
+                title=document["title"],
+                citations=document["citations"],
             )
         media = _XLSX_MEDIA
         ext = "xlsx"
@@ -1662,8 +1750,8 @@ async def export_conversation_message(
     else:
         raise HTTPException(400, f"Unsupported format '{format}'")
 
-    safe_name = _sanitize_filename(project_name)
-    download_name = f"{safe_name}-{conversation_id[:8]}.{ext}"
+    # The file is named after the document it is, not after the chat.
+    download_name = f"{_sanitize_filename(document['title'][:80])}.{ext}"
     _save_produced_to_session(
         project_id, conversation_id, auth["user_id"], path, download_name,
         source=render_source)

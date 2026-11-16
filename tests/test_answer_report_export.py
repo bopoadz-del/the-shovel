@@ -444,7 +444,8 @@ def test_default_scope_is_still_last_message_only(_export_http):
     doc = z.read("word/document.xml").decode()
     assert "Named Engineer" in doc
     assert "8,640,000.00" not in doc
-    assert "Conversation Excerpt" in doc
+    # W2-a: a produced file is the document asked for, never a chat excerpt.
+    assert "Conversation Excerpt" not in doc
 
 
 def test_export_http_looks_up_master_corpus_not_drive_archive(monkeypatch):
