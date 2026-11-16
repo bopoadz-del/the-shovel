@@ -199,6 +199,26 @@ def _address_is_inside(ip) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_OCTAL_DIGITS = frozenset("01234567")
+
+
+def _resolver_number(part: str) -> int | None:
+    """One dotted part read as the system resolver reads it: ``0x`` hex, a
+    leading ``0`` octal, else decimal; None when it is not such a number.
+    Only ASCII digits count (``int`` would also take ``_`` and other scripts'
+    digits, which no resolver accepts)."""
+    if part[:2].lower() == "0x":
+        digits = part[2:]
+        return int(digits, 16) if digits and set(digits) <= _HEX_DIGITS else None
+    if len(part) > 1 and part.startswith("0"):
+        digits = part[1:]
+        return int(digits, 8) if set(digits) <= _OCTAL_DIGITS else None
+    if part.isascii() and part.isdigit():
+        return int(part)
+    return None
+
+
 def _numeric_ipv4(text: str):
     """The IPv4 address a numeric host names as the system resolver reads it
     (decimal ``167772162``, hex ``0x0a000002``, octal or short dotted forms
@@ -208,17 +228,10 @@ def _numeric_ipv4(text: str):
         return None
     nums = []
     for part in parts:
-        try:
-            if part[:2].lower() == "0x":
-                nums.append(int(part, 16))
-            elif len(part) > 1 and part.startswith("0"):
-                nums.append(int(part[1:], 8))
-            elif part.isdigit():
-                nums.append(int(part))
-            else:
-                return None
-        except ValueError:
+        number = _resolver_number(part)
+        if number is None:
             return None
+        nums.append(number)
     *head, last = nums
     if any(n > 255 for n in head) or last >= 256 ** (4 - len(head)):
         return None
@@ -244,6 +257,8 @@ def _host_is_inside(host: str, resolve: Callable[[str], list[str]]) -> bool:
     try:
         host = _ascii_name(host.strip("[]")).rstrip(".").lower()
     except _Unclassified:
+        logger.warning("on-prem check: a non-ASCII host is not a readable name; "
+                       "treated as outside.")
         return False
     ip = _as_ip(host)
     if ip is None:

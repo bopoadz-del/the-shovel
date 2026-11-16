@@ -485,6 +485,29 @@ def test_numeric_ipv4_reads_like_the_system_resolver(text, expected):
     assert (str(got) if got else None) == expected
 
 
+@pytest.mark.parametrize(
+    "part,expected",
+    [
+        ("0x1f", 31), ("0x", None), ("0x1g", None), ("0x1_f", None),   # hex: digits only, at least one
+        ("017", 15), ("018", None), ("0_7", None),                     # octal after a leading 0
+        ("0", 0), ("42", 42), ("4_2", None), ("٤٢", None),  # decimal: ASCII digits only
+        ("", None), ("x1", None),
+    ],
+)
+def test_one_dotted_part_reads_as_the_resolver_number(part, expected):
+    assert dp._resolver_number(part) == expected
+
+
+@pytest.mark.parametrize("host,expected", [("relay.\ud800x", False), ("localhost", True)])
+def test_an_unreadable_non_ascii_host_is_outside_and_logged(caplog, host, expected):
+    def never(_host):
+        raise AssertionError("an unreadable or local host must not reach DNS")
+
+    with caplog.at_level("WARNING", logger=dp.logger.name):
+        assert dp._host_is_inside(host, never) is expected
+    assert ("not a readable name" in caplog.text) is (not expected)
+
+
 def _shipped_onprem_env():
     """The on-prem box's environment as shipped: onprem.env.example, the
     installer's generated secrets, and the compose file's app settings with
