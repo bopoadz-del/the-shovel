@@ -124,8 +124,9 @@ def test_a_gil_hold_that_begins_while_the_monitor_sleeps_is_not_invisible(hold):
 
 @pytest.mark.parametrize("first_closed,second_active", [(False, False), (True, True)])
 def test_only_one_monitor_owns_the_process_wide_dump_timer(first_closed, second_active):
-    """faulthandler has one timer per process: a second owner is refused
-    while the first holds it, and granted once the first lets it go."""
+    """faulthandler has one timer per process: ``LiveDump.__init__`` refuses a
+    second owner while the first holds it, and grants it once the first lets
+    it go."""
     first = loop_watchdog.LiveDump(150)
     assert first.active
     if first_closed:
@@ -214,3 +215,64 @@ def test_the_monitors_own_snapshot_is_not_counted_as_loop_lag(monkeypatch, loop_
         assert mon.max_lag_ms >= 250, mon.max_lag_ms
     else:
         assert mon.max_lag_ms < 250 and mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
+
+
+@pytest.mark.parametrize("cancelled,fired", [(True, False), (False, True)])
+def test_a_cancelled_timer_writes_nothing(cancelled, fired):
+    """``cancel`` is what makes a dump mean "still unserved": a timer
+    cancelled before its delay writes nothing; one left armed writes."""
+    live = loop_watchdog.LiveDump(40)
+    try:
+        live.arm()
+        if cancelled:
+            live.cancel()
+        time.sleep(0.25)
+        assert bool(live.take()) is fired
+    finally:
+        live.close()
+
+
+@pytest.mark.parametrize("who_cancels,fired", [("refused", True), ("owner", False)])
+def test_a_refused_owner_cannot_cancel_the_owners_timer(who_cancels, fired):
+    """The timer is process-wide: a monitor refused ownership must not touch it."""
+    owner = loop_watchdog.LiveDump(40)
+    refused = loop_watchdog.LiveDump(40)
+    try:
+        assert owner.active and not refused.active
+        owner.arm()
+        (refused if who_cancels == "refused" else owner).cancel()
+        time.sleep(0.25)
+        assert bool(owner.take()) is fired
+    finally:
+        refused.close()
+        owner.close()
+
+
+@pytest.mark.parametrize("monitor_slow,loop_late_ms,near", [(True, 0, False), (False, 190, True)])
+def test_a_served_heartbeat_is_never_a_near_miss(monkeypatch, monitor_slow, loop_late_ms, near):
+    """Serving a heartbeat cancels its timer (``_serve``). The monitor itself
+    may be slow after that -- held 300 ms after every heartbeat here -- and a
+    heartbeat already served still never counts as late. A loop really late
+    past live_ms (150) but under the limit (250) is a near miss."""
+    if monitor_slow:
+        real = loop_watchdog.heartbeat_lag_ms
+
+        def slow_after_serve(posted, served_at, now):
+            time.sleep(0.3)
+            return real(posted, served_at, now)
+
+        monkeypatch.setattr(loop_watchdog, "heartbeat_lag_ms", slow_after_serve)
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
+                                       tick_ms=10, log=False, live_ms=150).start()
+        await asyncio.sleep(1.0)
+        for _ in range(5 if loop_late_ms else 0):
+            time.sleep(loop_late_ms / 1000)  # the loop itself, late under the limit
+            await asyncio.sleep(0.05)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.stalls == [], mon.stalls[:1]
+    assert (mon.live_near_misses > 0) is near, mon.live_near_misses

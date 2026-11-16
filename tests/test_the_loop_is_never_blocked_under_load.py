@@ -139,7 +139,7 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     sys.__stderr__.write(
         f"\nLOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
         f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
-        f"live_dumps={len(mon.live_dumps)} monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
+        f"live_dumps={len(mon.live_dumps)} near_misses={mon.live_near_misses} monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
         f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms\n")
     for lag, text in sorted(mon.live_dumps, reverse=True)[:3]:
         sys.__stderr__.write(f"LOOP_LAG_LIVE_DUMP {lag:.0f}ms {text[:6000]}\n")

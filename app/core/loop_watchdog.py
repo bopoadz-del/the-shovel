@@ -356,6 +356,10 @@ class LagMonitor:
         #: between heartbeats, which ``max_lag_ms`` cannot see (see
         #: ``_sleep_watched``). Reported beside the lag, never folded into it.
         self.max_wake_late_ms = 0.0
+        #: Heartbeats late past ``live_ms`` but served under the threshold:
+        #: near misses, counted (their dump is not kept). A heartbeat already
+        #: served never adds one -- serving it cancels the timer.
+        self.live_near_misses = 0
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
@@ -461,7 +465,8 @@ class LagMonitor:
                 # sees the event also sees both.
                 self.stall_recorded.set()
             elif live is not None:
-                live.take()  # fired for a late-but-under-limit heartbeat: drop
+                if live.take():  # late past live_ms, under the limit
+                    self.live_near_misses += 1
             self._sleep_watched(live, armed_names if live is not None else {})
 
     def _sleep_watched(self, live: Optional[LiveDump], armed_names: dict) -> None:
