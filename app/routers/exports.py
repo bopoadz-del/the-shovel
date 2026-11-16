@@ -1344,6 +1344,16 @@ def _names_a_source(text: str, names: List[str]) -> bool:
     return bool(re.search(rf"\.(?:{_FILE_EXTS})\b", low, re.IGNORECASE))
 
 
+def _drop_cited_span(m: "re.Match[str]", names: List[str], found: List[str]) -> str:
+    """A bracketed span that names a cited document or a file leaves the text
+    (its citation goes to ``found``); any other bracketed span -- a note, a
+    dimension, an aside -- stays as written."""
+    if _names_a_source(m.group("inner"), names):
+        found.append(m.group("inner").strip())
+        return ""
+    return m.group(0)
+
+
 def _is_source_line(line: str, names: List[str]) -> str | None:
     """The citation a line carries when the line is nothing but a citation.
 
@@ -1404,19 +1414,13 @@ def _requested_document(answer: str, stored: Any, fallback_title: str) -> Dict[s
 
     fallback: List[str] = [_cited_line(e) for e in done.citations]
 
-    def _span(m: "re.Match[str]") -> str:
-        if _names_a_source(m.group("inner"), names):
-            fallback.append(m.group("inner").strip())
-            return ""
-        return m.group(0)
-
     lines: List[str] = []
     for line in (done.text or "").split("\n"):
         body = _is_source_line(line, names)
         if body is not None:
             fallback.extend(p.strip() for p in re.split(r"[;؛]", body) if p.strip())
             continue
-        lines.append(_SPAN_RE.sub(_span, line).rstrip())
+        lines.append(_SPAN_RE.sub(lambda m: _drop_cited_span(m, names, fallback), line).rstrip())
     while lines and not lines[-1].strip():
         lines.pop()
     if len([ln for ln in lines if ln.strip()]) > 1:

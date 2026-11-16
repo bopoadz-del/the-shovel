@@ -281,20 +281,25 @@ def _end_frame(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-async def _through_the_exit(frames: list[str], cid: str) -> list[str]:
+async def _through_the_exit(frames: list[str], store=None) -> list[str]:
+    """The stream exit wrapper around a turn that stores its messages while
+    it streams (``store`` runs first, inside the wrapped stream, the way the
+    agent and the chat routes persist the turn before the end frame)."""
     from app.routers.exit_frames import with_answer_exit
 
     async def gen():
+        if store is not None:
+            store()
         for f in frames:
             yield f
 
-    return [f async for f in with_answer_exit(gen(), cid)]
+    return [f async for f in with_answer_exit(gen())]
 
 
 def test_the_document_lists_the_citations_stored_when_the_answer_left(client):
-    """The answer's citations are stored on its message by the stream's exit
-    wrapper, and the document lists them -- including a document the answer
-    drew on (a Sources row) but never wrote inline."""
+    """The answer's citations are stored on its own message by the stream's
+    exit wrapper, and the document lists them -- including a document the
+    answer drew on (a Sources row) but never wrote inline."""
     from app.core import agent_memory
 
     headers = _register(client, "stored")
@@ -305,7 +310,6 @@ def test_the_document_lists_the_citations_stored_when_the_answer_left(client):
         "Precast kerbs are bedded on C20 concrete (Highway Details Register.pdf, p. 7).\n"
         "Dropped kerbs sit at every crossing."
     )
-    _turn(cid, pid, "Put the kerb schedule in a document", answer)
     end = {
         "type": "end", "content": answer,
         "sources": [
@@ -313,7 +317,10 @@ def test_the_document_lists_the_citations_stored_when_the_answer_left(client):
             {"doc_name": "Crossing Layout Sheet.xlsx", "page_or_section": "Sheet 2"},
         ],
     }
-    asyncio.run(_through_the_exit([_end_frame({"type": "token", "content": answer}), _end_frame(end)], cid))
+    asyncio.run(_through_the_exit(
+        [_end_frame({"type": "token", "content": answer}), _end_frame(end)],
+        store=lambda: _turn(cid, pid, "Put the kerb schedule in a document", answer),
+    ))
 
     stored = [m for m in agent_memory.get_messages(cid) if m["role"] == "assistant"][-1]["citations"]
     assert stored and [e["document"] for e in stored] == [
@@ -325,21 +332,144 @@ def test_the_document_lists_the_citations_stored_when_the_answer_left(client):
     _sources_at_end(texts, ("Highway Details Register.pdf, p. 7", "Crossing Layout Sheet.xlsx, Sheet 2"))
 
 
+def _invented_entry(document: str) -> list[dict]:
+    return [{"marker": 1, "document": document, "section": "", "tier": None, "kind": "document"}]
+
+
 def test_citations_never_land_on_an_earlier_answer():
-    """When the answer of this turn was not stored, the newest message is the
-    user's ask: nothing is attached, so an earlier answer never gets this
-    turn's sources."""
+    """A turn whose own answer was not stored attaches nothing: the earlier
+    answer of the same conversation never gets this turn's sources."""
     from app.core import agent_memory
 
     cid = f"ws-w2a-guard-{_RUN}-1000"
     agent_memory.get_or_create_conversation(cid, "project_assistant", None)
     agent_memory.append_message(cid, "user", "First ask")
     agent_memory.append_message(cid, "assistant", "First answer.")
-    agent_memory.append_message(cid, "user", "Second ask")
-    entry = [{"marker": 1, "document": "Invented Register.pdf", "section": "", "tier": None, "kind": "document"}]
+    end = {"type": "end", "content": "Second answer (Invented Register.pdf).",
+           "sources": [{"doc_name": "Invented Register.pdf", "page_or_section": ""}]}
 
-    assert agent_memory.attach_citations(cid, entry) is False
+    asyncio.run(_through_the_exit(
+        [_end_frame(end)], store=lambda: agent_memory.append_message(cid, "user", "Second ask"),
+    ))
+
     assert all(m.get("citations") is None for m in agent_memory.get_messages(cid))
+
+
+@pytest.mark.parametrize("role", ["assistant", "user"])
+def test_the_turn_holder_records_only_the_answer_it_stored(role):
+    """``watch_stored_answer`` hands the turn a holder; ``append_message``
+    puts the id of an ASSISTANT message it stores there, never a user's."""
+    from app.core import agent_memory
+
+    cid = f"ws-w2a-holder-{role}-{_RUN}-1000"
+    agent_memory.get_or_create_conversation(cid, "project_assistant", None)
+    holder, token = agent_memory.watch_stored_answer()
+    try:
+        row = agent_memory.append_message(cid, role, f"A {role} message.")
+    finally:
+        agent_memory._STORED_ANSWER.reset(token)
+    expected = row["id"] if role == "assistant" else None
+    assert holder.get("message_id") == expected
+
+
+@pytest.mark.parametrize("target", ["user", "already_cited"])
+def test_citations_go_only_on_an_assistant_message_without_them(target):
+    """Addressed by id, the entries still land only on an assistant message
+    that has none yet: never on a user message, never over stored ones."""
+    from app.core import agent_memory
+
+    cid = f"ws-w2a-target-{target}-{_RUN}-1000"
+    agent_memory.get_or_create_conversation(cid, "project_assistant", None)
+    if target == "user":
+        mid = agent_memory.append_message(cid, "user", "An ask")["id"]
+        before = None
+    else:
+        mid = agent_memory.append_message(cid, "assistant", "An answer.")["id"]
+        before = _invented_entry("First Invented Register.pdf")
+        assert agent_memory.attach_citations(mid, before) is True
+
+    assert agent_memory.attach_citations(mid, _invented_entry("Other Invented Register.pdf")) is False
+    row = next(m for m in agent_memory.get_messages(cid) if m["id"] == mid)
+    assert row.get("citations") == before
+
+
+@pytest.mark.parametrize("empty", [[], None])
+def test_no_entries_store_nothing(empty):
+    """An answer with no citations leaves its message's citations unset (the
+    document then falls back to reading the text)."""
+    from app.core import agent_memory
+
+    cid = f"ws-w2a-empty-{_RUN}-{empty is None}-1000"
+    agent_memory.get_or_create_conversation(cid, "project_assistant", None)
+    mid = agent_memory.append_message(cid, "assistant", "An answer.")["id"]
+    assert agent_memory.attach_citations(mid, empty) is False
+    assert agent_memory.get_messages(cid)[-1].get("citations") is None
+
+
+@pytest.mark.parametrize("event, expected", [
+    ({"type": "end", "content": "x", "sources": [{"doc_name": "Invented Register.pdf"}]}, True),
+    ({"type": "end", "content": "x", "sources": []}, False),
+])
+def test_store_citations_reports_whether_it_stored(event, expected):
+    from app.core import agent_memory
+    from app.routers.exit_frames import _store_citations
+
+    cid = f"ws-w2a-store-{expected}-{_RUN}-1000"
+    agent_memory.get_or_create_conversation(cid, "project_assistant", None)
+    mid = agent_memory.append_message(cid, "assistant", "An answer.")["id"]
+    assert _store_citations(mid, event) is expected
+
+
+@pytest.mark.parametrize("event, documents", [
+    ({"citations": [{"marker": 1, "document": "Invented Register.pdf", "section": "p. 2"}],
+      "sources": [{"doc_name": "Invented Register.pdf", "page_or_section": "p. 2"},
+                  {"doc_name": "Second Invented Sheet.xlsx", "page_or_section": ""}]},
+     [(1, "Invented Register.pdf"), (None, "Second Invented Sheet.xlsx")]),
+    ("not an event", []),
+    ({"citations": [{"marker": 1, "document": ""}], "sources": [{"doc_name": ""}]}, []),
+])
+def test_citations_to_store_reads_the_checked_event_fields(event, documents):
+    """Numbered contract entries first, then Sources rows no entry names; a
+    non-event or nameless entries give nothing."""
+    from app.agents.answer_exit import citations_to_store
+
+    assert [(e["marker"], e["document"]) for e in citations_to_store(event)] == documents
+
+
+@pytest.mark.parametrize("has_owner", [False, True])
+def test_an_older_sqlite_messages_table_gains_the_citations_column(tmp_path, monkeypatch, has_owner):
+    """``_patch_conversation_columns`` adds the column to a SQLite database
+    created before W2-a, whether or not it already had owner tracking."""
+    from sqlalchemy import create_engine, text
+
+    from app.core import agent_memory
+
+    url = f"sqlite:///{(tmp_path / 'old.db').as_posix()}"
+    old = create_engine(url)
+    with old.connect() as conn:
+        owner = ", owner_id TEXT" if has_owner else ""
+        conn.execute(text(f"CREATE TABLE conversations (id TEXT PRIMARY KEY{owner})"))
+        conn.execute(text("CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT)"))
+        conn.commit()
+    monkeypatch.setattr(agent_memory, "engine", old)
+    agent_memory._patch_conversation_columns(url)
+    with old.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(messages)"))}
+        owner_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(conversations)"))}
+    old.dispose()
+    assert "citations" in cols and "owner_id" in owner_cols, (cols, owner_cols)
+
+
+@pytest.mark.parametrize("names, text, kept", [
+    # A cited document named without a file extension is still a citation.
+    (["Invented Kerb Register"], "Kerbs are bedded (Invented Kerb Register, p. 4).", "Kerbs are bedded."),
+    # A bracketed aside naming no source stays as written.
+    (["Invented Kerb Register"], "Kerbs are bedded (minimum 150 mm).", "Kerbs are bedded (minimum 150 mm)."),
+])
+def test_a_bracketed_span_leaves_only_when_it_names_a_source(names, text, kept):
+    found: list[str] = []
+    out = exports._SPAN_RE.sub(lambda m: exports._drop_cited_span(m, names, found), text)
+    assert out == kept
 
 
 # ── (3) Arabic: removal by structure, not by English words ──────────────────

@@ -7,6 +7,7 @@ SQLAlchemy-backed via app.core.db — unified The Fork schema.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -490,36 +491,49 @@ def append_message(
                         .values(title=title)
                     )
             session.commit()
+    if role == "assistant":
+        holder = _STORED_ANSWER.get()
+        if holder is not None:
+            holder["message_id"] = mid
     with SessionLocal() as session:
         message = session.get(Message, mid)
     return _message_as_dict(message)  # type: ignore[arg-type]
 
 
-def attach_citations(conversation_id: str, citations: Optional[list]) -> bool:
-    """Store an answer's structured citations on the assistant message it
-    belongs to (W2-a).
+#: The answer this turn stored (W2-a). ``watch_stored_answer`` puts a fresh
+#: holder here before a turn runs; ``append_message`` writes the id of the
+#: assistant message it stores into it. The holder is one shared object, so
+#: the id comes back from a worker thread or a task the turn started -- and
+#: an answer's citations go on the message of THAT answer, never on another.
+_STORED_ANSWER: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar(
+    "stored_answer", default=None
+)
+
+
+def watch_stored_answer() -> tuple[Dict[str, Any], contextvars.Token]:
+    """A fresh holder for the id of the assistant message this turn stores."""
+    holder: Dict[str, Any] = {}
+    return holder, _STORED_ANSWER.set(holder)
+
+
+def attach_citations(message_id: Optional[str], citations: Optional[list]) -> bool:
+    """Store an answer's structured citations on its own assistant message
+    (W2-a).
 
     The answer is stored before its exit check numbers the citations, so the
-    entries arrive afterwards. They go on the newest message of the
-    conversation only when that message is an assistant message that has none
-    yet: a turn always stores the user message first, so an answer whose own
-    message was not stored can never put its citations on an earlier answer.
-    Returns True when the entries were stored.
+    entries arrive afterwards, addressed by the id of the message the turn
+    stored. Only an assistant message that has none yet takes them. Returns
+    True when the entries were stored.
     """
-    if not conversation_id or not citations:
+    if not message_id or not citations:
         return False
     _ensure_db()
     with _lock:
         with SessionLocal() as session:
-            newest = session.scalars(
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at.desc(), Message.id.desc())
-                .limit(1)
-            ).first()
-            if newest is None or newest.role != "assistant" or newest.citations:
+            message = session.get(Message, message_id)
+            if message is None or message.role != "assistant" or message.citations:
                 return False
-            newest.citations = json.dumps(citations, default=str)
+            message.citations = json.dumps(citations, default=str)
             session.commit()
     return True
 
