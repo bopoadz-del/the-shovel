@@ -114,13 +114,44 @@ def test_backfill_types_a_document_by_its_own_text(monkeypatch, tmp_path, texts,
     assert plan["documents"] == ([did] if counts else [])
 
 
-def test_no_chunks_table_means_no_sample(monkeypatch, tmp_path):
-    from app.core.db import SessionLocal
+@pytest.mark.parametrize("make_table", [False, True])
+def test_no_chunks_means_no_sample(monkeypatch, tmp_path, make_table):
+    # no chunks table at all (a fresh database), and a table with no chunks
+    from app.core.db import SessionLocal, engine
+    from app.core.models import RagChunk
 
     pm = _reload_projects(monkeypatch, tmp_path)
+    if make_table:
+        RagChunk.__table__.create(bind=engine, checkfirst=True)
     pm.create_project("cproj", user_id="system", project_id="cproj")
     with SessionLocal() as s:
         assert bf.content_samples(s, "cproj") == {}
+
+
+@pytest.mark.parametrize("name, content, expected", [
+    # nothing in the name, extension or text names a kind
+    ("", "", "unrecognised"),
+    # the extension alone names a kind
+    ("plan.xer", "", "schedule"),
+])
+def test_a_document_matching_nothing_is_unrecognised(name, content, expected):
+    assert doc_types.classify(name, content)["name"] == expected
+
+
+@pytest.mark.parametrize("env, expected", [
+    # a zero bar is clamped to one: a document matching nothing stays unrecognised
+    ("0", 1),
+    ("3", 3),
+])
+def test_the_content_bar_is_never_below_one(monkeypatch, env, expected):
+    import importlib
+
+    monkeypatch.setenv("DOC_TYPE_CONTENT_MIN_HITS", env)
+    try:
+        assert importlib.reload(doc_types).CONTENT_ONLY_MIN_HITS == expected
+    finally:
+        monkeypatch.delenv("DOC_TYPE_CONTENT_MIN_HITS")
+        importlib.reload(doc_types)
 
 
 @pytest.mark.parametrize("limit, expected", [

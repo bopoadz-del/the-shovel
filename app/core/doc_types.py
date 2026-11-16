@@ -106,8 +106,9 @@ _NAME_SEPARATORS = re.compile(r"[\s_\-.]+")
 
 #: Distinct content keywords one type needs before content ALONE (a name and
 #: extension that match no type) may decide the type. One shared phrase is
-#: too weak: generic words recur across kinds of document.
-CONTENT_ONLY_MIN_HITS = int(os.getenv("DOC_TYPE_CONTENT_MIN_HITS", "2") or 2)
+#: too weak: generic words recur across kinds of document. Never below 1, so
+#: a document that matches nothing at all always fails the bar.
+CONTENT_ONLY_MIN_HITS = max(1, int(os.getenv("DOC_TYPE_CONTENT_MIN_HITS", "2") or 2))
 
 
 def _fold_name(text: str) -> str:
@@ -178,10 +179,10 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
         if score > best_score:
             best_score, best_type, best_matched = score, t, matched
 
-    if best_score == 0:
-        return _unrecognised()
-    # Content alone (no name or extension matched): enough distinct evidence
-    # for one kind, and no tie between kinds.
+    # No name or extension matched, so the score is content hits alone: it
+    # decides only with enough distinct evidence for one kind and no tie
+    # between kinds. A document that matched nothing (score 0) fails the bar
+    # here too, since the bar is at least 1; any name match scores >= 2.
     if not name_matched_any and (
         best_score < CONTENT_ONLY_MIN_HITS or content_scores.count(best_score) > 1
     ):
