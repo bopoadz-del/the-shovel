@@ -251,13 +251,17 @@ def test_without_scope_document_the_export_is_still_the_plain_excerpt(client, fm
         assert "Sources" not in _xlsx_sheets(res.content), "the excerpt workbook gained a sheet"
 
 
-def test_the_answers_scope_spreadsheet_is_unchanged(client):
-    headers = _register(client, "answers-xlsx")
-    name = f"W2a-answers-{_RUN}"
+@pytest.mark.parametrize("later", [
+    (ASK_HEADED, ANSWER_HEADED),
+    ("Which formwork is struck first?", "Side forms are struck before soffit forms."),
+])
+def test_the_answers_scope_spreadsheet_is_unchanged(client, later):
+    headers = _register(client, f"answers-xlsx-{len(later[1])}")
+    name = f"W2a-answers-{len(later[1])}-{_RUN}"
     pid = _project(client, headers, name)
     cid = f"ws-{pid}-1000"
     _turn(cid, pid, *EARLIER)
-    _turn(cid, pid, ASK_HEADED, ANSWER_HEADED)
+    _turn(cid, pid, *later)
 
     res = _export(client, headers, pid, cid, "xlsx", scope="answers")
     sheets = _xlsx_sheets(res.content)
