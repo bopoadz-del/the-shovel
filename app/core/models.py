@@ -523,6 +523,11 @@ class Message(Base):
     # Provenance record of an assistant answer (JSON): where each figure and
     # cited fact came from. Migration 0023.
     provenance: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured citations of an assistant answer (JSON): one entry per cited
+    # document, as the answer contract numbered them, then the turn's other
+    # Sources rows. A produced document lists its sources from these, not by
+    # re-reading the answer text (W2-a). Migration 0038.
+    citations: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class DocIndex(Base):

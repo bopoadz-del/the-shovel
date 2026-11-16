@@ -1219,7 +1219,7 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
     return StreamingResponse(
         turn_gate.hold_until_done(close_on_escape(turn_progress.opened(redact_frames(
         guarantee_terminal(
-            with_hat_signals(with_answer_exit(event_stream()), request.message),
+            with_hat_signals(with_answer_exit(event_stream(), request.conversation_id), request.message),
             request_id=get_request_id(),
         ), _identity)), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",
@@ -1421,7 +1421,7 @@ async def chat_stream_v1(
     return StreamingResponse(
         turn_gate.hold_until_done(close_on_escape(turn_progress.opened(_with_stage_timings(redact_frames(
         guarantee_terminal(
-            with_hat_signals(with_answer_exit(event_stream()), prompt),
+            with_hat_signals(with_answer_exit(event_stream(), conversation_id), prompt),
             request_id=get_request_id(),
         ), _identity))), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",

@@ -497,7 +497,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
         _release_turn = await turn_gate.acquire()
     return StreamingResponse(
         turn_gate.hold_until_done(turn_progress.opened(
-        with_hat_signals(with_answer_exit(event_stream()), message)), _release_turn),
+        with_hat_signals(with_answer_exit(event_stream(), conversation_id), message)), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

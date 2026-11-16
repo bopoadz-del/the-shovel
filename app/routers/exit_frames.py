@@ -24,7 +24,12 @@ from app.routers.hat_frames import _decode, _encode
 _LOG = logging.getLogger(__name__)
 
 
-async def with_answer_exit(frames: AsyncIterator[str]) -> AsyncIterator[str]:
+async def with_answer_exit(
+    frames: AsyncIterator[str], conversation_id: str | None = None,
+) -> AsyncIterator[str]:
+    """``conversation_id``: when given, the checked answer's structured
+    citations are stored on its assistant message (W2-a), so a document
+    produced from that answer lists its sources from them."""
     from app.agents import answer_exit
     from app.core.offload import off_loop
 
@@ -40,7 +45,21 @@ async def with_answer_exit(frames: AsyncIterator[str]) -> AsyncIterator[str]:
                 # The agent opens its own record in this same context; read
                 # whichever is current so its evidence resolves citations.
                 turn = answer_exit.current_turn() or own
-                frame = _encode(await off_loop(answer_exit.check_end_event, event, "".join(streamed), turn))
+                checked = await off_loop(answer_exit.check_end_event, event, "".join(streamed), turn)
+                frame = _encode(checked)
+                if conversation_id:
+                    await off_loop(_store_citations, conversation_id, checked)
         except Exception:  # noqa: BLE001 - the exit check must never eat a frame
             _LOG.exception("exit_frames: frame passed through unmodified")
         yield frame
+
+
+def _store_citations(conversation_id: str, event: dict) -> None:
+    """Never raises: storing the citations must not break the answer."""
+    try:
+        from app.agents import answer_exit
+        from app.core import agent_memory
+
+        agent_memory.attach_citations(conversation_id, answer_exit.citations_to_store(event))
+    except Exception:  # noqa: BLE001 -- bookkeeping only
+        _LOG.exception("exit_frames: citations not stored")

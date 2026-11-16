@@ -78,7 +78,7 @@ globalThis.fetch = async (url, init = {}) => {
   const u = new URL(String(url), 'http://localhost')
   const method = (init.method ?? 'GET').toUpperCase()
   const p = u.pathname
-  stub.sent.push({ method, path: p })
+  stub.sent.push({ method, path: p, scope: u.searchParams.get('scope') })
   const isExport = method === 'POST' && (
     p === `/v1/projects/${PROJECT}/conversations/${SESSION}/export` || p === OFFER.endpoint)
   if (isExport && stub.failExports) return json({ detail: 'invented failure' }, 500)
@@ -205,3 +205,24 @@ for (const [name, find] of exportControls) {
     ws.unmount()
   })
 }
+
+// W2-a: which file is produced is decided by the control pressed, never by
+// the answer's wording. The answer's own download control asks for the
+// document (scope=document); the sidebar's conversation export asks for the
+// plain excerpt (no scope, the server's default).
+const conversationExports = () => stub.sent.filter((r) => r.method === 'POST'
+  && r.path === `/v1/projects/${PROJECT}/conversations/${SESSION}/export`)
+
+test('the download control under an answer asks for the document', async () => {
+  const ws = await openWorkspaceOnTheSession()
+  await ws.click(ws.container.querySelector('button[aria-label="Download as Word document"]'))
+  assert.deepEqual(conversationExports().map((r) => r.scope), ['document'])
+  ws.unmount()
+})
+
+test('the sidebar conversation export still asks for the plain excerpt', async () => {
+  const ws = await openWorkspaceOnTheSession()
+  await ws.click(ws.container.querySelector('button[title="Export this conversation as a .docx file"]'))
+  assert.deepEqual(conversationExports().map((r) => r.scope), [null])
+  ws.unmount()
+})

@@ -112,6 +112,7 @@ def _message_as_dict(message: Message) -> Dict[str, Any]:
         "content": message.content,
         "created_at": message.created_at,
         "provenance": (json.loads(message.provenance) if getattr(message, "provenance", None) else None),
+        "citations": (json.loads(message.citations) if getattr(message, "citations", None) else None),
     }
 
 
@@ -164,6 +165,10 @@ def _patch_conversation_columns(url: str) -> None:
         cols = {row[1] for row in conn.execute(sqla_text("PRAGMA table_info(conversations)"))}
         if cols and "owner_id" not in cols:
             conn.execute(sqla_text("ALTER TABLE conversations ADD COLUMN owner_id TEXT"))
+            conn.commit()
+        cols = {row[1] for row in conn.execute(sqla_text("PRAGMA table_info(messages)"))}
+        if cols and "citations" not in cols:
+            conn.execute(sqla_text("ALTER TABLE messages ADD COLUMN citations TEXT"))
             conn.commit()
 
 
@@ -488,6 +493,35 @@ def append_message(
     with SessionLocal() as session:
         message = session.get(Message, mid)
     return _message_as_dict(message)  # type: ignore[arg-type]
+
+
+def attach_citations(conversation_id: str, citations: Optional[list]) -> bool:
+    """Store an answer's structured citations on the assistant message it
+    belongs to (W2-a).
+
+    The answer is stored before its exit check numbers the citations, so the
+    entries arrive afterwards. They go on the newest message of the
+    conversation only when that message is an assistant message that has none
+    yet: a turn always stores the user message first, so an answer whose own
+    message was not stored can never put its citations on an earlier answer.
+    Returns True when the entries were stored.
+    """
+    if not conversation_id or not citations:
+        return False
+    _ensure_db()
+    with _lock:
+        with SessionLocal() as session:
+            newest = session.scalars(
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(1)
+            ).first()
+            if newest is None or newest.role != "assistant" or newest.citations:
+                return False
+            newest.citations = json.dumps(citations, default=str)
+            session.commit()
+    return True
 
 
 def get_messages(conversation_id: str, limit: Optional[int] = 40) -> List[Dict[str, Any]]:

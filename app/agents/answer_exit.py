@@ -1707,6 +1707,43 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     return env
 
 
+def citations_to_store(event: Any) -> list[dict[str, Any]]:
+    """The structured citations an answer is stored with (W2-a).
+
+    First every entry the answer contract numbered, in marker order; then
+    each Sources row of the turn that no numbered entry already names, with
+    ``marker: None`` -- a document the answer drew on but did not cite inline
+    is still one of its sources. Read from the fields of the checked event,
+    never from the answer's wording.
+    """
+    if not isinstance(event, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in event.get("citations") or []:
+        if not isinstance(entry, dict):
+            continue
+        doc = str(entry.get("document") or "").strip()
+        if not doc:
+            continue
+        sec = str(entry.get("section") or "").strip()
+        out.append({"marker": entry.get("marker"), "document": doc, "section": sec,
+                    "tier": entry.get("tier"), "kind": entry.get("kind") or "document"})
+        seen.add((doc, sec))
+    named = {doc for doc, _sec in seen}
+    for row in event.get("sources") or []:
+        if not isinstance(row, dict):
+            continue
+        doc = str(row.get("doc_name") or row.get("document") or "").strip()
+        sec = str(row.get("page_or_section") or "").strip()
+        if not doc or (doc, sec) in seen or (doc in named and not sec):
+            continue
+        out.append({"marker": None, "document": doc, "section": sec,
+                    "tier": row.get("layer_label") or row.get("layer") or None, "kind": "document"})
+        seen.add((doc, sec))
+    return out
+
+
 def check_result(result: Any, turn: Turn | None = None) -> Any:
     """A whole-turn result (``answer`` and ``sources``) as it may leave."""
     if not isinstance(result, dict):
