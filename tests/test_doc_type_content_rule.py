@@ -164,3 +164,88 @@ def test_content_sample_is_opening_chunks_in_order_and_capped(monkeypatch, tmp_p
     did = _project_with_doc(monkeypatch, tmp_path, "x.pdf", ["first chunk", "second chunk"])
     with SessionLocal() as s:
         assert bf.content_samples(s, "cproj", limit=limit) == {did: expected}
+
+
+# ── a tie on the NAME path is unrecognised too (no order among kinds) ────────
+
+@pytest.mark.parametrize("name, expected", [
+    # one word for each of two kinds: a tie, so no kind is chosen
+    ("Site_photo_model_04.pdf", "unrecognised"),
+    # the same name with one kind's word only
+    ("Site_photo_04.pdf", "photo"),
+])
+def test_a_name_tie_between_kinds_is_unrecognised(name, expected):
+    assert doc_types.classify(name)["name"] == expected
+
+
+@pytest.mark.parametrize("content, expected", [
+    # the name ties two kinds; the text adds nothing: still a tie
+    ("", "unrecognised"),
+    # the text adds one word for one of them: it is ahead, so it wins
+    ("Attendees: the site team.", "minutes"),
+])
+def test_content_can_break_a_name_tie_by_score(content, expected):
+    assert doc_types.classify("Daily_meeting_12.pdf", content)["name"] == expected
+
+
+# ── Arabic: every kind in the table has Arabic words ─────────────────────────
+
+@pytest.mark.parametrize("name, expected", [
+    ("مخطط الدور الأرضي.pdf", "drawing"),
+    ("البرنامج الزمني المحدث.pdf", "schedule"),
+    ("جدول الكميات - المرحلة الأولى.xlsx", "boq"),
+    ("عقد المقاولة الرئيسي.pdf", "contract"),
+    ("تقرير عدم مطابقة 012.pdf", "ncr"),
+    ("طلب فحص أعمال الخرسانة.pdf", "inspection_request"),
+    ("خطة الفحص والاختبار للخرسانة.pdf", "itp"),
+    ("طلب اعتماد مواد العزل.pdf", "material_submittal"),
+    ("طريقة العمل لأعمال الحفر.docx", "method_statement"),
+    ("المواصفات الفنية للخرسانة.pdf", "specification"),
+    ("صور الموقع - الأسبوع 12.pdf", "photo"),
+    ("نمذجة معلومات البناء - المبنى أ.pdf", "bim"),
+    ("تقرير يومي 15.pdf", "report"),
+    ("محضر اجتماع الموقع 7.pdf", "minutes"),
+    ("خطاب إلى الاستشاري.pdf", "correspondence"),
+    ("قالب فارغ.docx", "template"),
+    # an Arabic name with no type word is unrecognised, never mistyped
+    ("مستند 7.pdf", "unrecognised"),
+])
+def test_arabic_names_type_by_the_table(name, expected):
+    assert doc_types.classify(name)["name"] == expected
+
+
+@pytest.mark.parametrize("content, expected", [
+    ("يمر المسار الحرج عبر المعالم الرئيسية للمشروع.", "schedule"),
+    ("تسلسل الأعمال وتقييم المخاطر قبل الحفر.", "method_statement"),
+    ("يلتزم صاحب العمل وتطبق غرامات التأخير.", "contract"),
+    ("الحضور: فريق الموقع. الاجتماع القادم يوم الأحد.", "minutes"),
+    # one Arabic phrase only: below the content bar
+    ("يمر المسار الحرج عبر المنطقة.", "unrecognised"),
+])
+def test_arabic_content_alone_types_with_two_hits(content, expected):
+    assert doc_types.classify("annex_04.pdf", content)["name"] == expected
+
+
+@pytest.mark.parametrize("name, content", [
+    # written with hamza, ta marbuta and short vowels
+    ("إتفاقية الخدمات.pdf", "وفقاً للمخططات، يجب أنْ يكونَ الخرسانة"),
+    # the same words written without them
+    ("اتفاقيه الخدمات.pdf", "وفقا للمخططات، يجب ان يكون الخرسانة"),
+])
+def test_arabic_spelling_variants_fold_to_one_form(name, content):
+    assert doc_types.classify(name)["name"] == "contract"
+    assert doc_types.classify("annex_04.pdf", content)["name"] == "specification"
+
+
+# ── the change as seen by ingest (newly uploaded names) ──────────────────────
+
+@pytest.mark.parametrize("name, expected", [
+    # was inspection_request by table order; the full phrase now scores higher
+    ("Inspection and Test Plan.pdf", "itp"),
+    ("Inspection Request.pdf", "inspection_request"),
+    # was the first kind listed; a tie on the name is now 'document'
+    ("Site photo model.pdf", "document"),
+])
+def test_ingest_types_new_names_by_the_same_rule(name, expected):
+    from app.core.projects import classify_doc_type
+    assert classify_doc_type(name) == expected

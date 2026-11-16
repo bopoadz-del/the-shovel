@@ -111,8 +111,22 @@ _NAME_SEPARATORS = re.compile(r"[\s_\-.]+")
 CONTENT_ONLY_MIN_HITS = max(1, int(os.getenv("DOC_TYPE_CONTENT_MIN_HITS", "2") or 2))
 
 
+#: Arabic spelling variants folded to one form on BOTH sides (keyword and
+#: document): short vowels / tanween / shadda and tatweel dropped, hamza-
+#: carrying alefs to bare alef, alef maqsura to ya, ta marbuta to ha. A
+#: keyword then matches however the writer spelt the word.
+_AR_MARKS = re.compile("[ً-ْٰـ]")
+_AR_LETTERS = str.maketrans({"أ": "ا", "إ": "ا",
+                             "آ": "ا", "ٱ": "ا",
+                             "ى": "ي", "ة": "ه"})
+
+
+def _norm(text: str) -> str:
+    return _AR_MARKS.sub("", (text or "").lower()).translate(_AR_LETTERS)
+
+
 def _fold_name(text: str) -> str:
-    return _NAME_SEPARATORS.sub(" ", (text or "").lower()).strip()
+    return _NAME_SEPARATORS.sub(" ", _norm(text)).strip()
 
 
 def _unrecognised() -> Dict[str, Any]:
@@ -136,17 +150,21 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
     decides only if one type has at least ``CONTENT_ONLY_MIN_HITS`` distinct
     content keywords and no other type scores as high. A tie between kinds is
     left `unrecognised`: the table's order is not a precedence among kinds.
+
+    The same holds on every path: when two kinds share the top score (by
+    name, extension, content or any mix), the document is `unrecognised`
+    rather than given to whichever kind the table lists first.
     """
-    fn = (filename or "").lower()
+    fn = _norm(filename)
     ext = os.path.splitext(fn)[1]
     stem = _fold_name(os.path.splitext(fn)[0] if ext else fn)
-    content = (content_sample or "").lower()
+    content = _norm(content_sample)
 
     best_type: Dict[str, Any] = {}
     best_score = 0
     best_matched: List[str] = []
     name_matched_any = False
-    content_scores: List[int] = []
+    scores: List[int] = []
 
     for t in list_types():
         m = t.get("match", {}) or {}
@@ -159,7 +177,7 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
             # underscores and parentheses, so those count as separators, and
             # a multi-word keyword matches across any of them.
             kw_n = _fold_name(kw)
-            if (re.search(rf"(?<![a-z0-9]){re.escape(kw.lower())}(?![a-z0-9])", fn)
+            if (re.search(rf"(?<![a-z0-9]){re.escape(_norm(kw))}(?![a-z0-9])", fn)
                     or re.search(rf"(?<![a-z0-9]){re.escape(kw_n)}(?![a-z0-9])", stem)):
                 score += 2
                 matched.append(f"filename:{kw}")
@@ -169,23 +187,23 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
             matched.append(f"ext:{ext}")
         if score:
             name_matched_any = True
-        content_hits = 0
         for kw in m.get("content", []) or []:
-            if kw.lower() in content:
+            if _norm(kw) in content:
                 score += 1
-                content_hits += 1
                 matched.append(f"content:{kw}")
-        content_scores.append(content_hits)
+        scores.append(score)
         if score > best_score:
             best_score, best_type, best_matched = score, t, matched
 
+    # A tie at the top between kinds is unrecognised on every path: no kind
+    # wins by its place in the table.
+    if scores.count(best_score) > 1:
+        return _unrecognised()
     # No name or extension matched, so the score is content hits alone: it
-    # decides only with enough distinct evidence for one kind and no tie
-    # between kinds. A document that matched nothing (score 0) fails the bar
-    # here too, since the bar is at least 1; any name match scores >= 2.
-    if not name_matched_any and (
-        best_score < CONTENT_ONLY_MIN_HITS or content_scores.count(best_score) > 1
-    ):
+    # decides only with enough distinct evidence for one kind. A document
+    # that matched nothing (score 0) fails the bar here too, since the bar
+    # is at least 1; any name match scores >= 2.
+    if not name_matched_any and best_score < CONTENT_ONLY_MIN_HITS:
         return _unrecognised()
     return {
         "name": best_type["name"],
