@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
-from app.core.loop_watchdog import LagMonitor
+from app.core.loop_watchdog import DEFAULT_LIVE_MS, LagMonitor
 from tests._fixture_values import STUB_TOKEN_06
 
 # Measures the event loop under its own simulated load: CI runs it alone, not
@@ -120,7 +121,10 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         finally:
             idle.stop()
         # Load phase: the real property under test.
-        mon = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
+        # live_ms: a C-level timer dumps every thread WHILE a heartbeat is
+        # late, so the failure names the call running during the stall.
+        mon = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False,
+                         live_ms=DEFAULT_LIVE_MS).start()
         try:
             await asyncio.gather(*(user(n) for n in range(USERS)))
         finally:
@@ -130,11 +134,21 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     idle, mon = asyncio.run(run())
     worst = max(mon.stalls, default=(0, ""))
     excess = excess_over_baseline(mon.max_lag_ms, idle.max_lag_ms)
+    during = max(mon.live_dumps, default=(0, ""))
+    # The control beside every result, pass or fail, uncaptured so CI shows it.
+    sys.__stderr__.write(
+        f"\nLOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
+        f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
+        f"live_dumps={len(mon.live_dumps)} monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
+        f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms\n")
+    for lag, text in sorted(mon.live_dumps, reverse=True)[:3]:
+        sys.__stderr__.write(f"LOOP_LAG_LIVE_DUMP {lag:.0f}ms {text[:6000]}\n")
     assert excess < LIMIT_MS, (
         f"event loop lag under {USERS} concurrent users exceeded the limit ABOVE the "
         f"runner's idle noise: load_max={mon.max_lag_ms:.0f} ms, idle_baseline="
         f"{idle.max_lag_ms:.0f} ms, excess={excess:.0f} ms >= {LIMIT_MS} ms; "
-        f"at the worst stall (every thread): {worst[1][:12000]}")
+        f"DURING the worst stall ({during[0]:.0f} ms, every thread, live dump): "
+        f"{during[1][:8000]}; at the worst stall (every thread): {worst[1][:12000]}")
 
 
 def test_the_monitor_sees_a_blocked_loop():
