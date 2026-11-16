@@ -58,6 +58,14 @@ document_types:
     description: Material approval / submittal (MAR, TSF, AMS, SAF)
     match:
       filename: ["mar", "material approval", "material submittal", "tsf"]
+  - name: method_statement
+    description: Method statements / RAMS (how a package of work is carried out)
+    match:
+      filename: ["method statement", "rams"]
+      extensions: []
+      content: ["method statement", "sequence of work", "risk assessment", "safe system of work"]
+    expected_fields: []
+
   - name: specification
     description: Technical specifications
     match:
