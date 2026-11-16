@@ -376,6 +376,106 @@ def test_values_that_are_not_hosts_never_reach_dns(value):
     assert _offenders(env) == [], f"stage=endpoint: {value!r} is not a host"
 
 
+# ── G-6 grader FAIL (#386): a host ANYWHERE in a value; numbers under a ──
+# secret's name stay secrets. Every name and host below is invented.
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("FENWAY_DB_PASSWORD", "482913"),     # a numeric PIN or password
+        ("QUILLBASE_SECRET", "7"),
+        ("ORCHARD_API_KEY", "123456789"),
+        ("BRAMBLE_SESSION_TOKEN", "55501"),  # TOKEN, but the name counts nothing
+        ("LOOM_MAX_KEY", "4096"),            # a count word cannot cover KEY
+        ("SIFT_TOKEN_LIMIT_SECRET", "12"),   # nor SECRET
+    ],
+)
+def test_a_number_under_a_secret_name_is_still_a_credential(name, value):
+    offs = _offenders({**_CLEAN_ONPREM, name: value})
+    assert _settings(offs) == [name], f"stage=credential: {name}={value} -> {offs}"
+    assert "credential" in offs[0].reason
+
+
+@pytest.mark.parametrize("name", ["PEBBLE_MAX_TOKENS", "SIFT_TOKEN_COUNT", "MOSS_TOKEN_LIMIT"])
+def test_a_number_under_a_token_count_name_is_a_count(name):
+    assert _offenders({**_CLEAN_ONPREM, name: "8192"}) == [], f"stage=credential: {name}"
+    assert _settings(_offenders({**_CLEAN_ONPREM, name: "8192-k"})) == [name]
+
+
+_FAR = {
+    "far.quillbase.example": ["1.0.0.1"],
+    "mail.quillbase.example": ["9.9.9.9"],
+    "db.quillbase.example": ["8.8.8.8"],
+    "relay.xn--p1ai": ["1.0.0.1"],
+}
+_NEAR = {
+    "near.corp.example": ["10.9.8.7"],
+    "relay.corp.example": ["172.16.0.9"],
+    "box.xn--80ak6aa92e": ["192.168.4.4"],
+}
+
+
+@pytest.mark.parametrize(
+    "form,outside,inside",
+    [
+        ("json object",
+         '{"endpoint": "https://far.quillbase.example/v1", "retries": 3}',
+         '{"endpoint": "https://near.corp.example/v1", "retries": 3}'),
+        ("json nested list, bare host:port",
+         '[{"hosts": ["relay.corp.example:25", "db.quillbase.example:5432"]}]',
+         '[{"hosts": ["relay.corp.example:25", "ollama:11434"]}]'),
+        ("bare IPv6, unbracketed", "2001:4860:4860::8888", "fd00::5"),
+        ("IPv6 inside a list", "10.0.0.4, 2606:4700::1111", "10.0.0.4, fe80::1"),
+        ("user@host:port, no scheme", "svc@mail.quillbase.example:587", "svc@relay.corp.example:587"),
+        ("user@host, no port", "deploy@far.quillbase.example", "deploy@near.corp.example"),
+        ("key=value conninfo", "host=db.quillbase.example port=5432", "host=near.corp.example port=5432"),
+        ("quoted key=value", "host='far.quillbase.example' user=x", "host='near.corp.example' user=x"),
+        ("URL inside text", "send to https://far.quillbase.example/hook now",
+         "send to http://near.corp.example/hook now"),
+        ("punycode last label", "relay.xn--p1ai:2525", "box.xn--80ak6aa92e:2525"),
+        ("decimal IP in a URL", "http://134744072/x", "http://167772162/x"),  # 8.8.8.8 / 10.0.0.2
+        ("hex IP in a URL", "http://0x08080808/x", "http://0x7f000001/x"),    # 8.8.8.8 / 127.0.0.1
+        ("decimal IP with a port", "134744072:443", "3232235777:443"),       # 8.8.8.8 / 192.168.1.1
+        ("short dotted IP after @", "u@8.0x080808", "u@10.2"),               # 8.8.8.8 / 10.0.0.2
+    ],
+)
+def test_a_host_anywhere_in_a_value_is_checked(form, outside, inside):
+    resolve = _resolver({**_FAR, **_NEAR})
+    offs = _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": outside}, resolve)
+    assert _settings(offs) == ["GRANARY_SETTING"], f"stage=endpoint: {form}: {outside!r} -> {offs}"
+    assert _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": inside}, resolve) == [], (
+        f"stage=endpoint: {form}: {inside!r} stays inside"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "4096",                     # a plain number is a count, not a decimal IP
+        "12:30",                    # a time, not host:port
+        "./report.final.pdf",       # a file name written as a path
+        "/var/log/shovel/app.log",  # a path
+        "C:\\data\\export.csv",     # a Windows path
+        '{"retries": 3, "mode": "fast"}',
+        "[not json, just text]",
+    ],
+)
+def test_values_holding_no_host_never_reach_dns(value):
+    env = {**_CLEAN_ONPREM, "GRANARY_SETTING": value}
+    assert _offenders(env) == [], f"stage=endpoint: {value!r} holds no host"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("167772162", "10.0.0.2"), ("0x7f000001", "127.0.0.1"), ("10.2", "10.0.0.2"),
+     ("0177.1", "127.0.0.1"), ("300.1.1.1", None), ("4294967296", None), ("1.2.x", None)],
+)
+def test_numeric_ipv4_reads_like_the_system_resolver(text, expected):
+    got = dp._numeric_ipv4(text)
+    assert (str(got) if got else None) == expected
+
+
 def _shipped_onprem_env():
     """The on-prem box's environment as shipped: onprem.env.example, the
     installer's generated secrets, and the compose file's app settings with

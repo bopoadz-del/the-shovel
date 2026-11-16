@@ -28,15 +28,22 @@ of services:
   DSN, PASSWORD, PASSWD or CREDENTIAL is a credential for a remote service,
   whatever the rest of the name says. Two exceptions, both stated here: the
   box's own local secrets (generated on the box by the installer, never sent
-  anywhere) on a short allow list, and a value that is a plain whole number,
-  which is a count or a limit (a token budget), not a secret.
+  anywhere) on a short allow list, and a plain whole number under a name
+  that counts or budgets (MAX/MIN/LIMIT/BUDGET/COUNT, or TOKENS) and whose
+  only credential word is TOKEN: a token budget, not a secret. A number
+  under a KEY, SECRET, PASSWORD, PASSWD, CREDENTIAL or DSN name is a secret.
 * endpoints: judged by the VALUE, not the name. Every non-empty setting is
-  read; each part of it that is a URL with a host, or a bare ``host[:port]``
-  (a dotted name or an address literal, with or without a scheme), must
-  point inside the box: loopback, private or link-local addresses, a
-  single-label (compose service) name, or a name that resolves only to such
-  addresses. The service's own inbound addresses are not dialled and are not
-  checked.
+  read, and a host found ANYWHERE in it counts: URLs anywhere in the text; a
+  value that is JSON is walked string by string; the rest is split on
+  separators, ``=`` and quotes, and each token is read as ``[user@]host
+  [:port][/path]`` where host is an address literal (IPv4, IPv6 bracketed or
+  not, or a decimal/hex IPv4 in a host position) or a dotted name (the last
+  label alphabetic or punycode). A token that is a path (starts with ``/``,
+  ``./``, ``~`` or holds a backslash) is not a host; write a file name as
+  ``./name.ext``. Every host must point inside the box: loopback, private or
+  link-local addresses, a single-label (compose service) name, or a name
+  that resolves only to such addresses. The service's own inbound addresses
+  are not dialled and are not checked.
 
 Network isolation itself is the deployment's job; this check only proves the
 configuration does not need egress. It never prints a setting's value.
@@ -45,6 +52,7 @@ configuration does not need egress. It never prints a setting's value.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -85,18 +93,22 @@ _LOCAL_ONLY_SECRETS = frozenset({
     "BOOTSTRAP_USER_PASSWORD",
     "GPG_KEY",
 })
-# A plain whole number is a count or a limit (MAX_TOKENS), never a secret.
+# A plain whole number is a count or a limit only under a name that says so.
 _COUNT = re.compile(r"\d{1,9}")
-# A bare host[:port]: an IPv4 literal, a bracketed IPv6 literal, or a dotted
-# name whose last label is alphabetic (so "3.11" or "qwen2.5" is not a host).
+_COUNT_WORDS = ("MAX", "MIN", "LIMIT", "BUDGET", "COUNT", "TOKENS")
+# The only credential word a count's name may carry (MAX_TOKENS); never
+# KEY, SECRET, PASSWORD, PASSWD, CREDENTIAL or DSN.
+_COUNTABLE_WORDS = frozenset({"TOKEN"})
+# A dotted host name: the last label alphabetic or punycode (so "3.11" or
+# "qwen2.5" is not a host).
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-_BARE_HOST = re.compile(
-    r"(?P<host>\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:.%]+\]|(?:" + _LABEL + r"\.)+[a-z]{2,63})"
-    r"(?::\d{1,5})?(?:/\S*)?",
-    re.IGNORECASE,
-)
-# A setting's value is read part by part: lists are comma, semicolon or space separated.
-_VALUE_PARTS = re.compile(r"[\s,;]+")
+_DOTTED_NAME = re.compile(r"(?:" + _LABEL + r"\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})\.?", re.IGNORECASE)
+# A URL anywhere in a value.
+_URL_IN_TEXT = re.compile(r"[a-z][a-z0-9+.-]*://[^\s,;\"'<>`]+", re.IGNORECASE)
+# What separates tokens in a value: list separators, key=value, quotes and braces.
+_TOKEN_SEPARATORS = re.compile(r"[\s,;=\"'`(){}<>|]+")
+_BRACKETED_V6 = re.compile(r"\[(?P<host>[0-9a-f:.%]+)\](?::\d{1,5})?", re.IGNORECASE)
+_PORT = re.compile(r"\d{1,5}")
 # Where users reach this service; the service never dials them.
 _INBOUND_ADDRESS_SETTINGS = frozenset({"FRONTEND_URL", "PUBLIC_BASE_URL", "RENDER_EXTERNAL_URL"})
 _OFFLINE_FLAGS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
@@ -155,9 +167,40 @@ def _address_is_inside(ip) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
+def _numeric_ipv4(text: str):
+    """The IPv4 address a numeric host names as the system resolver reads it
+    (decimal ``167772162``, hex ``0x0a000002``, octal or short dotted forms
+    such as ``10.2`` or ``0x7f.1``), or None."""
+    parts = text.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    nums = []
+    for part in parts:
+        try:
+            if part[:2].lower() == "0x":
+                nums.append(int(part, 16))
+            elif len(part) > 1 and part.startswith("0"):
+                nums.append(int(part[1:], 8))
+            elif part.isdigit():
+                nums.append(int(part))
+            else:
+                return None
+        except ValueError:
+            return None
+    *head, last = nums
+    if any(n > 255 for n in head) or last >= 256 ** (4 - len(head)):
+        return None
+    value = last
+    for k, n in enumerate(head):
+        value += n << (8 * (3 - k))
+    return ipaddress.IPv4Address(value)
+
+
 def _host_is_inside(host: str, resolve: Callable[[str], list[str]]) -> bool:
-    host = host.strip("[]").lower()
+    host = host.strip("[]").rstrip(".").lower()
     ip = _as_ip(host)
+    if ip is None:
+        ip = _numeric_ipv4(host)
     if ip is not None:
         return _address_is_inside(ip)
     if host == "localhost" or "." not in host:
@@ -181,26 +224,75 @@ def _url_host(url: str) -> str | None:
 
 def _is_credential(name: str, value: str) -> bool:
     upper = name.upper()
-    if upper in _LOCAL_ONLY_SECRETS or _COUNT.fullmatch(value):
+    words = {word for word in _CREDENTIAL_WORDS if word in upper}
+    if not words or upper in _LOCAL_ONLY_SECRETS:
         return False
-    return any(word in upper for word in _CREDENTIAL_WORDS)
+    is_count = (
+        _COUNT.fullmatch(value) is not None
+        and words <= _COUNTABLE_WORDS
+        and any(word in upper for word in _COUNT_WORDS)
+    )
+    return not is_count
+
+
+def _strings_in_json(node) -> Iterable[str]:
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for key, item in node.items():
+            yield str(key)
+            yield from _strings_in_json(item)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _strings_in_json(item)
+
+
+def _token_host(token: str) -> str | None:
+    """The host one ``[user@]host[:port][/path]`` token dials, or None."""
+    if not token or token.startswith(("/", "./", "../", "~")) or "\\" in token:
+        return None  # a path, not a host
+    in_host_position = "@" in token
+    token = token.rsplit("@", 1)[-1]
+    v6 = _BRACKETED_V6.match(token)
+    if v6:
+        return v6.group("host")
+    if _as_ip(token) is not None:
+        return token  # an address literal, IPv6 unbracketed included
+    head = token.split("/", 1)[0]
+    if ":" in head:
+        head, _, port = head.rpartition(":")
+        if ":" in head or not _PORT.fullmatch(port):
+            return None  # not host:port (a version tag or a time)
+        in_host_position = True
+    if _as_ip(head) is not None or _DOTTED_NAME.fullmatch(head):
+        return head
+    if in_host_position and _numeric_ipv4(head) is not None:
+        return head
+    return None
 
 
 def _dialled_hosts(value: str) -> list[str]:
-    """Every host the value would dial: URL hosts and bare host[:port] parts.
+    """Every host the value would dial, wherever it sits in the value.
 
     Raises ValueError for a part that looks like a URL but cannot be read."""
+    text = value.strip()
+    if text[:1] in "{[":
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            logger.debug("on-prem check: a value starting with a bracket is not JSON")
+        else:
+            return [h for s in _strings_in_json(parsed) for h in _dialled_hosts(s)]
     hosts: list[str] = []
-    for part in _VALUE_PARTS.split(value):
-        # an empty part (leading or trailing separator) matches neither form
-        if "://" in part:
-            host = _url_host(part)
-            if host:
-                hosts.append(host)
-            continue
-        bare = _BARE_HOST.fullmatch(part)
-        if bare:
-            hosts.append(bare.group("host"))
+    for url in _URL_IN_TEXT.findall(text):
+        host = _url_host(url)
+        if host:
+            hosts.append(host)
+    rest = _URL_IN_TEXT.sub(" ", text)
+    for token in _TOKEN_SEPARATORS.split(rest):
+        host = _token_host(token)
+        if host:
+            hosts.append(host)
     return hosts
 
 
