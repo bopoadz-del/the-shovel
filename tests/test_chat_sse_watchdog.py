@@ -293,7 +293,10 @@ def test_both_streaming_endpoints_are_wrapped():
     # wrap both endpoints. The exit check sits innermost, around the
     # event stream itself.
     assert source.count("guarantee_terminal(") == 2
-    assert source.count("with_hat_signals(with_answer_exit(event_stream())") == 2
+    # The exit wrapper also takes the conversation id (W2-a: it stores the
+    # answer's citations on its message); it still wraps event_stream() itself.
+    import re
+    assert len(re.findall(r"with_hat_signals\(with_answer_exit\(event_stream\(\)[,)]", source)) == 2
     assert source.count("StreamingResponse(") == 2
 
 
