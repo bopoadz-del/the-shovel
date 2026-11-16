@@ -32,6 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.routers import exports
 from tests._fixture_values import PW_06
 
 _RUN = uuid.uuid4().hex[:8]
@@ -106,8 +107,10 @@ def _turn(cid: str, pid: str, ask: str, answer: str) -> None:
 
 
 def _export(client, headers, pid, cid, fmt):
+    # The route is addressed by its handler, so the request provably reaches
+    # exports.export_conversation_message and not a look-alike path.
     path = app.url_path_for(
-        "export_conversation_message", project_id=pid, conversation_id=cid,
+        exports.export_conversation_message.__name__, project_id=pid, conversation_id=cid,
     )
     res = client.post(f"{path}?format={fmt}", headers=headers)
     assert res.status_code == 200, res.text
