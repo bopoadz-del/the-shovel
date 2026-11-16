@@ -13,6 +13,7 @@ chat block as a fallback; see ``app/blocks/chat.py``.
 from __future__ import annotations
 
 from app.core.offload import off_loop as _off_loop
+from app.core.offload import to_thread_in as _to_thread_in
 from app.core.turn_timing import timed as _turn_timing_stage
 from app.core import turn_progress as _turn_progress
 import asyncio
@@ -886,7 +887,10 @@ async def _rag_inject_off_process(**kwargs: Any):
             from app.core.privileges import caller_role
 
             return await retrieval_worker.call(retrieval_worker.rag_inject_job, kwargs, caller_role())
-        return await asyncio.to_thread(rag_inject, **kwargs)
+        # The bounded, named retrieval pool (same as document search), not the
+        # loop's default executor: CI's loop-lag captures showed default-
+        # executor threads in psycopg at every stall, unbounded beside it.
+        return await _to_thread_in("retrieval", rag_inject, **kwargs)
 
 
 def _agentic_figure_retrieval_excluded(text: str) -> bool:
