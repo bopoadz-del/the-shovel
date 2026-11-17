@@ -14,8 +14,11 @@ Every test builds its own input; no document text.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -54,7 +57,83 @@ def _size_for(seconds: float) -> int:
     return n
 
 
+#: Set in the child pytest process that runs one C-timer test by itself.
+_OWN_PROCESS_ENV = "LOOP_CAPTURE_OWN_PROCESS"
+#: Wall-clock cap for one C-timer test in its own process.
+_OWN_PROCESS_TIMEOUT_S = 60
+
+
+def child_verdict(rc, out: str) -> str:
+    """'' when the child pytest passed, else why it did not. A negative return
+    code is a signal (the C timer reading a running thread's frame can crash
+    the interpreter: #396 9370c0c, exit 139); it is named, never retried."""
+    if rc == 0:
+        return ""
+    tail = out[-3000:]
+    if rc is None:
+        return f"timed out after {_OWN_PROCESS_TIMEOUT_S}s: {tail}"
+    if rc < 0:
+        try:
+            name = signal.Signals(-rc).name
+        except ValueError:
+            name = f"signal {-rc}"
+        return f"child crashed: {name}: {tail}"
+    return f"child pytest rc={rc}: {tail}"
+
+
+def run_in_own_process(nodeid: str) -> tuple:
+    """Run one test node in a child pytest; ``(rc, combined output)``."""
+    env = {**os.environ, _OWN_PROCESS_ENV: "1"}
+    try:
+        proc = subprocess.run([sys.executable, "-m", "pytest", nodeid, "-q", "-p", "no:cacheprovider"], check=False,
+                              cwd=_REPO, env=env, capture_output=True, text=True,
+                              timeout=_OWN_PROCESS_TIMEOUT_S)
+        return proc.returncode, proc.stdout + proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.stdout or b"") + (exc.stderr or b"")
+        return None, out.decode("utf-8", "replace") if isinstance(out, bytes) else out
+
+
+def own_process(test):
+    """A test that arms the real faulthandler C timer while other threads run
+    is run in a child pytest of its own. A crash of that timer then fails THIS
+    test (signal named) and cannot end the serial step and every unrelated test
+    after it. Same body, same assertions: the child runs the test itself."""
+    @functools.wraps(test)
+    def wrapper(*args, **kwargs):
+        if os.environ.get(_OWN_PROCESS_ENV):
+            return test(*args, **kwargs)
+        nodeid = os.environ["PYTEST_CURRENT_TEST"].rsplit(" (", 1)[0]
+        why = child_verdict(*run_in_own_process(nodeid))
+        assert not why, why
+    return wrapper
+
+
+@pytest.mark.parametrize("code,crashed", [
+    ("import faulthandler; faulthandler.disable(); faulthandler._sigsegv()", True),
+    ("pass", False),
+])
+def test_a_crash_in_a_child_is_named_and_the_parent_survives(code, crashed):
+    """The guard's two sides, on a real process: a child that dies of a
+    signal (or a non-zero exit) is a named failure; a clean child is none.
+    This process is still here to assert it."""
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30, check=False)
+    why = child_verdict(proc.returncode, proc.stdout + proc.stderr)
+    assert bool(why) is crashed, (proc.returncode, why)
+    if crashed and proc.returncode < 0:
+        assert "child crashed: SIG" in why, why
+
+
+@pytest.mark.parametrize("rc,expected", [
+    (0, ""), (-11, "child crashed: SIGSEGV"), (1, "child pytest rc=1"), (None, "timed out after"),
+])
+def test_the_child_verdict_names_each_way_a_child_can_end(rc, expected):
+    why = child_verdict(rc, "tail")
+    assert why.startswith(expected) and (why == "" or why.endswith("tail")), why
+
+
 @pytest.mark.parametrize("hold", [True, False])
+@own_process
 def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(hold):
     """A worker thread holds the GIL inside one C call while the loop waits.
     The live dump (C timer, no GIL) shows the worker IN that call; with no
@@ -106,6 +185,7 @@ def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(hold):
 
 
 @pytest.mark.parametrize("hold", [True, False])
+@own_process
 def test_a_gil_hold_that_begins_while_the_monitor_sleeps_is_not_invisible(hold):
     """The blind spot this closes: the hold starts inside the monitor's tick
     sleep, so no heartbeat is pending and ``max_lag_ms`` stays ~0. The late
@@ -261,6 +341,7 @@ def test_live_capture_is_off_unless_asked(live_ms, armed):
 
 
 @pytest.mark.parametrize("cancelled,fired", [(True, False), (False, True)])
+@own_process
 def test_a_cancelled_timer_writes_nothing(cancelled, fired):
     """``cancel`` is what makes a dump mean "still unserved": a timer
     cancelled before its delay writes nothing; one left armed writes."""
@@ -276,6 +357,7 @@ def test_a_cancelled_timer_writes_nothing(cancelled, fired):
 
 
 @pytest.mark.parametrize("who_cancels,fired", [("refused", True), ("owner", False)])
+@own_process
 def test_a_refused_owner_cannot_cancel_the_owners_timer(who_cancels, fired):
     """The timer is process-wide: a monitor refused ownership must not touch it."""
     owner = loop_watchdog.LiveDump(40)
@@ -292,6 +374,7 @@ def test_a_refused_owner_cannot_cancel_the_owners_timer(who_cancels, fired):
 
 
 @pytest.mark.parametrize("monitor_slow,loop_late_ms,near", [(True, 0, False), (False, 190, True)])
+@own_process
 def test_a_served_heartbeat_is_never_a_near_miss(monkeypatch, monitor_slow, loop_late_ms, near):
     """Serving a heartbeat cancels its timer (``_serve``). The monitor itself
     may be slow after that -- held 300 ms after every heartbeat here -- and a
@@ -324,6 +407,7 @@ def test_a_served_heartbeat_is_never_a_near_miss(monkeypatch, monitor_slow, loop
 
 
 @pytest.mark.parametrize("hold_s,wake_late", [(0.12, False), (0.45, True)])
+@own_process
 def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
     """Serving a heartbeat re-arms the timer (``_serve``), so the monitor's
     late return is measured from the serve. Here the loop serves ~240 ms after

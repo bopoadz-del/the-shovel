@@ -10,8 +10,11 @@ running threads' frames without the GIL, and once crashed a timing job
 
 Prints one line ``LOOP_CAPTURE_RESULT {json}`` and nothing is asserted here.
 The same line carries the cost of the monitor's CPU snapshot with and without
-the process stat read (``snapshot_us``), so ten CI runs give ten figures for
-the extra read that sits inside the measured window.
+the process stat read (``snapshot_us``): TEN figures each way from one run,
+taken in interleaved batches so drift on the runner falls on both sides
+alike. The snapshot runs after the heartbeat is stamped, so this extra read
+is inside the measured window; ten figures against the 250 ms limit show
+what it can move.
 
 Not collected by pytest (no ``test_`` prefix). Synthetic corpus only.
 """
@@ -24,8 +27,10 @@ import statistics
 import sys
 import time
 
-#: Snapshots timed per variant; the median is printed.
-SNAPSHOT_REPS = 200
+#: Snapshots timed per batch; each batch's median is one figure.
+SNAPSHOT_REPS = 20
+#: Figures per variant (batches, interleaved threads-only / threads-and-stat).
+SNAPSHOT_FIGURES = 10
 
 
 def _median_us(fn, reps: int = SNAPSHOT_REPS) -> float:
@@ -35,6 +40,17 @@ def _median_us(fn, reps: int = SNAPSHOT_REPS) -> float:
         fn()
         costs.append((time.perf_counter() - t) * 1e6)
     return statistics.median(costs)
+
+
+def snapshot_figures(without, with_, figures: int = SNAPSHOT_FIGURES) -> dict:
+    """``figures`` batch medians (us) for each variant, batches interleaved,
+    and the per-batch extra cost of ``with_`` over ``without``."""
+    a, b = [], []
+    for _ in range(figures):
+        a.append(round(_median_us(without), 1))
+        b.append(round(_median_us(with_), 1))
+    return {"threads_only": a, "threads_and_stat": b,
+            "extra": [round(y - x, 1) for x, y in zip(a, b)]}
 
 
 def main(data_dir: str) -> dict:
@@ -82,10 +98,7 @@ def main(data_dir: str) -> dict:
         "wake_late_max_ms": round(mon.max_wake_late_ms),
         "worst_dump_ms": round(worst[0]),
         "worst_dump": worst[1][:2000],
-        "snapshot_us": {
-            "threads_only": round(_median_us(wd.thread_cpu_ms), 1),
-            "threads_and_stat": round(_median_us(wd.cpu_snapshot), 1),
-        },
+        "snapshot_us": snapshot_figures(wd.thread_cpu_ms, wd.cpu_snapshot),
     }
 
 
