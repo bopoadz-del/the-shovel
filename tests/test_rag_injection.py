@@ -34,6 +34,7 @@ def test_audit_writer_writes_one_jsonl_row_per_call(monkeypatch, tmp_path):
         "budget_degraded": False,
         "chunks": [],
     })
+    assert audit.flush(5.0)
     log_path = tmp_path / "logs" / "rag_audit.jsonl"
     assert log_path.exists()
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
