@@ -16,6 +16,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import httpcore
 import httpx
 import pytest
 
@@ -50,12 +51,14 @@ def _handler(request: httpx.Request) -> httpx.Response:
                                      "usage": {"total_tokens": 2}})
 
 
-def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None, transports=None):
+def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None, transports=None,
+             backend=None):
     """A stand-in for ``httpx.AsyncClient`` that counts builds, records the
-    building thread, and answers through an in-memory transport placed under
-    the module's own retry wrapper. ``hold`` maps a timeout to an Event the
-    build of that timeout waits on; ``transports`` collects the network
-    transports the module built (replaced here by the in-memory one)."""
+    building thread, and answers through an in-memory transport. ``hold`` maps
+    a timeout to an Event the build of that timeout waits on; ``transports``
+    collects the network transports the module built. With ``backend`` the
+    module's own transport is kept and only its sockets are fake, so its pool,
+    keep-alive expiry and connect retry are the ones under test."""
     transports = [] if transports is None else transports
 
     class _Counting(_REAL_CLIENT):
@@ -68,9 +71,12 @@ def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None, tra
                 gate.wait(10)
             builds.append((kwargs.get("timeout"), threading.current_thread().name))
             transport = kwargs.pop("transport")
-            assert isinstance(transport, llm_client._StaleConnectionRetry)
-            transports.append(transport.inner)
-            transport.inner = httpx.MockTransport(handler)
+            assert type(transport) is httpx.AsyncHTTPTransport  # never a request wrapper
+            transports.append(transport)
+            if backend is None:
+                transport = httpx.MockTransport(handler)
+            else:
+                transport._pool._network_backend = backend
             super().__init__(*args, transport=transport, **kwargs)
 
     return _Counting
@@ -319,73 +325,190 @@ def test_a_refused_stream_raises_before_any_line(monkeypatch, wired, status):
     assert used == []
 
 
-# --- grader 17 Nov 18:35Z: a reused connection can be dead after an idle period
+# --- grader 17 Nov 18:35Z / 19:05Z: a reused connection can be dead after an
+# idle period. The retry is the transport's CONNECT retry only; the request is
+# never wrapped, so a body the provider may have received is never sent twice.
+# These tests keep the module's real transport and fake only the sockets.
 
 
-def _flaky_handler(fail_on: set, exc_type, calls: list):
-    """Answers like ``_handler`` but raises ``exc_type`` (no response at all)
-    on the request numbers in ``fail_on`` (1-based)."""
+class _Socket(httpcore.AsyncNetworkStream):
+    """One fake TCP connection to the provider. Every byte written is kept on
+    the server; a read answers the request written so far through ``_handler``
+    unless the server drops it."""
 
-    def handler(request):
-        calls.append(request.url.path)
-        if len(calls) in fail_on:
-            raise exc_type("Server disconnected without sending a response.", request=request)
-        return _handler(request)
+    def __init__(self, server: "_Server") -> None:
+        self.server = server
+        self.inbox = b""
+        self.out = b""
+        self.peer_closed = False
 
-    return handler
+    async def write(self, buffer: bytes, timeout=None) -> None:
+        self.server.written.append(bytes(buffer))
+        self.inbox += buffer
+
+    async def read(self, max_bytes: int, timeout=None) -> bytes:
+        if not self.out and self.inbox and not self.peer_closed:
+            if self.server.drop_after_write:
+                self.peer_closed = True
+            else:
+                self.out = self.server.answer(self.inbox)
+                self.inbox = b""
+        if self.peer_closed:
+            return b""
+        chunk, self.out = self.out[:max_bytes], self.out[max_bytes:]
+        return chunk
+
+    async def aclose(self) -> None:
+        self.peer_closed = True
+
+    async def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        return self
+
+    def get_extra_info(self, info: str):
+        # An idle socket the peer closed reads end-of-stream: "readable".
+        return self.peer_closed if info == "is_readable" else None
 
 
-@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.ReadError])
-def test_a_call_after_idling_survives_a_connection_the_provider_dropped(monkeypatch, wired, exc_type):
+class _Server(httpcore.AsyncNetworkBackend):
+    def __init__(self, refuse_connects: int = 0, drop_after_write: bool = False) -> None:
+        self.refuse_connects = refuse_connects
+        self.drop_after_write = drop_after_write
+        self.connects = 0
+        self.sockets: list = []
+        self.written: list = []
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        self.connects += 1
+        if self.connects <= self.refuse_connects:
+            raise httpcore.ConnectError("connection refused")
+        sock = _Socket(self)
+        self.sockets.append(sock)
+        return sock
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+    @staticmethod
+    def answer(raw: bytes) -> bytes:
+        _, _, body = raw.partition(b"\r\n\r\n")
+        resp = _handler(httpx.Request("POST", "https://provider.invalid/", content=body))
+        content = resp.content
+        head = (b"HTTP/1.1 %d OK\r\ncontent-type: %s\r\ncontent-length: %d\r\n\r\n"
+                % (resp.status_code, resp.headers["content-type"].encode(), len(content)))
+        return head + content
+
+    def times_sent(self, marker: bytes) -> int:
+        return b"".join(self.written).count(marker)
+
+
+async def _call(kind: str, tag: str):
+    if kind == "post":
+        return await _post(tag)
+    got = []
+    async for line in llm_client.provider_stream(
+            "https://provider.invalid/v1/chat/completions", {"stream": True, "tag": tag}, {},
+            timeout=30.0, provider="p", model="m"):
+        got.append(line)
+    return [ln for ln in got if ln][-1]
+
+
+_DONE = {"post": lambda tag: (200, tag), "stream": lambda tag: "data: [DONE]"}
+
+
+@pytest.mark.parametrize("kind", ["post", "stream"])
+@pytest.mark.parametrize("idle", ["provider_closed_it", "keepalive_expired"])
+def test_a_call_after_idling_opens_a_new_connection_and_sends_its_body_once(monkeypatch, wired, kind, idle):
     builds, recorded = wired
-    calls: list = []
-    # Call 1 opens the connection; call 2 reuses it after the provider closed
-    # it while the user idled; the resend on a new connection is answered.
-    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_flaky_handler({2}, exc_type, calls)))
+    server = _Server()
+    if idle == "keepalive_expired":
+        monkeypatch.setattr(llm_client, "_KEEPALIVE_EXPIRY_S", 0.05)
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, backend=server))
 
     async def run():
-        return [await _post("before idle"), await _post("after idle")]
+        first = await _call(kind, "before-idle")
+        if idle == "provider_closed_it":
+            server.sockets[0].peer_closed = True  # the provider's idle timeout fired
+        else:
+            await asyncio.sleep(0.15)  # longer than the client's keep-alive expiry
+        return first, await _call(kind, "after-idle")
 
-    results, used = asyncio.run(_guarded(run))
-    assert results == [(200, "before idle"), (200, "after idle")]
-    assert len(calls) == 3
-    assert len(builds) == 1
-    assert len(recorded) == 2
-    assert used == []
-
-
-@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.WriteError])
-def test_a_stream_after_idling_survives_a_connection_the_provider_dropped(monkeypatch, wired, exc_type):
-    builds, recorded = wired
-    calls: list = []
-    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_flaky_handler({2}, exc_type, calls)))
-
-    async def run():
-        await _post("before idle")
-        return await _stream()
-
-    lines, used = asyncio.run(_guarded(run))
-    assert [ln for ln in lines if ln][-1] == "data: [DONE]"
-    assert len(calls) == 3
-    assert len(recorded) == 2
-    assert used == []
+    (first, second), used = asyncio.run(_guarded(run))
+    assert (first, second) == (_DONE[kind]("before-idle"), _DONE[kind]("after-idle"))
+    assert len(server.sockets) == 2  # the dead connection was not written into
+    assert server.times_sent(b"before-idle") == 1
+    assert server.times_sent(b"after-idle") == 1
+    assert len(builds) == 1 and len(recorded) == 2 and used == []
 
 
-@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.ConnectError])
-def test_a_provider_that_never_answers_is_a_transport_error_after_one_resend(monkeypatch, wired, exc_type):
-    builds, recorded = wired
-    calls: list = []
-    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_flaky_handler({1, 2, 3}, exc_type, calls)))
+@pytest.mark.parametrize("calls", [2, 4])
+def test_a_live_idle_connection_is_reused(monkeypatch, wired, calls):
+    builds, _ = wired
+    server = _Server()
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, backend=server))
 
     async def run():
-        with pytest.raises(llm_client.ProviderStreamError) as err:
-            await _stream()
+        return [await _post(f"call-{i}") for i in range(calls)]
+
+    got, _ = asyncio.run(_guarded(run))
+    assert got == [(200, f"call-{i}") for i in range(calls)]
+    assert len(server.sockets) == 1
+
+
+@pytest.mark.parametrize("kind", ["post", "stream"])
+def test_a_refused_connect_is_retried_once_and_the_body_sent_once(monkeypatch, wired, kind):
+    builds, recorded = wired
+    server = _Server(refuse_connects=1)
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, backend=server))
+
+    got, used = asyncio.run(_guarded(lambda: _call(kind, "first-try-refused")))
+    assert got == _DONE[kind]("first-try-refused")
+    assert server.connects == 2
+    assert server.times_sent(b"first-try-refused") == 1
+    assert len(recorded) == 1
+
+
+@pytest.mark.parametrize("kind", ["post", "stream"])
+def test_a_provider_that_keeps_refusing_fails_after_one_connect_retry(monkeypatch, wired, kind):
+    builds, recorded = wired
+    server = _Server(refuse_connects=5)
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, backend=server))
+
+    async def run():
+        with pytest.raises((httpx.ConnectError, llm_client.ProviderStreamError)) as err:
+            await _call(kind, "never-connected")
         return err.value
 
-    err, used = asyncio.run(_guarded(run))
-    assert err.status == 0
-    assert "Server disconnected" in err.text
-    assert len(calls) == 2  # sent once more, never a third time
+    err, _ = asyncio.run(_guarded(run))
+    if kind == "stream":
+        # A stream transport error is status 0.
+        assert isinstance(err, llm_client.ProviderStreamError) and err.status == 0
+    else:
+        assert isinstance(err, httpx.ConnectError)
+    assert server.connects == 2
+    assert server.written == []
+    assert recorded == []
+
+
+@pytest.mark.parametrize("kind", ["post", "stream"])
+def test_a_body_the_provider_received_is_never_sent_again(monkeypatch, wired, kind):
+    """The provider takes the request and closes without answering: the call
+    fails; the body went out exactly once, on one connection."""
+    builds, recorded = wired
+    server = _Server(drop_after_write=True)
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, backend=server))
+
+    async def run():
+        with pytest.raises((httpx.RemoteProtocolError, llm_client.ProviderStreamError)) as err:
+            await _call(kind, "received-once")
+        return err.value
+
+    err, _ = asyncio.run(_guarded(run))
+    if kind == "stream":
+        assert isinstance(err, llm_client.ProviderStreamError) and err.status == 0
+    else:
+        assert isinstance(err, httpx.RemoteProtocolError)
+    assert server.connects == 1
+    assert server.times_sent(b"received-once") == 1
     assert recorded == []
 
 
@@ -416,10 +539,9 @@ def test_idle_connections_expire_before_the_provider_drops_them(monkeypatch, wir
     got, used = asyncio.run(_guarded(lambda: _post("x", timeout)))
     assert got == (200, "x")
     (built,) = transports
-    assert isinstance(built, httpx.AsyncHTTPTransport)
     # Below the 5 s idle timeout of the shortest common provider front end.
     assert built._pool._keepalive_expiry == llm_client._KEEPALIVE_EXPIRY_S < 5.0
-    assert built._pool._retries == 1
+    assert built._pool._retries == llm_client._CONNECT_RETRIES == 1
 
 
 # --- grader: the stream's own error and parse paths
