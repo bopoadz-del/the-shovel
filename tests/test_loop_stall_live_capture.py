@@ -6,6 +6,9 @@ a thread holding the GIL across one long call (turn-io_3 burned 630 ms) was
 already in its next call by the time anything was sampled. And the same stall
 logged threads=820ms against proc=190ms: two clocks read at two instants.
 
+The monitor tests drive ``LagMonitor._run`` (the monitor thread, started by
+``start()``): a late heartbeat, the live timer it arms, the oversleep.
+
 Every test builds its own input; no document text.
 """
 from __future__ import annotations
