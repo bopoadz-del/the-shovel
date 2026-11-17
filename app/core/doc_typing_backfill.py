@@ -4,7 +4,10 @@ New rows are typed at ingest (``app.core.projects.add_document``). This
 applies the same two decisions to rows written before the tables existed:
 
 * ``doc_type`` -- ``projects.classify_doc_type`` over the stored name (the
-  type table), exactly as ingest calls it;
+  type table), as ingest calls it, plus the opening text of the document's
+  own indexed chunks. Ingest types a row before its text exists, so a name
+  that carries no type word left the row ``document`` even when the text
+  says plainly what it is; the backfill is where the content can be read;
 * ``doc_role`` -- ``projects.resolve_doc_role`` over the stored name and
   metadata source path (readiness role from the name, then the folder-name
   table), exactly as ingest calls it.
@@ -24,9 +27,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
+
+#: Characters of a document's opening chunks read as its content sample.
+CONTENT_SAMPLE_CHARS = int(os.getenv("DOC_TYPING_CONTENT_CHARS", "4000") or 4000)
+
+#: Opening chunks per document read for the sample (bounds the query).
+CONTENT_SAMPLE_CHUNKS = int(os.getenv("DOC_TYPING_CONTENT_CHUNKS", "4") or 4)
 
 #: Columns this backfill may fill, with the default value that marks a row
 #: as never decided.
@@ -54,7 +64,7 @@ def decide_changes(
     """The column changes for these document rows, in doc_id order.
 
     Each row carries ``id``, ``original_name``, ``doc_type``, ``doc_role`` and
-    ``metadata``. A column is changed only when it holds its default and the
+    ``metadata``, and may carry ``content_sample`` (the document's own text). A column is changed only when it holds its default and the
     ingest rule decides something else.
     """
     from app.core.doc_typing import DEFAULT_DOC_TYPE
@@ -66,7 +76,7 @@ def decide_changes(
         did = str(row.get("id"))
         name = str(row.get("original_name") or "")
         decided = {
-            "doc_type": classify_doc_type(name),
+            "doc_type": classify_doc_type(name, str(row.get("content_sample") or "")),
             "doc_role": resolve_doc_role(name, _metadata(row.get("metadata"))),
         }
         for col in COLUMNS:
@@ -98,6 +108,32 @@ def _plan_from_changes(project_id: str, scanned: int, changes: list[dict[str, st
     }
 
 
+def content_samples(session, project_id: str, limit: int | None = None) -> dict[str, str]:
+    """doc_id -> the opening text of its indexed chunks, in chunk order, cut
+    at ``limit`` characters. Read-only; a document with no chunks is absent."""
+    from sqlalchemy import inspect, select
+
+    from app.core.models import RagChunk
+
+    cap = CONTENT_SAMPLE_CHARS if limit is None else limit
+    out: dict[str, str] = {}
+    if not inspect(session.get_bind()).has_table(RagChunk.__tablename__):
+        # A database that has never indexed anything (a fresh SQLite) has no
+        # chunks table: no document has text yet, so the name alone decides.
+        return out
+    for doc_id, text in session.execute(
+        select(RagChunk.doc_id, RagChunk.text)
+        .where(RagChunk.project_id == project_id,
+               RagChunk.chunk_index < CONTENT_SAMPLE_CHUNKS)
+        .order_by(RagChunk.doc_id, RagChunk.chunk_index)
+    ):
+        have = out.get(doc_id, "")
+        if len(have) >= cap:
+            continue
+        out[doc_id] = (have + "\n" + (text or "") if have else (text or ""))[:cap]
+    return out
+
+
 def plan_doc_typing(session, project_id: str) -> dict[str, Any]:
     """Read-only: every doc_type / doc_role fill for ``project_id``, hashed."""
     from sqlalchemy import select
@@ -111,6 +147,9 @@ def plan_doc_typing(session, project_id: str) -> dict[str, Any]:
             select(Document).where(Document.project_id == project_id)
         ).scalars()
     ]
+    samples = content_samples(session, project_id)
+    for r in rows:
+        r["content_sample"] = samples.get(str(r["id"]), "")
     return _plan_from_changes(project_id, len(rows), decide_changes(rows))
 
 

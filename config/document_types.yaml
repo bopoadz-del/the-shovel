@@ -5,71 +5,91 @@
 # and override these by name — no code change or redeploy needed.
 #
 # match scoring: extension +3, filename keyword +2, content keyword +1.
+# Every kind carries English and Arabic words; Arabic spelling variants
+# (hamza on alef, ta marbuta, alef maqsura, short vowels) are folded on
+# both sides before matching. A top score shared by two kinds is
+# 'unrecognised': the order of this list is never a precedence.
+
+# Arabic clitics that may stand glued before a keyword (one at most):
+# the article, the one-letter conjunctions / prepositions, and a
+# conjunction or preposition joined to the article. Keywords are
+# matched as WHOLE words of the folded text, so "صور" never fires inside a
+# longer word such as "تصور"; a prefix listed here is the only thing that
+# may be glued in front ("والعقد" = "and the contract").
+arabic_prefixes: ["ال", "و", "ف", "ب", "ل", "ك", "لل", "وال", "بال", "فال", "كال"]
 
 document_types:
   - name: drawing
     description: Architectural / engineering drawings
     match:
-      filename: ["drawing", "dwg", "sheet", "sht", "detail"]
+      filename: ["drawing", "dwg", "sheet", "sht", "detail", "مخطط", "مخططات", "رسومات"]
       extensions: [".dwg", ".dxf"]
-      content: ["scale 1:", "drawing no", "drawing number", "rev."]
+      content: ["scale 1:", "drawing no", "drawing number", "rev.", "مقياس الرسم", "رقم المخطط", "رقم اللوحة"]
     expected_fields: ["drawing_number", "revision", "scale", "title_block"]
 
   - name: schedule
     description: Project programme / schedule (P6, MS Project)
     match:
-      filename: ["schedule", "programme", "program", "p6", "primavera", "baseline"]
+      filename: ["schedule", "programme", "program", "p6", "primavera", "baseline", "برنامج زمني", "البرنامج الزمني", "جدول زمني", "الجدول الزمني"]
       extensions: [".xer", ".mpp"]
-      content: ["critical path", "milestone", "baseline", "early start"]
+      content: ["critical path", "milestone", "baseline", "early start", "المسار الحرج", "المعالم الرئيسية", "تاريخ البدء"]
     expected_fields: ["commencement_date", "completion_date"]
 
   - name: boq
     description: Bill of quantities / cost breakdown
     match:
-      filename: ["boq", "bill of quant", "bill of quantities", "bills of quantities", "bill", "pricing", "cost plan"]
+      filename: ["boq", "bill of quant", "bill of quantities", "bills of quantities", "bill", "pricing", "cost plan", "جدول الكميات", "جداول الكميات"]
       extensions: []
-      content: ["bill of quantities", "unit rate", "provisional sum", "preliminaries"]
+      content: ["bill of quantities", "unit rate", "provisional sum", "preliminaries", "جدول الكميات", "سعر الوحدة", "المبالغ الاحتياطية"]
     expected_fields: ["boq_total"]
 
   - name: contract
     description: Contract / agreement documents
     match:
-      filename: ["contract", "agreement", "fidic", "nec"]
+      filename: ["contract", "agreement", "fidic", "nec", "عقد", "عقود", "اتفاقية"]
       extensions: []
-      content: ["liquidated damages", "the employer", "the contractor", "defects liability"]
+      content: ["liquidated damages", "the employer", "the contractor", "defects liability", "غرامات التأخير", "صاحب العمل", "فترة الصيانة"]
     expected_fields: ["contract_value", "contract_type", "employer", "contractor"]
 
-  # QA/QC controlled documents (QMS). Listed BEFORE the generic 'report'
-  # entry and with acronym keywords, so an NCR beats 'report' on score:
-  # acronym + full phrase both match -> 4 vs report's 2.
+  # QA/QC controlled documents (QMS), with acronym keywords so an NCR beats
+  # 'report' on score: acronym + full phrase both match -> 4 vs report's 2.
+  # Position in this list decides nothing; a tie is 'unrecognised'.
   - name: ncr
     description: Non-conformance report (QA/QC)
     match:
-      filename: ["ncr", "non-conformance", "non conformance", "nonconformance"]
+      filename: ["ncr", "non-conformance", "non conformance", "nonconformance", "عدم مطابقة", "عدم المطابقة", "تقرير عدم مطابقة", "تقرير عدم المطابقة"]
   - name: inspection_request
     description: Work / material inspection request (WIR, MIR, RFI-inspection)
     match:
-      filename: ["wir", "mir", "inspection request", "inspection"]
+      filename: ["wir", "mir", "inspection request", "inspection", "طلب فحص", "طلب استلام", "فحص"]
   - name: itp
     description: Inspection and test plan
     match:
-      filename: ["itp", "inspection and test plan", "test plan"]
+      filename: ["itp", "inspection and test plan", "test plan", "خطة الفحص والاختبار", "الفحص والاختبار", "خطة الاختبار"]
   - name: material_submittal
     description: Material approval / submittal (MAR, TSF, AMS, SAF)
     match:
-      filename: ["mar", "material approval", "material submittal", "tsf"]
+      filename: ["mar", "material approval", "material submittal", "tsf", "اعتماد مواد", "اعتماد المواد"]
+  - name: method_statement
+    description: Method statements / RAMS (how a package of work is carried out)
+    match:
+      filename: ["method statement", "rams", "طريقة العمل", "طريقة التنفيذ"]
+      extensions: []
+      content: ["method statement", "sequence of work", "risk assessment", "safe system of work", "طريقة العمل", "تسلسل الأعمال", "تقييم المخاطر", "نظام عمل آمن"]
+    expected_fields: []
+
   - name: specification
     description: Technical specifications
     match:
-      filename: ["spec", "specification"]
+      filename: ["spec", "specification", "مواصفات", "المواصفات"]
       extensions: []
-      content: ["section ", "csi ", "masterformat", "shall be", "in accordance with"]
+      content: ["section ", "csi ", "masterformat", "shall be", "in accordance with", "يجب أن يكون", "وفقاً", "طبقاً"]
     expected_fields: []
 
   - name: photo
     description: Site photographs
     match:
-      filename: ["photo", "img", "image"]
+      filename: ["photo", "img", "image", "صور", "صورة"]
       extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif"]
       content: []
     expected_fields: []
@@ -77,7 +97,7 @@ document_types:
   - name: bim
     description: BIM / IFC models
     match:
-      filename: ["bim", "model", "ifc"]
+      filename: ["bim", "model", "ifc", "نمذجة معلومات البناء"]
       extensions: [".ifc"]
       content: ["ifcproject", "ifcbuilding"]
     expected_fields: []
@@ -85,31 +105,31 @@ document_types:
   - name: report
     description: Progress / inspection / site reports
     match:
-      filename: ["report", "daily", "weekly"]
+      filename: ["report", "daily", "weekly", "تقرير", "تقارير", "يومي", "أسبوعي"]
       extensions: []
-      content: ["progress", "site instruction", "weather", "manpower"]
+      content: ["progress", "site instruction", "weather", "manpower", "نسبة الإنجاز", "الطقس", "العمالة"]
     expected_fields: []
 
   - name: minutes
     description: Minutes of meeting
     match:
-      filename: ["minutes", "mom", "meeting"]
+      filename: ["minutes", "mom", "meeting", "محضر اجتماع", "محضر", "اجتماع"]
       extensions: []
-      content: ["attendees", "action by", "next meeting", "apologies"]
+      content: ["attendees", "action by", "next meeting", "apologies", "الحضور", "المعتذرون", "الاجتماع القادم", "الإجراء المطلوب"]
     expected_fields: []
 
   - name: correspondence
     description: Letters, memos, transmittals
     match:
-      filename: ["letter", "correspondence", "memo", "transmittal"]
+      filename: ["letter", "correspondence", "memo", "transmittal", "خطاب", "مراسلة", "مذكرة"]
       extensions: [".msg", ".eml"]
-      content: ["dear sir", "yours faithfully", "yours sincerely"]
+      content: ["dear sir", "yours faithfully", "yours sincerely", "السادة", "تحية طيبة", "وتفضلوا بقبول"]
     expected_fields: []
 
   - name: template
     description: Blank templates and forms
     match:
-      filename: ["template", "blank form"]
+      filename: ["template", "blank form", "قالب", "نموذج فارغ"]
       extensions: [".dotx", ".xltx"]
       content: []
     expected_fields: []
