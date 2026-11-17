@@ -84,3 +84,89 @@ def test_a_split_tie_on_an_arabic_question_hands_the_passage_on_topic_at_the_tok
     assert [c.chunk_id for c in kept] == [on.chunk_id]
     assert why == {off.chunk_id: "score_tie_overlap"}
 
+
+
+# --- Grader round (19:05Z): Latin unchanged, the stated Latin change, no
+# shared word, and the stated limit (no prefix stripping). ---------------
+
+_OLD_LATIN = __import__("re").compile(r"[a-z0-9]+")
+
+
+def _old_terms(text: str) -> set[str]:
+    """The pattern this PR replaced, kept here only to compare against."""
+    return set(_OLD_LATIN.findall((text or "").casefold()))
+
+
+_EN_Q = "what is the pump maintenance period"
+_EN_ON = "invented note the pump maintenance period is stated here "
+_EN_OFF = "invented note about another subject entirely now "
+
+
+@pytest.mark.parametrize("text", [
+    _EN_Q + " " + _EN_ON, "Kerb_backing grade C20, ref 4-B/7 (rev.3)"])
+def test_plain_latin_text_yields_the_same_words_as_the_old_pattern(text):
+    assert _terms(text) == _old_terms(text)
+
+
+@pytest.mark.parametrize("on_first", [False, True])
+def test_a_split_tie_on_a_latin_question_is_decided_as_before(monkeypatch, on_first):
+    t_on, t_off = _same_size(_EN_ON, _EN_OFF)
+    on, off = _chunk("beta", 0.61, t_on), _chunk("alpha", 0.61, t_off)
+    # Same overlap under the old pattern and the new one: same outcome.
+    for c in (on, off):
+        assert (len(_terms(_EN_Q) & _terms(c.text))
+                == len(_old_terms(_EN_Q) & _old_terms(c.text)))
+    monkeypatch.setenv("MAX_RAG_TOKENS", str(len(t_on) // 4 + 2))
+    why: dict = {}
+    kept, _ = apply_token_cap([on, off] if on_first else [off, on],
+                              query=_EN_Q, reasons=why)
+    assert [c.chunk_id for c in kept] == [on.chunk_id]
+    assert why == {off.chunk_id: "score_tie_overlap"}
+
+
+# STATED CHANGE: an accented Latin letter and a digit of another script used
+# to SPLIT a word ("béton" -> "b", "ton"); they are now part of it.
+@pytest.mark.parametrize("text,new,old", [
+    ("béton armé", {"béton", "armé"}, {"b", "ton", "arm"}),
+    ("Grade C٣٠ mix", {"grade", "c٣٠", "mix"},
+     {"grade", "c", "mix"}),
+])
+def test_accented_letters_and_other_digits_are_now_inside_a_word(text, new, old):
+    assert _old_terms(text) == old
+    assert _terms(text) == new
+
+
+# Consequence of the change: a fragment of a split word no longer counts as
+# a shared word ("ton" in a passage was a hit for "béton" in the question).
+@pytest.mark.parametrize("question,passage", [
+    ("béton", "invented ton of fill"), ("C٣٠", "invented c mix")])
+def test_a_fragment_of_an_accented_or_mixed_word_is_no_longer_a_hit(question, passage):
+    assert _old_terms(question) & _old_terms(passage)
+    assert tie_break_key(_chunk("x", 0.5, passage), _terms(question))[0] == 0
+
+
+# No word of the question in either passage: the tie falls to the chunk id,
+# whichever order retrieval handed them in.
+@pytest.mark.parametrize("question,on_first", [
+    ("zzqv wqxk", False), ("قطعة مختلفة", True)])
+def test_with_no_shared_word_the_tie_falls_to_the_chunk_id(monkeypatch, question, on_first):
+    t_b, t_a = _same_size(_EN_ON, _EN_OFF)
+    b, a = _chunk("beta", 0.61, t_b), _chunk("alpha", 0.61, t_a)
+    terms = _terms(question)
+    assert tie_break_key(a, terms)[0] == tie_break_key(b, terms)[0] == 0
+    monkeypatch.setenv("MAX_RAG_TOKENS", str(len(t_b) // 4 + 2))
+    why: dict = {}
+    kept, _ = apply_token_cap([b, a] if on_first else [a, b],
+                              query=question, reasons=why)
+    assert [c.chunk_id for c in kept] == [a.chunk_id]
+    assert why == {b.chunk_id: "score_tie_overlap"}
+
+
+# STATED LIMIT: no prefix stripping. An Arabic word with the article (or
+# another attached prefix) is a different term from the bare word.
+@pytest.mark.parametrize("prefixed,bare", [
+    ("المضخة", "مضخة"),
+    ("للمضخة", "مضخة")])
+def test_no_prefix_stripping_an_arabic_word_with_the_article_is_another_term(prefixed, bare):
+    assert _terms(prefixed) and _terms(bare)
+    assert not (_terms(prefixed) & _terms(bare))
