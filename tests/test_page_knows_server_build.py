@@ -43,17 +43,18 @@ def _pin(monkeypatch, value: str | None) -> None:
         monkeypatch.setenv("GIT_SHA", value)
 
 
-def test_every_response_names_the_server_build(client, monkeypatch):
-    _pin(monkeypatch, _SERVER_BUILD)
+@pytest.mark.parametrize("server_build", [_SERVER_BUILD, "c" * 40])
+def test_every_response_names_the_server_build(client, monkeypatch, server_build):
+    _pin(monkeypatch, server_build)
     live = client.get("/livez")
-    assert live.headers[BUILD_ID_HEADER] == _SERVER_BUILD
+    assert live.headers[BUILD_ID_HEADER] == server_build
     # The header and the liveness body name the same build.
-    assert live.json()["build_sha"] == _SERVER_BUILD
+    assert live.json()["build_sha"] == server_build
     # An error response from an API route carries it too: the press that
     # exposed the defect was a POST to an API route, not a page load.
     denied = client.post("/v1/projects/p/conversations/c/export?format=docx")
     assert denied.status_code in (401, 403)
-    assert denied.headers[BUILD_ID_HEADER] == _SERVER_BUILD
+    assert denied.headers[BUILD_ID_HEADER] == server_build
 
 
 def test_an_unknown_server_build_is_not_invented(client, monkeypatch):
@@ -70,14 +71,14 @@ def test_a_cross_origin_dev_page_may_read_the_build(client, monkeypatch):
     assert BUILD_ID_HEADER.lower() in exposed.lower()
 
 
-def _shell_app() -> FastAPI:
+def _shell_app(media_type: str = "text/html") -> FastAPI:
     """A shell served with no cache header of its own, like a static mount."""
     shell = FastAPI()
     shell.add_middleware(SecurityHeadersMiddleware)
 
     @shell.get("/plain-shell")
     def plain_shell():
-        return HTMLResponse("<!doctype html><title>t</title>")
+        return HTMLResponse("<!doctype html><title>t</title>", media_type=media_type)
 
     @shell.get("/chosen-shell")
     def chosen_shell():
@@ -93,8 +94,9 @@ def _shell_app() -> FastAPI:
     return shell
 
 
-def test_every_html_shell_is_revalidated():
-    with TestClient(_shell_app()) as c:
+@pytest.mark.parametrize("media_type", ["text/html", "TEXT/HTML"])
+def test_every_html_shell_is_revalidated(media_type):
+    with TestClient(_shell_app(media_type)) as c:
         assert c.get("/plain-shell").headers["Cache-Control"] == "no-cache"
         # A route that already chose a stricter policy keeps it.
         assert c.get("/chosen-shell").headers["Cache-Control"] == "no-store"
