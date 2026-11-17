@@ -383,8 +383,7 @@ def derived_bill_documents(project_id: str, document_id: str | None = None) -> l
 
 
 def _fmt(value: float) -> str:
-    if float(value).is_integer():
-        return f"{int(value):,}"
+    """``3000`` -> ``3,000``; ``103.5`` -> ``103.5``; at most three decimals."""
     return f"{value:,.3f}".rstrip("0").rstrip(".")
 
 

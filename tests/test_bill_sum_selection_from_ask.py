@@ -121,17 +121,38 @@ def test_call_terms_only_when_the_ask_selects_nothing(rows, ask, call, selected_
     assert [r["ref"] for r in out["rows"]] == refs
 
 
+@pytest.mark.parametrize("terms, fold, refs", [
+    # the call's own words match exactly: a plural is not its singular
+    ("pipes", False, []),
+    # the ask's words fold plurals: the same word now matches
+    ("pipes", True, ["R1", "R2", "R3", "R4", "R5", "C1"]),
+    ("trench", False, ["R1", "R2", "R4"]),
+])
+def test_plural_folding_only_for_the_asks_selection(rows, terms, fold, refs):
+    out = agg.aggregate(rows, terms=terms, fold=fold)
+    assert [r["ref"] for r in out["rows"]] == refs
+
+
+@pytest.mark.parametrize("value, shown", [(3000.0, "3,000"), (103.5, "103.5"), (0.125, "0.125"), (0.0, "0")])
+def test_figure_format(value, shown):
+    assert agg._fmt(value) == shown
+
+
 def _numbers(text):
     return [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text)]
 
 
-@pytest.mark.parametrize("ask, figure, listed, absent", [
-    ("total length of clay pipes in the runs", "103.5 m", ["R1 (p. 1)", "R4 (p. 2-3)", "R5 (p. 3)"], ["C1"]),
-    ("total cost of the fencing", "3,000", ["F1 (p. 5)"], ["R1"]),
+@pytest.mark.parametrize("ask, why, figure, listed, absent", [
+    ("total length of clay pipes in the runs",
+     'row(s) whose description contains "clay", "pipes" in the section "runs": ',
+     "103.5 m", ["R1 (p. 1)", "R4 (p. 2-3)", "R5 (p. 3)"], ["C1"]),
+    ("total cost of the fencing", 'row(s) in the section "fencing": ',
+     "3,000", ["F1 (p. 5)"], ["R1"]),
 ], ids=["quantity", "amount"])
-def test_statement_names_the_rows_and_carries_the_tools_figure(rows, ask, figure, listed, absent):
+def test_statement_names_the_rows_and_carries_the_tools_figure(rows, ask, why, figure, listed, absent):
     out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)
     text = out["statement"]
+    assert text.startswith(f"{out['count']} {why}")
     assert f"Total {out['measure']} {figure}" in text
     assert out["sum"] in _numbers(text)
     for label in listed:
