@@ -207,3 +207,50 @@ def test_tool_call_args_are_the_ones_sent_with_that_call(messages, call_id, expe
 def test_failure_text_is_the_plain_error_or_reason(payload, expected):
     assert failure_text(payload) == expected
 
+
+
+# --- a declared reason code must be a snake_case code (tool and result) ---
+
+def _stater(_result):
+    return []
+
+
+def _declare_tool(name, codes):
+    from app.agents.core import tool_registry
+    return tool_registry.tool(name, owner="base", display_name="Probe tool",
+                              kind="computed", statement=_stater,
+                              reason_codes=codes)
+
+
+def _declare_result(name, codes):
+    from app.agents.core import tool_registry
+    tool_registry.declare_result(name, owner="base", display_name="Probe result",
+                                 kind="computed", statement=_stater,
+                                 reason_codes=codes)
+
+
+@pytest.mark.parametrize("declare", [_declare_tool, _declare_result])
+@pytest.mark.parametrize("bad_code", [
+    "Table Name",          # spaces and capitals: free text, not a code
+    "orders",              # one bare word: a table name, not a code
+    "/srv/data/x.db",      # a path
+    42,                    # not text at all
+])
+def test_a_reason_code_that_is_not_a_snake_case_code_is_refused(declare, bad_code):
+    from app.agents.core import tool_registry
+    name = f"probe_bad_code_{declare.__name__}_{abs(hash(repr(bad_code)))}"
+    with pytest.raises(ValueError, match="reason code"):
+        declare(name, ("rows_missing", bad_code))
+    assert name not in tool_registry._TOOLS
+    assert name not in tool_registry._RESULTS
+
+
+@pytest.mark.parametrize("codes", [("rows_missing",), ("term_not_found", "bill_not_found")])
+def test_declared_snake_case_codes_are_kept_in_order(codes):
+    from app.agents.core import tool_registry
+    name = f"probe_good_codes_{len(codes)}"
+    try:
+        _declare_result(name, codes)
+        assert tool_registry._RESULTS[name].reason_codes == codes
+    finally:
+        tool_registry._RESULTS.pop(name, None)
