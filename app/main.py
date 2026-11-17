@@ -735,6 +735,9 @@ _CSP_REPORT_ONLY = "; ".join((
 ))
 
 
+from app.routers.health import BUILD_ID_HEADER, _deployed_build_sha  # noqa: E402
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Stamp baseline security headers on every response.
 
@@ -752,6 +755,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
         )
         h.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
+        # A tab keeps the script it loaded until reloaded. Name the server's
+        # build on every response so the page can tell when it is running a
+        # different build than the server it talks to (frontend
+        # lib/buildCheck.js). Unset build -> no header: never invent one.
+        build = _deployed_build_sha()
+        if build:
+            h.setdefault(BUILD_ID_HEADER, build)
+        # Every HTML page shell is revalidated, whichever route or mount
+        # served it, so a reload always fetches the current bundle names.
+        if (h.get("content-type") or "").lower().startswith("text/html"):
+            h.setdefault("Cache-Control", "no-cache")
         # HSTS only where the origin really is https. Sent from a plain-HTTP
         # dev box it pins that browser to https for a year.
         if (os.getenv("ENV") or "").strip().lower() in {"production", "prod"}:
@@ -789,6 +803,8 @@ app.add_middleware(
     # should not reflect arbitrary methods/headers back to the browser.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
+    # A cross-origin page (vite dev on another port) may read the build id.
+    expose_headers=[BUILD_ID_HEADER],
 )
 
 
