@@ -250,20 +250,25 @@ def test_the_tool_name_alone_decides_a_note_without_a_calculation_key(name, expe
 _PLAIN_ERROR = {"status": "error", "error": "Missing input: trench length"}
 
 
-@pytest.mark.parametrize("name,recovered", [
-    pytest.param("construction_calc", True, id="calculator-name"),
-    pytest.param("formula_executor_v2", True, id="formula-name"),
-    pytest.param("search_project_documents", False, id="search-name"),
+@pytest.mark.parametrize("name,heading", [
+    pytest.param("construction_calc", "Platform calculator", id="calculator-name"),
+    pytest.param("formula_executor", "Formula code runner", id="formula-name"),
+    pytest.param("formula_executor_v2", "Formula code runner", id="formula-v2-name"),
+    pytest.param("search_project_documents", None, id="search-name"),
 ])
-def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, recovered):
+def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, heading):
     """A failed calculator -- a tool DECLARED computed in the registry, not a
-    name on a list -- states its error in plain words; a failed search's
-    error text is never shown as the answer."""
+    name on a list -- states its error in plain words under its declared
+    name; a failed search's error text is never shown as the answer."""
+    from app.agents.core import tool_registry
+
     msgs = [{"role": "tool", "name": name, "content": json.dumps(_PLAIN_ERROR)}]
-    out = _recover_answer_from_tool_messages("", msgs)
-    assert json.dumps(_PLAIN_ERROR) not in out
-    if recovered:
-        assert _PLAIN_ERROR["error"] in out, out
-        assert "unable to generate" not in out.lower()
+    spec = tool_registry.result_spec(name)
+    if heading is not None:
+        assert spec is not None and spec.kind == "computed"
+        assert (spec.display_name or spec.name) == heading
+        expected = f"{heading}:\n- did not return: {_PLAIN_ERROR['error']}"
     else:
-        assert out == ""
+        expected = ""
+    assert expected != json.dumps(_PLAIN_ERROR)
+    assert _recover_answer_from_tool_messages("", msgs) == expected

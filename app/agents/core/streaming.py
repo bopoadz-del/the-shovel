@@ -1432,6 +1432,8 @@ async def _chat_stream_impl(
                 "name": tool_result["name"],
                 "content": _tool_content,
             })
+            from app.agents import answer_exit as _answer_exit
+            _answer_exit.note_tool_message(tc, messages[-1])
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(

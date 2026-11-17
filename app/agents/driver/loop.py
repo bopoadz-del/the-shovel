@@ -448,6 +448,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                     tabled.extend(render.record_lists(envelope))
             msgs.append({**tool_msg, "content": shown})
             evidence.append({**tool_msg, "content": full})
+            answer_exit.note_tool_message(call, evidence[-1])
         # A calculator that rejected or lacks an input ends the turn with its
         # own question: the model is never given the chance to compute a
         # figure the calculator refused (lane 2: it did).

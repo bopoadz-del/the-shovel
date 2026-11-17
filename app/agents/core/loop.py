@@ -728,6 +728,8 @@ async def _chat_impl(
                 "name": tool_result["name"],
                 "content": _tool_content,
             })
+            from app.agents import answer_exit as _answer_exit
+            _answer_exit.note_tool_message(tc, messages[-1])
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(
@@ -945,7 +947,10 @@ async def chat_stream(
                         timeout_s, _stalled, _stalled_for,
                     )
                     if not token_emitted:
-                        yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
+                        # A tool that already answered this turn answers
+                        # before the generic reply (same recovery as the end).
+                        _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+                        yield {"type": "token", "content": _recovered or _EMPTY_RESPONSE_FALLBACK}
                         token_emitted = True
                     yield {
                         "type": "error",
@@ -1005,6 +1010,7 @@ async def chat_stream(
     # Opened before the producer task exists, so the task (and the threads it
     # offloads to) record this turn's evidence into the same record.
     _exit_turn = answer_exit.open_turn()
+    _exit_turn.question = user_message or ""
     # The user's own words reach every calculator run this turn makes.
     from app.lib import construction_formulas as _calc_words
 
@@ -1055,8 +1061,10 @@ async def chat_stream(
         if not token_emitted:
             # Make sure the UI does NOT render an empty bubble. A token
             # event populates the bubble with the friendly fallback; the
-            # error event then triggers the styled error banner.
-            yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
+            # error event then triggers the styled error banner. A tool that
+            # already answered this turn answers before the generic reply.
+            _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+            yield {"type": "token", "content": _recovered or _EMPTY_RESPONSE_FALLBACK}
             token_emitted = True
         yield {"type": "error", "message": f"chat_stream crashed: {exc}"}
         terminal_emitted = True
@@ -1073,8 +1081,10 @@ async def chat_stream(
             token_emitted,
         )
         if not token_emitted:
-            yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
-            _streamed.append(_EMPTY_RESPONSE_FALLBACK)
+            _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+            _first = _recovered or _EMPTY_RESPONSE_FALLBACK
+            yield {"type": "token", "content": _first}
+            _streamed.append(_first)
         yield _with_hat_signals(
             await off_loop(
                 answer_exit.check_end_event,

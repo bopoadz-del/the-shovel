@@ -27,8 +27,12 @@ def improvised_statement(result: dict) -> list[Statement]:
             if isinstance(v, (int, float)) and not isinstance(v, bool)]
 
 
-declare_result("formula_executor_v2", owner="base", display_name="Formula code runner",
-               kind="computed", statement=improvised_statement)
+# The runner's earlier name still heads tool messages in recorded turns and in
+# the tool lists that exclude it; a message under that name is the same
+# runner's result, so it is declared the same.
+for _runner in ("formula_executor_v2", "formula_executor"):
+    declare_result(_runner, owner="base", display_name="Formula code runner",
+                   kind="computed", statement=improvised_statement)
 
 
 def _declare_calculator_aliases() -> None:

@@ -45,6 +45,8 @@ LABELS: Dict[str, Dict[str, str]] = {
         "no_derived_bill_sheet": "no bill sheet has been derived for this project",
         "derived_sheet_has_no_readable_bytes": "the bill sheet file could not be read",
         "derived_sheet_is_not_a_readable_workbook": "the bill sheet is not a readable workbook",
+        "tool_error": "the tool reported an error",
+        "code": "code",
     },
     "ar": {
         "heading": "نتيجة محسوبة",
@@ -68,6 +70,8 @@ LABELS: Dict[str, Dict[str, str]] = {
         "no_derived_bill_sheet": "لم يُستخرج جدول كميات لهذا المشروع",
         "derived_sheet_has_no_readable_bytes": "تعذّرت قراءة ملف جدول الكميات",
         "derived_sheet_is_not_a_readable_workbook": "ملف جدول الكميات ليس مصنفًا مقروءًا",
+        "tool_error": "أبلغت الأداة عن خطأ",
+        "code": "الرمز",
     },
 }
 
@@ -108,6 +112,57 @@ def _word(lab: Dict[str, str], key: str) -> str:
     return lab.get(key, key)
 
 
+#: What must never reach a user from a tool's error or its echoed arguments:
+#: a stack trace and everything after it, a file path, a SQL table/relation
+#: name, an internal id (uuid, long hex, a word joined to a hex key by an
+#: underscore). A document's own codes (drawing S-101, lot L-01) are data.
+_TRACE_RE = re.compile(r"(?:Traceback \(most recent call last\)|\bFile \"[^\"]*\", line \d+).*", re.S)
+_PATH_RE = re.compile(r"(?:\b[A-Za-z]:[\\/]|\\\\|(?<![\w.])/)(?:[\w.\-]+[\\/])+[\w.\-]*")
+_TABLE_RE = re.compile(
+    r"\b(?:relation|table|column|schema|index|constraint)\s+"
+    r"(?:[\"'`][^\"'`\s]+[\"'`]|[a-z]\w*[_.][\w.]+)"
+    r"|\b(?:from|into|update|join)\s+[\"'`]?[a-z_]\w*\.[\w.]+[\"'`]?",
+    re.I)
+#: A dotted module or exception path (``psycopg.errors.UndefinedTable``).
+_DOTTED_RE = re.compile(r"\b[A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}:?")
+_ID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
+    r"|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,}\b"
+    r"|\b[a-z]+_(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,}\b",
+    re.I)
+_CODE_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+
+
+def scrub(text: str) -> str:
+    """``text`` without a stack trace, file path, table name or internal id."""
+    out = _TRACE_RE.sub("", str(text or ""))
+    for rx in (_PATH_RE, _TABLE_RE, _DOTTED_RE, _ID_RE):
+        out = rx.sub("", out)
+    out = re.sub(r"[{}\[\]]", "", out)
+    out = re.sub(r"\s+([,.;:)])", r"\1", re.sub(r"\(\s*\)", "", out))
+    return re.sub(r"\s{2,}", " ", out).strip(" ,;:-\n")
+
+
+def reason_text(error: str, lab: Dict[str, str], language: str) -> str:
+    """A tool's error as the user reads it, in the question's language.
+
+    A reason code LABELS knows is translated. Another code is kept, after a
+    plain sentence in the question's language that the tool reported an
+    error. Free text is shown scrubbed where the question is in the language
+    the tools write in; in another language it is never pasted raw: the
+    plain sentence stands in its place."""
+    raw = str(error or "").strip()
+    if not raw:
+        return ""
+    if raw in lab:
+        return lab[raw]
+    if _CODE_RE.fullmatch(raw):
+        return f"{lab['tool_error']} ({lab['code']}: {raw})"
+    if language == DEFAULT_LANGUAGE:
+        return scrub(raw)[:180] or lab["tool_error"]
+    return lab["tool_error"]
+
+
 def _what(st: Any, lab: Dict[str, str]) -> str:
     basis = getattr(st, "basis", "")
     if basis not in ("count", "sum"):
@@ -123,9 +178,9 @@ def _what(st: Any, lab: Dict[str, str]) -> str:
     return head[:1].upper() + head[1:]
 
 
-def _statement_lines(st: Any, lab: Dict[str, str]) -> List[str]:
+def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGUAGE) -> List[str]:
     if st.figure is None:
-        reason = _word(lab, str(getattr(st, "failure", "") or "")) or lab["failed"]
+        reason = reason_text(str(getattr(st, "failure", "") or ""), lab, language) or lab["failed"]
         line = f"- {_what(st, lab)}: {lab['not_returned']} ({reason})"
     elif st.count == 0:
         line = f"- {_what(st, lab)}: **0** ({lab['no_rows']})"
@@ -144,8 +199,11 @@ def _statement_lines(st: Any, lab: Dict[str, str]) -> List[str]:
 
 
 def _asked_line(asked: Dict[str, Any], lab: Dict[str, str]) -> str:
-    values = [str(v).strip() for v in (asked or {}).values()
-              if isinstance(v, (str, int, float)) and str(v).strip()]
+    # Echoed arguments are scrubbed like an error: an id, path or table name
+    # the model passed is never shown back.
+    values = [scrub(str(v)) for v in (asked or {}).values()
+              if isinstance(v, (str, int, float)) and not isinstance(v, bool)]
+    values = [v for v in values if v]
     return f"{lab['asked']}: " + lab["sep"].join(values) if values else ""
 
 
@@ -156,12 +214,12 @@ def render_call(heading: str, statements: Sequence[Any], *, asked: Dict[str, Any
     lab = labels_for(language)
     lines: List[str] = [f"{heading}:"]
     for st in statements:
-        lines.extend(_statement_lines(st, lab))
+        lines.extend(_statement_lines(st, lab, language))
     if not statements:
         asked_line = _asked_line(asked, lab)
         if asked_line:
             lines.append(f"- {asked_line}")
-        reason = _word(lab, error) if error else lab["no_figure"]
+        reason = reason_text(error, lab, language) if error else lab["no_figure"]
         lines.append(f"- {lab['not_returned']}: {reason}")
     return "\n".join(lines)
 
@@ -210,11 +268,12 @@ def failure_text(payload: Optional[Dict[str, Any]]) -> str:
     for key in ("error", "reason"):
         val = (payload or {}).get(key)
         if isinstance(val, str) and val.strip():
-            return re.sub(r"[{}\[\]]", "", val).strip()[:180]
+            # The code or text as given; reason_text words it and scrubs it.
+            return re.sub(r"[{}\[\]]", "", val).strip()[:2000]
     return ""
 
 
 __all__: Tuple[str, ...] = (
     "LABELS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
-    "tool_call_args", "failure_text",
+    "tool_call_args", "failure_text", "scrub", "reason_text",
 )
