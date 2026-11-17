@@ -6097,6 +6097,9 @@ def _recover_answer_from_tool_messages(
     surface that draft instead of an empty bubble or a 413 error."""
     if not _text_needs_tool_recovery(text):
         return text
+    computed = _computed_turn_answer(messages)
+    if computed:
+        return computed
     error_fallback = ""
     for m in reversed(messages or []):
         if m.get("role") == "user":
@@ -6128,12 +6131,10 @@ def _recover_answer_from_tool_messages(
             inner = payload
         if not isinstance(inner, dict):
             continue
-        kind, stated = _declared_tool_result(m, inner)
-        if kind == "search":
-            # Passages are evidence for an answer, never the answer (G-8).
+        if _declared_kind(m)[0] in ("search", "computed"):
+            # Passages are evidence for an answer, never the answer (G-8);
+            # a computed call of this turn was answered above.
             continue
-        if stated:
-            return stated
         action = inner.get("action")
         if action == "commissioning_checklist_generated":
             return _format_commissioning_tool(inner)
@@ -6273,55 +6274,82 @@ def _with_model_unreached_note(text: str) -> str:
     return f"{body}\n\n{MODEL_UNREACHED_NOTE}"
 
 
-def _figure_text(value: float) -> str:
-    return f"{value:,.3f}".rstrip("0").rstrip(".")
+def _declared_kind(msg: dict[str, Any] | None) -> tuple[str, Any]:
+    """(the result kind a tool message's tool DECLARED, its registry spec).
 
-
-def _render_statements(display_name: str, statements: list[Any]) -> str:
-    """A computed tool's statements as the answer: each figure with its unit,
-    what was counted or summed, the source, and the source rows."""
-    lines: list[str] = []
-    for st in statements:
-        figure = f"{_figure_text(st.figure)} {st.unit}".strip()
-        if st.count is not None:
-            figure = f"{st.count} row" + ("" if st.count == 1 else "s")
-        line = f"- {st.what[:1].upper()}{st.what[1:]}: **{figure}**"
-        if st.source:
-            line += f" (source: {st.source})"
-        lines.append(line)
-        if st.rows:
-            lines.append("  Rows: " + "; ".join(st.rows))
-    if not lines:
-        return ""
-    return "\n".join([f"{display_name}:", *lines])
-
-
-def _declared_tool_result(
-    msg: dict[str, Any], payload: dict[str, Any],
-) -> tuple[str, str]:
-    """(declared result kind, the answer a computed tool's result states).
-
-    The kind comes from the tool's own declaration in the registry, not from
-    a list of tool names here. A computed tool that failed, or whose result
-    states no figure, gives ``""`` so the turn keeps its honest fallback.
-    """
+    The kind comes from the tool's own declaration in the registry, never
+    from a list of tool names here."""
     from app.agents.core import tool_registry
 
     name = str((msg or {}).get("name") or "")
     spec = tool_registry.get(name) if name else None
-    if spec is None:
-        return "", ""
-    if spec.kind != "computed" or spec.statement is None or payload.get("ok") is False:
-        return spec.kind, ""
-    body = payload.get("result") if isinstance(payload.get("result"), dict) else payload
-    if _tool_error_payload(body):
-        return spec.kind, ""
+    return (spec.kind if spec is not None else ""), spec
+
+
+def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
+    """The result dict a tool message carries (a truncation envelope's whole
+    preview included), or None."""
+    raw = msg.get("content") or ""
     try:
-        statements = spec.statement(body)
-    except (TypeError, ValueError, KeyError, AttributeError):
-        _LOG.warning("computed tool %s: its result states no figure", name, exc_info=True)
-        return spec.kind, ""
-    return spec.kind, _render_statements(spec.display_name or name, statements)
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, dict) and payload.get("truncated"):
+        try:
+            payload = json.loads(payload.get("preview") or "")
+        except (TypeError, json.JSONDecodeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _render_computed_call(msg: dict[str, Any], spec: Any,
+                          messages: list[dict[str, Any]], language: str) -> str:
+    """One computed call as the answer. A call that failed or stated no
+    figure still answers plainly: what was asked and why there is no figure."""
+    from app.agents.core import computed_answer
+
+    payload = _tool_message_payload(msg) or {}
+    inner = payload.get("result")
+    body = inner if isinstance(inner, dict) else payload
+    statements: list[Any] = []
+    error = ""
+    err = _tool_error_payload(body)
+    status = str(body.get("status") or "").strip().lower()
+    if payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
+        error = computed_answer.failure_text(err or body)
+    elif body:
+        try:
+            statements = list(spec.statement(body) or [])
+        except (TypeError, ValueError, KeyError, AttributeError):
+            _LOG.warning("computed tool %s: its result states no figure", spec.name, exc_info=True)
+    return computed_answer.render_call(
+        computed_answer.heading_for(spec.display_name or spec.name, language), statements,
+        asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
+        error=error, language=language)
+
+
+def _computed_turn_answer(messages: list[dict[str, Any]] | None) -> str:
+    """Every computed call of the current turn (after the user's last
+    question), in call order, worded in the question's language."""
+    from app.agents.core import computed_answer
+
+    msgs = list(messages or [])
+    start, question = 0, ""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        content = str(m.get("content") or "")
+        if m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]:
+            start, question = i + 1, content
+            break
+    language = computed_answer.question_language(question)
+    rendered = []
+    for m in msgs[start:]:
+        if m.get("role") != "tool":
+            continue
+        kind, spec = _declared_kind(m)
+        if kind == "computed" and spec.statement is not None:
+            rendered.append(_render_computed_call(m, spec, msgs, language))
+    return computed_answer.join_calls(rendered, language)
 
 
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:

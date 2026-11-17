@@ -64,7 +64,7 @@ def test_empty_synthesis_after_the_bill_tool_states_its_figure(synthesis, ask, r
     bill = result["bills"][0]
     assert "unable to generate" not in out.lower()
     assert f"**{total} {unit}**" in out
-    assert f"**{bill['count']} rows**" in out
+    assert f"Number of rows whose description holds {', '.join(bill['terms'])}: **{bill['count']}**" in out
     assert bill["filename"] in out
     for row in bill["rows"]:
         assert row["ref"] in out
@@ -111,7 +111,7 @@ def invented_tools():
                                 "members": ["B3", "B7"]}, ["**18.75**", "S-invented-12", "B3; B7",
                                                            "Span to depth ratio", "Span ratio check"]),
     ("zz_invented_pallet_count", {"lots": ["L-01", "L-02", "L-05"], "note": "DN-invented-4"},
-     ["**3 rows**", "DN-invented-4", "L-01; L-02; L-05", "Pallets on the delivery note",
+     ["**3**", "DN-invented-4", "L-01; L-02; L-05", "Pallets on the delivery note",
       "Pallet counter"]),
 ])
 def test_any_tool_declared_computed_is_recovered_by_its_kind(invented_tools, name, result, expect):
@@ -120,18 +120,27 @@ def test_any_tool_declared_computed_is_recovered_by_its_kind(invented_tools, nam
         assert piece in out
 
 
-@pytest.mark.parametrize("name", ["zz_invented_span_ratio", "zz_invented_pallet_count"])
-def test_a_failed_computed_tool_states_nothing(invented_tools, name):
-    failed = _tool_msg(name, {"status": "error", "error": "input missing"}, ok=False)
-    assert runtime._recover_answer_from_tool_messages("", _turn("how many?", failed)) == ""
-    refused = _tool_msg(name, {"status": "error", "error": "input missing"})
-    assert runtime._recover_answer_from_tool_messages("", _turn("how many?", refused)) == ""
+@pytest.mark.parametrize("name,error", [("zz_invented_span_ratio", "input missing"),
+                                        ("zz_invented_pallet_count", "note not found")])
+def test_a_failed_computed_tool_says_what_was_asked_and_its_error(invented_tools, name, error):
+    ask = {"role": "assistant", "content": "", "tool_calls": [{
+        "id": f"call-{name}", "type": "function",
+        "function": {"name": name, "arguments": json.dumps({"drawing": "S-invented-9"})}}]}
+    for ok in (False, True):
+        failed = _tool_msg(name, {"status": "error", "error": error}, ok=ok)
+        messages = _turn("how many?", ask, failed)
+        out = runtime._recover_answer_from_tool_messages("", messages)
+        assert "unable to generate" not in out.lower()
+        assert f"did not return: {error}" in out and "Asked: S-invented-9" in out
+        assert FALLBACK not in runtime._postprocess_answer("", None, messages)
 
 
 @pytest.mark.parametrize("name", ["zz_invented_span_ratio", "zz_invented_pallet_count"])
-def test_a_result_the_tool_cannot_state_keeps_the_honest_fallback(invented_tools, name):
+def test_a_result_the_tool_cannot_state_says_it_returned_no_figure(invented_tools, name):
     odd = _tool_msg(name, {"unexpected": "shape"})
-    assert runtime._recover_answer_from_tool_messages("", _turn("how many?", odd)) == ""
+    out = runtime._recover_answer_from_tool_messages("", _turn("how many?", odd))
+    assert "did not return: the tool returned no figure" in out
+    assert "unable to generate" not in out.lower()
 
 
 SEARCH_RESULTS = [
@@ -215,16 +224,24 @@ def test_a_row_is_labelled_by_its_ref_and_first_page_else_its_description(row, l
     assert _row_label(row) == label
 
 
-@pytest.mark.parametrize("bill", [
-    {"status": "error", "error": "sheet unreadable", "rows": [{"ref": "A.1", "quantity": 2.0}],
-     "sum": 2.0, "unit": "m", "filename": "bill-failed.xlsx"},
-    "not a bill",
+@pytest.mark.parametrize("failed,reason", [
+    ({"status": "error", "reason": "derived_sheet_is_not_a_readable_workbook",
+      "filename": "bill-failed.xlsx", "terms": ["gully"]},
+     "the bill sheet is not a readable workbook"),
+    ({"status": "error", "error": "sheet locked by the invented host",
+      "filename": "bill-locked.xlsx", "terms": ["gully"]}, "sheet locked by the invented host"),
 ])
-def test_a_bill_that_did_not_succeed_states_nothing(bill):
+def test_a_bill_that_did_not_return_is_named_never_skipped(failed, reason):
     good = _bill("bill-gamma.xlsx", ["gully"], "nr", [("G.1", 2, 3.0)])["bills"][0]
-    stated = bill_rows_statement({"bills": [bill, good]})
-    assert [s.source for s in stated] == ["bill-gamma.xlsx", "bill-gamma.xlsx"]
-    assert stated[0].count == 1 and stated[1].figure == 3.0 and stated[1].unit == "nr"
+    stated = bill_rows_statement({"bills": [failed, good, "not a bill"]})
+    assert [s.source for s in stated] == [failed["filename"], "bill-gamma.xlsx", "bill-gamma.xlsx"]
+    assert stated[0].figure is None and stated[0].failure
+    assert stated[1].count == 1 and stated[2].figure == 3.0 and stated[2].unit == "nr"
+    out = runtime._recover_answer_from_tool_messages("", _turn(
+        "count the gullies", _tool_msg("bill_rows_aggregate", {"status": "success",
+                                                              "bills": [failed, good]})))
+    assert f"did not return ({reason}) (source: {failed['filename']})" in out
+    assert "**1**" in out and "**3 nr**" in out
 
 
 @pytest.mark.parametrize("ask,result,total,unit", BILLS)
@@ -234,18 +251,91 @@ def test_each_bill_states_its_count_and_its_sum_per_unit_with_the_rows_behind(as
     labels = tuple(f"{r['ref']} (p.{r['pages'][0]})" for r in bill["rows"])
     assert (count.figure, count.count, count.rows) == (float(len(bill["rows"])), len(bill["rows"]), labels)
     assert (summed.figure, summed.unit, summed.rows) == (float(total), unit, labels)
-    assert all(t in count.what for t in bill["terms"])
+    assert count.terms == summed.terms == tuple(bill["terms"])
+    assert (count.basis, summed.basis, summed.what) == ("count", "sum", bill["measure"])
 
 
-@pytest.mark.parametrize("result", [
-    {"status": "success", "bills": [{"status": "success", "filename": "bill-empty.xlsx",
-                                     "terms": ["kerb"], "rows": [], "sum": None}]},
-    {"status": "success", "bills": []},
+@pytest.mark.parametrize("terms,filename", [(["kerb"], "bill-empty.xlsx"),
+                                             (["duct", "pvc"], "bill-bare.xlsx")])
+def test_a_zero_row_result_says_no_matching_rows(terms, filename):
+    result = {"status": "success", "bills": [{"status": "success", "filename": filename,
+                                              "terms": terms, "rows": [], "sum": None}]}
+    messages = _turn("count them", _tool_msg("bill_rows_aggregate", result))
+    out = runtime._postprocess_answer("", None, messages)
+    assert FALLBACK not in out
+    assert f"holds {', '.join(terms)}: **0** (no matching rows) (source: {filename})" in out
+
+
+@pytest.mark.parametrize("result,reason", [
+    ({"status": "error", "reason": "no_derived_bill_sheet"},
+     "no bill sheet has been derived for this project"),
+    ({"status": "success", "bills": []}, "the tool returned no figure"),
 ])
-def test_a_computed_result_with_no_figure_keeps_the_honest_fallback(result):
-    messages = _turn("count the kerb runs", _tool_msg("bill_rows_aggregate", result))
-    assert runtime._recover_answer_from_tool_messages("", messages) == ""
-    assert FALLBACK in runtime._postprocess_answer("", None, messages)
+def test_a_computed_call_with_nothing_to_state_says_why(result, reason):
+    ask = {"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call-bill_rows_aggregate", "type": "function",
+        "function": {"name": "bill_rows_aggregate", "arguments": {"terms": "kerb", "section": "7"}}}]}
+    messages = _turn("count the kerb runs", ask, _tool_msg("bill_rows_aggregate", result))
+    out = runtime._postprocess_answer("", None, messages)
+    assert FALLBACK not in out
+    assert f"did not return: {reason}" in out and "Asked: kerb, 7" in out
+
+
+@pytest.mark.parametrize("first,second", [(0, 1), (1, 0)])
+def test_every_computed_call_of_the_turn_is_shown_in_call_order(first, second):
+    a, b = BILLS[first], BILLS[second]
+    messages = _turn("both please", _tool_msg("bill_rows_aggregate", a[1]),
+                     _tool_msg("bill_rows_aggregate", b[1]))
+    out = runtime._recover_answer_from_tool_messages("", messages)
+    assert out.startswith("2 computed results in this turn")
+    one, two = a[1]["bills"][0]["filename"], b[1]["bills"][0]["filename"]
+    assert one in out and two in out and out.index(one) < out.index(two)
+
+
+@pytest.mark.parametrize("before,now", [(0, 1), (1, 0)])
+def test_a_computed_call_of_an_earlier_turn_does_not_answer_this_one(before, now):
+    earlier = _turn(BILLS[before][0], _tool_msg("bill_rows_aggregate", BILLS[before][1]))
+    thread = [*earlier, {"role": "assistant", "content": "earlier answer"},
+              {"role": "user", "content": BILLS[now][0]},
+              _tool_msg("bill_rows_aggregate", BILLS[now][1])]
+    out = runtime._recover_answer_from_tool_messages("", thread)
+    assert BILLS[now][1]["bills"][0]["filename"] in out
+    assert BILLS[before][1]["bills"][0]["filename"] not in out
+
+
+ARABIC_QUESTION = "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0628\u0646\u0648\u062f\u061f"
+
+
+@pytest.mark.parametrize("ask,result,total,unit", BILLS)
+def test_the_recovered_answer_follows_the_language_of_the_question(ask, result, total, unit):
+    from app.agents.core.computed_answer import LABELS
+    bill = result["bills"][0]
+    english = runtime._recover_answer_from_tool_messages("", _turn(ask, _tool_msg(
+        "bill_rows_aggregate", result)))
+    arabic = runtime._recover_answer_from_tool_messages("", _turn(
+        ARABIC_QUESTION, _tool_msg("bill_rows_aggregate", result)))
+    ar, en = LABELS["ar"], LABELS["en"]
+    assert en["count"] in english and en["count"] not in arabic
+    for key in ("count", "source", "rows", "heading"):
+        assert ar[key] in arabic
+    assert ar["sum"].format(what=ar["quantity"]) in arabic
+    for latin_label in ("source:", "Rows:", "summed", "whose description", "Bill row"):
+        assert latin_label not in arabic
+    assert f"**{total} {unit}**" in arabic and bill["filename"] in arabic
+
+
+@pytest.mark.parametrize("question,language", [
+    (ARABIC_QUESTION, "ar"), ("how long are the kerbs?", "en"), ("", "en"), ("12 / 7", "en"),
+    ("kerb " + ARABIC_QUESTION, "ar")])
+def test_the_question_language_is_the_script_most_of_its_letters_are_in(question, language):
+    from app.agents.core.computed_answer import question_language
+    assert question_language(question) == language
+
+
+def test_every_language_carries_every_label():
+    from app.agents.core.computed_answer import LABELS
+    keys = set(LABELS["en"])
+    assert all(set(table) == keys for table in LABELS.values())
 
 
 @pytest.mark.parametrize("name", ["zz_invented_twice_a", "zz_invented_twice_b"])

@@ -311,23 +311,28 @@ def _row_label(row: dict) -> str:
 def bill_rows_statement(result: dict) -> list[Statement]:
     """What a ``bill_rows_aggregate`` result states: per bill, the count of
     the matching rows and the sum of the measure per unit, each with the
-    rows behind it. Two bills are never added together."""
+    rows behind it. Two bills are never added together. A bill that did not
+    return is stated as not returned, with its reason, so a partial result is
+    never read as complete; a bill with no matching row states a count of 0."""
     out: list[Statement] = []
     for bill in (result or {}).get("bills") or []:
-        if not isinstance(bill, dict) or bill.get("status") != "success":
+        if not isinstance(bill, dict):
+            continue
+        source = str(bill.get("filename") or bill.get("document_id") or "")
+        terms = tuple(str(t) for t in bill.get("terms") or [])
+        within = tuple(str(t) for t in bill.get("section_terms") or [])
+        if bill.get("status") != "success":
+            out.append(Statement(figure=None, what="", source=source, basis="count",
+                                 terms=terms, within=within,
+                                 failure=str(bill.get("reason") or bill.get("error") or "")))
             continue
         rows = [r for r in bill.get("rows") or [] if isinstance(r, dict)]
+        measure = str(bill.get("measure") or "quantity")
+        out.append(Statement(figure=float(len(rows)), what=measure, source=source,
+                             rows=tuple(_row_label(r) for r in rows), count=len(rows),
+                             basis="count", terms=terms, within=within))
         if not rows:
             continue
-        measure = str(bill.get("measure") or "quantity")
-        rule = ", ".join(bill.get("terms") or [])
-        within = ", ".join(bill.get("section_terms") or [])
-        matched = "rows" + (f" whose description holds {rule}" if rule else "") + (
-            f" in the section {within}" if within else "")
-        source = str(bill.get("filename") or bill.get("document_id") or "")
-        out.append(Statement(figure=float(len(rows)), what=f"number of {matched}",
-                             source=source, rows=tuple(_row_label(r) for r in rows),
-                             count=len(rows)))
         by_unit = bill.get("sum_by_unit")
         if not isinstance(by_unit, dict) or not by_unit:
             by_unit = {} if bill.get("sum") is None else {str(bill.get("unit") or ""): bill.get("sum")}
@@ -336,9 +341,9 @@ def bill_rows_statement(result: dict) -> list[Statement]:
                 continue
             behind = [r for r in rows if r.get(measure) is not None
                       and (measure != "quantity" or str(r.get("unit") or "") == unit)]
-            out.append(Statement(figure=float(total), unit=str(unit or ""),
-                                 what=f"{measure} summed over the {matched}",
-                                 source=source, rows=tuple(_row_label(r) for r in behind)))
+            out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
+                                 source=source, rows=tuple(_row_label(r) for r in behind),
+                                 basis="sum", terms=terms, within=within))
     return out
 
 

@@ -61,13 +61,25 @@ class Statement:
     """One figure a computed tool states, in the answer contract's terms:
     the figure and its unit, what was counted or summed, the source it was
     computed from, and the source rows behind it."""
-    figure: float
+    #: None: this part of the result did not return (see ``failure``).
+    figure: Optional[float]
+    #: What the figure is. For ``basis`` "count"/"sum" it is the measure
+    #: (a data word); otherwise the tool's own name for the figure.
     what: str
     unit: str = ""
     source: str = ""
     rows: Tuple[str, ...] = ()
     #: The figure is a count of rows, not a sum of a measure.
     count: Optional[int] = None
+    #: "count" or "sum" over matching rows; "" for any other figure. The
+    #: answer's wording for a basis comes from the labels of the question's
+    #: language (app.agents.core.computed_answer), never from the tool.
+    basis: str = ""
+    #: The words the rows were matched on, and the section words.
+    terms: Tuple[str, ...] = ()
+    within: Tuple[str, ...] = ()
+    #: Why this part did not return: a reason code or the tool's error.
+    failure: str = ""
 
 
 Stater = Callable[[Dict[str, Any]], List[Statement]]
