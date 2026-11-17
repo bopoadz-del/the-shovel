@@ -306,3 +306,43 @@ def test_a_served_heartbeat_is_never_a_near_miss(monkeypatch, monitor_slow, loop
     # A near miss is counted; its dump is dropped, never kept.
     assert mon.live_dumps == [], mon.live_dumps[:1]
     assert (mon.live_near_misses > 0) is near, mon.live_near_misses
+
+
+@pytest.mark.parametrize("hold_s,wake_late", [(0.12, False), (0.45, True)])
+def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
+    """Serving a heartbeat re-arms the timer (``_serve``), so the monitor's
+    late return is measured from the serve. Here the loop serves ~240 ms after
+    the post (under live_ms 300) and then holds the GIL, which keeps the
+    monitor from returning. A hold shorter than live_ms after the serve is
+    nothing at all: a timer still running from the post fired inside it and
+    counted a near miss the loop never had. A hold longer than live_ms after
+    the serve is a WAKE_LATE dump naming the holder."""
+    n = _size_for(hold_s)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        mon = loop_watchdog.LagMonitor(loop, threshold_ms=1000, tick_ms=10,
+                                       log=False, live_ms=300).start()
+        await asyncio.sleep(0.2)
+        for _ in range(2):
+            done = asyncio.Event()
+
+            def late_then_hold():
+                time.sleep(0.25)  # late, the GIL free: the post lands now
+                # Runs after the heartbeat's _serve, queued during the sleep.
+                loop.call_soon(lambda: (_gil_holding_call(n), done.set()))
+
+            loop.call_soon(late_then_hold)
+            await done.wait()
+            await asyncio.sleep(0.2)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.stalls == [], mon.stalls[:1]
+    if wake_late:
+        assert any(d.startswith("WAKE_LATE ") and "_gil_holding_call" in d
+                   for _, d in mon.live_dumps), mon.live_dumps
+    else:
+        assert mon.live_near_misses == 0, mon.live_near_misses
+        assert mon.live_dumps == [], mon.live_dumps[:1]
