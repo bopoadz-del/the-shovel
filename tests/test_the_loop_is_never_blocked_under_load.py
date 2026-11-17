@@ -49,12 +49,16 @@ _QUESTIONS = (
 )
 
 
-@pytest.fixture
-def seeded(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
-    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_06)
+#: The environment both the gated run and the capture pass seed under.
+def load_env(data_dir: str) -> dict:
+    return {"DATA_DIR": data_dir, "RAG_EMBEDDING_MODEL": "fake",
+            "RAG_GENERAL_KNOWLEDGE_PROJECTS": "", "DEEPSEEK_API_KEY": STUB_TOKEN_06}
+
+
+def seed_corpus() -> None:
+    """The synthetic corpus, seeded under the environment ``load_env`` sets.
+    Shared with the non-gating capture pass (tests/_loop_capture_pass.py) so
+    both measure the same load."""
     from app.core.rag import embeddings as emb, vector_store as vs
     emb.reset_embedder_cache()
     vs.reset_store_cache()
@@ -70,6 +74,14 @@ def seeded(tmp_path, monkeypatch):
     for doc in sorted({d for d, _ in texts}):
         chunk_texts = [t for d, t in texts if d == doc]
         store.upsert_chunks(PID, doc, chunk_texts, e.encode(chunk_texts))
+
+
+@pytest.fixture
+def seeded(tmp_path, monkeypatch):
+    for k, v in load_env(str(tmp_path)).items():
+        monkeypatch.setenv(k, v)
+    from app.core.rag import embeddings as emb, vector_store as vs
+    seed_corpus()
     yield
     emb.reset_embedder_cache()
     vs.reset_store_cache()

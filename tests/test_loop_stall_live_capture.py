@@ -14,13 +14,28 @@ Every test builds its own input; no document text.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from app.core import loop_watchdog
+
+# Never in a process shared with the gated shards: these tests arm the
+# process-wide faulthandler timer and hold the GIL for up to 0.6 s against
+# wall-clock thresholds. ``serial`` without ``timing`` runs them in CI's own
+# "serial and not timing" step -- a pytest process of its own, after the xdist
+# shards and apart from the timing job (pytest.ini, .github/workflows/test.yml).
+pytestmark = [pytest.mark.serial]
+
+_REPO = Path(__file__).resolve().parents[1]
+#: Wall-clock cap for the child pass; the load itself takes well under it.
+_PASS_TIMEOUT_S = 100
 
 
 def _gil_holding_call(n: int) -> None:
@@ -346,3 +361,32 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
     else:
         assert mon.live_near_misses == 0, mon.live_near_misses
         assert mon.live_dumps == [], mon.live_dumps[:1]
+
+
+def test_the_capture_runs_over_the_fifteen_user_load_in_its_own_process(tmp_path, request):
+    """The NON-GATING second pass: the gated fifteen-user load, capture ON.
+
+    Logging only: what the capture saw is printed (``LOOP_CAPTURE_PASS``), and
+    no latency figure is asserted -- the gate is the capture-OFF measurement.
+    The pass runs in a child process (tests/_loop_capture_pass.py), so a crash
+    of the capture's C timer ends the child and is printed with its exit code;
+    it cannot take a test process down with it. The one assertion: a child
+    that exits cleanly printed its result (a silent exit is a broken harness)."""
+    try:
+        proc = subprocess.run([sys.executable, "-m", "tests._loop_capture_pass", str(tmp_path)],
+                              cwd=_REPO, capture_output=True, text=True, timeout=_PASS_TIMEOUT_S)
+        rc, out, err = proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        rc, out, err = None, exc.stdout or "", exc.stderr or ""
+        out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
+        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
+    found = [ln for ln in out.splitlines() if ln.startswith("LOOP_CAPTURE_RESULT ")]
+    result = json.loads(found[-1].split(" ", 1)[1]) if found else None
+    line = (f"LOOP_CAPTURE_PASS rc={rc} " + (json.dumps(result) if result is not None
+            else f"no result; stderr tail: {err[-1500:]!r}"))
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(line)
+    else:
+        sys.__stderr__.write(line + "\n")
+    assert not (rc == 0 and result is None), line
