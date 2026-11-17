@@ -259,16 +259,20 @@ _PLAIN_ERROR = {"status": "error", "error": "Missing input: trench length"}
 def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, heading):
     """A failed calculator -- a tool DECLARED computed in the registry, not a
     name on a list -- states its error in plain words under its declared
-    name; a failed search's error text is never shown as the answer."""
+    name -- the plain sentence, never the tool's own error text; a failed
+    search's error text is never shown as the answer."""
     from app.agents.core import tool_registry
+    from app.agents.core.computed_answer import LABELS
 
     msgs = [{"role": "tool", "name": name, "content": json.dumps(_PLAIN_ERROR)}]
     spec = tool_registry.result_spec(name)
     if heading is not None:
         assert spec is not None and spec.kind == "computed"
         assert (spec.display_name or spec.name) == heading
-        expected = f"{heading}:\n- did not return: {_PLAIN_ERROR['error']}"
+        expected = f"{heading}:\n- did not return: {LABELS['en']['tool_error']}"
     else:
         expected = ""
     assert expected != json.dumps(_PLAIN_ERROR)
-    assert _recover_answer_from_tool_messages("", msgs) == expected
+    out = _recover_answer_from_tool_messages("", msgs)
+    assert out == expected
+    assert _PLAIN_ERROR["error"] not in out

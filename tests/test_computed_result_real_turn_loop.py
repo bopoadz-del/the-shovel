@@ -61,6 +61,12 @@ def test_a_failed_calculation_with_an_empty_synthesis_says_why(monkeypatch, synt
     assert text.strip(), events
     assert _EMPTY_RESPONSE_FALLBACK not in text
     assert "unable to generate" not in text.lower()
-    # The calculator's own error, in plain words; the wordless reply is not shown.
-    assert "zz_no_such_calculation" in text, text
+    # What was asked (the call's own arguments) and the plain sentence that
+    # the tool failed -- never the calculator's own error text; the wordless
+    # reply is not shown.
+    from app.agents.core.computed_answer import LABELS
+
+    assert f"{LABELS['en']['asked']}: zz_no_such_calculation" in text, text
+    assert LABELS["en"]["tool_error"] in text, text
+    assert "Unknown calculation" not in text, text
     assert "---" not in text

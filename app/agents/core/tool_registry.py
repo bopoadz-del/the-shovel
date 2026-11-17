@@ -15,6 +15,10 @@ that statement is the answer -- by kind, never by a list of tool names. A
 ``"search"`` tool returns passages: its result is evidence for an answer and
 is never shown as the answer itself.
 
+A computed tool also DECLARES the reason codes its failures carry
+(``reason_codes=``). Only a declared code is ever shown to a user (as
+"code: X"); any other error text a tool returns is never shown at all.
+
 A block that needs its arguments shaped before it runs registers an adapter
 the same way, in its owner's ``blocks`` module: ``@block_args("name",
 owner=...)`` on ``async def adapt(call, block_input, block_params)``, which
@@ -23,6 +27,7 @@ answers the call itself.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
@@ -54,6 +59,17 @@ Handler = Callable[[ToolCall], Awaitable[Dict[str, Any]]]
 #: "computed": deterministic figures (needs ``statement``); "search":
 #: passages, never an answer on their own; "": undeclared.
 RESULT_KINDS = ("", "computed", "search")
+
+#: The shape of a reason code a tool may declare.
+_REASON_CODE_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+
+
+def _reason_codes(owner_kind: str, name: str, codes: Any) -> Tuple[str, ...]:
+    out = tuple(codes or ())
+    for code in out:
+        if not isinstance(code, str) or not _REASON_CODE_RE.fullmatch(code):
+            raise ValueError(f"{owner_kind} {name!r}: reason code {code!r} is not a snake_case code")
+    return out
 
 
 @dataclass(frozen=True)
@@ -104,6 +120,9 @@ class ToolSpec:
     kind: str = ""
     #: For a ``"computed"`` tool: its result -> the figures it states.
     statement: Optional[Stater] = None
+    #: The reason codes the tool's failures carry; the only error words of
+    #: the tool a user may be shown.
+    reason_codes: Tuple[str, ...] = ()
 
 
 _TOOLS: Dict[str, ToolSpec] = {}
@@ -112,7 +131,8 @@ _TOOLS: Dict[str, ToolSpec] = {}
 def tool(name: str, *, owner: str, display_name: str,
          schema: Optional[Dict[str, Any]] = None,
          params: Optional[Dict[str, Any]] = None, kind: str = "",
-         statement: Optional[Stater] = None) -> Callable[[Handler], Handler]:
+         statement: Optional[Stater] = None,
+         reason_codes: Tuple[str, ...] = ()) -> Callable[[Handler], Handler]:
     if owner not in OWNERS:
         raise ValueError(f"unknown tool owner {owner!r}; one of {OWNERS}")
     if not (display_name or "").strip():
@@ -121,6 +141,7 @@ def tool(name: str, *, owner: str, display_name: str,
         raise ValueError(f"tool {name!r}: unknown result kind {kind!r}; one of {RESULT_KINDS}")
     if (kind == "computed") != (statement is not None):
         raise ValueError(f"tool {name!r}: a computed tool, and only a computed tool, declares a statement")
+    codes = _reason_codes("tool", name, reason_codes)
 
     def register(fn: Handler) -> Handler:
         existing = _TOOLS.get(name)
@@ -128,7 +149,7 @@ def tool(name: str, *, owner: str, display_name: str,
             raise ValueError(f"tool {name!r} is registered twice")
         _TOOLS[name] = ToolSpec(name, owner, fn, display_name.strip(), schema,
                                 dict(params) if params is not None else None,
-                                kind, statement)
+                                kind, statement, codes)
         return fn
     return register
 
@@ -178,13 +199,15 @@ class ResultSpec:
     display_name: str
     kind: str
     statement: Optional[Stater] = None
+    reason_codes: Tuple[str, ...] = ()
 
 
 _RESULTS: Dict[str, ResultSpec] = {}
 
 
 def declare_result(name: str, *, owner: str, display_name: str, kind: str,
-                   statement: Optional[Stater] = None) -> None:
+                   statement: Optional[Stater] = None,
+                   reason_codes: Tuple[str, ...] = ()) -> None:
     """Declare what a block's (or an aliased action's) result is, with the
     same rules as ``tool(kind=, statement=)``. A registered tool declares
     its kind on ``tool`` instead."""
@@ -196,7 +219,8 @@ def declare_result(name: str, *, owner: str, display_name: str, kind: str,
         raise ValueError(f"result {name!r}: unknown result kind {kind!r}; one of {RESULT_KINDS[1:]}")
     if (kind == "computed") != (statement is not None):
         raise ValueError(f"result {name!r}: a computed result, and only a computed result, declares a statement")
-    spec = ResultSpec(name, owner, display_name.strip(), kind, statement)
+    spec = ResultSpec(name, owner, display_name.strip(), kind, statement,
+                      _reason_codes("result", name, reason_codes))
     existing = _RESULTS.get(name)
     if (existing is not None and existing != spec) or name in _TOOLS:
         raise ValueError(f"result {name!r} is declared twice")

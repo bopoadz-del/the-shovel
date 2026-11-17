@@ -113,7 +113,7 @@ ARABIC_FAILURES = [
     (call("construction_calc", {"calculation": "zz_no_such_calculation", "params": {}}, "a1"),
      "Unknown calculation", computed_answer.LABELS["ar"]["tool_error"]),
     (call("bill_rows_aggregate", {"terms": "kerb"}, "a2"),
-     "no_derived_bill_sheet", computed_answer.LABELS["ar"]["no_derived_bill_sheet"]),
+     "no_derived_bill_sheet", computed_answer.REASONS["ar"]["no_derived_bill_sheet"]),
 ]
 
 
@@ -134,55 +134,91 @@ def test_an_arabic_question_gets_no_raw_english_error(monkeypatch, tool_call, en
     assert computed_answer.LABELS["ar"]["not_returned"] in text
 
 
-@pytest.mark.parametrize("code,language,expect", [
-    ("no_derived_bill_sheet", "ar", computed_answer.LABELS["ar"]["no_derived_bill_sheet"]),
-    ("quota_window_closed", "ar", computed_answer.LABELS["ar"]["tool_error"] + " ("
-     + computed_answer.LABELS["ar"]["code"] + ": quota_window_closed)"),
-    ("quota_window_closed", "en", "the tool reported an error (code: quota_window_closed)"),
-    ("the rate column is blank", "ar", computed_answer.LABELS["ar"]["tool_error"]),
-    ("the rate column is blank", "en", "the rate column is blank"),
+_EN, _AR = computed_answer.LABELS["en"], computed_answer.LABELS["ar"]
+
+
+@pytest.mark.parametrize("code,language,declared,expect", [
+    ("no_derived_bill_sheet", "ar", (), computed_answer.REASONS["ar"]["no_derived_bill_sheet"]),
+    ("derived_sheet_has_no_readable_bytes", "en", (),
+     computed_answer.REASONS["en"]["derived_sheet_has_no_readable_bytes"]),
+    # A declared code with no wording is shown as a code.
+    ("quota_window_closed", "ar", ("quota_window_closed",),
+     f"{_AR['tool_error']} ({_AR['code']}: quota_window_closed)"),
+    ("quota_window_closed", "en", ("quota_window_closed",),
+     f"{_EN['tool_error']} ({_EN['code']}: quota_window_closed)"),
+    # An undeclared snake_case token (a table or column name) is not a code.
+    ("quota_window_closed", "en", (), _EN["tool_error"]),
+    ("bill_rows_v2", "ar", ("quota_window_closed",), _AR["tool_error"]),
+    # An error equal to a LABELS key is not that label.
+    ("count", "en", (), _EN["tool_error"]),
+    ("rows", "ar", (), _AR["tool_error"]),
+    # Free text never reaches the answer, English included.
+    ("the rate column is blank", "ar", (), _AR["tool_error"]),
+    ("the rate column is blank", "en", (), _EN["tool_error"]),
 ])
-def test_a_reason_is_worded_in_the_question_language(code, language, expect):
+def test_a_reason_is_worded_in_the_question_language(code, language, declared, expect):
     lab = computed_answer.labels_for(language)
-    assert computed_answer.reason_text(code, lab, language) == expect
+    assert computed_answer.reason_text(code, lab, language, declared) == expect
 
 
-# ── the stated error and the echoed arguments are scrubbed ──────────────────
+# ── no free text a tool wrote reaches the answer ────────────────────────────
+# A bare table name, a path with spaces (POSIX and Windows), a stack trace, a
+# constraint name, an address with a port: each injected through the real
+# recovery, under an English and an Arabic question.
 
 LEAKS = [
-    ("stack trace", "rate missing\nTraceback (most recent call last):\n  File \"/srv/app/x.py\", line 9, in f\n"
-     "KeyError: 'rate'", "rate missing", ["Traceback", "x.py", "KeyError"]),
-    ("stack trace", "Traceback (most recent call last):\n  File \"C:\\w\\calc.py\", line 3\nValueError: no",
-     "", ["Traceback", "calc.py", "ValueError"]),
-    ("table name", 'psycopg.errors.UndefinedTable: relation "bill_rows_v2" does not exist',
-     "does not exist", ["bill_rows_v2", "psycopg", "UndefinedTable"]),
-    ("table name", "select from public.project_documents failed", "failed",
-     ["public.project_documents"]),
-    ("internal id", "document 3f2a9c1e-1b2c-4d5e-8f90-123456789abc has no sheet", "has no sheet",
-     ["3f2a9c1e"]),
-    ("internal id", "row bill_7f3a9c22e1 not found", "not found", ["bill_7f3a9c22e1"]),
-    ("file path", "cannot open /srv/data/p17/derived/bill.xlsx for reading", "cannot open",
-     ["/srv/data", "bill.xlsx"]),
-    ("file path", "cannot open C:\\data\\proj\\sheet.xlsx now", "cannot open", ["C:\\data", "sheet.xlsx"]),
+    ("bare table", "bill_rows_v2", ["bill_rows_v2"]),
+    ("bare table", "SELECT qty FROM bill_rows WHERE doc = 4", ["bill_rows", "SELECT"]),
+    ("posix path with spaces", "cannot open /srv/data/Project Files/derived bill.xlsx",
+     ["Project Files", "derived bill", "/srv/data", "cannot open"]),
+    ("posix path with spaces", "missing /var/lib/the fork/sheets/p 17", ["the fork", "p 17", "/var/lib"]),
+    ("windows path with spaces", "cannot open C:\\Program Files\\Fork Data\\bill sheet.xlsx",
+     ["Program Files", "Fork Data", "bill sheet", "C:\\"]),
+    ("windows path with spaces", "D:\\My Bills\\kerb run.xlsx not found",
+     ["My Bills", "kerb run", "not found"]),
+    ("stack trace", "Traceback (most recent call last):\n  File \"/srv/app/x.py\", line 9\nKeyError: 'rate'",
+     ["Traceback", "x.py", "KeyError"]),
+    ("constraint and address", 'duplicate key violates unique constraint "uq_bill_doc" at 10.0.4.7:5432',
+     ["uq_bill_doc", "10.0.4.7", "5432", "duplicate key"]),
 ]
 
 
-@pytest.mark.parametrize("kind,error,kept,gone", LEAKS, ids=[f"{k}-{i}" for i, (k, *_r) in enumerate(LEAKS)])
-def test_a_failed_tools_error_reaches_the_user_scrubbed(kind, error, kept, gone):
+@pytest.mark.parametrize("question,language", [
+    ("Bank volume of the pit?", "en"),
+    ("\u0645\u0627 \u062d\u062c\u0645 \u0627\u0644\u062d\u0641\u0631\u061f", "ar"),
+])
+@pytest.mark.parametrize("kind,error,gone", LEAKS, ids=[f"{k}-{i}" for i, (k, *_r) in enumerate(LEAKS)])
+def test_no_tool_free_text_reaches_the_answer(kind, error, gone, question, language):
     msgs = [
-        {"role": "user", "content": "Bank volume of the pit?"},
+        {"role": "user", "content": question},
         {"role": "assistant", "content": "", "tool_calls": [call("construction_calc", {
             "calculation": "excavation_volume", "params": {}}, "e1")]},
         {"role": "tool", "name": "construction_calc", "tool_call_id": "e1",
          "content": json.dumps({"status": "error", "error": error})},
     ]
     out = runtime._recover_answer_from_tool_messages("", msgs)
+    lab = computed_answer.LABELS[language]
     assert out.strip() and "unable to generate" not in out.lower()
-    assert kept in out, out
+    assert f"{lab['not_returned']}: {lab['tool_error']}" in out, out
     for piece in gone:
         assert piece not in out, (kind, out)
 
 
+@pytest.mark.parametrize("reason", ["no_derived_bill_sheet", "derived_sheet_is_not_a_readable_workbook"])
+def test_a_declared_reason_code_through_the_real_recovery_reads_as_its_wording(reason):
+    msgs = [
+        {"role": "user", "content": "How many kerb items?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            call("bill_rows_aggregate", {"terms": "kerb"}, "e3")]},
+        {"role": "tool", "name": "bill_rows_aggregate", "tool_call_id": "e3",
+         "content": json.dumps({"status": "error", "reason": reason})},
+    ]
+    out = runtime._recover_answer_from_tool_messages("", msgs)
+    assert computed_answer.REASONS["en"][reason] in out, out
+    assert reason not in out, out
+
+
+# The echoed call arguments are still shown, scrubbed.
 ECHOED = [
     ({"document_id": "3f2a9c1e-1b2c-4d5e-8f90-123456789abc", "terms": "kerb"}, "kerb", ["3f2a9c1e"]),
     ({"path": "/srv/data/p17/bill.xlsx", "terms": "duct"}, "duct", ["/srv/data", "bill.xlsx"]),

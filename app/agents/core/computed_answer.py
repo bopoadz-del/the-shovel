@@ -42,9 +42,6 @@ LABELS: Dict[str, Dict[str, str]] = {
         "list_sep": "; ",
         "quantity": "quantity",
         "amount": "amount",
-        "no_derived_bill_sheet": "no bill sheet has been derived for this project",
-        "derived_sheet_has_no_readable_bytes": "the bill sheet file could not be read",
-        "derived_sheet_is_not_a_readable_workbook": "the bill sheet is not a readable workbook",
         "tool_error": "the tool reported an error",
         "code": "code",
     },
@@ -67,11 +64,25 @@ LABELS: Dict[str, Dict[str, str]] = {
         "list_sep": "؛ ",
         "quantity": "الكمية",
         "amount": "المبلغ",
+        "tool_error": "أبلغت الأداة عن خطأ",
+        "code": "الرمز",
+    },
+}
+
+#: Known reason codes, worded per language. A tool's error is looked up
+#: ONLY here (never in LABELS, so an error that happens to equal a label key
+#: is not shown as that label). A code is added by adding it to every
+#: language below.
+REASONS: Dict[str, Dict[str, str]] = {
+    "en": {
+        "no_derived_bill_sheet": "no bill sheet has been derived for this project",
+        "derived_sheet_has_no_readable_bytes": "the bill sheet file could not be read",
+        "derived_sheet_is_not_a_readable_workbook": "the bill sheet is not a readable workbook",
+    },
+    "ar": {
         "no_derived_bill_sheet": "لم يُستخرج جدول كميات لهذا المشروع",
         "derived_sheet_has_no_readable_bytes": "تعذّرت قراءة ملف جدول الكميات",
         "derived_sheet_is_not_a_readable_workbook": "ملف جدول الكميات ليس مصنفًا مقروءًا",
-        "tool_error": "أبلغت الأداة عن خطأ",
-        "code": "الرمز",
     },
 }
 
@@ -112,7 +123,8 @@ def _word(lab: Dict[str, str], key: str) -> str:
     return lab.get(key, key)
 
 
-#: What must never reach a user from a tool's error or its echoed arguments:
+#: What must never reach a user from the echoed call arguments (a tool's
+#: error text is never shown at all, see ``reason_text``):
 #: a stack trace and everything after it, a file path, a SQL table/relation
 #: name, an internal id (uuid, long hex, a word joined to a hex key by an
 #: underscore). A document's own codes (drawing S-101, lot L-01) are data.
@@ -130,11 +142,11 @@ _ID_RE = re.compile(
     r"|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,}\b"
     r"|\b[a-z]+_(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,}\b",
     re.I)
-_CODE_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
 
 
 def scrub(text: str) -> str:
-    """``text`` without a stack trace, file path, table name or internal id."""
+    """``text`` without a stack trace, file path, table name or internal id.
+    Applied to the echoed call arguments only."""
     out = _TRACE_RE.sub("", str(text or ""))
     for rx in (_PATH_RE, _TABLE_RE, _DOTTED_RE, _ID_RE):
         out = rx.sub("", out)
@@ -143,23 +155,24 @@ def scrub(text: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip(" ,;:-\n")
 
 
-def reason_text(error: str, lab: Dict[str, str], language: str) -> str:
+def reason_text(error: str, lab: Dict[str, str], language: str,
+                declared: Sequence[str] = ()) -> str:
     """A tool's error as the user reads it, in the question's language.
 
-    A reason code LABELS knows is translated. Another code is kept, after a
-    plain sentence in the question's language that the tool reported an
-    error. Free text is shown scrubbed where the question is in the language
-    the tools write in; in another language it is never pasted raw: the
-    plain sentence stands in its place."""
+    No free text a tool wrote reaches an answer, in any language. A reason
+    code in ``REASONS`` reads as its wording there. A code the tool's
+    registry entry DECLARES (``declared``) and ``REASONS`` does not word is
+    shown as a code after the plain sentence that the tool reported an
+    error. Anything else -- free text, a table, column or path, an
+    undeclared token -- is the plain sentence alone."""
     raw = str(error or "").strip()
     if not raw:
         return ""
-    if raw in lab:
-        return lab[raw]
-    if _CODE_RE.fullmatch(raw):
+    worded = (REASONS.get(language) or REASONS[DEFAULT_LANGUAGE]).get(raw)
+    if worded:
+        return worded
+    if raw in tuple(declared or ()):
         return f"{lab['tool_error']} ({lab['code']}: {raw})"
-    if language == DEFAULT_LANGUAGE:
-        return scrub(raw)[:180] or lab["tool_error"]
     return lab["tool_error"]
 
 
@@ -178,9 +191,11 @@ def _what(st: Any, lab: Dict[str, str]) -> str:
     return head[:1].upper() + head[1:]
 
 
-def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGUAGE) -> List[str]:
+def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGUAGE,
+                     declared: Sequence[str] = ()) -> List[str]:
     if st.figure is None:
-        reason = reason_text(str(getattr(st, "failure", "") or ""), lab, language) or lab["failed"]
+        reason = (reason_text(str(getattr(st, "failure", "") or ""), lab, language, declared)
+                  or lab["failed"])
         line = f"- {_what(st, lab)}: {lab['not_returned']} ({reason})"
     elif st.count == 0:
         line = f"- {_what(st, lab)}: **0** ({lab['no_rows']})"
@@ -199,8 +214,8 @@ def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGU
 
 
 def _asked_line(asked: Dict[str, Any], lab: Dict[str, str]) -> str:
-    # Echoed arguments are scrubbed like an error: an id, path or table name
-    # the model passed is never shown back.
+    # Echoed arguments are what the model sent, so they are shown, scrubbed:
+    # an id, path or table name the model passed is never shown back.
     values = [scrub(str(v)) for v in (asked or {}).values()
               if isinstance(v, (str, int, float)) and not isinstance(v, bool)]
     values = [v for v in values if v]
@@ -208,18 +223,20 @@ def _asked_line(asked: Dict[str, Any], lab: Dict[str, str]) -> str:
 
 
 def render_call(heading: str, statements: Sequence[Any], *, asked: Dict[str, Any],
-                error: str, language: str) -> str:
+                error: str, language: str, declared: Sequence[str] = ()) -> str:
     """One computed call as text. With no statement the call still answers:
-    what was asked, and the tool's error (or that it returned no figure)."""
+    what was asked, and why there is no figure (a known or declared reason
+    code, else the plain sentence that the tool reported an error).
+    ``declared``: the reason codes the tool's registry entry declares."""
     lab = labels_for(language)
     lines: List[str] = [f"{heading}:"]
     for st in statements:
-        lines.extend(_statement_lines(st, lab, language))
+        lines.extend(_statement_lines(st, lab, language, declared))
     if not statements:
         asked_line = _asked_line(asked, lab)
         if asked_line:
             lines.append(f"- {asked_line}")
-        reason = reason_text(error, lab, language) if error else lab["no_figure"]
+        reason = reason_text(error, lab, language, declared) if error else lab["no_figure"]
         lines.append(f"- {lab['not_returned']}: {reason}")
     return "\n".join(lines)
 
@@ -268,12 +285,12 @@ def failure_text(payload: Optional[Dict[str, Any]]) -> str:
     for key in ("error", "reason"):
         val = (payload or {}).get(key)
         if isinstance(val, str) and val.strip():
-            # The code or text as given; reason_text words it and scrubs it.
+            # The code or text as given; reason_text decides what is shown.
             return re.sub(r"[{}\[\]]", "", val).strip()[:2000]
     return ""
 
 
 __all__: Tuple[str, ...] = (
-    "LABELS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
+    "LABELS", "REASONS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
     "tool_call_args", "failure_text", "scrub", "reason_text",
 )

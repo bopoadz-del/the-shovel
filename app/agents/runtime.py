@@ -6342,7 +6342,8 @@ def _render_computed_call(msg: dict[str, Any], spec: Any,
     text = computed_answer.render_call(
         computed_answer.heading_for(spec.display_name or spec.name, language), statements,
         asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
-        error=error, language=language)
+        error=error, language=language,
+        declared=tuple(getattr(spec, "reason_codes", ()) or ()))
     return text, bool(statements or error)
 
 

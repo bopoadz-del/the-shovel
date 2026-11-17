@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from app.agents.core.tool_registry import Statement, ToolCall, tool
 from app.lib.formula_registry import Param
+from app.core.bill_aggregate import REASON_CODES as BILL_REASON_CODES
 
 
 @tool("delegate_to_agent", owner="base", display_name='Specialist hand-off', params={
@@ -351,7 +352,7 @@ def bill_rows_statement(result: dict) -> list[Statement]:
 
 
 @tool("bill_rows_aggregate", owner="base", display_name='Bill row count and total',
-      kind="computed", statement=bill_rows_statement, params={
+      kind="computed", statement=bill_rows_statement, reason_codes=BILL_REASON_CODES, params={
     "terms": Param(label="description words", kind="text", required=False),
     "section": Param(label="section words", kind="text", required=False),
     "measure": Param(label="quantity or amount", kind="text", required=False),

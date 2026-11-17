@@ -8,6 +8,7 @@ import pytest
 
 from app.agents.core.computed_answer import (
     LABELS,
+    REASONS,
     _asked_line,
     _figure_text,
     _statement_lines,
@@ -77,7 +78,7 @@ def test_what_a_statement_is_reads_its_basis(st, lab, expected):
 
 @pytest.mark.parametrize("st, lab, needle", [
     (Statement(figure=None, what="quantity", basis="sum", failure="no_derived_bill_sheet"),
-     EN, f"{EN['not_returned']} ({EN['no_derived_bill_sheet']})"),
+     EN, f"{EN['not_returned']} ({REASONS['en']['no_derived_bill_sheet']})"),
     (Statement(figure=None, what="quantity", basis="sum"), AR,
      f"{AR['not_returned']} ({AR['failed']})"),
     (Statement(figure=0.0, what="", basis="count", count=0), EN, f"**0** ({EN['no_rows']})"),
@@ -98,7 +99,7 @@ def test_the_asked_line_lists_the_values_sent(asked, lab, expected):
 
 
 @pytest.mark.parametrize("error, language, last", [
-    ("missing depth", "en", f"- {EN['not_returned']}: missing depth"),
+    ("missing depth", "en", f"- {EN['not_returned']}: {EN['tool_error']}"),
     ("", "ar", f"- {AR['not_returned']}: {AR['no_figure']}"),
 ])
 def test_a_call_with_no_statement_says_what_was_asked_and_why(error, language, last):
@@ -107,6 +108,46 @@ def test_a_call_with_no_statement_says_what_was_asked_and_why(error, language, l
     assert lines[0] == "Invented calculator:"
     assert lines[-1] == last
     assert "7" in lines[1]
+    assert "missing depth" not in out
+
+
+@pytest.mark.parametrize("declared, language, last", [
+    (("invented_gauge_offline",), "en",
+     f"- {EN['not_returned']}: {EN['tool_error']} ({EN['code']}: invented_gauge_offline)"),
+    (("invented_gauge_offline",), "ar",
+     f"- {AR['not_returned']}: {AR['tool_error']} ({AR['code']}: invented_gauge_offline)"),
+    ((), "en", f"- {EN['not_returned']}: {EN['tool_error']}"),
+    (("another_declared_code",), "ar", f"- {AR['not_returned']}: {AR['tool_error']}"),
+])
+def test_a_code_is_shown_only_when_the_tool_declares_it(declared, language, last):
+    out = render_call("Invented gauge", [], asked={}, error="invented_gauge_offline",
+                      language=language, declared=declared)
+    assert out.splitlines()[-1] == last
+
+
+@pytest.mark.parametrize("declared, shown", [
+    (("invented_meter_jammed",), f"({EN['tool_error']} ({EN['code']}: invented_meter_jammed))"),
+    ((), f"({EN['tool_error']})"),
+])
+def test_a_failed_part_shows_a_code_only_when_declared(declared, shown):
+    st = Statement(figure=None, what="", basis="count", failure="invented_meter_jammed")
+    assert _statement_lines(st, EN, "en", declared)[0].endswith(shown)
+
+
+@pytest.mark.parametrize("language", ["en", "ar"])
+def test_every_reason_code_is_worded_in_every_language(language):
+    assert set(REASONS[language]) == set(REASONS["en"])
+    assert all(v.strip() for v in REASONS[language].values())
+
+
+def test_every_worded_reason_code_is_declared_by_a_tool():
+    from app.agents.core import tool_registry
+
+    tool_registry.load()
+    declared = set()
+    for spec in list(tool_registry._TOOLS.values()) + list(tool_registry._RESULTS.values()):
+        declared.update(spec.reason_codes)
+    assert set(REASONS["en"]) <= declared, set(REASONS["en"]) - declared
 
 
 @pytest.mark.parametrize("figure, shown", [(4.0, "**4 m3**"), (17.25, "**17.25 m3**")])

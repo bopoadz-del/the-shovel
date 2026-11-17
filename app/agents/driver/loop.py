@@ -551,11 +551,12 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         # The model's reply carried no words and nothing above stood in for
         # it: the same recovery every other path uses answers from this
         # turn's tool results (a computed figure, or what was asked and why
-        # there is none) -- never a blank answer.
+        # there is none) -- never a blank answer. It reads the turn's own
+        # messages, so each tool result keeps the call (and the arguments)
+        # that asked for it.
         from app.agents.runtime import _recover_answer_from_tool_messages
 
-        recovered = await off_loop(_recover_answer_from_tool_messages, "",
-                                   [{"role": "user", "content": user_message}, *evidence])
+        recovered = await off_loop(_recover_answer_from_tool_messages, "", _trail())
         if has_words(recovered):
             event = await off_loop(_release, recovered.rstrip() + "\n", model_text=False)
             if event:

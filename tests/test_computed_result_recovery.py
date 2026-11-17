@@ -122,7 +122,11 @@ def test_any_tool_declared_computed_is_recovered_by_its_kind(invented_tools, nam
 
 @pytest.mark.parametrize("name,error", [("zz_invented_span_ratio", "input missing"),
                                         ("zz_invented_pallet_count", "note not found")])
-def test_a_failed_computed_tool_says_what_was_asked_and_its_error(invented_tools, name, error):
+def test_a_failed_computed_tool_says_what_was_asked_and_that_it_failed(invented_tools, name, error):
+    """The tool's own error text is never shown (it may carry a table, a
+    path or an id): the plain sentence stands in its place."""
+    from app.agents.core.computed_answer import LABELS
+
     ask = {"role": "assistant", "content": "", "tool_calls": [{
         "id": f"call-{name}", "type": "function",
         "function": {"name": name, "arguments": json.dumps({"drawing": "S-invented-9"})}}]}
@@ -131,7 +135,8 @@ def test_a_failed_computed_tool_says_what_was_asked_and_its_error(invented_tools
         messages = _turn("how many?", ask, failed)
         out = runtime._recover_answer_from_tool_messages("", messages)
         assert "unable to generate" not in out.lower()
-        assert f"did not return: {error}" in out and "Asked: S-invented-9" in out
+        assert f"did not return: {LABELS['en']['tool_error']}" in out and "Asked: S-invented-9" in out
+        assert error not in out, out
         assert FALLBACK not in runtime._postprocess_answer("", None, messages)
 
 
@@ -229,7 +234,7 @@ def test_a_row_is_labelled_by_its_ref_and_first_page_else_its_description(row, l
       "filename": "bill-failed.xlsx", "terms": ["gully"]},
      "the bill sheet is not a readable workbook"),
     ({"status": "error", "error": "sheet locked by the invented host",
-      "filename": "bill-locked.xlsx", "terms": ["gully"]}, "sheet locked by the invented host"),
+      "filename": "bill-locked.xlsx", "terms": ["gully"]}, "the tool reported an error"),
 ])
 def test_a_bill_that_did_not_return_is_named_never_skipped(failed, reason):
     good = _bill("bill-gamma.xlsx", ["gully"], "nr", [("G.1", 2, 3.0)])["bills"][0]
@@ -241,6 +246,9 @@ def test_a_bill_that_did_not_return_is_named_never_skipped(failed, reason):
         "count the gullies", _tool_msg("bill_rows_aggregate", {"status": "success",
                                                               "bills": [failed, good]})))
     assert f"did not return ({reason}) (source: {failed['filename']})" in out
+    # The bill's own words are never shown: a declared code reads as its
+    # wording, anything else as the plain sentence.
+    assert str(failed.get("error") or failed.get("reason")) not in out
     assert "**1**" in out and "**3 nr**" in out
 
 
