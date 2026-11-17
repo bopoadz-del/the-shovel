@@ -27,6 +27,7 @@ import pytest
 from app.agents import answer_exit
 from app.agents import runtime
 from app.agents.core import computed_answer
+from app.agents.core import loop as core_loop
 from app.agents.runtime import _EMPTY_RESPONSE_FALLBACK as FALLBACK
 from app.lib import construction_formulas as cf
 from tests.lane5_core_support import agent, answer_text, call, drive, install_driver_stream
@@ -232,7 +233,7 @@ def _driver_chat(monkeypatch, user: str, replies: List[Any], *, timeout_s: str =
     probe = agent()
 
     async def go():
-        return [e async for e in probe.chat_stream(user_message=user)]
+        return [e async for e in core_loop.chat_stream(probe, user_message=user)]
 
     return asyncio.run(go())
 
@@ -309,7 +310,7 @@ def test_a_stream_with_no_terminal_event_recovers_before_the_generic_reply(monke
     monkeypatch.setattr(probe, "_chat_stream_impl", impl)
 
     async def go():
-        return [e async for e in probe.chat_stream(user_message="Bank volume?")]
+        return [e async for e in core_loop.chat_stream(probe, user_message="Bank volume?")]
 
     events = asyncio.run(go())
     text = answer_text(events)
@@ -317,3 +318,33 @@ def test_a_stream_with_no_terminal_event_recovers_before_the_generic_reply(monke
     assert f"{_bank(*pit):g}" in text.replace(",", ""), text
     end = [e for e in events if e.get("type") == "end"]
     assert end and FALLBACK not in (end[-1].get("content") or ""), end
+
+
+# ── the turn record outside a turn ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("message", [
+    {"role": "tool", "name": "construction_calc", "tool_call_id": "x1", "content": "{}"},
+    {"role": "tool", "name": "bill_rows_aggregate", "tool_call_id": "x2", "content": "{}"},
+])
+def test_outside_a_turn_nothing_is_recorded_or_recovered_and_nothing_is_logged(caplog, message):
+    """With no open turn, recording a tool message is a silent no-op and the
+    recovery says nothing (it never raises)."""
+    token = answer_exit._TURN.set(None)
+    try:
+        with caplog.at_level("WARNING", logger=answer_exit._LOG.name):
+            answer_exit.note_tool_message(None, message)
+            assert answer_exit.recovered_answer() == ""
+            assert answer_exit.recovered_answer(None) == ""
+        assert not caplog.records, [r.getMessage() for r in caplog.records]
+    finally:
+        answer_exit._TURN.reset(token)
+
+
+@pytest.mark.parametrize("not_a_message", [None, "tool said 42"])
+def test_a_tool_message_that_is_not_a_dict_is_ignored_silently(caplog, not_a_message):
+    turn = answer_exit.Turn(question="How many?")
+    with caplog.at_level("WARNING", logger=answer_exit._LOG.name):
+        answer_exit.note_tool_message(None, not_a_message, turn)
+    assert turn.tool_messages == []
+    assert not caplog.records, [r.getMessage() for r in caplog.records]
