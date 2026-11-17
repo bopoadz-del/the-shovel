@@ -625,3 +625,48 @@ def test_a_client_built_for_a_cancelled_caller_is_closed(monkeypatch, wired, wai
     # The orphan build is closed; the waiters' own build is kept open.
     assert closed == ([False, True] if waiting else [True])
     assert used == []
+
+
+@pytest.mark.parametrize("timeout", [30.0, 120.0])
+def test_build_client_gives_the_real_transport_with_expiry_and_connect_retry(timeout):
+    made: list = []
+
+    def factory(**kwargs):
+        made.append(kwargs)
+        return "client"
+
+    assert llm_client._build_client(factory, timeout) == "client"
+    (kw,) = made
+    assert kw["timeout"] == timeout
+    transport = kw["transport"]
+    assert type(transport) is httpx.AsyncHTTPTransport
+    assert transport._pool._keepalive_expiry == llm_client._KEEPALIVE_EXPIRY_S
+    assert transport._pool._retries == llm_client._CONNECT_RETRIES
+
+
+class _Closable:
+    def __init__(self) -> None:
+        self.closed = 0
+
+    async def aclose(self) -> None:
+        self.closed += 1
+
+
+@pytest.mark.parametrize("outcome", ["built", "cancelled", "failed"])
+def test_close_when_built_closes_only_a_client_that_exists(outcome):
+    client = _Closable()
+
+    async def run():
+        fut = asyncio.get_running_loop().create_future()
+        if outcome == "built":
+            fut.set_result(client)
+        elif outcome == "cancelled":
+            fut.cancel()
+        else:
+            fut.set_exception(OSError("CA bundle unreadable"))
+        llm_client._close_when_built(fut)  # must not raise for any outcome
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return client.closed
+
+    assert asyncio.run(run()) == (1 if outcome == "built" else 0)
