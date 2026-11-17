@@ -397,7 +397,11 @@ class LagMonitor:
             def _serve(served=served, served_at=served_at, live=live) -> None:
                 served_at.append(time.monotonic())
                 if live is not None:
-                    live.cancel()
+                    # Re-armed from the serve, not cancelled: the monitor needs
+                    # the GIL to arm its sleep timer, so a hold that begins
+                    # between this serve and that arm was invisible (CI #396
+                    # 9f775c1: a 0.6 s hold, max_lag 1, no dump, no wake-late).
+                    live.arm()
                 served.set()
 
             # The heartbeat is stamped BEFORE the monitor's CPU snapshot, as
@@ -424,6 +428,11 @@ class LagMonitor:
                 break
             sample = ""
             stalled = not served.wait(self.threshold)
+            resumed = time.monotonic()
+            if live is not None and not stalled:
+                # Back with the GIL: the gap the serve re-armed for is over.
+                # Cancelled here, the monitor's own work below never fires it.
+                live.cancel()
             if stalled:
                 # Sample now and keep re-sampling while the stall persists, so
                 # the stack we keep is the loop caught in the act (the deepest,
@@ -476,7 +485,15 @@ class LagMonitor:
                 # sees the event also sees both.
                 self.stall_recorded.set()
             elif live is not None:
-                if live.take():  # late past live_ms, under the limit
+                dump = live.take()
+                # How long past the serve this thread got the GIL back: a hold
+                # that began after the serve shows here, not in lag_ms.
+                gap_ms = (resumed - served_at[0]) * 1000 if served_at else 0.0
+                if dump and gap_ms >= live.after_s * 1000:
+                    self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
+                    idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
+                    keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
+                elif dump:  # late past live_ms, under the limit
                     self.live_near_misses += 1
             self._sleep_watched(live, armed_names if live is not None else {})
 
