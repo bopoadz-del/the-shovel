@@ -6203,13 +6203,18 @@ def _recover_answer_from_tool_messages(
         )
         if generic:
             return generic
+        if _declared_kind(m)[0] == "computed":
+            # A computed call's failure is stated by the computed renderer
+            # below (declared code or the plain sentence), never by pasting
+            # the tool's own error text.
+            continue
         err_payload = _tool_error_payload(inner)
         if (
             err_payload
             and not error_fallback
             and _is_calc_tool_error(m, inner, err_payload)
         ):
-            error_fallback = _format_tool_error_plain(err_payload)
+            error_fallback = _plain_tool_error_sentence(err_payload)
     return error_fallback or _computed_turn_answer(messages) or text
 
 
@@ -6313,7 +6318,8 @@ def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _render_computed_call(msg: dict[str, Any], spec: Any,
-                          messages: list[dict[str, Any]], language: str) -> tuple[str, bool]:
+                          messages: list[dict[str, Any]], language: str,
+                          question: str = "") -> tuple[str, bool]:
     """(One computed call as the answer, whether the call stated anything).
 
     A call that failed or stated no figure still answers plainly: what was
@@ -6343,7 +6349,7 @@ def _render_computed_call(msg: dict[str, Any], spec: Any,
         computed_answer.heading_for(spec.display_name or spec.name, language), statements,
         asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
         error=error, language=language,
-        declared=tuple(getattr(spec, "reason_codes", ()) or ()))
+        declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
     return text, bool(statements or error)
 
 
@@ -6371,7 +6377,7 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
             continue
         kind, spec = _declared_kind(m)
         if kind == "computed" and spec.statement is not None:
-            text, stated = _render_computed_call(m, spec, msgs, language)
+            text, stated = _render_computed_call(m, spec, msgs, language, question)
             if require_stated and not stated:
                 return ""
             rendered.append(text)
@@ -14215,6 +14221,32 @@ def _format_tool_error_plain(
     return sentence
 
 
+#: A request id is shown only in this shape (the platform's own correlation
+#: id); anything else a payload carries under that key is not shown.
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def _plain_tool_error_sentence(payload: dict[str, Any] | None) -> str:
+    """The plain sentence for a failed tool. The tool's own error text never
+    appears in it: only which of two fixed sentences applies, and the
+    request id when it is an id."""
+    err = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+    if "unknown calculation" in err.lower():
+        sentence = (
+            "The calculator does not have a formula for that request. "
+            "Please restate the inputs or name the calculation."
+        )
+    else:
+        sentence = "The tool could not complete that request."
+    request_id = ""
+    if isinstance(payload, dict):
+        request_id = str(payload.get("request_id") or "")
+    request_id = request_id or _current_request_id()
+    if request_id and _REQUEST_ID_RE.fullmatch(request_id):
+        sentence = f"{sentence} Request id: {request_id}."
+    return sentence
+
+
 def _plain_sentence_for_tool_error_json(text: str) -> str:
     """Plain sentence if ``text`` is a tool-error JSON blob, else ''."""
     obj = _parse_json_object(text)
@@ -14223,7 +14255,7 @@ def _plain_sentence_for_tool_error_json(text: str) -> str:
     payload = _tool_error_payload(obj)
     if not payload:
         return ""
-    return _format_tool_error_plain(payload)
+    return _plain_tool_error_sentence(payload)
 
 
 def _is_calc_tool_result(

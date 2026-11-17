@@ -132,7 +132,7 @@ def test_a_failed_computed_tool_says_what_was_asked_and_that_it_failed(invented_
         "function": {"name": name, "arguments": json.dumps({"drawing": "S-invented-9"})}}]}
     for ok in (False, True):
         failed = _tool_msg(name, {"status": "error", "error": error}, ok=ok)
-        messages = _turn("how many?", ask, failed)
+        messages = _turn("how many on S-invented-9?", ask, failed)
         out = runtime._recover_answer_from_tool_messages("", messages)
         assert "unable to generate" not in out.lower()
         assert f"did not return: {LABELS['en']['tool_error']}" in out and "Asked: S-invented-9" in out
@@ -283,10 +283,65 @@ def test_a_computed_call_with_nothing_to_state_says_why(result, reason):
     ask = {"role": "assistant", "content": "", "tool_calls": [{
         "id": "call-bill_rows_aggregate", "type": "function",
         "function": {"name": "bill_rows_aggregate", "arguments": {"terms": "kerb", "section": "7"}}}]}
-    messages = _turn("count the kerb runs", ask, _tool_msg("bill_rows_aggregate", result))
+    messages = _turn("count the kerb runs in section 7", ask, _tool_msg("bill_rows_aggregate", result))
     out = runtime._postprocess_answer("", None, messages)
     assert FALLBACK not in out
     assert f"did not return: {reason}" in out and "Asked: kerb, 7" in out
+
+
+HOSTILE_ERRORS = [
+    ("relation invented_bill_rows_internal does not exist",
+     ["invented_bill_rows_internal", "relation"]),
+    (r"could not open C:\Program Files\Invented Data\rows store.db (/srv/invented x/y.db)",
+     ["Program Files", "Invented Data", "rows store", "/srv/invented x"]),
+]
+
+
+@pytest.mark.parametrize("error,absent", HOSTILE_ERRORS)
+def test_a_mixed_turn_never_pastes_the_failed_calls_error(invented_tools, error, absent):
+    """One computed call succeeds with no figure, another fails with an error
+    holding a table name and a path: the answer states both calls and holds
+    neither the table nor the path (no old formatter on the way)."""
+    from app.agents.core.computed_answer import LABELS
+
+    messages = _turn("how many?",
+                     _tool_msg("zz_invented_span_ratio", {"unexpected": "shape"}),
+                     _tool_msg("zz_invented_pallet_count", {"status": "error", "error": error}, ok=False))
+    for out in (runtime._recover_answer_from_tool_messages("", messages),
+                runtime._postprocess_answer("", None, messages)):
+        assert "Span ratio check" in out and "Pallet counter" in out, out
+        assert LABELS["en"]["tool_error"] in out
+        assert "unable to generate" not in out.lower()
+        for piece in absent:
+            assert piece not in out, (piece, out)
+
+
+@pytest.mark.parametrize("error,absent", HOSTILE_ERRORS)
+def test_a_tool_error_json_answer_becomes_the_plain_sentence(error, absent):
+    """The other caller of the error formatter: a reply that is a tool-error
+    envelope reads as the plain sentence, never the error text."""
+    raw = json.dumps({"status": "error", "error": error, "request_id": "req-invented-1"})
+    out = runtime._sanitize_final_text(raw)
+    assert out.startswith("The tool could not complete that request.")
+    assert "req-invented-1" in out
+    for piece in absent:
+        assert piece not in out, (piece, out)
+
+
+@pytest.mark.parametrize("error,absent", HOSTILE_ERRORS)
+def test_a_failed_calculation_not_declared_computed_reads_the_plain_sentence(error, absent):
+    messages = _turn("work it out", _tool_msg("zz_undeclared_invented_calc", {
+        "status": "error", "error": error, "calculation": "invented_volume"}))
+    out = runtime._recover_answer_from_tool_messages("", messages)
+    assert out.startswith("The tool could not complete that request.")
+    for piece in absent:
+        assert piece not in out, (piece, out)
+
+
+@pytest.mark.parametrize("rid,shown", [("req-invented-2", True), (r"C:\Invented Dir\x", False)])
+def test_a_request_id_is_shown_only_when_it_is_an_id(rid, shown):
+    out = runtime._plain_tool_error_sentence({"status": "error", "error": "x", "request_id": rid})
+    assert (rid in out) is shown
 
 
 @pytest.mark.parametrize("first,second", [(0, 1), (1, 0)])

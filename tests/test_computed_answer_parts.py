@@ -20,6 +20,8 @@ from app.agents.core.computed_answer import (
     join_calls,
     labels_for,
     render_call,
+    reason_text,
+    MAX_CODE_CHARS,
     tool_call_args,
 )
 from app.agents.core.tool_registry import Statement
@@ -89,21 +91,57 @@ def test_a_statement_line_says_returned_none_or_its_figure(st, lab, needle):
     assert needle in _statement_lines(st, lab)[0]
 
 
-@pytest.mark.parametrize("asked, lab, expected", [
-    ({"terms": "invented kerb", "unit": "m", "flag": None}, EN, "Asked: invented kerb, m"),
-    ({"calculation": "x_volume", "depth": 2}, AR, f"{AR['asked']}: x_volume{AR['sep']}2"),
-    ({"skip": [1, 2], "blank": "  "}, EN, ""),
+@pytest.mark.parametrize("asked, lab, question, expected", [
+    ({"terms": "invented kerb", "unit": "m", "flag": None}, EN,
+     "Count the Invented Kerb runs in M", "Asked: invented kerb, m"),
+    ({"calculation": "x_volume", "depth": 2}, AR, "x_volume بعمق 2", f"{AR['asked']}: x_volume{AR['sep']}2"),
+    ({"skip": [1, 2], "blank": "  "}, EN, "1 2", ""),
 ])
-def test_the_asked_line_lists_the_values_sent(asked, lab, expected):
-    assert _asked_line(asked, lab) == expected
+def test_the_asked_line_lists_the_values_the_user_typed(asked, lab, question, expected):
+    assert _asked_line(asked, lab, question) == expected
 
 
-@pytest.mark.parametrize("error, language, last", [
-    ("missing depth", "en", f"- {EN['not_returned']}: {EN['tool_error']}"),
-    ("", "ar", f"- {AR['not_returned']}: {AR['no_figure']}"),
+@pytest.mark.parametrize("asked, question, absent, expected", [
+    ({"file": r"C:\Program Files\Invented Works\bill sheet.xlsx", "terms": "kerb"},
+     "count the kerb runs", ["Program Files", "Invented Works", "bill sheet", "C:"], "Asked: kerb"),
+    ({"vendor": "Zephyrine Invented Holdings Ltd", "qty": 12},
+     "total of 12 pallets", ["Zephyrine", "Holdings"], "Asked: 12"),
 ])
-def test_a_call_with_no_statement_says_what_was_asked_and_why(error, language, last):
-    out = render_call("Invented calculator", [], asked={"length": 7}, error=error, language=language)
+def test_an_argument_the_user_did_not_type_is_never_echoed(asked, question, absent, expected):
+    line = _asked_line(asked, EN, question)
+    assert line == expected
+    for piece in absent:
+        assert piece not in line
+
+
+@pytest.mark.parametrize("asked, question", [
+    ({"table": "invented_rows_internal", "path": "/srv/invented data/x.db"}, "how many?"),
+    ({"company": "Invented Contracting LLC"}, "count them"),
+])
+def test_no_value_from_the_question_drops_the_asked_line(asked, question):
+    assert _asked_line(asked, EN, question) == ""
+    out = render_call("Invented tool", [], asked=asked, error="", language="en", question=question)
+    assert EN["asked"] not in out
+    for value in asked.values():
+        assert value not in out
+
+
+@pytest.mark.parametrize("length, shown", [(64, True), (65, False)])
+def test_a_declared_code_is_shown_only_up_to_64_characters(length, shown):
+    code = ("invented_reason_" + "x" * 80)[:length]
+    out = reason_text(code, EN, "en", (code,))
+    assert (code in out) is shown
+    assert out.startswith(EN["tool_error"])
+    assert MAX_CODE_CHARS == 64
+
+
+@pytest.mark.parametrize("error, language, question, last", [
+    ("missing depth", "en", "a trench 7 long", f"- {EN['not_returned']}: {EN['tool_error']}"),
+    ("", "ar", "خندق بطول 7", f"- {AR['not_returned']}: {AR['no_figure']}"),
+])
+def test_a_call_with_no_statement_says_what_was_asked_and_why(error, language, question, last):
+    out = render_call("Invented calculator", [], asked={"length": 7}, error=error, language=language,
+                      question=question)
     lines = out.splitlines()
     assert lines[0] == "Invented calculator:"
     assert lines[-1] == last

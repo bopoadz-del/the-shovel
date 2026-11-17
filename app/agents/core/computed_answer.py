@@ -155,6 +155,10 @@ def scrub(text: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip(" ,;:-\n")
 
 
+#: The longest reason code ever shown; a longer string is not a code.
+MAX_CODE_CHARS = 64
+
+
 def reason_text(error: str, lab: Dict[str, str], language: str,
                 declared: Sequence[str] = ()) -> str:
     """A tool's error as the user reads it, in the question's language.
@@ -171,7 +175,7 @@ def reason_text(error: str, lab: Dict[str, str], language: str,
     worded = (REASONS.get(language) or REASONS[DEFAULT_LANGUAGE]).get(raw)
     if worded:
         return worded
-    if raw in tuple(declared or ()):
+    if len(raw) <= MAX_CODE_CHARS and raw in tuple(declared or ()):
         return f"{lab['tool_error']} ({lab['code']}: {raw})"
     return lab["tool_error"]
 
@@ -213,27 +217,42 @@ def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGU
     return lines
 
 
-def _asked_line(asked: Dict[str, Any], lab: Dict[str, str]) -> str:
-    # Echoed arguments are what the model sent, so they are shown, scrubbed:
-    # an id, path or table name the model passed is never shown back.
+def _typed_by_user(value: Any, question: str) -> bool:
+    """True when ``value`` occurs in the user's question (case-folded)."""
+    forms = {str(value)}
+    if isinstance(value, (int, float)):
+        forms.add(_figure_text(float(value)))
+    folded = (question or "").casefold()
+    return any(f.strip() and f.strip().casefold() in folded for f in forms)
+
+
+def _asked_line(asked: Dict[str, Any], lab: Dict[str, str], question: str = "") -> str:
+    # Only what the USER typed is echoed: an argument the model sent is shown
+    # only when its value occurs in the question, so a path, a table, an id
+    # or a name the model put in a call never reaches the answer. The scrub
+    # stays as a second layer. No value left -> no line.
     values = [scrub(str(v)) for v in (asked or {}).values()
-              if isinstance(v, (str, int, float)) and not isinstance(v, bool)]
+              if isinstance(v, (str, int, float)) and not isinstance(v, bool)
+              and _typed_by_user(v, question)]
     values = [v for v in values if v]
     return f"{lab['asked']}: " + lab["sep"].join(values) if values else ""
 
 
 def render_call(heading: str, statements: Sequence[Any], *, asked: Dict[str, Any],
-                error: str, language: str, declared: Sequence[str] = ()) -> str:
+                error: str, language: str, declared: Sequence[str] = (),
+                question: str = "") -> str:
     """One computed call as text. With no statement the call still answers:
     what was asked, and why there is no figure (a known or declared reason
     code, else the plain sentence that the tool reported an error).
-    ``declared``: the reason codes the tool's registry entry declares."""
+    ``declared``: the reason codes the tool's registry entry declares.
+    ``question``: the user's question; only argument values it holds are
+    echoed on the asked line."""
     lab = labels_for(language)
     lines: List[str] = [f"{heading}:"]
     for st in statements:
         lines.extend(_statement_lines(st, lab, language, declared))
     if not statements:
-        asked_line = _asked_line(asked, lab)
+        asked_line = _asked_line(asked, lab, question)
         if asked_line:
             lines.append(f"- {asked_line}")
         reason = reason_text(error, lab, language, declared) if error else lab["no_figure"]
@@ -292,5 +311,5 @@ def failure_text(payload: Optional[Dict[str, Any]]) -> str:
 
 __all__: Tuple[str, ...] = (
     "LABELS", "REASONS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
-    "tool_call_args", "failure_text", "scrub", "reason_text",
+    "tool_call_args", "failure_text", "scrub", "reason_text", "MAX_CODE_CHARS",
 )

@@ -61,12 +61,13 @@ def test_a_failed_calculation_with_an_empty_synthesis_says_why(monkeypatch, synt
     assert text.strip(), events
     assert _EMPTY_RESPONSE_FALLBACK not in text
     assert "unable to generate" not in text.lower()
-    # What was asked (the call's own arguments) and the plain sentence that
-    # the tool failed -- never the calculator's own error text; the wordless
-    # reply is not shown.
+    # The plain sentence that the tool failed -- never the calculator's own
+    # error text; the wordless reply is not shown. The calculation name the
+    # MODEL sent is not in the user's question, so it is not echoed.
     from app.agents.core.computed_answer import LABELS
 
-    assert f"{LABELS['en']['asked']}: zz_no_such_calculation" in text, text
+    assert "zz_no_such_calculation" not in text, text
+    assert f"{LABELS['en']['asked']}:" not in text, text
     assert LABELS["en"]["tool_error"] in text, text
     assert "Unknown calculation" not in text, text
     assert "---" not in text

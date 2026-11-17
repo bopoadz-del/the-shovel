@@ -218,7 +218,8 @@ def test_a_declared_reason_code_through_the_real_recovery_reads_as_its_wording(r
     assert reason not in out, out
 
 
-# The echoed call arguments are still shown, scrubbed.
+# A call argument the user typed is shown; an id or path the model added is
+# not (it is not in the question, and the scrub is the second layer).
 ECHOED = [
     ({"document_id": "3f2a9c1e-1b2c-4d5e-8f90-123456789abc", "terms": "kerb"}, "kerb", ["3f2a9c1e"]),
     ({"path": "/srv/data/p17/bill.xlsx", "terms": "duct"}, "duct", ["/srv/data", "bill.xlsx"]),
@@ -228,7 +229,7 @@ ECHOED = [
 @pytest.mark.parametrize("args,kept,gone", ECHOED)
 def test_the_echoed_arguments_are_scrubbed(args, kept, gone):
     msgs = [
-        {"role": "user", "content": "How many items?"},
+        {"role": "user", "content": f"How many {kept} items?"},
         {"role": "assistant", "content": "", "tool_calls": [call("bill_rows_aggregate", args, "e2")]},
         {"role": "tool", "name": "bill_rows_aggregate", "tool_call_id": "e2",
          "content": json.dumps({"status": "error"})},
