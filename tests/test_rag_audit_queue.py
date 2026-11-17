@@ -65,17 +65,15 @@ def test_write_returns_while_the_disk_append_is_held(monkeypatch, tmp_path, held
     assert [r["i"] for r in _rows(log)] == [-1] + list(range(n_rows))
 
 
-def test_rows_go_to_the_path_resolved_at_call_time(monkeypatch, tmp_path):
-    a, b = tmp_path / "a", tmp_path / "b"
-    monkeypatch.setenv("DATA_DIR", str(a))
-    audit.write({"k": "a1"})
-    monkeypatch.setenv("DATA_DIR", str(b))
-    audit.write({"k": "b1"})
-    monkeypatch.setenv("DATA_DIR", str(a))
-    audit.write({"k": "a2"})
+@pytest.mark.parametrize("order", [("a", "b", "a"), ("b", "a", "b", "b")])
+def test_rows_go_to_the_path_resolved_at_call_time(monkeypatch, tmp_path, order):
+    for n, where in enumerate(order):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path / where))
+        audit.write({"k": f"{where}{n}"})
     assert audit.flush(5.0)
-    assert [r["k"] for r in _rows(a / "logs" / "rag_audit.jsonl")] == ["a1", "a2"]
-    assert [r["k"] for r in _rows(b / "logs" / "rag_audit.jsonl")] == ["b1"]
+    for where in set(order):
+        expected = [f"{w}{n}" for n, w in enumerate(order) if w == where]
+        assert [r["k"] for r in _rows(tmp_path / where / "logs" / "rag_audit.jsonl")] == expected
 
 
 @pytest.mark.parametrize("capacity,extra", [(1, 3), (4, 2)])
@@ -117,9 +115,16 @@ def test_the_row_is_the_record_as_it_was_at_the_call(monkeypatch, tmp_path, held
     assert _rows(tmp_path / "logs" / "rag_audit.jsonl") == [{"injected_k": 2, "chunks": [{"id": "c1"}]}]
 
 
-def test_a_failed_append_does_not_stop_the_writer(monkeypatch, tmp_path):
+@pytest.mark.parametrize("bad", ["nul_byte", "parent_is_a_file"])
+def test_a_failed_append_does_not_stop_the_writer(monkeypatch, tmp_path, bad):
+    if bad == "nul_byte":
+        bad_path = "\x00invalid/logs/rag_audit.jsonl"
+    else:
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        bad_path = str(blocker / "logs" / "rag_audit.jsonl")
     good = tmp_path / "good"
-    monkeypatch.setattr(audit, "_log_path", lambda: "\x00invalid/logs/rag_audit.jsonl")
+    monkeypatch.setattr(audit, "_log_path", lambda: bad_path)
     audit.write({"k": "lost"})
     assert audit.flush(5.0)
     monkeypatch.setattr(audit, "_log_path", lambda: str(good / "logs" / "rag_audit.jsonl"))
