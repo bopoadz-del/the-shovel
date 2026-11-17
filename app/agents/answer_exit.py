@@ -246,12 +246,13 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
 
 
 def note_tool_message(tool_call: dict[str, Any] | None, message: dict[str, Any],
-                      turn: Turn | None = None) -> None:
+                      turn: Turn | None = None) -> dict[str, Any]:
     """Record one tool call and its tool message (whole result) in the turn,
-    so a path that never sees the turn's messages can still recover from it."""
+    so a path that never sees the turn's messages can still recover from it.
+    Returns ``message`` unchanged, so a caller can record as it appends."""
     turn = turn or _TURN.get()
     if turn is None or not isinstance(message, dict):
-        return
+        return message
     try:
         fn = (tool_call or {}).get("function") or {}
         call_id = str(message.get("tool_call_id") or (tool_call or {}).get("id") or "")
@@ -265,6 +266,7 @@ def note_tool_message(tool_call: dict[str, Any] | None, message: dict[str, Any],
                                    else json.dumps(content, default=str)})
     except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
         _LOG.warning("answer_exit: could not record a tool message", exc_info=True)
+    return message
 
 
 def recovered_answer(turn: Turn | None = None) -> str:

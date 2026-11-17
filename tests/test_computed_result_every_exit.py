@@ -384,3 +384,19 @@ def test_a_tool_message_that_is_not_a_dict_is_ignored_silently(caplog, not_a_mes
         answer_exit.note_tool_message(None, not_a_message, turn)
     assert turn.tool_messages == []
     assert not caplog.records, [r.getMessage() for r in caplog.records]
+
+
+# --- note_tool_message hands back the message it records (callers append it) ---
+
+@pytest.mark.parametrize("with_turn", [True, False])
+@pytest.mark.parametrize("content", ["rows: 3", {"figure": 12.5, "unit": "m3"}])
+def test_note_tool_message_returns_the_message_it_was_given(with_turn, content):
+    from app.agents import answer_exit as ax
+    turn = ax.Turn() if with_turn else None
+    message = {"role": "tool", "tool_call_id": "call-probe", "name": "probe_tool", "content": content}
+    call = {"id": "call-probe", "function": {"name": "probe_tool", "arguments": "{}"}}
+    back = ax.note_tool_message(call, message, turn)
+    assert back is message
+    assert message["content"] == content  # recording never rewrites the caller's message
+    if with_turn:
+        assert [m["role"] for m in turn.tool_messages] == ["assistant", "tool"]

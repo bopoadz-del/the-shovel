@@ -116,7 +116,7 @@ async def _chat_stream_impl(
 ) -> AsyncIterator[dict[str, Any]]:
     """Internal implementation. ``chat_stream`` wraps this with an emit
     guarantee so silent / crashing exits become structured error events."""
-    from app.agents.answer_exit import end_on_a_sentence
+    from app.agents.answer_exit import end_on_a_sentence, note_tool_message
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         MAX_TOOL_ITERATIONS, _CONTEXT_LEAK_RETRY_NUDGE, _EMPTY_RESPONSE_FALLBACK,
         _EMPTY_ROUTER_NUDGE, _LOG, _SEARCH_PREAMBLE_RETRY_NUDGE, _approx_prompt_tokens,
@@ -1426,14 +1426,12 @@ async def _chat_stream_impl(
                 "ok": tool_result.get("ok", True),
                 "summary": _summarize_result(tool_result["result"])[:400],
             }
-            messages.append({
+            messages.append(note_tool_message(tc, {
                 "role": "tool",
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
-            })
-            from app.agents import answer_exit as _answer_exit
-            _answer_exit.note_tool_message(tc, messages[-1])
+            }))
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(
