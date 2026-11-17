@@ -65,34 +65,29 @@ def _write_batch(rows: List[Tuple[str, str]]) -> None:
             _LOG.warning("rag_audit write failed: %s", exc)
 
 
-def _drain() -> None:
+def _drain(q: "queue.Queue[Tuple[str, Any]]") -> None:
+    """Writer-thread loop: take everything queued, append it, release flushes."""
     while True:
-        kind, item = _queue.get()
-        rows: List[Tuple[str, str]] = []
-        flushes: List[threading.Event] = []
+        batch = [q.get()]
         while True:
-            if kind == _ROW:
-                rows.append(item)
-            else:
-                flushes.append(item)
             try:
-                kind, item = _queue.get_nowait()
+                batch.append(q.get_nowait())
             except queue.Empty:
                 break
-        _write_batch(rows)
-        for ev in flushes:
-            ev.set()
+        _write_batch([item for kind, item in batch if kind == _ROW])
+        for kind, item in batch:
+            if kind == _FLUSH:
+                item.set()
 
 
 def _ensure_writer() -> None:
+    """Start the one writer thread for this process (again after a fork)."""
     global _writer, _writer_pid
     pid = os.getpid()
-    if _writer is not None and _writer_pid == pid and _writer.is_alive():
-        return
     with _START_LOCK:
         if _writer is not None and _writer_pid == pid and _writer.is_alive():
             return
-        t = threading.Thread(target=_drain, name="rag-audit-writer", daemon=True)
+        t = threading.Thread(target=_drain, args=(_queue,), name="rag-audit-writer", daemon=True)
         t.start()
         _writer, _writer_pid = t, pid
 

@@ -10,6 +10,7 @@ the row is the record as it was at the call.
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 
@@ -140,3 +141,50 @@ def test_unserialisable_values_still_log_via_str(monkeypatch, tmp_path, record):
     assert audit.flush(5.0)
     rows = _rows(tmp_path / "logs" / "rag_audit.jsonl")
     assert len(rows) == 1 and set(rows[0]) == set(record)
+
+
+@pytest.mark.parametrize("paths", [("one",), ("one", "two", "one")])
+def test_drain_appends_a_batch_and_releases_its_flush(tmp_path, paths):
+    """Drive the writer loop by name on a private queue."""
+    q = queue.Queue()
+    for n, p in enumerate(paths):
+        q.put((audit._ROW, (str(tmp_path / p / "audit.jsonl"), json.dumps({"n": n}) + "\n")))
+    done = threading.Event()
+    q.put((audit._FLUSH, done))
+    threading.Thread(target=audit._drain, args=(q,), daemon=True).start()
+    assert done.wait(5.0)
+    for p in set(paths):
+        want = [n for n, x in enumerate(paths) if x == p]
+        assert [r["n"] for r in _rows(tmp_path / p / "audit.jsonl")] == want
+
+
+@pytest.mark.parametrize("bad_at", [0, 1])
+def test_write_batch_groups_by_path_and_one_bad_path_spares_the_rest(tmp_path, bad_at):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    bad = str(blocker / "logs" / "audit.jsonl")
+    good = str(tmp_path / "good" / "audit.jsonl")
+    rows = [(good, '{"n": 0}\n'), (good, '{"n": 1}\n')]
+    rows.insert(bad_at, (bad, '{"n": "lost"}\n'))
+    audit._write_batch(rows)
+    assert [r["n"] for r in _rows(tmp_path / "good" / "audit.jsonl")] == [0, 1]
+
+
+@pytest.mark.parametrize("n_threads", [1, 8])
+def test_ensure_writer_keeps_exactly_one_writer_thread(monkeypatch, tmp_path, n_threads):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+    def _burst():
+        for i in range(20):
+            audit._ensure_writer()
+            audit.write({"i": i})
+
+    workers = [threading.Thread(target=_burst) for _ in range(n_threads)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(10.0)
+    assert audit.flush(5.0)
+    writers = [t for t in threading.enumerate() if t.name == "rag-audit-writer" and t.is_alive()]
+    assert len(writers) == 1
+    assert len(_rows(tmp_path / "logs" / "rag_audit.jsonl")) == 20 * n_threads
