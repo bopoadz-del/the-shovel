@@ -966,9 +966,17 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   const [previewRequest, setPreviewRequest] = useState<{ docId: string; nonce: number } | null>(null)
   // W3: a marker clicked in an answer opens the Sources tab on its entry.
   const [sourcesRequest, setSourcesRequest] = useState<{ marker: number; nonce: number } | null>(null)
-  const openCitation = useCallback((marker: number) => {
-    setSourcesRequest({ marker, nonce: Date.now() })
+  // One counter numbers every side-panel request (a document preview, a
+  // marker's entry); the panel shows the higher number. A clock is no order:
+  // two clicks in one millisecond tie, and a clock set back runs backwards.
+  const panelRequestSeq = useRef(0)
+  const nextPanelRequest = useCallback(() => {
+    panelRequestSeq.current += 1
+    return panelRequestSeq.current
   }, [])
+  const openCitation = useCallback((marker: number) => {
+    setSourcesRequest({ marker, nonce: nextPanelRequest() })
+  }, [nextPanelRequest])
   useEffect(() => {
     if (!sourcesRequest) return
     document
@@ -1698,7 +1706,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // Sources list and the per-input "document" links in Why this answer.
   const openSource = (s: CitedSource) => {
     if (!s.doc_id) return
-    setPreviewRequest({ docId: s.doc_id, nonce: Date.now() })
+    setPreviewRequest({ docId: s.doc_id, nonce: nextPanelRequest() })
   }
 
   // Sources the answer cited that this project does not own — Master-Corpus
