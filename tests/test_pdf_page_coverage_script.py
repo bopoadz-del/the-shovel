@@ -164,13 +164,16 @@ def test_main_needs_exactly_one_document_per_id(monkeypatch, tmp_path, matches, 
     seen = []
 
     class _Res:
+        def __init__(self, out):
+            self._out = out
+
         def all(self):
-            return rows
+            return self._out
 
     class _S:
         def execute(self, stmt, params):
             seen.append(params)
-            return _Res()
+            return _Res(rows if "p" in params else [(1, 2, 40)])
 
         def __enter__(self):
             return self
@@ -183,10 +186,16 @@ def test_main_needs_exactly_one_document_per_id(monkeypatch, tmp_path, matches, 
     monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
     monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
     assert mod.main() == code
-    assert seen == [{"p": "abc%"}]
+    # the prefix select, then one stored-chunk read per printed document
+    assert seen == [{"p": "abc%"}] + ([{"d": "d0"}] if matches == 1 else [])
 
 
 # --- drive-path selector (scope widened 05:12Z) -------------------------------
+
+class _NoRows:
+    def all(self):
+        return []
+
 
 def _fake_session(monkeypatch, rows, seen):
     class _Res:
@@ -196,7 +205,7 @@ def _fake_session(monkeypatch, rows, seen):
     class _S:
         def execute(self, stmt, params):
             seen.append((str(stmt), params))
-            return _Res()
+            return _Res() if "p" in params else _NoRows()
 
         def __enter__(self):
             return self
@@ -261,7 +270,8 @@ def test_main_runs_the_drive_path_selector(monkeypatch, tmp_path, matches, code,
     monkeypatch.setenv("COVERAGE_DRIVE_PATH", "Signed Set")
     monkeypatch.delenv("COVERAGE_DOC_IDS", raising=False)
     assert mod.main() == code
-    assert [params for _sql, params in seen] == [{"p": "%signed set%"}]
+    assert [params for _sql, params in seen] == (
+        [{"p": "%signed set%"}] + [{"d": f"d{i}"} for i in range(matches)])
     out = capsys.readouterr().out
     assert out.startswith("budgets: ")
     assert f"drive path selector: {matches} documents" in out
@@ -337,3 +347,87 @@ def test_budgets_follow_the_product_env(monkeypatch, timeout, mem):
     assert b["file_mem_mb"] == int(mem)
     from app.core import ingest_status as st
     assert b["extractor_version"] == st.EXTRACTOR_VERSION
+
+
+# --- the index's own page coverage (stored chunks by page locator) --------------
+
+@pytest.mark.parametrize("rows, pif, with_chunk, missing_runs, span_from", [
+    # page 3 of 5 carries no chunk: named as a gap, span read from the row
+    ([(1, 2, 900), (2, 1, 400), (4, 1, 50), (5, 3, 1200)], 5, 4, [(3, 3)], "pages_in_file"),
+    # every page carries a chunk; pages_in_file unknown -> span = top page
+    ([(1, 1, 10), (2, 1, 10), (3, 1, 10)], None, 3, [], "highest_chunk_page"),
+])
+def test_stored_page_coverage_names_pages_without_a_chunk(rows, pif, with_chunk, missing_runs, span_from):
+    cov = _load().stored_page_coverage(rows, pif)
+    assert cov["pages_with_chunk"] == with_chunk
+    assert cov["pages_without_chunk_runs"] == missing_runs
+    assert cov["span_from"] == span_from
+
+
+@pytest.mark.parametrize("pif, span, tail_gap", [
+    (8, 8, [(5, 8)]),       # the file is longer than the last chunked page
+    (None, 4, []),          # unknown length: no invented tail gap
+])
+def test_stored_span_uses_the_file_length_when_recorded(pif, span, tail_gap):
+    cov = _load().stored_page_coverage([(1, 1, 5), (2, 1, 5), (3, 1, 5), (4, 1, 5)], pif)
+    assert cov["span"] == span
+    assert cov["pages_without_chunk_runs"] == tail_gap
+
+
+@pytest.mark.parametrize("rows, no_page, total", [
+    ([(None, 4, 300), (1, 1, 20)], 4, 5),
+    ([(1, 1, 20), (2, 2, 30)], 0, 3),
+])
+def test_chunks_without_a_page_locator_are_counted_not_dropped(rows, no_page, total):
+    cov = _load().stored_page_coverage(rows, None)
+    assert cov["chunks_without_page"] == no_page
+    assert cov["chunks"] == total
+
+
+@pytest.mark.parametrize("n_pages", [9, 400])
+def test_stored_by_range_is_bounded_and_sums_to_total(n_pages):
+    mod = _load()
+    rows = [(p, 1, p) for p in range(1, n_pages + 1)]
+    cov = mod.stored_page_coverage(rows, n_pages)
+    assert len(cov["by_range"]) <= mod._MAX_RANGE_ROWS
+    assert sum(r["chars"] for r in cov["by_range"]) == sum(range(1, n_pages + 1))
+    assert sum(r["pages_with_chunk"] for r in cov["by_range"]) == n_pages
+
+
+@pytest.mark.parametrize("namespace, table", [("v2", "chunks_v2"), ("x9", "chunks_x9")])
+def test_stored_sql_is_a_select_on_the_namespaced_table_with_a_bound_id(monkeypatch, namespace, table):
+    mod = _load()
+    monkeypatch.setenv("RAG_VECTOR_NAMESPACE", namespace)
+    sql = mod._stored_pages_sql(mod.stored_chunk_table())
+    assert sql.lstrip().upper().startswith("SELECT")
+    assert f"FROM {table} " in sql and ":d" in sql
+    for verb in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER"):
+        assert not re.search(r"\b" + verb + r"\b", sql.upper())
+
+
+@pytest.mark.parametrize("fail", [True, False])
+def test_stored_lines_print_a_failed_read_instead_of_raising(monkeypatch, fail):
+    mod = _load()
+
+    class _S:
+        def execute(self, stmt, params):
+            if fail:
+                raise RuntimeError("no such table")
+            return _Res2()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Res2:
+        def all(self):
+            return [(1, 1, 10), (3, 1, 10)]
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    row = ("d1", "p1", "a.pdf", 10, "/gone", "INDEXED", 2, 3, None, None, None)
+    out = "\n".join(mod.stored_lines(row))
+    assert ("READ FAILED" in out) is fail
+    assert ("pages_without_chunk_runs: 2" in out) is (not fail)

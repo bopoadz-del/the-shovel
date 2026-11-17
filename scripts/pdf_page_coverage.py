@@ -21,6 +21,10 @@ or space separated ids or prefixes) and/or ``COVERAGE_DRIVE_PATH`` (a
 case-insensitive substring of ``metadata->>'drive_path'``, wildcards escaped);
 no document identifier or path lives in this repository.
 
+Per document it also prints the index's own page coverage (stored chunks by
+their ``page`` locator: which pages carry a chunk and how much text), read
+from the chunk table, so it answers even when the source file is gone.
+
 Per document it also prints the stored failure evidence (the ledger reason,
 the parsed ``attempts_exhausted`` mark and the failure keys of the metadata)
 and, once per run, the extraction budgets read from the product helpers, so
@@ -261,6 +265,100 @@ def read_page_chars(file_path: str) -> tuple[list[int], float, str | None]:
     return chars, max_side, error
 
 
+# Stored chunks of one document by page (read-only). The table name comes from
+# the product's single chokepoint for the namespaced chunk table, which
+# validates the identifier; the document id is a bind parameter.
+def _stored_pages_sql(table: str) -> str:
+    return (
+        f"SELECT page, COUNT(*), COALESCE(SUM(LENGTH(text)), 0) FROM {table} "
+        "WHERE doc_id = :d GROUP BY page"
+    )
+
+
+def stored_chunk_table() -> str:
+    from app.core.models import rag_chunk_table_name
+
+    return rag_chunk_table_name(os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip())
+
+
+def stored_page_coverage(rows: Iterable[tuple], pages_in_file: int | None) -> dict[str, Any]:
+    """Pure summary of the index's own page locators for one document.
+
+    ``rows`` is ``(page, chunks, chars)`` per stored page (page None = chunks
+    with no locator). The span is the file's page count when the row records
+    it, else the highest page that carries a chunk; ``pages_without_chunk``
+    are the pages of that span no chunk points at. This answers "is page N
+    indexed, and with how much text" from the index alone, so it still
+    answers when the source bytes are gone."""
+    per_page: dict[int, tuple[int, int]] = {}
+    no_page = (0, 0)
+    for page, n, chars in rows:
+        n, chars = int(n or 0), int(chars or 0)
+        if page is None or int(page) < 1:
+            no_page = (no_page[0] + n, no_page[1] + chars)
+            continue
+        a, b = per_page.get(int(page), (0, 0))
+        per_page[int(page)] = (a + n, b + chars)
+    top = max(per_page) if per_page else 0
+    span = max(int(pages_in_file or 0), top)
+    missing = [p for p in range(1, span + 1) if p not in per_page]
+    step = range_size(span)
+    by_range = []
+    for start in range(1, span + 1, step):
+        end = min(span, start + step - 1)
+        hits = [per_page[p] for p in range(start, end + 1) if p in per_page]
+        by_range.append({
+            "pages": (start, end),
+            "pages_with_chunk": len(hits),
+            "chunks": sum(h[0] for h in hits),
+            "chars": sum(h[1] for h in hits),
+        })
+    return {
+        "chunks": sum(v[0] for v in per_page.values()) + no_page[0],
+        "chunks_without_page": no_page[0],
+        "chars_without_page": no_page[1],
+        "pages_with_chunk": len(per_page),
+        "span": span,
+        "span_from": "pages_in_file" if pages_in_file and int(pages_in_file) >= top else "highest_chunk_page",
+        "pages_without_chunk": len(missing),
+        "pages_without_chunk_runs": _runs(missing),
+        "by_range": by_range,
+    }
+
+
+def render_stored(cov: dict[str, Any]) -> list[str]:
+    runs = cov["pages_without_chunk_runs"]
+    shown = ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in runs[:40])
+    more = f" (+{len(runs) - 40} more runs)" if len(runs) > 40 else ""
+    lines = [
+        (f"   stored: chunks={cov['chunks']} pages_with_chunk={cov['pages_with_chunk']} "
+         f"span={cov['span']} ({cov['span_from']}) pages_without_chunk={cov['pages_without_chunk']} "
+         f"chunks_without_page={cov['chunks_without_page']} "
+         f"chars_without_page={cov['chars_without_page']}"),
+        f"   stored pages_without_chunk_runs: {shown or '-'}{more}",
+        "   stored pages | pages_with_chunk | chunks | chars",
+    ]
+    for r in cov["by_range"]:
+        a, b = r["pages"]
+        lines.append(f"   {a}-{b} | {r['pages_with_chunk']} | {r['chunks']} | {r['chars']}")
+    return lines
+
+
+def stored_lines(doc_row: tuple) -> list[str]:
+    """The index's own page coverage for one document; a failed read is
+    printed, never raised, so the file-side diagnosis still prints."""
+    did, pif = doc_row[0], doc_row[7]
+    from app.core.db import SessionLocal
+
+    try:
+        sql = _stored_pages_sql(stored_chunk_table())
+        with SessionLocal() as s:
+            rows = s.execute(text(sql), {"d": did}).all()
+    except Exception as exc:  # report it, do not hide it
+        return [f"   stored: READ FAILED: {type(exc).__name__}: {str(exc)[:200]}"]
+    return render_stored(stored_page_coverage([tuple(r) for r in rows], pif))
+
+
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
            max_side: float, error: str | None) -> list[str]:
     did, pid, name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
@@ -345,7 +443,7 @@ def main() -> int:
         if not rows:
             failed += 1
         for row in rows:
-            for line in diagnose(tuple(row)):
+            for line in diagnose(tuple(row)) + stored_lines(tuple(row)):
                 print(line, flush=True)
     for prefix in ids:
         with SessionLocal() as s:
@@ -354,7 +452,7 @@ def main() -> int:
             print(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
             failed += 1
             continue
-        for line in diagnose(tuple(rows[0])):
+        for line in diagnose(tuple(rows[0])) + stored_lines(tuple(rows[0])):
             print(line, flush=True)
     return 1 if failed else 0
 
