@@ -34,3 +34,44 @@ export function sessionDocumentsFor(fetchedId, activeId, payload) {
       tag: sessionDocumentTag(d.origin),
     }))
 }
+
+// G-1: what the "This session" group shows is a state, not just a list. A
+// fetch that failed is not an empty session: saying "No files in this
+// session yet" after a failed read is false, so a failure is kept as its own
+// state, with any rows already known for that session, and shown as an
+// error the user can retry. "No files" is said only after a read succeeded.
+
+/** The state after a read of `fetchedId`'s documents succeeded. Null when
+ *  the user has since opened another session (the reply is dropped). */
+export function sessionDocumentsLoaded(fetchedId, activeId, payload) {
+  const rows = sessionDocumentsFor(fetchedId, activeId, payload)
+  return rows ? { sid: fetchedId, status: 'ready', rows } : null
+}
+
+/** The state after a read of `fetchedId`'s documents failed. Rows already
+ *  shown for that session are kept; null when the user has moved on. */
+export function sessionDocumentsFailed(fetchedId, activeId, previous) {
+  if (!fetchedId || fetchedId !== activeId) return null
+  const rows = previous && previous.sid === fetchedId && Array.isArray(previous.rows) ? previous.rows : []
+  return { sid: fetchedId, status: 'error', rows }
+}
+
+/** What the group shows for the open session: 'loading' until its first
+ *  read returns, 'error' after a failed read, else 'list' or 'empty'. */
+export function sessionDocumentsView(state, activeId) {
+  if (!activeId || !state || state.sid !== activeId) return { kind: 'loading', rows: [] }
+  if (state.status === 'error') return { kind: 'error', rows: state.rows }
+  return state.rows.length > 0 ? { kind: 'list', rows: state.rows } : { kind: 'empty', rows: [] }
+}
+
+/** Read the open session's documents once and return the next state (or
+ *  null to keep the current one). `getJson` is the API read; `activeIdNow`
+ *  is read after the reply so a reply for a session left behind is dropped. */
+export async function readSessionDocuments(getJson, path, fetchedId, activeIdNow, previous) {
+  try {
+    const payload = await getJson(path)
+    return sessionDocumentsLoaded(fetchedId, activeIdNow(), payload)
+  } catch {
+    return sessionDocumentsFailed(fetchedId, activeIdNow(), previous)
+  }
+}

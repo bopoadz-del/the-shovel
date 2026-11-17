@@ -12,7 +12,8 @@
  * RightPanel/SourcesList for the LATEST answer (operator spec — moved
  * to right panel for visibility).
  */
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
+import type { Components } from 'react-markdown'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AlertTriangle, Download } from 'lucide-react'
@@ -20,11 +21,14 @@ import './ChatBubble.css'
 
 import type { ChatMessage, ExportDescriptor } from './types'
 import { plainMetadata } from './userFacingText'
+import { citationMarkerFromHref, linkCitationMarkers } from './citationMarkers'
 
 interface Props {
   message: ChatMessage
   onDownload?: (format: 'docx' | 'xlsx') => void
   onExport?: (descriptor: ExportDescriptor) => void
+  /** Open this marker's entry in the Sources panel. */
+  onCitation?: (marker: number) => void
 }
 
 // Memoised: every streamed token calls setMessages on the parent, which
@@ -35,8 +39,32 @@ interface Props {
 // default shallow compare could NOT skip them, because ChatList builds a fresh
 // onDownload closure for every bubble on every render, so that prop always
 // "changed". We compare the fields a bubble actually renders instead.
-function ChatBubble({ message, onDownload, onExport }: Props) {
+function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
   const isUser = message.role === 'user'
+  const markdown = useMemo(
+    () => (isUser ? message.content : linkCitationMarkers(message.content, message.citations)),
+    [isUser, message.content, message.citations],
+  )
+  const components = useMemo<Components>(() => ({
+    // A marker is a control that opens its entry in the Sources panel; the
+    // document it stands for is never written into the answer itself.
+    a({ href, title, children }) {
+      const marker = citationMarkerFromHref(href)
+      if (marker === null) return <a href={href} title={title}>{children}</a>
+      return (
+        <button
+          type="button"
+          className="chat-bubble__cite"
+          data-citation-marker={marker}
+          aria-label={`Source ${marker}`}
+          title={`Source ${marker}`}
+          onClick={() => onCitation?.(marker)}
+        >
+          {marker}
+        </button>
+      )
+    },
+  }), [onCitation])
   const exports = message.exports ?? []
   const toolStatus = message.toolStatus ? plainMetadata(message.toolStatus) : ''
 
@@ -71,7 +99,7 @@ function ChatBubble({ message, onDownload, onExport }: Props) {
             </span>
           ) : (
             <div className="chat-bubble__markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{markdown}</ReactMarkdown>
               {message.streaming && <span className="chat-bubble__cursor" aria-hidden="true" />}
             </div>
           )}
@@ -143,7 +171,9 @@ function propsEqual(prev: Props, next: Props): boolean {
     !!a.error === !!b.error &&
     a.toolStatus === b.toolStatus &&
     a.exports === b.exports &&
-    !!prev.onDownload === !!next.onDownload
+    a.citations === b.citations &&
+    !!prev.onDownload === !!next.onDownload &&
+    !!prev.onCitation === !!next.onCitation
   )
 }
 

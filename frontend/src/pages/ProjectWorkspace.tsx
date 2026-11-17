@@ -32,9 +32,16 @@ import {
   renameTitleError,
 } from '../chat/session'
 import { activityForTool, plainMetadata } from '../chat/userFacingText'
-import { sessionDocumentsFor, withSessionId, type SessionDocumentRow } from '../chat/sessionDocuments'
+import {
+  readSessionDocuments,
+  sessionDocumentsView,
+  withSessionId,
+  type SessionDocumentsState,
+} from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
+import { readCoverage } from '../chat/citationMarkers'
+import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
 
@@ -166,6 +173,10 @@ interface ChatMessage {
    *  answer came from (a calculator run with its envelope badge, the operator's
    *  own words, or a retrieved chunk). Drives the "Why this answer" panel. */
   provenance?: ProvenanceEntry[]
+  /** Marker entries from the SSE 'end' event (W3: shown in the Sources panel only). */
+  citations?: AnswerCitation[]
+  /** Coverage from the SSE 'end' event (a Sources panel line, never answer text). */
+  coverage?: AnswerCoverage
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -368,7 +379,7 @@ interface DocumentsPanelProps {
 // ample for the pilot; the remainder are summarised in a footer.
 const MAX_VISIBLE_DOCS = 200
 
-function DocumentsPanel({
+export function DocumentsPanel({
   projectId,
   sessionId,
   documents,
@@ -953,6 +964,17 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   const [rightExpanded, setRightExpanded] = useState(false)
   const [driveModalOpen, setDriveModalOpen] = useState(false)
   const [previewRequest, setPreviewRequest] = useState<{ docId: string; nonce: number } | null>(null)
+  // W3: a marker clicked in an answer opens the Sources tab on its entry.
+  const [sourcesRequest, setSourcesRequest] = useState<{ marker: number; nonce: number } | null>(null)
+  const openCitation = useCallback((marker: number) => {
+    setSourcesRequest({ marker, nonce: Date.now() })
+  }, [])
+  useEffect(() => {
+    if (!sourcesRequest) return
+    document
+      .getElementById(`citation-entry-${sourcesRequest.marker}`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [sourcesRequest])
 
   // ── / agent-picker: available agents + the user's pinned choice ───────────
   // A pinned agent is sent as `agent` on /v1/chat/stream and runs directly
@@ -991,18 +1013,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // the session changes, after an upload and after each answer; a reply for
   // a session the user has since left is dropped.
   // Rows are stored with the session they belong to, so another session's
-  // rows are never shown while the new session's reply is in flight.
-  const [sessionDocsOf, setSessionDocsOf] = useState<{ sid: string; rows: SessionDocumentRow[] } | null>(null)
-  const sessionDocs = sessionDocsOf && sessionDocsOf.sid === activeConversationId ? sessionDocsOf.rows : []
+  // rows are never shown while the new session's reply is in flight. A
+  // failed read is kept as an error state (G-1), never shown as "no files".
+  const [sessionDocsState, setSessionDocsState] = useState<SessionDocumentsState | null>(null)
+  const sessionDocsStateRef = useRef<SessionDocumentsState | null>(null)
+  const sessionDocs = sessionDocumentsView(sessionDocsState, activeConversationId)
   const refreshSessionDocuments = useCallback(() => {
     const cid = activeIdRef.current
     if (!id || !cid) return
-    apiGet<unknown>(`/v1/projects/${id}/conversations/${encodeURIComponent(cid)}/documents`)
-      .then((payload) => {
-        const rows = sessionDocumentsFor(cid, activeIdRef.current, payload)
-        if (rows) setSessionDocsOf({ sid: cid, rows })
-      })
-      .catch(() => { /* the session group is progressive enhancement */ })
+    void readSessionDocuments(
+      apiGet,
+      `/v1/projects/${id}/conversations/${encodeURIComponent(cid)}/documents`,
+      cid,
+      () => activeIdRef.current,
+      sessionDocsStateRef.current,
+    ).then((next) => {
+      if (!next) return
+      sessionDocsStateRef.current = next
+      setSessionDocsState(next)
+    })
   }, [id])
   useEffect(() => {
     refreshSessionDocuments()
@@ -1489,10 +1518,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawSources = Array.isArray(evt['sources']) ? (evt['sources'] as ChatMessage['sources']) : []
               const rawExports = Array.isArray(evt['exports']) ? (evt['exports'] as ChatMessage['exports']) : []
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
+              const rawCitations = Array.isArray(evt['citations']) ? (evt['citations'] as AnswerCitation[]) : []
+              const rawCoverage = readCoverage(evt['coverage'])
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage }
                     : m
                 )
               )
@@ -1714,17 +1745,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // without duplicating fetch wiring. Drive still opens as a modal from
   // the ChatComposer's + popover.
 
-  async function exportConversation() {
-    if (!id || !conversationId) return
+  // Every export the page offers goes through here. The server keeps what
+  // it serves in a session as that session's Produced document (W2), so
+  // after ANY successful export the session's list is re-read at once; a
+  // control that skipped this left "No files in this session yet" showing.
+  async function downloadExport(
+    url: string,
+    init: RequestInit,
+    fallbackName: string,
+    failLabel: string,
+  ) {
     const token = getToken() || ''
     try {
-      const res = await fetch(
-        `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=docx`,
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
-      )
+      const res = await fetch(url, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+      })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
-        alert(`Export failed (${res.status}): ${detail.slice(0, 200)}`)
+        alert(`${failLabel} failed (${res.status}): ${detail.slice(0, 200)}`)
         return
       }
       const blob = await res.blob()
@@ -1733,14 +1772,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       a.href = objUrl
       const cd = res.headers.get('Content-Disposition') || ''
       const m = /filename="?([^";]+)"?/.exec(cd)
-      a.download = m?.[1] || `the-fork-${conversationId.slice(0, 8)}.docx`
+      a.download = m?.[1] || fallbackName
       document.body.appendChild(a)
       a.click()
       a.remove()
       URL.revokeObjectURL(objUrl)
+      refreshSessionDocuments()
     } catch (err) {
-      alert(`Export error: ${(err as Error).message}`)
+      alert(`${failLabel} error: ${(err as Error).message}`)
     }
+  }
+
+  async function exportConversation() {
+    if (!id || !conversationId) return
+    await downloadExport(
+      `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=docx`,
+      { method: 'POST' },
+      `the-fork-${conversationId.slice(0, 8)}.docx`,
+      'Export',
+    )
   }
 
   async function clearConversation() {
@@ -1788,6 +1838,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           onDeleteConversation={handleDeleteConversation}
           onClearConversation={clearConversation}
           sessionDocuments={sessionDocs}
+          onRetrySessionDocuments={refreshSessionDocuments}
           documents={
             <DocumentsPanel
               projectId={id ?? ''}
@@ -1815,31 +1866,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
             suggestionsDisabled={streaming || composerIsBlocked}
             onDownloadMessage={(assistantIndex, format) => {
               if (!id || !conversationId) return
-              const token = getToken() || ''
-              const url = `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}`
-              void fetch(url, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-              })
-                .then(async (res) => {
-                  if (!res.ok) {
-                    const detail = await res.text().catch(() => '')
-                    alert(`Download failed (${res.status}): ${detail.slice(0, 200)}`)
-                    return
-                  }
-                  const blob = await res.blob()
-                  const a = document.createElement('a')
-                  const objUrl = URL.createObjectURL(blob)
-                  a.href = objUrl
-                  const cd = res.headers.get('Content-Disposition') || ''
-                  const m = /filename="?([^";]+)"?/.exec(cd)
-                  a.download = m?.[1] || `the-fork-${conversationId.slice(0, 8)}.${format}`
-                  document.body.appendChild(a)
-                  a.click()
-                  a.remove()
-                  URL.revokeObjectURL(objUrl)
-                })
-                .catch((e) => alert(`Download error: ${(e as Error).message}`))
+              void downloadExport(
+                `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}`,
+                { method: 'POST' },
+                `the-fork-${conversationId.slice(0, 8)}.${format}`,
+                'Download',
+              )
             }}
             feedback={
               id && conversationId
@@ -1850,43 +1882,24 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                   }
                 : undefined
             }
+            onCitation={openCitation}
             onExport={(descriptor) => {
               // Data-backed download offer (e.g. cost BOQ / A1–A9 Word). The
               // descriptor's endpoint is server-relative; generation happens
               // server-side on click (bounded), not in the chat hot path.
               // Rewrite a remapped RAG corpus id (drive_archive) to the
               // workspace the user is actually in.
-              const token = getToken() || ''
               const endpoint = exportEndpointForWorkspace(descriptor.endpoint, id)
-              void fetch(`${API_BASE}${endpoint}`, {
-                method: descriptor.method || 'POST',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'Content-Type': 'application/json',
+              void downloadExport(
+                `${API_BASE}${endpoint}`,
+                {
+                  method: descriptor.method || 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(descriptor.payload ?? {}),
                 },
-                body: JSON.stringify(descriptor.payload ?? {}),
-              })
-                .then(async (res) => {
-                  if (!res.ok) {
-                    const detail = await res.text().catch(() => '')
-                    alert(`Export failed (${res.status}): ${detail.slice(0, 200)}`)
-                    return
-                  }
-                  const blob = await res.blob()
-                  const a = document.createElement('a')
-                  const objUrl = URL.createObjectURL(blob)
-                  a.href = objUrl
-                  const cd = res.headers.get('Content-Disposition') || ''
-                  const m = /filename="?([^";]+)"?/.exec(cd)
-                  a.download = m?.[1] || `the-fork-export.${descriptor.format || 'xlsx'}`
-                  document.body.appendChild(a)
-                  a.click()
-                  a.remove()
-                  URL.revokeObjectURL(objUrl)
-                  // W2: a session's export is kept as its Produced file.
-                  refreshSessionDocuments()
-                })
-                .catch((e) => alert(`Export error: ${(e as Error).message}`))
+                `the-fork-export.${descriptor.format || 'xlsx'}`,
+                'Export',
+              )
             }}
           />
           <ChatComposer
@@ -1934,11 +1947,15 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           }))}
           citedDocuments={citedPreviewDocs}
           previewRequest={previewRequest}
+          sourcesRequest={sourcesRequest}
           onPreviewHydrated={handlePreviewHydrated}
           sources={
             <>
               <SourcesList
                 sources={latestSources}
+                citations={latestAssistant?.citations}
+                coverage={latestAssistant?.coverage}
+                activeMarker={sourcesRequest?.marker ?? null}
                 streaming={latestAssistant?.streaming}
                 activeDocId={previewRequest?.docId}
                 onOpenSource={openSource}
