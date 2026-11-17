@@ -284,10 +284,15 @@ def test_a_stall_names_only_cpu_burned_across_it_not_before_it(monkeypatch, grow
     figure on a stall is the delta across the stall, not the thread's lifetime
     total (without the snapshot a long-lived busy thread would be blamed)."""
     clock = {"ms": 1000.0}
+    # The fake thread id must never be a live thread's native id: the monitor
+    # names threads by native id, and a real worker thread whose Linux TID
+    # happened to be 4242 was named in its place (#407 virgin run). Native ids
+    # are positive on every platform, so a negative id cannot collide.
+    fake_tid = -4242
 
     def fake_cpu():
         clock["ms"] += grows_ms
-        return {4242: clock["ms"]}
+        return {fake_tid: clock["ms"]}
 
     monkeypatch.setattr(loop_watchdog, "thread_cpu_ms", fake_cpu)
 
@@ -303,7 +308,7 @@ def test_a_stall_names_only_cpu_burned_across_it_not_before_it(monkeypatch, grow
     mon = asyncio.run(run())
     assert mon.stalls, "a blocked loop must record a stall"
     _, worst = max(mon.stalls)
-    assert worst.startswith("cpu 4242=") is named, worst[:200]
+    assert worst.startswith(f"cpu {fake_tid}=") is named, worst[:200]
 
 
 # The busiest four threads do not tell a GIL convoy (many threads, process
