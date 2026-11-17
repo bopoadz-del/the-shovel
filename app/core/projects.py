@@ -954,8 +954,12 @@ def get_project(
     include_admin_approved: bool = False,
     doc_limit: Optional[int] = None,
     doc_offset: int = 0,
+    session_files: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Load a project the caller can access.
+
+    ``session_files=False`` loads the project's own documents and count,
+    without chat sessions' files (see ``list_documents``).
 
     PR D — non-owners may also read approved platform-shared projects
     when ``include_admin_approved=True`` (Drive-approved origin,
@@ -991,8 +995,9 @@ def get_project(
         limit=doc_limit,
         offset=doc_offset,
         newest_first=doc_limit is not None,
+        session_files=session_files,
     )
-    proj["document_count"] = count_documents(source_id)
+    proj["document_count"] = count_documents(source_id, session_files=session_files)
     proj["readiness"] = compute_readiness(source_id)
     return proj
 
@@ -2509,12 +2514,33 @@ def documents_matching_title_phrase(
     ]
 
 
+def _outside_any_session():
+    """SQL clause: the row is not a chat session's file.
+
+    A file uploaded in or produced by a chat session records that session
+    in its metadata (``session_id``); it belongs to the session, which lists
+    it (``list_session_documents``), not to the project's document list. A
+    row whose metadata the store holds as an encoded JSON string (see
+    ``coerce_document_metadata``) has no keys the query can read; it is
+    left out when its text names a session at all. A row with no metadata
+    (SQL NULL, as a bulk insert leaves it) is the project's.
+    """
+    meta_text = cast(Document.metadata_, String)
+    return and_(
+        Document.metadata_["session_id"].as_string().is_(None),
+        or_(Document.metadata_.is_(None),
+            ~meta_text.startswith('"'),
+            ~meta_text.contains("session_id", autoescape=True)),
+    )
+
+
 def list_documents(
     project_id: str,
     *,
     limit: Optional[int] = None,
     offset: int = 0,
     newest_first: bool = False,
+    session_files: bool = True,
 ) -> List[Dict[str, Any]]:
     """List a project's documents.
 
@@ -2523,6 +2549,12 @@ def list_documents(
     ``newest_first`` orders by upload time descending — the natural order for a
     paginated sidebar. Defaults preserve the legacy "all docs, oldest-first"
     behaviour so existing callers are untouched.
+
+    ``session_files=False`` is the project's own document list, the one a
+    user browses: a file uploaded in or produced by a chat session is that
+    session's, listed under the session for the user who made it, so it is
+    left out here. Otherwise every session's files of every user would show
+    in every session (TESTER, 16 Nov 04:20Z).
     """
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
@@ -2533,6 +2565,8 @@ def list_documents(
             .where(Document.project_id == source_id)
             .order_by(order)
         )
+        if not session_files:
+            stmt = stmt.where(_outside_any_session())
         if limit is not None:
             stmt = stmt.limit(limit).offset(offset)
         rows = session.scalars(stmt).all()
@@ -2618,13 +2652,17 @@ def list_session_documents(
     return out
 
 
-def count_documents(project_id: str, visible_only: bool = False) -> int:
+def count_documents(
+    project_id: str, visible_only: bool = False, *, session_files: bool = True,
+) -> int:
     """Total document count for a project — a cheap indexed COUNT, so a
     paginated listing can report the total without serializing every row.
 
     ``visible_only`` leaves out the rows retrieval hides
     (``retrieval_visible`` false: an owner-excluded file, a retired copy of
-    a re-ingested one), so the count is the documents the project holds."""
+    a re-ingested one), so the count is the documents the project holds.
+    ``session_files=False`` leaves out chat sessions' files, as
+    ``list_documents`` does for the project's own list."""
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
     stmt = (
@@ -2634,6 +2672,8 @@ def count_documents(project_id: str, visible_only: bool = False) -> int:
     )
     if visible_only:
         stmt = stmt.where(Document.retrieval_visible.is_(True))
+    if not session_files:
+        stmt = stmt.where(_outside_any_session())
     with SessionLocal() as session:
         return int(session.scalar(stmt) or 0)
 
