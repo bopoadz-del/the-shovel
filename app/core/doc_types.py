@@ -42,10 +42,9 @@ def _table_key(path: str):
     """What identifies one version of the types file on disk: its path, its
     modification time and its size. ``None`` when there is no file. An edit
     to the file changes the key, so a cached read never outlives the file."""
-    try:
-        st = os.stat(path)
-    except OSError:
+    if not os.path.exists(path):
         return None
+    st = os.stat(path)
     return (path, st.st_mtime_ns, st.st_size)
 
 
