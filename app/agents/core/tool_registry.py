@@ -80,6 +80,9 @@ class Statement:
     within: Tuple[str, ...] = ()
     #: Why this part did not return: a reason code or the tool's error.
     failure: str = ""
+    #: The tool's own working for the figure (e.g. a calculator's note),
+    #: shown as data under the figure.
+    working: str = ""
 
 
 Stater = Callable[[Dict[str, Any]], List[Statement]]
@@ -166,14 +169,57 @@ def block_args_of(owner: str) -> List[str]:
     return sorted(n for n, s in _BLOCK_ARGS.items() if s.owner == owner)
 
 
+@dataclass(frozen=True)
+class ResultSpec:
+    """The declared result kind of a name the model calls that is not a
+    registered tool (a block, or a manifest action aliased to one)."""
+    name: str
+    owner: str
+    display_name: str
+    kind: str
+    statement: Optional[Stater] = None
+
+
+_RESULTS: Dict[str, ResultSpec] = {}
+
+
+def declare_result(name: str, *, owner: str, display_name: str, kind: str,
+                   statement: Optional[Stater] = None) -> None:
+    """Declare what a block's (or an aliased action's) result is, with the
+    same rules as ``tool(kind=, statement=)``. A registered tool declares
+    its kind on ``tool`` instead."""
+    if owner not in OWNERS:
+        raise ValueError(f"unknown result owner {owner!r}; one of {OWNERS}")
+    if not (display_name or "").strip():
+        raise ValueError(f"result {name!r} needs a display_name")
+    if kind not in RESULT_KINDS or not kind:
+        raise ValueError(f"result {name!r}: unknown result kind {kind!r}; one of {RESULT_KINDS[1:]}")
+    if (kind == "computed") != (statement is not None):
+        raise ValueError(f"result {name!r}: a computed result, and only a computed result, declares a statement")
+    spec = ResultSpec(name, owner, display_name.strip(), kind, statement)
+    existing = _RESULTS.get(name)
+    if (existing is not None and existing != spec) or name in _TOOLS:
+        raise ValueError(f"result {name!r} is declared twice")
+    _RESULTS[name] = spec
+
+
 def get(name: str) -> Optional[ToolSpec]:
     load()
     return _TOOLS.get(name)
 
 
+def result_spec(name: str) -> Optional[Union[ToolSpec, ResultSpec]]:
+    """What ``name`` declares about its result: the tool's spec, else the
+    block's result declaration, else None."""
+    load()
+    return _TOOLS.get(name) or _RESULTS.get(name)
+
+
 def tools_of_kind(kind: str) -> List[str]:
     load()
-    return sorted(n for n, s in _TOOLS.items() if s.kind == kind)
+    names = {n for n, s in _TOOLS.items() if s.kind == kind}
+    names.update(n for n, s in _RESULTS.items() if s.kind == kind)
+    return sorted(names)
 
 
 def tools_of(owner: str) -> List[str]:

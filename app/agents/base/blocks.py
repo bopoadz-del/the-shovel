@@ -7,7 +7,45 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.core.tool_registry import ToolCall, block_args
+from app.agents.core.tool_registry import Statement, ToolCall, block_args, declare_result
+
+
+def improvised_statement(result: dict) -> list[Statement]:
+    """What a ``formula_executor_v2`` result states: the figure(s) its
+    sandboxed code returned, for the task it was given (the user's words).
+    Not certified, and said so by its own provenance; a non-numeric or
+    failed result states nothing."""
+    body = result if isinstance(result, dict) else {}
+    while "task" not in body and isinstance(body.get("result"), dict):
+        body = body["result"]
+    if body.get("status") != "success":
+        return []
+    value, task = body.get("result"), str(body.get("task") or "").strip()
+    figures = value.items() if isinstance(value, dict) else [(task, value)]
+    return [Statement(figure=float(v), what=str(k or task))
+            for k, v in figures
+            if isinstance(v, (int, float)) and not isinstance(v, bool)]
+
+
+declare_result("formula_executor_v2", owner="base", display_name="Formula code runner",
+               kind="computed", statement=improvised_statement)
+
+
+def _declare_calculator_aliases() -> None:
+    """A manifest action aliased to a registry calculator returns that
+    calculator's result, so it states what the calculator states."""
+    from app.agents.base.tools import calculation_statement
+    from app.agents.runtime import _HAT_CALC_ALIASES
+    from app.lib import formula_registry
+
+    for action, calculation in _HAT_CALC_ALIASES.items():
+        spec = formula_registry.get(calculation)
+        declare_result(action, owner="base",
+                       display_name=(spec.display_name if spec and spec.display_name else action),
+                       kind="computed", statement=calculation_statement)
+
+
+_declare_calculator_aliases()
 
 
 @block_args("construction", owner="base")

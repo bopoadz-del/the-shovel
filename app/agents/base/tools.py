@@ -314,8 +314,11 @@ def bill_rows_statement(result: dict) -> list[Statement]:
     rows behind it. Two bills are never added together. A bill that did not
     return is stated as not returned, with its reason, so a partial result is
     never read as complete; a bill with no matching row states a count of 0."""
+    body = result if isinstance(result, dict) else {}
+    while "bills" not in body and isinstance(body.get("result"), dict):
+        body = body["result"]
     out: list[Statement] = []
-    for bill in (result or {}).get("bills") or []:
+    for bill in body.get("bills") or []:
         if not isinstance(bill, dict):
             continue
         source = str(bill.get("filename") or bill.get("document_id") or "")
@@ -415,7 +418,54 @@ async def handle_remember_fact(call: ToolCall) -> dict:
     }
 
 
-@tool("construction_calc", owner="base", display_name='Platform calculator', params={
+def calculation_statement(result: dict) -> list[Statement]:
+    """What a calculator result states: each numeric output its formula
+    DECLARES (``app.lib.formula_registry``: outputs and their units), the
+    declared main output first. Nothing is read from a list of names here;
+    a formula with no declaration, or a result that is not a success,
+    states nothing (the caller then says what was asked and why)."""
+    from app.lib import formula_registry
+
+    body = result if isinstance(result, dict) else {}
+    # The calculator's own envelope may sit one level down (the tool's
+    # ``{"ok", "result": {...}}``); it is the level that names its calculation.
+    while not body.get("calculation") and isinstance(body.get("result"), dict):
+        body = body["result"]
+    if body.get("status") not in (None, "success"):
+        return []
+    spec = formula_registry.get(str(body.get("calculation") or ""))
+    figures = body.get("result") if isinstance(body.get("result"), dict) else body
+    if spec is None or not isinstance(figures, dict):
+        return []
+    source = str(figures.get("standard") or body.get("standard") or "")
+    working = str(figures.get("note") or "").strip()
+    order = sorted(spec.outputs, key=lambda k: k != spec.main_output)
+    out: list[Statement] = []
+    for key in order:
+        unit = spec.outputs[key]
+        value = figures.get(key)
+        if unit in ("", "-") or isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        out.append(Statement(figure=float(value), what=_output_name(key, unit), unit=unit,
+                             source=source, working="" if out else working))
+    if out and all(st.figure == 0 for st in out):
+        # Every declared figure is zero: the calculation ran on inputs that
+        # were never given (e.g. an empty call), so it states no figure.
+        return []
+    return out
+
+
+def _output_name(key: str, unit: str) -> str:
+    """A declared output's name as words: its trailing unit token (the one
+    the declaration gives) dropped, underscores read as spaces."""
+    words = [w for w in str(key).split("_") if w]
+    if len(words) > 1 and words[-1].lower() == str(unit).lower():
+        words = words[:-1]
+    return " ".join(words)
+
+
+@tool("construction_calc", owner="base", display_name='Platform calculator',
+      kind="computed", statement=calculation_statement, params={
     "calculation": Param(label="which calculation", kind="text", required=True),
     "params": Param(label="calculator inputs", kind="object", required=False),
     "input": Param(label="nested calculator inputs", kind="object", required=False),

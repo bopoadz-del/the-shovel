@@ -16,6 +16,7 @@ matching rows -- into plain text:
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -30,6 +31,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "within": " in the section {terms}",
         "source": "source",
         "rows": "Rows",
+        "working": "Working",
         "no_rows": "no matching rows",
         "not_returned": "did not return",
         "asked": "Asked",
@@ -52,6 +54,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "within": " في القسم {terms}",
         "source": "المصدر",
         "rows": "البنود",
+        "working": "طريقة الحساب",
         "no_rows": "لا توجد بنود مطابقة",
         "not_returned": "لم تُرجع نتيجة",
         "asked": "المطلوب",
@@ -68,6 +71,8 @@ LABELS: Dict[str, Dict[str, str]] = {
     },
 }
 
+_LOG = logging.getLogger(__name__)
+
 DEFAULT_LANGUAGE = "en"
 
 #: The letters of each script a LABELS language is written in.
@@ -75,6 +80,12 @@ _SCRIPT_LETTERS: Dict[str, "re.Pattern[str]"] = {
     "ar": re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]"),
     "en": re.compile(r"[A-Za-z]"),
 }
+
+
+def has_words(text: str) -> bool:
+    """True when ``text`` carries a letter or digit in any script; markdown
+    alone (rules, bullets, emphasis marks, blank lines) says nothing."""
+    return bool(re.sub(r"[\W_]+", "", text or ""))
 
 
 def question_language(question: str) -> str:
@@ -127,6 +138,8 @@ def _statement_lines(st: Any, lab: Dict[str, str]) -> List[str]:
     lines = [line]
     if st.rows:
         lines.append(f"  {lab['rows']}: " + lab["list_sep"].join(st.rows))
+    if getattr(st, "working", ""):
+        lines.append(f"  {lab['working']}: {st.working}")
     return lines
 
 
@@ -186,6 +199,7 @@ def tool_call_args(messages: Sequence[Dict[str, Any]], call_id: str) -> Dict[str
             try:
                 parsed = json.loads(raw or "{}")
             except (TypeError, ValueError):
+                _LOG.info("tool call %s: arguments are not JSON", call_id, exc_info=True)
                 return {}
             return parsed if isinstance(parsed, dict) else {}
     return {}
@@ -201,6 +215,6 @@ def failure_text(payload: Optional[Dict[str, Any]]) -> str:
 
 
 __all__: Tuple[str, ...] = (
-    "LABELS", "question_language", "render_call", "heading_for", "join_calls",
+    "LABELS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
     "tool_call_args", "failure_text",
 )

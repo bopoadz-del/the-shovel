@@ -5689,6 +5689,11 @@ def _text_needs_tool_recovery(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
+    from app.agents.core.computed_answer import has_words
+
+    if not has_words(t):
+        # Markdown alone (rules, bullets, emphasis marks) says nothing.
+        return True
     if t == _EMPTY_RESPONSE_FALLBACK:
         return True
     if "unable to generate" in t.lower():
@@ -6097,7 +6102,12 @@ def _recover_answer_from_tool_messages(
     surface that draft instead of an empty bubble or a 413 error."""
     if not _text_needs_tool_recovery(text):
         return text
-    computed = _computed_turn_answer(messages)
+    # Every computed call of the turn that states its figures (or failed)
+    # answers first. When one succeeded but states nothing, the result
+    # formatters below get their say; if they say nothing either, the
+    # computed calls still answer plainly at the end -- never the generic
+    # sentence.
+    computed = _computed_turn_answer(messages, require_stated=True)
     if computed:
         return computed
     error_fallback = ""
@@ -6131,9 +6141,8 @@ def _recover_answer_from_tool_messages(
             inner = payload
         if not isinstance(inner, dict):
             continue
-        if _declared_kind(m)[0] in ("search", "computed"):
-            # Passages are evidence for an answer, never the answer (G-8);
-            # a computed call of this turn was answered above.
+        if _declared_kind(m)[0] == "search":
+            # Passages are evidence for an answer, never the answer (G-8).
             continue
         action = inner.get("action")
         if action == "commissioning_checklist_generated":
@@ -6202,7 +6211,7 @@ def _recover_answer_from_tool_messages(
             and _is_calc_tool_error(m, inner, err_payload)
         ):
             error_fallback = _format_tool_error_plain(err_payload)
-    return error_fallback or text
+    return error_fallback or _computed_turn_answer(messages) or text
 
 
 #: The one plain line that stands in for the model's explanation when the
@@ -6282,7 +6291,7 @@ def _declared_kind(msg: dict[str, Any] | None) -> tuple[str, Any]:
     from app.agents.core import tool_registry
 
     name = str((msg or {}).get("name") or "")
-    spec = tool_registry.get(name) if name else None
+    spec = tool_registry.result_spec(name) if name else None
     return (spec.kind if spec is not None else ""), spec
 
 
@@ -6293,19 +6302,24 @@ def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, json.JSONDecodeError):
+        _LOG.info("tool message %s: content is not a JSON result", msg.get("name"), exc_info=True)
         return None
     if isinstance(payload, dict) and payload.get("truncated"):
         try:
             payload = json.loads(payload.get("preview") or "")
         except (TypeError, json.JSONDecodeError):
+            _LOG.info("tool message %s: truncated preview is not whole JSON", msg.get("name"), exc_info=True)
             return None
     return payload if isinstance(payload, dict) else None
 
 
 def _render_computed_call(msg: dict[str, Any], spec: Any,
-                          messages: list[dict[str, Any]], language: str) -> str:
-    """One computed call as the answer. A call that failed or stated no
-    figure still answers plainly: what was asked and why there is no figure."""
+                          messages: list[dict[str, Any]], language: str) -> tuple[str, bool]:
+    """(One computed call as the answer, whether the call stated anything).
+
+    A call that failed or stated no figure still answers plainly: what was
+    asked and why there is no figure. A failure counts as stated (its error
+    is what it says); a success with no figure does not."""
     from app.agents.core import computed_answer
 
     payload = _tool_message_payload(msg) or {}
@@ -6319,18 +6333,27 @@ def _render_computed_call(msg: dict[str, Any], spec: Any,
         error = computed_answer.failure_text(err or body)
     elif body:
         try:
+            # The statement reads the tool's result; a result recorded
+            # without the tool's envelope is read whole.
             statements = list(spec.statement(body) or [])
+            if not statements and body is not payload:
+                statements = list(spec.statement(payload) or [])
         except (TypeError, ValueError, KeyError, AttributeError):
             _LOG.warning("computed tool %s: its result states no figure", spec.name, exc_info=True)
-    return computed_answer.render_call(
+    text = computed_answer.render_call(
         computed_answer.heading_for(spec.display_name or spec.name, language), statements,
         asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
         error=error, language=language)
+    return text, bool(statements or error)
 
 
-def _computed_turn_answer(messages: list[dict[str, Any]] | None) -> str:
+def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
+                          require_stated: bool = False) -> str:
     """Every computed call of the current turn (after the user's last
-    question), in call order, worded in the question's language."""
+    question), in call order, worded in the question's language.
+
+    ``require_stated``: answer only when every one of them stated its
+    figures or its failure; otherwise "" (so no call is left out)."""
     from app.agents.core import computed_answer
 
     msgs = list(messages or [])
@@ -6348,7 +6371,10 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None) -> str:
             continue
         kind, spec = _declared_kind(m)
         if kind == "computed" and spec.statement is not None:
-            rendered.append(_render_computed_call(m, spec, msgs, language))
+            text, stated = _render_computed_call(m, spec, msgs, language)
+            if require_stated and not stated:
+                return ""
+            rendered.append(text)
     return computed_answer.join_calls(rendered, language)
 
 
@@ -14200,21 +14226,18 @@ def _plain_sentence_for_tool_error_json(text: str) -> str:
     return _format_tool_error_plain(payload)
 
 
-_CALC_TOOL_NAMES = ("construction_calc", "formula_executor_v2", "formula_executor")
-
-
 def _is_calc_tool_result(
     msg: dict[str, Any] | None,
     inner: dict[str, Any] | None,
 ) -> bool:
     """True when a tool message carries a calculator's result.
 
-    A calculator names its ``calculation`` (on the envelope or on its
+    A tool DECLARED computed (tool_registry) is one; otherwise a calculator
+    names its ``calculation`` (on the envelope or on its
     ``result``); a search or lookup never does, so its notes stay with the
     model.
     """
-    name = str((msg or {}).get("name") or "").lower()
-    if name in _CALC_TOOL_NAMES:
+    if _declared_kind(msg)[0] == "computed":
         return True
     blob = inner if isinstance(inner, dict) else {}
     result = blob.get("result")
@@ -14230,8 +14253,7 @@ def _is_calc_tool_error(
     err_payload: dict[str, Any] | None,
 ) -> bool:
     """True when the failed tool is a calculator, not a search/lookup."""
-    name = str((msg or {}).get("name") or "").lower()
-    if name in _CALC_TOOL_NAMES:
+    if _declared_kind(msg)[0] == "computed":
         return True
     blob = inner or {}
     err = err_payload or {}

@@ -24,7 +24,6 @@ from app.agents.runtime import (
     _EMPTY_RESPONSE_FALLBACK,
     _TOOL_RESULT_MAX_CHARS,
     Agent,
-    _format_tool_error_plain,
     _recover_answer_from_tool_messages,
     _tool_result_content,
 )
@@ -253,13 +252,18 @@ _PLAIN_ERROR = {"status": "error", "error": "Missing input: trench length"}
 
 @pytest.mark.parametrize("name,recovered", [
     pytest.param("construction_calc", True, id="calculator-name"),
-    pytest.param("formula_executor", True, id="formula-name"),
+    pytest.param("formula_executor_v2", True, id="formula-name"),
     pytest.param("search_project_documents", False, id="search-name"),
 ])
 def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, recovered):
-    """A failed calculator still yields its one honest sentence; a failed
-    search's error text is never shown as the answer."""
+    """A failed calculator -- a tool DECLARED computed in the registry, not a
+    name on a list -- states its error in plain words; a failed search's
+    error text is never shown as the answer."""
     msgs = [{"role": "tool", "name": name, "content": json.dumps(_PLAIN_ERROR)}]
-    expected = _format_tool_error_plain(_PLAIN_ERROR) if recovered else ""
-    assert expected != json.dumps(_PLAIN_ERROR)
-    assert _recover_answer_from_tool_messages("", msgs) == expected
+    out = _recover_answer_from_tool_messages("", msgs)
+    assert json.dumps(_PLAIN_ERROR) not in out
+    if recovered:
+        assert _PLAIN_ERROR["error"] in out, out
+        assert "unable to generate" not in out.lower()
+    else:
+        assert out == ""
