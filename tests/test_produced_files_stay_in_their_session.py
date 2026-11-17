@@ -141,14 +141,15 @@ def _project_list(client, headers, pid) -> tuple[list[str], dict]:
     return [d["id"] for d in detail.json()["documents"]], detail.json()
 
 
-def test_the_projects_document_list_holds_no_sessions_files(client):
+@pytest.mark.parametrize("second_session_suffix", ["2000", "mwiqvj9k28n987unh726"])
+def test_the_projects_document_list_holds_no_sessions_files(client, second_session_suffix):
     from app.core import projects as store
 
-    owner = _register(client, "plist-own")
-    stranger = _register(client, "plist-oth")
+    owner = _register(client, f"plist-own{second_session_suffix[:4]}")
+    stranger = _register(client, f"plist-oth{second_session_suffix[:4]}")
     owner_id = client.get("/v1/users/me", headers=owner).json()
     owner_id = owner_id.get("user_id") or owner_id.get("id")
-    pid = _project(client, owner, f"W2scope-plist-{_RUN}")
+    pid = _project(client, owner, f"W2scope-plist-{second_session_suffix[:4]}-{_RUN}")
     store.approve_project(pid)  # shared: every user opens it, as on Master Corpus
 
     # The project's own documents: an upload with no session, a legacy row
@@ -173,7 +174,7 @@ def test_the_projects_document_list_holds_no_sessions_files(client):
 
     # Sessions' files, all newer than the project's: two produced in X, one
     # attached in Y, and a legacy session row held as one JSON string.
-    x, y = f"ws-{pid}-1000", f"ws-{pid}-mwiqvj9k28n987unh726"
+    x, y = f"ws-{pid}-1000", f"ws-{pid}-{second_session_suffix}"
     _answer(x, pid, "Summarise the pour sequence.", "Pour bay 1 first, then bay 3, then bay 2.")
     _export(client, owner, pid, x, "docx")
     _export(client, owner, pid, x, "xlsx")
