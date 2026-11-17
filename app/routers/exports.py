@@ -35,6 +35,10 @@ from app.dependencies import require_user
 from app.core import projects as projects_store
 from app.core import agent_memory
 from app.core import byte_store, doc_index, privileges
+from app.core.answer_report_intent import (
+    answer_export_declined_message,
+    answer_export_format_pattern,
+)
 
 router = APIRouter()
 
@@ -1696,7 +1700,7 @@ async def export_conversation_schedule(
 async def export_conversation_message(
     project_id: str,
     conversation_id: str,
-    format: str = Query("docx", pattern="^(docx|pdf|xlsx)$"),
+    format: str = Query("docx", pattern=answer_export_format_pattern()),
     message_index: int = Query(
         -1,
         description="Index of the assistant message to export; -1 = most recent",
@@ -1777,11 +1781,7 @@ async def export_conversation_message(
             media = _XLSX_MEDIA
             ext = "xlsx"
         elif fmt == "pdf":
-            raise HTTPException(
-                501,
-                "format='pdf' is not offered — export as 'docx' or 'xlsx' "
-                "(operator decision 2026-07-24).",
-            )
+            raise HTTPException(501, answer_export_declined_message(fmt))
         else:
             raise HTTPException(400, f"Unsupported format '{format}'")
         safe_name = _sanitize_filename(project_name)
@@ -1853,11 +1853,7 @@ async def export_conversation_message(
         media = _XLSX_MEDIA
         ext = "xlsx"
     elif fmt == "pdf":
-        raise HTTPException(
-            501,
-            "format='pdf' is not offered — export as 'docx' or 'xlsx' "
-            "(operator decision 2026-07-24).",
-        )
+        raise HTTPException(501, answer_export_declined_message(fmt))
     else:
         raise HTTPException(400, f"Unsupported format '{format}'")
 
