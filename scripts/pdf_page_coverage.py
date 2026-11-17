@@ -17,9 +17,15 @@ the way ingest does (``file_crypto.open_plaintext`` + PyMuPDF) and prints:
 Nothing here OCRs a page, re-extracts a document or writes to the database:
 the SQL is parameterised SELECTs and each page is read with
 ``page.get_text()`` only. Documents are chosen by ``COVERAGE_DOC_IDS`` (comma
-or space separated ids or prefixes) and/or ``COVERAGE_DRIVE_PATH`` (a
-case-insensitive substring of ``metadata->>'drive_path'``, wildcards escaped);
-no document identifier or path lives in this repository.
+or space separated ids or prefixes, at most ``_MAX_DOCS``); no document
+identifier or path lives in this repository.
+
+The report is written to a workflow log on a public repository, so it prints
+document ids, counts, page numbers and product-written codes ONLY: never a
+file name, a path, a Drive path, a project id or any free text read from the
+row, the metadata, the file or an exception message (an exception is named
+by its class). ``withhold`` is the last step before printing: it replaces any
+remaining occurrence of the row's own name, stem, path or project id.
 
 Per document it also prints the index's own page coverage (stored chunks by
 their ``page`` locator: which pages carry a chunk and how much text), read
@@ -45,7 +51,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
 
-# Read-only. The pattern is a bind parameter in both selectors.
+# Read-only. The id prefix is a bind parameter. The name and path columns are
+# read to open the file and to withhold them from the output, never printed.
 _COLS = (
     "SELECT id, project_id, original_name, size, file_path, ingest_status, "
     "chunk_count, pages_in_file, pages_ocrd, ingest_status_reason, metadata "
@@ -53,16 +60,16 @@ _COLS = (
 )
 # ``LIKE`` on the string id (prefix; the id is validated by parse_ids).
 _DOC_SQL = _COLS + "WHERE id LIKE :p ORDER BY id"
-# Case-insensitive substring of the Drive path; ``like_contains`` escapes
-# ``%``, ``_`` and the escape character ``!``. ``->>`` reads JSON text on
-# Postgres (JSON/JSONB) and SQLite alike.
-_PATH_SQL = (
-    _COLS + "WHERE lower(metadata->>'drive_path') LIKE :p ESCAPE '!' "
-    "ORDER BY original_name, id"
-)
 # Metadata keys that carry failure evidence (matched on the key name).
 _FAIL_KEY_RE = re.compile(r"error|fail|skip|reason|attempt|truncat|timeout|oom|limit", re.IGNORECASE)
-_MAX_VALUE_CHARS = 300
+# A product-written code (a reason segment, a metadata value): lower snake
+# case. Anything else read from the row is free text, printed as its length.
+_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+# Documents per run: the report is a public log, keep it short.
+_MAX_DOCS = 20
+_WITHHELD = "<withheld>"
+_MIN_WITHHOLD_CHARS = 4
 
 # Bounded output: at most this many chars-by-range rows per document.
 _MAX_RANGE_ROWS = 25
@@ -83,18 +90,6 @@ def parse_ids(raw: str) -> list[str]:
         if tok not in out:
             out.append(tok)
     return out
-
-
-def like_contains(raw: str) -> str:
-    """A LIKE pattern matching ``raw`` as a case-insensitive substring, with
-    the pattern characters escaped (escape char ``!``) so the input is always
-    literal. Raises ValueError on a blank input, which would select every
-    document."""
-    sub = (raw or "").strip()
-    if not sub:
-        raise ValueError("drive path substring is blank")
-    esc = sub.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_")
-    return f"%{esc}%"
 
 
 def _metadata(raw: Any) -> dict[str, Any]:
@@ -121,17 +116,76 @@ def terminal_meaning(reason: str | None) -> str | None:
             f"INGEST_MAX_ATTEMPTS now {st.max_attempts()}; {after}")
 
 
+def safe_reason(reason: str | None) -> str:
+    """The ``|``-separated reason with each product code kept and any other
+    segment (free text that may quote a name or a path) printed as its length.
+    The attempts mark is read by ``terminal_meaning``, not echoed."""
+    from app.core import ingest_status as st
+
+    if not reason:
+        return "-"
+    out = []
+    for seg in str(reason).split("|"):
+        if seg.startswith(st.ATTEMPTS_MARK):
+            out.append("attempts_mark")
+        elif _CODE_RE.match(seg):
+            out.append(seg)
+        else:
+            out.append(f"<text len={len(seg)}>")
+    return "|".join(out)
+
+
+def safe_value(value: Any) -> str:
+    """A metadata value as a count or a shape: numbers and booleans print,
+    a product code prints, other text prints as its length, a mapping prints
+    its numeric members under their keys, a list its length."""
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    if value is None:
+        return "-"
+    if isinstance(value, str):
+        return value if _CODE_RE.match(value) else f"<text len={len(value)}>"
+    if isinstance(value, dict):
+        parts = [f"{k}={v}" for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+                 if _KEY_RE.match(str(k)) and isinstance(v, (bool, int, float))]
+        return "{" + ", ".join(parts[:10]) + f"}} keys={len(value)}"
+    if isinstance(value, (list, tuple)):
+        return f"<list len={len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
 def failure_evidence(reason: str | None, meta: dict[str, Any]) -> list[str]:
-    """The stored evidence of why a row holds what it holds."""
-    lines = [f"   reason: {reason or '-'}"]
+    """The stored evidence of why a row holds what it holds, as codes and
+    counts only (see the module docstring)."""
+    lines = [f"   reason: {safe_reason(reason)}"]
     meaning = terminal_meaning(reason)
     if meaning:
         lines.append(f"   terminal: {meaning}")
-    if meta.get("drive_path"):
-        lines.append(f"   drive_path: {str(meta['drive_path'])[:_MAX_VALUE_CHARS]}")
-    for key in sorted(k for k in meta if _FAIL_KEY_RE.search(str(k))):
-        lines.append(f"   meta.{key}: {str(meta[key])[:_MAX_VALUE_CHARS]}")
+    for key in sorted(k for k in meta if _KEY_RE.match(str(k)) and _FAIL_KEY_RE.search(str(k))):
+        lines.append(f"   meta.{key}: {safe_value(meta[key])}")
     return lines
+
+
+def withhold(lines: list[str], doc_row: tuple) -> list[str]:
+    """Last step before printing: replace any occurrence of this row's file
+    name, its stem, its stored path (and that path's file name and stem), its
+    Drive path and its project id. Values shorter than ``_MIN_WITHHOLD_CHARS``
+    are skipped so a one-letter stem cannot garble the counts."""
+    pid, name, fpath = doc_row[1], doc_row[2], doc_row[4]
+    meta = _metadata(doc_row[10]) if len(doc_row) > 10 else {}
+    found: set[str] = set()
+    for v in (name, fpath, pid, meta.get("drive_path")):
+        if not v:
+            continue
+        v = str(v)
+        base = v.replace("\\", "/").rsplit("/", 1)[-1]
+        found.update({v, base, os.path.splitext(base)[0]})
+    found = {f for f in found if len(f) >= _MIN_WITHHOLD_CHARS}
+    if not found:
+        return lines
+    pat = re.compile("|".join(re.escape(f) for f in sorted(found, key=len, reverse=True)),
+                     re.IGNORECASE)
+    return [pat.sub(_WITHHELD, ln) for ln in lines]
 
 
 def budgets() -> dict[str, Any]:
@@ -257,8 +311,8 @@ def read_page_chars(file_path: str) -> tuple[list[int], float, str | None]:
                     page = doc.load_page(i)
                     max_side = max(max_side, page.rect.width, page.rect.height)
                     chars.append(len((page.get_text() or "").strip()))
-                except Exception as exc:  # report it, do not hide it
-                    error = f"page {i + 1}: {type(exc).__name__}: {str(exc)[:200]}"
+                except Exception as exc:  # report it (by class), do not hide it
+                    error = f"page {i + 1}: {type(exc).__name__}"
                     break
         finally:
             doc.close()
@@ -267,11 +321,12 @@ def read_page_chars(file_path: str) -> tuple[list[int], float, str | None]:
 
 # Stored chunks of one document by page (read-only). The table name comes from
 # the product's single chokepoint for the namespaced chunk table, which
-# validates the identifier; the document id is a bind parameter.
+# validates the identifier; project and document id are bind parameters, so
+# the read uses the (project_id, doc_id) index.
 def _stored_pages_sql(table: str) -> str:
     return (
         f"SELECT page, COUNT(*), COALESCE(SUM(LENGTH(text)), 0) FROM {table} "
-        "WHERE doc_id = :d GROUP BY page"
+        "WHERE project_id = :pr AND doc_id = :d GROUP BY page"
     )
 
 
@@ -347,23 +402,23 @@ def render_stored(cov: dict[str, Any]) -> list[str]:
 def stored_lines(doc_row: tuple) -> list[str]:
     """The index's own page coverage for one document; a failed read is
     printed, never raised, so the file-side diagnosis still prints."""
-    did, pif = doc_row[0], doc_row[7]
+    did, pid, pif = doc_row[0], doc_row[1], doc_row[7]
     from app.core.db import SessionLocal
 
     try:
         sql = _stored_pages_sql(stored_chunk_table())
         with SessionLocal() as s:
-            rows = s.execute(text(sql), {"d": did}).all()
-    except Exception as exc:  # report it, do not hide it
-        return [f"   stored: READ FAILED: {type(exc).__name__}: {str(exc)[:200]}"]
+            rows = s.execute(text(sql), {"pr": pid, "d": did}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return [f"   stored: READ FAILED: {type(exc).__name__}"]
     return render_stored(stored_page_coverage([tuple(r) for r in rows], pif))
 
 
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
            max_side: float, error: str | None) -> list[str]:
-    did, pid, name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
+    did, _pid, _name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
     lines = [
-        f"== doc {did} | project {pid} | {name}",
+        f"== doc {did}",
         (f"   db: size={size} ingest_status={status} chunks={nchunks} "
          f"pages_in_file={pif} pages_ocrd={pocr}"),
     ]
@@ -408,43 +463,47 @@ def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | N
 
 def diagnose(doc_row: tuple) -> list[str]:
     _did, _pid, name, _size, fpath, *_ = doc_row
-    if not fpath or not os.path.exists(fpath):
-        return render(doc_row, None, None, 0.0, f"file not on this filesystem: {fpath!r}")
+    if not fpath:
+        return render(doc_row, None, None, 0.0, "no stored file path on the row")
+    if not os.path.exists(fpath):
+        return render(doc_row, None, None, 0.0, "file not on this filesystem")
     if os.path.splitext(name or fpath)[1].lower() != ".pdf":
         return render(doc_row, None, None, 0.0, "not a PDF: page read skipped")
     try:
         gates = ingest_gates(fpath, name or "")
         chars, max_side, error = read_page_chars(fpath)
     except Exception as exc:
-        return render(doc_row, None, None, 0.0, f"open failed: {type(exc).__name__}: {str(exc)[:200]}")
+        return render(doc_row, None, None, 0.0, f"open failed: {type(exc).__name__}")
     cov = coverage(chars, gates["ocr_threshold"], gates["ocr_page_cap"])
     return render(doc_row, cov, gates, max_side, error)
 
 
+def report(doc_row: tuple) -> list[str]:
+    """Every printed line for one document, already withheld."""
+    return withhold(diagnose(doc_row) + stored_lines(doc_row), doc_row)
+
+
 def main() -> int:
-    raw_path = os.environ.get("COVERAGE_DRIVE_PATH", "")
+    if os.environ.get("COVERAGE_DRIVE_PATH", "").strip():
+        # Withdrawn: a path selector puts a client folder name into a public
+        # run log. The value is not echoed.
+        sys.stderr.write("COVERAGE_DRIVE_PATH is withdrawn: select by document id\n")
+        return 2
     try:
         ids = parse_ids(os.environ.get("COVERAGE_DOC_IDS", ""))
-        path_pattern = like_contains(raw_path) if raw_path.strip() else None
-    except ValueError as exc:
-        sys.stderr.write(f"{exc}\n")
+    except ValueError:
+        sys.stderr.write("COVERAGE_DOC_IDS holds a token that is not a document id\n")
         return 2
-    if not ids and path_pattern is None:
-        sys.stderr.write("COVERAGE_DOC_IDS or COVERAGE_DRIVE_PATH is required\n")
+    if not ids:
+        sys.stderr.write("COVERAGE_DOC_IDS is required\n")
+        return 2
+    if len(ids) > _MAX_DOCS:
+        sys.stderr.write(f"{len(ids)} ids given, at most {_MAX_DOCS} per run\n")
         return 2
     from app.core.db import SessionLocal
 
     print("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()), flush=True)
     failed = 0
-    if path_pattern is not None:
-        with SessionLocal() as s:
-            rows = s.execute(text(_PATH_SQL), {"p": path_pattern}).all()
-        print(f"== drive path selector: {len(rows)} documents", flush=True)
-        if not rows:
-            failed += 1
-        for row in rows:
-            for line in diagnose(tuple(row)) + stored_lines(tuple(row)):
-                print(line, flush=True)
     for prefix in ids:
         with SessionLocal() as s:
             rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
@@ -452,7 +511,7 @@ def main() -> int:
             print(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
             failed += 1
             continue
-        for line in diagnose(tuple(rows[0])) + stored_lines(tuple(rows[0])):
+        for line in report(tuple(rows[0])):
             print(line, flush=True)
     return 1 if failed else 0
 

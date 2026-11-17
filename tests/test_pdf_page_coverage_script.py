@@ -187,25 +187,61 @@ def test_main_needs_exactly_one_document_per_id(monkeypatch, tmp_path, matches, 
     monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
     assert mod.main() == code
     # the prefix select, then one stored-chunk read per printed document
-    assert seen == [{"p": "abc%"}] + ([{"d": "d0"}] if matches == 1 else [])
+    assert seen == [{"p": "abc%"}] + ([{"pr": "p1", "d": "d0"}] if matches == 1 else [])
 
 
-# --- drive-path selector (scope widened 05:12Z) -------------------------------
+# --- the report is a public log: ids, counts and page numbers only -------------
+
+@pytest.mark.parametrize("value", ["Signed Set", "x"])
+def test_main_refuses_the_withdrawn_drive_path_selector_without_echoing_it(monkeypatch, capsys, value):
+    mod = _load()
+    monkeypatch.setenv("COVERAGE_DRIVE_PATH", value)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
+    assert mod.main() == 2
+    captured = capsys.readouterr()
+    assert value not in captured.out + captured.err
+
+
+@pytest.mark.parametrize("n, code", [(21, 2), (20, 1)])
+def test_main_caps_the_number_of_documents(monkeypatch, n, code):
+    mod = _load()
+    seen: list = []
+
+    class _S:
+        def execute(self, stmt, params):
+            seen.append(params)
+            return _NoRows()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", " ".join(f"id{i}" for i in range(n)))
+    assert mod.main() == code
+    assert len(seen) == (0 if code == 2 else n)
+
 
 class _NoRows:
     def all(self):
         return []
 
 
-def _fake_session(monkeypatch, rows, seen):
+def _session_with(monkeypatch, doc_rows, chunk_rows):
     class _Res:
+        def __init__(self, out):
+            self._out = out
+
         def all(self):
-            return rows
+            return self._out
 
     class _S:
         def execute(self, stmt, params):
-            seen.append((str(stmt), params))
-            return _Res() if "p" in params else _NoRows()
+            return _Res(doc_rows if "p" in params else chunk_rows)
 
         def __enter__(self):
             return self
@@ -217,65 +253,64 @@ def _fake_session(monkeypatch, rows, seen):
     monkeypatch.setattr(db, "SessionLocal", lambda: _S())
 
 
-@pytest.mark.parametrize("raw, pattern", [
-    ("  Tender Pack FINAL ", "%tender pack final%"),
-    ("50%_a!b", "%50!%!_a!!b%"),
+# Each input is a client-looking name, Drive path, project id and free-text
+# reason / metadata built here; none may reach the printed report.
+@pytest.mark.parametrize("name, folder, project, exists", [
+    ("Harbour Tower Vol 3 Drawings.pdf", "Client Alpha/Tender Pack FINAL", "proj-alpha-7731", True),
+    ("Riverside_Mall_BOQ_rev2.pdf", "Zeta Holdings/Signed", "proj-zeta-0042", False),
 ])
-def test_like_contains_lowers_and_escapes(raw, pattern):
-    assert _load().like_contains(raw) == pattern
-
-
-@pytest.mark.parametrize("raw", ["", "   "])
-def test_like_contains_refuses_a_blank_selector(raw):
-    with pytest.raises(ValueError):
-        _load().like_contains(raw)
-
-
-@pytest.mark.parametrize("needle, expected", [
-    ("tender pack final", ["a", "b"]),
-    ("50%", ["c"]),
-])
-def test_path_sql_matches_literal_substring_case_insensitively(needle, expected):
-    """The selector's WHERE clause, run for real against SQLite. ``%`` in the
-    input is a literal, never a wildcard."""
+def test_rendered_report_carries_no_file_name_path_or_project(
+        monkeypatch, tmp_path, capsys, name, folder, project, exists):
     import json
-    import sqlite3
 
     mod = _load()
-    con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE documents (id TEXT, project_id TEXT, original_name TEXT, "
-                "size INT, file_path TEXT, ingest_status TEXT, chunk_count INT, "
-                "pages_in_file INT, pages_ocrd INT, ingest_status_reason TEXT, metadata TEXT)")
-    paths = {"a": "X/Tender pack FINAL/v1.pdf", "b": "y/TENDER PACK final/v2.pdf",
-             "c": "z/50% set/v3.pdf", "d": "z/500 set/v4.pdf"}
-    for did, dp in paths.items():
-        con.execute("INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (did, "p", did + ".pdf", 1, None, "INDEXED", 0, None, None, None,
-                     json.dumps({"drive_path": dp})))
-    sql = mod._PATH_SQL.replace("metadata->>'drive_path'", "json_extract(metadata, '$.drive_path')")
-    got = [r[0] for r in con.execute(sql.replace(":p", "?"), (mod.like_contains(needle),))]
-    assert sorted(got) == expected
-    for verb in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE"):
-        assert not re.search(rf"\b{verb}\b", mod._PATH_SQL.upper())
-
-
-@pytest.mark.parametrize("matches, code", [(0, 1), (2, 0)])
-def test_main_runs_the_drive_path_selector(monkeypatch, tmp_path, matches, code, capsys):
-    mod = _load()
-    path = _pdf(tmp_path, "c.pdf", ["Bill 1 item rate amount " * 4])
-    rows = [(f"d{i}", "p1", "c.pdf", 10, path, "ZERO_CHUNK", 0, None, None, None, None)
-            for i in range(matches)]
-    seen: list = []
-    _fake_session(monkeypatch, rows, seen)
-    monkeypatch.setenv("COVERAGE_DRIVE_PATH", "Signed Set")
-    monkeypatch.delenv("COVERAGE_DOC_IDS", raising=False)
-    assert mod.main() == code
-    assert [params for _sql, params in seen] == (
-        [{"p": "%signed set%"}] + [{"d": f"d{i}"} for i in range(matches)])
+    sub = tmp_path / folder
+    sub.mkdir(parents=True)
+    path = _pdf(sub, name, ["Bill 1 item rate amount " * 4, ""]) if exists else str(sub / name)
+    stem = name.rsplit(".", 1)[0]
+    meta = {"drive_path": f"{folder}/{name}",
+            "extract_failed_detail": f"FileNotFoundError: {path}",
+            "ingest_attempts": {"n": 2, "last": stem},
+            "ocr_skip_reason": "size"}
+    reason = f"pdf_extract_failed|could not open {name}"
+    row = ("d0c1d", project, name, 10, path, "EXTRACT_FAILED", 0, 2, None, reason,
+           json.dumps(meta))
+    _session_with(monkeypatch, [row], [(1, 1, 40)])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "d0c1d")
+    assert mod.main() == 0
     out = capsys.readouterr().out
-    assert out.startswith("budgets: ")
-    assert f"drive path selector: {matches} documents" in out
-    assert out.count("== doc ") == matches
+    low = out.lower()
+    for secret in (name, stem, folder, project, path, str(tmp_path), "Client", "Zeta"):
+        assert secret.lower() not in low, secret
+    # What it does print: the id, codes and counts.
+    assert "== doc d0c1d" in out
+    assert "reason: pdf_extract_failed|<text len=" in out
+    assert "meta.ocr_skip_reason: size" in out
+    assert "meta.ingest_attempts: {n=2} keys=2" in out
+    assert ("text_stops_at=2" in out) is exists
+    assert ("file not on this filesystem" in out) is (not exists)
+
+
+@pytest.mark.parametrize("line, kept", [
+    ("open failed at /data/u/Bay Bridge Spec.pdf", "open failed at "),
+    ("pages=3 chunks=12 span=3", "pages=3 chunks=12 span=3"),
+])
+def test_withhold_replaces_the_rows_own_name_and_path(line, kept):
+    mod = _load()
+    row = ("d1", "proj-xyz1", "Bay Bridge Spec.pdf", 1, "/data/u/Bay Bridge Spec.pdf",
+           "INDEXED", 1, 1, None, None, None)
+    out = mod.withhold([line], row)[0]
+    assert "Bay Bridge" not in out
+    assert out.startswith(kept)
+
+
+@pytest.mark.parametrize("reason, shown", [
+    ("pdf_text_sparse|terminal", "pdf_text_sparse|terminal"),
+    ("ocr_failed|Tesseract choked on Alpha.pdf", "ocr_failed|<text len=29>"),
+])
+def test_safe_reason_keeps_codes_and_hides_free_text(reason, shown):
+    assert _load().safe_reason(reason) == shown
 
 
 # --- failure evidence ----------------------------------------------------------
@@ -303,14 +338,15 @@ def test_terminal_meaning_is_none_without_a_mark(reason):
 
 
 @pytest.mark.parametrize("meta, shown, hidden", [
-    ({"drive_path": "a/b.pdf", "extract_failed_detail": "MemoryError", "chunk_pages": [1]},
-     ["drive_path: a/b.pdf", "meta.extract_failed_detail: MemoryError"], "chunk_pages"),
+    ({"drive_path": "a/b.pdf", "extract_failed_detail": "MemoryError at a/b.pdf", "chunk_pages": [1]},
+     ["meta.extract_failed_detail: <text len=22>"], "a/b.pdf"),
     ({"ingest_attempts": {"n": 1}, "ocr_skip_reason": "size", "sheet_names": ["x"]},
-     ["meta.ingest_attempts: {'n': 1}", "meta.ocr_skip_reason: size"], "sheet_names"),
+     ["meta.ingest_attempts: {n=1} keys=1", "meta.ocr_skip_reason: size"], "sheet_names"),
 ])
 def test_failure_evidence_prints_failure_keys_only(meta, shown, hidden):
     out = "\n".join(_load().failure_evidence("r1", meta))
     assert "reason: r1" in out
+    assert "drive_path" not in out
     for s in shown:
         assert s in out
     assert hidden not in out
@@ -400,7 +436,7 @@ def test_stored_sql_is_a_select_on_the_namespaced_table_with_a_bound_id(monkeypa
     monkeypatch.setenv("RAG_VECTOR_NAMESPACE", namespace)
     sql = mod._stored_pages_sql(mod.stored_chunk_table())
     assert sql.lstrip().upper().startswith("SELECT")
-    assert f"FROM {table} " in sql and ":d" in sql
+    assert f"FROM {table} " in sql and "project_id = :pr AND doc_id = :d" in sql
     for verb in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER"):
         assert not re.search(r"\b" + verb + r"\b", sql.upper())
 
