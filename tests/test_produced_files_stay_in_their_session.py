@@ -26,6 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.routers import projects as projects_router
 from tests._fixture_values import PW_06
 
 _RUN = uuid.uuid4().hex[:8]
@@ -186,6 +187,15 @@ def test_the_projects_document_list_holds_no_sessions_files(client, second_sessi
         legacy_session, {"session_id": x, "uploader_id": owner_id, "origin": "uploaded"})
     sessions_files = made_in_x | {attached_in_y, legacy_session}
 
+    # The store: the project's own list leaves the session files out; the
+    # full row set the internal callers read (retrieval, bills, name
+    # matching) still holds them.
+    assert {d["id"] for d in store.list_documents(pid, session_files=False)} == projects_own
+    assert store.count_documents(pid, session_files=False) == len(projects_own)
+    assert sessions_files <= {d["id"] for d in store.list_documents(pid)}
+    assert store.count_documents(pid) == len(projects_own | sessions_files)
+
+    pages_path = app.url_path_for(projects_router.list_project_documents.__name__, project_id=pid)
     for viewer in (owner, stranger):
         ids, detail = _project_list(client, viewer, pid)
         assert set(ids) == projects_own, ids
@@ -197,7 +207,7 @@ def test_the_projects_document_list_holds_no_sessions_files(client, second_sessi
         paged = []
         for offset in range(len(projects_own) + 1):
             page = client.get(
-                f"/v1/projects/{pid}/documents?limit=1&offset={offset}", headers=viewer)
+                f"{pages_path}?limit=1&offset={offset}", headers=viewer)
             assert page.status_code == 200, page.text
             assert page.json()["total"] == len(projects_own)
             paged += [d["id"] for d in page.json()["documents"]]
