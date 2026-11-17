@@ -24,6 +24,12 @@ rest of that item.
 Matching is by words, not by a phrase: every term must appear as a word in
 the row's description (and every section term in its heading path). Nothing
 here names a bill, a section, a row or a question.
+
+Which rows a call selects is derived from the user's ask, not from the words
+the model chose to pass (:func:`selection_from_ask`): the same ask over the
+same bill selects the same rows every time, however the model words its call.
+Each result carries a ``statement`` naming the rows it used and the figure, so
+the answer can say which rows were counted and quote the tool's own total.
 """
 
 from __future__ import annotations
@@ -181,10 +187,102 @@ def _terms(terms: Iterable[str] | str | None) -> set[str]:
     return set().union(*(_words(t) for t in terms)) if terms else set()
 
 
-def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
-    if terms and not terms <= _words(row.description):
+def _forms(word: str) -> set[str]:
+    """A word and its singular spellings: ``pipes`` is also ``pipe``,
+    ``trenches`` is also ``trench``. Two words agree when their forms meet."""
+    out = {word}
+    if len(word) > 3 and word.endswith("s"):
+        out.add(word[:-1])
+        if word.endswith("es"):
+            out.add(word[:-2])
+    return out
+
+
+def _contains(words: set[str], terms: set[str], fold: bool) -> bool:
+    if not fold:
+        return terms <= words
+    have = set().union(*(_forms(w) for w in words)) if words else set()
+    return all(_forms(t) & have for t in terms)
+
+
+def matches(row: SheetRow, terms: set[str], section_terms: set[str], *, fold: bool = False) -> bool:
+    if terms and not _contains(_words(row.description), terms, fold):
         return False
-    return not section_terms or section_terms <= _words(" ".join(row.path))
+    return not section_terms or _contains(_words(" ".join(row.path)), section_terms, fold)
+
+
+#: Words of an ask that never pick rows: function words, the words of asking,
+#: and the words that say WHAT is counted or summed rather than WHICH rows
+#: (a total length is a sum of quantities; it does not select rows that print
+#: the word "length"). General English; nothing here is a bill's word.
+_ASK_STOPWORD_TEXT = """
+a an the of to in on at by for from with within into onto under over and or nor not no
+is are was were be been being am do does did done have has had having will would shall
+should can could may might must there here this that these those it its it's i me my
+we our us you your they their them what which who whom whose how when where why whether
+all any each every both either some only just also please give tell show list find
+calculate compute work out get let make need want know many much more most less least
+total totals sum sums summed count counts counted number numbers figure figures overall
+altogether together combined grand quantity quantities amount amounts value values
+cost costs price prices priced money length lengths area areas volume volumes weight
+weights item items row rows line lines entry entries bill bills boq boqs schedule
+document documents section sections part parts heading headings page pages per
+"""
+_ASK_STOPWORDS = frozenset(_ASK_STOPWORD_TEXT.split())
+
+#: Ask words that mean the money column; any of them makes the measure amount.
+_AMOUNT_WORDS = frozenset(("amount", "amounts", "cost", "costs", "value", "values",
+                           "price", "prices", "priced", "money"))
+#: Ask words that mean the measured column.
+_QUANTITY_WORDS = frozenset(("quantity", "quantities", "length", "lengths", "area", "areas",
+                             "volume", "volumes", "weight", "weights"))
+
+
+def measure_from_ask(ask: str | None, default: str = MEASURE_QUANTITY) -> str:
+    """The column an ask totals: money words choose the amount, measure words
+    the quantity; an ask with neither keeps ``default``."""
+    words = _words(ask or "")
+    if words & _AMOUNT_WORDS:
+        return MEASURE_AMOUNT
+    if words & _QUANTITY_WORDS:
+        return MEASURE_QUANTITY
+    return default
+
+
+def selection_from_ask(rows: Sequence[SheetRow], ask: str | None) -> dict[str, list[str]]:
+    """Which words of the user's ask select rows of this bill, and how.
+
+    The rule, applied the same way to every ask and every bill:
+
+    * the ask's words, less :data:`_ASK_STOPWORDS`;
+    * a word the bill prints in a heading path is a section word (the bill's
+      own categories), else a word it prints in a description is a
+      description word, else it selects nothing and is reported as ignored;
+    * a plural and its singular agree (:func:`_forms`).
+
+    The result depends only on the ask and the bill, never on the model.
+    """
+    path_words: set[str] = set()
+    desc_words: set[str] = set()
+    for row in rows:
+        path_words |= _words(" ".join(row.path))
+        desc_words |= _words(row.description)
+    path_forms = set().union(*(_forms(w) for w in path_words)) if path_words else set()
+    desc_forms = set().union(*(_forms(w) for w in desc_words)) if desc_words else set()
+    terms: list[str] = []
+    section: list[str] = []
+    ignored: list[str] = []
+    for word in _WORD_RE.findall(ask or ""):
+        word = word.casefold()
+        if word in _ASK_STOPWORDS or word in terms or word in section or word in ignored:
+            continue
+        if _forms(word) & path_forms:
+            section.append(word)
+        elif _forms(word) & desc_forms:
+            terms.append(word)
+        else:
+            ignored.append(word)
+    return {"terms": sorted(terms), "section_terms": sorted(section), "ignored": sorted(ignored)}
 
 
 def aggregate(
@@ -193,8 +291,11 @@ def aggregate(
     terms: Iterable[str] | str | None,
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
+    fold: bool = False,
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
+
+    ``fold`` lets a plural and its singular agree (the ask-derived selection).
 
     Quantities are summed per unit: adding cubic metres to metres is not a
     total, so a mixed-unit match returns one sum per unit and no single sum.
@@ -210,7 +311,7 @@ def aggregate(
     used, without = [], []
     sums: dict[str, float] = {}
     for row in items:
-        if not matches(row, want, where):
+        if not matches(row, want, where, fold=fold):
             continue
         value = row.figure(measure)
         entry = {
@@ -281,6 +382,52 @@ def derived_bill_documents(project_id: str, document_id: str | None = None) -> l
     return out
 
 
+def _fmt(value: float) -> str:
+    if float(value).is_integer():
+        return f"{int(value):,}"
+    return f"{value:,.3f}".rstrip("0").rstrip(".")
+
+
+def _row_label(entry: dict[str, Any]) -> str:
+    pages = entry.get("pages") or []
+    where = ("p. " + "-".join(str(p) for p in (pages[0], pages[-1]) if p is not None)
+             if len(pages) > 1 else (f"p. {pages[0]}" if pages else ""))
+    name = entry.get("ref") or " ".join((entry.get("description") or "").split()[:6])
+    return f"{name} ({where})" if where else name
+
+
+def _quoted(words: Iterable[str]) -> str:
+    return ", ".join(f'"{w}"' for w in words)
+
+
+def statement(result: dict[str, Any]) -> str:
+    """One sentence a user reads: which rows were counted and why, and the
+    figure, built from ``result`` alone so it is the tool's own figure."""
+    measure = result.get("measure") or MEASURE_QUANTITY
+    why = []
+    if result.get("terms"):
+        why.append(f"whose description contains {_quoted(result['terms'])}")
+    if result.get("section_terms"):
+        why.append(f"in the section {_quoted(result['section_terms'])}")
+    rows = result.get("rows") or []
+    head = f"{result.get('count', 0)} row(s) {' '.join(why)}".rstrip()
+    if not rows:
+        return f"{head}: no row of this bill matches."
+    listed = "; ".join(_row_label(r) for r in rows)
+    if result.get("sum") is not None:
+        unit = f" {result['unit']}" if result.get("unit") else ""
+        figure = f"total {measure} {_fmt(result['sum'])}{unit}"
+    else:
+        figure = f"total {measure} by unit: " + ", ".join(
+            f"{_fmt(v)} {u}".rstrip() for u, v in (result.get("sum_by_unit") or {}).items())
+    text = f"{head}: {listed}. {figure[0].upper()}{figure[1:]}."
+    without = result.get("without_figure") or []
+    if without:
+        text += f" {len(without)} of them print no {measure} and add nothing: " + "; ".join(
+            _row_label(w) for w in without) + "."
+    return text
+
+
 def aggregate_project_bills(
     project_id: str,
     *,
@@ -288,9 +435,16 @@ def aggregate_project_bills(
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
     document_id: str | None = None,
+    ask: str | None = None,
 ) -> dict[str, Any]:
     """:func:`aggregate` over every row of each derived bill sheet in scope,
-    one result per bill (two bills are never added together)."""
+    one result per bill (two bills are never added together).
+
+    With ``ask`` (the user's own message) each bill's rows are selected by
+    :func:`selection_from_ask` and the measure by :func:`measure_from_ask`;
+    ``terms``/``section``/``measure`` are then used only when the ask selects
+    nothing in that bill (an ask naming no column totals the quantity). Every bill result says where its selection came
+    from (``selected_by``: ``ask`` or ``call``)."""
     from app.core import projects
 
     docs = derived_bill_documents(project_id, document_id)
@@ -313,11 +467,31 @@ def aggregate_project_bills(
             _LOG.warning("derived bill sheet %s is not readable: %s", doc.get("id"), type(exc).__name__)
             bills.append({**head, "status": "error", "reason": UNREADABLE_SHEET})
             continue
-        result = aggregate(rows, terms=terms, section=section, measure=measure)
+        result = _aggregate_bill(rows, terms=terms, section=section, measure=measure, ask=ask)
         bills.append({**head, "status": "success", **result})
     out = {"status": "success", "bills": bills}
     _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))
     return out
+
+
+def _aggregate_bill(
+    rows: Sequence[SheetRow],
+    *,
+    terms: Iterable[str] | str | None,
+    section: Iterable[str] | str | None,
+    measure: str,
+    ask: str | None,
+) -> dict[str, Any]:
+    picked = selection_from_ask(rows, ask) if ask else None
+    if picked and (picked["terms"] or picked["section_terms"]):
+        result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
+                           measure=measure_from_ask(ask), fold=True)
+        result.update(selected_by="ask", ignored_ask_words=picked["ignored"])
+    else:
+        result = aggregate(rows, terms=terms, section=section, measure=measure)
+        result["selected_by"] = "call"
+    result["statement"] = statement(result)
+    return result
 
 
 def _digest(items: Any) -> str:
@@ -366,7 +540,10 @@ def selection_log_line(
             continue
         selected = [[r.get("ref"), r.get("pages"), r.get("section")] for r in bill.get("rows") or []]
         parts.append(
-            f"[{bill.get('document_id')} success scanned={bill.get('rows_scanned')} "
+            f"[{bill.get('document_id')} success by={bill.get('selected_by', 'call')} "
+            f"used_terms={_set_field(set(bill.get('terms') or []))} "
+            f"used_section={_set_field(set(bill.get('section_terms') or []))} "
+            f"scanned={bill.get('rows_scanned')} "
             f"count={bill.get('count')} without_figure={len(bill.get('without_figure') or [])} "
             f"rows={_digest(selected) if selected else '-'}]"
         )

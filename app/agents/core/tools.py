@@ -187,8 +187,10 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
                     "'how many items ...' and 'what is the total quantity / "
                     "amount of ...' over a bill: it reads every row of the "
                     "bill and lists the rows it used with reference and page. "
-                    "Report its count, sum and rows as given; do not add "
-                    "figures yourself."
+                    "The rows are selected from the user's own question; each "
+                    "bill's 'statement' names the rows used and the total. "
+                    "Quote that statement's count, rows and total as given; "
+                    "do not add figures yourself or restate a different total."
                 ),
                 "parameters": {
                     "type": "object",
