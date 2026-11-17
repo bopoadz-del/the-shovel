@@ -33,7 +33,8 @@ _PASS_TIMEOUT_S = 100
 def test_search_thread_loop_lag_is_printed_from_its_own_process(tmp_path, request):
     try:
         proc = subprocess.run([sys.executable, "-m", "tests._search_thread_lag_pass", str(tmp_path)],
-                              cwd=_REPO, capture_output=True, text=True, timeout=_PASS_TIMEOUT_S)
+                              cwd=_REPO, capture_output=True, text=True, timeout=_PASS_TIMEOUT_S,
+                              check=False)
         rc, out, err = proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as exc:
         rc, out, err = None, exc.stdout or "", exc.stderr or ""

@@ -51,7 +51,7 @@ def lag_summary(lags_ms: list) -> dict:
     if not lags_ms:
         return {"ticks": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
     ordered = sorted(lags_ms)
-    p95 = ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
+    p95 = ordered[min(len(ordered) - 1, round(0.95 * (len(ordered) - 1)))]
     return {"ticks": len(ordered), "p50_ms": round(statistics.median(ordered), 1),
             "p95_ms": round(p95, 1), "max_ms": round(ordered[-1], 1)}
 
@@ -108,7 +108,7 @@ def _driver_impl() -> str:
         import psycopg
 
         return str(psycopg.pq.__impl__)
-    except Exception as exc:  # reported, never raised: this pass only logs
+    except Exception as exc:  # noqa: BLE001 -- reported, never raised: this pass only logs
         return f"unavailable ({type(exc).__name__})"
 
 
@@ -155,7 +155,7 @@ def main(data_dir: str) -> dict:
         in_process(queries[0])
         result["modes"]["process"] = [measure(in_process, queries, n) for n in THREAD_COUNTS]
         result["worker_processes"] = retrieval_worker._workers()
-    except Exception as exc:  # reported, never raised: this pass only logs
+    except Exception as exc:  # noqa: BLE001 -- reported, never raised: this pass only logs
         result["modes"]["process"] = f"not measured: {type(exc).__name__}: {str(exc)[:300]}"
     finally:
         pool = retrieval_worker._POOL
