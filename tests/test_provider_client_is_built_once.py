@@ -50,10 +50,13 @@ def _handler(request: httpx.Request) -> httpx.Response:
                                      "usage": {"total_tokens": 2}})
 
 
-def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None):
+def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None, transports=None):
     """A stand-in for ``httpx.AsyncClient`` that counts builds, records the
-    building thread, and answers through an in-memory transport. ``hold``
-    maps a timeout to an Event the build of that timeout waits on."""
+    building thread, and answers through an in-memory transport placed under
+    the module's own retry wrapper. ``hold`` maps a timeout to an Event the
+    build of that timeout waits on; ``transports`` collects the network
+    transports the module built (replaced here by the in-memory one)."""
+    transports = [] if transports is None else transports
 
     class _Counting(_REAL_CLIENT):
         def __init__(self, *args, **kwargs):
@@ -64,7 +67,11 @@ def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None):
             if gate is not None:
                 gate.wait(10)
             builds.append((kwargs.get("timeout"), threading.current_thread().name))
-            super().__init__(*args, transport=httpx.MockTransport(handler), **kwargs)
+            transport = kwargs.pop("transport")
+            assert isinstance(transport, llm_client._StaleConnectionRetry)
+            transports.append(transport.inner)
+            transport.inner = httpx.MockTransport(handler)
+            super().__init__(*args, transport=transport, **kwargs)
 
     return _Counting
 
@@ -309,4 +316,190 @@ def test_a_refused_stream_raises_before_any_line(monkeypatch, wired, status):
     assert (err.status, err.text) == (status, f"upstream said {status}")
     assert lines == []
     assert recorded == []
+    assert used == []
+
+
+# --- grader 17 Nov 18:35Z: a reused connection can be dead after an idle period
+
+
+def _flaky_handler(fail_on: set, exc_type, calls: list):
+    """Answers like ``_handler`` but raises ``exc_type`` (no response at all)
+    on the request numbers in ``fail_on`` (1-based)."""
+
+    def handler(request):
+        calls.append(request.url.path)
+        if len(calls) in fail_on:
+            raise exc_type("Server disconnected without sending a response.", request=request)
+        return _handler(request)
+
+    return handler
+
+
+@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.ReadError])
+def test_a_call_after_idling_survives_a_connection_the_provider_dropped(monkeypatch, wired, exc_type):
+    builds, recorded = wired
+    calls: list = []
+    # Call 1 opens the connection; call 2 reuses it after the provider closed
+    # it while the user idled; the resend on a new connection is answered.
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_flaky_handler({2}, exc_type, calls)))
+
+    async def run():
+        return [await _post("before idle"), await _post("after idle")]
+
+    results, used = asyncio.run(_guarded(run))
+    assert results == [(200, "before idle"), (200, "after idle")]
+    assert len(calls) == 3
+    assert len(builds) == 1
+    assert len(recorded) == 2
+    assert used == []
+
+
+@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.WriteError])
+def test_a_stream_after_idling_survives_a_connection_the_provider_dropped(monkeypatch, wired, exc_type):
+    builds, recorded = wired
+    calls: list = []
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_flaky_handler({2}, exc_type, calls)))
+
+    async def run():
+        await _post("before idle")
+        return await _stream()
+
+    lines, used = asyncio.run(_guarded(run))
+    assert [ln for ln in lines if ln][-1] == "data: [DONE]"
+    assert len(calls) == 3
+    assert len(recorded) == 2
+    assert used == []
+
+
+@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.ConnectError])
+def test_a_provider_that_never_answers_is_a_transport_error_after_one_resend(monkeypatch, wired, exc_type):
+    builds, recorded = wired
+    calls: list = []
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_flaky_handler({1, 2, 3}, exc_type, calls)))
+
+    async def run():
+        with pytest.raises(llm_client.ProviderStreamError) as err:
+            await _stream()
+        return err.value
+
+    err, used = asyncio.run(_guarded(run))
+    assert err.status == 0
+    assert "Server disconnected" in err.text
+    assert len(calls) == 2  # sent once more, never a third time
+    assert recorded == []
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_a_request_the_provider_answered_is_never_resent(monkeypatch, wired, status):
+    builds, recorded = wired
+    seen: list = []
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_recording_handler(seen, status)))
+
+    async def run():
+        r, _ = await llm_client.provider_post(
+            "https://provider.invalid/v1/chat/completions", {"tag": "x"}, {},
+            timeout=30.0, provider="p", model="m")
+        return r.status_code
+
+    got, used = asyncio.run(_guarded(run))
+    assert got == status
+    assert len(seen) == 1
+    assert recorded == []
+
+
+@pytest.mark.parametrize("timeout", [30.0, 90.0])
+def test_idle_connections_expire_before_the_provider_drops_them(monkeypatch, wired, timeout):
+    builds, _ = wired
+    transports: list = []
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, transports=transports))
+
+    got, used = asyncio.run(_guarded(lambda: _post("x", timeout)))
+    assert got == (200, "x")
+    (built,) = transports
+    assert isinstance(built, httpx.AsyncHTTPTransport)
+    # Below the 5 s idle timeout of the shortest common provider front end.
+    assert built._pool._keepalive_expiry == llm_client._KEEPALIVE_EXPIRY_S < 5.0
+    assert built._pool._retries == 1
+
+
+# --- grader: the stream's own error and parse paths
+
+
+def _lines_handler(lines: list):
+    def handler(request):
+        return httpx.Response(200, content=("\n\n".join(lines) + "\n\n").encode(),
+                              headers={"content-type": "text/event-stream"})
+
+    return handler
+
+
+@pytest.mark.parametrize("bad", ['data: {"choices": [', "data: not json at all"])
+def test_a_malformed_data_line_is_skipped_and_the_stream_goes_on(monkeypatch, wired, bad):
+    builds, recorded = wired
+    lines = ['data: {"choices":[{"delta":{"content":"a"}}]}', bad,
+             'data: {"choices":[{"delta":{"content":"b"}}]}',
+             'data: {"choices":[],"usage":{"total_tokens":7}}', "data: [DONE]"]
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_lines_handler(lines)))
+
+    got, used = asyncio.run(_guarded(_stream))
+    assert [ln for ln in got if ln] == lines
+    assert len(recorded) == 1
+    assert recorded[0]["usage"] == {"total_tokens": 7}
+
+
+@pytest.mark.parametrize("users", [2, 15])
+def test_first_callers_interleaved_with_a_build_in_flight_share_one_build(monkeypatch, wired, users):
+    builds, _ = wired
+    gate = threading.Event()
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, hold={30.0: gate}))
+
+    async def run():
+        tasks = [asyncio.create_task(_post(f"u{i}")) for i in range(users)]
+        # Every caller gets past its fast path and parks while build 1 is held.
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        assert builds == [] and not any(t.done() for t in tasks)
+        gate.set()
+        return await asyncio.gather(*tasks)
+
+    results, used = asyncio.run(_guarded(run))
+    assert sorted(results) == sorted((200, f"u{i}") for i in range(users))
+    assert len(builds) == 1
+
+
+@pytest.mark.parametrize("waiting", [0, 3])
+def test_a_client_built_for_a_cancelled_caller_is_closed(monkeypatch, wired, waiting):
+    builds, _ = wired
+    gate = threading.Event()
+    made: list = []
+    base = _factory(builds, hold={30.0: gate})
+
+    class _Tracked(base):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            made.append(self)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Tracked)
+
+    async def run():
+        builder = asyncio.create_task(_post("cancelled"))
+        await asyncio.sleep(0.05)
+        others = [asyncio.create_task(_post(f"w{i}")) for i in range(waiting)]
+        await asyncio.sleep(0.05)
+        builder.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await builder
+        gate.set()
+        rest = await asyncio.gather(*others)
+        for _ in range(100):
+            if any(c.is_closed for c in made):
+                break
+            await asyncio.sleep(0.01)
+        # Read before shutdown closes the shared client too.
+        return rest, sorted(c.is_closed for c in made)
+
+    (rest, closed), used = asyncio.run(_guarded(run))
+    assert rest == [(200, f"w{i}") for i in range(waiting)]
+    # The orphan build is closed; the waiters' own build is kept open.
+    assert closed == ([False, True] if waiting else [True])
     assert used == []

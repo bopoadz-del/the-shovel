@@ -63,11 +63,94 @@ _BUILD_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock
     weakref.WeakKeyDictionary())
 
 
+#: An idle pooled connection is dropped after this many seconds, before the
+#: shortest server idle timeout a provider front end commonly uses (5 s), so a
+#: call after a user idles opens a fresh connection instead of writing into one
+#: the provider already closed.
+_KEEPALIVE_EXPIRY_S = 4.0
+
+#: Failures that mean the request never got a response head: the connection was
+#: refused, reset, or closed by the peer while we wrote or waited. On a pooled
+#: connection that is the provider having dropped it while idle; the request
+#: was not processed, so it is sent once more on a new connection.
+_NO_RESPONSE_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError,
+                       httpx.WriteError, httpx.ConnectError)
+
+
+class _StaleConnectionRetry(httpx.AsyncBaseTransport):
+    """Sends a request once more when the first try got no response at all
+    (see ``_NO_RESPONSE_ERRORS``). Only the request phase is retried: once a
+    response head arrives it is returned as is, and a failure while reading
+    its body is the caller's, so a request the provider answered is never sent
+    twice."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return await self.inner.handle_async_request(request)
+        except _NO_RESPONSE_ERRORS:
+            logger.info("provider connection gave no response; sending once more")
+            return await self.inner.handle_async_request(request)
+
+    async def __aenter__(self):
+        await self.inner.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.inner.__aexit__(*exc)
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+def _build_client(factory, timeout: Optional[float]):
+    """A provider client whose idle connections expire before the provider's,
+    with a connect retry on the transport and one resend of a request that got
+    no response. Runs off the loop: the transport loads the TLS context."""
+    transport = _StaleConnectionRetry(httpx.AsyncHTTPTransport(
+        limits=httpx.Limits(keepalive_expiry=_KEEPALIVE_EXPIRY_S), retries=1))
+    return factory(timeout=timeout, transport=transport)
+
+
+async def _close_quietly(client) -> None:
+    try:
+        await client.aclose()
+    except Exception:  # noqa: BLE001 -- best-effort close of an unused client
+        logger.debug("llm_client: closing an unused client failed", exc_info=True)
+
+
+def _close_when_built(build: "asyncio.Future") -> None:
+    """Done-callback for a build whose caller was cancelled: nobody will enter
+    or keep that client, so close it as soon as it exists."""
+    if build.cancelled() or build.exception() is not None:
+        return
+    asyncio.get_running_loop().create_task(_close_quietly(build.result()))
+
+
+async def _build_and_enter(factory, timeout: Optional[float]):
+    from app.core.offload import off_loop
+    build = asyncio.ensure_future(off_loop(_build_client, factory, timeout))
+    try:
+        built = await asyncio.shield(build)
+    except asyncio.CancelledError:
+        # The worker thread finishes the build regardless; close what it makes.
+        build.add_done_callback(_close_when_built)
+        raise
+    try:
+        return await built.__aenter__()
+    except BaseException:
+        await _close_quietly(built)
+        raise
+
+
 async def _shared_client(timeout: Optional[float]):
     """The open provider client for this loop and ``timeout``. The first call
     builds and enters it off the loop; concurrent first calls wait on one lock
-    and reuse that build; a failed or cancelled build keeps nothing, so the
-    next call builds again."""
+    and reuse that build; a failed or cancelled build keeps nothing (and a
+    client built for a cancelled caller is closed), so the next call builds
+    again."""
     loop = asyncio.get_running_loop()
     factory = httpx.AsyncClient
     key = (factory, timeout)
@@ -78,9 +161,7 @@ async def _shared_client(timeout: Optional[float]):
     async with _BUILD_LOCKS.setdefault(loop, asyncio.Lock()):
         client = per_loop.get(key)
         if client is None:
-            from app.core.offload import off_loop
-            built = await off_loop(factory, timeout=timeout)
-            client = await built.__aenter__()
+            client = await _build_and_enter(factory, timeout)
             per_loop[key] = client
     return client
 
