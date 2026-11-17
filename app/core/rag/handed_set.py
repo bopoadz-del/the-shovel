@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 import os
 import re
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 #: Character budget for the handed first-pass set on a normal turn. Roughly
 #: MAX_RAG_TOKENS' default spend at 4 chars per token, leaving the token cap
@@ -167,48 +167,96 @@ def diversify(
 
 # --- (a) character budget --------------------------------------------------
 
+def _walk_chars(band: Sequence[Any], room: int, keep_first: bool) -> tuple[list, list]:
+    """Greedy walk of one tie band through ``room`` characters: (kept,
+    skipped). With ``keep_first`` the band's first chunk is kept whatever
+    its size (the top excerpt of the whole set)."""
+    kept: list = []
+    skipped: list = []
+    for c in band:
+        size = len(getattr(c, "text", "") or "")
+        if size > room and not (keep_first and not kept):
+            skipped.append(c)
+            continue
+        kept.append(c)
+        room -= size
+    return kept, skipped
+
+
 def fit_char_budget(
     chunks: Sequence[Any], budget: int, skipped: list | None = None,
+    *, tie_key: Callable[[Any], Any] | None = None,
+    band_of: Callable[[Any], Any] = _score, tie_lost: set | None = None,
 ) -> list:
     """Whole chunks, in order, while they fit ``budget`` characters. The first
     chunk is always kept (an over-long top excerpt is still the best one);
     a chunk that does not fit is skipped so a shorter later one may (and
-    appended to ``skipped`` when given)."""
+    appended to ``skipped`` when given).
+
+    Each run of adjacent chunks with one ``band_of`` value is an exact tie.
+    A tie keeps its order unless the walk in that order keeps one member and
+    skips another; only then, and only when ``tie_key`` is given, is that tie
+    reordered by ``tie_key`` and walked again. The id of each member skipped
+    after a reorder that would have fit the room alone goes to ``tie_lost``."""
+    order = list(chunks)
     kept: list = []
     used = 0
-    for c in chunks:
-        size = len(getattr(c, "text", "") or "")
-        if kept and used + size > budget:
-            if skipped is not None:
-                skipped.append(c)
-            continue
-        kept.append(c)
-        used += size
+    i = 0
+    while i < len(order):
+        j = i + 1
+        while j < len(order) and band_of(order[j]) == band_of(order[i]):
+            j += 1
+        band = order[i:j]
+        room = budget - used
+        band_kept, band_skipped = _walk_chars(band, room, not kept)
+        if tie_key is not None and band_kept and band_skipped:
+            band = sorted(band, key=tie_key)
+            band_kept, band_skipped = _walk_chars(band, room, not kept)
+            if tie_lost is not None:
+                tie_lost.update(
+                    getattr(c, "chunk_id", None) for c in band_skipped
+                    if len(getattr(c, "text", "") or "") <= room)
+        if skipped is not None:
+            skipped.extend(band_skipped)
+        kept.extend(band_kept)
+        used += sum(len(getattr(c, "text", "") or "") for c in band_kept)
+        i = j
     return kept
 
 
 def select_handed(
     chunks: Sequence[Any], *, k: int, reasons: dict[str, str] | None = None,
+    tie_key: Callable[[Any], Any] | None = None,
 ) -> tuple[list, dict[str, Any]]:
     """The handed set: diversified, then fitted to the character budget.
 
     Returns ``(handed, allotment)`` where ``allotment`` is what the trace
     prints: the budget, the characters used, the per-layer and per-family
     counts. When ``reasons`` is a dict, each chunk left out gets its code
-    (chunk_id -> ``duplicate`` | ``family_share`` | ``char_budget``) where
-    it is left out: ``family_share`` is a chunk the diversity pass deferred
-    behind other documents that then did not fit the character budget."""
+    (chunk_id -> ``duplicate`` | ``family_share`` | ``char_budget`` |
+    ``score_tie_overlap``) where it is left out: ``family_share`` is a chunk
+    the diversity pass deferred behind other documents that then did not fit
+    the character budget; ``score_tie_overlap`` a chunk of an exact score
+    tie the budget split, that would have fit alone, and that ``tie_key``
+    (when given; the question's words in the passage, then the chunk id)
+    put behind the tie's other members."""
     budget = char_budget()
     deferred_ids: set = set()
     ordered = diversify(chunks, slots=k, share=doc_share(), margin=doc_margin(),
                         reasons=reasons, deferred_ids=deferred_ids)
     skipped: list = []
-    handed = fit_char_budget(ordered, budget, skipped)
+    tie_lost: set = set()
+    # A tie band never spans a deferral: the tie-break must not move a chunk
+    # the diversity pass deferred ahead of the other documents.
+    handed = fit_char_budget(
+        ordered, budget, skipped, tie_key=tie_key, tie_lost=tie_lost,
+        band_of=lambda c: (_score(c), getattr(c, "chunk_id", None) in deferred_ids))
     if reasons is not None:
         for c in skipped:
             cid = getattr(c, "chunk_id", None)
             reasons[cid or ""] = (
-                "family_share" if cid in deferred_ids else "char_budget")
+                "score_tie_overlap" if cid in tie_lost
+                else "family_share" if cid in deferred_ids else "char_budget")
     layers: dict[str, int] = {}
     families: dict[str, int] = {}
     for c in handed:

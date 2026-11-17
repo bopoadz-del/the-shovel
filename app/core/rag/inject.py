@@ -1451,8 +1451,10 @@ def rag_inject(
         return None, audit_rec
 
     drop_reasons: Dict[str, str] = {}
+    _tie_terms = _terms(user_message or "")
     handed_pool, allotment = _handed_set.select_handed(
-        chunks, k=effective_k, reasons=drop_reasons)
+        chunks, k=effective_k, reasons=drop_reasons,
+        tie_key=lambda c: tie_break_key(c, _tie_terms))
     kept, total_tokens = apply_token_cap(
         handed_pool, query=user_message or "", reasons=drop_reasons)
     sys_msg = format_chunks_as_system_message(
