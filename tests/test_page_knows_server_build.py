@@ -5,6 +5,9 @@ scope the current bundle sends, which is what an older bundle sent. A tab
 keeps the script it loaded until it is reloaded, and nothing on the page knew
 its build, so nothing told the user.
 
+The server half lives in ``app.main.SecurityHeadersMiddleware.dispatch``
+(every response passes through it, errors included).
+
 The rule, server half (the client half is frontend/src/lib/buildCheck.test.mjs):
 - every response names the server's build in ``X-Build-Id`` (never invented:
   an unset build sends no header);
