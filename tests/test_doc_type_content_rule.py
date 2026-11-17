@@ -281,9 +281,39 @@ _NAME_KINDS = _arabic_words("filename", 1)
 _CONTENT_KINDS = _arabic_words("content", 2)
 
 
-def test_every_kind_has_arabic_words_to_test():
-    assert len(_NAME_KINDS) == len(doc_types._load_builtins())
-    assert _CONTENT_KINDS
+@pytest.mark.parametrize("kinds, every_kind", [
+    (_NAME_KINDS, True),      # every kind has an Arabic name word
+    (_CONTENT_KINDS, False),  # some kind has two Arabic content words
+], ids=["filename", "content"])
+def test_every_kind_has_arabic_words_to_test(kinds, every_kind):
+    assert kinds
+    if every_kind:
+        assert len(kinds) == len(doc_types._load_builtins())
+
+
+@pytest.mark.parametrize("table, expected", [
+    # no types table on disk: no prefix, nothing raised
+    (None, []),
+    # the table's prefixes, folded, longest first
+    ("arabic_prefixes: ['ال', 'وال', ' ']\n", ["وال", "ال"]),
+], ids=["no_table", "table"])
+def test_arabic_prefixes_come_from_the_types_table(tmp_path, monkeypatch,
+                                                   table, expected):
+    path = tmp_path / "document_types.yaml"
+    if table is not None:
+        path.write_text(table, encoding="utf-8")
+    monkeypatch.setattr(doc_types, "_builtin_file", lambda: str(path))
+    assert doc_types._ar_prefixes() == expected
+
+
+@pytest.mark.parametrize("keyword, expected", [
+    # an empty keyword (a table entry that folds to nothing) matches nothing,
+    # not every gap between two separators
+    ("", False),
+    ("عقد", True),
+], ids=["empty_keyword", "whole_word"])
+def test_an_empty_keyword_never_matches(keyword, expected):
+    assert doc_types._has_word(keyword, "a, عقد", []) is expected
 
 
 @pytest.mark.parametrize("kind, kws", _NAME_KINDS, ids=[k for k, _ in _NAME_KINDS])
