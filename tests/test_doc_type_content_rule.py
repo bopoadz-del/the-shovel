@@ -249,3 +249,116 @@ def test_arabic_spelling_variants_fold_to_one_form(name, content):
 def test_ingest_types_new_names_by_the_same_rule(name, expected):
     from app.core.projects import classify_doc_type
     assert classify_doc_type(name) == expected
+
+
+# ── Arabic keywords match WHOLE words only (#398 grader, 17 Nov) ─────────────
+# A keyword glued inside a longer word is a different word: it must not type
+# the document. The pairs below are built from the table itself, so every
+# kind with Arabic words is covered and a new word is covered when it lands.
+
+_GLUE_BEFORE, _GLUE_AFTER = "م", "ت"   # letters that are not a listed prefix
+
+
+def _is_arabic_kw(kw: str) -> bool:
+    return any("ء" <= ch <= "ي" for ch in kw)
+
+
+def _glued(phrase: str) -> str:
+    """Every word of ``phrase`` inside a longer word."""
+    return " ".join(_GLUE_BEFORE + w + _GLUE_AFTER for w in phrase.split())
+
+
+def _arabic_words(field: str, minimum: int):
+    out = []
+    for t in doc_types._load_builtins():
+        kws = [k for k in ((t.get("match") or {}).get(field) or []) if _is_arabic_kw(k)]
+        if len(kws) >= minimum:
+            out.append((t["name"], kws))
+    return out
+
+
+_NAME_KINDS = _arabic_words("filename", 1)
+_CONTENT_KINDS = _arabic_words("content", 2)
+
+
+def test_every_kind_has_arabic_words_to_test():
+    assert len(_NAME_KINDS) == len(doc_types._load_builtins())
+    assert _CONTENT_KINDS
+
+
+@pytest.mark.parametrize("kind, kws", _NAME_KINDS, ids=[k for k, _ in _NAME_KINDS])
+@pytest.mark.parametrize("glue", [False, True], ids=["whole", "inside_longer_word"])
+def test_an_arabic_name_word_types_only_as_a_whole_word(kind, kws, glue):
+    for kw in kws:
+        name = (_glued(kw) if glue else kw) + " 07.pdf"
+        got = doc_types.classify(name)["name"]
+        if glue:
+            assert got == "unrecognised", (kw, got)
+        else:
+            # the bare word types its kind, or ties a kind that shares it
+            assert got in (kind, "unrecognised"), (kw, got)
+    if not glue:
+        assert doc_types.classify(kws[0] + " 07.pdf")["name"] == kind
+
+
+@pytest.mark.parametrize("kind, kws", _CONTENT_KINDS, ids=[k for k, _ in _CONTENT_KINDS])
+@pytest.mark.parametrize("glue", [False, True], ids=["whole", "inside_longer_word"])
+def test_arabic_content_words_count_only_as_whole_words(kind, kws, glue):
+    two = kws[:2]
+    text = " . ".join(_glued(k) if glue else k for k in two)
+    expected = "unrecognised" if glue else kind
+    assert doc_types.classify("annex_04.pdf", text)["name"] == expected
+
+
+@pytest.mark.parametrize("name, expected", [
+    # "concept" contains the letters of "photos": not a photo
+    ("تصور المشروع.pdf", "unrecognised"),
+    ("صور المشروع.pdf", "photo"),
+    # "complex" contains the letters of "contract": not a contract
+    ("مشروع معقد.pdf", "unrecognised"),
+    ("عقد المشروع.pdf", "contract"),
+])
+def test_a_keyword_inside_a_longer_arabic_word_does_not_type(name, expected):
+    assert doc_types.classify(name)["name"] == expected
+
+
+@pytest.mark.parametrize("name, expected", [
+    # one listed prefix glued in front: "and a contract", "and the contract"
+    ("وعقد المقاول.pdf", "contract"),
+    ("والعقد المعدل.pdf", "contract"),
+    # two separate clitics stacked ("and with"): not a listed prefix
+    ("وبعقد المقاول.pdf", "unrecognised"),
+])
+def test_one_leading_arabic_prefix_is_allowed(name, expected):
+    assert doc_types.classify(name)["name"] == expected
+
+
+# ── common names that now tie two kinds and become untyped ───────────────────
+
+@pytest.mark.parametrize("name, expected", [
+    # a word of two kinds each, nothing else: a tie, so 'document'
+    ("Inspection Report.pdf", "document"),
+    ("Meeting Report.pdf", "document"),
+    ("Drawing Schedule.xlsx", "document"),
+    ("Method Statement Template.docx", "document"),
+    ("Contract Programme.pdf", "document"),
+    ("BOQ Contract.xlsx", "document"),
+    # one more word for one kind breaks the tie by score
+    ("Daily Inspection Report.pdf", "report"),
+    # each name with one kind's word only types that kind
+    ("Inspection 14.pdf", "inspection_request"),
+    ("Meeting 14.pdf", "minutes"),
+])
+def test_common_names_that_tie_two_kinds_are_untyped(name, expected):
+    from app.core.projects import classify_doc_type
+    assert classify_doc_type(name) == expected
+
+
+@pytest.mark.parametrize("content, expected", [
+    # a Latin content phrase keeps its substring match ("milestone" in
+    # "milestones"): the whole-word rule is for Arabic words
+    ("Critical path and milestones.", "schedule"),
+    ("Critical path only.", "unrecognised"),
+])
+def test_latin_content_phrases_still_match_inside_words(content, expected):
+    assert doc_types.classify("annex_04.pdf", content)["name"] == expected

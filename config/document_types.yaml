@@ -10,11 +10,19 @@
 # both sides before matching. A top score shared by two kinds is
 # 'unrecognised': the order of this list is never a precedence.
 
+# Arabic clitics that may stand glued before a keyword (one at most):
+# the article, the one-letter conjunctions / prepositions, and a
+# conjunction or preposition joined to the article. Keywords are
+# matched as WHOLE words of the folded text, so "صور" never fires inside a
+# longer word such as "تصور"; a prefix listed here is the only thing that
+# may be glued in front ("والعقد" = "and the contract").
+arabic_prefixes: ["ال", "و", "ف", "ب", "ل", "ك", "لل", "وال", "بال", "فال", "كال"]
+
 document_types:
   - name: drawing
     description: Architectural / engineering drawings
     match:
-      filename: ["drawing", "dwg", "sheet", "sht", "detail", "مخطط", "رسومات"]
+      filename: ["drawing", "dwg", "sheet", "sht", "detail", "مخطط", "مخططات", "رسومات"]
       extensions: [".dwg", ".dxf"]
       content: ["scale 1:", "drawing no", "drawing number", "rev.", "مقياس الرسم", "رقم المخطط", "رقم اللوحة"]
     expected_fields: ["drawing_number", "revision", "scale", "title_block"]
@@ -38,7 +46,7 @@ document_types:
   - name: contract
     description: Contract / agreement documents
     match:
-      filename: ["contract", "agreement", "fidic", "nec", "عقد", "اتفاقية"]
+      filename: ["contract", "agreement", "fidic", "nec", "عقد", "عقود", "اتفاقية"]
       extensions: []
       content: ["liquidated damages", "the employer", "the contractor", "defects liability", "غرامات التأخير", "صاحب العمل", "فترة الصيانة"]
     expected_fields: ["contract_value", "contract_type", "employer", "contractor"]
@@ -75,13 +83,13 @@ document_types:
     match:
       filename: ["spec", "specification", "مواصفات", "المواصفات"]
       extensions: []
-      content: ["section ", "csi ", "masterformat", "shall be", "in accordance with", "يجب أن يكون", "وفقاً ل", "طبقاً ل"]
+      content: ["section ", "csi ", "masterformat", "shall be", "in accordance with", "يجب أن يكون", "وفقاً", "طبقاً"]
     expected_fields: []
 
   - name: photo
     description: Site photographs
     match:
-      filename: ["photo", "img", "image", "صور"]
+      filename: ["photo", "img", "image", "صور", "صورة"]
       extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif"]
       content: []
     expected_fields: []
@@ -97,7 +105,7 @@ document_types:
   - name: report
     description: Progress / inspection / site reports
     match:
-      filename: ["report", "daily", "weekly", "تقرير", "يومي", "أسبوعي"]
+      filename: ["report", "daily", "weekly", "تقرير", "تقارير", "يومي", "أسبوعي"]
       extensions: []
       content: ["progress", "site instruction", "weather", "manpower", "نسبة الإنجاز", "الطقس", "العمالة"]
     expected_fields: []

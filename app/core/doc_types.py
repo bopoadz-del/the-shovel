@@ -121,8 +121,47 @@ _AR_LETTERS = str.maketrans({"أ": "ا", "إ": "ا",
                              "ى": "ي", "ة": "ه"})
 
 
+#: Letters and digits that make up one word, in Latin and Arabic script. A
+#: keyword matches only a WHOLE word of the folded text: "صور" (photos) must
+#: not fire inside "تصور" (concept), nor "عقد" (contract) inside "معقد"
+#: (complex). Arabic punctuation (comma, semicolon, question mark) is not a
+#: letter and so separates words.
+_WORD_CHARS = "a-z0-9\u0621-\u063a\u0641-\u064a\u0660-\u0669\u066e-\u06d3"
+
+
+def _ar_prefixes() -> List[str]:
+    """One-word Arabic clitics (article, conjunction, preposition) that may
+    stand glued before a keyword: "والعقد" is "and the contract". Read from
+    the types table (``arabic_prefixes``), longest first, so the regex tries
+    "لل" before "ل"."""
+    path = _builtin_file()
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    out = {_norm(str(p)) for p in (data.get("arabic_prefixes") or []) if str(p).strip()}
+    return sorted(out, key=lambda p: (-len(p), p))
+
+
+def _has_word(keyword: str, text: str, prefixes: List[str]) -> bool:
+    """``keyword`` (already folded) occurs in ``text`` (already folded) as
+    whole words: nothing word-like before or after it. A keyword that starts
+    with an Arabic letter may carry ONE leading prefix from ``prefixes``."""
+    if not keyword:
+        return False
+    lead = ""
+    if prefixes and re.match(r"[\u0621-\u064a]", keyword):
+        lead = "(?:" + "|".join(re.escape(p) for p in prefixes) + ")?"
+    return re.search(rf"(?<![{_WORD_CHARS}]){lead}{re.escape(keyword)}(?![{_WORD_CHARS}])",
+                     text) is not None
+
+
 def _norm(text: str) -> str:
     return _AR_MARKS.sub("", (text or "").lower()).translate(_AR_LETTERS)
+
+
+def _is_arabic(text: str) -> bool:
+    return re.search(r"[\u0621-\u064a]", text) is not None
 
 
 def _fold_name(text: str) -> str:
@@ -165,6 +204,7 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
     best_matched: List[str] = []
     name_matched_any = False
     scores: List[int] = []
+    prefixes = _ar_prefixes()
 
     for t in list_types():
         m = t.get("match", {}) or {}
@@ -176,9 +216,9 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
             # specification). Controlled-document names are full of hyphens,
             # underscores and parentheses, so those count as separators, and
             # a multi-word keyword matches across any of them.
-            kw_n = _fold_name(kw)
-            if (re.search(rf"(?<![a-z0-9]){re.escape(_norm(kw))}(?![a-z0-9])", fn)
-                    or re.search(rf"(?<![a-z0-9]){re.escape(kw_n)}(?![a-z0-9])", stem)):
+            # Arabic words are matched the same way (see ``_has_word``).
+            if (_has_word(_norm(kw), fn, prefixes)
+                    or _has_word(_fold_name(kw), stem, prefixes)):
                 score += 2
                 matched.append(f"filename:{kw}")
         exts = [e.lower() for e in (m.get("extensions", []) or [])]
@@ -188,7 +228,11 @@ def classify(filename: str = "", content_sample: str = "") -> Dict[str, Any]:
         if score:
             name_matched_any = True
         for kw in m.get("content", []) or []:
-            if _norm(kw) in content:
+            # Arabic content words are whole words too; a Latin content
+            # phrase keeps its substring match (unchanged by this rule).
+            kw_c = _norm(kw)
+            if (_has_word(kw_c, content, prefixes) if _is_arabic(kw_c)
+                    else kw_c in content):
                 score += 1
                 matched.append(f"content:{kw}")
         scores.append(score)
