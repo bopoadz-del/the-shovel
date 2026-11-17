@@ -129,12 +129,19 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-_TERM_RE = re.compile(r"[a-z0-9]+")
+#: One word in any script: a run of Unicode letters and digits (``\w``
+#: without the underscore). An Arabic question has words too; a Latin-only
+#: pattern gave it none, and every tie it split fell to the chunk id.
+_TERM_RE = re.compile(r"[^\W_]+")
 
 
 def _terms(text: str) -> set[str]:
-    """Distinct lower-case alphanumeric words of ``text``."""
-    return set(_TERM_RE.findall((text or "").casefold()))
+    """Distinct words of ``text`` in any script, case-folded and with the
+    document-typing rule's Arabic folding (short vowels and tatweel dropped,
+    hamza alefs to alef, alef maqsura to ya, ta marbuta to ha) on BOTH the
+    question and the passage, so one word spelt two ways is one term."""
+    from app.core.doc_types import _norm as _fold
+    return set(_TERM_RE.findall(_fold((text or "").casefold())))
 
 
 def tie_break_key(chunk: Chunk, query_terms: set[str]) -> Tuple[int, str]:
