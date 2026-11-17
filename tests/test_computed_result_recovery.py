@@ -16,6 +16,7 @@ import json
 import pytest
 
 from app.agents import runtime
+from app.agents.base.tools import _row_label, bill_rows_statement
 from app.agents.core import tool_registry
 from app.agents.core.tool_registry import Statement
 from app.agents.driver.sources import RETRIEVAL_TOOLS
@@ -197,6 +198,69 @@ def test_a_computed_tool_without_a_statement_is_refused():
     assert "zz_invented_bare" not in tool_registry._TOOLS
 
 
-def test_search_kind_and_the_driver_retrieval_list_agree():
-    assert set(tool_registry.tools_of_kind("search")) == set(RETRIEVAL_TOOLS)
-    assert "bill_rows_aggregate" in tool_registry.tools_of_kind("computed")
+@pytest.mark.parametrize("kind,agrees", [
+    ("search", lambda got: got == set(RETRIEVAL_TOOLS)),
+    ("computed", lambda got: "bill_rows_aggregate" in got and not got & set(RETRIEVAL_TOOLS)),
+])
+def test_search_kind_and_the_driver_retrieval_list_agree(kind, agrees):
+    assert agrees(set(tool_registry.tools_of_kind(kind)))
+
+
+@pytest.mark.parametrize("row,label", [
+    ({"ref": "K.1", "pages": [3, 4], "description": "Precast kerb"}, "K.1 (p.3)"),
+    ({"ref": " ", "pages": [], "description": "  Duct bedding in sand " + "x" * 80},
+     ("Duct bedding in sand " + "x" * 80)[:60]),
+])
+def test_a_row_is_labelled_by_its_ref_and_first_page_else_its_description(row, label):
+    assert _row_label(row) == label
+
+
+@pytest.mark.parametrize("bill", [
+    {"status": "error", "error": "sheet unreadable", "rows": [{"ref": "A.1", "quantity": 2.0}],
+     "sum": 2.0, "unit": "m", "filename": "bill-failed.xlsx"},
+    "not a bill",
+])
+def test_a_bill_that_did_not_succeed_states_nothing(bill):
+    good = _bill("bill-gamma.xlsx", ["gully"], "nr", [("G.1", 2, 3.0)])["bills"][0]
+    stated = bill_rows_statement({"bills": [bill, good]})
+    assert [s.source for s in stated] == ["bill-gamma.xlsx", "bill-gamma.xlsx"]
+    assert stated[0].count == 1 and stated[1].figure == 3.0 and stated[1].unit == "nr"
+
+
+@pytest.mark.parametrize("ask,result,total,unit", BILLS)
+def test_each_bill_states_its_count_and_its_sum_per_unit_with_the_rows_behind(ask, result, total, unit):
+    bill = result["bills"][0]
+    count, summed = bill_rows_statement(result)
+    labels = tuple(f"{r['ref']} (p.{r['pages'][0]})" for r in bill["rows"])
+    assert (count.figure, count.count, count.rows) == (float(len(bill["rows"])), len(bill["rows"]), labels)
+    assert (summed.figure, summed.unit, summed.rows) == (float(total), unit, labels)
+    assert all(t in count.what for t in bill["terms"])
+
+
+@pytest.mark.parametrize("result", [
+    {"status": "success", "bills": [{"status": "success", "filename": "bill-empty.xlsx",
+                                     "terms": ["kerb"], "rows": [], "sum": None}]},
+    {"status": "success", "bills": []},
+])
+def test_a_computed_result_with_no_figure_keeps_the_honest_fallback(result):
+    messages = _turn("count the kerb runs", _tool_msg("bill_rows_aggregate", result))
+    assert runtime._recover_answer_from_tool_messages("", messages) == ""
+    assert FALLBACK in runtime._postprocess_answer("", None, messages)
+
+
+@pytest.mark.parametrize("name", ["zz_invented_twice_a", "zz_invented_twice_b"])
+def test_a_second_handler_under_one_name_is_refused_and_the_first_kept(name):
+    async def first(call):  # pragma: no cover
+        return {}
+
+    async def second(call):  # pragma: no cover
+        return {}
+    register = tool_registry.tool(name, owner="base", display_name="Twice")
+    try:
+        register(first)
+        assert register(first) is first  # the same handler again is not a second one
+        with pytest.raises(ValueError):
+            register(second)
+        assert tool_registry.get(name).handler is first
+    finally:
+        tool_registry._TOOLS.pop(name, None)
