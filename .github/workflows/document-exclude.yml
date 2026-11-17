@@ -15,6 +15,11 @@ name: document-exclude
 #      metadata.excluded = {by: owner, at, reason}; chunk_rows_after must be 0.
 # project_id, document_id, reason and expected_plan_hash have NO committed
 # default: the operator supplies them.
+# PUBLIC repository: the run log and step summary are public pages. They carry
+# ids, codes, counts and the hash only: never the document's file name, and
+# the stored exclusion prints its by/at and the reason's LENGTH. A dispatch
+# input is printed in the run log, so the reason must be a short code
+# (lower case letters, digits, '_', '-', '.'), refused otherwise.
 
 on:
   workflow_dispatch:
@@ -26,7 +31,7 @@ on:
         description: "Document to exclude (no default committed)"
         required: true
       reason:
-        description: "Owner's reason, stored on the row (required with execute=true)"
+        description: "Owner's reason CODE, stored on the row (required with execute=true). Printed in the public run log: a code such as duplicate_volume, never a name"
         required: false
         default: ""
       expected_plan_hash:
@@ -92,11 +97,11 @@ jobs:
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -o plan.json -w "\nHTTP %{http_code}\n" "${url}"
-          jq '.plan | del(.rows_to_delete)' plan.json
+          jq '.plan | {document_id, doc_type, ingest_status, chunk_count, chunk_rows, project_chunk_total, already_excluded, plan_hash}' plan.json
           echo "rows_to_delete:"; jq -r '.plan.rows_to_delete[]' plan.json
           {
             echo "### Plan (execute=false)"
-            echo "- document_id: $(jq -r '.plan.document_id' plan.json) ($(jq -r '.plan.original_name' plan.json), doc_type=$(jq -r '.plan.doc_type' plan.json))"
+            echo "- document_id: $(jq -r '.plan.document_id' plan.json) (doc_type=$(jq -r '.plan.doc_type' plan.json))"
             echo "- ingest_status: $(jq -r '.plan.ingest_status' plan.json), chunk_count: $(jq -r '.plan.chunk_count' plan.json), chunk_rows: $(jq -r '.plan.chunk_rows' plan.json)"
             echo "- project_chunk_total: $(jq -r '.plan.project_chunk_total' plan.json)"
             echo "- already_excluded: $(jq -r '.plan.already_excluded' plan.json)"
@@ -110,6 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$REASON" ] || { echo "::error::reason is required with execute=true"; exit 1; }
+          printf '%s' "$REASON" | grep -Eq '^[a-z0-9_.-]{1,64}$' || { echo "::error::reason must be a code (a-z 0-9 _ . -, at most 64); no write was made"; exit 1; }
           if [ "$PLANNED" != "$EXPECTED" ]; then
             echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}; no write was made"
             echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
@@ -126,14 +132,14 @@ jobs:
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -o applied.json -w "\nHTTP %{http_code}\n" "${url}"
-          jq 'del(.plan.rows_to_delete)' applied.json
+          jq '{executed, refused, chunks_deleted, index_pruned, chunk_rows_after, chunk_count_after, project_chunk_total_after, ingest_status, retrieval_visible}' applied.json
           {
             echo "### Write (execute=true)"
             echo "- executed: $(jq -r '.executed' applied.json) refused: $(jq -r '.refused // "-"' applied.json)"
             echo "- chunks_deleted: $(jq -r '.chunks_deleted' applied.json)"
             echo "- chunk_rows_after: $(jq -r '.chunk_rows_after' applied.json), chunk_count_after: $(jq -r '.chunk_count_after' applied.json)"
             echo "- project_chunk_total before/after: $(jq -r '.plan.project_chunk_total' applied.json) / $(jq -r '.project_chunk_total_after' applied.json)"
-            echo "- excluded (as stored): $(jq -c '.excluded' applied.json)"
+            echo "- excluded (as stored): $(jq -c '.excluded | if . == null then null else {by, at, reason_chars: ((.reason // "") | length)} end' applied.json)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$(jq -r '.executed' applied.json)" = "true" ] || { echo "::error::write refused"; exit 1; }
           [ "$(jq -r '.chunk_rows_after' applied.json)" = "0" ] || { echo "::error::chunk rows remain after the write"; exit 1; }

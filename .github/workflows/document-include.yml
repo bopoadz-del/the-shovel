@@ -13,6 +13,10 @@ name: document-include
 #   3. The write clears metadata.excluded (kept under metadata.included_back)
 #      and the tombstone: status UNVERIFIED, retrieval_visible=true. It does
 #      not restore chunks; run doc-reindex-once for the document afterwards.
+# PUBLIC repository: the run log and step summary are public pages. They carry
+# ids, codes, counts and the hash only: never the document's file name; any
+# stored reason prints as its LENGTH. A dispatch input is printed in the run
+# log, so the reason must be a short code, refused otherwise.
 # project_id, document_id, reason and expected_plan_hash have NO committed
 # default: the operator supplies them.
 
@@ -26,7 +30,7 @@ on:
         description: "Document to bring back (no default committed)"
         required: true
       reason:
-        description: "Owner's reason, stored on the row (required with execute=true)"
+        description: "Owner's reason CODE, stored on the row (required with execute=true). Printed in the public run log: a code, never a name"
         required: false
         default: ""
       expected_plan_hash:
@@ -92,12 +96,12 @@ jobs:
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -o plan.json -w "\nHTTP %{http_code}\n" "${url}"
-          jq '.plan' plan.json
+          jq '.plan | walk(if type == "object" then del(.original_name, .name, .filename, .file_path, .drive_path) | with_entries(if (.key | test("reason")) and (.value | type) == "string" then .value = "<text len=\(.value | length)>" else . end) else . end)' plan.json
           {
             echo "### Plan (execute=false)"
-            echo "- document_id: $(jq -r '.plan.document_id' plan.json) ($(jq -r '.plan.original_name' plan.json), doc_type=$(jq -r '.plan.doc_type' plan.json))"
-            echo "- ingest_status: $(jq -r '.plan.ingest_status' plan.json) ($(jq -r '.plan.ingest_status_reason' plan.json)), retrieval_visible: $(jq -r '.plan.retrieval_visible' plan.json), chunk_rows: $(jq -r '.plan.chunk_rows' plan.json)"
-            echo "- excluded (stored): $(jq -c '.plan.excluded' plan.json)"
+            echo "- document_id: $(jq -r '.plan.document_id' plan.json) (doc_type=$(jq -r '.plan.doc_type' plan.json))"
+            echo "- ingest_status: $(jq -r '.plan.ingest_status' plan.json) (reason_chars=$(jq -r '(.plan.ingest_status_reason // "") | length' plan.json)), retrieval_visible: $(jq -r '.plan.retrieval_visible' plan.json), chunk_rows: $(jq -r '.plan.chunk_rows' plan.json)"
+            echo "- excluded (stored): $(jq -c '.plan.excluded | if . == null then null else {by, at, reason_chars: ((.reason // "") | length)} end' plan.json)"
             echo "- eligible: $(jq -r '.plan.eligible' plan.json) $(jq -r '.plan.not_eligible // ""' plan.json)"
             echo "- status_after: $(jq -r '.plan.status_after' plan.json)"
             echo "- plan_hash (live): $(jq -r '.plan.plan_hash' plan.json)"
@@ -110,6 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$REASON" ] || { echo "::error::reason is required with execute=true"; exit 1; }
+          printf '%s' "$REASON" | grep -Eq '^[a-z0-9_.-]{1,64}$' || { echo "::error::reason must be a code (a-z 0-9 _ . -, at most 64); no write was made"; exit 1; }
           if [ "$PLANNED" != "$EXPECTED" ]; then
             echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}; no write was made"
             echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
@@ -126,13 +131,13 @@ jobs:
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -o applied.json -w "\nHTTP %{http_code}\n" "${url}"
-          jq '.' applied.json
+          jq 'walk(if type == "object" then del(.original_name, .name, .filename, .file_path, .drive_path) | with_entries(if (.key | test("reason")) and (.value | type) == "string" then .value = "<text len=\(.value | length)>" else . end) else . end)' applied.json
           {
             echo "### Write (execute=true)"
             echo "- executed: $(jq -r '.executed' applied.json) refused: $(jq -r '.refused // "-"' applied.json)"
             echo "- ingest_status: $(jq -r '.ingest_status' applied.json), retrieval_visible: $(jq -r '.retrieval_visible' applied.json), chunk_count: $(jq -r '.chunk_count' applied.json)"
-            echo "- excluded after: $(jq -c '.excluded_after' applied.json)"
-            echo "- included_back (as stored): $(jq -c '.included_back' applied.json)"
+            echo "- excluded after: $(jq -c '.excluded_after | if . == null then null else {by, at, reason_chars: ((.reason // "") | length)} end' applied.json)"
+            echo "- included_back (as stored): $(jq -c '.included_back | if . == null then null else {by, at, reason_chars: ((.reason // "") | length)} end' applied.json)"
             echo "- next: doc-reindex-once for this document brings its chunks back"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$(jq -r '.executed' applied.json)" = "true" ] || { echo "::error::write refused"; exit 1; }
