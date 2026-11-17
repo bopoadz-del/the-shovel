@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import os
+import weakref
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -50,6 +51,50 @@ async def record_provider_usage(
         logger.debug("record_provider_usage swallowed an error", exc_info=True)
 
 
+#: One open provider client per (client factory, event loop, timeout). Building
+#: an ``httpx.AsyncClient`` loads a TLS context and the CA bundle: CPU work that
+#: holds the interpreter lock. Built once per key, on the turn pool (never the
+#: default executor), and reused by every later model call on that loop. Keyed
+#: by the loop because a client's connections belong to the loop that opened
+#: them; keyed by the factory so a replaced ``httpx.AsyncClient`` gets its own.
+_CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[Any, Any]]" = (
+    weakref.WeakKeyDictionary())
+_BUILD_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary())
+
+
+async def _shared_client(timeout: Optional[float]):
+    """The open provider client for this loop and ``timeout``. The first call
+    builds and enters it off the loop; concurrent first calls wait on one lock
+    and reuse that build; a failed or cancelled build keeps nothing, so the
+    next call builds again."""
+    loop = asyncio.get_running_loop()
+    factory = httpx.AsyncClient
+    key = (factory, timeout)
+    per_loop = _CLIENTS.setdefault(loop, {})
+    client = per_loop.get(key)
+    if client is not None:
+        return client
+    async with _BUILD_LOCKS.setdefault(loop, asyncio.Lock()):
+        client = per_loop.get(key)
+        if client is None:
+            from app.core.offload import off_loop
+            built = await off_loop(factory, timeout=timeout)
+            client = await built.__aenter__()
+            per_loop[key] = client
+    return client
+
+
+async def aclose_shared_clients() -> None:
+    """Close every provider client opened on the running loop (shutdown)."""
+    per_loop = _CLIENTS.pop(asyncio.get_running_loop(), {})
+    for client in per_loop.values():
+        try:
+            await client.__aexit__(None, None, None)
+        except Exception:  # noqa: BLE001 -- best-effort close at shutdown
+            logger.debug("aclose_shared_clients: close failed", exc_info=True)
+
+
 class ProviderStreamError(Exception):
     """A streaming provider call failed before/while streaming. Carries the
     HTTP status (0 for a transport error) and a short body so the caller can
@@ -77,9 +122,8 @@ async def provider_post(
     Returns ``(response, parsed_json_or_None)``; the caller keeps its own
     status/retry handling. Every non-streaming ``client.post`` to a provider in
     the app lives here (enforced by tests/test_provider_egress_is_single.py)."""
-    client_obj = await asyncio.to_thread(httpx.AsyncClient, timeout=timeout)
-    async with client_obj as client:
-        r = await client.post(url, json=payload, headers=headers)
+    client = await _shared_client(timeout)
+    r = await client.post(url, json=payload, headers=headers)
     data: Optional[Dict[str, Any]] = None
     if r.status_code < 400:
         try:
@@ -127,37 +171,36 @@ async def provider_stream(
                 provider, model, u, user_id=user_id, agent_name=agent_name,
             )
 
-    client_obj = await asyncio.to_thread(httpx.AsyncClient, timeout=timeout)
+    client = await _shared_client(timeout)
     try:
-        async with client_obj as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as r:
-                if r.status_code != 200:
-                    # Read the body for the message — a streaming response's
-                    # .text is not populated until read, and some clients don't
-                    # expose .text at all.
-                    body = await r.aread()
-                    text = body.decode("utf-8", "ignore") if isinstance(body, (bytes, bytearray)) else str(body)
-                    raise ProviderStreamError(r.status_code, text)
-                started = True
-                async for line in r.aiter_lines():
-                    # Capture usage for the meter, but yield the RAW line so each
-                    # caller keeps its own "data:" prefix and [DONE] handling.
-                    # Record the moment we have usage OR reach [DONE], BEFORE
-                    # yielding it — the caller breaks on [DONE] and abandons us,
-                    # so a deferred finally would run too late.
-                    if line and line.startswith("data:"):
-                        _d = line[5:].strip()
-                        if _d == "[DONE]":
-                            await _record_once(usage)
-                        elif _d:
-                            try:
-                                evt = _json.loads(_d)
-                                if isinstance(evt, dict) and evt.get("usage"):
-                                    usage = evt["usage"]
-                                    await _record_once(usage)
-                            except Exception:  # noqa: BLE001 — best-effort usage
-                                logger.debug("provider_stream: usage parse skipped", exc_info=True)
-                    yield line
+        async with client.stream("POST", url, json=payload, headers=headers) as r:
+            if r.status_code != 200:
+                # Read the body for the message — a streaming response's
+                # .text is not populated until read, and some clients don't
+                # expose .text at all.
+                body = await r.aread()
+                text = body.decode("utf-8", "ignore") if isinstance(body, (bytes, bytearray)) else str(body)
+                raise ProviderStreamError(r.status_code, text)
+            started = True
+            async for line in r.aiter_lines():
+                # Capture usage for the meter, but yield the RAW line so each
+                # caller keeps its own "data:" prefix and [DONE] handling.
+                # Record the moment we have usage OR reach [DONE], BEFORE
+                # yielding it — the caller breaks on [DONE] and abandons us,
+                # so a deferred finally would run too late.
+                if line and line.startswith("data:"):
+                    _d = line[5:].strip()
+                    if _d == "[DONE]":
+                        await _record_once(usage)
+                    elif _d:
+                        try:
+                            evt = _json.loads(_d)
+                            if isinstance(evt, dict) and evt.get("usage"):
+                                usage = evt["usage"]
+                                await _record_once(usage)
+                        except Exception:  # noqa: BLE001 — best-effort usage
+                            logger.debug("provider_stream: usage parse skipped", exc_info=True)
+                yield line
     except ProviderStreamError:
         raise
     except Exception as e:  # noqa: BLE001 — transport/parse before/within the stream

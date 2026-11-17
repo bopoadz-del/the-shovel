@@ -301,6 +301,8 @@ async def lifespan(app: FastAPI):
         await hydration_scheduler.stop()
         from app.core.cde.poll import stop_event_poller
         await stop_event_poller()
+        from app.core.llm_client import aclose_shared_clients
+        await aclose_shared_clients()
         await _redis_client.close_redis_client()
 
 
