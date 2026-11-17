@@ -230,3 +230,64 @@ def test_markdown_only_text_needs_recovery(text):
 @pytest.mark.parametrize("text", ["**12**", "- نعم"])
 def test_a_word_or_figure_inside_markdown_is_text(text):
     assert not runtime._text_needs_tool_recovery(text)
+
+
+# ── a failed result states nothing even when it carries figures ───────────
+
+@pytest.mark.parametrize("status, value", [("error", 42.5), ("timeout", {"steel_t": 3})])
+def test_a_failed_code_run_states_nothing_even_with_a_figure(status, value):
+    body = {"status": status, "result": value, "task": "invented yard area"}
+    assert improvised_statement(body) == []
+    assert improvised_statement({**body, "status": "success"}) != []
+
+
+@pytest.mark.parametrize("calculation", ["excavation_volume", "concrete_volume"])
+def test_a_failed_calculation_states_nothing_even_with_its_figures(calculation):
+    spec = formula_registry.get(calculation)
+    figures = {key: 5.5 for key, unit in spec.outputs.items() if unit not in ("", "-")}
+    failed = {"status": "error", "calculation": calculation, "result": figures}
+    assert calculation_statement(failed) == []
+    assert calculation_statement({**failed, "status": "success"}) != []
+
+
+@pytest.mark.parametrize("key, unit, expected", [
+    ("bank_volume_m3", "m3", "bank volume"),
+    ("loose_volume", "m3", "loose volume"),
+    ("m3", "m3", "m3"),
+    ("weight__kg", "KG", "weight"),
+])
+def test_a_declared_output_reads_as_words_without_its_unit(key, unit, expected):
+    from app.agents.base.tools import _output_name
+
+    assert _output_name(key, unit) == expected
+
+
+@pytest.mark.parametrize("owner", ["zz_no_such_lane", ""])
+def test_a_result_declared_by_an_unknown_owner_is_refused(owner):
+    with pytest.raises(ValueError, match="unknown result owner"):
+        tool_registry.declare_result("zz_invented_owned_block", owner=owner,
+                                     display_name="Invented", kind="search")
+    assert tool_registry.result_spec("zz_invented_owned_block") is None
+
+
+@pytest.mark.parametrize("action", sorted(runtime._HAT_CALC_ALIASES)[:2])
+def test_declaring_the_calculator_aliases_declares_each_computed(action):
+    from app.agents.base import blocks
+
+    assert blocks._declare_calculator_aliases() is None  # idempotent re-declaration
+    spec = tool_registry.result_spec(action)
+    assert spec is not None and spec.kind == "computed"
+    assert spec.statement is calculation_statement
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("construction_calc", True),
+    ("formula_executor_v2", True),
+    ("search_project_documents", False),
+    ("fetch_document", False),
+])
+def test_a_failed_tool_is_a_calculator_by_its_declared_kind_alone(name, expected):
+    # No calculation key, no "unknown calculation", no "available" list:
+    # only the declaration can decide.
+    msg = {"role": "tool", "name": name, "content": "{}"}
+    assert runtime._is_calc_tool_error(msg, {}, {"error": "invented failure"}) is expected

@@ -5686,13 +5686,12 @@ def _looks_like_tool_truncation_notice(text: str) -> bool:
 
 def _text_needs_tool_recovery(text: str) -> bool:
     """True when the LLM hop died and a tool/predispatch draft should speak."""
-    t = (text or "").strip()
-    if not t:
-        return True
     from app.agents.core.computed_answer import has_words
 
-    if not has_words(t):
-        # Markdown alone (rules, bullets, emphasis marks) says nothing.
+    t = (text or "").strip()
+    if not t or not has_words(t):
+        # Nothing, or markdown alone (rules, bullets, emphasis marks): it
+        # says nothing.
         return True
     if t == _EMPTY_RESPONSE_FALLBACK:
         return True
