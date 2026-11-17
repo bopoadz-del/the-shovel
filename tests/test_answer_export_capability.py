@@ -59,6 +59,20 @@ def test_every_parsed_agent_is_told_the_download_formats(tmp_path, name, body):
     assert "Never tell the user you cannot produce" in prompt
 
 
+@pytest.mark.parametrize("raw", [
+    "You answer questions, but this file has no frontmatter.\n",
+    "--\nname: half-fence\n--\n\nBody with a broken fence.\n",
+])
+def test_agent_file_without_frontmatter_is_refused(tmp_path, raw):
+    """_parse_agent_file still refuses a malformed file before adding anything."""
+    from app.agents.runtime import _parse_agent_file
+
+    path = tmp_path / "broken.md"
+    path.write_text(raw, encoding="utf-8")
+    with pytest.raises(ValueError, match="missing YAML frontmatter"):
+        _parse_agent_file(path)
+
+
 @pytest.mark.parametrize("agent_name", ["project-assistant", "quantity-surveyor"])
 def test_shipped_agents_carry_the_section(agent_name):
     from app.agents.runtime import _parse_agent_file
