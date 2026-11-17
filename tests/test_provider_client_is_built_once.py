@@ -50,17 +50,21 @@ def _handler(request: httpx.Request) -> httpx.Response:
                                      "usage": {"total_tokens": 2}})
 
 
-def _factory(builds: list, fail_first: int = 0):
+def _factory(builds: list, fail_first: int = 0, handler=_handler, hold=None):
     """A stand-in for ``httpx.AsyncClient`` that counts builds, records the
-    building thread, and answers through an in-memory transport."""
+    building thread, and answers through an in-memory transport. ``hold``
+    maps a timeout to an Event the build of that timeout waits on."""
 
     class _Counting(_REAL_CLIENT):
         def __init__(self, *args, **kwargs):
             if len(builds) < fail_first:
                 builds.append(("failed", threading.current_thread().name))
                 raise OSError("CA bundle unreadable")
+            gate = (hold or {}).get(kwargs.get("timeout"))
+            if gate is not None:
+                gate.wait(10)
             builds.append((kwargs.get("timeout"), threading.current_thread().name))
-            super().__init__(*args, transport=httpx.MockTransport(_handler), **kwargs)
+            super().__init__(*args, transport=httpx.MockTransport(handler), **kwargs)
 
     return _Counting
 
@@ -229,3 +233,80 @@ def test_a_replaced_client_factory_gets_its_own_client(monkeypatch, wired, swap)
     assert used == []
     assert len(builds) == 1
     assert len(other) == (1 if swap else 0)
+
+
+@pytest.mark.parametrize("built,slow,calls", [(30.0, 90.0, 1), (60.0, 120.0, 3)])
+def test_a_built_client_is_not_held_behind_another_timeouts_first_build(monkeypatch, wired, built, slow, calls):
+    """A slow first build (another timeout: a slow CA-bundle read) must not
+    stall every model call whose client is already open."""
+    builds, _ = wired
+    gate = threading.Event()
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, hold={slow: gate}))
+
+    async def run():
+        await _post("warm", timeout=built)
+        pending = asyncio.create_task(_post("slow", timeout=slow))
+        await asyncio.sleep(0.05)
+        try:
+            got = [await asyncio.wait_for(_post(f"b{i}", timeout=built), 2.0) for i in range(calls)]
+            still_building = not pending.done()
+        finally:
+            gate.set()
+        return got, still_building, await pending
+
+    (got, still_building, slow_result), used = asyncio.run(_guarded(run))
+    assert got == [(200, f"b{i}") for i in range(calls)]
+    assert still_building is True
+    assert slow_result == (200, "slow")
+    assert used == []
+
+
+def _recording_handler(seen: list, status: int = 200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content or b"{}"))
+        if status != 200:
+            return httpx.Response(status, content=f"upstream said {status}".encode())
+        return _handler(request)
+    return handler
+
+
+@pytest.mark.parametrize("payload,sent_options", [
+    ({"stream": True}, {"include_usage": True}),
+    ({"stream": True, "stream_options": {"include_usage": False}}, {"include_usage": False}),
+])
+def test_a_stream_asks_for_the_usage_chunk_unless_the_caller_chose(monkeypatch, wired, payload, sent_options):
+    builds, _ = wired
+    seen: list = []
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_recording_handler(seen)))
+
+    async def run():
+        return [line async for line in llm_client.provider_stream(
+            "https://provider.invalid/v1/chat/completions", dict(payload), {},
+            timeout=30.0, provider="p", model="m")]
+
+    lines, used = asyncio.run(_guarded(run))
+    assert seen[0]["stream_options"] == sent_options
+    assert "data: [DONE]" in lines
+    assert used == []
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_a_refused_stream_raises_before_any_line(monkeypatch, wired, status):
+    builds, recorded = wired
+    seen: list = []
+    monkeypatch.setattr(httpx, "AsyncClient", _factory(builds, handler=_recording_handler(seen, status)))
+    lines: list = []
+
+    async def run():
+        with pytest.raises(llm_client.ProviderStreamError) as err:
+            async for line in llm_client.provider_stream(
+                    "https://provider.invalid/v1/chat/completions", {"stream": True}, {},
+                    timeout=30.0, provider="p", model="m"):
+                lines.append(line)
+        return err.value
+
+    err, used = asyncio.run(_guarded(run))
+    assert (err.status, err.text) == (status, f"upstream said {status}")
+    assert lines == []
+    assert recorded == []
+    assert used == []
