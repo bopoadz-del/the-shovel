@@ -7,6 +7,7 @@ content-aware, not filename-only, and an unmatched document is reported as
 `unrecognised` so the caller can ASK rather than silently guess.
 """
 
+import functools
 import json
 import logging
 import re
@@ -37,13 +38,34 @@ def _custom_file() -> str:
     return os.path.join(data_dir, "custom_document_types.json")
 
 
-def _load_builtins() -> List[Dict[str, Any]]:
-    path = _builtin_file()
-    if not os.path.exists(path):
-        return []
-    with open(path, "r", encoding="utf-8") as f:
+def _table_key(path: str):
+    """What identifies one version of the types file on disk: its path, its
+    modification time and its size. ``None`` when there is no file. An edit
+    to the file changes the key, so a cached read never outlives the file."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (path, st.st_mtime_ns, st.st_size)
+
+
+@functools.lru_cache(maxsize=4)
+def _read_table(key) -> Dict[str, Any]:
+    """The parsed types file for one ``_table_key``: read once per version of
+    the file, not once per classify call (the backfill classifies every
+    document of a project in one pass)."""
+    with open(key[0], "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    return data.get("document_types", []) or []
+    return data if isinstance(data, dict) else {}
+
+
+def _builtin_table() -> Dict[str, Any]:
+    key = _table_key(_builtin_file())
+    return _read_table(key) if key is not None else {}
+
+
+def _load_builtins() -> List[Dict[str, Any]]:
+    return list(_builtin_table().get("document_types", []) or [])
 
 
 def _load_custom() -> List[Dict[str, Any]]:
@@ -133,14 +155,16 @@ def _ar_prefixes() -> List[str]:
     """One-word Arabic clitics (article, conjunction, preposition) that may
     stand glued before a keyword: "والعقد" is "and the contract". Read from
     the types table (``arabic_prefixes``), longest first, so the regex tries
-    "لل" before "ل"."""
-    path = _builtin_file()
-    if not os.path.exists(path):
-        return []
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    out = {_norm(str(p)) for p in (data.get("arabic_prefixes") or []) if str(p).strip()}
-    return sorted(out, key=lambda p: (-len(p), p))
+    "لل" before "ل". Cached per version of the file, like the type list."""
+    key = _table_key(_builtin_file())
+    return list(_prefixes_for(key)) if key is not None else []
+
+
+@functools.lru_cache(maxsize=4)
+def _prefixes_for(key) -> tuple:
+    raw = _read_table(key).get("arabic_prefixes") or []
+    out = {_norm(str(p)) for p in raw if str(p).strip()}
+    return tuple(sorted(out, key=lambda p: (-len(p), p)))
 
 
 def _has_word(keyword: str, text: str, prefixes: List[str]) -> bool:

@@ -392,3 +392,74 @@ def test_common_names_that_tie_two_kinds_are_untyped(name, expected):
 ])
 def test_latin_content_phrases_still_match_inside_words(content, expected):
     assert doc_types.classify("annex_04.pdf", content)["name"] == expected
+
+
+# ── the types file is read once per version, not once per classify call ──────
+
+@pytest.mark.parametrize("edit, reads, expected", [
+    # unchanged file: the second call reads nothing
+    (None, 1, ["ال"]),
+    # same size, new modification time: read again, the new list is seen
+    ("mtime", 2, ["لل"]),
+    # new size, modification time forced back to the old one: read again
+    ("size", 2, ["وال"]),
+], ids=["unchanged", "new_mtime", "new_size"])
+def test_the_types_file_is_cached_per_version(tmp_path, monkeypatch,
+                                              edit, reads, expected):
+    import os
+    path = tmp_path / "document_types.yaml"
+    path.write_text("arabic_prefixes: ['ال']\ndocument_types: []\n", encoding="utf-8")
+    st = os.stat(path)
+    monkeypatch.setattr(doc_types, "_builtin_file", lambda: str(path))
+    doc_types._read_table.cache_clear()
+    doc_types._prefixes_for.cache_clear()
+    real, calls = doc_types.yaml.safe_load, []
+    monkeypatch.setattr(doc_types.yaml, "safe_load",
+                        lambda f: calls.append(1) or real(f))
+
+    assert doc_types._ar_prefixes() == ["ال"]
+    assert doc_types._load_builtins() == []
+    if edit == "mtime":
+        path.write_text("arabic_prefixes: ['لل']\ndocument_types: []\n", encoding="utf-8")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    elif edit == "size":
+        path.write_text("arabic_prefixes: ['وال']\ndocument_types: []\n", encoding="utf-8")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert doc_types._ar_prefixes() == expected
+    assert doc_types._load_builtins() == []
+    assert len(calls) == reads
+
+
+# ── mixed Latin / Arabic names ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("name, expected", [
+    # a Latin word, a space, an Arabic keyword: the Arabic word types it
+    ("Tower عقد.pdf", "contract"),
+    # the Latin letters glued to the Arabic keyword: one longer word, untyped
+    ("Towerعقد.pdf", "unrecognised"),
+    # a Latin keyword, a space, an Arabic word: the Latin word types it
+    ("Inspection برج.pdf", "inspection_request"),
+    # Arabic letters glued to the Latin keyword: one longer word, untyped
+    ("Inspectionبرج.pdf", "unrecognised"),
+], ids=["ar_kw_spaced", "ar_kw_glued", "latin_kw_spaced", "latin_kw_glued"])
+def test_a_mixed_latin_arabic_name_types_by_whole_words(name, expected):
+    assert doc_types.classify(name)["name"] == expected
+
+
+# ── digits glued to a keyword ────────────────────────────────────────────────
+# A digit is a word character (unchanged for Latin names since before the
+# Arabic rule): a keyword with a digit glued on is a different token and does
+# not type the name; a separator between them does. Arabic-Indic digits
+# behave exactly like Latin digits.
+
+@pytest.mark.parametrize("name, expected", [
+    ("Inspection-07.pdf", "inspection_request"),
+    ("Inspection07.pdf", "unrecognised"),
+    ("07Inspection.pdf", "unrecognised"),
+    ("عقد ٠٧.pdf", "contract"),
+    ("عقد٠٧.pdf", "unrecognised"),
+    ("٠٧عقد.pdf", "unrecognised"),
+], ids=["latin_sep", "latin_glued_after", "latin_glued_before",
+        "arabic_indic_sep", "arabic_indic_glued_after", "arabic_indic_glued_before"])
+def test_digits_glued_to_a_keyword(name, expected):
+    assert doc_types.classify(name)["name"] == expected
