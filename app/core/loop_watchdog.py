@@ -20,9 +20,12 @@ turns it off.
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
 import os
+import re
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -124,6 +127,37 @@ def process_cpu_ms() -> float:
     return (t.user + t.system) * 1000.0
 
 
+#: The whole process's CPU on the SAME clock as the per-thread figures.
+_PROC_STAT = "/proc/self/stat"
+
+
+def _proc_stat_cpu_ms(stat_path: str = _PROC_STAT) -> Optional[float]:
+    """Process CPU (user + system) from ``/proc/self/stat``, in the same clock
+    ticks as ``/proc/self/task/*/stat``; None where the file is absent."""
+    try:
+        with open(stat_path, "rb") as fh:
+            fields = fh.read().rsplit(b")", 1)[1].split()
+        tick = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        return (int(fields[11]) + int(fields[12])) * 1000.0 / tick
+    except (OSError, ValueError, IndexError) as exc:
+        # Not Linux, or an unreadable stat line: the caller falls back to
+        # os.times(), and says nothing about the per-thread clock match.
+        _LOG.debug("process cpu from %s unavailable: %r", stat_path, exc)
+        return None
+
+
+def cpu_snapshot(task_dir: Optional[str] = None, stat_path: str = _PROC_STAT) -> tuple:
+    """``(process_ms, {native_tid: thread_ms})`` read back to back from one
+    clock. CI e312ea2 logged threads=820ms against proc=190ms for one stall:
+    the per-thread figures came from ``/proc`` ticks and the process figure
+    from ``os.times()`` read at a different instant, so the two could not be
+    compared. Both now come from ``/proc`` in one pass; ``os.times()`` is the
+    fallback only where ``/proc`` is absent."""
+    threads = thread_cpu_ms() if task_dir is None else thread_cpu_ms(task_dir)
+    proc = _proc_stat_cpu_ms(stat_path)
+    return (process_cpu_ms() if proc is None else proc), threads
+
+
 def host_cpu(stat_path: str = _HOST_STAT) -> dict:
     """Host-wide CPU ticks since boot -- ``busy`` (user, nice, system, irq,
     softirq), ``steal`` and ``total`` -- plus ``running`` (runnable tasks now).
@@ -160,13 +194,20 @@ def stall_cpu_summary(threads_before: dict, threads_after: dict, proc_ms: Option
     window: a process total near the window with many threads is a GIL
     convoy; a process total far below it while the host is busy (or stolen
     from) is the runner starving the whole process."""
-    used = [after - threads_before.get(t, 0.0) for t, after in threads_after.items()]
+    # A thread absent from the earlier snapshot started inside the window;
+    # its lifetime total is not a delta, so it is counted apart (new=) and
+    # kept out of the sum the process total is compared against.
+    fresh = [t for t in threads_after if threads_before and t not in threads_before]
+    used = [after - threads_before.get(t, 0.0) for t, after in threads_after.items()
+            if t not in fresh]
     used = [d for d in used if d > 0]
     parts = [f"window={window_ms:.0f}ms"]
     if proc_ms is not None:
         parts.append(f"proc={proc_ms:.0f}ms")
     if threads_after:
         parts.append(f"threads={sum(used):.0f}ms/{len(used)}")
+    if fresh:
+        parts.append(f"new={len(fresh)}")
     total = host_after.get("total", 0) - host_before.get("total", 0)
     if total > 0:
         busy = host_after.get("busy", 0) - host_before.get("busy", 0)
@@ -192,11 +233,113 @@ def heartbeat_lag_ms(posted: float, served_at: Optional[float], now: float) -> f
     return max(0.0, (end - posted) * 1000)
 
 
+#: How late a heartbeat may be before the live dump fires. Below the stall
+#: limit on purpose, so the dump lands WHILE the loop is still blocked.
+DEFAULT_LIVE_MS = 150.0
+_LIVE_FRAMES = 12
+#: At most this many live dumps are kept per monitor (the worst ones); each is
+#: a whole-process stack text, and a monitor runs for the life of the process.
+LIVE_KEEP = 16
+_FH_THREAD = re.compile(r"^(Current thread|Thread) (0x[0-9a-fA-F]+)")
+_FH_FRAME = re.compile(r'^\s+File "(.*)", line (\d+) in (.*)$')
+#: faulthandler has ONE process-wide timer; one monitor at a time may own it.
+_live_owner_lock = threading.Lock()
+
+
+def format_live_dump(text: str, names: dict, max_frames: int = _LIVE_FRAMES) -> str:
+    """faulthandler's all-threads dump as one line, ``[thread] file:line func
+    <- ...`` innermost first. Code locations only, like ``sample_stacks``.
+    ``*`` marks the thread faulthandler names as current."""
+    parts: list = []
+    head, frames = None, []
+
+    def flush() -> None:
+        if head is not None:
+            parts.append(f"[{head}] " + " <- ".join(frames[:max_frames]))
+
+    for line in text.splitlines():
+        m = _FH_THREAD.match(line)
+        if m:
+            flush()
+            ident = int(m.group(2), 16)
+            star = "*" if m.group(1).startswith("Current") else ""
+            head, frames = f"{star}{names.get(ident, m.group(2))}", []
+            continue
+        f = _FH_FRAME.match(line)
+        if f and head is not None:
+            frames.append(f"{f.group(1)}:{f.group(2)} {f.group(3).strip()}")
+    flush()
+    return " || ".join(parts)
+
+
+def keep_worst(kept: list, item: tuple, cap: int = LIVE_KEEP) -> None:
+    """Add ``(lag_ms, text)`` to ``kept``, holding at most ``cap`` entries:
+    when full, the least late one is dropped, so the worst stalls survive."""
+    kept.append(item)
+    if len(kept) > cap:
+        kept.remove(min(kept, key=lambda e: e[0]))
+
+
+class LiveDump:
+    """Dumps every thread's stack DURING a stall, not after it.
+
+    The sampler thread (``sample_stacks``) is Python: it needs the GIL to wake,
+    so when a thread holds the GIL across a long call the sampler wakes only
+    once that call has returned and records the loop back in ``select`` (CI
+    e312ea2: turn-io_3 burned 630 ms, and the stacks showed it already in the
+    next call). ``faulthandler.dump_traceback_later`` runs its timer on a C
+    thread that reads the frames without the GIL, so a timer armed for each
+    heartbeat and cancelled by the heartbeat itself fires only while that
+    heartbeat is late, and shows what was running then."""
+
+    def __init__(self, after_ms: float) -> None:
+        self.after_s = after_ms / 1000
+        self._fh = None
+        if after_ms > 0 and _live_owner_lock.acquire(blocking=False):
+            self._fh = tempfile.TemporaryFile()
+
+    @property
+    def active(self) -> bool:
+        return self._fh is not None
+
+    def arm(self, after_s: Optional[float] = None) -> None:
+        """(Re)arm the one timer; arming again replaces the pending one."""
+        if self._fh is not None:
+            delay = self.after_s if after_s is None else after_s
+            faulthandler.dump_traceback_later(delay, repeat=False, file=self._fh)
+
+    def cancel(self) -> None:
+        if self._fh is not None:
+            faulthandler.cancel_dump_traceback_later()
+
+    def take(self) -> str:
+        """What the timer wrote since the last take (empty if it never fired)."""
+        if self._fh is None:
+            return ""
+        fd = self._fh.fileno()
+        size = os.fstat(fd).st_size
+        if not size:
+            return ""
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, size)
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        return raw.decode("utf-8", "replace")
+
+    def close(self) -> None:
+        if self._fh is not None:
+            faulthandler.cancel_dump_traceback_later()
+            self._fh.close()
+            self._fh = None
+            _live_owner_lock.release()
+
+
 class LagMonitor:
     """Measures how late the loop serves a heartbeat; optionally logs stalls."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop, threshold_ms: float = _DEFAULT_MS,
-                 tick_ms: float = _DEFAULT_TICK_MS, log: bool = True) -> None:
+                 tick_ms: float = _DEFAULT_TICK_MS, log: bool = True,
+                 live_ms: float = 0.0) -> None:
         self.loop, self.threshold, self.tick = loop, threshold_ms / 1000, tick_ms / 1000
         self.log = log
         self.max_lag_ms = 0.0
@@ -216,6 +359,19 @@ class LagMonitor:
         self._cpu_before: dict = {}
         self._proc_before = 0.0
         self._host_before: dict = {}
+        #: In-stall capture (``LiveDump``); off unless ``live_ms`` > 0.
+        self._live = LiveDump(live_ms) if live_ms > 0 else None
+        #: Stalls whose live dump fired: (lag_ms, dump) -- what ran DURING it.
+        #: Bounded to the LIVE_KEEP worst (``keep_worst``).
+        self.live_dumps: list[tuple[float, str]] = []
+        #: Worst oversleep of this thread past its tick: a GIL hold that began
+        #: between heartbeats, which ``max_lag_ms`` cannot see (see
+        #: ``_sleep_watched``). Reported beside the lag, never folded into it.
+        self.max_wake_late_ms = 0.0
+        #: Heartbeats late past ``live_ms`` but served under the threshold:
+        #: near misses, counted (their dump is not kept). A heartbeat already
+        #: served never adds one -- serving it cancels the timer.
+        self.live_near_misses = 0
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
@@ -225,6 +381,8 @@ class LagMonitor:
     def stop(self) -> None:
         self._stop.set()
         self._thread.join(timeout=2)
+        if self._live is not None:
+            self._live.close()
 
     def _note_loop_thread(self) -> None:
         self._loop_ident = threading.get_ident()
@@ -234,14 +392,34 @@ class LagMonitor:
             served = threading.Event()
             served_at: list[float] = []
 
-            def _serve(served=served, served_at=served_at) -> None:
+            live = self._live
+
+            def _serve(served=served, served_at=served_at, live=live) -> None:
                 served_at.append(time.monotonic())
+                if live is not None:
+                    # Re-armed from the serve, not cancelled: the monitor needs
+                    # the GIL to arm its sleep timer, so a hold that begins
+                    # between this serve and that arm was invisible (CI #396
+                    # 9f775c1: a 0.6 s hold, max_lag 1, no dump, no wake-late).
+                    live.arm()
                 served.set()
 
+            # The heartbeat is stamped BEFORE the monitor's CPU snapshot, as
+            # #380 shipped it: what the timing test measures is unchanged here
+            # (advisor ruling 04:18Z; moving the stamp is its own proposal).
+            # The live timer is armed with the stamp, so a GIL hold that
+            # begins while the snapshot reads /proc -- each read releases the
+            # GIL -- is dumped too. Armed after the snapshot, that window was
+            # blind (CI #396 d3c7ef0: a 0.6 s hold, max_lag 2, no dump).
             posted = time.monotonic()
+            if live is not None:
+                # Names now: a thread in the dump may have exited by the time
+                # the stall ends and the dump is formatted.
+                armed_names = {t.ident: t.name for t in threading.enumerate()}
+                live.arm()
             if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
-                self._cpu_before, self._cpu_at = thread_cpu_ms(), posted
-                self._proc_before, self._host_before = process_cpu_ms(), host_cpu()
+                self._proc_before, self._cpu_before = cpu_snapshot()
+                self._cpu_at, self._host_before = posted, host_cpu()
             try:
                 self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
@@ -250,6 +428,11 @@ class LagMonitor:
                 break
             sample = ""
             stalled = not served.wait(self.threshold)
+            resumed = time.monotonic()
+            if live is not None and not stalled:
+                # Back with the GIL: the gap the serve re-armed for is over.
+                # Cancelled here, the monitor's own work below never fires it.
+                live.cancel()
             if stalled:
                 # Sample now and keep re-sampling while the stall persists, so
                 # the stack we keep is the loop caught in the act (the deepest,
@@ -279,14 +462,20 @@ class LagMonitor:
                 # when the loop itself was idle-but-late. Leads the sample, so
                 # a truncated message still names it.
                 names = {t.native_id: t.name for t in threading.enumerate()}
-                threads_now = thread_cpu_ms()
+                proc_now, threads_now = cpu_snapshot()
                 cpu = busiest_threads(self._cpu_before, threads_now, names)
                 # Process- and host-wide totals over the same window, so the
                 # line itself tells a GIL convoy from a starved runner.
                 total = stall_cpu_summary(
-                    self._cpu_before, threads_now, process_cpu_ms() - self._proc_before,
+                    self._cpu_before, threads_now, proc_now - self._proc_before,
                     self._host_before, host_cpu(), (time.monotonic() - self._cpu_at) * 1000)
                 sample = f"{cpu} {total} :: {sample}" if cpu else f"{total} :: {sample}"
+                dump = live.take() if live is not None else ""
+                if dump:
+                    idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
+                    during = format_live_dump(dump, idents)
+                    keep_worst(self.live_dumps, (lag_ms, during))
+                    sample = f"{sample} :: DURING {during}"
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:
@@ -295,7 +484,40 @@ class LagMonitor:
                 # Recorded and (if logging) logged: signal last so a waiter that
                 # sees the event also sees both.
                 self.stall_recorded.set()
-            self._stop.wait(self.tick)
+            elif live is not None:
+                dump = live.take()
+                # How long past the serve this thread got the GIL back: a hold
+                # that began after the serve shows here, not in lag_ms.
+                gap_ms = (resumed - served_at[0]) * 1000 if served_at else 0.0
+                if dump and gap_ms >= live.after_s * 1000:
+                    self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
+                    idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
+                    keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
+                elif dump:  # late past live_ms, under the limit
+                    self.live_near_misses += 1
+            self._sleep_watched(live, armed_names if live is not None else {})
+
+    def _sleep_watched(self, live: Optional[LiveDump], armed_names: dict) -> None:
+        """Sleep one tick, and catch a GIL hold that starts during the sleep.
+
+        This thread is Python: a call that holds the GIL from inside this
+        sleep keeps it asleep too, and when the call returns the next
+        heartbeat is posted and served at once -- lag 0, a stall the
+        heartbeat never sees. So the C timer stays armed across the sleep
+        (tick + live), and the oversleep itself is measured: ``wake_late``
+        is how long past its tick this thread could not run."""
+        if live is not None:
+            live.arm(self.tick + live.after_s)
+        slept_from = time.monotonic()
+        self._stop.wait(self.tick)
+        late_ms = max(0.0, (time.monotonic() - slept_from - self.tick) * 1000)
+        self.max_wake_late_ms = max(self.max_wake_late_ms, late_ms)
+        if live is not None:
+            live.cancel()
+            dump = live.take()
+            if dump:
+                idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
+                keep_worst(self.live_dumps, (late_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
 
 
 def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> Optional[LagMonitor]:

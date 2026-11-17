@@ -130,6 +130,11 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 ENV VITE_API_BASE=""
+# The bundle carries the commit it was built from, so a tab can tell when it
+# runs a different build than the server (frontend lib/buildCheck.js). Same
+# --build-arg GIT_SHA the runtime stage reads; blank leaves the check silent.
+ARG GIT_SHA
+ENV VITE_BUILD_ID=$GIT_SHA
 RUN npm run build
 
 # Same digest as the builder stage above -- keep the two in step.
