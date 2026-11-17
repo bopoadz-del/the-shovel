@@ -1304,6 +1304,163 @@ def _render_answers_docx(
     return path
 
 
+#: The Sources line of a produced document that cites nothing.
+_NO_SOURCES_LINE = "No document was cited in this answer."
+#: A bracketed whole number already in the answer's text (a clause or note
+#: reference). It is held out of the contract run so that only the markers the
+#: contract itself numbered are stripped from the document body.
+_BRACKET_NUMBER_RE = re.compile(r"\[(\d+)\]")
+_HELD_OPEN, _HELD_CLOSE = "", ""
+_HELD_RE = re.compile(_HELD_OPEN + r"(\d+)" + _HELD_CLOSE)
+_HEADING_LINE_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.+?)\s*#*\s*$")
+_BOLD_LINE_RE = re.compile(r"^\s*(?:\*\*|__)(?P<text>[^*_\n]+?)(?:\*\*|__)\s*$")
+#: A line ending in a question mark of any script (Latin, Arabic, full-width).
+_ENDS_ASKING_RE = re.compile(r"[?؟？⸮][\s*_]*$")
+#: Sentence-final punctuation of any script: a line ending in one is prose,
+#: not a title.
+_ENDS_SENTENCE_RE = re.compile(r"[.!?:;؟۔。！？][\s*_]*$")
+#: ``label: body`` -- a short label of any script, then a colon.
+_LABELLED_LINE_RE = re.compile(
+    r"^[ \t]*(?:[-*•][ \t]+)?[*_]*[ \t]*(?P<label>[^:：\n\d]{1,40}?)[ \t]*[*_]*[ \t]*[:：]"
+    r"[ \t]*[*_]*[ \t]*(?P<body>.+?)[ \t]*[*_]*[ \t]*[.۔]?[ \t]*$"
+)
+#: A parenthesised or bracketed span.
+_SPAN_RE = re.compile(r"[ \t]*[(\[](?P<inner>[^()\[\]\n]{1,260})[)\]]")
+
+
+def _cited_line(entry: Dict[str, Any]) -> str:
+    doc = str(entry.get("document") or "").strip()
+    sec = str(entry.get("section") or "").strip()
+    return f"{doc}, {sec}" if doc and sec else doc
+
+
+def _names_a_source(text: str, names: List[str]) -> bool:
+    """True when ``text`` names one of the cited documents or a file."""
+    from app.agents.answer_contract import _FILE_EXTS
+
+    low = (text or "").lower()
+    if any(n and n.lower() in low for n in names):
+        return True
+    return bool(re.search(rf"\.(?:{_FILE_EXTS})\b", low, re.IGNORECASE))
+
+
+def _drop_cited_span(m: "re.Match[str]", names: List[str], found: List[str]) -> str:
+    """A bracketed span that names a cited document or a file leaves the text
+    (its citation goes to ``found``); any other bracketed span -- a note, a
+    dimension, an aside -- stays as written."""
+    if _names_a_source(m.group("inner"), names):
+        found.append(m.group("inner").strip())
+        return ""
+    return m.group(0)
+
+
+def _is_source_line(line: str, names: List[str]) -> str | None:
+    """The citation a line carries when the line is nothing but a citation.
+
+    Structural, in any language: a short label (at most three words, no
+    figure), a colon, and a body that names a cited document or a file, with
+    at most a few words (a page or section) beside it. Returns the body, else
+    ``None``.
+    """
+    from app.agents.answer_contract import _FILE_EXTS
+
+    m = _LABELLED_LINE_RE.match(line or "")
+    if not m or len(m.group("label").split()) > 3:
+        return None
+    body = m.group("body").strip()
+    if not _names_a_source(body, names):
+        return None
+    rest = body
+    for n in sorted((n for n in names if n), key=len, reverse=True):
+        rest = re.sub(re.escape(n), " ", rest, flags=re.IGNORECASE)
+    rest = re.sub(rf"[^\s,;،]+\.(?:{_FILE_EXTS})\b", " ", rest, flags=re.IGNORECASE)
+    words = [w for w in re.split(r"[\s,;،؛]+", rest) if w and not w.isdigit()]
+    return body if len(words) <= 4 else None
+
+
+def _requested_document(answer: str, stored: Any, fallback_title: str) -> Dict[str, Any]:
+    """The document a produce-a-file export of ``answer`` is (W2-a).
+
+    ``stored`` is the assistant message's own structured citations
+    (``agent_memory.attach_citations``); the source list is built from them.
+    Re-reading the text is only the fallback for an answer stored without
+    them. Every step is structural, so it holds for an answer in any
+    language:
+
+    * the answer contract (``app.agents.answer_contract``) numbers the
+      citations it recognises and drops padding and machinery wording;
+    * a line that is nothing but a citation of a cited document or a file,
+      and a bracketed span naming one, leave the body;
+    * a closing question to the reader (the last line ends in a question
+      mark of any script and carries no figure) leaves the body;
+    * only the markers the contract itself numbered are stripped: a
+      bracketed number that was in the answer (a clause or note) stays;
+    * the title is the answer's own title -- its opening heading, a bold
+      opening line, or a short opening line with no sentence punctuation --
+      else ``fallback_title``. Never the user's request.
+
+    Returns ``{"title", "body", "citations"}``; ``citations`` are the source
+    lines, in the order the answer cited them.
+    """
+    from app.agents import answer_contract
+    from app.lib.markdown_docx import strip_inline_markdown
+
+    entries = [e for e in (stored or []) if isinstance(e, dict) and str(e.get("document") or "").strip()]
+    held = _BRACKET_NUMBER_RE.sub(lambda m: f"{_HELD_OPEN}{m.group(1)}{_HELD_CLOSE}", answer or "")
+    rows = [{"doc_name": e["document"], "page_or_section": e.get("section") or ""} for e in entries]
+    done = answer_contract.apply(held, sources=rows)
+    numbered = {int(e["marker"]) for e in done.citations if isinstance(e.get("marker"), int)}
+    names = [str(e.get("document") or "").strip() for e in [*entries, *done.citations]]
+
+    fallback: List[str] = [_cited_line(e) for e in done.citations]
+
+    lines: List[str] = []
+    for line in (done.text or "").split("\n"):
+        body = _is_source_line(line, names)
+        if body is not None:
+            fallback.extend(p.strip() for p in re.split(r"[;؛]", body) if p.strip())
+            continue
+        lines.append(_SPAN_RE.sub(lambda m: _drop_cited_span(m, names, fallback), line).rstrip())
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len([ln for ln in lines if ln.strip()]) > 1:
+        last = lines[-1]
+        if _ENDS_ASKING_RE.search(last) and not re.search(r"\d", _HELD_RE.sub("", last)):
+            lines.pop()
+    text = "\n".join(lines)
+    if numbered:
+        text = re.sub(
+            r"[ \t]*\[(\d+)\]",
+            lambda m: "" if int(m.group(1)) in numbered else m.group(0),
+            text,
+        )
+    text = _HELD_RE.sub(lambda m: f"[{m.group(1)}]", text)
+
+    title = ""
+    body_lines = text.split("\n")
+    first = next((i for i, ln in enumerate(body_lines) if ln.strip()), None)
+    if first is not None:
+        line = body_lines[first]
+        m = _HEADING_LINE_RE.match(line) or _BOLD_LINE_RE.match(line)
+        if m:
+            title = m.group("text")
+        elif (len(line.split()) <= 10 and not _ENDS_SENTENCE_RE.search(line)
+              and any(ln.strip() for ln in body_lines[first + 1:])):
+            title = line
+        title = strip_inline_markdown(title).strip()
+        if title:
+            body_lines = body_lines[first + 1:]
+
+    if entries:
+        ordered = sorted((e for e in entries if isinstance(e.get("marker"), int)), key=lambda e: e["marker"])
+        ordered += [e for e in entries if not isinstance(e.get("marker"), int)]
+        sources = [_cited_line(e) for e in ordered]
+    else:
+        sources = fallback
+    citations = [c for c in dict.fromkeys(c.strip() for c in sources) if c]
+    return {"title": title or fallback_title, "body": "\n".join(body_lines).strip(), "citations": citations}
+
+
 def _render_message_docx(
     project_name: str,
     assistant_text: str,
@@ -1311,8 +1468,16 @@ def _render_message_docx(
     message_index: int,
     base_url: str = "",
     sources: list | None = None,
+    *,
+    title: str | None = None,
+    citations: List[str] | None = None,
 ) -> str:
     """Render a single assistant message to a temp DOCX and return its path.
+
+    With ``title`` and ``citations`` (a produced document, W2-a, see
+    ``_requested_document``) the file is headed by the document's own title
+    and lists its sources once, at the end; without them it is the plain
+    conversation excerpt, unchanged.
 
     Markdown is RENDERED, not printed: an exported
     ``word/document.xml`` once carried literal asterisks
@@ -1328,13 +1493,12 @@ def _render_message_docx(
     from app.lib.markdown_docx import render_markdown_into_docx
 
     doc = Document()
-    title = doc.add_heading(f"{project_name} - Conversation Excerpt", level=0)
-    for run in title.runs:
+    heading = doc.add_heading(title or f"{project_name} - Conversation Excerpt", level=0)
+    for run in heading.runs:
         run.font.size = Pt(18)
 
-    subtitle = doc.add_paragraph(
-        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    )
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    subtitle = doc.add_paragraph(f"{project_name} — {stamp}" if title else stamp)
     subtitle.runs[0].italic = True
 
     doc.add_paragraph()  # spacer
@@ -1343,7 +1507,10 @@ def _render_message_docx(
 
     doc.add_paragraph()
     doc.add_heading("Sources", level=2)
-    if sources:
+    if citations is not None:
+        for line in citations or [_NO_SOURCES_LINE]:
+            doc.add_paragraph(line)
+    elif sources:
         from app.core.rag.source_class import visible_label
 
         for s in sources:
@@ -1406,12 +1573,19 @@ def _render_message_xlsx(
     project_name: str,
     assistant_text: str,
     conversation_id: str,
+    *,
+    title: str | None = None,
+    citations: List[str] | None = None,
 ) -> str:
     """Render an assistant message to a temp XLSX and return its path.
 
     Markdown pipe-tables (the shape cost/BOQ answers arrive in) become real
     worksheets with a bold header row; prose goes on a Message sheet. A
     message with no tables still exports — Message sheet only.
+
+    With ``title`` and ``citations`` (a produced document, W2-a) the first
+    sheet is headed by the document's title and a last sheet, Sources, lists
+    the sources; without them the workbook is unchanged.
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -1423,15 +1597,16 @@ def _render_message_xlsx(
     wb = Workbook()
     wb.remove(wb.active)
 
-    if prose or not tables:
+    if prose or not tables or title:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         ws = wb.create_sheet("Message")
-        ws.cell(row=1, column=1, value=f"{project_name} - Conversation Excerpt").font = Font(bold=True)
+        ws.cell(row=1, column=1, value=title or f"{project_name} - Conversation Excerpt").font = Font(bold=True)
         ws.cell(
             row=2, column=1,
-            value=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            value=f"{project_name} — {stamp}" if title else stamp,
         ).font = Font(italic=True)
         r = 4
-        for line in prose or [(assistant_text or "").strip()]:
+        for line in prose or ([] if tables else [(assistant_text or "").strip()]):
             # An Excel cell cannot carry mixed runs, so the markers are
             # stripped rather than rendered. H2 found "**Total activities:**
             # 204" sitting in a cell; either way a reader must never see the
@@ -1447,6 +1622,13 @@ def _render_message_xlsx(
                 out = ws.cell(row=r, column=c, value=strip_inline_markdown(cell))
                 if r == 1:
                     out.font = Font(bold=True)
+
+    if citations is not None:
+        ws = wb.create_sheet("Sources")
+        ws.cell(row=1, column=1, value="Sources").font = Font(bold=True)
+        for r, line in enumerate(citations or [_NO_SOURCES_LINE], start=2):
+            ws.cell(row=r, column=1, value=line)
+        ws.column_dimensions["A"].width = 100
 
     with tempfile.NamedTemporaryFile(
         suffix=".xlsx", delete=False, prefix=f"export-{conversation_id[:8]}-"
@@ -1521,8 +1703,12 @@ async def export_conversation_message(
     ),
     scope: str = Query(
         "message",
-        pattern="^(message|answers)$",
-        description="message = one turn (default); answers = answer-range report",
+        pattern="^(message|answers|document)$",
+        description=(
+            "message = one turn as a conversation excerpt (default); "
+            "document = one turn as the document the user asked for (the "
+            "answer's own download control); answers = answer-range report"
+        ),
     ),
     range: str = Query(
         "",
@@ -1533,7 +1719,11 @@ async def export_conversation_message(
 ):
     """Export conversation answers as a downloadable file.
 
-    Default ``scope=message`` is the one-turn excerpt. ``scope=answers``
+    Default ``scope=message`` is the one-turn excerpt. ``scope=document`` is
+    the same turn produced as the document asked for (W2-a): its own title, no
+    chat text, the message's stored citations listed once at the end. The
+    control the user pressed decides which; the answer's wording never does.
+    ``scope=answers``
     compiles a labelled range (or all) of the chat answers into one report — the live H1
     ask, which used to be misread as RFP attachments.
 
@@ -1608,17 +1798,25 @@ async def export_conversation_message(
     except IndexError:
         raise HTTPException(404, f"message_index {message_index} out of range")
 
+    produced = (scope or "message").lower() == "document"
+    answer_text = chosen.get("content") or ""
+    shape: Dict[str, Any] = {}
+    if produced:
+        document = _requested_document(answer_text, chosen.get("citations"), project_name)
+        answer_text = document["body"]
+        shape = {"title": document["title"], "citations": document["citations"]}
     render_source: Dict[str, Any] = {
-        "render": "message", "format": fmt, "project": project_name,
-        "answer": chosen.get("content") or "",
+        "render": "document" if produced else "message", "format": fmt,
+        "project": project_name, "answer": chosen.get("content") or "",
     }
     if fmt == "docx":
         path = _render_message_docx(
             project_name,
-            chosen.get("content") or "",
+            answer_text,
             conversation_id,
             message_index,
             base_url,
+            **shape,
         )
         media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ext = "docx"
@@ -1648,8 +1846,9 @@ async def export_conversation_message(
         else:
             path = _render_message_xlsx(
                 project_name,
-                chosen.get("content") or "",
+                answer_text,
                 conversation_id,
+                **shape,
             )
         media = _XLSX_MEDIA
         ext = "xlsx"
@@ -1662,8 +1861,11 @@ async def export_conversation_message(
     else:
         raise HTTPException(400, f"Unsupported format '{format}'")
 
-    safe_name = _sanitize_filename(project_name)
-    download_name = f"{safe_name}-{conversation_id[:8]}.{ext}"
+    if produced:
+        # A produced document is named after the document it is.
+        download_name = f"{_sanitize_filename(shape['title'][:80])}.{ext}"
+    else:
+        download_name = f"{_sanitize_filename(project_name)}-{conversation_id[:8]}.{ext}"
     _save_produced_to_session(
         project_id, conversation_id, auth["user_id"], path, download_name,
         source=render_source)

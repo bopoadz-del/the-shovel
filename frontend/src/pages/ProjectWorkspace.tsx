@@ -1866,8 +1866,11 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
             suggestionsDisabled={streaming || composerIsBlocked}
             onDownloadMessage={(assistantIndex, format) => {
               if (!id || !conversationId) return
+              // The download control under an answer produces that answer as
+              // a document (W2-a): scope=document. The sidebar's conversation
+              // export stays the plain excerpt.
               void downloadExport(
-                `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}`,
+                `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}&scope=document`,
                 { method: 'POST' },
                 `the-fork-${conversationId.slice(0, 8)}.${format}`,
                 'Download',
