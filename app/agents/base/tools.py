@@ -337,17 +337,38 @@ def bill_rows_statement(result: dict) -> list[Statement]:
                              basis="count", terms=terms, within=within))
         if not rows:
             continue
-        by_unit = bill.get("sum_by_unit")
-        if not isinstance(by_unit, dict) or not by_unit:
-            by_unit = {} if bill.get("sum") is None else {str(bill.get("unit") or ""): bill.get("sum")}
-        for unit, total in by_unit.items():
-            if total is None:
-                continue
-            behind = [r for r in rows if r.get(measure) is not None
-                      and (measure != "quantity" or str(r.get("unit") or "") == unit)]
-            out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
-                                 source=source, rows=tuple(_row_label(r) for r in behind),
-                                 basis="sum", terms=terms, within=within))
+        # Rows of two or more sections: each section's own total is stated
+        # (named by its heading path, with the rows behind it) before the
+        # total of all, so the user sees what was added and can say which
+        # section was meant.
+        by_section = bill.get("by_section")
+        parts = [p for p in (by_section.values() if isinstance(by_section, dict) else [])
+                 if isinstance(p, dict)]
+        if len(parts) > 1:
+            for part in parts:
+                path = [str(t) for t in part.get("section") or []]
+                inside = [r for r in rows if [str(t) for t in r.get("section") or []] == path]
+                out.extend(_sum_statements(part, inside, measure, source, terms,
+                                           (" > ".join(t for t in path if t) or "(no heading)",)))
+        out.extend(_sum_statements(bill, rows, measure, source, terms, within))
+    return out
+
+
+def _sum_statements(totals: dict, rows: list, measure: str, source: str,
+                    terms: tuple, within: tuple) -> list[Statement]:
+    """One sum statement per unit of ``totals`` over ``rows``."""
+    by_unit = totals.get("sum_by_unit")
+    if not isinstance(by_unit, dict) or not by_unit:
+        by_unit = {} if totals.get("sum") is None else {str(totals.get("unit") or ""): totals.get("sum")}
+    out: list[Statement] = []
+    for unit, total in by_unit.items():
+        if total is None:
+            continue
+        behind = [r for r in rows if r.get(measure) is not None
+                  and (measure != "quantity" or str(r.get("unit") or "") == unit)]
+        out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
+                             source=source, rows=tuple(_row_label(r) for r in behind),
+                             basis="sum", terms=terms, within=within))
     return out
 
 
@@ -385,6 +406,11 @@ async def handle_bill_rows_aggregate(call: ToolCall) -> dict:
             section=str(args.get("section") or ""),
             measure=measure,
             document_id=(str(args.get("document_id") or "").strip() or None),
+            # The rows are chosen from the user's own words, never the
+            # model's (bill_aggregate.selection_from_ask): the same ask selects
+            # the same rows whatever terms the call carries, and an ask that
+            # selects nothing says so. A missing message is an empty ask.
+            ask=call.user_message or "",
         )
     except ValueError as exc:
         return {"name": name, "ok": False, "result": {"status": "error", "error": str(exc)}}
