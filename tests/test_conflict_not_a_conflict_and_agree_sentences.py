@@ -176,6 +176,10 @@ def test_the_agreement_reading(sentence, agrees):
     ("The Harlow drawing and the Harlow bill agree.", [], False),
     ("The sources are consistent on the fire rating.", [], False),
     ("Both documents give 200 mm, they match.", [], False),
+    # A typed value with no word of its own: the sentence still states a
+    # value, so it is not an agreement about nothing (two inputs).
+    ("Both documents match: C32/40.", [], False),
+    ("They agree: 25/11/2027.", [], False),
 ])
 def test_an_agreement_naming_no_other_thing(sentence, docs, none):
     assert agreement_names_no_thing(sentence, docs) is none
