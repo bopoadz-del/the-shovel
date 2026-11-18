@@ -12,6 +12,8 @@ reads), ``model_provider``, ``embedder``, ``credential``, ``endpoint``,
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from app.core import deployment_profile as dp
@@ -238,6 +240,39 @@ def test_refusal_prints_setting_name_and_verdict_only(setting, value, read_from_
         assert part not in text, f"stage=boot: {part!r} read from the value leaked"
     refused = [o for o in err.value.offenders if o.setting == setting]
     assert len(refused) == 1 and refused[0].reason in text
+
+
+# A value that carries credentials and a path: user, password, host and a
+# secret path. None of its parts may reach the refusal or any log line, at
+# any level (#445 grader, 10:57Z).
+@pytest.mark.parametrize(
+    "setting,value,parts,table",
+    [
+        ("DATABASE_URL",
+         "postgresql://wrenfold_admin:Pq7-hollow-lantern@db.quarry-north.example:5432/vault-7731/ledger",
+         ["wrenfold_admin", "Pq7-hollow-lantern", "db.quarry-north.example", "quarry-north",
+          "vault-7731", "ledger"],
+         {"db.quarry-north.example": ["8.8.8.8"]}),
+        ("ARCHIVE_SYNC_URL",
+         "https://ossery.ops:Zt4_brine_kettle@relay.fenmarch.example/drop/kestrel-secret-19?token=amber44",
+         ["ossery.ops", "Zt4_brine_kettle", "relay.fenmarch.example", "fenmarch",
+          "kestrel-secret-19", "amber44"],
+         {}),  # does not resolve: cannot be shown to stay inside
+    ],
+)
+def test_credentials_row_never_reaches_refusal_or_log(caplog, setting, value, parts, table):
+    env = {**_CLEAN_ONPREM, setting: value}
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(dp.DeploymentProfileError) as err:
+        dp.assert_onprem_ready(env, resolve=_resolver(table))
+    text = str(err.value)
+    assert setting in text, f"stage=boot: the setting is named: {text}"
+    logged = [r.getMessage() for r in caplog.records]
+    assert logged, "stage=boot: the check logged nothing, so the log was not exercised"
+    for part in parts:
+        assert part not in text, f"stage=boot: {part!r} read from the value leaked into the refusal"
+        for line in logged:
+            assert part not in line, f"stage=boot: {part!r} leaked into a log line: {line!r}"
 
 
 @pytest.mark.parametrize("host", ["db.vendor-one.example", "1.0.0.1"])

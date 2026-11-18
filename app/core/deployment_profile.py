@@ -203,7 +203,7 @@ def _as_ip(text: str):
     try:
         return ipaddress.ip_address(literal)
     except ValueError:
-        logger.debug("on-prem check: %r is not an address literal", literal)
+        logger.debug("on-prem check: a host is not an address literal")
         return None
 
 
