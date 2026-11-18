@@ -467,3 +467,14 @@ def test_on_equal_depth_the_newer_sample_is_kept(frames):
 @pytest.mark.parametrize("kept", [_sample(_IDLE), _sample(_BLOCKED)])
 def test_an_empty_resample_never_replaces_a_kept_sample(kept):
     assert loop_watchdog.keep_deeper_sample(kept, "") == kept
+
+
+@pytest.mark.parametrize("kept", [
+    "[w1] a.py:1 f",
+    "[w2] b.py:2 g <- c.py:3 h || [w3] d.py:4 k",
+])
+def test_an_empty_resample_never_wipes_a_sample_without_a_loop_stack(kept):
+    # both have loop depth 0, so only the empty-resample rule keeps the
+    # threads' frames that were already captured during the stall
+    assert loop_watchdog.loop_depth(kept) == 0
+    assert loop_watchdog.keep_deeper_sample(kept, "") == kept
