@@ -433,6 +433,7 @@ def apply(
     computed: bool = False,
     asking: bool = False,
     question: str | None = None,
+    evidence: Iterable[dict[str, Any]] | None = None,
 ) -> Contracted:
     """The answer in contract form. ``sources`` are the turn's Sources rows
     (used only to fill a citation's page, passage and tier); ``computed`` is
@@ -441,7 +442,11 @@ def apply(
     is the user's next action, so its wording is left as asked (citations and
     the coverage footer still leave the text). ``question`` is the user's
     question when known: it sharpens which evidence values answer the same
-    thing when documents are checked for conflicts (C2)."""
+    thing when documents are checked for conflicts (C2). ``evidence`` is
+    every passage the turn was handed (pre-injected excerpts and tool
+    passages): conflicts are checked over it as well as over ``sources``,
+    since a Sources row names only what the answer cited and may carry no
+    passage."""
     if not isinstance(text, str) or not text.strip():
         return Contracted(text=text)
     try:
@@ -462,7 +467,8 @@ def apply(
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 
-        found = detect(text, rows, question)
+        handed = [r for r in (evidence or []) if isinstance(r, dict)]
+        found = detect(text, rows + handed, question)
         structured: list[dict[str, Any]] = []
         if found:
             lines, structured = _conflict_lines(found, markers)
