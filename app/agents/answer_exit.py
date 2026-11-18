@@ -87,14 +87,6 @@ class Turn:
     #: Paths that never see the turn's messages -- the wall-clock deadline,
     #: the crash safety net, the exit check -- recover from these.
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
-    #: Figures a tool stated as its result (a payload's ``stated_figures``:
-    #: ``value``, ``shown``). The answer that leaves must carry each of them.
-    stated_figures: list[dict[str, Any]] = field(default_factory=list)
-    #: Each computed result of the turn, in call order: the tool, its
-    #: payload, the figures it stated and the plain statements it made. The
-    #: answer's lead is built from these, never from the model's text.
-    computed_results: list[dict[str, Any]] = field(default_factory=list)
-
     #: Every passage the turn put in front of the model (pre-injected
     #: excerpts and tool passages), one row each: ``doc_id``, ``doc_name``,
     #: ``page``, ``page_or_section``, ``chunk_index``, ``snippet``. The
@@ -250,14 +242,6 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
             if err and err != question:
                 turn.error_questions.setdefault(err, question)
         turn.step_names.update(_call_names(tool, payload))
-        figures = _stated_figures(payload)
-        for fig in figures:
-            if fig not in turn.stated_figures:
-                turn.stated_figures.append(fig)
-        statements = _plain_statements(payload)
-        if figures or statements:
-            turn.computed_results.append({"tool": tool, "payload": payload,
-                                          "figures": figures, "statements": statements})
         for err in _error_texts(payload):
             turn.step_names.update(_error_step_names(err))
             label = _step_label(tool, payload)
@@ -310,234 +294,6 @@ def recovered_answer(turn: Turn | None = None) -> str:
         return ""
     text = text if isinstance(text, str) else ""
     return text if has_words(text) and text.strip() != _EMPTY_RESPONSE_FALLBACK else ""
-
-
-def _stated_figures(payload: Any, depth: int = 0) -> list[dict[str, Any]]:
-    """Every figure of each ``stated_figures`` anywhere in a tool payload,
-    as a ``value`` number and the ``shown`` text the tool prints it as."""
-    out: list[dict[str, Any]] = []
-    if depth > 6:
-        return out
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if key == "stated_figures" and isinstance(value, dict):
-                # Parallel lists of plain values: ``values`` and ``shown``.
-                values = value.get("values")
-                shown = value.get("shown")
-                values = values if isinstance(values, list) else []
-                shown = shown if isinstance(shown, list) else []
-                out.extend({"value": float(v),
-                            "shown": str(shown[i]) if i < len(shown) and shown[i] else str(v)}
-                           for i, v in enumerate(values)
-                           if isinstance(v, (int, float)) and not isinstance(v, bool))
-            else:
-                out.extend(_stated_figures(value, depth + 1))
-    elif isinstance(payload, list):
-        for value in payload:
-            out.extend(_stated_figures(value, depth + 1))
-    return out
-
-
-def _plain_statements(payload: Any, depth: int = 0) -> list[str]:
-    """Every ``statement`` sentence a computed result carries next to its
-    ``stated_figures`` (the tool's own words for what it selected and found)."""
-    out: list[str] = []
-    if depth > 6:
-        return out
-    if isinstance(payload, dict):
-        text = payload.get("statement")
-        if isinstance(text, str) and text.strip() and "stated_figures" in payload:
-            out.append(text.strip())
-        for key, value in payload.items():
-            if key != "statement":
-                out.extend(_plain_statements(value, depth + 1))
-    elif isinstance(payload, list):
-        for value in payload:
-            out.extend(_plain_statements(value, depth + 1))
-    return out
-
-
-#: Arabic-Indic and Eastern Arabic-Indic digits and the Arabic decimal mark
-#: read as the Latin ones; every thousands separator (comma, space, no-break
-#: and thin spaces, the Arabic thousands mark) reads as a comma.
-_NUMBER_FORMS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
-                               **{chr(0x06F0 + i): str(i) for i in range(10)},
-                               "٫": ".", "٬": ",", " ": " ",
-                               " ": " ", " ": " ", " ": " "})
-_ANSWER_NUMBER_RE = re.compile(r"(?<![\w.])\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
-#: A list marker at the start of a line ("1." "2)" "-" "*") is layout, not a figure.
-_LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+")
-#: A number and the word printed right after it (its unit: ``m``, ``items``).
-_CLAIM_RE = re.compile(r"(?<![\w.])(\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|\d+(?:\.\d+)?)\s*([^\W\d_]+)")
-
-
-def _number_text(text: str) -> str:
-    return (text or "").translate(_NUMBER_FORMS)
-
-
-def _as_number(text: str) -> float:
-    return float(re.sub(r"[, ]", "", text))
-
-
-def _answer_numbers(text: str) -> set[float]:
-    """Every number written in ``text``; a number grouped by any thousands
-    separator (or written in Arabic digits) is ONE number."""
-    return {_as_number(n) for n in _ANSWER_NUMBER_RE.findall(_number_text(text))}
-
-
-def _unit_claims(text: str) -> dict[str, set[float]]:
-    """The numbers ``text`` states per unit word (``{"m": {18.0}}``)."""
-    out: dict[str, set[float]] = {}
-    for num, unit in _CLAIM_RE.findall(_number_text(text)):
-        out.setdefault(unit.casefold(), set()).add(_as_number(num))
-    return out
-
-
-def _same(a: float, b: float) -> bool:
-    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
-
-
-def computed_leads(turn: Turn | None) -> list[str]:
-    """The tool statements a computed answer leads with: one per computed
-    result of the turn that stated a figure, in call order, an identical
-    statement once. A result that selected nothing states no figure and does
-    not lead. Which call is "the" answer is never guessed: every call that
-    stated a figure is shown, the user's ask chose each one's rows."""
-    if turn is None:
-        return []
-    leads: list[str] = []
-    for res in turn.computed_results:
-        if res["figures"]:
-            lead = _computed_lead(res, turn.question or "")
-            if lead and lead not in leads:
-                leads.append(lead)
-    return leads
-
-
-def _computed_lead(res: dict[str, Any], question: str) -> str:
-    """The tool's own statement of ``res``, worded by the computed-answer
-    renderer (#392) from the tool's declared statement; the tool's plain
-    statement sentences when the tool declares none."""
-    try:
-        from app.agents.core import computed_answer, tool_registry
-
-        spec = tool_registry.result_spec(str(res.get("tool") or ""))
-        stater = getattr(spec, "statement", None)
-        if spec is not None and getattr(spec, "kind", "") == "computed" and stater is not None:
-            statements = list(stater(res["payload"]) or [])
-            if statements:
-                language = computed_answer.question_language(question)
-                return computed_answer.render_call(
-                    computed_answer.heading_for(getattr(spec, "display_name", "") or spec.name, language),
-                    statements, asked={}, error="", language=language,
-                    declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
-    except Exception:  # noqa: BLE001 -- the plain statements below still lead
-        _LOG.warning("answer_exit: computed lead not rendered", exc_info=True)
-    return "\n".join(res["statements"]) or "; ".join(f["shown"] for f in res["figures"])
-
-
-def _states_a_foreign_figure(text: str, allowed: set[float]) -> bool:
-    """Whether ``text`` states a number that is not ``allowed`` (the model's
-    own arithmetic, or a row's quantity read as a total). A list marker at
-    the start of a line is layout, not a figure."""
-    for line in text.split("\n"):
-        marker = _LIST_MARKER_RE.match(line)
-        body = line[len(marker.group(0)):] if marker else line
-        if any(not any(_same(n, a) for a in allowed) for n in _answer_numbers(body)):
-            return True
-    return False
-
-
-def _restates_a_claim(text: str, figures: list[dict[str, Any]]) -> bool:
-    """Whether ``text`` states two different figures in a unit the tool
-    stated exactly ONE figure in (a self-correction: '2,246 m ... correction,
-    5,244 m'). Which of the two is meant is not the reader's to guess."""
-    stated: dict[str, set[float]] = {}
-    for fig in figures:
-        for unit, values in _unit_claims(fig["shown"]).items():
-            stated.setdefault(unit, set()).update(values)
-    said = _unit_claims(text)
-    return any(len(stated[u]) == 1 and len(said.get(u, ())) > 1 for u in stated)
-
-
-def _lines(text: str) -> list[str]:
-    return [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
-
-
-def _several_line(line: str) -> bool:
-    """``line`` is the computed renderer's own 'N computed results' header."""
-    from app.agents.core import computed_answer
-
-    for lab in computed_answer.LABELS.values():
-        pattern = re.escape(lab.get("several", "")).replace(re.escape("{n}"), r"\d+")
-        if pattern and re.fullmatch(pattern, line):
-            return True
-    return False
-
-
-#: The one correction line a computed answer may carry.
-FIGURE_REMOVED = ("The reply's own text stated a figure the tool did not and was withheld; "
-                  "the tool's figure above stands.")
-
-
-def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
-    """The exit check for a computed turn: the user reads the TOOL's
-    statements first, never the model's arithmetic.
-
-    * The answer leads with :func:`computed_leads`: every computed result
-      that stated a figure, in call order, an identical statement once. A
-      lead whose every line the text already carries (the computed-result
-      recovery rendered it) is not stated again.
-    * The numbers the rest may state are the tool's stated figures, the
-      leads' own numbers and the user's question's numbers -- NOT every
-      number of the tool's payload (a row quantity is not a total).
-    * The model's own text follows WHOLE or not at all: when any of it
-      states another number, or states two different figures in a unit the
-      tool stated one figure in (a self-correction), all of it is withheld
-      and one line says so.
-    * When no computed result of the turn stated a figure (its ask selected
-      nothing) and the reply states a figure anyway, the reply is replaced
-      by the tool's plain statement that nothing was selected.
-
-    A turn with no computed result is returned unchanged."""
-    turn = turn if turn is not None else _TURN.get()
-    if not isinstance(text, str) or not text.strip() or turn is None or not turn.computed_results:
-        return text
-    allowed = _answer_numbers(turn.question or "")
-    for fig in turn.stated_figures:
-        allowed.add(fig["value"])
-        allowed |= _answer_numbers(fig["shown"])
-    leads = computed_leads(turn)
-    if not leads:
-        if not _states_a_foreign_figure(text, allowed):
-            return text
-        plain = list(dict.fromkeys(s for res in turn.computed_results for s in res["statements"]))
-        # A result is recorded only with a figure or a statement, so a turn
-        # whose results stated no figure always has a plain statement here.
-        return "\n".join(plain)
-    lead_lines: set[str] = set()
-    for lead in leads:
-        allowed |= _answer_numbers(lead)
-        lead_lines.update(_lines(lead))
-    present = set(_lines(text))
-    missing = [lead for lead in leads if not set(_lines(lead)) <= present]
-    shown = [lead for lead in leads if lead not in missing]
-    # The rest of the text: every line that is neither a lead's line nor the
-    # renderer's own count header, in its order.
-    rest = "\n".join(ln for ln in text.split("\n")
-                     if ln.strip() not in lead_lines and not _several_line(ln.strip()))
-    rest = re.sub(r"\n{3,}", "\n\n", rest).strip()
-    withheld = bool(rest) and (_states_a_foreign_figure(rest, allowed)
-                               or _restates_a_claim(rest, turn.stated_figures))
-    if shown:
-        # The text already states the tool's results (the computed recovery):
-        # it stands as rendered, a missing lead first, the model's rest held.
-        kept = text if not withheld else "\n".join(
-            ln for ln in text.split("\n") if ln.strip() in lead_lines or _several_line(ln.strip()))
-        parts = missing + [kept.strip()] + ([FIGURE_REMOVED] if withheld else [])
-    else:
-        parts = leads + ([FIGURE_REMOVED] if withheld else [rest])
-    return "\n\n".join(p for p in parts if p)
 
 
 def _note_passage(turn: Turn, rec: Any) -> None:
@@ -2085,8 +1841,7 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     rows = fixed.get("sources")
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
-        fixed["answer"] = hold_stated_figures(
-            check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows), turn)
+        fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
         fixed = _apply_contract(fixed, "answer", rows, turn)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
@@ -2115,8 +1870,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
     if not isinstance(content, str) or not content.strip():
         content = streamed
     if isinstance(content, str) and content.strip():
-        checked = hold_stated_figures(
-            check_text_or_fallback(content, turn=turn, index=index, sources=rows), turn)
+        checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
             fixed = _apply_contract(fixed, "content", rows, turn)

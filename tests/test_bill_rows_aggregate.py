@@ -210,27 +210,22 @@ def runtime():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("project_id, args, ask, ok, field, value", [
-    (None, {"terms": "paint"}, "how many paint rows?", False, "error", "no project in scope"),
-    ("p", {"terms": "backfill", "section": "trenches", "document_id": "s1"},
-     "total quantity of backfill in the trenches", True, "sum", 1267.0),
-    ("p", {"terms": "emulsion", "measure": "AMOUNT", "document_id": "d2"},
-     "total cost of emulsion", True, "sum", 1650.0),
-    ("p", {"terms": "paint", "measure": "rate"}, "total cost of paint", False, "error",
+@pytest.mark.parametrize("project_id, args, ok, field, value", [
+    (None, {"terms": "paint"}, False, "error", "no project in scope"),
+    ("p", {"terms": "backfill", "section": "trenches", "document_id": "s1"}, True, "sum", 1267.0),
+    ("p", {"terms": "emulsion", "measure": "AMOUNT", "document_id": "d2"}, True, "sum", 1650.0),
+    ("p", {"terms": "paint", "measure": "rate"}, False, "error",
      "measure must be one of ('quantity', 'amount')"),
-    ("p", {"terms": "paint", "document_id": "s9"}, "how many paint rows?", False, "reason",
-     agg.NO_DERIVED_SHEET),
+    ("p", {"terms": "paint", "document_id": "s9"}, False, "reason", agg.NO_DERIVED_SHEET),
 ], ids=["no-project", "quantity", "amount", "bad-measure", "no-sheet"])
-async def test_tool_handler(runtime, two_bills, project_id, args, ask, ok, field, value):
-    # The rows come from the user's message (a chat turn always carries one);
-    # the call's own terms name the same rows here.
+async def test_tool_handler(runtime, two_bills, project_id, args, ok, field, value):
     from app.agents.base.tools import handle_bill_rows_aggregate
     from app.agents.core.tool_registry import ToolCall
 
     direct = await handle_bill_rows_aggregate(ToolCall(
-        agent=runtime, name="bill_rows_aggregate", args=args, project_id=project_id, user_message=ask,
+        agent=runtime, name="bill_rows_aggregate", args=args, project_id=project_id,
     ))
-    out = await runtime._run_tool_call(_tool_call(args), project_id=project_id, user_message=ask)
+    out = await runtime._run_tool_call(_tool_call(args), project_id=project_id)
     assert out == direct
     assert out["ok"] is ok
     result = out["result"]

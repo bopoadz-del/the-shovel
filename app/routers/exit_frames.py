@@ -11,13 +11,6 @@ accumulated tokens when there is none), so the checked text is put on the
 ``end`` frame: what stays on screen and what the Sources list shows is what
 :mod:`app.agents.answer_exit` let through.
 
-On a COMPUTED turn (a tool result stated a figure) the tool speaks first:
-each new tool statement is emitted as its own token frame the moment the
-result is on the turn, in call order, an identical statement once, and from
-then on the model's own tokens are held, not streamed, until the exit check
-on ``end`` has read them (:func:`answer_exit.hold_stated_figures`). The
-user never watches the model state a figure the check then takes back.
-
 Any failure passes the frame through unchanged.
 """
 
@@ -44,29 +37,18 @@ async def with_answer_exit(frames: AsyncIterator[str], question: str = "") -> As
     # The holder lives for this request's task; the next turn gets its own.
     stored, _ = agent_memory.watch_stored_answer()
     streamed: list[str] = []
-    led: list[str] = []
-    seen_results = 0
     async for frame in frames:
         try:
             event = _decode(frame)
             kind = event.get("type") if event else None
-            turn = answer_exit.current_turn() or own
-            if len(turn.computed_results) != seen_results:
-                seen_results = len(turn.computed_results)
-                for lead in await off_loop(answer_exit.computed_leads, turn):
-                    if lead not in led:
-                        led.append(lead)
-                        yield _encode({"type": "token", "content": lead + "\n\n",
-                                       "request_id": (event or {}).get("request_id")})
             if kind == "token" and isinstance(event.get("content"), str):
                 streamed.append(event["content"])
-                if led:
-                    continue  # held: the exit check on ``end`` reads it first
             elif kind == "end" and event is not None:
-                # The agent opens its own record in this same context; the
-                # current one (read above) resolves its evidence's citations.
+                # The agent opens its own record in this same context; read
+                # whichever is current so its evidence resolves citations.
                 # The router knows the asked text even when the agent's own
                 # record was opened without it.
+                turn = answer_exit.current_turn() or own
                 turn.question = turn.question or own.question
                 checked = await off_loop(answer_exit.check_end_event, event, "".join(streamed), turn)
                 frame = _encode(checked)
