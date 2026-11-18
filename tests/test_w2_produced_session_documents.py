@@ -182,11 +182,18 @@ def test_the_kept_file_downloads_again_byte_for_byte(client, fmt):
 
     res = _export(client, headers, pid, sid, fmt)
     (listed,) = _session_docs(client, headers, pid, sid)
+    # From its own chat (the session it was produced in), by its maker.
     again = client.get(
         f"/v1/projects/{pid}/documents/{listed['id']}/download", headers=headers,
+        params={"session_id": sid},
     )
     assert again.status_code == 200, again.text
     assert again.content == res.content
+    # From no chat it is not found (advisor ruling 12:39Z, #451).
+    elsewhere = client.get(
+        f"/v1/projects/{pid}/documents/{listed['id']}/download", headers=headers,
+    )
+    assert elsewhere.status_code == 404, elsewhere.text
 
 
 @pytest.mark.parametrize("who,count", [("owner", 1), ("stranger", 0)])

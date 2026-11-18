@@ -176,7 +176,7 @@ def test_index_project_hands_structured_pages_to_the_chunk_store(
         "uploaded_at": "2026-11-14T00:00:00Z", "size": 1, "bytes_state": "present",
     }
     seen: dict = {}
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: [doc])
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: [doc])
     monkeypatch.setattr(doc_index, "_load_index", lambda pid: None)
     monkeypatch.setattr(doc_index, "_write_index", lambda pid, data: None)
     monkeypatch.setattr(doc_index, "_record_document_attributes", lambda *a: None)

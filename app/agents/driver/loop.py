@@ -26,6 +26,26 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 #: How much of one tool result the model is given.
 _TOOL_RESULT_CHARS = 20000
 
+
+def _shown_to_model(text: str) -> str:
+    """A tool result as the model gets it: whole when it fits; otherwise a
+    valid envelope that keeps every figure, unit and selection whole, with
+    how many rows each row list holds, and a preview of the rest -- never a
+    raw slice that no longer parses."""
+    if len(text) <= _TOOL_RESULT_CHARS:
+        return text
+    from app.agents.runtime import _compacted_tool_payload
+
+    note = f"Tool result exceeded {_TOOL_RESULT_CHARS} characters and was cut."
+    # The preview is re-escaped inside the envelope and the envelope adds its
+    # own fields, so keeping _TOOL_RESULT_CHARS of preview overshoots the cap.
+    # The PREVIEW gives way first, measured on the real envelope; the outline
+    # (figure, unit, selection, row counts) keeps a fixed budget. max_chars
+    # makes the fit a guarantee: an outline over the cap by itself (a
+    # statement is never cut) is replaced by a minimal one.
+    return _compacted_tool_payload(text, _TOOL_RESULT_CHARS, note=note,
+                                   outline_budget=_TOOL_RESULT_CHARS // 4, max_chars=_TOOL_RESULT_CHARS)
+
 _STOP = ("I could not finish this answer within the steps a turn may take. "
          "Please narrow the question or split it into parts.")
 
@@ -443,7 +463,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 if envelope.get("status") != "success" and str(envelope.get("question") or "").strip():
                     questions.append(str(envelope["question"]).strip())
             else:
-                shown = json.dumps(_without_missing_pages(result_of_call), default=str)[:_TOOL_RESULT_CHARS]
+                shown = _shown_to_model(json.dumps(_without_missing_pages(result_of_call), default=str))
                 if isinstance(envelope, dict) and envelope.get("status") == "success":
                     tabled.extend(render.record_lists(envelope))
             msgs.append({**tool_msg, "content": shown})

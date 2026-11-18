@@ -9,6 +9,8 @@ specification.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import json
 import re
 from pathlib import Path
@@ -51,6 +53,7 @@ def _corpus(tmp_path, monkeypatch):
 
     embedder = get_embedder()
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     names = {}
     for doc in _load():
         texts = [c["text"] for c in doc["chunks"]]

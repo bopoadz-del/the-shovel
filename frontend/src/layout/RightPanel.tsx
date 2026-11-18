@@ -34,6 +34,8 @@ interface Props {
   graph: ReactNode
   /** Project the previewable documents belong to. */
   projectId?: string
+  /** The open chat: a file attached to it is previewable only from it. */
+  sessionId?: string | null
   /** Documents available to preview (newest first — index 0 is the default). */
   documents?: PreviewDocument[]
   /** Documents the latest answer cited, including Master Corpus / GK. */
@@ -75,7 +77,7 @@ const PREVIEW_EMPTY: Record<'sheet' | 'schedule' | 'chart', string> = {
 }
 
 export default function RightPanel({
-  sources, graph, projectId, documents = [], citedDocuments = [],
+  sources, graph, projectId, sessionId, documents = [], citedDocuments = [],
   previewRequest = null, sourcesRequest = null, onPreviewHydrated, expanded = false, onToggleExpand,
 }: Props) {
   const [tab, setTab] = useState<TabKey>('sources')
@@ -148,6 +150,7 @@ export default function RightPanel({
             </label>
             <DocumentPreview
               projectId={projectId ?? ''}
+              sessionId={sessionId}
               document={selectedDoc}
               emptyLabel={PREVIEW_EMPTY[kind]}
               onHydrated={onPreviewHydrated}

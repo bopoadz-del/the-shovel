@@ -255,7 +255,7 @@ def _fetch_turn(tool_result: dict) -> list[dict]:
 def _real_fetch(monkeypatch, name: str, text: str, chunks: list[str] | None) -> dict:
     """Run the real fetch_document tool on one invented document."""
     doc = {"id": "doc-" + name[:6], "original_name": name, "file_path": "/nowhere"}
-    monkeypatch.setattr("app.core.projects.list_documents", lambda pid: [doc])
+    monkeypatch.setattr("app.core.projects.list_documents", lambda pid, **_kw: [doc])
     monkeypatch.setattr("app.core.doc_index.extract_document_text",
                         lambda file_path, filename: text)
     if chunks is None:

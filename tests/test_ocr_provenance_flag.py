@@ -96,7 +96,7 @@ def test_index_project_passes_ocr_flags_to_rag(tmp_path, monkeypatch, ocr_pages,
     monkeypatch.setattr(retriever_mod, "index_chunks", fake_index_chunks)
     monkeypatch.setattr(
         doc_index._projects, "list_documents",
-        lambda pid: [{
+        lambda pid, **_kw: [{
             "id": "doc-1",
             "original_name": "scan.pdf",
             "uploaded_at": "t",

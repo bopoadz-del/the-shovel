@@ -14,6 +14,8 @@ or live SAR figures.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import importlib
 
 import pytest
@@ -217,6 +219,7 @@ def isolated_store(tmp_path, monkeypatch):
     from sqlalchemy import delete as _sa_delete
     e = Embedder(model_name="fake")
     store = get_store(dim=e.dim)
+    give_documents_table(store)
     with store._lock:
         with store._session_factory()() as session:
             session.execute(_sa_delete(store._rag_chunk_cls))

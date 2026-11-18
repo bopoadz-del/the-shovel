@@ -26,6 +26,7 @@ import logging
 import os
 from contextlib import nullcontext
 import re
+import time
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from threading import Lock
@@ -33,7 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import cast, delete, func, or_, select, text
+from sqlalchemy import cast, delete, false, func, or_, select, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -900,6 +901,39 @@ def _memo_get(key: tuple):
     return _MISS if memo is None else memo.get(key, _MISS)
 
 
+def _query_ref(query: Optional[str]) -> str:
+    """A query as a log may carry it: its length in characters and a short
+    sha256, never its words. Equal queries give equal refs, so log lines
+    still join on it."""
+    q = query or ""
+    digest = hashlib.sha256(q.encode("utf-8")).hexdigest()[:12]
+    return f"chars={len(q)} sha256={digest}"
+
+
+def _terms_ref(terms) -> str:
+    """Terms taken from a question (needles, identifiers) as a log may carry
+    them: how many and a short sha256 of the list, never the terms. Equal
+    lists give equal refs, so log lines still join on it."""
+    items = [str(t) for t in (terms or [])]
+    digest = hashlib.sha256("".join(items).encode("utf-8")).hexdigest()[:12]
+    return f"count={len(items)} sha256={digest}"
+
+
+def _error_ref(exc: BaseException) -> str:
+    """A database error as a log may carry it: its class, the driver's class
+    and the SQLSTATE when there is one. Never its message: SQLAlchemy
+    renders the bound parameters into it (the query) and FTS5 echoes the
+    MATCH text."""
+    orig = getattr(exc, "orig", None)
+    parts = [type(exc).__name__]
+    if orig is not None:
+        parts.append(type(orig).__name__)
+        state = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+        if state:
+            parts.append(f"sqlstate={state}")
+    return " ".join(parts)
+
+
 def _memo_put(key: tuple, value):
     memo = _TURN_MEMO.get()
     if memo is not None:
@@ -943,6 +977,18 @@ def fused_candidates_record(project_id: str) -> Optional[Dict[str, Any]]:
 def _memoised(key: tuple, compute):
     hit = _memo_get(key)
     return _memo_put(key, compute()) if hit is _MISS else hit
+
+
+_TERM_COUNT_CACHE_LOCK = Lock()
+# The session-scope clause when the scope cannot be computed: no row.
+_NO_ROW_SQL = " AND 1 = 0"
+
+
+def _projects_scope_key():
+    """The turn's chat-session scope, for memo keys of scoped searches."""
+    from app.core import projects as _projects
+
+    return _projects.current_session_scope()
 
 
 def hidden_document_predicate(prefix: str = "", *, postgres: bool = True) -> str:
@@ -1315,15 +1361,26 @@ class VectorStore:
         """True when search uses pgvector ANN on PostgreSQL."""
         return self._use_pgvector
 
+    _VISIBILITY_REPROBE_S = 30.0
+
     def _docs_visibility_ready(self, session: Optional[Session] = None) -> bool:
         """True when ``documents.retrieval_visible`` can gate this store.
 
-        Isolated hybrid-test DBs create only the chunks table. A missing
-        documents table must not empty the result set — those chunks stay
-        visible. Cached per store after the first probe.
+        Isolated hybrid-test DBs create only the chunks table. A store the
+        documents table cannot gate cannot compute the session scope either,
+        so its project-wide reads return no candidate (``_session_hidden_ids``
+        fails closed). ``True`` is cached per store; ``False`` is probed again
+        after ``_VISIBILITY_REPROBE_S``, so one failed probe does not leave a
+        store reading nothing for the life of the process.
         """
-        if self._visibility_ready is not None:
-            return self._visibility_ready
+        if self._visibility_ready is True:
+            return True
+        now = time.monotonic()
+        if (self._visibility_ready is False
+                and now - getattr(self, "_visibility_probed_at", now)
+                < self._VISIBILITY_REPROBE_S):
+            return False
+        self._visibility_probed_at = now
         close = False
         if session is None:
             session = self._session_factory()()
@@ -1362,9 +1419,72 @@ class VectorStore:
             f"AND {hidden_document_predicate('d.', postgres=self._use_pgvector)})"
         )
 
-    def _hidden_doc_ids(self, session: Session, project_id: str) -> Set[str]:
+    def _session_hidden_ids(
+        self, session: Session, project_id: str,
+    ) -> Optional[Set[str]]:
+        """Chat-session files out of the turn's session scope.
+
+        The document list's rule (``projects.document_in_scope``) applied to
+        search: another session's files, or another user's, are never
+        candidates. ``None`` when the set cannot be computed -- the documents
+        table cannot gate this store, or reading it failed. The rule fails
+        CLOSED: every caller then reads NO candidate of the project from this
+        store, never every session's files."""
         if not self._docs_visibility_ready(session):
-            return set()
+            return None
+        from app.core import projects as _projects
+
+        # One lookup per turn, not one per search leg: the turn's legs share
+        # the scope, and a session file uploaded mid-turn is not this turn's.
+        key = ("session_hidden", project_id, _projects.current_session_scope())
+        try:
+            return set(_memoised(key, lambda: frozenset(
+                _projects.session_hidden_document_ids(project_id, db_session=session))))
+        except SQLAlchemyError:
+            session.rollback()
+            # Not latched as "ungated": one failed read decides this call only.
+            logger.warning("session scope unreadable; the project's search "
+                           "returns no candidates this call", exc_info=True)
+            return None
+
+    def _session_visible(self, stmt: Any, session: Session, project_id: str) -> Any:
+        """``stmt`` restricted to chunks in the turn's session scope.
+
+        No row at all when the hidden set cannot be computed (fail closed)."""
+        hidden = self._session_hidden_ids(session, project_id)
+        if hidden is None:
+            return stmt.where(false())
+        if hidden:
+            return stmt.where(self._rag_chunk_cls.doc_id.not_in(sorted(hidden)))
+        return stmt
+
+    def _session_hidden_sql(
+        self, session: Session, project_id: str, column: str, params: Dict[str, Any],
+    ) -> str:
+        """AND-clause leaving out ``_session_hidden_ids``; binds into ``params``.
+
+        ``AND 1 = 0`` (no row) when the hidden set cannot be computed."""
+        hidden = self._session_hidden_ids(session, project_id)
+        if hidden is None:
+            return _NO_ROW_SQL
+        ids = sorted(hidden)
+        if not ids:
+            return ""
+        names = []
+        for i, did in enumerate(ids):
+            key = f"_session_hidden_{i}"
+            params[key] = did
+            names.append(f":{key}")
+        return f" AND {column} NOT IN ({', '.join(names)})"
+
+    def _hidden_doc_ids(
+        self, session: Session, project_id: str,
+    ) -> Optional[Set[str]]:
+        """Ids no reader may see; ``None`` = every row is hidden (the session
+        scope cannot be computed, ``_session_hidden_ids``)."""
+        in_other_session = self._session_hidden_ids(session, project_id)
+        if in_other_session is None:
+            return None
         try:
             from app.core.ingest_status import NO_CHUNK_STATUSES
 
@@ -1379,9 +1499,8 @@ class VectorStore:
             ).scalars().all()
         except SQLAlchemyError:
             session.rollback()
-            self._visibility_ready = False
-            return set()
-        return {str(r) for r in rows}
+            return None
+        return {str(r) for r in rows} | in_other_session
 
     def check_identity(self) -> Optional[Dict[str, Any]]:
         """Read-only: compare the stored corpus identity (model/dim/normalized)
@@ -1665,31 +1784,51 @@ class VectorStore:
 
     # ── Read ─────────────────────────────────────────────────────────────
 
-    def count(self, project_id: Optional[str] = None) -> int:
+    def count(
+        self, project_id: Optional[str] = None, *, all_sessions: bool = False,
+    ) -> int:
+        """Chunk rows, of ``project_id`` when given.
+
+        A project's count leaves out the chunks of chat-session files out of
+        the current session scope (``_session_hidden_ids``), as search does;
+        ``all_sessions`` counts every row."""
         with self._lock:
             with self._session_factory()() as session:
                 stmt = select(func.count()).select_from(self._rag_chunk_cls)
                 if project_id is not None:
                     stmt = stmt.where(self._rag_chunk_cls.project_id == project_id)
+                    if not all_sessions:
+                        stmt = self._session_visible(stmt, session, project_id)
                 return int(session.scalar(stmt) or 0)
 
     def has_chunks(self, project_id: str) -> bool:
-        """Whether the project has any chunk: one index probe, not a count."""
+        """Whether the project has any chunk in the current session scope:
+        one index probe, not a count. Another session's file's chunks do
+        not make the project searchable (``_session_hidden_ids``)."""
         with self._lock:
             with self._session_factory()() as session:
-                return session.execute(
+                stmt = (
                     select(self._rag_chunk_cls.chunk_id)
                     .where(self._rag_chunk_cls.project_id == project_id)
-                    .limit(1)
-                ).first() is not None
+                )
+                stmt = self._session_visible(stmt, session, project_id)
+                return session.execute(stmt.limit(1)).first() is not None
 
-    def count_by_doc(self, project_id: str) -> Dict[str, int]:
+    def count_by_doc(
+        self, project_id: str, *, all_sessions: bool = False,
+    ) -> Dict[str, int]:
         """Return a ``{doc_id: chunk_count}`` map for ``project_id``.
 
         Uses the ``idx_chunks_doc`` index; one small GROUP BY regardless of
         corpus size. This is the source of truth for per-document chunk
         counts, including chunks written by ``/v1/admin/corpus/bulk-insert``
         (which bypasses the legacy ``doc_index`` JSON blob).
+
+        Chat-session files out of the current session scope are left out
+        (``_session_hidden_ids``, the rule every search leg applies), so a
+        project-wide count never counts another session's file.
+        ``all_sessions`` is for maintenance that must see every row
+        (reconcile, ingest bookkeeping, the admin write check).
         """
         with self._lock:
             with self._session_factory()() as session:
@@ -1698,7 +1837,13 @@ class VectorStore:
                     .where(self._rag_chunk_cls.project_id == project_id)
                     .group_by(self._rag_chunk_cls.doc_id)
                 )
-                return {row[0]: int(row[1]) for row in session.execute(stmt).all()}
+                counts = {row[0]: int(row[1]) for row in session.execute(stmt).all()}
+                if all_sessions or not counts:
+                    return counts
+                hidden = self._session_hidden_ids(session, project_id)
+                if hidden is None:
+                    return {}
+                return {d: n for d, n in counts.items() if str(d) not in hidden}
 
     def doc_chunk_texts(
         self, project_id: str, doc_ids: List[str]
@@ -1867,9 +2012,14 @@ class VectorStore:
         self, session: Session, project_id: str, doc_ids: List[str],
     ) -> Set[str]:
         """``_hidden_doc_ids`` restricted to ``doc_ids`` -- primary-key probes
-        instead of reading every document row of the project."""
-        if not doc_ids or not self._docs_visibility_ready(session):
+        instead of reading every document row of the project. Every one of
+        ``doc_ids`` when the session scope cannot be computed (fail closed)."""
+        if not doc_ids:
             return set()
+        wanted = {str(d) for d in doc_ids}
+        in_other_session = self._session_hidden_ids(session, project_id)
+        if in_other_session is None:
+            return wanted
         try:
             from app.core.ingest_status import NO_CHUNK_STATUSES
 
@@ -1885,9 +2035,8 @@ class VectorStore:
             ).scalars().all()
         except SQLAlchemyError:
             session.rollback()
-            self._visibility_ready = False
-            return set()
-        return {str(r) for r in rows}
+            return wanted
+        return {str(r) for r in rows} | (in_other_session & wanted)
 
     def chunks_containing_all(
         self,
@@ -1958,6 +2107,11 @@ class VectorStore:
                     vis = ""
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql(self._table_name)
+                    # Outside the readiness guard: a store that cannot compute the
+                    # session scope reads no row (fail closed), not every row.
+                    vis += self._session_hidden_sql(
+                        session, project_id, f"{self._table_name}.doc_id", params,
+                    )
                     sql = text(
                         "SELECT chunk_id, project_id, doc_id, chunk_index, text, "
                         "knowledge_layer, authority, page, ocr "
@@ -1971,8 +2125,8 @@ class VectorStore:
                     rows = session.execute(sql, params).all()
         except Exception as exc:  # noqa: BLE001 — rescue must not break the turn
             logger.warning(
-                "chunks_containing_all failed for project=%s needles=%r: %s",
-                project_id, cleaned, exc,
+                "chunks_containing_all failed for project=%s needles %s: %s",
+                project_id, _terms_ref(cleaned), _error_ref(exc),
             )
             return []
         return [
@@ -2055,7 +2209,7 @@ class VectorStore:
         except Exception as exc:  # noqa: BLE001 — rescue must not break the turn
             logger.warning(
                 "chunks_following failed for project=%s anchors=%s: %s",
-                project_id, list(wanted), exc,
+                project_id, list(wanted), _error_ref(exc),
             )
             return []
         return [self._row_as_chunk(r) for r in rows]
@@ -2122,15 +2276,15 @@ class VectorStore:
                 state = "no_lexeme_match"
                 logger.info(
                     "lexical leg empty: no query lexeme in project=%s; "
-                    "semantic-only for this layer. query=%r",
-                    project_id, (query_text or "")[:120],
+                    "semantic-only for this layer. query %s",
+                    project_id, _query_ref(query_text),
                 )
             else:
                 state = "no_chunks"
                 logger.warning(
                     "lexical leg empty: project=%s has no chunks at all; "
-                    "semantic-only for this layer. query=%r",
-                    project_id, (query_text or "")[:120],
+                    "semantic-only for this layer. query %s",
+                    project_id, _query_ref(query_text),
                 )
             _memo_put(("lexical_leg", project_id), state)
             return sem_results[:k]
@@ -2209,6 +2363,11 @@ class VectorStore:
                 with self._session_factory()() as session:
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql(self._table_name)
+                    # Outside the readiness guard: a store that cannot compute the
+                    # session scope reads no row (fail closed), not every row.
+                    vis += self._session_hidden_sql(
+                        session, project_id, f"{self._table_name}.doc_id", params,
+                    )
                     sql = text(
                         "SELECT chunk_id, project_id, doc_id, chunk_index, text, "
                         "knowledge_layer, authority, page, ocr "
@@ -2221,8 +2380,8 @@ class VectorStore:
                     rows = session.execute(sql, params).all()
         except OperationalError as e:
             logger.warning(
-                "identifier_search failed for project=%s: %s; identifiers=%r",
-                project_id, e, identifiers,
+                "identifier_search failed for project=%s: %s; identifiers %s",
+                project_id, _error_ref(e), _terms_ref(identifiers),
             )
             return []
 
@@ -2358,11 +2517,13 @@ class VectorStore:
                         .exists()
                     )
                     stmt = stmt.where(~hidden)
+                stmt = self._session_visible(stmt, session, project_id)
                 # ``distance + 0`` is not an expression HNSW can serve, so a
                 # small project is ranked exactly from its own rows.
                 order = distance + 0 if self._project_is_small(session, project_id) else distance
                 stmt = stmt.order_by(order).limit(k)
                 key = ("vector", self._table_name, project_id, k,
+                       _projects_scope_key(),
                        hashlib.sha1(np.asarray(query_vec, dtype=np.float32).tobytes()).hexdigest())
                 rows = _memo_get(key)
                 if rows is _MISS:
@@ -2391,6 +2552,8 @@ class VectorStore:
         with self._lock:
             with self._session_factory()() as session:
                 hidden = self._hidden_doc_ids(session, project_id)
+                if hidden is None:
+                    return []
                 rows = [
                     r for r in session.scalars(stmt).all()
                     if r.doc_id not in hidden
@@ -2482,8 +2645,14 @@ class VectorStore:
             with self._lock:
                 with self._session_factory()() as session:
                     vis = ""
+                    scope_params = dict(scope_params or {})
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql("c")
+                    # Outside the readiness guard: a store that cannot compute the
+                    # session scope reads no row (fail closed), not every row.
+                    vis += self._session_hidden_sql(
+                        session, project_id, "c.doc_id", scope_params,
+                    )
                     rows = self._bm25_postgres_rows(
                         session, project_id, safe_query, int(k), vis + scope_sql,
                         scope_params,
@@ -2497,9 +2666,9 @@ class VectorStore:
             # half-working retriever is what let this class of bug live in
             # production while every test stayed green.
             logger.error(
-                "bm25_search (postgres) unavailable on %s: %s; query=%r — "
+                "bm25_search (postgres) unavailable on %s: %s; query %s — "
                 "retrieval is running SEMANTIC-ONLY for this request",
-                table, e, query, exc_info=True,
+                table, _error_ref(e), _query_ref(query),
             )
             return []
         return [
@@ -2666,6 +2835,8 @@ class VectorStore:
         return freq
 
     _TERM_COUNT_TTL_S = 600.0
+    # One entry per (project, session scope): bounded, oldest written first out.
+    _TERM_COUNT_MAX_ENTRIES = 256
 
     def term_chunk_counts(
         self, project_id: str, terms: Iterable[str],
@@ -2676,9 +2847,13 @@ class VectorStore:
         ``text_search`` tsvector on PostgreSQL, ``chunks_fts`` on SQLite),
         so "the index contains this word" means what a lexical re-query
         could find. A term the index cannot match (a stopword, punctuation
-        only) counts 0. Counts are cached per project for
-        ``_TERM_COUNT_TTL_S``. Backend errors propagate: the caller decides
-        what an unreadable index means.
+        only) counts 0. Chat-session files out of the turn's session scope
+        are not counted, as the other search legs do not read them. Counts
+        are cached per project AND session scope for ``_TERM_COUNT_TTL_S``,
+        so one session's counts are never served to another. Each write drops
+        the expired entries and keeps at most ``_TERM_COUNT_MAX_ENTRIES``
+        (the oldest written go first). Backend errors propagate: the caller
+        decides what an unreadable index means.
         """
         import time as _time
 
@@ -2687,28 +2862,58 @@ class VectorStore:
         cache = getattr(self, "_term_count_cache", None)
         if cache is None:
             cache = self._term_count_cache = {}
-        stamp, counts = cache.get(project_id, (now, {}))
+        cache_key = (project_id, _projects_scope_key())
+        stamp, counts = cache.get(cache_key, (now, {}))
         if now - stamp >= self._TERM_COUNT_TTL_S:
             stamp, counts = now, {}
         todo = [t for t in wanted if t not in counts]
         if todo:
             with self._lock:
                 with self._session_factory()() as session:
-                    vis = (
-                        self._hidden_doc_sql("c")
-                        if self._docs_visibility_ready(session) else ""
+                    vis = ""
+                    params: Dict[str, Any] = {}
+                    if self._docs_visibility_ready(session):
+                        vis = self._hidden_doc_sql("c")
+                    session_vis = self._session_hidden_sql(
+                        session, project_id, "c.doc_id", params,
                     )
-                    for term in todo:
-                        counts[term] = self._term_chunk_count(
-                            session, project_id, term, vis,
+                    if session_vis == _NO_ROW_SQL:
+                        # The scope cannot be computed: no chunk counts, and
+                        # nothing remembered -- the next readable call counts.
+                        return {t: 0 for t in wanted}
+                    vis += session_vis
+                    counts = {**counts, **{
+                        term: self._term_chunk_count(
+                            session, project_id, term, vis, params,
                         )
-            cache[project_id] = (stamp, counts)
+                        for term in todo
+                    }}
+            self._term_count_cache_put(cache, cache_key, stamp, counts, now)
         return {t: counts[t] for t in wanted}
+
+    def _term_count_cache_put(
+        self, cache: Dict[Any, Any], key: Any, stamp: float,
+        counts: Dict[str, int], now: float,
+    ) -> None:
+        """Write one entry; evict expired ones, then the oldest over the cap.
+
+        Under a lock: on PostgreSQL the store lock is a no-op and turns write
+        concurrently."""
+        with _TERM_COUNT_CACHE_LOCK:
+            for k in [k for k, (t, _c) in list(cache.items())
+                      if now - t >= self._TERM_COUNT_TTL_S]:
+                cache.pop(k, None)
+            cache.pop(key, None)  # re-inserted last: insertion order = write order
+            cache[key] = (stamp, counts)
+            while len(cache) > self._TERM_COUNT_MAX_ENTRIES:
+                cache.pop(next(iter(cache)), None)
 
     def _term_chunk_count(
         self, session: Session, project_id: str, term: str, vis: str,
+        params: Optional[Dict[str, Any]] = None,
     ) -> int:
         table = self._table_name
+        params = dict(params or {})
         if self._use_pgvector:
             sql = (
                 f"SELECT count(*) FROM {table} c "
@@ -2716,7 +2921,7 @@ class VectorStore:
                 "AND c.text_search @@ plainto_tsquery('english', :q)" + vis
             )
             return int(session.execute(
-                text(sql), {"project_id": project_id, "q": term},
+                text(sql), {**params, "project_id": project_id, "q": term},
             ).scalar() or 0)
         tokens = _FTS5_SAFE_RE.sub(" ", term).split()
         if not tokens:
@@ -2729,7 +2934,7 @@ class VectorStore:
         )
         phrase = '"' + " ".join(tokens) + '"'
         return int(session.execute(
-            text(sql), {"project_id": project_id, "q": phrase},
+            text(sql), {**params, "project_id": project_id, "q": phrase},
         ).scalar() or 0)
 
     def _bm25_sqlite(
@@ -2747,8 +2952,14 @@ class VectorStore:
         try:
             with self._lock:
                 with self._session_factory()() as session:
+                    scope_params = dict(scope_params or {})
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql("c")
+                    # Outside the readiness guard: a store that cannot compute the
+                    # session scope reads no row (fail closed), not every row.
+                    vis += self._session_hidden_sql(
+                        session, project_id, "c.doc_id", scope_params,
+                    )
                     sql = text(
                         f"""
                         SELECT c.chunk_id, c.project_id, c.doc_id, c.chunk_index,
@@ -2773,9 +2984,9 @@ class VectorStore:
         except OperationalError as e:
             # FTS5 raises on malformed MATCH input. Treat as "no matches."
             logger.warning(
-                "bm25_search (sqlite) FTS5 MATCH failed: %s; query=%r",
-                e,
-                safe_query,
+                "bm25_search (sqlite) FTS5 MATCH failed: %s; query %s",
+                _error_ref(e),
+                _query_ref(safe_query),
             )
             return []
         return [
