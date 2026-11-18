@@ -29,6 +29,14 @@ BELOW_TARGET = "below_target"
 RERANK_CUT = "rerank_cut"
 NOT_HANDED = "not_handed"
 
+#: How deep each leg's own ranking is traced (``leg_top``). A measurement
+#: depth only: reading it changes no ranking. It covers any leg share the
+#: fusion guarantee can be set to without a second trace change.
+LEG_TOP_TRACED = 10
+
+#: The two legs by their rank maps' roles in ``leg_summary``.
+LEG_NAMES = ("vector", "lexical")
+
 
 def leg_summary(
     order: Iterable[Any],
@@ -70,7 +78,48 @@ def leg_summary(
         "n_vector_only": n_vec,
         "fused_k": fused_k,
         **{f"best_{leg}": best[leg] for leg in LEGS},
+        "leg_top": leg_top(order, sem_rank, bm_rank),
     }
+
+
+def leg_top(
+    order: Iterable[Any],
+    sem_rank: Mapping[str, int],
+    bm_rank: Mapping[str, int],
+    depth: int = LEG_TOP_TRACED,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Each leg's own top ``depth`` chunks, by leg rank: the other leg's
+    rank for the same chunk (None when it did not find it), the chunk's
+    place in the fused order, and its length in characters.
+
+    This is what an offline replay of a fusion rule needs. It shows which
+    chunks a leg-rank guarantee would lift, and how much of the handed
+    set's character budget they take. The single best chunk per class in
+    ``best_*`` cannot show either."""
+    chunks = list(order)
+    position = {getattr(c, "chunk_id", None): i for i, c in enumerate(chunks, 1)}
+    chars = {
+        getattr(c, "chunk_id", None): len(getattr(c, "text", "") or "")
+        for c in chunks
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for name, mine, other in (
+        ("vector", sem_rank, bm_rank), ("lexical", bm_rank, sem_rank),
+    ):
+        top = sorted(
+            (r, cid) for cid, r in mine.items() if r <= depth and cid in position
+        )
+        out[name] = [
+            {
+                "chunk_id": cid,
+                "leg_rank": r,
+                "other_leg_rank": other.get(cid),
+                "fused_rank": position[cid],
+                "chars": chars[cid],
+            }
+            for r, cid in top
+        ]
+    return out
 
 
 class Follow:
@@ -133,6 +182,16 @@ class Follow:
             else:
                 entry["dropped_by"] = BELOW_TARGET
             out[f"best_{leg}"] = entry
+        out["leg_top"] = {
+            name: [
+                {**e, "pool_position": (
+                    kept_ids.index(e["chunk_id"]) + 1
+                    if e["chunk_id"] in kept_ids else None
+                )}
+                for e in entries
+            ]
+            for name, entries in (self.summary.get("leg_top") or {}).items()
+        }
         return out
 
 
@@ -145,7 +204,23 @@ def public_view(
     if not record:
         return None
     handed_ids = [getattr(c, "chunk_id", None) for c in handed]
-    out = {k: v for k, v in record.items() if not k.startswith("best_")}
+    out = {
+        k: v for k, v in record.items()
+        if not k.startswith("best_") and k != "leg_top"
+    }
+    out["leg_top"] = {
+        name: [
+            {
+                **{k: v for k, v in e.items() if k != "chunk_id"},
+                "handed_position": (
+                    handed_ids.index(e.get("chunk_id")) + 1
+                    if e.get("chunk_id") in handed_ids else None
+                ),
+            }
+            for e in entries
+        ]
+        for name, entries in (record.get("leg_top") or {}).items()
+    }
     for leg in LEGS:
         entry = record.get(f"best_{leg}")
         if not entry:
