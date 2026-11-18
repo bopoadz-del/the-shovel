@@ -76,7 +76,9 @@ def test_start_up_freezes_once_after_warm_up_and_shutdown_releases(
     real = loop_watchdog.freeze_startup_heap
 
     def counted():
-        calls.append(gc.get_freeze_count())
+        # Who froze, and how much was frozen before: the end of the warm-up
+        # (``_warm_models``), once, with nothing frozen ahead of it.
+        calls.append((sys._getframe(1).f_code.co_name, gc.get_freeze_count()))
         return real()
 
     monkeypatch.setattr(loop_watchdog, "freeze_startup_heap", counted)
@@ -84,7 +86,7 @@ def test_start_up_freezes_once_after_warm_up_and_shutdown_releases(
     caplog.set_level(logging.INFO, logger=main_mod.logger.name)
     with TestClient(main_mod.app) as client:
         assert client.get("/livez").status_code == 200
-        assert calls == [0]  # once, and nothing was frozen before it
+        assert calls == [(main_mod._warm_models.__name__, 0)]  # once, at the end of warm-up
         assert (gc.get_freeze_count() > 0) is frozen_while_serving
     assert len(calls) == 1
     assert gc.get_freeze_count() == 0
