@@ -437,3 +437,17 @@ def test_a_project_document_is_updated_by_its_owner_as_before(client, name):
     res = _patch(client, owner, pid, did)
     assert res.status_code == 200, res.text
     assert (res.json().get("metadata") or {}).get("drive_file_id") == _DRIVE_ID
+
+
+@pytest.mark.parametrize("bad_id", ["https://drive.example/file/abc", "short"])
+def test_an_invalid_drive_id_is_refused_and_nothing_is_set(client, bad_id):
+    """The update's own guard, unchanged: a value that is not a Drive file id
+    (a URL, a too-short token) is a 422 and the document keeps no id."""
+    owner = _headers(client, f"bi{len(bad_id)}")
+    pid = _project(client, owner, f"Panel-bi-{len(bad_id)}-{_RUN}")
+    did = _upload(client, owner, pid, f"crane_base_{len(bad_id)}.txt", b"Base 6 x 6 x 1.5 m.")["id"]
+    res = client.patch(_doc_url(pid, did), headers=owner, json={"drive_file_id": bad_id})
+    assert res.status_code == 422, res.text
+    page = client.get(f"/v1/projects/{pid}/documents", headers=owner).json()["documents"]
+    row = next(d for d in page if d["id"] == did)
+    assert not (row.get("metadata") or {}).get("drive_file_id")
