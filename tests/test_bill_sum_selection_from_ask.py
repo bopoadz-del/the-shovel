@@ -681,16 +681,22 @@ async def test_a_non_computed_turn_through_the_stream_route_is_untouched(reply):
     from app.routers.exit_frames import with_answer_exit
     from app.routers.hat_frames import _decode, _encode
 
+    tokens = [{"type": "token", "content": piece + " "} for piece in reply.split(" ")]
+
     async def frames():
         answer_exit.current_turn().question = "What does the bill hold?"
-        for piece in reply.split(" "):
-            yield _encode({"type": "token", "content": piece + " "})
+        for token in tokens:
+            yield _encode(token)
         yield _encode({"type": "end", "sources": []})
 
     decoded = [_decode(f) async for f in with_answer_exit(frames())]
-    ends = [e for e in decoded if e and e.get("type") == "end"]
-    assert ends[0]["content"].strip() == reply
-    assert answer_exit.FIGURE_REMOVED not in ends[0]["content"]
+    # The FULL frame sequence: every token streamed as sent, in order, nothing
+    # held, no lead frame added, then one end frame carrying the text as
+    # streamed (a non-computed turn's contract fields: no tool asked for
+    # inputs, the general tier).
+    assert decoded == tokens + [{
+        "type": "end", "sources": [], "content": "".join(t["content"] for t in tokens),
+        "awaiting_inputs": {"missing": []}, "tier": "general"}]
 
 
 # -- the exit check's own bounds and the renderer branch ---------------------
