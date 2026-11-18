@@ -204,3 +204,57 @@ def test_the_startup_warm_up_declares_off_the_event_loop(invented, monkeypatch, 
     assert threads and threads[0] != loop_thread
     assert declarer not in tool_registry._DEFERRED
     assert tool_registry._RESULTS[name].kind == "search"
+
+
+@pytest.mark.parametrize("names", [("zz_direct_warm_a",), ("zz_direct_warm_b", "zz_direct_warm_c")])
+def test_the_app_warm_step_drains_every_pending_declarer(invented, names):
+    from app import main
+
+    declarers = [invented(n, lambda n=n: _declare(n)) for n in names]
+    main._declare_deferred_results()
+    for n in names:
+        assert tool_registry._RESULTS[n].kind == "search"
+    assert not any(d in tool_registry._DEFERRED for d in declarers)
+
+
+_WARM_STEPS = ("_declare_deferred_results", "_warm_safety_detector", "_warm_embedder",
+               "_check_embedder_identity", "_seed_knowledge", "_warm_parse_libraries")
+
+
+@pytest.mark.parametrize("blocked_at", [0, 2])
+def test_cancelling_the_warm_up_stops_it_before_the_next_step(monkeypatch, blocked_at):
+    """At shutdown the warm-up task is cancelled: it must end cancelled and
+    must not go on loading the remaining models."""
+    import asyncio
+
+    from app import main
+
+    ran, entered, release = [], threading.Event(), threading.Event()
+
+    def make(i):
+        def step():
+            ran.append(i)
+            if i == blocked_at:
+                entered.set()
+                release.wait(10)
+        return step
+
+    for i, step in enumerate(_WARM_STEPS):
+        monkeypatch.setattr(main, step, make(i))
+
+    async def run():
+        task = asyncio.create_task(main._warm_models())
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return True
+        return False
+
+    try:
+        assert asyncio.run(run()) is True
+    finally:
+        release.set()
+    assert ran == list(range(blocked_at + 1))
