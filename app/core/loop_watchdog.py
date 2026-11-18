@@ -78,8 +78,8 @@ def sample_stacks(loop_ident: Optional[int]) -> str:
 
 #: Linux exposes each thread's CPU time; elsewhere the CPU delta is omitted.
 _TASK_DIR = "/proc/self/task"
-#: Per-thread CPU is snapshotted at most this often (each read costs a file
-#: per thread), so a stall's delta spans the stall plus at most this much.
+#: The snapshot thread reads per-thread CPU this often (each read costs a file
+#: per thread), so a stall's window spans the stall plus about this much.
 _CPU_SNAPSHOT_S = 0.1
 
 
@@ -381,10 +381,13 @@ class LagMonitor:
         #: deterministically (event, not a wall-clock guess) instead of racing
         #: the sampler thread -- see tests/test_offload_and_loop_watchdog.
         self.stall_recorded = threading.Event()
-        self._cpu_at = 0.0
-        self._cpu_before: dict = {}
-        self._proc_before = 0.0
-        self._host_before: dict = {}
+        #: The latest CPU reading, ``(process_ms, {tid: ms}, host, monotonic_s)``,
+        #: published by the snapshot thread (``_snap_run``) with one attribute
+        #: store and read by the heartbeat thread with one attribute read.
+        #: None until the first reading lands.
+        self._snap: Optional[tuple] = None
+        self._snap_thread = threading.Thread(target=self._snap_run, name="loop-watchdog-cpu",
+                                             daemon=True)
         #: In-stall capture (``LiveDump``); off unless ``live_ms`` > 0.
         self._live = LiveDump(live_ms) if live_ms > 0 else None
         #: Stalls whose live dump fired: (lag_ms, dump) -- what ran DURING it.
@@ -414,11 +417,17 @@ class LagMonitor:
         self.max_stamp_to_post_ms = 0.0
         self.stall_stamp_to_post: list[tuple[float, float]] = []
         self.worst_lag_stamp_to_post: tuple[float, float] = (0.0, 0.0)
-        #: Diagnostic only, never gated (advisor 09:17Z 18 Nov): the CPU
-        #: snapshot's own duration, worst and count. It runs after the post,
-        #: so it is no longer in any lag; a slow one shows here instead.
+        #: Diagnostic only, never gated (advisor 10:10Z 18 Nov): the CPU
+        #: snapshot's own duration, worst and count. It runs in its own thread,
+        #: never on the heartbeat's path; a slow one shows here instead.
         self.max_snapshot_ms = 0.0
         self.snapshots = 0
+        #: Diagnostic only, never gated: the longest time between one
+        #: heartbeat's service and the next heartbeat's post, i.e. how long
+        #: the loop went with no heartbeat in flight. With nothing but the
+        #: tick sleep between the two it reads about one tick.
+        self.max_unobserved_ms = 0.0
+        self._last_served: Optional[float] = None
 
     def note_snapshot(self, snapshot_ms: float) -> None:
         """Record one CPU snapshot's own duration."""
@@ -435,19 +444,63 @@ class LagMonitor:
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
+        self._snap_thread.start()
         self._thread.start()
         return self
 
     def stop(self) -> None:
         self._stop.set()
         self._thread.join(timeout=2)
+        self._snap_thread.join(timeout=2)
         if self._live is not None:
             self._live.close()
 
     def _note_loop_thread(self) -> None:
         self._loop_ident = threading.get_ident()
 
+    def _snap_run(self) -> None:
+        """The CPU snapshot, in its own thread (advisor 10:10Z 18 Nov).
+
+        The /proc reads are slow under load (each read releases and re-takes
+        the GIL). Taken on the heartbeat thread -- before the post (#380), or
+        after it but before the wait (#439 e2a33cf) -- they either entered the
+        lag or left the loop with no heartbeat in flight for as long as they
+        took. Here they cost the heartbeat nothing: each reading is published
+        with one attribute store, and a stall's CPU figures use the latest
+        one. A failed reading is logged and skipped; it never reaches the
+        heartbeat thread."""
+        while not self._stop.is_set():
+            t0 = time.monotonic()
+            try:
+                proc, threads = cpu_snapshot()
+                reading = (proc, threads, host_cpu(), t0)
+            except Exception as exc:  # noqa: BLE001 -- a reading is optional
+                _LOG.debug("loop watchdog cpu snapshot failed: %r", exc)
+            else:
+                self._snap = reading
+                self.note_snapshot((time.monotonic() - t0) * 1000)
+            self._stop.wait(_CPU_SNAPSHOT_S)
+
+    def _stall_cpu(self, before: Optional[tuple]) -> str:
+        """The CPU figures for a stall, from two snapshot-thread readings: the
+        latest one when the heartbeat was posted (``before``, at most one
+        cadence old) and the latest one now. ``cpu unknown`` when there is no
+        newer reading (the snapshot thread is slow, stopped or never ran)."""
+        after = self._snap
+        if before is None or after is None or after[3] <= before[3]:
+            return "cpu unknown"
+        proc_b, threads_b, host_b, at_b = before
+        proc_a, threads_a, host_a, at_a = after
+        names = {t.native_id: t.name for t in threading.enumerate()}
+        cpu = busiest_threads(threads_b, threads_a, names)
+        # Process- and host-wide totals over the same window, so the line
+        # itself tells a GIL convoy from a starved runner.
+        total = stall_cpu_summary(threads_b, threads_a, proc_a - proc_b,
+                                  host_b, host_a, (at_a - at_b) * 1000)
+        return f"{cpu} {total}" if cpu else total
+
     def _run(self) -> None:
+        before = self._snap
         while not self._stop.is_set():
             served = threading.Event()
             served_at: list[float] = []
@@ -464,46 +517,32 @@ class LagMonitor:
                     live.arm()
                 served.set()
 
-            # STAMP AT THE POST (advisor 09:17Z 18 Nov, outcome A): the
-            # heartbeat is stamped immediately before it is posted, and the
-            # CPU snapshot runs AFTER the post, never between the two. Stamped
-            # before the snapshot (as #380 shipped it), every millisecond the
-            # monitor spent reading /proc -- or waiting to get the GIL back
-            # between reads -- was charged to the loop: on CI the worst
-            # heartbeat's lag equalled its stamp-to-post time to within 2 ms,
-            # reds included. The lag is the loop's own lateness again.
+            # STAMP AT THE POST, SNAPSHOT OFF THIS THREAD (advisor 10:10Z 18
+            # Nov). Nothing but the live timer's arm runs between the stamp and
+            # the post, and no /proc read runs anywhere on this thread: the CPU
+            # snapshot lives in ``_snap_run``. Between one heartbeat's service
+            # and the next one's post there is only the tick sleep (and, after
+            # a stall, its recording), so the loop is never left without a
+            # heartbeat in flight for longer than that (``max_unobserved_ms``).
             if live is not None:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
             posted = time.monotonic()
             if live is not None:
-                # Armed with the stamp, so a GIL hold that begins while the
-                # snapshot below reads /proc -- each read releases the GIL --
-                # is still dumped (CI #396 d3c7ef0: armed after the snapshot,
-                # a 0.6 s hold left no dump).
                 live.arm()
             stamp_to_post_ms = (time.monotonic() - posted) * 1000
+            if self._last_served is not None:
+                self.max_unobserved_ms = max(self.max_unobserved_ms,
+                                             (posted - self._last_served) * 1000)
             try:
                 self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
                 _LOG.info("loop watchdog stopped: the event loop is closed")
                 self._stop.set()
                 break
-            # The snapshot now runs while the heartbeat is in flight: the loop
-            # serves it (or not) on its own, stamping ``served_at`` itself, so
-            # the snapshot's duration cannot enter the lag. It is kept as its
-            # own figure, so a slow snapshot stays visible as what it is.
-            snap_at = time.monotonic()
-            if snap_at - self._cpu_at >= _CPU_SNAPSHOT_S:
-                self._proc_before, self._cpu_before = cpu_snapshot()
-                self._cpu_at, self._host_before = snap_at, host_cpu()
-                self.note_snapshot((time.monotonic() - snap_at) * 1000)
-            snap_done = time.monotonic()
             sample = ""
-            # The threshold still counts from the stamp: time spent in the
-            # snapshot is not added to the wait.
-            stalled = not served.wait(max(0.0, self.threshold - (snap_done - posted)))
+            stalled = not served.wait(self.threshold)
             resumed = time.monotonic()
             if live is not None and not stalled:
                 # Back with the GIL: the gap the serve re-armed for is over.
@@ -526,6 +565,8 @@ class LagMonitor:
             # it during the stall (it then samples below).
             stalled = stalled or lag_ms >= self.threshold * 1000
             self.note_stamp_to_post(lag_ms, stamp_to_post_ms, stalled)
+            if served_at:
+                self._last_served = served_at[0]
             if stalled:
                 # A detected stall is ALWAYS recorded with its stack. sample is
                 # never empty (sample_stacks falls back to the main thread), but
@@ -533,18 +574,11 @@ class LagMonitor:
                 # stall can never carry an empty trace.
                 if not sample:
                     sample = sample_stacks(self._loop_ident)
-                # Which threads burned CPU across the stall: the GIL holder
-                # when the loop itself was idle-but-late. Leads the sample, so
-                # a truncated message still names it.
-                names = {t.native_id: t.name for t in threading.enumerate()}
-                proc_now, threads_now = cpu_snapshot()
-                cpu = busiest_threads(self._cpu_before, threads_now, names)
-                # Process- and host-wide totals over the same window, so the
-                # line itself tells a GIL convoy from a starved runner.
-                total = stall_cpu_summary(
-                    self._cpu_before, threads_now, proc_now - self._proc_before,
-                    self._host_before, host_cpu(), (time.monotonic() - self._cpu_at) * 1000)
-                sample = f"{cpu} {total} :: {sample}" if cpu else f"{total} :: {sample}"
+                # Which threads burned CPU across the stall (the GIL holder when
+                # the loop itself was idle-but-late), from the snapshot
+                # thread's readings. Leads the sample, so a truncated message
+                # still names it.
+                sample = f"{self._stall_cpu(before)} :: {sample}"
                 dump = live.take() if live is not None else ""
                 if dump:
                     idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
@@ -562,12 +596,7 @@ class LagMonitor:
             elif live is not None:
                 dump = live.take()
                 # How long past the serve this thread got the GIL back: a hold
-                # that began after the serve shows here, not in lag_ms. A serve
-                # that came while this thread was in its snapshot counts from
-                # the serve, not the snapshot's end: a GIL hold that began
-                # inside the snapshot is then still seen (and its dump names
-                # it); a merely slow snapshot shows here too, and beside it
-                # in ``max_snapshot_ms``.
+                # that began after the serve shows here, not in lag_ms.
                 gap_ms = (resumed - served_at[0]) * 1000 if served_at else 0.0
                 if dump and gap_ms >= live.after_s * 1000:
                     self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
@@ -576,6 +605,9 @@ class LagMonitor:
                     keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
                 elif dump:  # late past live_ms, under the limit
                     self.live_near_misses += 1
+            # The 'before' figures for the next heartbeat's stall window: the
+            # latest reading, at most one snapshot cadence old.
+            before = self._snap
             self._sleep_watched(live, armed_names if live is not None else {})
 
     def _note_wake_late(self, late_ms: float, at: float) -> None:
@@ -610,14 +642,17 @@ class LagMonitor:
 
 def stamp_to_post_summary(max_stamp_to_post_ms: float, stall_pairs: list,
                           worst_lag_pair: tuple,
-                          snapshot_max_ms: Optional[float] = None) -> str:
+                          snapshot_max_ms: Optional[float] = None,
+                          unobserved_max_ms: Optional[float] = None) -> str:
     """The STAMP TO POST fields for a result line (diagnostic, not gated).
 
     ``worst_stall`` is the stall with the largest lag and its stamp-to-post
     time; ``none`` when no stall was recorded. ``worst_lag`` is the same pair
     for the heartbeat with the largest lag, so a window without a recorded
     stall still carries it. ``snapshot_max`` (when given) is the slowest CPU
-    snapshot's own duration: off the heartbeat's path, printed on its own."""
+    snapshot's own duration: off the heartbeat's path, printed on its own.
+    ``unobserved_max`` (when given) is the longest gap between a heartbeat's
+    service and the next heartbeat's post."""
     if stall_pairs:
         lag, s2p = max(stall_pairs, key=lambda p: p[0])
         worst_stall = f"lag={lag:.0f}ms/s2p={s2p:.0f}ms"
@@ -628,6 +663,8 @@ def stamp_to_post_summary(max_stamp_to_post_ms: float, stall_pairs: list,
             f"worst_lag={worst_lag_pair[0]:.0f}ms/s2p={worst_lag_pair[1]:.0f}ms")
     if snapshot_max_ms is not None:
         line += f" snapshot_max={snapshot_max_ms:.0f}ms"
+    if unobserved_max_ms is not None:
+        line += f" unobserved_max={unobserved_max_ms:.0f}ms"
     return line
 
 

@@ -264,12 +264,12 @@ def test_the_stall_names_the_threads_that_burned_cpu_across_it(after, expected):
 @pytest.mark.parametrize("threshold_ms,tick_ms", [(250.0, 50.0), (120.0, 10.0)])
 def test_a_new_monitor_starts_clean_with_no_cpu_snapshot(threshold_ms, tick_ms):
     """``LagMonitor.__init__`` stores the limits in seconds and starts with no
-    stall, no lag and no CPU snapshot (the first heartbeat takes one)."""
+    stall, no lag and no CPU reading (the snapshot thread takes the first)."""
     loop = asyncio.new_event_loop()
     try:
         mon = loop_watchdog.LagMonitor(loop, threshold_ms=threshold_ms, tick_ms=tick_ms, log=False)
         assert (mon.threshold, mon.tick) == (threshold_ms / 1000, tick_ms / 1000)
-        assert (mon.max_lag_ms, mon.stalls, mon._cpu_before) == (0.0, [], {})
+        assert (mon.max_lag_ms, mon.stalls, mon._snap) == (0.0, [], None)
         assert not mon.stall_recorded.is_set()
     finally:
         loop.close()

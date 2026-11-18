@@ -283,37 +283,53 @@ def test_a_thread_born_inside_the_window_is_not_summed_as_a_delta(threads_after,
     assert got == expected
 
 
-@pytest.mark.parametrize("snapshot_s,slow", [(0.35, True), (0.0, False)])
-def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(monkeypatch, snapshot_s, slow):
-    """Ruling (advisor 09:17Z 18 Nov, STAMP TO POST outcome A; it replaces the
-    04:18Z ruling that kept the stamp before the snapshot): the heartbeat is
-    stamped at the post and the CPU snapshot runs after the post, so a slow
-    snapshot is never a stall of the loop. Its duration is its own figure,
-    and the live timer is still armed with the stamp: a slow snapshot fires
-    it and its dump names the snapshot (the monitor's own late wake), never
-    a stall."""
+@pytest.mark.parametrize("snapshot_s,hold", [(0.35, False), (0.35, True)])
+@own_process
+def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(monkeypatch, snapshot_s, hold):
+    """Ruling (advisor 10:10Z 18 Nov; it replaces 09:17Z and 04:18Z): the
+    heartbeat is stamped at the post and the CPU snapshot runs in its own
+    thread, never on the heartbeat's path. A slow snapshot is therefore not
+    loop lag (no stall, lag near zero, its duration its own figure), and
+    the live dump still fires on a real GIL hold while that slow snapshot
+    keeps running."""
     def snapshot(*_a, **_k):
         time.sleep(snapshot_s)
         return 0.0, {}
 
     monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
-    monkeypatch.setattr(loop_watchdog, "_CPU_SNAPSHOT_S", 0.0)
+    n = _size_for(0.6) if hold else 0
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
                                        tick_ms=10, log=False, live_ms=150).start()
         await asyncio.sleep(0.9)
+        done, release = threading.Event(), threading.Event()
+
+        def work():
+            _gil_holding_call(n)
+            done.set()
+            release.wait(5)
+
+        if hold:
+            worker = threading.Thread(target=work, name="gil-holder")
+            worker.start()
+            while not done.is_set():
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.2)
         mon.stop()
+        release.set()
         return mon
 
     mon = asyncio.run(run())
-    assert mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
-    assert mon.max_lag_ms < 100, mon.max_lag_ms
-    if slow:
-        assert mon.max_snapshot_ms >= 300, mon.max_snapshot_ms
-        assert any("snapshot" in text for _, text in mon.live_dumps), mon.live_dumps[:1]
+    assert mon.max_snapshot_ms >= snapshot_s * 1000 * 0.9, mon.max_snapshot_ms
+    if hold:
+        assert mon.live_dumps, f"no live dump; max_lag={mon.max_lag_ms:.0f} stalls={len(mon.stalls)}"
+        _, during = max(mon.live_dumps)
+        assert "[gil-holder]" in during and "_gil_holding_call" in during, during
     else:
-        assert mon.max_snapshot_ms < 100 and mon.live_dumps == [], (mon.max_snapshot_ms, mon.live_dumps[:1])
+        assert mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
+        assert mon.max_lag_ms < 100, mon.max_lag_ms
+        assert mon.live_dumps == [], mon.live_dumps[:1]
 
 
 @pytest.mark.parametrize("lags,kept", [
