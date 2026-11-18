@@ -205,3 +205,32 @@ def test_contract_alone_places_the_statement_first(question, docs, answer):
     rows = [{"doc_name": n, "snippet": t, "doc_id": d} for d, n, _p, t in docs]
     out = answer_contract.apply(answer, sources=rows, question=question)
     assert out.text.startswith(_LINE)
+
+
+# ── 5. a loosely worded second anchor never shrinks the thing ───────────────
+
+@pytest.mark.parametrize("question, rows, answer", [
+    pytest.param(
+        "What cover is required to the pile cap reinforcement?",
+        [{"doc_name": "Wrenfield Pile Cap Details.pdf",
+          "snippet": "Minimum concrete cover to pile cap reinforcement is 75 mm."},
+         {"doc_name": "Wrenfield Pile Notes.pdf", "snippet": "Pile cover: 75 mm nominal."},
+         {"doc_name": "Wrenfield Pile Shaft Schedule.pdf", "snippet": "Pile shaft cover 50 mm."}],
+        "The cover to the pile cap reinforcement is 75 mm.", id="pile-cap-cover"),
+    pytest.param(
+        "How long must the basement slab concrete be cured?",
+        [{"doc_name": "Wrenfield Concrete Specification.pdf",
+          "snippet": "Basement slab concrete shall be cured for 7 days."},
+         {"doc_name": "Wrenfield Site Notes.pdf", "snippet": "Concrete cured 7 days."},
+         {"doc_name": "Wrenfield Precast Schedule.pdf", "snippet": "Precast concrete cured 3 days."}],
+        "The basement slab concrete must be cured for 7 days.", id="basement-slab-curing"),
+])
+def test_a_loosely_worded_anchor_does_not_shrink_the_thing(question, rows, answer):
+    """The thing is named by the anchor naming the most asked words; a second
+    anchor that names fewer never lets a value for another thing in."""
+    assert detect(answer, rows, question) == []
+    # Without the loose anchor's narrower words the other thing is out as well,
+    # and a real second value for the asked thing is still a conflict.
+    real = rows[:1] + [dict(rows[0], doc_name="Wrenfield Method Statement.pdf",
+                            snippet=rows[0]["snippet"].replace(" 75 mm", " 60 mm").replace(" 7 days", " 5 days"))]
+    assert len(detect(answer, real, question)) == 1

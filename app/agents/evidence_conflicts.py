@@ -495,10 +495,9 @@ def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, ask
 
 
 def _named_enough(asked: int) -> int:
-    """How many of the asked thing's words a value's own words must name: a
-    third of them, and at least two when the question names two or more."""
-    if asked <= 0:
-        return 1
+    """How many of the asked thing's words (``asked`` >= 1: the caller holds a
+    non-empty question thing) a value's own words must name: a third of
+    them, and at least two when the question names two or more."""
     return min(asked, max(2, -(-asked // 3)))
 
 
