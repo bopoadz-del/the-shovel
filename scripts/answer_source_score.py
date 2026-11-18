@@ -26,8 +26,10 @@ Input (one JSON object per row, or a list of them)::
 
 ``handed`` is the turn's ``rag_retrieval_trace`` ``chunks`` list; ``text`` is
 filled from a ``{chunk_id: text}`` file (``--chunk-text``), never fetched
-from a live service. ``sources_list`` resolves bare numbered markers
-(``... 2.``) the answer shows for the Sources panel.
+from a live service. ``sources_list`` resolves the numbered markers the
+answer shows for the Sources panel: bare (``... 2.``) and bracketed (``[2]``,
+the answer contract's form). A bracketed marker is never a figure; one the
+panel does not number is counted in ``markers_unresolved``.
 
 Output carries ids and counts only: no answer text, no document name, no
 question text. The flag is ``low`` when any number is unfound, any citation
@@ -57,8 +59,10 @@ from app.lib import citation_spans as _spans  # after the path fix
 _NAMED_CITE_RE = _spans.NAMED_CITE_RE
 _KEYED_CITE_RE = _spans.KEYED_CITE_RE
 _MARKER_RE = _spans.MARKER_RE
+_BRACKET_MARKER_RE = _spans.BRACKET_MARKER_RE
 blank_named = _spans.blank_named
 blank_markers = _spans.blank_markers
+blank_citations = _spans.blank_citations
 
 _ELLIPSIS = ("…", "...")
 
@@ -119,12 +123,26 @@ def find_citations(answer: str, sources_list: list[str] | None = None) -> list[C
     for m in _KEYED_CITE_RE.finditer(text):
         out.append(Citation("key", m.group(1).strip(), _sentence_at(text, spans, m.start())))
     listed = list(sources_list or [])
-    for m in _MARKER_RE.finditer(_strip_named(text)):
+    stripped = _strip_named(text)
+    for m in _MARKER_RE.finditer(stripped):
         n = int(m.group(1))
         if not listed or not 1 <= n <= len(listed):
             continue  # a marker only exists when the Sources panel numbers it
         out.append(Citation("marker", listed[n - 1], _sentence_at(text, spans, m.start())))
+    for m in _BRACKET_MARKER_RE.finditer(stripped):
+        n = int(m.group(0)[1:-1])
+        if not 1 <= n <= len(listed):
+            continue  # counted by unresolved_markers, never a figure
+        out.append(Citation("marker", listed[n - 1], _sentence_at(text, spans, m.start())))
     return out
+
+
+def unresolved_markers(answer: str, sources_list: list[str] | None = None) -> int:
+    """Bracketed markers the Sources panel does not number (a citation the
+    reader cannot follow)."""
+    listed = len(sources_list or [])
+    return sum(1 for m in _BRACKET_MARKER_RE.finditer(_strip_named(answer or ""))
+               if not 1 <= int(m.group(0)[1:-1]) <= listed)
 
 
 def _strip_named(text: str) -> str:
@@ -162,8 +180,7 @@ def numbers_in(text: str) -> list[float]:
 def answer_numbers(answer: str, sources_list: list[str] | None = None) -> list[float]:
     """The answer's figures: citation spans and numbered source markers are
     not figures."""
-    text = blank_markers(_strip_named(answer), len(sources_list or []))
-    return numbers_in(text)
+    return numbers_in(blank_citations(answer, len(sources_list or [])))
 
 
 def _found(value: float, pool: Iterable[float]) -> bool:
@@ -202,6 +219,7 @@ class RowScore:
     numbers_not_found: int = 0
     citations_handed: int = 0
     citations_not_handed: int = 0
+    markers_unresolved: int = 0
     overlap_mean: float | None = None
     text_available: bool = False
     flag: str = "ok"
@@ -214,6 +232,7 @@ class RowScore:
             "numbers_not_found": self.numbers_not_found,
             "citations_handed": self.citations_handed,
             "citations_not_handed": self.citations_not_handed,
+            "markers_unresolved": self.markers_unresolved,
             "overlap_mean": None if self.overlap_mean is None else round(self.overlap_mean, 3),
             "text_available": self.text_available,
             "flag": self.flag,
@@ -244,6 +263,7 @@ def score_row(row: dict[str, Any], *, overlap_floor: float = 0.2) -> RowScore:
             if ov is not None:
                 overlaps.append(ov)
     out.text_available = bool(cited_text)
+    out.markers_unresolved = unresolved_markers(answer, listed)
 
     pool = [v for t in cited_text + tools for v in numbers_in(t)]
     for value in answer_numbers(answer, listed):
