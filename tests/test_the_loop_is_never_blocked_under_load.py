@@ -190,7 +190,8 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
              f"wake_late_when={wake_late_when(mon.wake_late_at, windows['load'][0])} "
              f"idle_wake_late_when={wake_late_when(idle.wake_late_at, windows['idle'][0])} "
              + stamp_to_post_summary(mon.max_stamp_to_post_ms, mon.stall_stamp_to_post,
-                                     mon.worst_lag_stamp_to_post),
+                                     mon.worst_lag_stamp_to_post, mon.max_snapshot_ms,
+                                     mon.max_unobserved_ms),
              _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
                                         mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")

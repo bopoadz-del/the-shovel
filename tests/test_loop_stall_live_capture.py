@@ -283,32 +283,74 @@ def test_a_thread_born_inside_the_window_is_not_summed_as_a_delta(threads_after,
     assert got == expected
 
 
-@pytest.mark.parametrize("snapshot_s,stalled", [(0.35, True), (0.0, False)])
-def test_the_heartbeat_is_stamped_before_the_monitors_snapshot(monkeypatch, snapshot_s, stalled):
-    """Ruling (advisor 04:18Z): the stamp stays BEFORE the CPU snapshot, so a
-    slow snapshot still counts as lag, exactly as the timing test measured it
-    since #380. The live timer is armed with the stamp, so such a stall
-    carries a dump naming what ran during it -- here the snapshot itself."""
+@pytest.mark.parametrize("snapshot_s,hold", [(0.35, False), (0.35, True)])
+@own_process
+def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(monkeypatch, snapshot_s, hold):
+    """Ruling (advisor 10:10Z 18 Nov; it replaces 09:17Z and 04:18Z): the
+    heartbeat is stamped at the post and the CPU snapshot runs in its own
+    thread, never on the heartbeat's path. A slow snapshot is therefore not
+    loop lag (no stall, lag near zero, its duration its own figure), and
+    the live dump still fires on a real GIL hold while that slow snapshot
+    keeps running."""
     def snapshot(*_a, **_k):
         time.sleep(snapshot_s)
         return 0.0, {}
 
     monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
-    monkeypatch.setattr(loop_watchdog, "_CPU_SNAPSHOT_S", 0.0)
+    n = _size_for(0.6) if hold else 0
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
                                        tick_ms=10, log=False, live_ms=150).start()
         await asyncio.sleep(0.9)
+        done, release = threading.Event(), threading.Event()
+
+        def work():
+            _gil_holding_call(n)
+            done.set()
+            release.wait(5)
+
+        if hold:
+            worker = threading.Thread(target=work, name="gil-holder")
+            worker.start()
+            while not done.is_set():
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.2)
+        mon.stop()
+        release.set()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.max_snapshot_ms >= snapshot_s * 1000 * 0.9, mon.max_snapshot_ms
+    if hold:
+        assert mon.live_dumps, f"no live dump; max_lag={mon.max_lag_ms:.0f} stalls={len(mon.stalls)}"
+        _, during = max(mon.live_dumps)
+        assert "[gil-holder]" in during and "_gil_holding_call" in during, during
+    else:
+        assert mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
+        assert mon.max_lag_ms < 100, mon.max_lag_ms
+        assert mon.live_dumps == [], mon.live_dumps[:1]
+
+
+@pytest.mark.parametrize("live_ms", [150.0, 0.0])
+@own_process
+def test_stop_ends_both_threads_and_hands_the_dump_timer_back(live_ms):
+    """``stop`` joins the heartbeat and snapshot threads and releases the
+    process-wide dump timer, so the next monitor can own it."""
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
+                                       tick_ms=10, log=False, live_ms=live_ms).start()
+        await asyncio.sleep(0.1)
         mon.stop()
         return mon
 
     mon = asyncio.run(run())
-    if stalled:
-        assert mon.max_lag_ms >= 250 and mon.stalls, mon.max_lag_ms
-        assert any("snapshot" in text for _, text in mon.live_dumps), mon.live_dumps[:1]
-    else:
-        assert mon.stalls == [] and mon.live_dumps == [], (mon.max_lag_ms, mon.stalls[:1])
+    assert not mon._thread.is_alive() and not mon._snap_thread.is_alive()
+    nxt = loop_watchdog.LiveDump(150)
+    try:
+        assert nxt.active, "the stopped monitor still owns the dump timer"
+    finally:
+        nxt.close()
 
 
 @pytest.mark.parametrize("lags,kept", [
