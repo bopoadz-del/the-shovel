@@ -18,8 +18,9 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 from app.core.rag.bill_sections import (
     in_named_span,
-    item_rows,
     named_sections,
+    row_index,
+    rows_for_item,
     section_label,
     section_map,
 )
@@ -444,23 +445,45 @@ def _total_status_text(total_status, doc_ids) -> str:
     return "\n".join(lines)
 
 
-def _item_rows_text(maps, named, item: str, row_segments) -> tuple[str, dict]:
+def _bill_row_index(maps, doc_id: str, numbers, row_segments, indexes):
+    """``doc_id``'s :class:`RowIndex` for ``numbers``, built once per action.
+
+    ``indexes`` is the action's own dict: the section maps it reads from are
+    cached for the action's life, so a bill's rows for the same named
+    sections are the same for every plan item and round. ``None`` builds
+    afresh.
+    """
+    sections, doc_chunks = maps[doc_id]
+    key = (doc_id, frozenset(str(n) for n in numbers))
+    if indexes is not None and key in indexes:
+        return indexes[key]
+    index = row_index(
+        ((int(c.chunk_index), chunk_text(c)) for c in doc_chunks),
+        sections, row_segments=row_segments, numbers=numbers,
+    )
+    if indexes is not None:
+        indexes[key] = index
+    return index
+
+
+def _item_rows_text(
+    maps, named, item: str, row_segments, indexes: dict | None = None,
+) -> tuple[str, dict]:
     """The item's complete row list over every bill read, and its counts.
 
     A bill whose section the ask names gives only that section's rows; every
     other bill gives all its matching rows. Nothing is ranked or cut here:
     the rows are the asked item's own evidence, so the chunk budget does not
-    apply to them.
+    apply to them. Each bill is segmented into rows once per ``indexes``
+    (one action, i.e. one turn); each item is then only scored.
     """
     lines: list[str] = []
     counts: dict[str, int] = {}
     for doc_id in sorted(maps):
-        sections, doc_chunks = maps[doc_id]
-        rows = item_rows(
-            ((int(c.chunk_index), chunk_text(c)) for c in doc_chunks),
-            sections, item, row_segments=row_segments,
-            numbers=named.get(doc_id, ()),
+        index = _bill_row_index(
+            maps, doc_id, named.get(doc_id, ()), row_segments, indexes,
         )
+        rows = rows_for_item(index, item)
         if rows:
             counts[doc_id] = len(rows)
             lines.extend(rows)
@@ -477,6 +500,7 @@ def _bill_rows_retrieve(
     ask: str = "",
     row_segments: Callable[[str], Sequence[str]] | None = None,
     total_status: Callable[[str], Mapping | None] | None = None,
+    row_indexes: dict | None = None,
 ) -> str:
     pool = list(bm25_fn(project_id, item, k=k) or ())
     typed = frozenset(typed_bills(project_id)) if typed_bills is not None else frozenset()
@@ -504,7 +528,7 @@ def _bill_rows_retrieve(
         handed = _tag_sections(handed, maps)
     _trace("bill_rows", item, handed)
     rows_text, row_counts = (
-        _item_rows_text(maps, named, item, row_segments)
+        _item_rows_text(maps, named, item, row_segments, row_indexes)
         if (maps and row_segments is not None) else ("", {})
     )
     if named or row_counts:
@@ -593,6 +617,8 @@ def bill_rows_action(
         total_status=(
             lru_cache(maxsize=None)(total_status) if total_status is not None else None
         ),
+        # One bill's rows are segmented once per action, not once per item.
+        row_indexes={},
     ))
 
 
