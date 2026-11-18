@@ -46,8 +46,9 @@ def test_the_off_switch_decides_whether_the_heap_is_frozen(unfrozen, monkeypatch
     assert gc.get_freeze_count() == 0
 
 
-def test_importing_the_app_freezes_nothing():
-    env = dict(os.environ, GC_FREEZE_AT_STARTUP="1", PYTHONPATH=_REPO)
+@pytest.mark.parametrize("setting", ["1", "0"])
+def test_importing_the_app_freezes_nothing(setting):
+    env = dict(os.environ, GC_FREEZE_AT_STARTUP=setting, PYTHONPATH=_REPO)
     out = subprocess.run(
         [sys.executable, "-c",
          "import gc, app.main; print('FREEZE', gc.get_freeze_count())"],
@@ -59,7 +60,9 @@ def test_importing_the_app_freezes_nothing():
 
 @pytest.mark.parametrize("setting, frozen_while_serving", [("1", True), ("0", False)])
 def test_start_up_freezes_once_after_warm_up_and_shutdown_releases(
-        unfrozen, monkeypatch, setting, frozen_while_serving):
+        unfrozen, monkeypatch, caplog, setting, frozen_while_serving):
+    import logging
+
     from fastapi.testclient import TestClient
 
     monkeypatch.setenv("GC_FREEZE_AT_STARTUP", setting)
@@ -78,9 +81,13 @@ def test_start_up_freezes_once_after_warm_up_and_shutdown_releases(
 
     monkeypatch.setattr(loop_watchdog, "freeze_startup_heap", counted)
     assert gc.get_freeze_count() == 0
+    caplog.set_level(logging.INFO, logger=main_mod.logger.name)
     with TestClient(main_mod.app) as client:
         assert client.get("/livez").status_code == 200
         assert calls == [0]  # once, and nothing was frozen before it
         assert (gc.get_freeze_count() > 0) is frozen_while_serving
     assert len(calls) == 1
     assert gc.get_freeze_count() == 0
+    # The production figure: the frozen count is logged only when it froze.
+    logged = [r.getMessage() for r in caplog.records if "startup heap frozen" in r.getMessage()]
+    assert len(logged) == (1 if frozen_while_serving else 0), logged
