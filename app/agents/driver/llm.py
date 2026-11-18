@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
+#: The finish reason of a completion whose provider never said why it ended.
+from app.agents.core.computed_answer import UNREPORTED_FINISH as UNREPORTED
+
 # A call that offers tools is a decision: which hat, tool or workflow comes
 # next. The same question must choose the same way every time, so decision
 # calls are not sampled. A call with no tools only writes prose and keeps the
@@ -58,7 +61,10 @@ async def call(agent: Any, messages: List[Dict[str, Any]], tools: Optional[List[
         if resp.status_code != 200 or not data:
             return {"status": "error", "error": f"The language model answered HTTP {resp.status_code}."}
         choice = (data.get("choices") or [{}])[0]
-        return {"status": "success", "message": choice.get("message") or {}}
+        out: Dict[str, Any] = {"status": "success", "message": choice.get("message") or {}}
+        if choice.get("finish_reason"):  # a whole response: reported only when the provider says
+            out["finish_reason"] = str(choice["finish_reason"])
+        return out
     except httpx.HTTPError as exc:
         return {"status": "error", "error": f"The language model could not be reached ({type(exc).__name__})."}
 
@@ -85,6 +91,7 @@ async def stream(agent: Any, messages: List[Dict[str, Any]], tools: Optional[Lis
     payload.setdefault("stream_options", {"include_usage": True})
     content: List[str] = []
     calls: Dict[int, Dict[str, Any]] = {}
+    finish = ""  # why the provider says the completion ended, as it says it
     try:
         # The single streaming provider egress (records usage at the egress);
         # aclosing closes it deterministically when we stop consuming.
@@ -103,7 +110,9 @@ async def stream(agent: Any, messages: List[Dict[str, Any]], tools: Optional[Lis
                     chunk = json.loads(data)
                 except ValueError:
                     continue
-                delta = ((chunk.get("choices") or [{}])[0].get("delta") or {})
+                first = (chunk.get("choices") or [{}])[0]
+                finish = str(first.get("finish_reason") or finish)
+                delta = first.get("delta") or {}
                 text = delta.get("content")
                 if text:
                     content.append(text)
@@ -126,4 +135,6 @@ async def stream(agent: Any, messages: List[Dict[str, Any]], tools: Optional[Lis
     message: Dict[str, Any] = {"content": "".join(content)}
     if calls:
         message["tool_calls"] = [calls[i] for i in sorted(calls)]
-    yield "done", {"status": "success", "message": message}
+    # A stream that ended without the provider saying why is reported as
+    # such; computed_answer.not_the_answer reads it as normal unless empty.
+    yield "done", {"status": "success", "message": message, "finish_reason": finish or UNREPORTED}
