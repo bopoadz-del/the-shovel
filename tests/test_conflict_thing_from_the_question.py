@@ -234,3 +234,29 @@ def test_a_loosely_worded_anchor_does_not_shrink_the_thing(question, rows, answe
     real = rows[:1] + [dict(rows[0], doc_name="Wrenfield Method Statement.pdf",
                             snippet=rows[0]["snippet"].replace(" 75 mm", " 60 mm").replace(" 7 days", " 5 days"))]
     assert len(detect(answer, real, question)) == 1
+
+
+# ── 6. when even the best anchor shares one word with the question ──────────
+
+@pytest.mark.parametrize("question, rows, answer", [
+    pytest.param(
+        "What cover is required to the pile cap reinforcement?",
+        [{"doc_name": "Thornbury Wall Details.pdf", "snippet": "Wall cover is 75 mm."},
+         {"doc_name": "Thornbury Slab Details.pdf", "snippet": "Slab cover is 50 mm."}],
+        "The cover is 75 mm.", id="cover"),
+    pytest.param(
+        "How long must the basement slab concrete be cured after the pour?",
+        [{"doc_name": "Thornbury Screed Notes.pdf", "snippet": "Screed is cured for 7 days."},
+         {"doc_name": "Thornbury Render Notes.pdf", "snippet": "Render is cured for 3 days."}],
+        "It is cured for 7 days.", id="cured"),
+])
+def test_a_thing_sharing_one_word_with_the_question_is_no_conflict(question, rows, answer):
+    """Two values that share only one of the question's thing words with it
+    are not shown to be about the asked thing."""
+    assert len(_question_thing(question)) >= 2
+    assert detect(answer, rows, question) == []
+    # The same two passages naming the asked thing do conflict.
+    named = [dict(r, snippet=r["snippet"].replace("Wall", "Pile cap reinforcement").replace(
+        "Slab", "Pile cap reinforcement").replace("Screed", "Basement slab concrete").replace(
+        "Render", "Basement slab concrete")) for r in rows]
+    assert len(detect(answer, named, question)) == 1
