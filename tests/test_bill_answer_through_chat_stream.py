@@ -174,3 +174,33 @@ async def test_a_turn_with_no_computed_result_streams_unchanged(monkeypatch, rep
     tokens, end = _turn(monkeypatch, [("say", reply)], message="What does the bill hold?")
     assert "".join(tokens).strip() == reply
     assert answer_exit.FIGURE_REMOVED not in (end.get("content") or "")
+
+
+@pytest.mark.parametrize("first_ref_on_next_page, count, total", [
+    # the item numbers continue over the break (D3 -> D4): the section is whole
+    ("D4", 5, 18),
+    # no reference at the head of the next page: no evidence, nothing carried
+    ("", 3, 15),
+], ids=["carried-by-the-sequence", "not-carried-without-evidence"])
+async def test_a_page_break_bill_through_the_stream_route(
+        monkeypatch, tmp_path, first_ref_on_next_page, count, total):
+    """A section printed over a page break, answered through POST
+    /v1/chat/stream: the count and sum the user reads are the reader's rows
+    (grader 1515Z point 6). The bill is invented here."""
+    from app.core import bill_aggregate as agg
+    from app.core import bill_table_geometry as g
+    from tests.test_bill_page_break_carry import RUNNING, _bill
+
+    path = tmp_path / "bill.xlsx"
+    g.write_bill_workbook(_bill(RUNNING, first_ref_on_next_page), str(path))
+    rows = agg.join_page_continuations(agg.read_sheet_rows(str(path)))
+    ask = "How many chambers 1.8 x 1.8 m? total quantity"
+    payload = _bill_payload(rows, ask)
+    reply = f"There are {count} chambers, {total} in all."
+    tokens, end = _turn(monkeypatch, [("tool", payload), ("say", reply)], message=ask)
+    content = _cited(end["content"])
+    other = 3 if count == 5 else 5
+    assert f"**{count}**" in content and f"**{other}**" not in content
+    assert f"**{total} nr**" in content
+    assert content.endswith(reply)
+    assert "".join(tokens).count(f"**{count}**") == 1
