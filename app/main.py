@@ -311,6 +311,9 @@ async def lifespan(app: FastAPI):
                 # something escaping that, and must not abort the remaining
                 # shutdown steps (scheduler stop, redis close) below.
                 logger.exception("model warm-up task failed during shutdown")
+        # After the warm-up task is finished or cancelled, so its freeze
+        # can never land after this release.
+        loop_watchdog.release_startup_heap()
         await hydration_scheduler.stop()
         from app.core.cde.poll import stop_event_poller
         await stop_event_poller()
@@ -486,6 +489,13 @@ async def _warm_models() -> None:
             raise
         except Exception:
             logger.exception("%s warm-load failed; it will lazy-load on first use", label)
+    # Start-up is done: what is alive now lives as long as the process.
+    # Freeze it so a full collection (which holds the interpreter lock, the
+    # loop included, for its whole pass) no longer re-scans it.
+    from app.core import loop_watchdog
+    frozen = loop_watchdog.freeze_startup_heap()
+    if frozen is not None:
+        logger.info("startup heap frozen: %d objects out of the collector's reach", frozen)
 
 
 # Interactive docs + the raw OpenAPI schema disclose the entire API surface
