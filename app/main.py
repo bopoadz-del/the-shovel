@@ -430,6 +430,15 @@ def _configure_ml_loop() -> None:
                 settings.enabled, settings.build_sha)
 
 
+def _declare_deferred_results() -> None:
+    """Run the deferred result declarations (they import the formula
+    registry, sympy among it) in the warm-up thread, so the first tool call
+    under load does not pay that import holding the interpreter lock on the
+    event loop. Not at import: the boot check forbids those libraries there."""
+    from app.agents.core.tool_registry import declare_deferred_results
+    declare_deferred_results()
+
+
 async def _warm_models() -> None:
     """Warm the heavy models — and seed the knowledge base — WITHOUT blocking startup.
 
@@ -452,7 +461,8 @@ async def _warm_models() -> None:
     """
     # Embedder first: the knowledge seed reuses the same cached instance, so
     # ordering it last means the seed never pays a second model load.
-    for label, fn in (("safety detector", _warm_safety_detector),
+    for label, fn in (("result declarations", _declare_deferred_results),
+                      ("safety detector", _warm_safety_detector),
                       ("RAG embedder", _warm_embedder),
                       ("embedder identity check", _check_embedder_identity),
                       ("knowledge seed", _seed_knowledge),

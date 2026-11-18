@@ -245,13 +245,20 @@ _DEFERRED_RUNNING = False
 _LOG = logging.getLogger(__name__)
 
 
-def _declare_deferred() -> None:
+def declare_deferred_results() -> None:
     """Run every waiting declarer, under one lock, so a second thread's first
     read waits until the declarations exist. A declarer leaves the list only
     after it SUCCEEDS: one that raises is logged by its exception class and
     tried again on the next read -- never silently lost. A read made from
-    inside a declarer (same thread) does not re-enter the loop."""
+    inside a declarer (same thread) does not re-enter the loop.
+
+    The lock is taken ONLY while declarers are pending: every tool call reads
+    the declarations, so once the list is empty a read must never queue on
+    it. The app runs this in its background warm-up (app.main._warm_models,
+    off the event loop); the first read is only the fallback."""
     global _DEFERRED_RUNNING
+    if not _DEFERRED:
+        return
     with _DEFERRED_LOCK:
         if _DEFERRED_RUNNING:
             return
@@ -278,13 +285,13 @@ def result_spec(name: str) -> Optional[Union[ToolSpec, ResultSpec]]:
     """What ``name`` declares about its result: the tool's spec, else the
     block's result declaration, else None."""
     load()
-    _declare_deferred()
+    declare_deferred_results()
     return _TOOLS.get(name) or _RESULTS.get(name)
 
 
 def tools_of_kind(kind: str) -> List[str]:
     load()
-    _declare_deferred()
+    declare_deferred_results()
     names = {n for n, s in _TOOLS.items() if s.kind == kind}
     names.update(n for n, s in _RESULTS.items() if s.kind == kind)
     return sorted(names)

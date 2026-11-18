@@ -142,3 +142,65 @@ def test_a_calculator_reads_computed_in_a_fresh_process():
     env.setdefault("RAG_EMBEDDING_MODEL", "fake")
     subprocess.run([sys.executable, "-c", code], check=True, timeout=300,
                    cwd=str(Path(__file__).resolve().parents[1]), env=env)
+
+
+class _CountingLock:
+    """Stands in for the declarers' lock and counts every acquisition."""
+
+    def __init__(self):
+        self._inner = threading.RLock()
+        self.taken = 0
+
+    def __enter__(self):
+        self.taken += 1
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc):
+        return self._inner.__exit__(*exc)
+
+
+@pytest.mark.parametrize("read, name", [
+    (lambda n: tool_registry.result_spec(n), "zz_lockfree_read_a"),
+    (lambda n: tool_registry.tools_of_kind("search"), "zz_lockfree_read_b"),
+])
+def test_once_nothing_is_pending_a_read_never_takes_the_lock(invented, monkeypatch, read, name):
+    """Every tool call reads the declarations: after they are declared a read
+    must not queue on the lock (fifteen users would serialise on it)."""
+    lock = _CountingLock()
+    monkeypatch.setattr(tool_registry, "_DEFERRED_LOCK", lock)
+    invented(name, lambda: _declare(name))
+    read(name)                                  # pending: the lock is taken once
+    assert lock.taken == 1 and not tool_registry._DEFERRED
+    for _ in range(5):
+        read(name)
+    assert lock.taken == 1
+
+
+@pytest.mark.parametrize("name", ["zz_warmup_declarer_a", "zz_warmup_declarer_b"])
+def test_the_startup_warm_up_declares_off_the_event_loop(invented, monkeypatch, name):
+    """The app declares at warm-up, in a worker thread, so the first read
+    under load finds nothing pending and runs no import on the loop."""
+    import asyncio
+
+    from app import main
+
+    for step in ("_warm_safety_detector", "_warm_embedder", "_check_embedder_identity",
+                 "_seed_knowledge", "_warm_parse_libraries"):
+        monkeypatch.setattr(main, step, lambda: None)
+    threads = []
+
+    def declarer():
+        threads.append(threading.get_ident())
+        _declare(name)
+
+    invented(name, declarer)
+
+    async def run():
+        loop_thread = threading.get_ident()
+        await main._warm_models()
+        return loop_thread
+
+    loop_thread = asyncio.run(run())
+    assert threads and threads[0] != loop_thread
+    assert declarer not in tool_registry._DEFERRED
+    assert tool_registry._RESULTS[name].kind == "search"
