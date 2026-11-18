@@ -579,6 +579,40 @@ def test_the_indexer_itself_refuses_a_session_file_whoever_calls_it(client, name
     assert (_row(pdid).get("chunk_count") or 0) > 0
 
 
+@pytest.mark.parametrize("name", ["kerb_line_a.txt", "kerb_line_b.txt"])
+def test_a_full_project_reindex_skips_a_session_file_and_indexes_the_project_file(client, name):
+    """``index_project`` lists every row (all sessions) for maintenance; a
+    chat's file is skipped before any chunk is written and is counted, a
+    project file beside it is chunked, and an entry the session file held in
+    the stored index before the rebuild is not carried forward."""
+    from app.core import doc_index
+    from app.core import projects as store
+
+    headers = _headers(client, f"rx{name[-5]}")
+    pid = _project(client, headers, f"Panel-rx-{name[-5]}-{_RUN}")
+    storage = store.storage_project_id(pid)
+    body = b"Kerb line set 450 mm behind the channel."
+    sid = _upload(client, headers, pid, name, body, session_id=f"ws-{pid}-6600")["id"]
+    pdid = _upload(client, headers, pid, f"project_{name}", body)["id"]
+
+    seeded = dict(doc_index._load_index(storage) or {"project_id": storage, "skipped": []})
+    seeded["documents"] = list(seeded.get("documents") or []) + [{
+        "document_id": sid, "filename": name, "fingerprint": "x:1", "chunk_count": 1,
+    }]
+    doc_index._write_index(storage, seeded)
+    assert sid in doc_index._entries_of(doc_index._load_index(storage))
+
+    out = doc_index.index_project(storage)
+
+    assert out["skipped_session_only"] == 1
+    assert [r["document_id"] for r in out["session_only"]] == [sid]
+    assert _chunk_rows(sid) == 0
+    assert _chunk_rows(pdid) > 0
+    entries = doc_index._entries_of(doc_index._load_index(storage))
+    assert sid not in entries
+    assert pdid in entries
+
+
 # ── redline by id (grader 19:35Z, item 2) ───────────────────────────────────
 
 def test_the_redline_route_is_the_handler_these_tests_call():

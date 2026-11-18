@@ -2635,6 +2635,9 @@ def index_project(
     rather than wiped by the zero-chunk stamp (``EXTRACT_FAILED`` deletes
     chunks), and it is counted ``skipped_not_stored`` in the summary.
 
+    A chat session's file is skipped before extraction: it gets no chunks
+    and no entry, and is counted ``skipped_session_only``.
+
     Persists the result as JSON and returns a summary dict.
     """
     _checked_profile(profile)
@@ -2652,6 +2655,11 @@ def index_project(
     missing_files: list[dict[str, Any]] = []
     not_stored: list[dict[str, Any]] = []
     unavailable: list[dict[str, Any]] = []
+    # A chat session's file never enters the project's index (the same rule
+    # ``_index_document`` keeps): it is listed here because maintenance must
+    # see every row, then skipped before any extraction or chunk write, and
+    # no prior entry is carried into the rebuilt index.
+    session_only: list[dict[str, Any]] = []
     total_chunks = 0
     ocr_chunks = 0
     zero_chunk = 0
@@ -2659,6 +2667,13 @@ def index_project(
 
     for doc in docs:
         filename = doc.get("original_name", "")
+        if _projects.is_session_document(doc.get("metadata")):
+            session_only.append({
+                "document_id": doc["id"],
+                "filename": filename,
+                "reason": "session_only",
+            })
+            continue
         ext = _ext_of(filename)
 
         if ext not in _SUPPORTED_EXTS:
@@ -2824,6 +2839,8 @@ def index_project(
             "skipped_not_stored": skipped_not_stored,
             "unavailable": unavailable,
             "unavailable_count": len(unavailable),
+            "session_only": session_only,
+            "skipped_session_only": len(session_only),
         }
 
     return {
@@ -2841,6 +2858,8 @@ def index_project(
         "skipped_not_stored": skipped_not_stored,
         "unavailable": unavailable,
         "unavailable_count": len(unavailable),
+        "session_only": session_only,
+        "skipped_session_only": len(session_only),
     }
 
 
