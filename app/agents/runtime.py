@@ -3537,7 +3537,9 @@ def _tool_result_content(
     # cap; shrink until the ENVELOPE fits, measuring the real thing. A
     # statement is never cut, so the outline alone can exceed the cap:
     # _fit_cap then replaces it by a minimal one and the result always fits.
-    return _fit_cap(_envelope, cap, outline, len(text), cap)
+    # A named call, as in _compacted_tool_payload, so the envelope's callers
+    # (and the tests that name them) are visible from a static call graph.
+    return _fit_cap(lambda k, o: _envelope(k, o), cap, outline, len(text), cap)
 
 
 def _persist_failed_turn(conversation_id: str | None) -> None:
