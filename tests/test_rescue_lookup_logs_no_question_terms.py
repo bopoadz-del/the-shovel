@@ -167,3 +167,26 @@ def test_chunks_following_failure_prints_error_ref_not_message(
     # Anchors are document ids and chunk indexes, not question text.
     assert "doc_x" in lines[0]
     assert type(exc).__name__ in lines[0]
+
+
+@pytest.mark.parametrize("project_id,opens", [
+    ("", 0),
+    (None, 0),
+    ("proj_b", 1),
+])
+def test_chunks_following_reads_the_store_only_with_a_project(
+        store, monkeypatch, project_id, opens):
+    """No project id, no read: the lookup must not open a session (an
+    unscoped read could reach another project's rows). With a project id
+    the same anchors do reach the store."""
+    opened = []
+
+    def _factory():
+        opened.append(1)
+        return _RaisingSession(_PgDriverError("unreachable"))
+
+    monkeypatch.setattr(store, "_session_factory", lambda: _factory)
+    monkeypatch.setattr(store, "_hidden_doc_ids_among",
+                        lambda *a, **kw: set())
+    assert store.chunks_following(project_id, [("doc_q", 2)]) == []
+    assert len(opened) == opens
