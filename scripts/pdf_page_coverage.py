@@ -491,14 +491,20 @@ def _accepted_kinds() -> frozenset:
     return frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS)
 
 
-def _declared_types() -> frozenset:
-    """Every document type the product declares: the type registry
-    (``app.core.doc_types.list_types``: ``config/document_types.yaml`` plus
-    the declared custom types) and the classifier's default, not a list here."""
+def _declared_types() -> tuple[frozenset, frozenset]:
+    """``(built-in, custom)`` document type names from the product's own type
+    registry (``app.core.doc_types.list_types``), not a list here. Built-in
+    names come from ``config/document_types.yaml`` plus the classifier's
+    default; a custom name was typed by a user, so it is user text and is
+    only ever counted, never printed."""
     from app.core.doc_types import list_types
     from app.core.doc_typing import DEFAULT_DOC_TYPE
-    names = {str(t.get("name")) for t in list_types() if t.get("name")}
-    return frozenset(names | {DEFAULT_DOC_TYPE})
+    builtin, custom = {DEFAULT_DOC_TYPE}, set()
+    for t in list_types():
+        name = t.get("name")
+        if name:
+            (builtin if t.get("source") == "builtin" else custom).add(str(name))
+    return frozenset(builtin), frozenset(custom - builtin)
 
 
 def file_kind(name: Any) -> str:
@@ -515,10 +521,17 @@ def file_kind(name: Any) -> str:
 
 
 def stored_type(value: Any) -> str:
-    """The stored type when it is one the product declares, else ``(other)``."""
+    """The stored type when it is a built-in declared type, ``(custom)`` when
+    it is a user-declared custom type (its name is user text), else
+    ``(other)``."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return "(none)"
-    return value if isinstance(value, str) and value in _declared_types() else "(other)"
+    if not isinstance(value, str):
+        return "(other)"
+    builtin, custom = _declared_types()
+    if value in builtin:
+        return value
+    return "(custom)" if value in custom else "(other)"
 
 
 def pageless_by_kind(chunk_rows: Iterable[tuple], doc_rows: Iterable[tuple],
