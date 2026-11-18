@@ -31,6 +31,12 @@ Per document it also prints the index's own page coverage (stored chunks by
 their ``page`` locator: which pages carry a chunk and how much text), read
 from the chunk table, so it answers even when the source file is gone.
 
+With ``COVERAGE_PAGELESS_SUMMARY`` set, each id is an anchor instead: the
+run prints, for the anchor document's own project, how many chunks carry no
+``page`` locator, by document id (counts and ids only, at most ``_MAX_DOCS``
+documents listed). The project is read from the anchor's row, never taken
+from an input, and never printed.
+
 Per document it also prints the stored failure evidence (the ledger reason,
 the parsed ``attempts_exhausted`` mark and the failure keys of the metadata)
 and, once per run, the extraction budgets read from the product helpers, so
@@ -414,6 +420,64 @@ def stored_lines(doc_row: tuple) -> list[str]:
     return render_stored(stored_page_coverage([tuple(r) for r in rows], pif))
 
 
+# Chunks with no page locator, by document, across ONE project (read-only).
+# The project is the anchor document's own (read from its row, never from an
+# input), and it is a bind parameter, so the read uses the project index.
+def _pageless_sql(table: str) -> str:
+    return (
+        "SELECT doc_id, "
+        "SUM(CASE WHEN page IS NULL OR page < 1 THEN 1 ELSE 0 END), COUNT(*) "
+        f"FROM {table} WHERE project_id = :pr GROUP BY doc_id"
+    )
+
+
+def pageless_summary(rows: Iterable[tuple], cap: int = _MAX_DOCS) -> dict[str, Any]:
+    """Pure count of chunks without a page locator, by document id.
+
+    ``rows`` is ``(doc_id, chunks_without_page, chunks)`` per document of one
+    project. A chunk with no page cannot be cited by page, so this is the
+    size of that defect in the working set: how many documents carry one,
+    how many chunks, and the ``cap`` documents with the most (ties by id)."""
+    docs = [(str(d), int(n or 0), int(t or 0)) for d, n, t in rows]
+    hit = sorted((r for r in docs if r[1] > 0), key=lambda r: (-r[1], r[0]))
+    return {
+        "documents": len(docs),
+        "documents_with_pageless": len(hit),
+        "chunks": sum(r[2] for r in docs),
+        "pageless_chunks": sum(r[1] for r in hit),
+        "top": hit[:cap],
+    }
+
+
+def render_pageless(anchor: str, summ: dict[str, Any]) -> list[str]:
+    lines = [
+        (f"== pageless in the project of id {anchor}: documents={summ['documents']} "
+         f"documents_with_pageless={summ['documents_with_pageless']} "
+         f"chunks={summ['chunks']} pageless_chunks={summ['pageless_chunks']}"),
+        "   doc_id | pageless_chunks | chunks",
+    ]
+    for did, n, t in summ["top"]:
+        lines.append(f"   {did} | {n} | {t}")
+    more = summ["documents_with_pageless"] - len(summ["top"])
+    if more > 0:
+        lines.append(f"   (+{more} more documents with pageless chunks)")
+    return lines
+
+
+def pageless_lines(anchor: str, doc_row: tuple) -> list[str]:
+    """The pageless count for the anchor document's project; a failed read
+    is printed by class, never raised. The project id is never printed."""
+    from app.core.db import SessionLocal
+
+    try:
+        sql = _pageless_sql(stored_chunk_table())
+        with SessionLocal() as s:
+            rows = s.execute(text(sql), {"pr": doc_row[1]}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return [f"== pageless in the project of id {anchor}: READ FAILED: {type(exc).__name__}"]
+    return render_pageless(anchor, pageless_summary([tuple(r) for r in rows]))
+
+
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
            max_side: float, error: str | None) -> list[str]:
     did, _pid, _name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
@@ -504,9 +568,18 @@ def _one(prefix: str) -> bool:
     if len(rows) != 1:
         emit(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
         return False
-    for line in report(tuple(rows[0])):
+    row = tuple(rows[0])
+    lines = (withhold(pageless_lines(prefix, row), row) if pageless_mode()
+             else report(row))
+    for line in lines:
         emit(line)
     return True
+
+
+def pageless_mode() -> bool:
+    """``COVERAGE_PAGELESS_SUMMARY``: each id is an anchor; print the
+    pageless-chunk count of its project instead of the per-page report."""
+    return os.environ.get("COVERAGE_PAGELESS_SUMMARY", "").strip().lower() in ("1", "true", "yes")
 
 
 def main() -> int:
