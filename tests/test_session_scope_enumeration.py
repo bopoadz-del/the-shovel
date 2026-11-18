@@ -73,6 +73,7 @@ EXEMPT = {
     # operator scripts
     "scripts/extraction_census.py::run_census": "operator census",
     "scripts/pdf_page_coverage.py::_stored_pages_sql": "operator diagnosis of named documents",
+    "scripts/pdf_page_coverage.py::_pageless_sql": "operator census of one project's pageless chunks",
     "scripts/rag_cleanup_unsupported.py::cleanup": "operator cleanup",
     "scripts/rag_render_bulk_ingest.py::fetch_existing": "bulk ingest resume",
     "scripts/rag_render_bulk_ingest.py::count_chunks": "bulk ingest tally",
