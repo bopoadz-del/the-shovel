@@ -687,3 +687,116 @@ def test_pageless_mode_keeps_the_ids_required_guard(monkeypatch, flag):
     monkeypatch.setenv("COVERAGE_DOC_IDS", "")
     monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", flag)
     assert mod.main() == 2
+
+
+# --- pageless by what the document IS (file kind x stored type) ---------------
+
+def test_kind_sql_is_one_select_bound_to_the_project():
+    sql = _load()._KIND_SQL
+    assert sql.lstrip().upper().startswith("SELECT")
+    assert ":pr" in sql and "doc_type" in sql
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b", sql, re.IGNORECASE)
+
+
+@pytest.mark.parametrize("name, kind", [
+    ("Sheet 12 Rev C.PDF", ".pdf"),
+    ("bill.xlsx", ".xlsx"),
+    ("no extension", "(none)"),
+    (None, "(none)"),
+    ("Client Alpha.final draft", "(other)"),  # a suffix with a space is name text, withheld
+    ("Jordan.Whitfield", "(other)"),  # a word as the suffix: a short alphanumeric name part, withheld
+    ("Jordan.Whitfield.dwg", ".dwg"),
+])
+def test_file_kind_is_an_accepted_kind_or_a_placeholder(name, kind):
+    assert _load().file_kind(name) == kind
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("drawing", "drawing"),
+    ("document", "document"),
+    ("whitfield", "(other)"),  # a lower-case word that is not a declared type, withheld
+    ("Free Text Type", "(other)"),
+    ("", "(none)"),
+])
+def test_stored_type_is_a_declared_type_or_a_placeholder(value, shown):
+    assert _load().stored_type(value) == shown
+
+
+@pytest.mark.parametrize("filename", ["Sheet A-101 drawing.pdf", "site photo.jpg", "notes.txt"])
+def test_declared_types_cover_every_type_the_classifier_writes(filename):
+    from app.core.projects import classify_doc_type
+    assert classify_doc_type(filename) in _load()._declared_types()
+
+
+@pytest.mark.parametrize("ext", [".pdf", ".xer"])
+def test_accepted_kinds_are_the_products_upload_constant(ext):
+    from app.core.upload_limits import ALLOWED_UPLOAD_EXTENSIONS
+    kinds = _load()._accepted_kinds()
+    assert kinds == frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS) and ext in kinds
+
+
+@pytest.mark.parametrize("chunks, docs, expected", [
+    (
+        [("a", 4, 4), ("b", 0, 6), ("c", 3, 3)],
+        [("a", "x.xlsx", "boq"), ("b", "y.pdf", "drawing"), ("c", "z.pdf", "drawing")],
+        [(".xlsx", "boq", 1, 1, 4, 4), (".pdf", "drawing", 2, 1, 9, 3)],
+    ),
+    (
+        [("a", 2, 5), ("ghost", 7, 7)],
+        [("a", "x.pdf", "Free Text Type")],
+        [("(no document row)", "(no document row)", 1, 1, 7, 7), (".pdf", "(other)", 1, 1, 5, 2)],
+    ),
+])
+def test_pageless_by_kind_groups_and_never_guesses_a_missing_row(chunks, docs, expected):
+    assert _load().pageless_by_kind(chunks, docs) == expected
+
+
+@pytest.mark.parametrize("groups, pdf_line", [
+    ([(".pdf", "drawing", 2, 1, 9, 3), (".pdf", "spec", 1, 0, 5, 0), (".txt", "document", 1, 1, 2, 2)],
+     "pdf-born (.pdf, every type listed above): chunks=14 with_page=11 without_page=3"),
+    ([(".xlsx", "boq", 1, 1, 4, 4)], None),
+])
+def test_render_by_kind_totals_the_pdf_born_chunks(groups, pdf_line):
+    lines = _load().render_by_kind(groups)
+    assert len(lines) == 1 + len(groups) + (1 if pdf_line else 0)
+    assert (lines[-1].strip() == pdf_line) if pdf_line else not any("pdf-born" in ln for ln in lines)
+
+
+@pytest.mark.parametrize("kind_read_fails", [False, True])
+def test_main_pageless_mode_prints_the_kind_table_or_its_read_failure(
+    monkeypatch, capsys, kind_read_fails,
+):
+    mod = _load()
+    pid = "proj-secret-0002"
+    doc = ("d0c1d", pid, "client_file.pdf", 10, "/data/x/client_file.pdf",
+           "indexed", 3, 2, 0, None, None)
+
+    class _S:
+        def execute(self, stmt, params):
+            sql = str(stmt)
+            if "p" in params:
+                return _Rows([doc])
+            if "original_name" in sql:
+                if kind_read_fails:
+                    raise RuntimeError("boom")
+                return _Rows([("d0c1d", "client_file.pdf", "drawing"),
+                              ("d0c2e", "client_bill.xlsx", "boq")])
+            return _Rows([("d0c1d", 2, 3), ("d0c2e", 4, 4)])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "d0c1d")
+    monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", "1")
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "pageless_chunks=6" in out  # the per-document summary prints either way
+    assert ("by kind: READ FAILED: RuntimeError" in out) == kind_read_fails
+    assert ("chunks=3 with_page=1 without_page=2" in out) != kind_read_fails
+    assert pid not in out and "client_file" not in out and "client_bill" not in out
