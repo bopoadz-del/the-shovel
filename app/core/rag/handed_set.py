@@ -153,7 +153,11 @@ def diversify(
     ordered = sorted(chunks, key=_score, reverse=True)
     if not ordered:
         return []
-    competitors = _competing_families(ordered, margin)
+    top = _score(ordered[0])
+    best_by_family: dict[str, float] = {}
+    for c in ordered:
+        best_by_family.setdefault(family_key(c), _score(c))
+    competitors = {f for f, s in best_by_family.items() if s >= top - margin}
     cap = max(1, math.ceil(share * max(1, slots)))
     seen_text: set[tuple[str, str]] = set()
     taken: dict[str, int] = {}
