@@ -121,3 +121,155 @@ def test_the_upload_response_names_the_session_the_client_rule_reads(client, ses
         assert not meta.get("session_id")
         detail_ids, page_ids = _panel_ids(client, headers, pid)
         assert doc["id"] in detail_ids and doc["id"] in page_ids
+
+
+# ── a second user on the same project (grader 12:50Z, bar 4) ────────────────
+
+def _share(project_id: str) -> None:
+    """Make the project one a second user can open (an approved platform
+    project), the way tests/test_chat_session_scope.py shares one."""
+    from app.core.db import SessionLocal
+    from app.core.models import Project
+
+    with SessionLocal() as db:
+        row = db.get(Project, project_id)
+        row.origin = "admin_drive_approved"
+        row.is_approved = True
+        db.commit()
+
+
+@pytest.mark.parametrize("name,body", [
+    ("grout_mix_record.txt", b"Grout 1:3 by volume, 28-day 40 MPa."),
+    ("anchor_bolt_list.txt", b"M24 anchors at base plates B1 to B9."),
+])
+def test_a_second_user_sees_the_session_file_nowhere(client, name, body):
+    first = _headers(client, f"u1{name[:5]}")
+    second = _headers(client, f"u2{name[:5]}")
+    pid = _project(client, first, f"Panel-2u-{name[:5]}-{_RUN}")
+    _share(pid)
+    own = f"ws-{pid}-7000"
+    session_doc = _upload(client, first, pid, name, body, session_id=own)
+    project_doc = _upload(client, first, pid, "gate_hours.txt", b"Gate open 06:00 to 18:00.")
+
+    detail_ids, page_ids = _panel_ids(client, second, pid)
+    assert session_doc["id"] not in detail_ids and session_doc["id"] not in page_ids
+    assert project_doc["id"] in detail_ids and project_doc["id"] in page_ids
+    # Neither the second user's own chat strip nor the first user's chat id
+    # lists it for the second user.
+    assert session_doc["id"] not in _strip_ids(client, second, pid, f"ws-{pid}-8000")
+    strip = client.get(f"/v1/projects/{pid}/conversations/{own}/documents", headers=second)
+    assert strip.status_code == 404 or session_doc["id"] not in {d["id"] for d in strip.json()["documents"]}
+
+
+# ── by id: delete, fetch, ask (advisor ruling 12:39Z) ───────────────────────
+
+def _doc_url(pid, did, tail=""):
+    return f"/v1/projects/{pid}/documents/{did}{tail}"
+
+
+@pytest.mark.parametrize("name,body", [
+    ("formwork_strike_log.txt", b"Soffit forms struck after 10 days at pour 4."),
+    ("pile_test_note.txt", b"Static load test on pile P-17 to 2.0 x working load."),
+])
+def test_a_session_file_is_deleted_only_from_its_own_chat_by_its_maker(client, name, body):
+    first = _headers(client, f"d1{name[:5]}")
+    second = _headers(client, f"d2{name[:5]}")
+    pid = _project(client, first, f"Panel-del-{name[:5]}-{_RUN}")
+    _share(pid)
+    own, other = f"ws-{pid}-1100", f"ws-{pid}-2200"
+    did = _upload(client, first, pid, name, body, session_id=own)["id"]
+
+    assert client.delete(_doc_url(pid, did), headers=first).status_code == 404
+    assert client.delete(_doc_url(pid, did), headers=first, params={"session_id": other}).status_code == 404
+    assert client.delete(_doc_url(pid, did), headers=second, params={"session_id": own}).status_code == 404
+    assert did in _strip_ids(client, first, pid, own)  # still there
+
+    res = client.delete(_doc_url(pid, did), headers=first, params={"session_id": own})
+    assert res.status_code == 200, res.text
+    assert did not in _strip_ids(client, first, pid, own)
+
+
+@pytest.mark.parametrize("name,body", [
+    ("cube_results_w12.txt", b"Cubes 7-day 31 MPa, 28-day 44 MPa."),
+    ("crane_lift_plan.txt", b"Lift 12 t at 18 m radius, 50 t crawler."),
+])
+def test_the_maker_on_a_shared_project_deletes_their_session_file_from_its_chat(client, name, body):
+    """The user who attached it deletes it, though they do not own the project."""
+    owner = _headers(client, f"o{name[:5]}")
+    maker = _headers(client, f"m{name[:5]}")
+    pid = _project(client, owner, f"Panel-mk-{name[:5]}-{_RUN}")
+    _share(pid)
+    own = f"ws-{pid}-3300"
+    did = _upload(client, maker, pid, name, body, session_id=own)["id"]
+    assert client.delete(_doc_url(pid, did), headers=owner, params={"session_id": own}).status_code == 404
+    res = client.delete(_doc_url(pid, did), headers=maker, params={"session_id": own})
+    assert res.status_code == 200, res.text
+
+
+@pytest.mark.parametrize("name", ["site_rules_a.txt", "site_rules_b.txt"])
+def test_a_project_document_is_deleted_by_its_owner_as_before(client, name):
+    owner = _headers(client, f"po{name[-5]}")
+    other = _headers(client, f"px{name[-5]}")
+    pid = _project(client, owner, f"Panel-pd-{name[-5]}-{_RUN}")
+    _share(pid)
+    did = _upload(client, owner, pid, name, b"Hard hats at all times.")["id"]
+    assert client.delete(_doc_url(pid, did), headers=other).status_code == 404  # owner-only, as before
+    res = client.delete(_doc_url(pid, did), headers=owner)
+    assert res.status_code == 200, res.text
+    _detail, page_ids = _panel_ids(client, owner, pid)
+    assert did not in page_ids
+
+
+@pytest.mark.parametrize("tail", ["/preview", "/download"])
+def test_a_session_file_is_fetched_by_id_only_from_its_own_chat(client, tail):
+    first = _headers(client, f"f1{tail[1:4]}")
+    second = _headers(client, f"f2{tail[1:4]}")
+    pid = _project(client, first, f"Panel-fetch-{tail[1:4]}-{_RUN}")
+    _share(pid)
+    own, other = f"ws-{pid}-4400", f"ws-{pid}-5500"
+    did = _upload(client, first, pid, "rebar_schedule_s3.txt", b"T16 at 150 c/c both ways.",
+                  session_id=own)["id"]
+    project_did = _upload(client, first, pid, "access_plan.txt", b"Access from the north gate.")["id"]
+    url = _doc_url(pid, did, tail)
+
+    assert client.get(url, headers=first).status_code == 404
+    assert client.get(url, headers=first, params={"session_id": other}).status_code == 404
+    assert client.get(url, headers=second, params={"session_id": own}).status_code == 404
+    res = client.get(url, headers=first, params={"session_id": own})
+    assert res.status_code == 200, res.text
+    # A project document needs no chat, for anyone who can open the project.
+    assert client.get(_doc_url(pid, project_did, tail), headers=second).status_code == 200
+
+
+@pytest.fixture
+def _llm(monkeypatch):
+    from app.agents.runtime import Agent
+    from tests._fixture_values import STUB_TOKEN_02
+
+    async def _reply(self, messages, api_key, project_id=None, **kwargs):
+        return {"status": "success", "choice": {"message": {"content": "noted", "tool_calls": []}}, "raw": {}}
+
+    monkeypatch.setattr(Agent, "_call_llm", _reply)
+    monkeypatch.setattr("app.agents.runtime.project_is_rag_ready", lambda _pid: True)
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_02)
+
+
+@pytest.mark.parametrize("name,body", [
+    ("waterstop_detail.txt", b"PVC waterstop 240 mm at all construction joints."),
+    ("sleeve_schedule.txt", b"Sleeves 150 mm at grid C/4 and C/7."),
+])
+def test_asking_about_a_session_file_by_id_works_only_from_its_own_chat(client, _llm, name, body):
+    headers = _headers(client, f"a{name[:5]}")
+    pid = _project(client, headers, f"Panel-ask-{name[:5]}-{_RUN}")
+    own, other = f"ws-{pid}-6600", f"ws-{pid}-7700"
+    did = _upload(client, headers, pid, name, body, session_id=own)["id"]
+
+    def ask(conversation_id):
+        return client.post("/v1/chat/stream", headers=headers, json={
+            "message": "What does this document say?", "project_id": pid,
+            "conversation_id": conversation_id, "document_ids": [did]})
+
+    assert ask(other).status_code == 404
+    res = ask(own)
+    assert res.status_code == 200, res.text

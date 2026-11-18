@@ -13,6 +13,16 @@ export function withSessionId(form, sessionId) {
   return form
 }
 
+/** The by-id route of one document (``tail``: ``/preview``,
+ *  ``/preview/raw``, ``/download``), naming the open chat. A file attached to
+ *  a chat is reachable by id only from that chat (the server answers 404
+ *  anywhere else); a project document ignores the chat id. */
+export function documentPath(projectId, docId, tail, sessionId) {
+  const sid = String(sessionId ?? '').trim()
+  const path = `/v1/projects/${projectId}/documents/${docId}${tail}`
+  return sid ? `${path}?session_id=${encodeURIComponent(sid)}` : path
+}
+
 /** True when a document record may sit in the project's document list.
  *  A file attached to a chat session belongs to THAT session: it is shown
  *  in the session's own group and nowhere in the project's list, in any

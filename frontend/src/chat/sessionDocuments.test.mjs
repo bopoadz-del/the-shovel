@@ -8,6 +8,7 @@ import { test } from 'node:test'
 
 import {
   belongsToProjectList,
+  documentPath,
   readSessionDocuments,
   sessionDocumentTag,
   sessionDocumentsFailed,
@@ -137,3 +138,20 @@ test('every row the workspace adds to the project list passes the session rule',
   assert.ok(/if \(!belongsToProjectList\(doc\)\) return/.test(body), body)
   assert.ok(body.indexOf('belongsToProjectList') < body.indexOf('setDocuments('), body)
 })
+
+// #451: a content-by-id request names the open chat; a file attached to a
+// chat is reachable by id only from it.
+for (const [sid, tail, expected] of [
+  ['ws-p1-1000', '/preview', '/v1/projects/p1/documents/d9/preview?session_id=ws-p1-1000'],
+  ['ws p1/2000', '/download', '/v1/projects/p1/documents/d9/download?session_id=ws%20p1%2F2000'],
+]) {
+  test(`documentPath names the open chat (${tail})`, () => {
+    assert.equal(documentPath('p1', 'd9', tail, sid), expected)
+  })
+}
+
+for (const sid of [null, '   ']) {
+  test(`documentPath with no open chat carries no session (${JSON.stringify(sid)})`, () => {
+    assert.equal(documentPath('p1', 'd9', '/preview/raw', sid), '/v1/projects/p1/documents/d9/preview/raw')
+  })
+}

@@ -7,6 +7,13 @@ export interface SessionDocumentRow {
 export function withSessionId(form: FormData, sessionId: string | null | undefined): FormData
 export function belongsToProjectList(doc: unknown): boolean
 export function sessionDocumentTag(origin: unknown): 'Uploaded' | 'Produced'
+export function documentPath(
+  projectId: string,
+  docId: string,
+  tail: string,
+  sessionId?: string | null,
+): string
+
 export function sessionDocumentsFor(
   fetchedId: string | null | undefined,
   activeId: string | null | undefined,

@@ -1960,6 +1960,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           expanded={rightExpanded}
           onToggleExpand={() => setRightExpanded((v) => !v)}
           projectId={id ?? ''}
+          sessionId={conversationId}
           documents={documents.map((d) => ({
             id: d.id,
             original_name: d.original_name,
