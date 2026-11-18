@@ -9,7 +9,6 @@ Every test builds its own wake-up list; no document text.
 """
 from __future__ import annotations
 
-import json
 import threading
 from pathlib import Path
 
@@ -72,21 +71,24 @@ def test_an_empty_window_prints_none_not_zero():
     assert "side_wake_late_max=none side_idle_wake_late_max=none" in line
 
 
-def test_a_real_side_process_ticks_until_its_stdin_closes():
+@pytest.mark.parametrize("run_s,min_inside", [(0.3, 3), (0.8, 12)])
+def test_a_real_side_process_ticks_until_its_stdin_closes(run_s, min_inside):
     import time
     sc = side.Sidecar().start(_REPO)
     t0 = time.monotonic()
-    time.sleep(0.5)
+    time.sleep(run_s)
     t1 = time.monotonic()
     wakes = sc.collect()
     assert sc.error == ""
     assert sc.proc.returncode == 0
     inside = [w for w in wakes if t0 <= w[0] <= t1]
-    assert len(inside) >= 5, wakes[:5]
+    assert len(inside) >= min_inside, wakes[:5]
     assert all(late >= 0 for _, late in wakes)
 
 
-def test_a_side_process_that_never_started_reports_no_wake_ups():
+@pytest.mark.parametrize("earlier_error", ["", "start failed: no such interpreter"])
+def test_a_side_process_that_never_started_reports_no_wake_ups(earlier_error):
     sc = side.Sidecar()
+    sc.error = earlier_error
     assert sc.collect() == []
-    assert json.loads(json.dumps(sc.collect())) == []
+    assert sc.error == earlier_error
