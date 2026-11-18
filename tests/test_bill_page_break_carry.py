@@ -52,8 +52,11 @@ def _read(tmp_path, bill):
     return agg.read_sheet_rows(str(path))
 
 
-def test_a_section_over_a_page_break_is_counted_and_summed_whole(tmp_path):
-    rows = _read(tmp_path, _bill(RUNNING, "D4"))
+@pytest.mark.parametrize("head", [RUNNING, OPEN], ids=["running-heading-cuts-path", "heading-re-printed-same"])
+def test_a_section_over_a_page_break_is_counted_and_summed_whole(tmp_path, head):
+    """Carried: the head of the next page prints the open path cut short (a
+    strict prefix) or the open path itself, and the numbering runs on."""
+    rows = _read(tmp_path, _bill(head, "D4"))
     out = agg._aggregate_bill(rows, terms=None, section=None, measure="quantity",
                               ask="How many chambers 1.8 x 1.8 m? total quantity")
     assert out["count"] == 5
