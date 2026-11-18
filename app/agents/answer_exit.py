@@ -106,9 +106,9 @@ class Turn:
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
 
 
-def open_turn() -> Turn:
+def open_turn(question: str = "") -> Turn:
     """Start a turn's record. Tasks and threads started afterwards share it."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     _TURN.set(turn)
     return turn
 
@@ -121,9 +121,9 @@ def reset_turn(token: contextvars.Token) -> None:
     _TURN.reset(token)
 
 
-def begin_turn() -> tuple[Turn, contextvars.Token]:
+def begin_turn(question: str = "") -> tuple[Turn, contextvars.Token]:
     """``open_turn`` for a caller that restores the previous record afterwards."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     return turn, _TURN.set(turn)
 
 

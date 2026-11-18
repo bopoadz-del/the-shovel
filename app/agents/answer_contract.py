@@ -200,9 +200,13 @@ def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[lis
         if c.get("governs"):
             gval = next(v["value"] for v in c["values"] if v["document"] == c["governs"])
             basis_row = next((r for r in markers.rows if str(r.get("doc_name") or "") == c["basis_document"]), None)
-            btag = markers.for_row(basis_row) if basis_row else ""
-            line += (f" {gval} governs: the stated order of precedence puts the {c['governing_kind']}"
-                     f" above the {c['lower_kind']} {btag}.").replace("  ", " ").replace(" .", ".")
+            # Each part is joined as it stands: a value or a kind phrase is
+            # quoted exactly as the evidence gave it, never edited afterwards.
+            words = [f"{gval} governs: the stated order of precedence puts the {c['governing_kind']}",
+                     f"above the {c['lower_kind']}"]
+            if basis_row:
+                words.append(markers.for_row(basis_row))
+            line += " " + " ".join(words) + "."
         else:
             line += " No document states which of them governs."
         lines.append(line)
