@@ -72,10 +72,75 @@ def test_selection_is_a_rule_over_the_ask_and_the_bill(rows, ask, terms, section
     ("What is the total value of the fencing?", agg.MEASURE_AMOUNT),
     ("What is the total length of clay pipe?", agg.MEASURE_QUANTITY),
     ("Sum the clay pipe", "kept"),
+    # Arabic: the article and letter variants do not hide a measure word
+    ("ما هي التكلفة الإجمالية للأنابيب؟", agg.MEASURE_AMOUNT),
+    ("ما قيمه بنود السياج", agg.MEASURE_AMOUNT),
+    ("ما هو الطول الكلي للأنابيب؟", agg.MEASURE_QUANTITY),
+    ("كم عدد الأنابيب؟", "kept"),
 ])
 def test_measure_from_ask(ask, measure):
     expected = "kept" if measure == "kept" else measure
     assert agg.measure_from_ask(ask, default="kept") == expected
+
+
+@pytest.mark.parametrize("word, forms", [
+    ("pipes", {"pipes", "pipe", "pip"}),
+    ("trench", {"trench"}),
+    # a word ending in a double s is not a plural of one ending in one s
+    ("glass", {"glass"}),
+    ("glasses", {"glasses", "glasse", "glass"}),
+])
+def test_plural_fold(word, forms):
+    assert agg._forms(word) == forms
+
+
+SLEEVES = [
+    _row(RUNS, 1, "P1", "Pipeline sleeve", "m", "5", "50"),
+    _row(RUNS, 1, "P2", "Pipe sleeve", "m", "7", "70"),
+]
+
+
+@pytest.mark.parametrize("ask, refs, total", [
+    # a word inside a longer word does not match: "pipe" is not "pipeline"
+    ("total length of pipe sleeves", ["P2"], 7),
+    ("total length of pipeline sleeves", ["P1"], 5),
+])
+def test_a_word_inside_a_longer_word_does_not_match(tmp_path, ask, refs, total):
+    path = tmp_path / "sleeves.xlsx"
+    g.write_bill_workbook(SLEEVES, str(path))
+    rows = agg.join_page_continuations(agg.read_sheet_rows(str(path)))
+    out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_AMOUNT)
+    assert [r["ref"] for r in out["rows"]] == refs
+    assert out["sum"] == total
+
+
+ARABIC = [
+    _row(("صرف", "مواسير"), 1, "A1", "مواسير فخار قطر 150", "م", "20", "600"),
+    _row(("صرف", "مواسير"), 1, "A2", "مواسير بلاستيك قطر 110", "م", "10", "200"),
+    _row(("صرف", "غرف"), 2, "A3", "غرفة تفتيش", "عدد", "2", "900"),
+]
+
+
+@pytest.mark.parametrize("ask, refs, measure, total, ignored", [
+    # an Arabic cost question sums the amounts of the rows it names
+    ("ما هي تكلفة مواسير فخار؟", ["A1"], agg.MEASURE_AMOUNT, 600, []),
+    # an Arabic length question sums the quantities; an unknown word is named
+    ("ما هو طول مواسير الحديد", ["A1", "A2"], agg.MEASURE_QUANTITY, 30, ["الحديد"]),
+    # no measure word: the rows and count, and plainly no total
+    ("كم مجموع مواسير فخار", ["A1"], None, None, []),
+], ids=["cost", "length", "no-measure"])
+def test_an_arabic_ask(tmp_path, ask, refs, measure, total, ignored):
+    path = tmp_path / "ar.xlsx"
+    g.write_bill_workbook(ARABIC, str(path))
+    rows = agg.join_page_continuations(agg.read_sheet_rows(str(path)))
+    out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)
+    assert out["selected_by"] == "ask"
+    assert [r["ref"] for r in out["rows"]] == refs
+    assert out["measure"] == measure
+    assert out["sum"] == total
+    assert out["ignored_ask_words"] == ignored
+    assert ("No total is given" in out["statement"]) is (measure is None)
+    assert [f["value"] for f in out["stated_figures"]] == ([] if total is None else [total])
 
 
 #: Two different wordings a model might put in its call for the same ask.
@@ -110,15 +175,23 @@ def test_same_ask_selects_same_rows_whatever_the_model_passes(rows, ask, refs, t
 
 
 @pytest.mark.parametrize("ask, call, selected_by, refs", [
-    # an ask that names no word of the bill: the call's terms are used, and said so
-    ("and how many of those?", {"terms": "fence", "section": None}, "call", ["F1"]),
+    # an ask that names no word of the bill selects nothing, whatever the call
+    # carries: the model's words never stand in for the user's
+    ("and how many of those?", {"terms": "fence", "section": None}, "none", []),
+    ("", {"terms": "pipe", "section": "runs"}, "none", []),
     # an ask that does name the bill's words wins over the call
     ("how many fence rows?", {"terms": "pipe", "section": None}, "ask", ["F1"]),
-])
-def test_call_terms_only_when_the_ask_selects_nothing(rows, ask, call, selected_by, refs):
+    # no ask at all (not a chat turn): the caller's own terms
+    (None, {"terms": "fence", "section": None}, "call", ["F1"]),
+], ids=["follow-up", "empty", "ask-wins", "no-ask"])
+def test_the_calls_terms_never_stand_in_for_the_ask(rows, ask, call, selected_by, refs):
     out = agg._aggregate_bill(rows, ask=ask, measure=agg.MEASURE_QUANTITY, **call)
     assert out["selected_by"] == selected_by
     assert [r["ref"] for r in out["rows"]] == refs
+    said = "No row was selected from the question" in out["statement"]
+    assert said is (selected_by == "none")
+    if selected_by == "none":
+        assert out["count"] == 0 and out["sum"] is None and out["stated_figures"] == []
 
 
 @pytest.mark.parametrize("terms, fold, refs", [
@@ -162,12 +235,36 @@ def test_statement_names_the_rows_and_carries_the_tools_figure(rows, ask, why, f
 
 
 @pytest.mark.parametrize("ask, expect", [
-    ("how many paint rows?", "no row of this bill matches"),
-    ("how many rows in the drainage section?", "Total quantity by unit: "),
+    ("how many paint rows?", "No row was selected from the question"),
+    ("total quantity of rows in the drainage section?", "Total quantity by unit: "),
+    ("how many clay pipes in the runs?", "No total is given: the question does not say"),
 ])
-def test_statement_for_no_match_and_mixed_units(rows, ask, expect):
+def test_statement_for_no_match_mixed_units_and_no_measure(rows, ask, expect):
     out = agg._aggregate_bill(rows, ask=ask, terms="paint", section="", measure=agg.MEASURE_QUANTITY)
     assert expect in out["statement"]
+
+
+@pytest.mark.parametrize("ask, named", [
+    # the words that matched nothing are named, not dropped
+    ("How many uPVC pipes are there?", ['"upvc"']),
+    ("How many fence and paint rows?", ['"paint"']),
+    ("How many pipes are there?", []),
+])
+def test_statement_names_the_words_it_did_not_use(rows, ask, named):
+    text = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)["statement"]
+    assert ("so not used:" in text) is bool(named)
+    for word in named:
+        assert word in text
+
+
+@pytest.mark.parametrize("ask, figures", [
+    ("total length of clay pipes in the runs", [(103.5, "103.5 m")]),
+    ("total quantity in the drainage section", [(73 + 18.5 + 40 + 12, "143.5 m"), (9, "9 nr")]),
+    ("how many clay pipes in the runs?", []),
+])
+def test_stated_figures_are_the_tools_totals(rows, ask, figures):
+    out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)
+    assert [(f["value"], f["shown"]) for f in out["stated_figures"]] == figures
 
 
 @pytest.fixture
@@ -205,7 +302,7 @@ async def test_tool_handler_selects_from_the_users_message(one_bill, ask, refs):
 
 @pytest.mark.parametrize("ask, by", [
     ("total length of clay pipes in the runs", "by=ask"),
-    ("and those?", "by=call"),
+    ("and those?", "by=none"),
 ])
 def test_log_line_says_where_the_selection_came_from(one_bill, caplog, ask, by):
     import logging
@@ -214,3 +311,60 @@ def test_log_line_says_where_the_selection_came_from(one_bill, caplog, ask, by):
         agg.aggregate_project_bills("p", terms="pipe", ask=ask)
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("bill_rows_aggregate"))
     assert by in line
+
+
+# -- the exit check: the answer carries the tool's own figure ----------------
+
+def _turn(*figures):
+    from app.agents import answer_exit
+
+    turn = answer_exit.Turn()
+    answer_exit.note_tool_result("bill_rows_aggregate", {
+        "name": "bill_rows_aggregate", "ok": True,
+        "result": {"bills": [{"stated_figures": [{"value": v, "shown": s} for v, s in figures]}]},
+    }, turn)
+    return turn
+
+
+@pytest.mark.parametrize("answer, figures, kept", [
+    ("The clay pipes in the runs total 103.5 m (R1, R2, R4, R5).", [(103.5, "103.5 m")], True),
+    ("The clay pipes in the runs total 112 m.", [(103.5, "103.5 m")], False),
+    ("The fencing costs 3,000.", [(3000.0, "3,000")], True),
+    ("The fencing costs 3,500.", [(3000.0, "3,000")], False),
+    ("Item R1 is clay pipe.", [(1.0, "1 m")], False),
+    ("The total is 112 m.", [], True),
+], ids=["same", "different", "thousands", "thousands-different", "ref-is-not-a-figure", "no-tool"])
+def test_exit_check_holds_the_tools_figure(answer, figures, kept):
+    from app.agents import answer_exit
+
+    out = answer_exit.hold_stated_figures(answer, _turn(*figures))
+    assert (out == answer) is kept
+    if not kept:
+        assert out.startswith(answer)
+        for _v, shown in figures:
+            assert f"The tool's own figure is {shown}." in out
+        assert "the tool's figure stands" in out
+
+
+@pytest.mark.parametrize("answer, kept", [
+    ("Total: 103.5 m.", True),
+    ("Total: 99 m.", False),
+])
+def test_exit_check_runs_on_the_turns_result_and_end_event(answer, kept):
+    from app.agents import answer_exit
+
+    turn = _turn((103.5, "103.5 m"))
+    out = answer_exit.check_result({"answer": answer, "sources": []}, turn)
+    assert ("The tool's own figure is 103.5 m." in out["answer"]) is (not kept)
+    end = answer_exit.check_end_event({"type": "end", "content": answer, "sources": []}, "", turn)
+    assert ("The tool's own figure is 103.5 m." in end["content"]) is (not kept)
+
+
+@pytest.mark.parametrize("payload, values", [
+    ({"result": {"bills": [{"stated_figures": [{"value": 5, "shown": "5 m"}, {"value": True}]}]}}, [5.0]),
+    ({"result": {"bills": [{"statement": "no figure"}]}}, []),
+])
+def test_only_numeric_stated_figures_are_recorded(payload, values):
+    from app.agents import answer_exit
+
+    assert [f["value"] for f in answer_exit._stated_figures(payload)] == values

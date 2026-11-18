@@ -190,7 +190,10 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
                     "The rows are selected from the user's own question; each "
                     "bill's 'statement' names the rows used and the total. "
                     "Quote that statement's count, rows and total as given; "
-                    "do not add figures yourself or restate a different total."
+                    "do not add figures yourself or restate a different total. "
+                    "When the statement says no row was selected from the "
+                    "question, or that no total is given, say so and ask the "
+                    "user to name the items or the column (cost or quantity)."
                 ),
                 "parameters": {
                     "type": "object",

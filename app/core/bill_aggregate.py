@@ -191,7 +191,9 @@ def _forms(word: str) -> set[str]:
     """A word and its singular spellings: ``pipes`` is also ``pipe``,
     ``trenches`` is also ``trench``. Two words agree when their forms meet."""
     out = {word}
-    if len(word) > 3 and word.endswith("s"):
+    # A word ending in a double s (glass, boss) is not a plural of a word
+    # ending in one s; it folds only through ``-es`` (glasses -> glass).
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
         out.add(word[:-1])
         if word.endswith("es"):
             out.add(word[:-2])
@@ -228,20 +230,53 @@ cost costs price prices priced money length lengths area areas volume volumes we
 weights item items row rows line lines entry entries bill bills boq boqs schedule
 document documents section sections part parts heading headings page pages per
 """
-_ASK_STOPWORDS = frozenset(_ASK_STOPWORD_TEXT.split())
+#: The same for an Arabic ask (written without the article: :func:`_bare`
+#: removes it from the ask's words before they are looked up).
+_ASK_STOPWORD_TEXT_AR = """
+ما ماذا كم كام هل هو هي هم في من على الى إلى عن مع او أو و ثم كل جميع كامل
+مجموع اجمالي إجمالي جمله جملة عدد بند بنود صف صفوف سطر اسطر احسب أحسب اعطني أعطني
+اعطيني أعطيني اذكر بين هذا هذه ذلك تلك التي الذي الذين لي لنا يوجد توجد موجود قسم
+اقسام أقسام جدول كميات مستند وثيقه وثيقة صفحه صفحة
+"""
+
+_AR_ARTICLE = ("وال", "بال", "فال", "كال", "لل", "ال")
+_AR_LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ة": "ه", "ى": "ي"})
+
+
+def _bare(word: str) -> str:
+    """An Arabic word without its article and with its letter variants made
+    one (``التكلفة`` -> ``تكلفه``); any other word as it is. Used only to look
+    an ask's word up in the small tables below, never to match the bill."""
+    word = word.casefold().translate(_AR_LETTERS)
+    for article in _AR_ARTICLE:
+        if word.startswith(article) and len(word) - len(article) >= 2:
+            return word[len(article):]
+    return word
+
+
+def _table(*texts: str) -> frozenset[str]:
+    return frozenset(_bare(w) for text in texts for w in text.split())
+
 
 #: Ask words that mean the money column; any of them makes the measure amount.
-_AMOUNT_WORDS = frozenset(("amount", "amounts", "cost", "costs", "value", "values",
-                           "price", "prices", "priced", "money"))
+_AMOUNT_WORDS = _table(
+    "amount amounts cost costs value values price prices priced money",
+    "مبلغ مبالغ تكلفة تكلفه تكاليف كلفة كلفه سعر أسعار اسعار قيمة قيمه قيم ثمن",
+)
 #: Ask words that mean the measured column.
-_QUANTITY_WORDS = frozenset(("quantity", "quantities", "length", "lengths", "area", "areas",
-                             "volume", "volumes", "weight", "weights"))
+_QUANTITY_WORDS = _table(
+    "quantity quantities length lengths area areas volume volumes weight weights",
+    "كمية كميه كميات طول أطوال اطوال مساحة مساحه مساحات حجم أحجام احجام وزن أوزان اوزان",
+)
+_ASK_STOPWORDS = _table(_ASK_STOPWORD_TEXT, _ASK_STOPWORD_TEXT_AR) | _AMOUNT_WORDS | _QUANTITY_WORDS
 
 
-def measure_from_ask(ask: str | None, default: str = MEASURE_QUANTITY) -> str:
+def measure_from_ask(ask: str | None, default: str | None = None) -> str | None:
     """The column an ask totals: money words choose the amount, measure words
-    the quantity; an ask with neither keeps ``default``."""
-    words = _words(ask or "")
+    the quantity (English or Arabic). An ask with neither returns ``default``
+    (``None``: the column cannot be read from the ask, and no total is given
+    -- a cost question is never answered with a sum of quantities)."""
+    words = {_bare(w) for w in _words(ask or "")}
     if words & _AMOUNT_WORDS:
         return MEASURE_AMOUNT
     if words & _QUANTITY_WORDS:
@@ -274,7 +309,7 @@ def selection_from_ask(rows: Sequence[SheetRow], ask: str | None) -> dict[str, l
     ignored: list[str] = []
     for word in _WORD_RE.findall(ask or ""):
         word = word.casefold()
-        if word in _ASK_STOPWORDS or word in terms or word in section or word in ignored:
+        if _bare(word) in _ASK_STOPWORDS or word in terms or word in section or word in ignored:
             continue
         if _forms(word) & path_forms:
             section.append(word)
@@ -408,11 +443,21 @@ def statement(result: dict[str, Any]) -> str:
         why.append(f"whose description contains {_quoted(result['terms'])}")
     if result.get("section_terms"):
         why.append(f"in the section {_quoted(result['section_terms'])}")
+    ignored = result.get("ignored_ask_words") or []
+    unused = (f" Words of the question found nowhere in this bill, so not used: {_quoted(ignored)}."
+              if ignored else "")
+    if result.get("selected_by") == "none":
+        return ("No row was selected from the question: none of its words occurs in this "
+                "bill's headings or descriptions. Ask again naming the items as the bill "
+                f"names them.{unused}")
     rows = result.get("rows") or []
     head = f"{result.get('count', 0)} row(s) {' '.join(why)}".rstrip()
     if not rows:
-        return f"{head}: no row of this bill matches."
+        return f"{head}: no row of this bill matches.{unused}"
     listed = "; ".join(_row_label(r) for r in rows)
+    if result.get("measure_unread"):
+        return (f"{head}: {listed}. No total is given: the question does not say whether "
+                f"to total the amount or the quantity.{unused}")
     if result.get("sum") is not None:
         unit = f" {result['unit']}" if result.get("unit") else ""
         figure = f"total {measure} {_fmt(result['sum'])}{unit}"
@@ -424,7 +469,21 @@ def statement(result: dict[str, Any]) -> str:
     if without:
         text += f" {len(without)} of them print no {measure} and add nothing: " + "; ".join(
             _row_label(w) for w in without) + "."
-    return text
+    return text + unused
+
+
+def stated_figures(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The figures a bill result states as its total, in the shape the
+    answer's exit check reads (``app.agents.answer_exit``): the answer must
+    carry each of them."""
+    if result.get("selected_by") == "none" or result.get("measure_unread") or not result.get("rows"):
+        return []
+    if result.get("sum") is not None:
+        pairs = [(result.get("unit") or "", result["sum"])]
+    else:
+        pairs = list((result.get("sum_by_unit") or {}).items())
+    return [{"value": float(v), "shown": f"{_fmt(v)} {u}".rstrip(), "measure": result.get("measure")}
+            for u, v in pairs]
 
 
 def aggregate_project_bills(
@@ -439,11 +498,13 @@ def aggregate_project_bills(
     """:func:`aggregate` over every row of each derived bill sheet in scope,
     one result per bill (two bills are never added together).
 
-    With ``ask`` (the user's own message) each bill's rows are selected by
-    :func:`selection_from_ask` and the measure by :func:`measure_from_ask`;
-    ``terms``/``section``/``measure`` are then used only when the ask selects
-    nothing in that bill (an ask naming no column totals the quantity). Every bill result says where its selection came
-    from (``selected_by``: ``ask`` or ``call``)."""
+    With ``ask`` (the user's own message, even an empty one) each bill's rows
+    are selected by :func:`selection_from_ask` and the measure by
+    :func:`measure_from_ask`, and ``terms``/``section``/``measure`` are NOT
+    used: an ask that selects nothing in a bill says so (``selected_by``
+    ``none``) and selects no row; the model's words never stand in for the
+    user's. Only a caller with no ask at all (``ask=None``: not a chat turn)
+    selects by ``terms``/``section`` (``selected_by`` ``call``)."""
     from app.core import projects
 
     docs = derived_bill_documents(project_id, document_id)
@@ -451,6 +512,9 @@ def aggregate_project_bills(
         out = {"status": "error", "reason": NO_DERIVED_SHEET}
         _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))
         return out
+    if measure not in MEASURES:
+        # The call's column is checked even when the ask decides the column.
+        raise ValueError(f"measure must be one of {MEASURES}")
     bills = []
     for doc in docs:
         path = projects.materialize_document_path(doc)
@@ -481,15 +545,27 @@ def _aggregate_bill(
     measure: str,
     ask: str | None,
 ) -> dict[str, Any]:
-    picked = selection_from_ask(rows, ask) if ask else None
-    if picked and (picked["terms"] or picked["section_terms"]):
-        result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
-                           measure=measure_from_ask(ask), fold=True)
-        result.update(selected_by="ask", ignored_ask_words=picked["ignored"])
-    else:
+    if ask is None:
         result = aggregate(rows, terms=terms, section=section, measure=measure)
         result["selected_by"] = "call"
+    else:
+        picked = selection_from_ask(rows, ask)
+        if picked["terms"] or picked["section_terms"]:
+            read = measure_from_ask(ask)
+            result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
+                               measure=read or MEASURE_QUANTITY, fold=True)
+            result["selected_by"] = "ask"
+            if read is None:
+                # Rows and count stand; no column was named, so no total.
+                result.update(measure=None, measure_unread=True, sum=None, unit=None, sum_by_unit=None)
+        else:
+            result = {"measure": None, "terms": [], "section_terms": [],
+                      "rows_scanned": len(join_page_continuations(rows)), "count": 0, "sum": None,
+                      "unit": None, "sum_by_unit": None, "without_figure": [], "rows": [],
+                      "selected_by": "none"}
+        result["ignored_ask_words"] = picked["ignored"]
     result["statement"] = statement(result)
+    result["stated_figures"] = stated_figures(result)
     return result
 
 

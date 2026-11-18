@@ -87,6 +87,9 @@ class Turn:
     #: Paths that never see the turn's messages -- the wall-clock deadline,
     #: the crash safety net, the exit check -- recover from these.
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
+    #: Figures a tool stated as its result (a payload's ``stated_figures``:
+    #: ``value``, ``shown``). The answer that leaves must carry each of them.
+    stated_figures: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -236,6 +239,9 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
             if err and err != question:
                 turn.error_questions.setdefault(err, question)
         turn.step_names.update(_call_names(tool, payload))
+        for fig in _stated_figures(payload):
+            if fig not in turn.stated_figures:
+                turn.stated_figures.append(fig)
         for err in _error_texts(payload):
             turn.step_names.update(_error_step_names(err))
             label = _step_label(tool, payload)
@@ -288,6 +294,52 @@ def recovered_answer(turn: Turn | None = None) -> str:
         return ""
     text = text if isinstance(text, str) else ""
     return text if has_words(text) and text.strip() != _EMPTY_RESPONSE_FALLBACK else ""
+
+
+def _stated_figures(payload: Any, depth: int = 0) -> list[dict[str, Any]]:
+    """Every ``stated_figures`` entry anywhere in a tool payload (each a
+    ``value`` number and the ``shown`` text the tool prints it as)."""
+    out: list[dict[str, Any]] = []
+    if depth > 6:
+        return out
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == "stated_figures" and isinstance(value, list):
+                out.extend({"value": float(f["value"]), "shown": str(f.get("shown") or f["value"])}
+                           for f in value
+                           if isinstance(f, dict) and isinstance(f.get("value"), (int, float))
+                           and not isinstance(f.get("value"), bool))
+            else:
+                out.extend(_stated_figures(value, depth + 1))
+    elif isinstance(payload, list):
+        for value in payload:
+            out.extend(_stated_figures(value, depth + 1))
+    return out
+
+
+_ANSWER_NUMBER_RE = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
+
+
+def _answer_numbers(text: str) -> set[float]:
+    return {float(n.replace(",", "")) for n in _ANSWER_NUMBER_RE.findall(text or "")}
+
+
+def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
+    """The exit check for a tool's own figure: when a tool this turn stated
+    a figure as its result and the answer does not carry that number, the
+    answer gets the tool's figure and says it was missing or different. The
+    model may quote the figure; it may not replace it."""
+    turn = turn if turn is not None else _TURN.get()
+    if not isinstance(text, str) or not text.strip() or turn is None or not turn.stated_figures:
+        return text
+    have = _answer_numbers(text)
+    missing = [f for f in turn.stated_figures
+               if not any(abs(n - f["value"]) <= 1e-9 * max(1.0, abs(f["value"])) for n in have)]
+    if not missing:
+        return text
+    shown = "; ".join(f["shown"] for f in missing)
+    return (f"{text.rstrip()}\n\nThe tool's own figure is {shown}. "
+            "The answer above did not state it; the tool's figure stands.")
 
 
 def note_evidence(
@@ -1805,7 +1857,8 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     rows = fixed.get("sources")
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
-        fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
+        fixed["answer"] = hold_stated_figures(
+            check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows), turn)
         fixed = _apply_contract(fixed, "answer", rows, turn)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
@@ -1834,7 +1887,8 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
     if not isinstance(content, str) or not content.strip():
         content = streamed
     if isinstance(content, str) and content.strip():
-        checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
+        checked = hold_stated_figures(
+            check_text_or_fallback(content, turn=turn, index=index, sources=rows), turn)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
             fixed = _apply_contract(fixed, "content", rows, turn)
