@@ -25,12 +25,24 @@ its document. The comparison is deterministic; no model decides it.
     answer did not state is never turned into a conflict about something
     else.
   * The value must belong to the asked thing: the thing is the asked words
-    (the question's, else the answer sentence's) that every document stating
-    the answer's value uses; another document's value counts only when its
-    sentence names all of them. Two documents giving values for different
+    (the question's, else the answer sentence's) that the document naming
+    the answer's value best uses (a word naming only the value's kind, such
+    as "date", is said by the value); another document's value counts only
+    when its sentence names all of them. Two documents giving values for different
     things that share words (two elements, two sections) are no conflict.
   * A document that holds two different values of the kind for the asked
     thing, equally well matched, is left out (no claim on doubt).
+  * A value is the sentence's own claim. Citation spans, retrieval keys and
+    numbered source markers are blanked first (``app.lib.citation_spans``,
+    the same rule the offline answer scorer uses), and a number glued to a
+    letter, hyphen, slash or point (a drawing, clause or item code) is no
+    quantity. A labelled phrase is a value only when it holds a word and no
+    code: a bare number, a page, a list or row number, or a document code
+    after a label is not a claim.
+  * No thing, no conflict: when the asked words that name the thing are
+    empty, nothing is compared.
+  * An answer that already states every one of the differing values has
+    told the user both; it is left as written.
 
 C3 PRECEDENCE. A sentence in the evidence that states which document kind
 takes precedence, prevails, governs or has priority (a pairwise statement
@@ -73,6 +85,14 @@ def _stem(word: str) -> str:
     return w
 
 
+#: Words that name a value KIND this module reads (a date, a grade or class,
+#: a quantity's dimension, a sum of money). In a value's own sentence the
+#: value says them; they never tell one thing from another.
+_KIND_TERMS = frozenset(_stem(w) for w in (
+    "date", "grade", "class", "length", "area", "volume", "mass", "weight", "time", "duration",
+    "period", "pressure", "force", "percent", "percentage", "price", "cost", "sum"))
+
+
 def _terms(text: str) -> set[str]:
     return {_stem(w) for w in re.findall(r"[A-Za-z][A-Za-z'-]*", text or "")
             if w.lower() not in _STOP and len(w) > 1}
@@ -110,8 +130,11 @@ _UNITS: list[tuple[str, str, float, float]] = [
     (r"years?|yrs?", "time", 365.0, 366.0),
     (r"%|per\s?cent", "percent", 1.0, 1.0),
 ]
+#: A number glued to an ASCII letter, a hyphen, a slash or a point is part of
+#: a code (``IP-INF-053``, ``A-101``, ``3.2.4``), never a quantity.
+_FREE = r"(?<![0-9A-Za-z_\-/.])"
 _QTY_RE = re.compile(
-    rf"(?P<num>{_NUM})\s?(?P<unit>" + "|".join(f"(?:{u})" for u, *_ in _UNITS) + rf"){_END}")
+    rf"{_FREE}(?P<num>{_NUM})\s?(?P<unit>" + "|".join(f"(?:{u})" for u, *_ in _UNITS) + rf"){_END}")
 _UNIT_RES = [(re.compile(rf"^(?:{u})$", re.IGNORECASE if k in ("time", "percent") else 0), k, lo, hi)
              for u, k, lo, hi in _UNITS]
 
@@ -169,8 +192,26 @@ def _valid_date(y: int, m: int, d: int) -> bool:
     return 1 <= m <= 12 and 1 <= d <= calendar.monthrange(y, m)[1]
 
 
+_WORD_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]*[A-Za-z]")
+
+
+def _claim_text(val: str) -> bool:
+    """A labelled phrase that is a claim: it holds a word and no code. A bare
+    number, a page or row number and a document or drawing code (a token
+    mixing digits with letters, hyphens, slashes or points) are not."""
+    tokens = [t.strip("()[]\"'*_,") for t in val.split()]
+    if not any(_WORD_TOKEN_RE.fullmatch(t) for t in tokens):
+        return False
+    return not any(re.search(r"\d", t) and re.search(r"[A-Za-z\-/.]", t) for t in tokens)
+
+
 def extract(sentence: str) -> list[Value]:
-    """Typed values in one sentence, left to right; a span is used once."""
+    """Typed values in one sentence, left to right; a span is used once.
+    Citation spans are blanked first (same positions), so a figure inside a
+    citation, a retrieval key or a numbered marker is never a value."""
+    from app.lib.citation_spans import blank_citations
+
+    sentence = blank_citations(sentence)
     found: list[Value] = []
     taken: list[tuple[int, int]] = []
 
@@ -209,7 +250,7 @@ def extract(sentence: str) -> list[Value]:
     found.sort(key=lambda v: v.start)
     if not found:
         lab = _LABELLED_RE.match(sentence)
-        if lab and len(lab.group("val").split()) <= 6:
+        if lab and len(lab.group("val").split()) <= 6 and _claim_text(lab.group("val")):
             val = lab.group("val").strip()
             found.append(Value(val, "text", " ".join(val.split()).casefold(), lab.start("val"), lab.end("val")))
     return found
@@ -353,9 +394,18 @@ def _precedence(docs: list[str], rows: list[dict[str, Any]]) -> tuple[str | None
 
 # ── Detection ───────────────────────────────────────────────────────────────
 
+def _says_text(norm: str, text: str) -> bool:
+    """A labelled phrase is said when it stands as whole words in the text
+    (citation spans blanked), never as a piece of another word or number."""
+    from app.lib.citation_spans import blank_citations
+
+    hay = " ".join(blank_citations(text).split()).casefold()
+    return bool(norm) and re.search(rf"(?<![\w-]){re.escape(norm)}(?![\w-])", hay) is not None
+
+
 def _states_answer(c: _Cand, sent: str, typed: list[Value], kind: str) -> bool:
     if kind == "text":
-        return c.value.norm in " ".join(sent.split()).casefold()
+        return _says_text(c.value.norm, sent)
     return any(same(c.value, a) for a in typed if a.kind == kind)
 
 
@@ -365,10 +415,28 @@ def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, ask
     from a sentence that does not name all of them is about something else
     that merely shares words (another element, section or revision)."""
     anchors = [c for c in kept if _states_answer(c, sent, typed, kind)]
-    thing = set(asked)
-    for c in anchors:
-        thing &= c.sent_terms
+    if not anchors:
+        return []
+    # The thing is named by the anchor that names the most asked words: a
+    # second, loosely worded passage stating the same value never shrinks the
+    # thing to a word other things share. A word that only names the value's
+    # own kind ("date" for a date) is said by the value itself.
+    named = [(len(asked & c.sent_terms), c) for c in anchors]
+    best = max(n for n, _c in named)
+    thing = set(asked) - _KIND_TERMS
+    for n, c in named:
+        if n == best:
+            thing &= c.sent_terms
+    if not thing:
+        return []  # nothing names the thing: no two values can be shown to be about it
     return [c for c in kept if thing <= c.sent_terms]
+
+
+def _thing(kept: list[_Cand], asked: set[str]) -> list[str]:
+    common = set(asked)
+    for c in kept:
+        common &= c.sent_terms
+    return sorted(common)
 
 
 def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | None = None) -> list[dict[str, Any]]:
@@ -386,7 +454,8 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
             return []
         q_terms = _terms(question or "")
         out: list[dict[str, Any]] = []
-        seen: set[frozenset] = set()
+        seen: set[tuple[str, frozenset]] = set()
+        said = extract(answer)
         for sent in _sentences(answer):
             avals = extract(sent)
             typed = [v for v in avals if v.kind != "text"]
@@ -406,7 +475,7 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                 if len(kept) < 2:
                     continue
                 if kind == "text":
-                    anchored = any(c.value.norm in " ".join(sent.split()).casefold() for c in kept)
+                    anchored = any(_says_text(c.value.norm, sent) for c in kept)
                 else:
                     anchored = any(same(c.value, a) for c in kept for a in typed if a.kind == kind)
                 if not anchored:
@@ -418,7 +487,13 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                         classes.append(c)
                 if len(classes) < 2:
                     continue
-                key = frozenset((c.doc, c.value.raw) for c in kept)
+                if kind == "text":
+                    told = all(_says_text(c.value.norm, answer) for c in classes)
+                else:
+                    told = all(any(same(c.value, a) for a in said if a.kind == kind) for c in classes)
+                if told:
+                    continue  # the answer already states every differing value
+                key = (kind, frozenset(str(c.value.norm) for c in classes))
                 if key in seen:
                     continue
                 seen.add(key)
@@ -430,6 +505,8 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     if not all(same(gval, c.value) for c in kept if _names(gkind, c.doc)):
                         gov = basis = None
                 out.append({
+                    "kind": kind,
+                    "thing": _thing(kept, q_terms or query),
                     "values": [{"value": c.value.raw, "document": c.doc, "row": c.row} for c in kept],
                     "governs": gov,
                     "basis_document": basis,

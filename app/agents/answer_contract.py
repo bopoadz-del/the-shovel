@@ -162,20 +162,41 @@ class _Markers:
         return f"[{entry['marker']}]"
 
 
+def _doc_words(name: str) -> str:
+    """A document's name as words for a sentence (its file extension off);
+    empty when the name holds no word at all."""
+    stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE).strip()
+    return stem if re.search(r"[A-Za-z]{2,}", stem) else ""
+
+
+def _nameable(c: dict[str, Any]) -> bool:
+    """A conflict is stated only when the line can name every value and every
+    value's document in words; one that cannot is not emitted at all."""
+    vals = c.get("values") or []
+    return (len({str(v.get("value") or "").strip() for v in vals}) >= 2
+            and len({v.get("document") for v in vals}) >= 2
+            and all(str(v.get("value") or "").strip() and _doc_words(str(v.get("document") or "")) for v in vals))
+
+
 def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[list[str], list[dict[str, Any]]]:
-    """Each conflict as one plain sentence (every value with its marker; the
-    governing value and why, or that no document says) and as a structured
-    entry for the side panel."""
+    """Each conflict as one plain sentence (every value with its document by
+    name and its marker; the governing value and why, or that no document
+    says) and as a structured entry for the side panel. A conflict whose
+    values or documents cannot all be named in words is not emitted."""
     lines: list[str] = []
     structured: list[dict[str, Any]] = []
     for c in found:
-        said: dict[str, str] = {}
+        if not _nameable(c):
+            continue
+        said: dict[tuple[str, str], str] = {}
         values = []
         for v in c["values"]:
             tag = markers.for_row(v["row"])
-            said[v["value"]] = said.get(v["value"], "") + ("" if tag in said.get(v["value"], "") else tag)
+            k = (_doc_words(v["document"]), v["value"])
+            said[k] = said.get(k, "") + ("" if tag in said.get(k, "") else tag)
             values.append({"value": v["value"], "document": v["document"], "marker": int(tag.strip("[]"))})
-        line = "The documents differ on this: " + "; ".join(f"{val} {tags}" for val, tags in said.items()) + "."
+        line = "The documents differ on this: " + "; ".join(
+            f"{doc} gives {val} {tags}" for (doc, val), tags in said.items()) + "."
         if c.get("governs"):
             gval = next(v["value"] for v in c["values"] if v["document"] == c["governs"])
             basis_row = next((r for r in markers.rows if str(r.get("doc_name") or "") == c["basis_document"]), None)
@@ -188,6 +209,48 @@ def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[lis
         structured.append({"values": values, "governs": c.get("governs"),
                            "basis_document": c.get("basis_document")})
     return lines, structured
+
+
+def _drop_single_value(body: str, found: list[dict[str, Any]]) -> str:
+    """A sentence that states only ONE of a conflict's differing values for
+    that thing goes: the conflict statement, which leads, replaces it. Read by
+    the typed values (``evidence_conflicts.extract``/``same``, citation spans
+    blanked); a sentence about another thing (none of the thing's words) and
+    a sentence stating two or more of the values stay."""
+    from app.agents.evidence_conflicts import _terms, extract, same
+
+    rules = []
+    for c in found:
+        kind = c.get("kind")
+        if not kind or kind == "text":
+            continue
+        classes: list[Any] = []
+        for v in c["values"]:
+            got = [x for x in extract(str(v["value"])) if x.kind == kind]
+            if got and not any(same(got[0], k) for k in classes):
+                classes.append(got[0])
+        if len(classes) >= 2:
+            rules.append((kind, classes, set(c.get("thing") or [])))
+    if not rules:
+        return body
+    out: list[str] = []
+    for line in body.split("\n"):
+        lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
+        sentences = _SENTENCE_RE.findall(line[len(lead):])
+        kept = []
+        for sent in sentences:
+            vals = extract(sent)
+            single = any(
+                len({i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}) == 1
+                and thing & _terms(sent)
+                for kind, classes, thing in rules)
+            if not single:
+                kept.append(sent.strip())
+        if not sentences or len(kept) == len(sentences):
+            out.append(line)
+        elif kept:
+            out.append(lead + " ".join(kept))
+    return "\n".join(out)
 
 
 def _split_parts(body: str) -> list[str]:
@@ -468,11 +531,16 @@ def apply(
         from app.agents.evidence_conflicts import detect
 
         handed = [r for r in (evidence or []) if isinstance(r, dict)]
-        found = detect(text, rows + handed, question)
+        # Read over the text the user reads (citations already markers).
+        found = detect(body, rows + handed, question)
         structured: list[dict[str, Any]] = []
         if found:
             lines, structured = _conflict_lines(found, markers)
-            body = (body + "\n\n" + "\n".join(lines)).strip()
+            if lines:
+                # The conflict statement leads; a sentence asserting only one
+                # of the differing values for that thing is replaced by it.
+                stated = [c for c in found if _nameable(c)]
+                body = _tidy("\n".join(lines) + "\n\n" + _drop_single_value(body, stated))
         # A marker whose line went (padding, a dropped note) is not lost: it
         # rides on the last line, so every citation entry has its marker.
         lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)
