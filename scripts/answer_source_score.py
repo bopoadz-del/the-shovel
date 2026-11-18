@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import sys
 from dataclasses import dataclass, field
@@ -46,19 +47,18 @@ from typing import Any, Iterable
 
 # --- citations ---------------------------------------------------------------
 
-# ``[source: NAME]`` / ``(source: NAME)`` written by the answer. A document
-# name may itself hold parentheses ("Bill (Priced).pdf"): the bracket form
-# ends only at ``]``, the paren form allows one level of inner parentheses.
-_NAMED_CITE_RE = re.compile(
-    r"\[\s*source\s*:\s*([^\]]+)\]"
-    r"|\(\s*source\s*:\s*((?:[^()]|\([^()]*\))+)\)",
-    re.IGNORECASE,
-)
-# Raw retrieval keys a model may leave in an answer before the exit check.
-_KEYED_CITE_RE = re.compile(r"\b(?:chunk_id|chunk|doc_id)\s*[=:]\s*([A-Za-z0-9_\-:.]+)", re.IGNORECASE)
-# A bare numbered marker: a small integer standing alone right before the end
-# of a sentence or line ("... 30 minutes 2." / "... mixes 1. The").
-_MARKER_RE = re.compile(r"(?<=[^\d\s,.])\s(\d{1,2})(?=[.;]?(?:\n|$)|[.;]\s)")
+# The citation-span rule lives in one place (app/lib/citation_spans.py) and is
+# shared with the product's conflict check; this script only reads it.
+_ROOT = str(pathlib.Path(__file__).resolve().parents[1])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from app.lib import citation_spans as _spans  # after the path fix
+
+_NAMED_CITE_RE = _spans.NAMED_CITE_RE
+_KEYED_CITE_RE = _spans.KEYED_CITE_RE
+_MARKER_RE = _spans.MARKER_RE
+blank_named = _spans.blank_named
+blank_markers = _spans.blank_markers
 
 _ELLIPSIS = ("…", "...")
 
@@ -130,9 +130,7 @@ def find_citations(answer: str, sources_list: list[str] | None = None) -> list[C
 def _strip_named(text: str) -> str:
     """Blank the named and keyed citation spans (same length, so positions
     still line up with the original text)."""
-    def blank(m: re.Match[str]) -> str:
-        return " " * len(m.group(0))
-    return _KEYED_CITE_RE.sub(blank, _NAMED_CITE_RE.sub(blank, text or ""))
+    return blank_named(text)
 
 
 def cited_chunks(cite: Citation, handed: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -164,12 +162,7 @@ def numbers_in(text: str) -> list[float]:
 def answer_numbers(answer: str, sources_list: list[str] | None = None) -> list[float]:
     """The answer's figures: citation spans and numbered source markers are
     not figures."""
-    text = _strip_named(answer)
-    listed = len(sources_list or [])
-    if listed:
-        def drop(m: re.Match[str]) -> str:
-            return " " * len(m.group(0)) if 1 <= int(m.group(1)) <= listed else m.group(0)
-        text = _MARKER_RE.sub(drop, text)
+    text = blank_markers(_strip_named(answer), len(sources_list or []))
     return numbers_in(text)
 
 
