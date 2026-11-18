@@ -357,6 +357,10 @@ def aggregate(
     items = join_page_continuations(rows)
     used, without = [], []
     sums: dict[str, float] = {}
+    # One entry per section (heading path) the matched rows sit in, in the
+    # order the bill prints them: an ask whose words match rows of two
+    # sections is told what each section adds, not only the total of all.
+    sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for row in items:
         if not matches(row, want, where, fold=fold):
             continue
@@ -370,11 +374,14 @@ def aggregate(
             measure: value,
         }
         used.append(entry)
+        part = sections.setdefault(tuple(row.path), {"section": list(row.path), "count": 0, "sums": {}})
+        part["count"] += 1
         if value is None:
             without.append({"ref": row.ref, "pages": row.pages, "description": row.description})
             continue
         key = row.unit if measure == MEASURE_QUANTITY else ""
         sums[key] = sums.get(key, 0.0) + value
+        part["sums"][key] = part["sums"].get(key, 0.0) + value
     single = len(sums) <= 1
     return {
         "measure": measure,
@@ -387,7 +394,31 @@ def aggregate(
         "sum_by_unit": ({u: s for u, s in sums.items()} if measure == MEASURE_QUANTITY else None),
         "without_figure": without,
         "rows": used,
+        "by_section": [_section_total(p, measure) for p in sections.values()],
     }
+
+
+def _section_total(part: dict[str, Any], measure: str) -> dict[str, Any]:
+    sums = part["sums"]
+    single = len(sums) <= 1
+    return {
+        "section": part["section"],
+        "count": part["count"],
+        "sum": (next(iter(sums.values()), 0.0) if single else None),
+        "unit": (next(iter(sums), "") if single and measure == MEASURE_QUANTITY else None),
+        "sum_by_unit": (dict(sums) if measure == MEASURE_QUANTITY else None),
+    }
+
+
+def _section_name(section: Sequence[str]) -> str:
+    return " > ".join(t for t in section if t) or "(no heading)"
+
+
+def _total_text(part: dict[str, Any], measure: str) -> str:
+    if part.get("sum") is not None:
+        unit = f" {part['unit']}" if part.get("unit") else ""
+        return f"{_fmt(part['sum'])}{unit}"
+    return ", ".join(f"{_fmt(v)} {u}".rstrip() for u, v in (part.get("sum_by_unit") or {}).items())
 
 
 NO_DERIVED_SHEET = "no_derived_bill_sheet"
@@ -474,6 +505,12 @@ def statement(result: dict[str, Any]) -> str:
         figure = f"total {measure} by unit: " + ", ".join(
             f"{_fmt(v)} {u}".rstrip() for u, v in (result.get("sum_by_unit") or {}).items())
     text = f"{head}: {listed}. {figure[0].upper()}{figure[1:]}."
+    parts = result.get("by_section") or []
+    if len(parts) > 1:
+        text += f" The rows sit in {len(parts)} sections: " + "; ".join(
+            f"{_section_name(p['section'])}: {p['count']} row(s), total {measure} "
+            f"{_total_text(p, measure)}" for p in parts) + (
+            f"; all {len(parts)} sections together: {_total_text(result, measure)}.")
     if result.get("measure_unread"):
         text += (" The question names no column, so this is the total quantity, "
                  "not the amount (cost).")
