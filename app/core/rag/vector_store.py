@@ -123,6 +123,19 @@ def fusion_leg_share() -> int:
     return max(n, 0)
 
 
+def _window_order_key(
+    chunk_id: str, sem_rank: Dict[str, int], bm_rank: Dict[str, int],
+) -> Tuple[float, int, str]:
+    """P3 sort key for a window chunk: fused RRF score (higher first), then
+    its better leg rank, then its id, so the window order is deterministic."""
+    s, b = sem_rank.get(chunk_id), bm_rank.get(chunk_id)
+    fused = (
+        (1.0 / (RRF_K + s) if s is not None else 0.0)
+        + (1.0 / (RRF_K + b) if b is not None else 0.0)
+    )
+    return (-fused, min(r for r in (s, b) if r is not None), chunk_id)
+
+
 def guarantee_leg_share(
     order: List["Chunk"],
     sem_rank: Dict[str, int],
@@ -167,15 +180,10 @@ def guarantee_leg_share(
     if not window_ids:
         return list(order)
 
-    def _key(c: "Chunk") -> Tuple[float, int, str]:
-        s, b = sem_rank.get(c.chunk_id), bm_rank.get(c.chunk_id)
-        fused = (
-            (1.0 / (RRF_K + s) if s is not None else 0.0)
-            + (1.0 / (RRF_K + b) if b is not None else 0.0)
-        )
-        return (-fused, min(r for r in (s, b) if r is not None), c.chunk_id)
-
-    window = sorted((c for c in order if c.chunk_id in window_ids), key=_key)
+    window = sorted(
+        (c for c in order if c.chunk_id in window_ids),
+        key=lambda c: _window_order_key(c.chunk_id, sem_rank, bm_rank),
+    )
     return window + [c for c in order if c.chunk_id not in window_ids]
 
 

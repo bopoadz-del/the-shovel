@@ -169,6 +169,17 @@ def test_share_zero_changes_nothing(sem, bm):
     assert _run(sem, bm, 0) == order
 
 
+@pytest.mark.parametrize("rank", [0, -3])
+def test_share_zero_changes_nothing_whatever_the_rank_numbering(rank):
+    """Share 0 is the kill switch: it returns the fused order as given even
+    when a leg map numbers from 0 or below (a caller's convention, not
+    this function's), where ``rank <= share`` would otherwise admit it."""
+    order = _order(["p", "q", "r"])
+    sem, bm = {"r": rank, "p": 2}, {"q": 1}
+    out = guarantee_leg_share(order, sem, bm, 0)
+    assert [c.chunk_id for c in out] == ["p", "q", "r"]
+
+
 @pytest.mark.parametrize("sem, bm", SHAPES)
 def test_a_window_chunk_never_needs_the_other_leg_to_lose_it(sem, bm):
     """Shape A's ``top``: vector #1, lexical #45. Plain fusion puts the
