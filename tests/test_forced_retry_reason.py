@@ -150,3 +150,68 @@ def test_a_good_retry_logs_no_fallback(mode, monkeypatch, caplog):
     lines = [r.getMessage() for r in caplog.records]
     assert any("unusable final_text reason=search_promise" in m for m in lines), lines
     assert not any("fallback shown" in m for m in lines), lines
+
+
+# The three trace helpers the turn paths call: each decides AND names the
+# rule. Direct, two inputs per decision; the return value and the line both
+# matter (a helper that returned the right bool but logged nothing, or
+# logged but always returned False, would hide the rule or change the turn).
+
+def _lines(caplog) -> List[str]:
+    return [r.getMessage() for r in caplog.records]
+
+
+@pytest.mark.parametrize("where,reason,text", [
+    ("chat", "search_promise", CASES["search_promise"][0]),
+    ("chat_stream", "greeting_only", CASES["greeting_only"][1]),
+])
+def test_the_start_line_names_the_path_and_the_rule(where, reason, text, caplog):
+    caplog.set_level(logging.INFO)
+    rt.log_forced_retry_start(where, text)
+    assert f"{where}: unusable final_text reason={reason}, forcing no-tools retry" in _lines(caplog)
+    assert not any(text.strip() and text in m for m in _lines(caplog))
+
+
+@pytest.mark.parametrize("where,resp", [
+    ("chat", {"status": "error", "error": "upstream 502"}),
+    ("chat_stream", {"status": "error"}),
+])
+def test_an_errored_retry_is_failed_and_named(where, resp, caplog):
+    caplog.set_level(logging.INFO)
+    assert rt.forced_retry_failed(where, resp) is True
+    assert f"{where}: forced retry failed reason=provider_error; fallback shown" in _lines(caplog)
+
+
+@pytest.mark.parametrize("resp", [
+    {"status": "success", "choice": {"message": {"content": "Grade B"}}},
+    {"choice": {"message": {"content": "Yes"}}},
+])
+def test_a_retry_that_returned_is_not_failed(resp, caplog):
+    caplog.set_level(logging.INFO)
+    assert rt.forced_retry_failed("chat_stream", resp) is False
+    assert not any("forced retry failed" in m for m in _lines(caplog))
+
+
+@pytest.mark.parametrize("where,reason,text,raw_len,tail", [
+    ("chat", "search_promise", CASES["search_promise"][1], None, "; fallback shown"),
+    ("chat_stream", "empty", CASES["empty"][1], 37, " raw=37c; fallback shown"),
+])
+def test_an_unusable_retry_is_unusable_and_named(where, reason, text, raw_len, tail, caplog):
+    caplog.set_level(logging.INFO)
+    assert rt.forced_retry_still_unusable(where, text, raw_len=raw_len) is True
+    assert f"{where}: forced retry unusable reason={reason}{tail}" in _lines(caplog)
+
+
+@pytest.mark.parametrize("text", USABLE[:2])
+def test_a_usable_retry_is_kept_and_not_traced(text, caplog):
+    caplog.set_level(logging.INFO)
+    assert rt.forced_retry_still_unusable("chat_stream", text, raw_len=len(text)) is False
+    assert not any("forced retry unusable" in m for m in _lines(caplog))
+
+
+@pytest.mark.parametrize("where", ["chat", "chat_stream"])
+def test_our_own_fallback_is_never_traced_as_a_model_reply(where, caplog):
+    caplog.set_level(logging.INFO)
+    expected = rt.forced_retry_reason(_EMPTY_RESPONSE_FALLBACK) is not None
+    assert rt.forced_retry_still_unusable(where, _EMPTY_RESPONSE_FALLBACK) is expected
+    assert not any("forced retry unusable" in m for m in _lines(caplog))
