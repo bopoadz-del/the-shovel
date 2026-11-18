@@ -145,6 +145,40 @@ def test_an_arabic_ask(tmp_path, ask, refs, measure, total, ignored, unread):
     assert [f["value"] for f in out["stated_figures"]] == [total]
 
 
+@pytest.mark.parametrize("ask, refs, measure, total", [
+    # the article on both words: "المواسير الفخار" selects the clay pipes
+    ("ما هي تكلفة المواسير الفخار؟", ["A1"], agg.MEASURE_AMOUNT, 600),
+    # a one-letter prefix and the article: "والبلاستيك" selects the plastic pipe
+    ("ما طول مواسير والبلاستيك", ["A2"], agg.MEASURE_QUANTITY, 10),
+], ids=["article", "prefix-and-article"])
+def test_an_arabic_ask_word_with_its_article_or_a_prefix_selects(tmp_path, ask, refs, measure, total):
+    """Before this fold an ask word carrying the article or a prefix matched
+    no bill word and selected nothing (it failed closed)."""
+    path = tmp_path / "ar.xlsx"
+    g.write_bill_workbook(ARABIC, str(path))
+    rows = agg.join_page_continuations(agg.read_sheet_rows(str(path)))
+    out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)
+    assert out["selected_by"] == "ask"
+    assert [r["ref"] for r in out["rows"]] == refs
+    assert out["measure"] == measure
+    assert out["sum"] == total
+    assert out["ignored_ask_words"] == []
+
+
+@pytest.mark.parametrize("word, has, lacks", [
+    ("بالفخار", {"بالفخار", "فخار"}, set()),
+    ("والبلاستيك", {"والبلاستيك", "بلاستيك"}, set()),
+    # a word that starts with a prefix letter keeps itself; a stem too short
+    # to be a word is not added
+    ("بلاستيك", {"بلاستيك"}, set()),
+    ("وزن", {"وزن"}, {"زن"}),
+], ids=["article", "prefix-article", "starts-with-prefix-letter", "too-short"])
+def test_arabic_forms_fold_the_article_and_a_prefix(word, has, lacks):
+    forms = agg._forms(word)
+    assert has <= forms
+    assert not (lacks & forms)
+
+
 #: Two different wordings a model might put in its call for the same ask.
 _MODEL_CALLS = [
     {"terms": "clay pipe trench", "section": "", "measure": agg.MEASURE_QUANTITY},

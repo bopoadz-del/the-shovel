@@ -197,6 +197,15 @@ def _forms(word: str) -> set[str]:
         out.add(word[:-1])
         if word.endswith("es"):
             out.add(word[:-2])
+    # An Arabic word and the same word without its article (``الفخار`` is
+    # also ``فخار``, ``بالفخار`` too) or a one-letter prefix (``وفخار``), with
+    # its letter variants made one. Forms are only ADDED (the word itself
+    # stays), so a word that merely starts with a prefix letter still
+    # matches itself.
+    stems = {word}
+    if word[:1] in _AR_PREFIX_LETTERS and len(word) - 1 >= 3:
+        stems.add(word[1:])
+    out |= {_bare(s) for s in stems}
     return out
 
 
@@ -240,6 +249,8 @@ _ASK_STOPWORD_TEXT_AR = """
 """
 
 _AR_ARTICLE = ("وال", "بال", "فال", "كال", "لل", "ال")
+#: One-letter Arabic prefixes (and, with, for, so, like) a word can carry.
+_AR_PREFIX_LETTERS = frozenset("وبلفك")
 _AR_LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ة": "ه", "ى": "ي"})
 
 
