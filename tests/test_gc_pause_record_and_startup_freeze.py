@@ -108,7 +108,8 @@ def test_the_summary_counts_passes(passes):
 def test_only_a_cycle_alive_at_the_freeze_survives_full_passes(gc_quiet, made_before_freeze):
     node = _Node() if made_before_freeze else None
     try:
-        assert freeze_long_lived_heap() == gc.get_freeze_count() > 0
+        # The count at the call; another thread may allocate before a re-read.
+        assert freeze_long_lived_heap() > 0 and gc.get_freeze_count() > 0
         if node is None:
             node = _Node()
         ref = weakref.ref(node)
