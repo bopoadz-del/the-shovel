@@ -108,6 +108,9 @@ def test_no_figure_twice_is_the_plain_answer_once_per_part(args_one, args_two, e
     question = "count the gully and manhole rows"
     for out in _answers(_turn(question, (args_one, NO_FIGURE), (args_two, NO_FIGURE))):
         assert out.count(f"{EN['not_returned']}: {EN['no_figure']}") == expected_blocks, out
+        # The no-figure calls are the answer itself, not a trailing line.
+        assert out.startswith("Bill row count and total:"), out
+        assert EN["unanswered"].split("{")[0] not in out, out
         assert "unable to generate" not in out.lower()
         assert "computed results in this turn" not in out
 
@@ -156,10 +159,119 @@ def test_a_result_covers_a_call_of_the_same_tool_whose_words_it_holds(other_tool
     assert covers(result, Call(tool=other_tool, heading="H", asked=other_args)) is covered
 
 
-def test_require_stated_waits_only_for_a_call_no_result_answered():
-    (a, _x, args, _f), _ = BILLS
-    answered = _turn("kerb?", ({"terms": "kerb"}, NO_FIGURE), (args, a))
-    open_part = _turn("kerb and gully?", ({"terms": "gully"}, NO_FIGURE), (args, a))
-    assert runtime._computed_turn_answer(answered, require_stated=True)
-    assert runtime._computed_turn_answer(open_part, require_stated=True) == ""
-    assert computed_answer.answer_turn([], "en") == ""
+FAILED = {"status": "error", "reason": "no_derived_bill_sheet"}
+
+
+@pytest.mark.parametrize("first,answers", [
+    # Its part answered by the result: nothing waits.
+    (({"terms": "kerb"}, NO_FIGURE), True),
+    # A part no result answered, and the call said nothing: wait.
+    (({"terms": "gully"}, NO_FIGURE), False),
+    # A part no result answered, but the call stated its failure: answer.
+    (({"terms": "gully"}, FAILED), True),
+])
+@pytest.mark.parametrize("result,_x,args,_f", BILLS)
+def test_require_stated_waits_only_for_a_call_no_result_answered(first, answers, result, _x, args, _f):
+    turn = _turn("kerb and gully?", first, ({"terms": "kerb"}, result))
+    out = runtime._computed_turn_answer(turn, require_stated=True)
+    assert bool(out) is answers, out
+    if answers:
+        assert out.startswith("Bill row count and total:"), out
+
+
+@pytest.mark.parametrize("question", ["total?", "kerb and gully totals?"])
+def test_a_turn_with_no_computed_call_has_no_computed_answer(question):
+    msgs = [{"role": "user", "content": question}, {"role": "assistant", "content": ""}]
+    assert runtime._computed_turn_answer(msgs, require_stated=True) == ""
+    assert computed_answer.answer_turn([], "en", question) == ""
+
+
+# -- the same four shapes through the real stream route (``drive``) ---------
+
+STREAM_BILLS = [
+    # (terms A, terms B, invented rows: (ref, description, unit, qty))
+    ("kerb", "duct", [("A1", "Precast kerb type B", "m", "120"), ("A2", "Precast kerb type C", "m", "35.5"),
+                      ("A3", "uPVC duct 110 dia", "m", "9")]),
+    ("gully", "manhole", [("G1", "Road gully grating", "nr", "4"), ("M1", "Manhole cover", "nr", "2"),
+                          ("M2", "Manhole ring", "nr", "5"), ("G2", "Yard gully", "nr", "1")]),
+]
+
+
+def _install_stream_bill(monkeypatch, rows, readable):
+    """An invented bill the tool reads; ``readable`` says, call by call,
+    whether the derived sheet exists yet (False: the tool returns no figure)."""
+    from app.core import bill_aggregate, projects
+
+    sheet = [bill_aggregate.SheetRow(path=("Bill 1",), ref=ref, description=desc, unit=unit,
+                                     quantity=qty, rate="", amount="", pages=[i + 1])
+             for i, (ref, desc, unit, qty) in enumerate(rows)]
+    seq = iter(readable)
+    monkeypatch.setattr(bill_aggregate, "derived_bill_documents",
+                        lambda project_id, document_id=None: (
+                            [{"id": "doc-1", "original_name": "invented.xlsx", "metadata": {}}]
+                            if next(seq) else []))
+    monkeypatch.setattr(projects, "materialize_document_path", lambda doc: "invented.xlsx")
+    monkeypatch.setattr(bill_aggregate, "read_sheet_rows", lambda path: list(sheet))
+
+
+def _stream(monkeypatch, rows, terms, readable) -> str:
+    from tests.lane5_core_support import answer_text, call, drive, install_driver_stream
+
+    _install_stream_bill(monkeypatch, rows, readable)
+    install_driver_stream(monkeypatch)
+    events, _ = drive(monkeypatch, f"how many {' and '.join(dict.fromkeys(terms))} items, and the totals?", [
+        {"content": "", "tool_calls": [call(TOOL, {"terms": t}, f"s{i}") for i, t in enumerate(terms)]},
+        {"content": ""},
+    ], project_id="p-invented")
+    return answer_text(events)
+
+
+def _count(rows, terms) -> str:
+    return f"holds {terms}: **{sum(terms in d.lower() for _r, d, _u, _q in rows)}**"
+
+
+_UNANSWERED = EN["unanswered"].split("{")[0]
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_no_figure_then_result_shows_the_result_alone(monkeypatch, a, b, rows):
+    out = _stream(monkeypatch, rows, [a, a], [False, True])
+    assert out.startswith("Bill row count and total:"), out
+    assert _count(rows, a) in out
+    assert EN["not_returned"] not in out and EN["several"].format(n=2) not in out, out
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_the_same_result_twice_is_shown_once(monkeypatch, a, b, rows):
+    out = _stream(monkeypatch, rows, [a, a], [True, True])
+    assert out.count(_count(rows, a)) == 1, out
+    assert out.count("Bill row count and total:") == 1, out
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_two_different_results_both_shown_in_call_order(monkeypatch, a, b, rows):
+    out = _stream(monkeypatch, rows, [a, b], [True, True])
+    assert out.startswith(EN["several"].format(n=2)), out
+    assert (out.index(f"{EN['asked']}: {a}") < out.index(_count(rows, a))
+            < out.index(f"{EN['asked']}: {b}") < out.index(_count(rows, b))), out
+
+
+@pytest.mark.parametrize("same_part,blocks", [(True, 1), (False, 2)])
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_no_figure_twice_is_the_plain_answer(monkeypatch, a, b, rows, same_part, blocks):
+    out = _stream(monkeypatch, rows, [a, a] if same_part else [a, b], [False, False])
+    # With no result the no-figure calls ARE the answer, one per part, each
+    # under its heading -- not the trailing "not answered" line.
+    assert out.startswith("Bill row count and total:"), out
+    assert out.count(f"{EN['not_returned']}:") == blocks, out
+    assert _UNANSWERED not in out, out
+    assert "unable to generate" not in out.lower()
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_an_unanswered_part_follows_the_result_in_one_line(monkeypatch, a, b, rows):
+    out = _stream(monkeypatch, rows, [b, a], [False, True])
+    assert out.startswith("Bill row count and total:"), out
+    line = next(ln for ln in out.splitlines() if ln.startswith(_UNANSWERED))
+    assert f"{EN['asked']}: {b}" in line
+    assert out.index(_count(rows, a)) < out.index(line)
