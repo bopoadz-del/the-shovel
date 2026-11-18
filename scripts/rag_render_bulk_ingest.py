@@ -808,7 +808,7 @@ def run_ingest(
     if verify_only:
         stats.stopped_reason = "verify_only"
         log(
-            f"[verify] docs={store.count_documents(PROJECT_ID, all_sessions=True)} "
+            f"[verify] docs={store.count_documents(PROJECT_ID)} "
             f"chunks={store.count_chunks(PROJECT_ID)} "
             f"missing_or_stale={len(todo)}"
         )
