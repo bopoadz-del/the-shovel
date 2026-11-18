@@ -180,6 +180,10 @@ class _Session:
 
     def execute(self, stmt, params=None):
         self.sent.append(str(stmt))
+        # The documents table holds no chat-session file: the session-scope
+        # lookup (projects.session_hidden_document_ids) finds none.
+        if "documents.metadata" in str(stmt):
+            return _Result([])
         return _Result(self.rows)
 
 

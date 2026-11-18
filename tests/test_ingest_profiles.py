@@ -220,7 +220,7 @@ def _index_project_run(monkeypatch, tmp_path, name, profile, extract_meta, table
         seen["extract"] = kw
         return "body text " * 50, dict(extract_meta)
 
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: [doc])
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: [doc])
     monkeypatch.setattr(doc_index, "_load_index", lambda pid: None)
     monkeypatch.setattr(doc_index, "_write_index", lambda pid, data: seen.update(written=data))
     monkeypatch.setattr(doc_index, "_extract_with_meta", _extract)
@@ -324,7 +324,7 @@ def test_index_project_refuses_unknown_profile(monkeypatch, profile):
     from app.core import projects as projects_mod
 
     listed: list = []
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: listed.append(pid) or [])
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: listed.append(pid) or [])
     with pytest.raises(ValueError):
         doc_index.index_project("p", profile=profile)
     assert listed == []

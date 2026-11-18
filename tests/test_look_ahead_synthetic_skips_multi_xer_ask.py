@@ -76,7 +76,7 @@ def test_named_xer_still_resolves_when_user_names_file(monkeypatch):
     ]
     import app.core.projects as projects_store
 
-    monkeypatch.setattr(projects_store, "list_documents", lambda _p: docs)
+    monkeypatch.setattr(projects_store, "list_documents", lambda _p, **_kw: docs)
     params, err = _resolve_predefined_file_params(
         "look_ahead",
         "0f1e2d3c",

@@ -52,7 +52,7 @@ _DOCS = [
 
 @pytest.fixture()
 def project_docs(monkeypatch):
-    monkeypatch.setattr("app.core.projects.list_documents", lambda pid: list(_DOCS))
+    monkeypatch.setattr("app.core.projects.list_documents", lambda pid, **_kw: list(_DOCS))
 
 
 def test_resolve_exact_match(project_docs):
@@ -110,7 +110,7 @@ def test_attached_note_empty_for_no_docs():
 
 @pytest.fixture()
 def fetch_env(monkeypatch):
-    monkeypatch.setattr("app.core.projects.list_documents", lambda pid: list(_DOCS))
+    monkeypatch.setattr("app.core.projects.list_documents", lambda pid, **_kw: list(_DOCS))
     # No RAG store in unit scope — force the raw-extraction fallback.
     monkeypatch.setattr("app.core.rag.retriever.available", lambda: False)
     monkeypatch.setattr(

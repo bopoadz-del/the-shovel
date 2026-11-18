@@ -191,7 +191,7 @@ def test_ok_false_is_errored_and_deep_nesting_gives_up_false():
 
 def _hint_docs(monkeypatch, docs):
     import app.core.projects as projects_mod
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: docs,
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: docs,
                         raising=False)
 
 
