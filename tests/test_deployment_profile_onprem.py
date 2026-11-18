@@ -118,7 +118,7 @@ def test_cloud_provider_named_is_refused(provider):
     env = {**_CLEAN_ONPREM, "LLM_PROVIDER": provider}
     offs = _offenders(env, _resolver({}))
     assert _settings(offs) == ["LLM_PROVIDER"], f"stage=model_provider: {offs}"
-    assert "outside" in offs[0].reason
+    assert offs[0].reason == dp._VERDICT_PROVIDER_OUTSIDE
 
 
 @pytest.mark.parametrize("provider", ["ollama", "llama-local"])
@@ -127,8 +127,8 @@ def test_unsupported_provider_is_refused_not_rerouted(provider):
     env = {**_CLEAN_ONPREM, "LLM_PROVIDER": provider}
     offs = _offenders(env)
     assert _settings(offs) == ["LLM_PROVIDER"], f"stage=model_provider: {offs}"
-    assert "not a supported provider" in offs[0].reason
-    assert provider in offs[0].reason
+    assert offs[0].reason == dp._VERDICT_UNSUPPORTED_PROVIDER
+    assert provider not in offs[0].reason, "the refusal names the setting, not its value"
 
 
 @pytest.mark.parametrize("fallback", ["ollama", "openrouter"])
@@ -205,6 +205,47 @@ def test_offender_message_never_prints_a_value():
     text = str(err.value)
     assert secret not in text, "stage=boot: a value leaked into the refusal"
     assert "SERPER_API_KEY" in text and "DATABASE_URL" in text
+
+
+# The refusal prints a setting's name and a verdict, never anything read from
+# its value: the provider it names, the model id, the host it dials (#386 i).
+_SURE_OUTSIDE = _resolver({"db.vendor-one.example": ["8.8.8.8"],
+                           "api.vendor-two.example": ["9.9.9.9", "10.0.0.2"]})
+
+
+@pytest.mark.parametrize(
+    "setting,value,read_from_value",
+    [
+        ("LLM_PROVIDER", "ollama", ["ollama"]),
+        ("LLM_PROVIDER", "deepseek", ["deepseek", "api.deepseek.com"]),
+        ("RAG_EMBEDDING_MODEL", "acme-org/tiny-embedder-v3", ["acme-org", "tiny-embedder-v3"]),
+        ("RAG_EMBEDDING_MODEL", "other-lab/wide-model", ["other-lab", "wide-model"]),
+        ("REPORTS_BACKEND_URL", "https://db.vendor-one.example:5432/x",
+         ["db.vendor-one.example", "vendor-one"]),
+        ("NOTIFY_HOOK", "api.vendor-two.example", ["api.vendor-two.example", "vendor-two"]),
+        ("CACHE_HOSTS", "10.0.0.5 1.0.0.1", ["1.0.0.1", "10.0.0.5"]),
+    ],
+)
+def test_refusal_prints_setting_name_and_verdict_only(setting, value, read_from_value):
+    env = {**_CLEAN_ONPREM, setting: value}
+    if setting == "RAG_EMBEDDING_MODEL":
+        env = {k: v for k, v in env.items() if k != "HF_HUB_OFFLINE"}
+    with pytest.raises(dp.DeploymentProfileError) as err:
+        dp.assert_onprem_ready(env, resolve=_SURE_OUTSIDE)
+    text = str(err.value)
+    assert setting in text, f"stage=boot: the setting is named: {text}"
+    for part in read_from_value:
+        assert part not in text, f"stage=boot: {part!r} read from the value leaked"
+    refused = [o for o in err.value.offenders if o.setting == setting]
+    assert len(refused) == 1 and refused[0].reason in text
+
+
+@pytest.mark.parametrize("host", ["db.vendor-one.example", "1.0.0.1"])
+def test_endpoint_verdict_is_exact(host):
+    env = {**_CLEAN_ONPREM, "REPORTS_BACKEND_URL": f"postgresql://{host}/x"}
+    offs = _offenders(env, _SURE_OUTSIDE)
+    assert _settings(offs) == ["REPORTS_BACKEND_URL"], f"stage=endpoint: {offs}"
+    assert offs[0].reason == dp._VERDICT_ENDPOINT_OUTSIDE
 
 
 # ── stage: endpoint ─────────────────────────────────────────────────────────
