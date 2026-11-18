@@ -909,6 +909,15 @@ def _query_ref(query: Optional[str]) -> str:
     return f"chars={len(q)} sha256={digest}"
 
 
+def _terms_ref(terms) -> str:
+    """Terms taken from a question (needles, identifiers) as a log may carry
+    them: how many and a short sha256 of the list, never the terms. Equal
+    lists give equal refs, so log lines still join on it."""
+    items = [str(t) for t in (terms or [])]
+    digest = hashlib.sha256("".join(items).encode("utf-8")).hexdigest()[:12]
+    return f"count={len(items)} sha256={digest}"
+
+
 def _error_ref(exc: BaseException) -> str:
     """A database error as a log may carry it: its class, the driver's class
     and the SQLSTATE when there is one. Never its message: SQLAlchemy
@@ -1987,8 +1996,8 @@ class VectorStore:
                     rows = session.execute(sql, params).all()
         except Exception as exc:  # noqa: BLE001 — rescue must not break the turn
             logger.warning(
-                "chunks_containing_all failed for project=%s needles=%r: %s",
-                project_id, cleaned, exc,
+                "chunks_containing_all failed for project=%s needles %s: %s",
+                project_id, _terms_ref(cleaned), _error_ref(exc),
             )
             return []
         return [
@@ -2071,7 +2080,7 @@ class VectorStore:
         except Exception as exc:  # noqa: BLE001 — rescue must not break the turn
             logger.warning(
                 "chunks_following failed for project=%s anchors=%s: %s",
-                project_id, list(wanted), exc,
+                project_id, list(wanted), _error_ref(exc),
             )
             return []
         return [self._row_as_chunk(r) for r in rows]
@@ -2237,8 +2246,8 @@ class VectorStore:
                     rows = session.execute(sql, params).all()
         except OperationalError as e:
             logger.warning(
-                "identifier_search failed for project=%s: %s; identifiers=%r",
-                project_id, e, identifiers,
+                "identifier_search failed for project=%s: %s; identifiers %s",
+                project_id, _error_ref(e), _terms_ref(identifiers),
             )
             return []
 
