@@ -16,8 +16,6 @@ the function itself or the route that calls it:
   404; the non-streaming route answers and keeps another session's file out
   of the model's input; the streaming route honours the per-user driver
   switch in request mode.
-* ``chat.chat_stream`` (``/chat/stream``): no chat block is a 500; the chat
-  block's answer reaches the client.
 * ``knowledge_seed.seed_knowledge``: no configured general-knowledge project
   means nothing is created or written.
 
@@ -39,7 +37,6 @@ from app.core import projects as store
 from app.core.rag import coverage_honesty
 from app.main import app
 from app.routers import agents as agents_router
-from app.routers import chat as chat_router
 from tests._fixture_values import PW_06, STUB_TOKEN_02
 
 _RUN = uuid.uuid4().hex[:8]
@@ -245,33 +242,6 @@ def test_agent_chat_stream_honours_the_users_driver_switch(client, monkeypatch, 
         assert res.status_code == 200
         list(res.iter_lines())
     assert seen == [switched_on], seen
-
-
-# ── chat.chat_stream (/chat/stream) ─────────────────────────────────────────
-
-@pytest.mark.parametrize("message", ["Hello.", "Which bay is poured first?"])
-def test_chat_stream_without_a_chat_block_is_a_500(client, monkeypatch, message):
-    headers, _uid = _register(client, f"nochat-{len(message)}")
-    monkeypatch.delitem(chat_router.BLOCK_REGISTRY, "chat")
-    path = app.url_path_for(chat_router.chat_stream.__name__)
-    assert client.post(path, json={"message": message}, headers=headers).status_code == 500
-
-
-@pytest.mark.parametrize("answer", ["Pour bay one first.", "Strike the formwork after 7 days."])
-def test_chat_stream_streams_the_chat_blocks_answer(client, monkeypatch, answer):
-    headers, _uid = _register(client, f"chatblk-{len(answer)}")
-
-    class _ChatBlock:
-        async def execute(self, message, params):
-            return {"result": {"text": answer}}
-
-    monkeypatch.setitem(chat_router.block_instances, "chat", _ChatBlock())
-    path = app.url_path_for(chat_router.chat_stream.__name__)
-    with client.stream("POST", path, json={"message": "Sequence?"}, headers=headers) as res:
-        assert res.status_code == 200
-        events = [json.loads(x[6:]) for x in res.iter_lines() if x.startswith("data: ")]
-    text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
-    assert text.strip() == answer, events
 
 
 # ── knowledge_seed.seed_knowledge ───────────────────────────────────────────

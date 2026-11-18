@@ -958,9 +958,6 @@ def get_project(
 ) -> Optional[Dict[str, Any]]:
     """Load a project the caller can access.
 
-    ``documents`` and ``document_count`` are the project's own documents,
-    without other chat sessions' files (see ``list_documents``).
-
     PR D — non-owners may also read approved platform-shared projects
     when ``include_admin_approved=True`` (Drive-approved origin,
     boot-seeded ``system_seed``, or a configured GK id).

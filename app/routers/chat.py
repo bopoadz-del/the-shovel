@@ -1066,10 +1066,6 @@ async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
     if "chat" not in BLOCK_REGISTRY:
         raise HTTPException(500, "Chat block not available")
     await _off_loop(_check_chat_conversation, request, auth)
-    # The turn's chat session: only its files (and the project's own) are
-    # listed or searched while it runs (projects.document_in_scope).
-    from app.core import projects as _scope_store
-    _scope_store.bind_session_scope(request.conversation_id, auth.get("user_id"))
 
     try:
         if "chat" not in block_instances:
@@ -1161,10 +1157,6 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
     if "chat" not in BLOCK_REGISTRY:
         raise HTTPException(500, "Chat block not available")
     await _off_loop(_check_chat_conversation, request, auth)
-    # The turn's chat session: only its files (and the project's own) are
-    # listed or searched while it runs (projects.document_in_scope).
-    from app.core import projects as _scope_store
-    _scope_store.bind_session_scope(request.conversation_id, auth.get("user_id"))
 
     async def event_stream():
         rid = get_request_id()
