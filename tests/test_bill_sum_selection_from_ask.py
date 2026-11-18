@@ -736,3 +736,58 @@ def test_the_lead_is_rendered_from_the_tools_declared_statement(rows, tool, rend
     lead = answer_exit._computed_lead(res, ASK)
     assert ("**103.5 m**" in lead) is rendered
     assert (lead == "\n".join(res["statements"])) is (not rendered)
+
+
+def _recovery(payloads, asks, question):
+    """The answer #428's computed-result recovery renders for ``payloads``
+    (``computed_answer.answer_turn`` over each call's own statements, built
+    as the runtime builds them), the text an empty write-up is replaced by."""
+    from app.agents.core import computed_answer, tool_registry
+
+    spec = tool_registry.result_spec("bill_rows_aggregate")
+    language = computed_answer.question_language(question)
+    calls = [computed_answer.Call(
+        tool=spec.name, heading=computed_answer.heading_for(spec.display_name or spec.name, language),
+        statements=tuple(spec.statement(p["result"]) or ()), asked={"terms": a},
+        declared=tuple(spec.reason_codes or ())) for p, a in zip(payloads, asks)]
+    return computed_answer.answer_turn(calls, language, question)
+
+
+@pytest.mark.parametrize("asks", [
+    ("clay pipe",),
+    ("clay pipe", "fence"),
+], ids=["one-result", "two-results"])
+async def test_a_recovered_answer_states_each_result_once_through_the_stream_route(tmp_path, asks):
+    """An empty write-up replaced by the recovery: the exit adds no second
+    copy of a statement the recovery already renders (grader 1515Z point 4)."""
+    from app.agents import answer_exit
+    from app.routers.exit_frames import with_answer_exit
+    from app.routers.hat_frames import _decode, _encode
+
+    rows = _invented_bill(tmp_path, _LIVE_ROWS)
+    question = "What is the total length of " + " and ".join(asks) + "?"
+    payloads = [_bill_payload(rows, f"What is the total length of {a}?") for a in asks]
+    recovery = _recovery(payloads, asks, question)
+    leads = answer_exit.computed_leads(_turn_for(payloads, question))
+    assert len(leads) == len(asks)
+
+    # the function: the recovery stands as rendered, nothing is prepended
+    out = answer_exit.hold_stated_figures(recovery, _turn_for(payloads, question))
+    assert out == recovery
+
+    async def frames():
+        turn = answer_exit.current_turn()
+        turn.question = question
+        for p in payloads:
+            answer_exit.note_tool_result("bill_rows_aggregate", p, turn)
+        yield _encode({"type": "end", "content": recovery, "sources": []})
+
+    decoded = [_decode(f) async for f in with_answer_exit(frames())]
+    content = [e for e in decoded if e and e.get("type") == "end"][0]["content"]
+    norm = lambda t: re.sub(r" \(source: [^)]*\)| \[\d+\]", "", t)  # noqa: E731
+    shown = "\n".join(answer_exit._lines(norm(content)))
+    for lead in leads:
+        # the lead's statement (its lines under the heading) appears once
+        body = "\n".join(answer_exit._lines(norm(lead))[1:])
+        assert shown.count(body) == 1, (body, content)
+    assert answer_exit.FIGURE_REMOVED not in content
