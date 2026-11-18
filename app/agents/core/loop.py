@@ -126,6 +126,7 @@ async def _chat_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
         _final_text_needs_forced_retry, _forced_retry_nudge, _fulfill_answer_report, _has_unread_windows,
+        forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
         _is_capability_request, _llm_config,
         _log_dataset_turn,
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
@@ -617,11 +618,12 @@ async def _chat_impl(
                     if priced:
                         final_text = priced
                     else:
+                        await _off_loop(log_forced_retry_start, "chat", final_text)
                         _nudge = await _off_loop(_forced_retry_nudge, final_text)
                         if _nudge:
                             messages.append({"role": "user", "content": _nudge})
                         forced_resp = await self._call_llm(messages, api_key, project_id=project_id, with_tools=False, user_id=user_id)
-                        if forced_resp.get("status") == "error":
+                        if forced_retry_failed("chat", forced_resp):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
                             forced_msg = forced_resp["choice"].get("message") or {}
@@ -629,7 +631,7 @@ async def _chat_impl(
                                 forced_msg.get("content") or "",
                                 messages=messages, tool_results=tool_calls_made,
                             )
-                        if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                        if (await _off_loop(forced_retry_still_unusable, "chat", final_text)):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 # An answer that names its own missing input gets ONE

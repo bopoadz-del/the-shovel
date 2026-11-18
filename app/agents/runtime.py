@@ -640,21 +640,34 @@ def _final_text_needs_forced_retry(
     text: str, *, user_message: str | None = None,
 ) -> bool:
     """True when sanitization left no usable user-facing answer."""
+    return forced_retry_reason(text) is not None
+
+
+def forced_retry_reason(text: str) -> str | None:
+    """The name of the rule that makes ``text`` unusable, else None.
+
+    One implementation for the retry decision, its nudge and the trace, so
+    the log names the rule that fired (never the text). The order is the
+    decision order.
+
+    A promise to search is never a usable answer to ANY question. This was
+    gated on deliverable/generative requests, so plain factual lookups fell
+    straight through and the user was shown "Let me search more precisely
+    for the Engineer's Representative..." as the final answer (a live
+    contract-particular lookup and a delay-damages ask). The request type
+    does not change whether a dangling promise is an answer.
+    """
     if not (text or "").strip():
-        return True
+        return "empty"
     if text == _TOOL_FORMAT_FALLBACK:
-        return True
-    # A promise to search is never a usable answer to ANY question. This was
-    # gated on deliverable/generative requests, so plain factual lookups fell
-    # straight through and the user was shown "Let me search more precisely
-    # for the Engineer's Representative..." as the final answer (a live
-    # contract-particular lookup and a delay-damages ask). The request
-    # type does not change whether a dangling promise is an answer.
+        return "tool_format"
     if _looks_like_search_preamble(text):
-        return True
+        return "search_promise"
     if _looks_like_greeting_only(text):
-        return True
-    return _exit_leaves_nothing(text)
+        return "greeting_only"
+    if _exit_leaves_nothing(text):
+        return "platform_only"
+    return None
 
 
 def _exit_leaves_nothing(text: str) -> bool:
@@ -682,15 +695,46 @@ _USER_TERMS_RETRY_NUDGE = (
 
 def _forced_retry_nudge(text: str) -> str | None:
     """The instruction that goes with the forced no-tools retry for ``text``."""
-    if text == _TOOL_FORMAT_FALLBACK:
-        return _TOOL_FORMAT_RETRY_NUDGE
-    if _looks_like_search_preamble(text):
-        return _SEARCH_PREAMBLE_RETRY_NUDGE
-    if _looks_like_greeting_only(text):
-        return _GREETING_RETRY_NUDGE
-    if _exit_leaves_nothing(text):
-        return _USER_TERMS_RETRY_NUDGE
-    return None
+    return _FORCED_RETRY_NUDGES.get(forced_retry_reason(text) or "")
+
+
+_FORCED_RETRY_NUDGES = {
+    "tool_format": _TOOL_FORMAT_RETRY_NUDGE,
+    "search_promise": _SEARCH_PREAMBLE_RETRY_NUDGE,
+    "greeting_only": _GREETING_RETRY_NUDGE,
+    "platform_only": _USER_TERMS_RETRY_NUDGE,
+}
+
+
+def log_forced_retry_start(where: str, text: str) -> None:
+    """Trace the forced no-tools retry by the rule that fired, never the text.
+
+    Evaluating the rule is CPU work: the turn paths call this through
+    ``_off_loop`` like the neighbouring decision calls.
+    """
+    _LOG.info("%s: unusable final_text reason=%s, forcing no-tools retry",
+              where, forced_retry_reason(text))
+
+
+def forced_retry_failed(where: str, resp: dict) -> bool:
+    """True when the forced retry's provider call errored; traced as such."""
+    if resp.get("status") != "error":
+        return False
+    _LOG.warning("%s: forced retry failed reason=provider_error; fallback shown", where)
+    return True
+
+
+def forced_retry_still_unusable(where: str, text: str, *, raw_len: int | None = None) -> bool:
+    """The retry's own decision (same rule as the first), traced by rule name.
+
+    Our own fallback line is not traced again: reaching it means the retry
+    call already failed and was logged as ``provider_error``.
+    """
+    reason = forced_retry_reason(text)
+    if reason is not None and text != _EMPTY_RESPONSE_FALLBACK:
+        raw = "" if raw_len is None else f" raw={raw_len}c"
+        _LOG.warning("%s: forced retry unusable reason=%s%s; fallback shown", where, reason, raw)
+    return reason is not None
 
 # Keys that strongly indicate an internal search tool argument payload.
 _SEARCH_TOOL_ARG_KEYS = {
