@@ -342,8 +342,6 @@ def _token_host(token: str, bare_numbers_are_hosts: bool = False) -> str | None:
     None for a path or a plain value.
 
     Raises _Unclassified for a token that is none of the known-safe shapes."""
-    if not token:
-        return None
     if "%" in token:
         token = unquote(token)  # an encoded dot or slash, read as a resolver reads it
     scheme_relative = token.startswith("//")
