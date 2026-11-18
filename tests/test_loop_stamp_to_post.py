@@ -1,12 +1,12 @@
 """STAMP TO POST: the watchdog keeps how long each heartbeat waited between
 its stamp and its post to the loop (advisor 07:28Z 18 Nov).
 
-The heartbeat is stamped, then the monitor takes its CPU snapshot (/proc
-reads), and only then is the heartbeat posted. Whatever the snapshot costs
-is counted as loop lag. These tests check that the new figure tells the two
-cases apart: a slow snapshot with an idle loop (the lag is about the
-stamp-to-post time) and a blocked loop with a fast snapshot (stamp-to-post is
-small next to the lag). Diagnostic only: nothing gated reads it.
+#435 measured it: stamped before the CPU snapshot (/proc reads), every
+heartbeat's lag carried the snapshot's cost. PROPOSAL (outcome A): the
+heartbeat is stamped at the post, after the snapshot. These tests check the
+two sides: a slow snapshot with an idle loop is no longer a stall, and a
+blocked loop still is, with a fast snapshot and with a slow one. The
+stamp-to-post figure itself stays diagnostic: nothing gated reads it.
 
 Every test builds its own input; no document text.
 """
@@ -67,10 +67,44 @@ def test_the_summary_names_the_worst_stall_and_its_stamp_to_post(pairs, expected
     assert line.endswith("worst_lag=650ms/s2p=610ms")
 
 
+@pytest.mark.parametrize("snapshot_s", [0.35, 0.6])
+def test_a_slow_snapshot_with_an_idle_loop_is_not_a_stall(snapshot_s, monkeypatch):
+    """PROPOSAL (outcome A): the heartbeat is stamped at the post, so the
+    monitor's own snapshot -- however slow -- is never charged to the loop.
+    The loop here is idle the whole time: no stall, and every lag is small."""
+    calls: list = []
+
+    def snapshot():
+        calls.append(1)
+        time.sleep(snapshot_s)
+        return 0.0, {}
+
+    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
+    monkeypatch.setattr(loop_watchdog, "host_cpu", lambda: {})
+    loop = asyncio.new_event_loop()
+    mon = LagMonitor(loop, threshold_ms=250, tick_ms=20, log=False)
+
+    async def run():
+        # Long enough for several slow snapshots to have run.
+        await asyncio.sleep(snapshot_s * 4)
+
+    mon.start()
+    try:
+        loop.run_until_complete(run())
+    finally:
+        mon.stop()
+        loop.close()
+
+    assert len(calls) >= 2, "the slow snapshot never ran"
+    assert not mon.stalls, mon.stalls
+    assert mon.max_lag_ms < 150, mon.max_lag_ms
+    assert mon.max_stamp_to_post_ms < 50, mon.max_stamp_to_post_ms
+
+
 @pytest.mark.parametrize("slow_snapshot", [True, False])
-def test_the_figure_tells_a_slow_snapshot_from_a_blocked_loop(slow_snapshot, monkeypatch):
-    """A slow snapshot with an idle loop: the stall's lag is its stamp-to-post.
-    A blocked loop with an instant snapshot: stamp-to-post is near zero."""
+def test_a_blocked_loop_is_still_a_stall_whatever_the_snapshot_costs(slow_snapshot, monkeypatch):
+    """The loop itself blocked past the limit is a stall, with an instant
+    snapshot and with a slow one; its stamp-to-post stays near zero."""
     snapshot_s = 0.35 if slow_snapshot else 0.0
 
     def snapshot():
@@ -85,8 +119,9 @@ def test_the_figure_tells_a_slow_snapshot_from_a_blocked_loop(slow_snapshot, mon
 
     async def run():
         await asyncio.sleep(0.1)
-        if not slow_snapshot:
-            time.sleep(0.45)  # the loop itself is blocked
+        # The loop itself is blocked. 0.9 s: even if a 0.35 s snapshot starts
+        # as the block starts, the heartbeat posted after it waits >= 0.55 s.
+        time.sleep(0.9)
         deadline = time.monotonic() + 5
         while not mon.stall_recorded.is_set() and time.monotonic() < deadline:
             await asyncio.sleep(0.02)
@@ -100,10 +135,6 @@ def test_the_figure_tells_a_slow_snapshot_from_a_blocked_loop(slow_snapshot, mon
 
     assert mon.stall_stamp_to_post, "no stall recorded"
     lag, s2p = max(mon.stall_stamp_to_post, key=lambda p: p[0])
-    assert lag >= 250
-    if slow_snapshot:
-        assert s2p >= 300
-        assert lag - s2p < 150, (lag, s2p)
-    else:
-        assert s2p < 50, (lag, s2p)
+    assert lag >= 250, (lag, s2p)
+    assert s2p < 50, (lag, s2p)
     assert mon.max_stamp_to_post_ms >= s2p

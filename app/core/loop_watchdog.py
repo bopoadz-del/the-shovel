@@ -454,22 +454,27 @@ class LagMonitor:
                     live.arm()
                 served.set()
 
-            # The heartbeat is stamped BEFORE the monitor's CPU snapshot, as
-            # #380 shipped it: what the timing test measures is unchanged here
-            # (advisor ruling 04:18Z; moving the stamp is its own proposal).
-            # The live timer is armed with the stamp, so a GIL hold that
-            # begins while the snapshot reads /proc -- each read releases the
-            # GIL -- is dumped too. Armed after the snapshot, that window was
-            # blind (CI #396 d3c7ef0: a 0.6 s hold, max_lag 2, no dump).
-            posted = time.monotonic()
+            # The live timer is armed BEFORE the CPU snapshot, so a GIL hold
+            # that begins while the snapshot reads /proc -- each read releases
+            # the GIL -- is still dumped (CI #396 d3c7ef0: armed after the
+            # snapshot, a 0.6 s hold left no dump).
             if live is not None:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
                 live.arm()
-            if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
+            snap_at = time.monotonic()
+            if snap_at - self._cpu_at >= _CPU_SNAPSHOT_S:
                 self._proc_before, self._cpu_before = cpu_snapshot()
-                self._cpu_at, self._host_before = posted, host_cpu()
+                self._cpu_at, self._host_before = snap_at, host_cpu()
+            # PROPOSAL (STAMP TO POST, outcome A): the heartbeat is stamped AT
+            # the post, after the snapshot. Stamped before it (as #380 shipped
+            # it), every millisecond the monitor spent reading /proc -- or
+            # waiting to get the GIL back between reads -- was charged to the
+            # loop: on CI the worst heartbeat's lag equalled its stamp-to-post
+            # time to within 2 ms, reds included. The lag is now the loop's
+            # own lateness from the moment the heartbeat could be served.
+            posted = time.monotonic()
             stamp_to_post_ms = (time.monotonic() - posted) * 1000
             try:
                 self.loop.call_soon_threadsafe(_serve)
