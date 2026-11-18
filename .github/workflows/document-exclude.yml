@@ -6,8 +6,8 @@ name: document-exclude
 #
 # Safety, in order:
 #   1. A plan call (execute=false) runs first, ALWAYS. It prints the document,
-#      its chunk_count, the exact chunk rows it would delete, the project chunk
-#      total and plan_hash. It writes nothing.
+#      its chunk_count, the NUMBER of chunk rows it would delete, the project
+#      chunk total and plan_hash. It writes nothing.
 #   2. The write runs only when the operator passed execute=true, a reason, AND
 #      an expected_plan_hash equal to the live plan's (from an earlier plan run).
 #      The route checks the hash again server-side.
@@ -15,27 +15,32 @@ name: document-exclude
 #      metadata.excluded = {by: owner, at, reason}; chunk_rows_after must be 0.
 # project_id, document_id, reason and expected_plan_hash have NO committed
 # default: the operator supplies them.
-# PUBLIC repository: the run log and step summary are public pages. They carry
-# ids, codes, counts and the hash only: never the document's file name, and
-# the stored exclusion prints its by/at and the reason's LENGTH. A dispatch
-# input is printed in the run log, so the reason must be a short code
-# (lower case letters, digits, '_', '-', '.'), refused otherwise.
+# PUBLIC repository: the run log, the step summary, the run page and any
+# artifact are public. Every response is printed ONLY through
+# scripts/ops_public_view.py, a whitelist of id, code, count, flag and hash
+# fields; any other key is never read, and a stored reason, a refusal or
+# not_eligible prints as its LENGTH. Nothing is uploaded as an artifact (the
+# raw response carries the file name); the raw files are deleted on the
+# runner. Every dispatch input is public: the first step refuses a reason
+# that is not a short code (a-z 0-9 _ -), in every mode, before any request.
+# An operator maps a document id to its document in the app (the project's
+# documents list), never in a log.
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: "Project the document belongs to (no default committed)"
+        description: "Project the document belongs to (no default committed). PUBLIC: visible on the run page"
         required: true
       document_id:
-        description: "Document to exclude (no default committed)"
+        description: "Document to exclude (no default committed). PUBLIC: visible on the run page"
         required: true
       reason:
-        description: "Owner's reason CODE, stored on the row (required with execute=true). Printed in the public run log: a code such as duplicate_volume, never a name"
+        description: "The owner's reason CODE (a-z 0-9 _ -, at most 64), required with execute=true. PUBLIC: every dispatch input is visible on the run page and in the log of this public repository; a code such as duplicate_volume, never a name or a sentence. Refused in every mode otherwise"
         required: false
         default: ""
       expected_plan_hash:
-        description: "plan_hash from an earlier plan run; the write runs only if the live plan equals it"
+        description: "plan_hash from an earlier plan run; the write runs only if the live plan equals it. PUBLIC: visible on the run page"
         required: false
         default: ""
       execute:
@@ -55,9 +60,20 @@ jobs:
       BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
       PROJECT_ID: ${{ inputs.project_id }}
       DOCUMENT_ID: ${{ inputs.document_id }}
-      REASON: ${{ inputs.reason }}
       EXPECTED: ${{ inputs.expected_plan_hash }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ops_public_view.py
+          sparse-checkout-cone-mode: false
+
+      - name: Refuse a reason that is not a short code (every mode, before any request)
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ops_public_view.py reason-gate "$REASON"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -97,25 +113,21 @@ jobs:
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -o plan.json -w "\nHTTP %{http_code}\n" "${url}"
-          jq '.plan | {document_id, doc_type, ingest_status, chunk_count, chunk_rows, project_chunk_total, already_excluded, plan_hash}' plan.json
-          echo "rows_to_delete:"; jq -r '.plan.rows_to_delete[]' plan.json
           {
             echo "### Plan (execute=false)"
-            echo "- document_id: $(jq -r '.plan.document_id' plan.json) (doc_type=$(jq -r '.plan.doc_type' plan.json))"
-            echo "- ingest_status: $(jq -r '.plan.ingest_status' plan.json), chunk_count: $(jq -r '.plan.chunk_count' plan.json), chunk_rows: $(jq -r '.plan.chunk_rows' plan.json)"
-            echo "- project_chunk_total: $(jq -r '.plan.project_chunk_total' plan.json)"
-            echo "- already_excluded: $(jq -r '.plan.already_excluded' plan.json)"
-            echo "- plan_hash (live): $(jq -r '.plan.plan_hash' plan.json)"
+            python3 scripts/ops_public_view.py exclude-plan plan.json
             echo "- expected_plan_hash (operator): ${EXPECTED}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           echo "PLANNED=$(jq -r '.plan.plan_hash' plan.json)" >> "$GITHUB_ENV"
 
       - name: Refuse the write when the plan differs from the expected hash
         if: inputs.execute
+        env:
+          REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
           [ -n "$REASON" ] || { echo "::error::reason is required with execute=true"; exit 1; }
-          printf '%s' "$REASON" | grep -Eq '^[a-z0-9_.-]{1,64}$' || { echo "::error::reason must be a code (a-z 0-9 _ . -, at most 64); no write was made"; exit 1; }
+          printf '%s' "$REASON" | grep -Eq '^[a-z0-9_-]{1,64}$' || { echo "::error::reason must be a code (a-z 0-9 _ -, at most 64); no write was made"; exit 1; }
           if [ "$PLANNED" != "$EXPECTED" ]; then
             echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}; no write was made"
             echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
@@ -124,6 +136,8 @@ jobs:
 
       - name: Exclude (execute=true)
         if: inputs.execute
+        env:
+          REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
           enc() { jq -rn --arg v "$1" '$v|@uri'; }
@@ -132,25 +146,13 @@ jobs:
             -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
             -H "Accept: application/json" \
             -o applied.json -w "\nHTTP %{http_code}\n" "${url}"
-          jq '{executed, refused, chunks_deleted, index_pruned, chunk_rows_after, chunk_count_after, project_chunk_total_after, ingest_status, retrieval_visible}' applied.json
           {
             echo "### Write (execute=true)"
-            echo "- executed: $(jq -r '.executed' applied.json) refused: $(jq -r '.refused // "-"' applied.json)"
-            echo "- chunks_deleted: $(jq -r '.chunks_deleted' applied.json)"
-            echo "- chunk_rows_after: $(jq -r '.chunk_rows_after' applied.json), chunk_count_after: $(jq -r '.chunk_count_after' applied.json)"
-            echo "- project_chunk_total before/after: $(jq -r '.plan.project_chunk_total' applied.json) / $(jq -r '.project_chunk_total_after' applied.json)"
-            echo "- excluded (as stored): $(jq -c '.excluded | if . == null then null else {by, at, reason_chars: ((.reason // "") | length)} end' applied.json)"
+            python3 scripts/ops_public_view.py exclude-applied applied.json
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$(jq -r '.executed' applied.json)" = "true" ] || { echo "::error::write refused"; exit 1; }
           [ "$(jq -r '.chunk_rows_after' applied.json)" = "0" ] || { echo "::error::chunk rows remain after the write"; exit 1; }
 
-      - name: Upload responses
+      - name: Delete the raw responses, never uploaded (they carry the file name)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: document-exclude-response
-          path: |
-            plan.json
-            applied.json
-          if-no-files-found: ignore
-          retention-days: 7
+        run: rm -f plan.json applied.json
