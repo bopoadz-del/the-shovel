@@ -1062,18 +1062,14 @@ def _leg_fields(c) -> Dict[str, Any]:
 
 
 def _trace_chunk(rank: int, c) -> Dict[str, Any]:
-    """Identity and rank of one chunk. Never its text."""
-    name = getattr(c, "source_name", "") or ""
-    if not name:
-        from app.core.rag.retriever import _doc_name_for_id
-
-        name = _doc_name_for_id(getattr(c, "doc_id", "") or "")
+    """Identity and rank of one chunk. Never its text, never its document's
+    name: the document is named by ``doc_id`` alone (names never in logs;
+    an operator maps an id to a document in the app)."""
     score = getattr(c, "score", None)
     return {
         "rank": rank,
         "chunk_id": getattr(c, "chunk_id", None),
         "doc_id": getattr(c, "doc_id", None),
-        "doc_name": name,
         "score": round(float(score), 6) if score is not None else None,
         **_leg_fields(c),
         "layer": getattr(c, "layer", "own"),
@@ -1107,8 +1103,13 @@ def _emit_retrieval_trace(
     top_score: float,
     k_info: Optional[Dict[str, Any]] = None,
     drop_reasons: Optional[Dict[str, str]] = None,
+    query_chars: Optional[int] = None,
 ) -> None:
     """Write the trace line. Best-effort: a logging failure never costs a turn.
+
+    The query is written as its source code (``query``: ``user_message`` or
+    ``followup_context``) and its length in characters (``query_chars``),
+    never its words. Chunks carry document ids, never document names.
 
     Every ``not_handed`` entry carries ``dropped_by``: the rule that left it
     out (``drop_reasons``, written by ``select_handed`` and
@@ -1144,6 +1145,7 @@ def _emit_retrieval_trace(
             "request_id": rid,
             "path": "pre_injection",
             "query": query_label,
+            "query_chars": query_chars,
             "project_id": project_id,
             "conversation_id": conversation_id,
             "agent": agent_name,
@@ -1446,7 +1448,8 @@ def rag_inject(
         })
         _audit.write(audit_rec)
         _emit_retrieval_trace(
-            query_label=_query_label, project_id=project_id,
+            query_label=_query_label, query_chars=len(retrieval_query or ""),
+            project_id=project_id,
             conversation_id=conversation_id, agent_name=agent_name,
             retrieved=chunks, handed=[], threshold_fired=True,
             identifier_miss=identifier_miss, top_score=top_score,
@@ -1484,7 +1487,8 @@ def rag_inject(
     })
     _audit.write(audit_rec)
     _emit_retrieval_trace(
-        query_label=_query_label, project_id=project_id,
+        query_label=_query_label, query_chars=len(retrieval_query or ""),
+        project_id=project_id,
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,

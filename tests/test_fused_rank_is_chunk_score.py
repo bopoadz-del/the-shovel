@@ -17,6 +17,8 @@ main and must keep passing.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.core.rag import retriever
@@ -283,14 +285,15 @@ def test_trace_lines_carry_leg_scores_and_fused_rank(vector_score, lexical_score
         assert "text" not in entry
 
 
-@pytest.mark.parametrize("own_name, resolved, want", [
-    ("", "resolved-by-id.pdf", "resolved-by-id.pdf"),
-    ("carried-on-chunk.pdf", "resolved-by-id.pdf", "carried-on-chunk.pdf"),
+@pytest.mark.parametrize("own_name, resolved", [
+    ("", "resolved-by-id.pdf"),
+    ("carried-on-chunk.pdf", "resolved-by-id.pdf"),
 ])
-def test_trace_chunk_names_a_nameless_chunk_by_its_doc_id(monkeypatch, own_name,
-                                                          resolved, want):
-    """A chunk that carries no source name is named by resolving its doc_id;
-    a chunk that carries one keeps it and the resolver is not consulted."""
+def test_trace_chunk_carries_no_name_and_resolves_none(monkeypatch, own_name,
+                                                       resolved):
+    """Names never in logs: a traced chunk is identified by its doc_id. A
+    chunk carrying a source name does not log it, and a nameless one is not
+    resolved to one (the resolver is never consulted)."""
     from app.core.rag import inject
 
     asked: list[str] = []
@@ -302,8 +305,13 @@ def test_trace_chunk_names_a_nameless_chunk_by_its_doc_id(monkeypatch, own_name,
     monkeypatch.setattr(retriever, "_doc_name_for_id", _resolve)
     c = _chunk("n", 0.74, doc="doc-named")
     c.source_name = own_name
-    assert inject._trace_chunk(1, c)["doc_name"] == want
-    assert asked == ([] if own_name else ["doc-named"])
+    entry = inject._trace_chunk(1, c)
+    assert entry["doc_id"] == "doc-named"
+    assert "doc_name" not in entry
+    dumped = json.dumps(entry)
+    assert resolved not in dumped
+    assert not own_name or own_name not in dumped
+    assert asked == []
 
 
 @pytest.mark.parametrize("score, has_score", [(None, False), (0.73, True)])
