@@ -505,12 +505,16 @@ def test_main_loop_names_a_failure_by_class_and_goes_on(monkeypatch, capsys, exc
         assert secret not in out
 
 
-def test_every_printed_line_carries_the_mark(monkeypatch, capsys, tmp_path):
+@pytest.mark.parametrize("ids, code", [
+    ("abc", 1),   # the run path: budgets, a skipped id, the tally (stdout)
+    ("", 2),      # the refusal path: no id given (stderr)
+])
+def test_every_printed_line_carries_the_mark(monkeypatch, capsys, ids, code):
     mod = _load()
     _session_with(monkeypatch, [], [])
     monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
-    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
-    assert mod.main() == 1
+    monkeypatch.setenv("COVERAGE_DOC_IDS", ids)
+    assert mod.main() == code
     cap = capsys.readouterr()
     lines = [ln for ln in (cap.out + cap.err).splitlines() if ln]
     assert lines and all(ln.startswith(mod.MARK) for ln in lines)
@@ -530,17 +534,31 @@ def test_summary_checker_flags_the_whole_stream(run, bad):
     assert len(summary_writes_unmarked(run, "PPC| ")) == bad
 
 
-def test_workflow_publishes_only_the_scripts_marked_lines():
+_WHOLE_STREAM_WF = """
+jobs:
+  report:
+    steps:
+      - run: |
+          aws logs get-log-events --log-stream-name s --output text | tee -a "$GITHUB_STEP_SUMMARY"
+"""
+
+
+@pytest.mark.parametrize("source, clean", [
+    ("committed", True),        # the real workflow file
+    ("whole-stream", False),    # the #409 shape: the whole container stream teed
+])
+def test_workflow_publishes_only_the_scripts_marked_lines(source, clean):
     import yaml
 
     mod = _load()
     wf = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pdf-page-coverage.yml"
-    doc = yaml.safe_load(wf.read_text(encoding="utf-8"))
+    body = wf.read_text(encoding="utf-8") if source == "committed" else _WHOLE_STREAM_WF
+    doc = yaml.safe_load(body)
     run = "\n".join(s["run"] for job in doc["jobs"].values() for s in job["steps"]
                     if isinstance(s.get("run"), str))
     assert "GITHUB_STEP_SUMMARY" in run
-    assert summary_writes_unmarked(run, mod.MARK) == []
-    assert "--output text | tee" not in run
+    assert (summary_writes_unmarked(run, mod.MARK) == []) is clean
+    assert ("--output text | tee" not in run) is clean
 
 
 @pytest.mark.parametrize("broken", [True, False])
