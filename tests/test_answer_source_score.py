@@ -105,6 +105,18 @@ def test_named_citation_counts_handed_or_not(cited, expected, reason):
     assert ("citation_not_handed" in s.reasons) == reason
 
 
+@pytest.mark.parametrize("answer, expected", [
+    ("Rate 585 [source: Bill (Priced).pdf].", (1, 0)),
+    ("Rate 585 (source: Bill (Priced).pdf).", (1, 0)),
+    ("Rate 585 [source: Bill (Draft).pdf].", (0, 1)),
+    ("Rate 585 (source: Bill (Draft).pdf).", (0, 1)),
+])
+def test_named_citation_keeps_parentheses_inside_the_name(answer, expected):
+    row = {"id": "r", "answer": answer, "handed": [_chunk("c1", "Bill (Priced).pdf", "rate 585")]}
+    s = ass.score_row(row)
+    assert (s.citations_handed, s.citations_not_handed) == expected
+
+
 def test_ellipsis_name_matches_on_both_ends():
     assert ass.name_matches("IP-BOQ-07…ities (Priced).xlsx", "IP-BOQ-07 Bill of Quantities (Priced).xlsx")
     assert not ass.name_matches("IP-BOQ-07…ities (Priced).xlsx", "IP-BOQ-07 Bill of Quantities (Draft).xlsx")

@@ -46,8 +46,14 @@ from typing import Any, Iterable
 
 # --- citations ---------------------------------------------------------------
 
-# ``[source: NAME]`` / ``(source: NAME)`` written by the answer.
-_NAMED_CITE_RE = re.compile(r"[\[(]\s*source\s*:\s*([^\])]+)[\])]", re.IGNORECASE)
+# ``[source: NAME]`` / ``(source: NAME)`` written by the answer. A document
+# name may itself hold parentheses ("Bill (Priced).pdf"): the bracket form
+# ends only at ``]``, the paren form allows one level of inner parentheses.
+_NAMED_CITE_RE = re.compile(
+    r"\[\s*source\s*:\s*([^\]]+)\]"
+    r"|\(\s*source\s*:\s*((?:[^()]|\([^()]*\))+)\)",
+    re.IGNORECASE,
+)
 # Raw retrieval keys a model may leave in an answer before the exit check.
 _KEYED_CITE_RE = re.compile(r"\b(?:chunk_id|chunk|doc_id)\s*[=:]\s*([A-Za-z0-9_\-:.]+)", re.IGNORECASE)
 # A bare numbered marker: a small integer standing alone right before the end
@@ -108,7 +114,8 @@ def find_citations(answer: str, sources_list: list[str] | None = None) -> list[C
     spans = _sentences(text)
     out: list[Citation] = []
     for m in _NAMED_CITE_RE.finditer(text):
-        out.append(Citation("name", m.group(1).strip(), _sentence_at(text, spans, m.start())))
+        name = m.group(1) if m.group(1) is not None else m.group(2)
+        out.append(Citation("name", name.strip(), _sentence_at(text, spans, m.start())))
     for m in _KEYED_CITE_RE.finditer(text):
         out.append(Citation("key", m.group(1).strip(), _sentence_at(text, spans, m.start())))
     listed = list(sources_list or [])
