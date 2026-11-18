@@ -8,6 +8,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 _PATH = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "answer_source_score.py"
 _spec = importlib.util.spec_from_file_location("answer_source_score", _PATH)
 ass = importlib.util.module_from_spec(_spec)
@@ -22,70 +24,85 @@ def _chunk(cid: str, name: str, text: str = "") -> dict:
 
 # --- (a) numbers --------------------------------------------------------------
 
-def test_number_in_cited_chunk_is_found():
-    row = {"id": "r", "answer": "The wall is 250 mm thick [source: Spec A.pdf].",
+@pytest.mark.parametrize("answer, expected, flag", [
+    ("The wall is 250 mm thick [source: Spec A.pdf].", (1, 0), "ok"),
+    ("The wall is 300 mm thick [source: Spec A.pdf].", (0, 1), "low"),
+])
+def test_number_in_cited_chunk_is_found_or_not(answer, expected, flag):
+    row = {"id": "r", "answer": answer,
            "handed": [_chunk("c1", "Spec A.pdf", "Walls shall be 250 mm thick.")]}
     s = ass.score_row(row)
-    assert (s.numbers_found, s.numbers_not_found) == (1, 0)
-    assert s.flag == "ok"
+    assert (s.numbers_found, s.numbers_not_found) == expected
+    assert s.flag == flag
+    assert ("number_not_found" in s.reasons) == (expected[1] > 0)
 
 
-def test_number_absent_from_cited_chunk_is_not_found():
-    row = {"id": "r", "answer": "The wall is 300 mm thick [source: Spec A.pdf].",
-           "handed": [_chunk("c1", "Spec A.pdf", "Walls shall be 250 mm thick.")]}
+@pytest.mark.parametrize("tool_result, expected", [
+    ('{"result": 945.0}', (1, 0)),
+    ('{"result": 900.0}', (0, 1)),
+])
+def test_number_from_tool_result(tool_result, expected):
+    row = {"id": "r", "answer": "Volume is 945 m3.", "tool_results": [tool_result]}
     s = ass.score_row(row)
-    assert (s.numbers_found, s.numbers_not_found) == (0, 1)
-    assert "number_not_found" in s.reasons and s.flag == "low"
+    assert (s.numbers_found, s.numbers_not_found) == expected
 
 
-def test_number_from_tool_result_is_found():
-    row = {"id": "r", "answer": "Volume is 945 m3.", "tool_results": ['{"result": 945.0}']}
-    assert ass.score_row(row).numbers_found == 1
-
-
-def test_number_only_in_uncited_chunk_is_not_found():
+@pytest.mark.parametrize("answer, expected_not_found", [
     # handed but not cited: the rule reads cited chunks, not the whole turn
-    row = {"id": "r", "answer": "Volume is 945 m3.", "handed": [_chunk("c1", "X.pdf", "945")]}
-    assert ass.score_row(row).numbers_not_found == 1
+    ("Volume is 945 m3.", 1),
+    ("Volume is 945 m3 [source: X.pdf].", 0),
+])
+def test_number_only_in_uncited_chunk_is_not_found(answer, expected_not_found):
+    row = {"id": "r", "answer": answer, "handed": [_chunk("c1", "X.pdf", "945")]}
+    assert ass.score_row(row).numbers_not_found == expected_not_found
 
 
-def test_thousands_commas_and_decimals_compare_as_values():
-    assert ass.numbers_in("SAR 4,984,120 and 0.125 l") == [4984120.0, 0.125]
-    assert ass.numbers_in("4984120") == [4984120.0]
+@pytest.mark.parametrize("text, expected", [
+    ("SAR 4,984,120 and 0.125 l", [4984120.0, 0.125]),
+    ("4984120", [4984120.0]),
+])
+def test_thousands_commas_and_decimals_compare_as_values(text, expected):
+    assert ass.numbers_in(text) == expected
 
 
-def test_identifier_digits_are_not_figures():
-    assert ass.numbers_in("ref IP-INF-053 item I233.3 sheet D/13/2") == []
-    assert ass.numbers_in("ref 53 item 233.3") == [53.0, 233.3]
+@pytest.mark.parametrize("text, expected", [
+    ("ref IP-INF-053 item I233.3 sheet D/13/2", []),
+    ("ref 53 item 233.3", [53.0, 233.3]),
+])
+def test_identifier_digits_are_not_figures(text, expected):
+    assert ass.numbers_in(text) == expected
 
 
-def test_numbered_marker_is_not_a_figure_when_panel_numbers_it():
-    answer = "Leakage is 0.125 litres per 30 minutes 2.\nNext line."
-    assert ass.answer_numbers(answer, ["A.pdf", "B.pdf"]) == [0.125, 30.0]
+@pytest.mark.parametrize("sources, expected", [
+    (["A.pdf", "B.pdf"], [0.125, 30.0]),
     # no panel: the trailing 2 is an ordinary number
-    assert ass.answer_numbers(answer, []) == [0.125, 30.0, 2.0]
+    ([], [0.125, 30.0, 2.0]),
+])
+def test_numbered_marker_is_not_a_figure_when_panel_numbers_it(sources, expected):
+    answer = "Leakage is 0.125 litres per 30 minutes 2.\nNext line."
+    assert ass.answer_numbers(answer, sources) == expected
 
 
-def test_number_inside_a_named_citation_is_not_a_figure():
-    assert ass.answer_numbers("Rate 585 [source: Bill 13 page 2.pdf]") == [585.0]
-    assert ass.answer_numbers("Rate 585 per Bill 13") == [585.0, 13.0]
+@pytest.mark.parametrize("answer, expected", [
+    ("Rate 585 [source: Bill 13 page 2.pdf]", [585.0]),
+    ("Rate 585 per Bill 13", [585.0, 13.0]),
+])
+def test_number_inside_a_named_citation_is_not_a_figure(answer, expected):
+    assert ass.answer_numbers(answer) == expected
 
 
 # --- (b) citations handed -----------------------------------------------------
 
-def test_named_citation_of_handed_document_counts_handed():
-    row = {"id": "r", "answer": "Grade C40 [source: Spec A.pdf].",
+@pytest.mark.parametrize("cited, expected, reason", [
+    ("Spec A.pdf", (1, 0), False),
+    ("Spec B.pdf", (0, 1), True),
+])
+def test_named_citation_counts_handed_or_not(cited, expected, reason):
+    row = {"id": "r", "answer": f"Grade C40 [source: {cited}].",
            "handed": [_chunk("c1", "Spec A.pdf", "grade C40")]}
     s = ass.score_row(row)
-    assert (s.citations_handed, s.citations_not_handed) == (1, 0)
-
-
-def test_named_citation_of_unhanded_document_counts_not_handed():
-    row = {"id": "r", "answer": "Grade C40 [source: Spec B.pdf].",
-           "handed": [_chunk("c1", "Spec A.pdf", "grade C40")]}
-    s = ass.score_row(row)
-    assert (s.citations_handed, s.citations_not_handed) == (0, 1)
-    assert "citation_not_handed" in s.reasons
+    assert (s.citations_handed, s.citations_not_handed) == expected
+    assert ("citation_not_handed" in s.reasons) == reason
 
 
 def test_ellipsis_name_matches_on_both_ends():
@@ -93,43 +110,50 @@ def test_ellipsis_name_matches_on_both_ends():
     assert not ass.name_matches("IP-BOQ-07…ities (Priced).xlsx", "IP-BOQ-07 Bill of Quantities (Draft).xlsx")
 
 
-def test_keyed_citation_matches_chunk_id():
+@pytest.mark.parametrize("answer, expected", [
+    ("Value 5 (chunk_id=c7).", 1),
+    ("Value 5 (chunk_id=c8).", 0),
+])
+def test_keyed_citation_matches_chunk_id(answer, expected):
     handed = [_chunk("c7", "A.pdf", "text")]
-    hit = ass.find_citations("Value 5 (chunk_id=c7).")
-    miss = ass.find_citations("Value 5 (chunk_id=c8).")
-    assert len(ass.cited_chunks(hit[0], handed)) == 1
-    assert ass.cited_chunks(miss[0], handed) == []
+    cites = ass.find_citations(answer)
+    assert len(ass.cited_chunks(cites[0], handed)) == expected
 
 
-def test_marker_resolves_through_sources_list():
-    cites = ass.find_citations("Tested at 2 m head 1.\n", ["Method.pdf"])
-    assert [(c.kind, c.target) for c in cites] == [("marker", "Method.pdf")]
+@pytest.mark.parametrize("answer, expected", [
+    ("Tested at 2 m head 1.\n", [("marker", "Method.pdf")]),
     # a marker beyond the panel's numbering is not a citation
-    assert ass.find_citations("Tested at 2 m head 3.\n", ["Method.pdf"]) == []
+    ("Tested at 2 m head 3.\n", []),
+])
+def test_marker_resolves_through_sources_list(answer, expected):
+    cites = ass.find_citations(answer, ["Method.pdf"])
+    assert [(c.kind, c.target) for c in cites] == expected
 
 
-def test_mid_sentence_small_number_is_not_a_marker():
-    assert ass.find_citations("Test at 2 m head above soffit.", ["A.pdf", "B.pdf"]) == []
-    assert len(ass.find_citations("Test above soffit 2.", ["A.pdf", "B.pdf"])) == 1
+@pytest.mark.parametrize("answer, expected", [
+    ("Test at 2 m head above soffit.", 0),
+    ("Test above soffit 2.", 1),
+])
+def test_mid_sentence_small_number_is_not_a_marker(answer, expected):
+    assert len(ass.find_citations(answer, ["A.pdf", "B.pdf"])) == expected
 
 
-def test_parse_sources_list_skips_the_count_line():
-    panel = "SOURCES CITED\n2\n\n31 of 32 documents indexed\n\n1\nA.pdf\n2\nB.pdf"
-    assert ass.parse_sources_list(panel) == ["A.pdf", "B.pdf"]
-    single = "SOURCES CITED\n1\n\n31 of 32 documents indexed\n\n1\nA.xlsx\nProject document"
-    assert ass.parse_sources_list(single) == ["A.xlsx"]
+@pytest.mark.parametrize("panel, expected", [
+    ("SOURCES CITED\n2\n\n31 of 32 documents indexed\n\n1\nA.pdf\n2\nB.pdf", ["A.pdf", "B.pdf"]),
+    ("SOURCES CITED\n1\n\n31 of 32 documents indexed\n\n1\nA.xlsx\nProject document", ["A.xlsx"]),
+])
+def test_parse_sources_list_skips_the_count_line(panel, expected):
+    assert ass.parse_sources_list(panel) == expected
 
 
 # --- (c) overlap ----------------------------------------------------------------
 
-def test_overlap_high_when_sentence_words_are_in_chunk():
-    v = ass.overlap("Concrete grade sulphate resisting cement", "sulphate resisting cement concrete grade")
-    assert v == 1.0
-
-
-def test_overlap_low_when_sentence_words_are_not_in_chunk():
-    v = ass.overlap("Concrete grade sulphate resisting cement", "pipe bedding granular backfill")
-    assert v == 0.0
+@pytest.mark.parametrize("chunk_text, expected", [
+    ("sulphate resisting cement concrete grade", 1.0),
+    ("pipe bedding granular backfill", 0.0),
+])
+def test_overlap_of_sentence_words_in_chunk(chunk_text, expected):
+    assert ass.overlap("Concrete grade sulphate resisting cement", chunk_text) == expected
 
 
 def test_low_overlap_flags_the_row_and_floor_is_configurable():
@@ -149,16 +173,21 @@ def test_overlap_is_none_without_chunk_text():
 
 # --- output -------------------------------------------------------------------
 
-def test_output_carries_ids_and_counts_only(tmp_path, capsys):
+@pytest.mark.parametrize("chunk_text, found, not_found", [
+    ("Secret words 12", 1, 0),
+    ("Secret words 13", 0, 1),
+])
+def test_output_carries_ids_and_counts_only(tmp_path, capsys, chunk_text, found, not_found):
     rows = [{"id": "Q9", "answer": "Secret words 12 [source: Private Name.pdf].",
              "question": "secret question", "handed": [{"chunk_id": "c1", "doc_name": "Private Name.pdf"}]}]
     p = tmp_path / "rows.json"
     p.write_text(json.dumps(rows), encoding="utf-8")
     t = tmp_path / "text.json"
-    t.write_text(json.dumps({"c1": "Secret words 12"}), encoding="utf-8")
+    t.write_text(json.dumps({"c1": chunk_text}), encoding="utf-8")
     assert ass.main([str(p), "--chunk-text", str(t)]) == 0
     out = capsys.readouterr().out
     rec = json.loads(out.strip())
-    assert rec["id"] == "Q9" and rec["numbers_found"] == 1 and rec["citations_handed"] == 1
+    assert rec["id"] == "Q9" and rec["citations_handed"] == 1
+    assert (rec["numbers_found"], rec["numbers_not_found"]) == (found, not_found)
     for leaked in ("Secret", "Private", "secret question"):
         assert leaked not in out
