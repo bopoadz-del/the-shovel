@@ -4389,7 +4389,7 @@ def _strip_reasoning_blocks(text: str) -> str:
 #: addressed to the MODEL -- how to read the rest, what it may not conclude.
 #: Never user-facing. ``tests/test_tool_directive_echo.py`` builds both
 #: envelopes and checks every string key outside ``preview`` is listed here.
-_TOOL_DIRECTIVE_KEYS: tuple[str, ...] = ("note", "scope_of_absence")
+_TOOL_DIRECTIVE_KEYS: tuple[str, ...] = ("note", "scope_of_absence", "rows_note")
 
 #: Words in a row an answer sentence must share with a tool directive before
 #: the run counts as copied. Five words in the same order is a quotation, not
@@ -11795,11 +11795,23 @@ def _compacted_tool_payload(
         # a cap keep the outline whole: only the preview gives way.
         budget = outline_budget if outline_budget is not None else kept // 4
         outline = _result_outline(whole, max(1, int(budget)))
-    dropped = max(0, len(content) - kept)
     totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
-    rows_shown = ({p: n for p, n in _rows_in_window(whole, content, 0, kept).items() if p in totals}
-                  if totals and isinstance(whole, dict) and not whole.get("truncated") else {})
-    rows_note = _rows_note(rows_shown, totals)
+    countable = bool(totals) and isinstance(whole, dict) and not whole.get("truncated")
+
+    def _shown(k: int) -> tuple[dict[str, int], str]:
+        if not countable:
+            return {}, ""
+        rs = {p: n for p, n in _rows_in_window(whole, content, 0, k).items() if p in totals}
+        return rs, _rows_note(rs, totals)
+
+    rows_shown, rows_note = _shown(kept)
+    if rows_shown:
+        # The count of rows shown is paid for out of the preview, so an
+        # envelope for a given ``keep`` is no longer than before: a caller
+        # that budgets by ``keep`` (the TPM pass) still fits.
+        kept = max(0, kept - len(json.dumps({ROWS_SHOWN_KEY: rows_shown, "rows_note": rows_note})))
+        rows_shown, rows_note = _shown(kept)
+    dropped = max(0, len(content) - kept)
     return json.dumps(
         {
             "truncated": True,
