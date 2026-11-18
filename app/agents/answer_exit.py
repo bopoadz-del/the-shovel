@@ -90,6 +90,10 @@ class Turn:
     #: Figures a tool stated as its result (a payload's ``stated_figures``:
     #: ``value``, ``shown``). The answer that leaves must carry each of them.
     stated_figures: list[dict[str, Any]] = field(default_factory=list)
+    #: Each computed result of the turn, in call order: the tool, its
+    #: payload, the figures it stated and the plain statements it made. The
+    #: answer's lead is built from these, never from the model's text.
+    computed_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -239,9 +243,14 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
             if err and err != question:
                 turn.error_questions.setdefault(err, question)
         turn.step_names.update(_call_names(tool, payload))
-        for fig in _stated_figures(payload):
+        figures = _stated_figures(payload)
+        for fig in figures:
             if fig not in turn.stated_figures:
                 turn.stated_figures.append(fig)
+        statements = _plain_statements(payload)
+        if figures or statements:
+            turn.computed_results.append({"tool": tool, "payload": payload,
+                                          "figures": figures, "statements": statements})
         for err in _error_texts(payload):
             turn.step_names.update(_error_step_names(err))
             label = _step_label(tool, payload)
@@ -317,29 +326,155 @@ def _stated_figures(payload: Any, depth: int = 0) -> list[dict[str, Any]]:
     return out
 
 
+def _plain_statements(payload: Any, depth: int = 0) -> list[str]:
+    """Every ``statement`` sentence a computed result carries next to its
+    ``stated_figures`` (the tool's own words for what it selected and found)."""
+    out: list[str] = []
+    if depth > 6:
+        return out
+    if isinstance(payload, dict):
+        text = payload.get("statement")
+        if isinstance(text, str) and text.strip() and "stated_figures" in payload:
+            out.append(text.strip())
+        for key, value in payload.items():
+            if key != "statement":
+                out.extend(_plain_statements(value, depth + 1))
+    elif isinstance(payload, list):
+        for value in payload:
+            out.extend(_plain_statements(value, depth + 1))
+    return out
+
+
 _ANSWER_NUMBER_RE = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
+#: A list marker at the start of a line ("1." "2)" "-" "*") is layout, not a figure.
+_LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+")
+#: A sentence end inside one line (a decimal point is never followed by a space).
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?؟])\s+")
 
 
 def _answer_numbers(text: str) -> set[float]:
     return {float(n.replace(",", "")) for n in _ANSWER_NUMBER_RE.findall(text or "")}
 
 
+def _payload_numbers(payload: Any, depth: int = 0) -> set[float]:
+    """Every number a tool result holds, as a value or written in its text
+    (row quantities, references, pages, counts, totals)."""
+    out: set[float] = set()
+    if depth > 8 or isinstance(payload, bool):
+        return out
+    if isinstance(payload, (int, float)):
+        out.add(float(payload))
+    elif isinstance(payload, str):
+        out |= _answer_numbers(payload)
+    elif isinstance(payload, dict):
+        for value in payload.values():
+            out |= _payload_numbers(value, depth + 1)
+    elif isinstance(payload, list):
+        for value in payload:
+            out |= _payload_numbers(value, depth + 1)
+    return out
+
+
+def _same(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+
+
+def _rested_result(turn: Turn) -> dict[str, Any] | None:
+    """The computed result the answer rests on: the LAST computed result of
+    the turn that stated a figure. An earlier one is exploratory; one that
+    selected nothing states no figure and forces nothing. Every call of a
+    turn selects its rows from the same ask, so the last call with a figure
+    holds the turn's selection."""
+    for res in reversed(turn.computed_results):
+        if res["figures"]:
+            return res
+    return None
+
+
+def _computed_lead(res: dict[str, Any], question: str) -> str:
+    """The tool's own statement of ``res``, worded by the computed-answer
+    renderer (#392) from the tool's declared statement; the tool's plain
+    statement sentences when the tool declares none."""
+    try:
+        from app.agents.core import computed_answer, tool_registry
+
+        spec = tool_registry.result_spec(str(res.get("tool") or ""))
+        stater = getattr(spec, "statement", None)
+        if spec is not None and getattr(spec, "kind", "") == "computed" and stater is not None:
+            statements = list(stater(res["payload"]) or [])
+            if statements:
+                language = computed_answer.question_language(question)
+                return computed_answer.render_call(
+                    computed_answer.heading_for(getattr(spec, "display_name", "") or spec.name, language),
+                    statements, asked={}, error="", language=language,
+                    declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
+    except Exception:  # noqa: BLE001 -- the plain statements below still lead
+        _LOG.warning("answer_exit: computed lead not rendered", exc_info=True)
+    return "\n".join(res["statements"]) or "; ".join(f["shown"] for f in res["figures"])
+
+
+def _without_foreign_figures(text: str, allowed: set[float]) -> tuple[str, bool]:
+    """``text`` less every sentence that states a number found in neither
+    the tool's result nor the user's question (the model's own arithmetic).
+    Returns (kept text, whether anything was removed)."""
+    kept_lines: list[str] = []
+    removed = False
+    for line in text.split("\n"):
+        marker = _LIST_MARKER_RE.match(line)
+        prefix = marker.group(0) if marker else ""
+        sentences = _SENTENCE_END_RE.split(line[len(prefix):])
+        keep = [s for s in sentences
+                if all(any(_same(n, a) for a in allowed) for n in _answer_numbers(s))]
+        if len(keep) == len(sentences):
+            kept_lines.append(line)
+            continue
+        removed = True
+        if any(k.strip() for k in keep):
+            kept_lines.append(prefix + " ".join(keep))
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
+    return out, removed
+
+
+#: The one correction line a computed answer may carry.
+FIGURE_REMOVED = ("A figure in the reply that the tool did not state was removed; "
+                  "the tool's figure above stands.")
+
+
 def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
-    """The exit check for a tool's own figure: when a tool this turn stated
-    a figure as its result and the answer does not carry that number, the
-    answer gets the tool's figure and says it was missing or different. The
-    model may quote the figure; it may not replace it."""
+    """The exit check for a computed turn: the user reads the TOOL's
+    statement first, never the model's arithmetic.
+
+    * The answer's lead is the statement of the computed result the answer
+      rests on (:func:`_rested_result`), rendered from the tool's result by
+      the route; the model's words follow it unchanged.
+    * Any sentence of the model's that states a number neither the tool's
+      results nor the user's question hold (another total, a re-added sum)
+      is removed, and one line says so. Which number is "the headline" is
+      never guessed: the tool's statement is the headline by construction.
+    * When no computed result of the turn stated a figure (its ask selected
+      nothing) and the reply states a figure anyway, the reply is replaced
+      by the tool's plain statement that nothing was selected.
+
+    A turn with no computed result is returned unchanged."""
     turn = turn if turn is not None else _TURN.get()
-    if not isinstance(text, str) or not text.strip() or turn is None or not turn.stated_figures:
+    if not isinstance(text, str) or not text.strip() or turn is None or not turn.computed_results:
         return text
-    have = _answer_numbers(text)
-    missing = [f for f in turn.stated_figures
-               if not any(abs(n - f["value"]) <= 1e-9 * max(1.0, abs(f["value"])) for n in have)]
-    if not missing:
-        return text
-    shown = "; ".join(f["shown"] for f in missing)
-    return (f"{text.rstrip()}\n\nThe tool's own figure is {shown}. "
-            "The answer above did not state it; the tool's figure stands.")
+    allowed = _answer_numbers(turn.question or "")
+    for res in turn.computed_results:
+        allowed |= _payload_numbers(res["payload"])
+    rested = _rested_result(turn)
+    if rested is None:
+        _kept, removed = _without_foreign_figures(text, allowed)
+        if not removed:
+            return text
+        plain = list(dict.fromkeys(s for res in turn.computed_results for s in res["statements"]))
+        return "\n".join(plain) if plain else _kept
+    lead = _computed_lead(rested, turn.question or "")
+    allowed |= _answer_numbers(lead)
+    body = text.replace(lead, "").strip() if lead and lead in text else text
+    kept, removed = _without_foreign_figures(body, allowed)
+    parts = [lead, kept] + ([FIGURE_REMOVED] if removed else [])
+    return "\n\n".join(p for p in parts if p)
 
 
 def note_evidence(

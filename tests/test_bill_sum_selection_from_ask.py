@@ -316,51 +316,121 @@ def test_log_line_says_where_the_selection_came_from(one_bill, caplog, ask, by):
     assert by in line
 
 
-# -- the exit check: the answer carries the tool's own figure ----------------
+# -- the exit check: the tool's statement leads; the model's arithmetic never --
 
-def _turn(*figures):
+ASK = "What is the total length of clay pipes in the runs?"
+NO_SELECT_ASK = "What is the total length of copper ducts?"
+
+
+def _bill_payload(bill_rows, ask):
+    """A ``bill_rows_aggregate`` tool payload as the handler returns it,
+    computed by the real aggregation over ``bill_rows`` for ``ask``."""
+    res = agg._aggregate_bill(bill_rows, terms=None, section=None, measure="quantity", ask=ask)
+    return {"name": "bill_rows_aggregate", "ok": True, "result": {"status": "success", "bills": [
+        {"document_id": "d1", "filename": "bill.xlsx", "status": "success", **res}]}}
+
+
+def _turn_for(payloads, ask=ASK):
     from app.agents import answer_exit
 
     turn = answer_exit.Turn()
-    answer_exit.note_tool_result("bill_rows_aggregate", {
-        "name": "bill_rows_aggregate", "ok": True,
-        "result": {"bills": [{"stated_figures": [{"value": v, "shown": s} for v, s in figures]}]},
-    }, turn)
+    turn.question = ask
+    for payload in payloads:
+        answer_exit.note_tool_result("bill_rows_aggregate", payload, turn)
     return turn
 
 
-@pytest.mark.parametrize("answer, figures, kept", [
-    ("The clay pipes in the runs total 103.5 m (R1, R2, R4, R5).", [(103.5, "103.5 m")], True),
-    ("The clay pipes in the runs total 112 m.", [(103.5, "103.5 m")], False),
-    ("The fencing costs 3,000.", [(3000.0, "3,000")], True),
-    ("The fencing costs 3,500.", [(3000.0, "3,000")], False),
-    ("Item R1 is clay pipe.", [(1.0, "1 m")], False),
-    ("The total is 112 m.", [], True),
-], ids=["same", "different", "thousands", "thousands-different", "ref-is-not-a-figure", "no-tool"])
-def test_exit_check_holds_the_tools_figure(answer, figures, kept):
+def _lead(turn):
     from app.agents import answer_exit
 
-    out = answer_exit.hold_stated_figures(answer, _turn(*figures))
-    assert (out == answer) is kept
-    if not kept:
-        assert out.startswith(answer)
-        for _v, shown in figures:
-            assert f"The tool's own figure is {shown}." in out
-        assert "the tool's figure stands" in out
+    return answer_exit._computed_lead(answer_exit._rested_result(turn), turn.question)
+
+
+def _leads(content, lead):
+    """``content`` opens with ``lead``; the exit contract may turn the lead's
+    ``(source: ...)`` into a numbered citation marker, nothing else."""
+    norm = lambda t: re.sub(r" \(source: [^)]*\)| \[\d+\]", "", t)  # noqa: E731
+    return norm(content).startswith(norm(lead))
+
+
+@pytest.mark.parametrize("reply, removed", [
+    ("The clay pipes in the runs come to 103.5 m over rows R1, R2 and R4.", False),
+    ("Clay pipe runs total 112 m. Rows R1, R2 and R4 were used.", True),
+], ids=["right", "different-total"])
+def test_the_tools_statement_leads_and_a_foreign_total_is_removed(rows, reply, removed):
+    from app.agents import answer_exit
+
+    turn = _turn_for([_bill_payload(rows, ASK)])
+    lead = _lead(turn)
+    assert "103.5" in lead
+    out = answer_exit.hold_stated_figures(reply, turn)
+    assert out.startswith(lead)
+    assert ("112" in out) is False
+    assert out.count(answer_exit.FIGURE_REMOVED) == (1 if removed else 0)
+    if not removed:
+        assert out == f"{lead}\n\n{reply}"
+
+
+@pytest.mark.parametrize("reply", [
+    "Here is what the bill says about drainage.",
+    "No figure could be given for that.",
+])
+def test_a_turn_without_a_computed_result_is_untouched(reply):
+    from app.agents import answer_exit
+
+    turn = answer_exit.Turn()
+    turn.question = ASK
+    answer_exit.note_tool_result("search_documents", {"ok": True, "result": {"passages": ["p 12"]}}, turn)
+    assert answer_exit.hold_stated_figures(reply, turn) == reply
+    assert answer_exit.hold_stated_figures(reply + " Total 99 m.", turn) == reply + " Total 99 m."
+
+
+@pytest.mark.parametrize("reply, replaced", [
+    ("The copper ducts total 64 m.", True),
+    ("No copper ducts were found in this bill.", False),
+], ids=["states-a-total", "states-none"])
+def test_a_total_when_the_tool_selected_nothing_gets_the_plain_statement(rows, reply, replaced):
+    from app.agents import answer_exit
+
+    payload = _bill_payload(rows, NO_SELECT_ASK)
+    assert payload["result"]["bills"][0]["selected_by"] == "none"
+    turn = _turn_for([payload], NO_SELECT_ASK)
+    out = answer_exit.hold_stated_figures(reply, turn)
+    if replaced:
+        assert out.startswith("No row was selected from the question")
+        assert "64" not in out
+    else:
+        assert out == reply
+
+
+@pytest.mark.parametrize("first_ask", [NO_SELECT_ASK, "fencing"])
+def test_only_the_call_the_answer_rests_on_leads(rows, first_ask):
+    """An earlier call (one that selected nothing, or another selection) is
+    exploratory: the lead is the last call that stated a figure."""
+    from app.agents import answer_exit
+
+    turn = _turn_for([_bill_payload(rows, first_ask), _bill_payload(rows, ASK)])
+    lead = _lead(turn)
+    assert "103.5" in lead and "120" not in lead
+    out = answer_exit.hold_stated_figures("The runs carry 103.5 m of clay pipe.", turn)
+    assert out.startswith(lead)
+    assert answer_exit.FIGURE_REMOVED not in out
 
 
 @pytest.mark.parametrize("answer, kept", [
     ("Total: 103.5 m.", True),
     ("Total: 99 m.", False),
 ])
-def test_exit_check_runs_on_the_turns_result_and_end_event(answer, kept):
+def test_exit_check_runs_on_the_turns_result_and_end_event(rows, answer, kept):
     from app.agents import answer_exit
 
-    turn = _turn((103.5, "103.5 m"))
+    turn = _turn_for([_bill_payload(rows, ASK)])
     out = answer_exit.check_result({"answer": answer, "sources": []}, turn)
-    assert ("The tool's own figure is 103.5 m." in out["answer"]) is (not kept)
+    assert _leads(out["answer"], _lead(turn))
+    assert (answer_exit.FIGURE_REMOVED in out["answer"]) is (not kept)
     end = answer_exit.check_end_event({"type": "end", "content": answer, "sources": []}, "", turn)
-    assert ("The tool's own figure is 103.5 m." in end["content"]) is (not kept)
+    assert _leads(end["content"], _lead(turn))
+    assert (answer_exit.FIGURE_REMOVED in end["content"]) is (not kept)
 
 
 @pytest.mark.parametrize("payload, values", [
@@ -434,32 +504,90 @@ def test_word_tables_fold_case_article_and_letter_variants(texts, expected):
     assert agg._table(*texts) == expected
 
 
-# -- the live shape: the headline total is the model's own addition of the rows,
-# -- off from the tool's sum (TESTER 18 Nov: 5,858 stated, the rows add to 4,858)
+# -- the live shape through the real stream route (TESTER 18 Nov: the headline
+# -- said 5,858, the reply's own check line and the tool's sum said 4,858) ----
 
 _LIVE_ROWS = (633, 488, 828, 957, 844, 221, 552, 200, 135)
 _OTHER_ROWS = (1250, 740, 310)
 
 
-def _added(rows, total):
-    return (f"The total is {total:,} m over {len(rows)} rows: "
-            + " + ".join(str(r) for r in rows) + f" = {total:,} m.")
+def _invented_bill(tmp_path, quantities):
+    bill = [_row(RUNS, 1 + i // 4, f"P{i + 1}", f"Clay pipe run {i + 1} laid in trench", "m", str(q), "")
+            for i, q in enumerate(quantities)]
+    bill.append(_row(FENCES, 9, "F1", "Timber post and rail fence", "m", "120", "3000"))
+    path = tmp_path / "invented.xlsx"
+    g.write_bill_workbook(bill, str(path))
+    return agg.join_page_continuations(agg.read_sheet_rows(str(path)))
 
 
-@pytest.mark.parametrize("rows, headline, kept", [
-    (_LIVE_ROWS, sum(_LIVE_ROWS) + 1000, False),
-    (_OTHER_ROWS, sum(_OTHER_ROWS) + 1000, False),
-    (_LIVE_ROWS, sum(_LIVE_ROWS), True),
-    (_OTHER_ROWS, sum(_OTHER_ROWS), True),
-], ids=["live-off-by-1000", "other-off-by-1000", "live-right", "other-right"])
-def test_a_headline_the_model_added_itself_does_not_replace_the_tools_sum(rows, headline, kept):
+def _live_reply(quantities, headline):
+    right = sum(quantities)
+    return (f"The total length of clay pipe in the runs is {headline:,} m.\n\n"
+            f"Check: {' + '.join(str(q) for q in quantities)} = {right:,} m.")
+
+
+async def _through_the_stream_route(payload, ask, reply):
+    """The reply streamed token by token through ``with_answer_exit`` (the
+    wrapper every chat stream route returns), the tool's result recorded on
+    the turn as the agent loop records it; returns the decoded end frame."""
+    from app.agents import answer_exit
+    from app.routers.exit_frames import with_answer_exit
+    from app.routers.hat_frames import _decode, _encode
+
+    async def frames():
+        turn = answer_exit.current_turn()
+        turn.question = ask
+        answer_exit.note_tool_result("bill_rows_aggregate", payload, turn)
+        for piece in reply.split(" "):
+            yield _encode({"type": "token", "content": piece + " "})
+        yield _encode({"type": "end", "sources": []})
+
+    decoded = [_decode(f) async for f in with_answer_exit(frames())]
+    ends = [e for e in decoded if e and e.get("type") == "end"]
+    assert len(ends) == 1
+    return ends[0]
+
+
+@pytest.mark.parametrize("quantities, off", [
+    (_LIVE_ROWS, 1000),
+    (_OTHER_ROWS, 10),
+    (_LIVE_ROWS, 0),
+    (_OTHER_ROWS, 0),
+], ids=["live-off-by-a-digit", "other-off", "live-right", "other-right"])
+async def test_the_live_shape_through_the_stream_route(tmp_path, quantities, off):
     from app.agents import answer_exit
 
-    tool_sum = float(sum(rows))
-    shown = f"{sum(rows):,} m"
-    answer = _added(rows, headline)
-    out = answer_exit.hold_stated_figures(answer, _turn((tool_sum, shown)))
-    assert (out == answer) is kept
-    if not kept:
-        assert out.startswith(answer)
-        assert f"The tool's own figure is {shown}." in out
+    bill_rows = _invented_bill(tmp_path, quantities)
+    payload = _bill_payload(bill_rows, ASK)
+    right = sum(quantities)
+    end = await _through_the_stream_route(payload, ASK, _live_reply(quantities, right + off))
+    content = end["content"]
+    turn = _turn_for([payload])
+    lead = _lead(turn)
+    assert f"{right:,}" in lead
+    assert _leads(content, lead)
+    assert f"{right + off:,}" in content if not off else f"{right + off:,}" not in content
+    assert content.count(answer_exit.FIGURE_REMOVED) == (1 if off else 0)
+    if not off:
+        assert content.endswith(_live_reply(quantities, right))
+
+
+@pytest.mark.parametrize("reply", [
+    "The drainage section lists 9 runs of clay pipe and a fence.",
+    "The bill has no copper ducts; 64 m was mentioned in the spec.",
+])
+async def test_a_non_computed_turn_through_the_stream_route_is_untouched(reply):
+    from app.agents import answer_exit
+    from app.routers.exit_frames import with_answer_exit
+    from app.routers.hat_frames import _decode, _encode
+
+    async def frames():
+        answer_exit.current_turn().question = "What does the bill hold?"
+        for piece in reply.split(" "):
+            yield _encode({"type": "token", "content": piece + " "})
+        yield _encode({"type": "end", "sources": []})
+
+    decoded = [_decode(f) async for f in with_answer_exit(frames())]
+    ends = [e for e in decoded if e and e.get("type") == "end"]
+    assert ends[0]["content"].strip() == reply
+    assert answer_exit.FIGURE_REMOVED not in ends[0]["content"]
