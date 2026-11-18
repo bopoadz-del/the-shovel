@@ -5686,8 +5686,12 @@ def _looks_like_tool_truncation_notice(text: str) -> bool:
 
 def _text_needs_tool_recovery(text: str) -> bool:
     """True when the LLM hop died and a tool/predispatch draft should speak."""
+    from app.agents.core.computed_answer import has_words
+
     t = (text or "").strip()
-    if not t:
+    if not t or not has_words(t):
+        # Nothing, or markdown alone (rules, bullets, emphasis marks): it
+        # says nothing.
         return True
     if t == _EMPTY_RESPONSE_FALLBACK:
         return True
@@ -6097,6 +6101,14 @@ def _recover_answer_from_tool_messages(
     surface that draft instead of an empty bubble or a 413 error."""
     if not _text_needs_tool_recovery(text):
         return text
+    # Every computed call of the turn that states its figures (or failed)
+    # answers first. When one succeeded but states nothing, the result
+    # formatters below get their say; if they say nothing either, the
+    # computed calls still answer plainly at the end -- never the generic
+    # sentence.
+    computed = _computed_turn_answer(messages, require_stated=True)
+    if computed:
+        return computed
     error_fallback = ""
     for m in reversed(messages or []):
         if m.get("role") == "user":
@@ -6127,6 +6139,9 @@ def _recover_answer_from_tool_messages(
         else:
             inner = payload
         if not isinstance(inner, dict):
+            continue
+        if _declared_kind(m)[0] == "search":
+            # Passages are evidence for an answer, never the answer (G-8).
             continue
         action = inner.get("action")
         if action == "commissioning_checklist_generated":
@@ -6188,14 +6203,19 @@ def _recover_answer_from_tool_messages(
         )
         if generic:
             return generic
+        if _declared_kind(m)[0] == "computed":
+            # A computed call's failure is stated by the computed renderer
+            # below (declared code or the plain sentence), never by pasting
+            # the tool's own error text.
+            continue
         err_payload = _tool_error_payload(inner)
         if (
             err_payload
             and not error_fallback
             and _is_calc_tool_error(m, inner, err_payload)
         ):
-            error_fallback = _format_tool_error_plain(err_payload)
-    return error_fallback or text
+            error_fallback = _plain_tool_error_sentence(err_payload)
+    return error_fallback or _computed_turn_answer(messages) or text
 
 
 #: The one plain line that stands in for the model's explanation when the
@@ -6265,6 +6285,103 @@ def _with_model_unreached_note(text: str) -> str:
     if MODEL_UNREACHED_NOTE in body:
         return body
     return f"{body}\n\n{MODEL_UNREACHED_NOTE}"
+
+
+def _declared_kind(msg: dict[str, Any] | None) -> tuple[str, Any]:
+    """(the result kind a tool message's tool DECLARED, its registry spec).
+
+    The kind comes from the tool's own declaration in the registry, never
+    from a list of tool names here."""
+    from app.agents.core import tool_registry
+
+    name = str((msg or {}).get("name") or "")
+    spec = tool_registry.result_spec(name) if name else None
+    return (spec.kind if spec is not None else ""), spec
+
+
+def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
+    """The result dict a tool message carries (a truncation envelope's whole
+    preview included), or None."""
+    raw = msg.get("content") or ""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        _LOG.info("tool message %s: content is not a JSON result", msg.get("name"), exc_info=True)
+        return None
+    if isinstance(payload, dict) and payload.get("truncated"):
+        try:
+            payload = json.loads(payload.get("preview") or "")
+        except (TypeError, json.JSONDecodeError):
+            _LOG.info("tool message %s: truncated preview is not whole JSON", msg.get("name"), exc_info=True)
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _render_computed_call(msg: dict[str, Any], spec: Any,
+                          messages: list[dict[str, Any]], language: str,
+                          question: str = "") -> tuple[str, bool]:
+    """(One computed call as the answer, whether the call stated anything).
+
+    A call that failed or stated no figure still answers plainly: what was
+    asked and why there is no figure. A failure counts as stated (its error
+    is what it says); a success with no figure does not."""
+    from app.agents.core import computed_answer
+
+    payload = _tool_message_payload(msg) or {}
+    inner = payload.get("result")
+    body = inner if isinstance(inner, dict) else payload
+    statements: list[Any] = []
+    error = ""
+    err = _tool_error_payload(body)
+    status = str(body.get("status") or "").strip().lower()
+    if payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
+        error = computed_answer.failure_text(err or body)
+    elif body:
+        try:
+            # The statement reads the tool's result; a result recorded
+            # without the tool's envelope is read whole.
+            statements = list(spec.statement(body) or [])
+            if not statements and body is not payload:
+                statements = list(spec.statement(payload) or [])
+        except (TypeError, ValueError, KeyError, AttributeError):
+            _LOG.warning("computed tool %s: its result states no figure", spec.name, exc_info=True)
+    text = computed_answer.render_call(
+        computed_answer.heading_for(spec.display_name or spec.name, language), statements,
+        asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
+        error=error, language=language,
+        declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
+    return text, bool(statements or error)
+
+
+def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
+                          require_stated: bool = False) -> str:
+    """Every computed call of the current turn (after the user's last
+    question), in call order, worded in the question's language.
+
+    ``require_stated``: answer only when every one of them stated its
+    figures or its failure; otherwise "" (so no call is left out)."""
+    from app.agents.core import computed_answer
+
+    msgs = list(messages or [])
+    start, question = 0, ""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        content = str(m.get("content") or "")
+        if m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]:
+            start, question = i + 1, content
+            break
+    language = computed_answer.question_language(question)
+    rendered = []
+    for m in msgs[start:]:
+        if m.get("role") != "tool":
+            continue
+        kind, spec = _declared_kind(m)
+        if kind == "computed" and spec.statement is not None:
+            text, stated = _render_computed_call(m, spec, msgs, language, question)
+            if require_stated and not stated:
+                return ""
+            rendered.append(text)
+    return computed_answer.join_calls(rendered, language)
 
 
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -14104,18 +14221,39 @@ def _format_tool_error_plain(
     return sentence
 
 
+#: A request id is shown only in this shape (the platform's own correlation
+#: id); anything else a payload carries under that key is not shown.
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def _plain_tool_error_sentence(payload: dict[str, Any] | None) -> str:
+    """The plain sentence for a failed tool. The tool's own error text never
+    appears in it: only which of two fixed sentences applies, and the
+    request id when it is an id."""
+    err = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+    if "unknown calculation" in err.lower():
+        sentence = (
+            "The calculator does not have a formula for that request. "
+            "Please restate the inputs or name the calculation."
+        )
+    else:
+        sentence = "The tool could not complete that request."
+    request_id = ""
+    if isinstance(payload, dict):
+        request_id = str(payload.get("request_id") or "")
+    request_id = request_id or _current_request_id()
+    if request_id and _REQUEST_ID_RE.fullmatch(request_id):
+        sentence = f"{sentence} Request id: {request_id}."
+    return sentence
+
+
 def _plain_sentence_for_tool_error_json(text: str) -> str:
     """Plain sentence if ``text`` is a tool-error JSON blob, else ''."""
     obj = _parse_json_object(text)
-    if not obj:
-        return ""
     payload = _tool_error_payload(obj)
     if not payload:
         return ""
-    return _format_tool_error_plain(payload)
-
-
-_CALC_TOOL_NAMES = ("construction_calc", "formula_executor_v2", "formula_executor")
+    return _plain_tool_error_sentence(payload)
 
 
 def _is_calc_tool_result(
@@ -14124,12 +14262,12 @@ def _is_calc_tool_result(
 ) -> bool:
     """True when a tool message carries a calculator's result.
 
-    A calculator names its ``calculation`` (on the envelope or on its
+    A tool DECLARED computed (tool_registry) is one; otherwise a calculator
+    names its ``calculation`` (on the envelope or on its
     ``result``); a search or lookup never does, so its notes stay with the
     model.
     """
-    name = str((msg or {}).get("name") or "").lower()
-    if name in _CALC_TOOL_NAMES:
+    if _declared_kind(msg)[0] == "computed":
         return True
     blob = inner if isinstance(inner, dict) else {}
     result = blob.get("result")
@@ -14145,8 +14283,7 @@ def _is_calc_tool_error(
     err_payload: dict[str, Any] | None,
 ) -> bool:
     """True when the failed tool is a calculator, not a search/lookup."""
-    name = str((msg or {}).get("name") or "").lower()
-    if name in _CALC_TOOL_NAMES:
+    if _declared_kind(msg)[0] == "computed":
         return True
     blob = inner or {}
     err = err_payload or {}

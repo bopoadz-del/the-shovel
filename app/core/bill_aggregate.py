@@ -245,6 +245,9 @@ def aggregate(
 NO_DERIVED_SHEET = "no_derived_bill_sheet"
 NO_READABLE_BYTES = "derived_sheet_has_no_readable_bytes"
 UNREADABLE_SHEET = "derived_sheet_is_not_a_readable_workbook"
+#: Every reason a bill (or the whole call) did not return; the tool declares
+#: these, and they are the only error words of it a user is shown.
+REASON_CODES = (NO_DERIVED_SHEET, NO_READABLE_BYTES, UNREADABLE_SHEET)
 
 
 def _unreadable_sheet_errors() -> tuple[type[BaseException], ...]:

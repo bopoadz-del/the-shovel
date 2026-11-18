@@ -80,6 +80,13 @@ class Turn:
     #: The turn's authoritative "I asked for inputs" state, read on the end
     #: event by the route observer -- never a phrase match (S1c).
     awaiting_inputs: list[str] = field(default_factory=list)
+    #: The user's question, for the language a recovered answer is worded in.
+    question: str = ""
+    #: Every tool call of the turn and its whole result, as the messages the
+    #: turn's own recovery reads (an assistant call, then its tool message).
+    #: Paths that never see the turn's messages -- the wall-clock deadline,
+    #: the crash safety net, the exit check -- recover from these.
+    tool_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -236,6 +243,51 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
                 turn.tool_errors.append((label, err))
     except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
         _LOG.warning("answer_exit: could not record a tool error", exc_info=True)
+
+
+def note_tool_message(tool_call: dict[str, Any] | None, message: dict[str, Any],
+                      turn: Turn | None = None) -> dict[str, Any]:
+    """Record one tool call and its tool message (whole result) in the turn,
+    so a path that never sees the turn's messages can still recover from it.
+    Returns ``message`` unchanged, so a caller can record as it appends."""
+    turn = turn or _TURN.get()
+    if turn is None or not isinstance(message, dict):
+        return message
+    try:
+        fn = (tool_call or {}).get("function") or {}
+        call_id = str(message.get("tool_call_id") or (tool_call or {}).get("id") or "")
+        raw = fn.get("arguments")
+        turn.tool_messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": call_id, "function": {"name": str(fn.get("name") or message.get("name") or ""),
+                                        "arguments": raw if isinstance(raw, (str, dict)) else "{}"}}]})
+        content = message.get("content")
+        turn.tool_messages.append({**message, "tool_call_id": call_id,
+                                   "content": content if isinstance(content, str)
+                                   else json.dumps(content, default=str)})
+    except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
+        _LOG.warning("answer_exit: could not record a tool message", exc_info=True)
+    return message
+
+
+def recovered_answer(turn: Turn | None = None) -> str:
+    """The turn's answer recovered from its own tool results -- the same
+    recovery the turn's end runs over its messages -- or "" when they say
+    nothing. Read by every path that would otherwise emit the platform's
+    generic empty-turn reply."""
+    turn = turn if turn is not None else _TURN.get()
+    if turn is None or not turn.tool_messages:
+        return ""
+    from app.agents.core.computed_answer import has_words
+    from app.agents.runtime import _EMPTY_RESPONSE_FALLBACK, _recover_answer_from_tool_messages
+
+    try:
+        text = _recover_answer_from_tool_messages(
+            "", [{"role": "user", "content": turn.question}, *list(turn.tool_messages)])
+    except Exception:  # noqa: BLE001 -- a recovery failure leaves the fallback in place
+        _LOG.exception("answer_exit: recovery from the turn's tool results failed")
+        return ""
+    text = text if isinstance(text, str) else ""
+    return text if has_words(text) and text.strip() != _EMPTY_RESPONSE_FALLBACK else ""
 
 
 def note_evidence(
@@ -1588,7 +1640,8 @@ def check_text_or_fallback(text: str, **kwargs: Any) -> str:
             not (checked or "").strip() or checked.strip() == _EMPTY_RESPONSE_FALLBACK):
         turn = kwargs.get("turn") or _TURN.get()
         asked = check_text("\n".join(turn.questions), **kwargs) if turn and turn.questions else ""
-        return asked.strip() or _EMPTY_RESPONSE_FALLBACK
+        # A tool that answered this turn answers before the generic reply.
+        return asked.strip() or recovered_answer(turn) or _EMPTY_RESPONSE_FALLBACK
     return checked
 
 

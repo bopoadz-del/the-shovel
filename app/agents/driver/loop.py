@@ -10,6 +10,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.agents import driver
+from app.agents.core.computed_answer import has_words
 from app.agents.driver import context, llm, render, routes, sources, tools
 from app.core import turn_progress
 from app.core.offload import off_loop
@@ -348,7 +349,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             answer_done = True
             break
         if not calls:
-            for piece in (held, buffer):
+            # A reply with no words (empty, or markdown alone) is not shown;
+            # the turn is then answered from its tool results below.
+            for piece in ((held, buffer) if has_words((held or "") + buffer) else ()):
                 if piece:
                     event = await off_loop(_release, piece)
                     if event:
@@ -445,6 +448,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                     tabled.extend(render.record_lists(envelope))
             msgs.append({**tool_msg, "content": shown})
             evidence.append({**tool_msg, "content": full})
+            answer_exit.note_tool_message(call, evidence[-1])
         # A calculator that rejected or lacks an input ends the turn with its
         # own question: the model is never given the chance to compute a
         # figure the calculator refused (lane 2: it did).
@@ -543,6 +547,20 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 event = _release("\n\n" + block + "\n", model_text=False)
                 if event:
                     yield event
+    if model_answered and evidence and not has_words("".join(sent)):
+        # The model's reply carried no words and nothing above stood in for
+        # it: the same recovery every other path uses answers from this
+        # turn's tool results (a computed figure, or what was asked and why
+        # there is none) -- never a blank answer. It reads the turn's own
+        # messages, so each tool result keeps the call (and the arguments)
+        # that asked for it.
+        from app.agents.runtime import _recover_answer_from_tool_messages
+
+        recovered = await off_loop(_recover_answer_from_tool_messages, "", _trail())
+        if has_words(recovered):
+            event = await off_loop(_release, recovered.rstrip() + "\n", model_text=False)
+            if event:
+                yield event
     from app.agents import citation_provenance as cp
 
     # Once, at the end: the calculator credit the answer does not carry, and
