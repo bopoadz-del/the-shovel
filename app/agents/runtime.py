@@ -6317,14 +6317,10 @@ def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _render_computed_call(msg: dict[str, Any], spec: Any,
-                          messages: list[dict[str, Any]], language: str,
-                          question: str = "") -> tuple[str, bool]:
-    """(One computed call as the answer, whether the call stated anything).
-
-    A call that failed or stated no figure still answers plainly: what was
-    asked and why there is no figure. A failure counts as stated (its error
-    is what it says); a success with no figure does not."""
+def _computed_call(msg: dict[str, Any], spec: Any,
+                   messages: list[dict[str, Any]], language: str) -> Any:
+    """One computed call of the turn as ``computed_answer.Call``: its
+    statements, or its failure, and the arguments it was asked with."""
     from app.agents.core import computed_answer
 
     payload = _tool_message_payload(msg) or {}
@@ -6345,21 +6341,24 @@ def _render_computed_call(msg: dict[str, Any], spec: Any,
                 statements = list(spec.statement(payload) or [])
         except (TypeError, ValueError, KeyError, AttributeError):
             _LOG.warning("computed tool %s: its result states no figure", spec.name, exc_info=True)
-    text = computed_answer.render_call(
-        computed_answer.heading_for(spec.display_name or spec.name, language), statements,
+    return computed_answer.Call(
+        tool=str(spec.name),
+        heading=computed_answer.heading_for(spec.display_name or spec.name, language),
+        statements=tuple(statements),
         asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
-        error=error, language=language,
-        declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
-    return text, bool(statements or error)
+        error=error, declared=tuple(getattr(spec, "reason_codes", ()) or ()))
 
 
 def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
                           require_stated: bool = False) -> str:
-    """Every computed call of the current turn (after the user's last
-    question), in call order, worded in the question's language.
+    """The one answer the computed calls of the current turn (after the
+    user's last question) give, worded in the question's language
+    (``computed_answer.answer_turn``: results lead, a repeat is shown once,
+    a call with no figure only when no result answered its part).
 
-    ``require_stated``: answer only when every one of them stated its
-    figures or its failure; otherwise "" (so no call is left out)."""
+    ``require_stated``: answer only when every call that is still shown
+    stated its figures or its failure; otherwise "" (so no call is left
+    out)."""
     from app.agents.core import computed_answer
 
     msgs = list(messages or [])
@@ -6371,17 +6370,16 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
             start, question = i + 1, content
             break
     language = computed_answer.question_language(question)
-    rendered = []
+    calls = []
     for m in msgs[start:]:
         if m.get("role") != "tool":
             continue
         kind, spec = _declared_kind(m)
         if kind == "computed" and spec.statement is not None:
-            text, stated = _render_computed_call(m, spec, msgs, language, question)
-            if require_stated and not stated:
-                return ""
-            rendered.append(text)
-    return computed_answer.join_calls(rendered, language)
+            calls.append(_computed_call(m, spec, msgs, language))
+    if require_stated and any(not c.stated for c in computed_answer.unanswered(calls)):
+        return ""
+    return computed_answer.answer_turn(calls, language, question)
 
 
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:
