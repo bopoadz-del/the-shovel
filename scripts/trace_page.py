@@ -222,26 +222,28 @@ def assign(
     slack_s: float = 15.0,
     default_window_s: float = 400.0,
     lead_s: float = 2.0,
-) -> Tuple[Dict[int, List[Tuple[float, Dict[str, Any]]]], int]:
-    """Each trace line goes to the latest-starting row whose turn covers it:
-    from its start (end minus ``t_end``, less ``lead_s``) to its end plus
+) -> Tuple[Dict[int, List[Tuple[float, Dict[str, Any]]]], int, int]:
+    """Each trace line goes to the ONE row whose turn covers it: from its
+    start (end minus ``t_end``, less ``lead_s``) to its end plus
     ``slack_s``. A row without ``t_end`` is taken to have run
-    ``default_window_s``. A line no row covers is counted as unmatched,
-    never guessed onto a row."""
+    ``default_window_s``. A line no row covers is counted as unmatched; a
+    line two or more rows cover is counted as ambiguous. Neither is ever
+    guessed onto a row. Returns ``(by_row, unmatched, ambiguous)``."""
     by_row: Dict[int, List[Tuple[float, Dict[str, Any]]]] = {i: [] for i in range(len(rows))}
     unmatched = 0
+    ambiguous = 0
     for ts, payload in events:
-        owner = None
-        for i, row in enumerate(rows):
-            if _row_start(row, default_window_s) - lead_s > ts:
-                break
-            if ts <= row["end"] + slack_s:
-                owner = i
-        if owner is None:
+        covering = [
+            i for i, row in enumerate(rows)
+            if _row_start(row, default_window_s) - lead_s <= ts <= row["end"] + slack_s
+        ]
+        if not covering:
             unmatched += 1
+        elif len(covering) > 1:
+            ambiguous += 1
         else:
-            by_row[owner].append((ts, payload))
-    return by_row, unmatched
+            by_row[covering[0]].append((ts, payload))
+    return by_row, unmatched, ambiguous
 
 
 def _row_start(row: Dict[str, Any], default_window_s: float = 400.0) -> float:
@@ -350,6 +352,7 @@ def render(
     by_row: Dict[int, List[Tuple[float, Dict[str, Any]]]],
     unmatched: int,
     scores: Optional[Dict[Tuple[str, Any], Dict[str, Any]]] = None,
+    ambiguous: int = 0,
 ) -> str:
     scores = scores or {}
     parts = [
@@ -362,7 +365,8 @@ def render(
         "<p>Ids, ranks, scores and counts only. Document names and question text are "
         "not written; look a document id up in the app.</p>",
         f"<p>rows: {len(rows)}; trace lines matched: "
-        f"{sum(len(v) for v in by_row.values())}; unmatched: {unmatched}</p>",
+        f"{sum(len(v) for v in by_row.values())}; unmatched: {unmatched}; "
+        f"ambiguous (inside two or more rows' windows, not assigned): {ambiguous}</p>",
     ]
     for i, row in enumerate(rows):
         lines = by_row.get(i, [])
@@ -405,12 +409,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not rows:
         print("no rows matched --rows", file=sys.stderr)
         return 2
-    by_row, unmatched = assign(events, rows, args.slack_s)
-    page = render(args.label or args.out, rows, by_row, unmatched, load_scores(args.scores))
+    by_row, unmatched, ambiguous = assign(events, rows, args.slack_s)
+    page = render(args.label or args.out, rows, by_row, unmatched, load_scores(args.scores),
+                  ambiguous)
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(page)
     print(f"trace_page rows={len(rows)} lines={len(events)} unmatched={unmatched} "
-          f"skipped={dict(SKIPPED)} out={args.out}")
+          f"ambiguous={ambiguous} skipped={dict(SKIPPED)} out={args.out}")
     return 0
 
 

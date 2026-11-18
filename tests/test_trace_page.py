@@ -90,8 +90,18 @@ def test_every_export_shape_parses_and_skips_other_lines(tmp_path, shape):
 ])
 def test_each_line_goes_to_the_row_whose_window_covers_it(offset, expected):
     rows = [tp.row_from_record(_row("A1", T0, 30)), tp.row_from_record(_row("A2", T0 + 100, 30))]
-    by_row, unmatched = tp.assign([(T0 + offset, _payload())], rows, slack_s=10)
-    assert (len(by_row[0]), len(by_row[1]), unmatched) == expected
+    by_row, unmatched, ambiguous = tp.assign([(T0 + offset, _payload())], rows, slack_s=10)
+    assert (len(by_row[0]), len(by_row[1]), unmatched, ambiguous) == expected + (0,)
+
+
+@pytest.mark.parametrize("second_start,expected", [
+    (T0 + 20, (0, 0, 0, 1)),   # overlapping: the line at +25 is inside both windows
+    (T0 + 100, (1, 0, 0, 0)),  # disjoint: the line at +25 is A1's alone
+])
+def test_a_line_inside_two_rows_windows_is_ambiguous_never_assigned(second_start, expected):
+    rows = [tp.row_from_record(_row("A1", T0, 30)), tp.row_from_record(_row("A2", second_start, 30))]
+    by_row, unmatched, ambiguous = tp.assign([(T0 + 25, _payload())], rows, slack_s=10)
+    assert (len(by_row[0]), len(by_row[1]), unmatched, ambiguous) == expected
 
 
 @pytest.mark.parametrize("slack,unmatched", [(10, 0), (5, 1)])
@@ -107,7 +117,7 @@ def test_slack_decides_a_line_just_after_the_end(slack, unmatched):
 def test_time_utc_is_the_end_of_the_turn(offset, owned):
     row = tp.row_from_record({"id": "A7", "time_utc": _iso(T0 + 50), "timing": {"t_end": 40}})
     assert (row["start"], row["end"]) == (T0 + 10, T0 + 50)
-    by_row, unmatched = tp.assign([(T0 + offset, _payload())], [row], slack_s=5)
+    by_row, unmatched, _ = tp.assign([(T0 + offset, _payload())], [row], slack_s=5)
     assert (len(by_row[0]) == 1, unmatched) == (owned, 0 if owned else 1)
 
 
@@ -124,7 +134,7 @@ def test_names_and_question_text_never_reach_the_page(planted):
     payload["chunks"][1]["text"] = "PLANTED CHUNK TEXT"
     rows = [tp.row_from_record(_row("A1", T0, 30, question="PLANTED QUESTION",
                                     answer="PLANTED ANSWER", expected="PLANTED EXPECTED"))]
-    by_row, _ = tp.assign([(T0 + 1, payload)], rows)
+    by_row, _, _ = tp.assign([(T0 + 1, payload)], rows)
     page = tp.render("run", rows, by_row, 0)
     assert page.count(planted) == 0
     assert page.count(tp.WITHHELD) == 2  # the name-shaped doc_id: handed + fused order
@@ -157,7 +167,7 @@ def test_markup_is_escaped(markup):
     payload = _payload()
     payload["fused_candidates"]["leg_top"] = {markup: []}
     rows = [tp.row_from_record(_row("A1", T0, 30))]
-    by_row, _ = tp.assign([(T0 + 1, payload)], rows)
+    by_row, _, _ = tp.assign([(T0 + 1, payload)], rows)
     page = tp.render(markup, rows, by_row, 0)
     assert page.count(markup) == 0
 
@@ -228,3 +238,17 @@ def test_rows_without_a_start_time_are_counted_not_silent(stamp, kept):
     tp.SKIPPED.clear()
     row = tp.row_from_record({"id": "A1", "time_utc": stamp})
     assert (row is not None, tp.SKIPPED["row_without_start_time"]) == (kept, 0 if kept else 1)
+
+
+@pytest.mark.parametrize("a2_start,ambiguous", [(T0 + 20, 1), (T0 + 100, 0)])
+def test_cli_prints_the_ambiguous_count_on_the_page_and_stdout(tmp_path, capsys, a2_start, ambiguous):
+    (tmp_path / "A1_v2_x.json").write_text(json.dumps(_row("A1", T0, 30)))
+    (tmp_path / "A2_v2_x.json").write_text(json.dumps(_row("A2", a2_start, 30)))
+    ev = tmp_path / "ev.json"
+    ev.write_text(json.dumps({"events": [_event(T0 + 25, _payload())]}))
+    out = tmp_path / "page.html"
+    assert tp.main(["--events", str(ev), "--rows", str(tmp_path / "*_v2_*.json"),
+                    "--out", str(out)]) == 0
+    page = out.read_text(encoding="utf-8")
+    assert f"not assigned): {ambiguous}</p>" in page
+    assert f" ambiguous={ambiguous} " in capsys.readouterr().out
