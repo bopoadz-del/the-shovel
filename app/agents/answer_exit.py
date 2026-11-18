@@ -482,6 +482,7 @@ def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
     parts = [lead, kept] + ([FIGURE_REMOVED] if removed else [])
     return "\n\n".join(p for p in parts if p)
 
+
 def _note_passage(turn: Turn, rec: Any) -> None:
     """One handed passage as an evidence row on the turn, once per chunk."""
     text = str(getattr(rec, "text", "") or "").strip()
