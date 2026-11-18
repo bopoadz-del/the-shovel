@@ -672,9 +672,20 @@ def test_stream_the_live_fifth_shape_a_result_over_the_cap_then_a_zero(monkeypat
         {"content": "", "tool_calls": [call(TOOL, {"terms": absent}, "s1")]},
         {"content": ""},
     ], project_id="p-invented")
+    cut = []
     for m in seen[-1]["messages"]:
         if m.get("role") == "tool":
-            assert len(m["content"]) <= 3000 and json.loads(m["content"]), m["content"][:200]
+            env = json.loads(m["content"])
+            assert len(m["content"]) <= 3000, len(m["content"])
+            if env.get("truncated"):
+                cut.append(env)
+    # Exactly one result was over the cap, and exactly what was cut: the
+    # rest counted, every row of the call-1 list counted in the outline.
+    assert len(cut) == 1, cut
+    env = cut[0]
+    assert env["chars_shown"] + env["chars_dropped"] == env["chars_total"] > 3000, env
+    matching = sum(a in d.lower() for _r, d, _u, _q in many)
+    assert list(env[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY].values()) == [matching], env
     out = answer_text(events)
     want = sum(a in d.lower() for _r, d, _u, _q in many)
     assert f"**{want}**" in out, out
@@ -708,9 +719,20 @@ def _one_bill_wide(rows: int, pages: int) -> dict:
 def test_an_outline_over_its_budget_keeps_the_statement_fields_never_dropped(result, figures):
     full = {"name": TOOL, "ok": True, "result": result}
     cap = 4000
-    env = json.loads(runtime._tool_result_content(full, max_chars=cap))
+    out = runtime._tool_result_content(full, max_chars=cap)
+    # The cap holds in every case (before #443's last resort, one input here
+    # came back at 8048 characters against this 4000 cap).
+    assert len(out) <= cap, len(out)
+    env = json.loads(out)
     outline = env.get(runtime.OUTLINE_KEY)
     assert outline is not None, "the outline was dropped"
+    floor = runtime._result_outline(full, cap // 4)
+    if len(json.dumps(floor)) > cap:
+        # The outline alone is over the cap: it is replaced, and says so.
+        assert outline[runtime.OUTLINE_CUT_KEY] is True
+        assert outline[runtime.ROWS_TOTAL_KEY] == floor[runtime.ROWS_TOTAL_KEY]
+        return
+    assert runtime.OUTLINE_CUT_KEY not in outline
     assert outline["name"] == TOOL and outline["ok"] is True
     bills = outline["result"]["bills"]
     assert bills, outline
@@ -718,13 +740,15 @@ def test_an_outline_over_its_budget_keeps_the_statement_fields_never_dropped(res
         assert (got["count"], got["sum"], got["terms"], got["filename"]) == (
             want["count"], want["sum"], want["terms"], want["filename"])
         assert "rows" not in got or got["rows"] == []
+        # Every statement shown is the whole statement, never a cut copy.
+        assert {k: got[k] for k, v in want.items() if isinstance(v, str)} == {
+            k: v for k, v in want.items() if isinstance(v, str)}
     if len(bills) < figures:
         # The parts shown are said to be N of M.
         assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": figures}, outline
     else:
         assert runtime.PARTS_TOTAL_KEY not in outline
         assert len(bills[0].get("pages_read", [])) <= runtime._OUTLINE_LIST_ITEMS
-        assert len(bills[0].get("working", "")) <= runtime._OUTLINE_TEXT_CHARS
     assert all(isinstance(v, int) for v in outline[runtime.ROWS_TOTAL_KEY].values())
 
 
@@ -957,3 +981,166 @@ def test_a_cut_result_compacted_again_is_not_recounted(monkeypatch, result, args
     monkeypatch.setattr(runtime, "_rows_in_window", scanned)
     again = json.loads(runtime._compacted_tool_payload(cut, 500))
     assert runtime.ROWS_SHOWN_KEY not in again and again[runtime.OUTLINE_KEY]
+
+
+# -- #428 follow-up: a statement is never cut in the model's copy ----------
+
+def _statement(word: str, n: int) -> str:
+    return " ".join(f"{word}{i}" for i in range(n))
+
+
+@pytest.mark.parametrize("where", ["in_a_part", "top_level"])
+@pytest.mark.parametrize("n", [80, 400])
+def test_a_statement_over_two_hundred_characters_is_never_cut(where, n):
+    long = _statement("per-unit", n)
+    assert len(long) > 200
+    result = _many_bills(12, 4)
+    if where == "in_a_part":
+        result["bills"][0]["working"] = long
+    else:
+        result["basis"] = long
+    full = {"name": TOOL, "ok": True, "result": result}
+    outline = runtime._result_outline(full, 900)
+    got = (outline["result"]["bills"][0]["working"] if where == "in_a_part"
+           else outline["result"]["basis"])
+    assert got == long
+    # Parts gave way before any statement did.
+    assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": 12}
+    assert 1 <= len(outline["result"]["bills"]) < 12
+
+
+@pytest.mark.parametrize("n,budget", [(400, 300), (900, 1000)])
+def test_top_level_statements_over_the_budget_hold_at_a_stated_floor(n, budget):
+    long = _statement("basis", n)
+    assert len(long) > budget
+    full = {"name": TOOL, "ok": True, "result": _many_bills(6, 3), "basis": long}
+    outline = runtime._result_outline(full, budget)
+    assert outline["basis"] == long and outline["name"] == TOOL
+    assert len(outline["result"]["bills"]) == 1
+    assert outline["result"]["bills"][0]["count"] == 3
+    assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": 6}
+    floor = outline[runtime.OUTLINE_FLOOR_KEY]
+    body = {k: v for k, v in outline.items() if k != runtime.OUTLINE_FLOOR_KEY}
+    assert floor["budget"] == budget
+    assert floor["chars"] == len(json.dumps(body)) > budget
+    assert floor["kept"] == ["name", "ok", "result", "basis", "result.bills[0]"]
+
+
+@pytest.mark.parametrize("n,budget", [(120, 1000), (60, 700)])
+def test_an_outline_that_fits_its_budget_has_no_floor(n, budget):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(n, 4)}
+    outline = runtime._result_outline(full, budget)
+    assert runtime.OUTLINE_FLOOR_KEY not in outline
+    assert len(json.dumps(outline)) <= budget
+
+
+@pytest.mark.parametrize("budget", [1, 40])
+def test_a_list_of_parts_keeps_its_first_part_at_any_budget(budget):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(9, 2)}
+    outline = runtime._result_outline(full, budget)
+    first = outline["result"]["bills"]
+    assert len(first) == 1 and first[0]["filename"] == "bill-0.xlsx", first
+    assert outline[runtime.OUTLINE_FLOOR_KEY]["kept"][-1] == "result.bills[0]"
+
+
+# -- The cap is a guarantee: an outline over the cap by itself is replaced --
+
+
+def _over_cap(cap: int, bills: int) -> tuple[dict, str]:
+    """A result whose top-level statement alone is longer than ``cap``."""
+    long = _statement("basis", cap // 3)
+    assert len(long) > cap
+    return {"name": TOOL, "ok": True, "result": _many_bills(bills, 3), "basis": long}, long
+
+
+def _assert_minimal(env: dict, full: dict, long: str, cap: int, chars_total: int) -> None:
+    assert env["truncated"] is True
+    outline = env[runtime.OUTLINE_KEY]
+    assert outline[runtime.OUTLINE_CUT_KEY] is True
+    replaced = runtime._result_outline(full, cap // 4)
+    assert outline[runtime.ROWS_TOTAL_KEY] == replaced[runtime.ROWS_TOTAL_KEY]
+    assert outline[runtime.PARTS_TOTAL_KEY] == replaced[runtime.PARTS_TOTAL_KEY]
+    assert outline["result_chars"] == chars_total
+    assert outline["outline_chars"] > cap
+    assert "dropped for size" in outline[runtime.OUTLINE_FLOOR_KEY]["rule"]
+    assert long not in json.dumps(env)
+
+
+@pytest.mark.parametrize("cap,bills", [(3000, 6), (6000, 11)])
+def test_a_statement_longer_than_the_cap_fits_through_the_tool_envelope(cap, bills):
+    full, long = _over_cap(cap, bills)
+    out = runtime._tool_result_content(full, max_chars=cap)
+    assert len(out) <= cap, len(out)
+    env = json.loads(out)
+    _assert_minimal(env, full, long, cap, len(json.dumps(full)))
+    # The outline at its floor shows the first part; the minimal one keeps
+    # that part's row count and how many parts there are.
+    assert env[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY] == {"result.bills[0].rows": 3}
+    assert env[runtime.OUTLINE_KEY][runtime.PARTS_TOTAL_KEY] == {"result.bills": bills}
+
+
+@pytest.mark.parametrize("cap,bills", [(3000, 6), (6000, 11)])
+def test_a_statement_longer_than_the_cap_fits_through_the_compaction(cap, bills):
+    full, long = _over_cap(cap, bills)
+    content = json.dumps(full)
+    out = runtime._compacted_tool_payload(content, cap, outline_budget=cap // 4, max_chars=cap)
+    assert len(out) <= cap, len(out)
+    _assert_minimal(json.loads(out), full, long, cap, len(content))
+
+
+@pytest.mark.parametrize("n", [9000, 12000])
+def test_the_driver_never_hands_the_model_more_than_its_cap(n):
+    from app.agents.driver import loop
+
+    full = {"name": TOOL, "ok": True, "result": _many_bills(5, 3), "basis": _statement("basis", n)}
+    text = json.dumps(full)
+    assert len(text) > loop._TOOL_RESULT_CHARS
+    out = loop._shown_to_model(text)
+    assert len(out) <= loop._TOOL_RESULT_CHARS, len(out)
+    assert json.loads(out)[runtime.OUTLINE_KEY][runtime.OUTLINE_CUT_KEY] is True
+
+
+@pytest.mark.parametrize("cap", [19, 60])
+def test_below_any_envelope_the_result_is_a_bare_cut_marker_within_the_cap(cap):
+    full, _long = _over_cap(3000, 4)
+    for out in (runtime._tool_result_content(full, max_chars=cap),
+                runtime._compacted_tool_payload(json.dumps(full), cap, max_chars=cap)):
+        assert len(out) <= cap, out
+        assert json.loads(out)["truncated"] is True
+
+
+@pytest.mark.parametrize("n,cap", [(120, 4000), (60, 8000)])
+def test_an_outline_that_fits_is_kept_whole_beside_a_preview(n, cap):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(n, 4)}
+    text = json.dumps(full)
+    assert len(text) > cap
+    for out, outline in (
+        (runtime._tool_result_content(full, max_chars=cap), runtime._result_outline(full, cap // 4)),
+        (runtime._compacted_tool_payload(text, cap, outline_budget=cap // 4, max_chars=cap),
+         runtime._result_outline(full, cap // 4)),
+    ):
+        env = json.loads(out)
+        assert len(out) <= cap
+        assert env[runtime.OUTLINE_KEY] == outline
+        assert runtime.OUTLINE_CUT_KEY not in env[runtime.OUTLINE_KEY]
+        assert env["preview"] and text.startswith(env["preview"])
+
+
+@pytest.mark.parametrize("lists", [30, 80])
+@pytest.mark.parametrize("rung", ["sum_only", "no_outline"])
+def test_the_outline_steps_down_one_rung_at_a_time_until_it_fits(lists, rung):
+    totals = {f"result.bills[{i}].rows": i + 1 for i in range(lists)}
+    outline = {"basis": "x" * 500, runtime.ROWS_TOTAL_KEY: totals}
+
+    def build(keep: int, o) -> str:
+        return json.dumps({"truncated": True, "outline": o, "preview": "p" * keep})
+
+    with_totals = runtime._minimal_outline(outline, 9999)
+    sum_only = runtime._minimal_outline(outline, 9999, with_totals=False)
+    assert sum_only["rows_total_sum"] == sum(range(1, lists + 1))
+    assert sum_only["row_lists"] == lists
+    assert runtime.ROWS_TOTAL_KEY not in sum_only
+    want = build(0, sum_only if rung == "sum_only" else None)
+    cap = len(want)
+    assert len(build(0, with_totals)) > cap
+    assert runtime._fit_cap(build, cap, outline, 9999, 500) == want

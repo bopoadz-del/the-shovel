@@ -39,16 +39,12 @@ def _shown_to_model(text: str) -> str:
     note = f"Tool result exceeded {_TOOL_RESULT_CHARS} characters and was cut."
     # The preview is re-escaped inside the envelope and the envelope adds its
     # own fields, so keeping _TOOL_RESULT_CHARS of preview overshoots the cap.
-    # Shrink the PREVIEW until the envelope fits, measuring the real thing;
-    # the outline (figure, unit, selection, row counts) keeps a fixed budget
-    # and is never what gives way.
-    outline_budget = _TOOL_RESULT_CHARS // 4
-    keep = _TOOL_RESULT_CHARS
-    out = _compacted_tool_payload(text, keep, note=note, outline_budget=outline_budget)
-    while len(out) > _TOOL_RESULT_CHARS and keep > 0:
-        keep = max(0, keep - max(len(out) - _TOOL_RESULT_CHARS, 32))
-        out = _compacted_tool_payload(text, keep, note=note, outline_budget=outline_budget)
-    return out
+    # The PREVIEW gives way first, measured on the real envelope; the outline
+    # (figure, unit, selection, row counts) keeps a fixed budget. max_chars
+    # makes the fit a guarantee: an outline over the cap by itself (a
+    # statement is never cut) is replaced by a minimal one.
+    return _compacted_tool_payload(text, _TOOL_RESULT_CHARS, note=note,
+                                   outline_budget=_TOOL_RESULT_CHARS // 4, max_chars=_TOOL_RESULT_CHARS)
 
 _STOP = ("I could not finish this answer within the steps a turn may take. "
          "Please narrow the question or split it into parts.")
