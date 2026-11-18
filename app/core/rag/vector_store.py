@@ -141,20 +141,39 @@ def guarantee_leg_share(
     candidate and the order is unchanged. On a tie of positions
     the vector-leg candidate goes first, as fusion keeps the semantic
     instance on a tie.
+
+    Being found by the other leg too never costs a chunk this place: a
+    candidate both legs returned that a leg ranks above that leg's last
+    single-leg pick moves up to its own leg rank in the same way. Without
+    this, a leg's rank-1 chunk that the other leg found only deep down
+    fused under the moved single-leg picks and under chunks both legs
+    ranked moderately, though it would hold rank 1 had the other leg
+    missed it. A chunk picked by both legs takes the better place; on a
+    tie of positions a single-leg pick goes before it, so no single-leg
+    candidate is ever moved down.
     """
     fused_pos = {c.chunk_id: i for i, c in enumerate(order, 1)}
-    picks: List[Tuple[int, int, str]] = []
+    best: Dict[str, Tuple[int, int, int, str]] = {}
     for leg_index, (mine, other) in enumerate(((sem_rank, bm_rank), (bm_rank, sem_rank))):
         alone = sorted(
             (r, cid) for cid, r in mine.items()
             if cid not in other and cid in fused_pos
         )[:share]
-        picks += [(min(r, fused_pos[cid]), leg_index, cid) for r, cid in alone]
-    picked = {cid for _, _, cid in picks}
+        bar = alone[-1][0] if alone else 0
+        chosen = alone + [
+            (r, cid) for cid, r in mine.items()
+            if cid in other and cid in fused_pos and r < bar
+        ]
+        for r, cid in chosen:
+            pick = (min(r, fused_pos[cid]), int(cid in other), leg_index, cid)
+            if cid not in best or pick < best[cid]:
+                best[cid] = pick
+    picks = list(best.values())
+    picked = set(best)
     by_id = {c.chunk_id: c for c in order}
     out = [c for c in order if c.chunk_id not in picked]
     last = -1
-    for target, _leg, cid in sorted(picks):
+    for target, _both, _leg, cid in sorted(picks):
         at = min(max(target - 1, last + 1), len(out))
         out.insert(at, by_id[cid])
         last = at

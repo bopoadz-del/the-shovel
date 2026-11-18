@@ -117,3 +117,69 @@ def test_a_single_leg_hit_fused_higher_is_never_moved_down(share):
 def test_fusion_leg_share_setting(monkeypatch, raw, expected):
     monkeypatch.setenv("RAG_FUSION_LEG_SHARE", raw)
     assert vs.fusion_leg_share() == expected
+
+
+# ── 5. a chunk both legs found keeps the place one leg would give it ───────
+#
+# Invented A10 shape: the vector leg's rank-1 chunk ``top`` is also found by
+# the lexical leg, but only deep down, so plain fusion puts the chunks both
+# legs ranked moderately (m*) above it, and the moved single-leg picks
+# (lx, vy) go above those. Had the lexical leg missed ``top`` it would be a
+# single-leg pick at rank 1; being found twice must not cost it that place.
+
+@pytest.mark.parametrize("deep, mine, other", [
+    (45, "sem", "bm"),   # vector #1, lexical #45
+    (30, "bm", "sem"),   # the mirror: lexical #1, vector #30
+])
+def test_a_both_leg_chunk_above_a_single_leg_pick_keeps_its_leg_rank(deep, mine, other):
+    # Plain fusion order: the moderate both-leg chunks first, then top.
+    order = _order(["m1", "m2", "m3", "top", "s2", "s3", "x1"])
+    ranks = {
+        mine: {"top": 1, "s2": 2, "s3": 3, "m1": 4, "m2": 5, "m3": 6},
+        other: {"x1": 1, "m1": 2, "m2": 3, "m3": 4, "top": deep},
+    }
+    out = [c.chunk_id for c in guarantee_leg_share(order, ranks["sem"], ranks["bm"], 2)]
+    # Leg rank 1, tied with the other leg's rank-1 single-leg pick, which
+    # goes first; then the remaining single-leg picks, then fused order.
+    assert out == ["x1", "top", "s2", "s3", "m1", "m2", "m3"], out
+
+
+@pytest.mark.parametrize("top_rank", [4, 7])
+def test_a_both_leg_chunk_below_the_last_single_leg_pick_keeps_fused_order(top_rank):
+    # The leg's single-leg picks are s1 (rank 1) and s2 (rank 2); ``top``
+    # ranks below both, so it gets no guarantee and stays where fusion put it.
+    order = _order(["m1", "top", "s1", "s2"])
+    sem = {"s1": 1, "s2": 2, "m1": 3, "top": top_rank}
+    bm = {"m1": 1, "top": 40}
+    out = guarantee_leg_share(order, sem, bm, 2)
+    assert [c.chunk_id for c in out] == ["s1", "s2", "m1", "top"]
+
+
+@pytest.mark.parametrize("share", [0, 2])
+def test_no_single_leg_pick_means_no_both_leg_move(share):
+    # Both legs found every chunk: there is no single-leg pick to outrank,
+    # so the fused order stands whatever the share.
+    order = _order(["b1", "b2", "top"])
+    out = guarantee_leg_share(order, {"top": 1, "b1": 2, "b2": 3},
+                              {"b1": 1, "b2": 2, "top": 45}, share)
+    assert [c.chunk_id for c in out] == ["b1", "b2", "top"]
+
+
+@pytest.mark.parametrize("n_both", [10, 20])
+def test_vector_rank_one_found_deep_by_lexical_is_pooled_first(monkeypatch, tmp_path, n_both):
+    """Real ``VectorStore.search`` / ``_rrf_combine`` / ``retrieve_with_filter``."""
+    semantic = _vector_leg(50)
+    top = semantic[0]
+    # The lexical leg: two lexical-only hits, then vector hits 5..n_both+4
+    # (so v1..v4 are vector-only), then v0 only at the very end.
+    lexical = [_chunk(f"l{i}", round(0.09 - i * 0.001, 6), kind="lexical", n=200 + i)
+               for i in range(2)]
+    lexical += [_as_lexical(c, round(0.08 - i * 0.001, 6))
+                for i, c in enumerate(semantic[5:n_both + 5])]
+    lexical += [_as_lexical(top, 0.001)]
+    _install(monkeypatch, tmp_path, semantic, lexical)
+
+    pooled, _ = retriever.retrieve_with_filter(QUERY, PID, k=10)
+    ids = _ids(pooled)
+    # Leg rank 1: only the lexical leg's tied rank-1 single-leg hit is ahead.
+    assert ids[:2] == ["l0", "v0"], ids
