@@ -211,24 +211,37 @@ def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[lis
     return lines, structured
 
 
-def _drop_single_value(body: str, found: list[dict[str, Any]]) -> str:
-    """A sentence that states only ONE of a conflict's differing values for
-    that thing goes: the conflict statement, which leads, replaces it. Read by
-    the typed values (``evidence_conflicts.extract``/``same``, citation spans
-    blanked); a sentence about another thing (none of the thing's words) and
-    a sentence stating two or more of the values stay."""
-    from app.agents.evidence_conflicts import _terms, extract, same
+def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
+    """The sentences the leading conflict statement replaces.
+
+    * A sentence that states only ONE of a conflict's differing values for
+      that thing. Read by the typed values (``evidence_conflicts.extract``/
+      ``same``, citation spans blanked); a sentence about another thing (none
+      of the thing's words) and a sentence stating two or more of the values
+      stay.
+    * A sentence asserting that the documents agree
+      (``evidence_conflicts.asserts_agreement``: an agreement word with no
+      negation just before it) about that thing: it states one or more of the
+      differing values, or uses a word of the thing, or names no other thing
+      at all (``agreement_names_no_thing``: no typed value, and no word left
+      beyond the agreement words, the words pointing at the evidence and the
+      documents' own names, as in "the sources are consistent"). An
+      agreement sentence about another thing stays."""
+    from app.agents.evidence_conflicts import _terms, agreement_names_no_thing, asserts_agreement, extract, same
 
     rules = []
     for c in found:
         kind = c.get("kind")
         classes: list[Any] = []
         for v in c["values"]:
-            got = [x for x in extract(str(v["value"])) if x.kind == kind]
-            if got and not any(same(got[0], k) for k in classes):
-                classes.append(got[0])
+            # The value as detect typed it in its passage: its raw text alone
+            # may not re-read as that kind (a grade code without its label).
+            typed = v.get("typed")
+            if typed is not None and not any(same(typed, k) for k in classes):
+                classes.append(typed)
         if len(classes) >= 2:
-            rules.append((kind, classes, set(c.get("thing") or [])))
+            docs = [str(v.get("document") or "") for v in c["values"]]
+            rules.append((kind, classes, set(c.get("thing") or []), docs))
     out: list[str] = []
     for line in body.split("\n"):
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
@@ -236,11 +249,16 @@ def _drop_single_value(body: str, found: list[dict[str, Any]]) -> str:
         kept = []
         for sent in sentences:
             vals = extract(sent)
-            single = any(
-                len({i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}) == 1
-                and thing & _terms(sent)
-                for kind, classes, thing in rules)
-            if not single:
+            agrees = asserts_agreement(sent)
+            gone = False
+            for kind, classes, thing, docs in rules:
+                hits = {i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}
+                about = bool(thing & _terms(sent))
+                if len(hits) == 1 and about:
+                    gone = True
+                elif agrees and (hits or about or agreement_names_no_thing(sent, docs)):
+                    gone = True
+            if not gone:
                 kept.append(sent.strip())
         if not sentences or len(kept) == len(sentences):
             out.append(line)
@@ -534,9 +552,10 @@ def apply(
             lines, structured = _conflict_lines(found, markers)
             if lines:
                 # The conflict statement leads; a sentence asserting only one
-                # of the differing values for that thing is replaced by it.
+                # of the differing values for that thing, or asserting that the
+                # documents agree about it, is replaced by it.
                 stated = [c for c in found if _nameable(c)]
-                body = _tidy("\n".join(lines) + "\n\n" + _drop_single_value(body, stated))
+                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated))
         # A marker whose line went (padding, a dropped note) is not lost: it
         # rides on the last line, so every citation entry has its marker.
         lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)

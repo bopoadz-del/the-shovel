@@ -129,8 +129,39 @@ _AGREE_RE = re.compile(
     r"no\s+(?:conflict|conflicts|discrepanc(?:y|ies)|difference|differences))\b", re.IGNORECASE)
 
 
+#: A negation just before the agreement word turns it round ("do not
+#: agree", "are not consistent", "never match"): that tells the user they differ.
+_NEGATED_RE = re.compile(r"(?:\bnot|n't|\bnever|\bno\s+longer)(?:\s+\w+){0,2}\s*$", re.IGNORECASE)
+
+
+def asserts_agreement(sentence: str) -> bool:
+    """The sentence tells the user the documents agree: an agreement word
+    (``_AGREE_RE``) that no negation stands just before."""
+    s = sentence or ""
+    return any(not _NEGATED_RE.search(s[: m.start()]) for m in _AGREE_RE.finditer(s))
+
+
 def _claims_agreement(answer: str) -> bool:
-    return bool(_AGREE_RE.search(answer or ""))
+    return any(asserts_agreement(s) for s in _sentences(answer))
+
+
+#: Words a sentence uses to point at the evidence itself, not at a thing in
+#: it ("the sources are consistent", "both documents match").
+_EVIDENCE_TERMS = frozenset(_stem(w) for w in (
+    "source", "document", "record", "evidence", "file", "reference", "both", "two", "they", "point",
+    "between"))
+
+
+def agreement_names_no_thing(sentence: str, documents: Iterable[str] = ()) -> bool:
+    """An agreement sentence about no other thing: it states no typed value,
+    and its words, less the agreement words, the words pointing at the
+    evidence and the words of the documents' own names, are empty."""
+    if any(v.kind != "text" for v in extract(sentence)):
+        return False
+    rest = _terms(_AGREE_RE.sub(" ", sentence or "")) - _EVIDENCE_TERMS
+    for doc in documents:
+        rest -= _terms(re.sub(r"\.\w{2,4}$", "", doc or ""))
+    return not rest
 
 
 def _terms(text: str) -> set[str]:
@@ -175,6 +206,13 @@ _UNITS: list[tuple[str, str, float, float]] = [
 _FREE = r"(?<![0-9A-Za-z_\-/.])"
 _QTY_RE = re.compile(
     rf"{_FREE}(?P<num>{_NUM})\s?(?P<unit>" + "|".join(f"(?:{u})" for u, *_ in _UNITS) + rf"){_END}")
+#: A range of one kind is one value covering both ends: "150-200 mm",
+#: "150 to 200 mm", "between 150 and 200 mm", "1.5 m to 2 m". A value inside
+#: it is the same value; a range is never read as its upper end alone.
+_UNIT_ALT = "|".join(f"(?:{u})" for u, *_ in _UNITS)
+_RANGE_RE = re.compile(
+    rf"(?:(?P<between>\b(?i:between|from))\s+)?{_FREE}(?P<a>{_NUM})\s?(?P<ua>{_UNIT_ALT})?"
+    rf"\s*(?P<sep>-|–|—|(?i:to|and))\s*(?P<b>{_NUM})\s?(?P<unit>{_UNIT_ALT}){_END}")
 _UNIT_RES = [(re.compile(rf"^(?:{u})$", re.IGNORECASE if k in ("time", "percent") else 0), k, lo, hi)
              for u, k, lo, hi in _UNITS]
 
@@ -212,6 +250,13 @@ class Value:
     norm: Any         # normalised: (low, high) | iso date | canonical text
     start: int
     end: int
+
+
+def _unit(unit: str) -> tuple[str, float, float] | None:
+    for urx, kind, lo, hi in _UNIT_RES:
+        if urx.match(unit):
+            return kind, lo, hi
+    return None
 
 
 def _num(s: str) -> float:
@@ -280,6 +325,15 @@ def extract(sentence: str) -> list[Value]:
         for m in rx.finditer(sentence):
             g = m.group("g")
             add(Value(g, "grade", re.sub(r"\s+", "", g).upper(), m.start("g"), m.end("g")))
+    for m in _RANGE_RE.finditer(sentence):
+        if m.group("sep").lower() == "and" and not m.group("between"):
+            continue  # "A and B mm" is two values, not a range
+        hit = _unit(m.group("unit"))
+        first = _unit(m.group("ua")) if m.group("ua") else hit
+        if hit and first and first[0] == hit[0]:
+            a, b = _num(m.group("a")), _num(m.group("b"))
+            ends = (a * first[1], a * first[2], b * hit[1], b * hit[2])
+            add(Value(m.group(0), hit[0], (min(ends), max(ends)), m.start(), m.end()))
     for m in _QTY_RE.finditer(sentence):
         unit = m.group("unit")
         for urx, kind, lo, hi in _UNIT_RES:
@@ -578,7 +632,8 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                 out.append({
                     "kind": kind,
                     "thing": _thing(kept, q_terms or query),
-                    "values": [{"value": c.value.raw, "document": c.doc, "row": c.row} for c in kept],
+                    "values": [{"value": c.value.raw, "document": c.doc, "row": c.row, "typed": c.value}
+                               for c in kept],
                     "governs": gov,
                     "basis_document": basis,
                     "governing_kind": gkind if gov else "",

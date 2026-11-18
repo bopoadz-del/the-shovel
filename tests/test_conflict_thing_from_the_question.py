@@ -187,8 +187,11 @@ def test_both_values_under_an_agree_headline_get_the_leading_conflict_statement(
     assert len(out.get("conflicts") or []) == 1, out["content"]
     first, _, rest = out["content"].partition("\n")
     assert first.startswith(_LINE)
-    # The model's reply follows as written (it states both values).
-    assert answer.split(":")[1].strip()[:20] in rest
+    # The statement names both values; the model's sentence asserting that
+    # the documents agree about them is replaced by it (advisor 18:31Z).
+    for _d, name, _p, text in docs:
+        assert name.rsplit(".", 1)[0] in first
+    assert "agree" not in out["content"] and "consistent" not in out["content"]
 
 
 @pytest.mark.parametrize("question, docs, answer", _AGREE_BOTH)
