@@ -57,19 +57,29 @@ def test_a_usable_reply_has_no_reason(text):
     assert rt._forced_retry_nudge(text) is None
 
 
-def test_platform_only_is_named(monkeypatch):
+@pytest.mark.parametrize("text", [
+    "The fetch_document step returned no rows.",
+    "The bill_rows operation returned zero chunks.",
+])
+def test_platform_only_is_named(text, monkeypatch):
     from app.agents import answer_exit
     monkeypatch.setattr(answer_exit, "check_text", lambda t: "")
-    for text in ("The fetch_document step returned no rows.", "The bill_rows operation returned zero chunks."):
-        assert rt.forced_retry_reason(text) == "platform_only"
-        assert rt._forced_retry_nudge(text) == rt._USER_TERMS_RETRY_NUDGE
+    assert rt.forced_retry_reason(text) == "platform_only"
+    assert rt._forced_retry_nudge(text) == rt._USER_TERMS_RETRY_NUDGE
 
 
-def test_nudge_follows_the_named_rule():
-    assert rt._forced_retry_nudge(CASES["search_promise"][0]) == rt._SEARCH_PREAMBLE_RETRY_NUDGE
-    assert rt._forced_retry_nudge(CASES["greeting_only"][1]) == rt._GREETING_RETRY_NUDGE
-    assert rt._forced_retry_nudge(rt._TOOL_FORMAT_FALLBACK) == rt._TOOL_FORMAT_RETRY_NUDGE
-    assert rt._forced_retry_nudge("") is None
+@pytest.mark.parametrize("text,nudge", [
+    (CASES["search_promise"][0], "_SEARCH_PREAMBLE_RETRY_NUDGE"),
+    (CASES["search_promise"][1], "_SEARCH_PREAMBLE_RETRY_NUDGE"),
+    (CASES["greeting_only"][0], "_GREETING_RETRY_NUDGE"),
+    (CASES["greeting_only"][1], "_GREETING_RETRY_NUDGE"),
+    (rt._TOOL_FORMAT_FALLBACK, "_TOOL_FORMAT_RETRY_NUDGE"),
+    ("", None),
+    ("  ", None),
+])
+def test_nudge_follows_the_named_rule(text, nudge):
+    expected = getattr(rt, nudge) if nudge else None
+    assert rt._forced_retry_nudge(text) == expected
 
 
 # ── through both drivers, model stubbed at its last hop ─────────────────────
