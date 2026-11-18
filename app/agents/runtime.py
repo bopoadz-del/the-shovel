@@ -3166,6 +3166,7 @@ def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     try:
         work = json.loads(json.dumps(payload, default=str))
     except (TypeError, ValueError):
+        _LOG.info("tool result outline: the result does not serialize", exc_info=True)
         return None
     if not isinstance(work, dict):
         return None
@@ -3189,6 +3190,7 @@ def _tool_result_was_cut(content: Any) -> bool:
     try:
         head = json.loads(content)
     except (TypeError, ValueError):
+        _LOG.info("tool result: content is not JSON, so it is not a cut envelope", exc_info=True)
         return False
     return isinstance(head, dict) and bool(head.get("truncated"))
 
@@ -6405,6 +6407,7 @@ def _tool_message_cut_unreadable(msg: dict[str, Any]) -> bool:
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, json.JSONDecodeError):
+        _LOG.info("tool message %s: content is not JSON, so it is not a cut envelope", msg.get("name"), exc_info=True)
         return False
     if not (isinstance(payload, dict) and payload.get("truncated")):
         return False
