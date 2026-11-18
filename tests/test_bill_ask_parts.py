@@ -44,10 +44,12 @@ def test_a_call_reads_only_a_part_of_the_users_words(ask, terms, refs, by):
 @pytest.mark.parametrize("picked, terms, expected", [
     ({"terms": ["kerb", "rail"], "section_terms": [], "sizes": []}, "kerbs",
      {"terms": ["kerb"], "section_terms": [], "sizes": []}),
-    ({"terms": ["pit"], "section_terms": [], "sizes": ["1.8 x 1.8 m"]}, "1800 x 1800",
+    ({"terms": ["pit"], "section_terms": [], "sizes": ["1.8 x 1.8 m"]}, "1800 x 1800 mm",
      {"terms": [], "section_terms": [], "sizes": ["1.8 x 1.8 m"]}),
+    # a bare size is its plain numbers: 1800 x 1800 is not 1.8 x 1.8 m
+    ({"terms": ["pit"], "section_terms": [], "sizes": ["1.8 x 1.8 m"]}, "1800 x 1800", None),
     ({"terms": ["kerb"], "section_terms": [], "sizes": []}, "kerb", None),
     ({"terms": ["kerb", "rail"], "section_terms": [], "sizes": []}, "", None),
-], ids=["plural", "size-any-spelling", "all-named", "no-call-words"])
+], ids=["plural", "size-with-a-unit", "bare-size-not-a-magnitude", "all-named", "no-call-words"])
 def test_part_of_ask(picked, terms, expected):
     assert agg._part_of_ask(picked, terms, None) == expected

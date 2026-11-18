@@ -252,10 +252,6 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
 #: unit). Units, not sizes: no size of any bill is listed here.
 _LENGTH_UNITS = {"mm": 0.001, "cm": 0.01, "m": 1.0, "km": 1000.0,
                  "مم": 0.001, "ملم": 0.001, "سم": 0.01, "م": 1.0, "كم": 1000.0}
-#: The readings of a size printed with no unit at all: it is read in each of
-#: these units, so ``1800 x 1800`` (millimetres) and ``1.8 x 1.8`` (metres)
-#: are one size.
-_UNITLESS_READINGS = (1.0, 0.01, 0.001)
 #: Arabic-Indic and Eastern Arabic-Indic digits, and the Arabic decimal and
 #: thousands separators, read as the Latin ones.
 _DIGITS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
@@ -287,36 +283,43 @@ def _number(text: str) -> float:
 
 @dataclass(frozen=True)
 class Size:
-    """A size as printed (``text``) and every canonical reading of it: a
-    tuple of member lengths in metres per reading."""
+    """A size as printed (``text``), its members as the plain numbers printed
+    (``printed``) and, when a unit is printed on any member, each member's
+    length in metres (``metres``; ``None`` for a size with no unit)."""
 
     text: str
-    readings: frozenset[tuple[float, ...]]
+    printed: tuple[float, ...]
+    metres: tuple[float, ...] | None
 
     def same(self, other: Size) -> bool:
-        return bool(self.readings & other.readings)
+        """Two sizes with a unit are one size when their lengths in metres
+        are equal (``1.8 x 1.8 m`` is ``1800 x 1800 mm``). A size with no
+        unit is the plain number it prints: it is the same as another size
+        only when the printed numbers are equal, never at another magnitude
+        (a bare ``1.8`` is not ``18``, ``180`` or ``1800``)."""
+        if self.metres is not None and other.metres is not None:
+            return self.metres == other.metres
+        return self.printed == other.printed
 
 
 def sizes_in(text: str) -> list[Size]:
-    """Every size printed in ``text``, each read to metres.
+    """Every size printed in ``text``.
 
     A member with no unit takes the unit printed on the next member, else on
     the one before (``1.8 x 1.8 m`` is metres throughout); a size with no unit
-    on any member is read in each of :data:`_UNITLESS_READINGS`."""
+    on any member borrows none: it keeps only its printed numbers."""
     out: list[Size] = []
     for m in _SIZE_RE.finditer((text or "").translate(_DIGITS)):
         members = [(_number(n), (u or "").casefold()) for n, u in _MEMBER_RE.findall(m.group(0))]
         units = [u for _, u in members]
-        if not any(units):
-            factors = [(f,) * len(members) for f in _UNITLESS_READINGS]
-        else:
+        metres: tuple[float, ...] | None = None
+        if any(units):
             filled = []
             for i, u in enumerate(units):
                 after = next((x for x in units[i:] if x), "")
                 filled.append(_LENGTH_UNITS[u or after or next(x for x in reversed(units[:i]) if x)])
-            factors = [tuple(filled)]
-        readings = frozenset(tuple(round(v * f, 9) for (v, _), f in zip(members, fs)) for fs in factors)
-        out.append(Size(" ".join(m.group(0).split()), readings))
+            metres = tuple(round(v * f, 9) for (v, _), f in zip(members, filled))
+        out.append(Size(" ".join(m.group(0).split()), tuple(v for v, _ in members), metres))
     return out
 
 
@@ -466,9 +469,11 @@ def selection_from_ask(rows: Sequence[SheetRow], ask: str | None) -> dict[str, l
       description word, else it selects nothing and is reported as ignored;
     * a plural and its singular agree (:func:`_forms`);
     * a number (with its unit, or a dimension ``a x b``) is a SIZE
-      (:func:`sizes_in`), read to metres on the ask and on the bill alike, so
-      every spelling of one size selects the same rows; a size the bill
-      prints nowhere selects nothing and is reported as ignored.
+      (:func:`sizes_in`): a size with a unit is read to metres on the ask
+      and on the bill alike, so every spelling of it with a unit selects the
+      same rows; a size with no unit is the plain number it prints, never
+      read at another magnitude; a size the bill prints nowhere selects
+      nothing and is reported as ignored.
 
     The result depends only on the ask and the bill, never on the model.
     """
