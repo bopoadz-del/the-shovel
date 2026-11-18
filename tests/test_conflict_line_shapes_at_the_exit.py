@@ -199,3 +199,18 @@ def test_a_reply_that_already_states_both_is_untouched(question, docs, answer, v
     assert "The documents differ on this" not in out["content"]
     for v in values:
         assert v in out["content"]
+
+
+@pytest.mark.parametrize("question, docs, answer, values, names, thing", [
+    pytest.param(*p.values[:5], t, id=p.id) for p, t in zip(_AGREE_HEADLINE, [
+        {"reinforcement", "pump", "station"}, {"cover", "pile", "cap", "reinforcement"}])
+])
+def test_detect_names_the_thing_both_documents_share(question, docs, answer, values, names, thing):
+    """The conflict carries the asked thing (stemmed words both value
+    sentences use): what a one-value sentence must name to be replaced."""
+    from app.agents.evidence_conflicts import _stem, detect
+
+    rows = [{"doc_name": n, "snippet": t} for _d, n, _p, t in docs]
+    found = detect(answer, rows, question)
+    assert len(found) == 1
+    assert set(found[0]["thing"]) == {_stem(w) for w in thing}
