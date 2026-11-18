@@ -37,7 +37,7 @@ def _names_follow_the_document_list(monkeypatch):
 
 def _wire(monkeypatch, docs, result, tool="bim_extractor"):
     import app.core.projects as projects_mod
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: docs,
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: docs,
                         raising=False)
     fake = _FakeExtractor(result)
     monkeypatch.setattr(runtime, "block_instances", {tool: fake}, raising=False)
@@ -104,7 +104,7 @@ async def test_named_txt_is_predispatched_via_fetch_document(monkeypatch):
     import app.core.projects as projects_mod
     monkeypatch.setattr(
         projects_mod, "list_documents",
-        lambda pid: [{"original_name": "ui_fenwick_grout_spec.txt"}],
+        lambda pid, **_kw: [{"original_name": "ui_fenwick_grout_spec.txt"}],
         raising=False,
     )
 
@@ -144,7 +144,7 @@ async def test_named_docx_stem_is_predispatched_via_fetch_document(monkeypatch):
     stored = "fenwick_waterproofing_spec_20260819-081916.docx"
     monkeypatch.setattr(
         projects_mod, "list_documents",
-        lambda pid: [{"original_name": stored}],
+        lambda pid, **_kw: [{"original_name": stored}],
         raising=False,
     )
 
@@ -214,7 +214,7 @@ async def test_clash_predispatch_unwraps_execute_envelope(monkeypatch):
     import app.core.projects as projects_mod
     monkeypatch.setattr(
         projects_mod, "list_documents",
-        lambda pid: [{"original_name": "sample_office.ifc"}],
+        lambda pid, **_kw: [{"original_name": "sample_office.ifc"}],
         raising=False,
     )
     monkeypatch.setattr(

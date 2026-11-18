@@ -24,6 +24,8 @@ cannot distinguish a manhole-spacing chunk from MEP rough-in.
 
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import os
 import sys
 import tempfile
@@ -210,6 +212,7 @@ def store_with_corpus():
     _vs.reset_store_cache()
 
     store = VectorStore(db_path=db_path, dim=embedder.dim)
+    give_documents_table(store)
     # Index each chunk as its own one-chunk "doc" so chunk_id is unique
     # and the per-doc replace semantics in upsert_chunks don't clobber.
     for doc_id, text in CORPUS:
@@ -407,6 +410,7 @@ def test_no_chunks_project_sets_state_and_warns(monkeypatch, caplog):
     tmpdir = tempfile.mkdtemp(prefix="hybrid_empty_")
     db_path = os.path.join(tmpdir, f"empty_{uuid.uuid4().hex}.db")
     store = VectorStore(db_path=db_path, dim=embedder.dim)
+    give_documents_table(store)
     token = start_turn_memo()
     try:
         pid = "empty_proj_no_chunks"

@@ -8,6 +8,8 @@ again. Synthetic projects and documents.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import os
 
 import pytest
@@ -82,6 +84,7 @@ def test_the_corpus_guard_probes_instead_of_counting(tmp_path, monkeypatch):
     vs.reset_store_cache()
     e = emb.Embedder(model_name="fake")
     st = vs.get_store(dim=e.dim)
+    give_documents_table(st)
     st.upsert_chunks("synthetic-full", "d1", ["an invented clause"], e.encode(["an invented clause"]))
     monkeypatch.setattr(type(st), "count", lambda *a, **k: (_ for _ in ()).throw(AssertionError("counted")))
     assert st.has_chunks("synthetic-full") is True
@@ -100,4 +103,5 @@ def test_postgres_operations_do_not_take_turns():
     from app.core.rag.embeddings import get_embedder
 
     st = vs.get_store(dim=get_embedder().dim)
+    give_documents_table(st)
     assert isinstance(st._lock, nullcontext)

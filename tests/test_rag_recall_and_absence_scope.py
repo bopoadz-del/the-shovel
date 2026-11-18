@@ -34,6 +34,8 @@ lexical rescue.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import os
 
 os.environ.setdefault("RAG_EMBEDDING_MODEL", "fake")
@@ -88,6 +90,7 @@ def corpus(monkeypatch, tmp_path):
     reset_embedder_cache()
     emb = get_embedder()
     store = vs.get_store(dim=emb.dim)
+    give_documents_table(store)
 
     store.upsert_chunks(
         project_id=PROJECT,

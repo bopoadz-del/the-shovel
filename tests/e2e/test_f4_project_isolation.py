@@ -23,6 +23,8 @@ former master-corpus fallback. Shared general-knowledge stays readable.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 from app.core.rag import vector_store as vs
@@ -36,7 +38,7 @@ def store(monkeypatch, tmp_path):
     from app.core.rag.embeddings import get_embedder, reset_embedder_cache
     reset_embedder_cache()
     emb = get_embedder()
-    return vs.get_store(dim=emb.dim), emb
+    return give_documents_table(vs.get_store(dim=emb.dim)), emb
 
 
 def _add(store, emb, project_id: str, doc_id: str, text: str):
