@@ -187,6 +187,64 @@ def test_the_construction_chat_agents_allow_the_block(config):
     assert f"  - {TOOL}\n" in head.replace("\r\n", "\n")
 
 
+# -- G-9: the rule over every config on disk, none named ----------------------
+# The rule is the configs' own: a config whose loaded allowed blocks include
+# the advisor block carries the allow-list line, and a config that carries
+# the line has the block in its loaded allowed blocks. The configs are found
+# by globbing the directory, so a future config is checked the day it lands.
+
+def _carries_the_line(md) -> bool:
+    head = md.read_text(encoding="utf-8").replace("\r\n", "\n").split("---")[1]
+    return f"  - {TOOL}\n" in head
+
+
+def _allows_the_block(md) -> bool:
+    from app.agents.runtime import _parse_agent_file
+    return TOOL in _parse_agent_file(md).allowed_blocks
+
+
+def _configs_breaking_the_rule(configs_dir) -> list[str]:
+    return [md.name for md in sorted(configs_dir.glob("*.md"))
+            if _allows_the_block(md) != _carries_the_line(md)]
+
+
+@pytest.mark.parametrize("allows", [True, False])
+def test_every_config_on_disk_carries_the_line_exactly_when_it_allows_the_block(allows):
+    # The two inputs are the two branches: configs whose loaded allowed
+    # blocks include the block must carry the line (block => line), and
+    # configs whose loaded allowed blocks do not must not (line => block).
+    from app.agents.runtime import CONFIGS_DIR
+    on_branch = [md for md in sorted(CONFIGS_DIR.glob("*.md")) if _allows_the_block(md) == allows]
+    assert on_branch, f"no config on disk on the allows={allows} branch"
+    assert [md.name for md in on_branch if _carries_the_line(md) != allows] == []
+
+
+def _write_config(directory, stem, frontmatter_tail):
+    (directory / f"{stem}.md").write_text(
+        f"---\nname: {stem}\ndescription: invented agent\n{frontmatter_tail}---\n\n"
+        "You are an invented agent used only by this test.\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("pair,want_breaks", [
+    # Both branches held: one config with block and line, one with neither.
+    ({"alpha-holds": f"allowed_blocks:\n  - sympy_reasoning\n  - {TOOL}\n",
+      "beta-holds": "allowed_blocks:\n  - sympy_reasoning\n"},
+     []),
+    # Both branches broken: the block allowed without the line (a tab list
+    # the loader accepts), and the line present without the block (under a
+    # key the loader does not read as allowed blocks).
+    ({"gamma-block-no-line": f"allowed_blocks:\n\t- {TOOL}\n",
+      "delta-line-no-block": f"allowed_blocks:\n  - sympy_reasoning\nretired_blocks:\n  - {TOOL}\n"},
+     ["delta-line-no-block.md", "gamma-block-no-line.md"]),
+])
+def test_the_rule_flags_a_synthetic_config_on_either_branch(tmp_path, pair, want_breaks):
+    for stem, tail in pair.items():
+        _write_config(tmp_path, stem, tail)
+    assert _configs_breaking_the_rule(tmp_path) == want_breaks
+
+
 # -- not installed: an honest refusal -----------------------------------------
 
 @pytest.mark.parametrize("query", ["scaffold tie spacing", "gravel yield"])
