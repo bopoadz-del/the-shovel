@@ -35,6 +35,9 @@ def scoped_store(tmp_path, monkeypatch):
 
     _emb.reset_embedder_cache()
     _vs.reset_store_cache()
+    # The fresh database needs the documents table production has, or the
+    # store cannot compute the session scope and reads nothing.
+    give_documents_table(_vs.get_store())
     yield _ret
     _emb.reset_embedder_cache()
     _vs.reset_store_cache()
