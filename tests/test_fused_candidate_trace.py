@@ -277,3 +277,59 @@ def test_record_fused_candidates_is_read_back_and_overwritten(turn, record):
     vs.record_fused_candidates(PID, {"n_candidates": 99})
     vs.record_fused_candidates(PID, record)
     assert vs.fused_candidates_record(PID) == record
+
+
+# ── leg_top: each leg's own top ranks, for an offline replay ───────────────
+
+
+class _T:
+    def __init__(self, cid, text):
+        self.chunk_id = cid
+        self.text = text
+
+
+@pytest.mark.parametrize("sem, bm, depth, want_vec, want_lex", [
+    # The vector leg's #1 is found by the lexical leg only at #9.
+    ({"v1": 1, "b1": 2, "v3": 3}, {"x1": 1, "b1": 2, "v1": 9}, 2,
+     [("v1", 1, 9), ("b1", 2, 2)], [("x1", 1, None), ("b1", 2, 2)]),
+    # Depth 1, and a leg rank absent from the order is not traced.
+    ({"gone": 1, "b1": 2}, {"b1": 1}, 1, [], [("b1", 1, 2)]),
+])
+def test_leg_top_lists_each_legs_own_ranks(sem, bm, depth, want_vec, want_lex):
+    ids = list(dict.fromkeys([*bm, *sem]))
+    order = [_T(c, "w" * (10 * (i + 1))) for i, c in enumerate(ids) if c != "gone"]
+    top = ft.leg_top(order, sem, bm, depth)
+    for name, want in (("vector", want_vec), ("lexical", want_lex)):
+        got = [(e["chunk_id"], e["leg_rank"], e["other_leg_rank"]) for e in top[name]]
+        assert got == want
+        for e in top[name]:
+            pos = [c.chunk_id for c in order].index(e["chunk_id"])
+            assert e["fused_rank"] == pos + 1
+            assert e["chars"] == len(order[pos].text)
+
+
+@pytest.mark.parametrize("handed_n", [1, 2])
+def test_leg_top_public_view_states_pool_and_handed_without_ids(handed_n):
+    order = [_T("b1", "aaaa"), _T("lx", "bb"), _T("v9", "c")]
+    summary = ft.leg_summary(order, {"b1": 1, "v9": 2}, {"b1": 2, "lx": 1}, 10)
+    rec = ft.Follow(summary).finish(order, order, order[:2])
+    view = ft.public_view(rec, order[:handed_n])
+    lex = view["leg_top"]["lexical"]
+    assert all("chunk_id" not in e for es in view["leg_top"].values() for e in es)
+    assert [e["leg_rank"] for e in lex] == [1, 2]
+    assert [e["pool_position"] for e in lex] == [2, 1]
+    assert [e["handed_position"] for e in lex] == [2 if handed_n == 2 else None, 1]
+    assert [e["pool_position"] for e in view["leg_top"]["vector"]] == [1, None]
+
+
+@pytest.mark.parametrize("text", ["abc", "x" * 3001])
+def test_pre_injection_chunk_carries_its_length_not_its_text(text):
+    from app.core.rag.inject import _trace_chunk
+
+    from types import SimpleNamespace
+
+    c = SimpleNamespace(chunk_id="c1", doc_id="d1", text=text, score=0.5,
+                        source_name="n.pdf")
+    entry = _trace_chunk(1, c)
+    assert entry["chars"] == len(text)
+    assert text not in json.dumps(entry)

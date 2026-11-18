@@ -253,6 +253,13 @@ async def lifespan(app: FastAPI):
     from app.core.cde.poll import start_event_poller
     start_event_poller()
 
+    # Readiness waits for the result declarations (about a second: they import
+    # the formula registry). In a worker thread, so the loop is never held by
+    # that import; before serving, so no request's first read has to declare.
+    # A declarer that fails is logged and backed off (it never raises out of
+    # here); the warm-up below runs the step again.
+    await asyncio.to_thread(_declare_deferred_results)
+
     # Model warm-up runs AFTER the port is listening — see _warm_models.
     warm_task = None
     if os.getenv("WARM_MODELS_BLOCKING", "").strip().lower() in ("1", "true", "yes"):
@@ -430,6 +437,15 @@ def _configure_ml_loop() -> None:
                 settings.enabled, settings.build_sha)
 
 
+def _declare_deferred_results() -> None:
+    """Run the deferred result declarations (they import the formula
+    registry, sympy among it) in the warm-up thread, so the first tool call
+    under load does not pay that import holding the interpreter lock on the
+    event loop. Not at import: the boot check forbids those libraries there."""
+    from app.agents.core.tool_registry import declare_deferred_results
+    declare_deferred_results()
+
+
 async def _warm_models() -> None:
     """Warm the heavy models — and seed the knowledge base — WITHOUT blocking startup.
 
@@ -452,7 +468,8 @@ async def _warm_models() -> None:
     """
     # Embedder first: the knowledge seed reuses the same cached instance, so
     # ordering it last means the seed never pays a second model load.
-    for label, fn in (("safety detector", _warm_safety_detector),
+    for label, fn in (("result declarations", _declare_deferred_results),
+                      ("safety detector", _warm_safety_detector),
                       ("RAG embedder", _warm_embedder),
                       ("embedder identity check", _check_embedder_identity),
                       ("knowledge seed", _seed_knowledge),
