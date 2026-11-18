@@ -57,6 +57,15 @@ def _register(client, tag: str) -> tuple[dict, str]:
             body.get("user_id") or body.get("user", {}).get("id"))
 
 
+def _user(tag: str) -> str:
+    """A user row only: these tests call the store, not a route."""
+    from app.core.users import ensure_user_exists
+
+    uid = f"scopeguard-{tag}-{_RUN}"
+    ensure_user_exists(uid)
+    return uid
+
+
 def _session_doc(pid: str, name: str, session_id: str, uploader: str) -> str:
     return store.add_document(pid, name, metadata={
         "session_id": session_id, "uploader_id": uploader, "origin": "uploaded"})["id"]
@@ -65,9 +74,8 @@ def _session_doc(pid: str, name: str, session_id: str, uploader: str) -> str:
 # ── privileges.raise_if_inaccessible_document_ids ───────────────────────────
 
 @pytest.mark.parametrize("case", ["missing", "foreign-project", "other-users-session"])
-def test_an_unreadable_pinned_document_is_a_404(client, case):
-    owner, owner_id = _register(client, f"pin-own-{case}")
-    _other, other_id = _register(client, f"pin-oth-{case}")
+def test_an_unreadable_pinned_document_is_a_404(case):
+    owner_id, other_id = _user(f"pin-own-{case}"), _user(f"pin-oth-{case}")
     pid = store.create_project(f"PinGuard-{case}-{_RUN}", user_id=owner_id)["id"]
     store.approve_project(pid)
     if case == "missing":
@@ -85,8 +93,8 @@ def test_an_unreadable_pinned_document_is_a_404(client, case):
 
 
 @pytest.mark.parametrize("own", ["session-file", "project-file"])
-def test_the_callers_own_document_is_not_refused(client, own):
-    _h, uid = _register(client, f"pin-mine-{own}")
+def test_the_callers_own_document_is_not_refused(own):
+    uid = _user(f"pin-mine-{own}")
     pid = store.create_project(f"PinMine-{own}-{_RUN}", user_id=uid)["id"]
     did = (_session_doc(pid, "invented_mine.md", "ws-b", uid) if own == "session-file"
            else store.add_document(pid, "invented_project.md")["id"])
