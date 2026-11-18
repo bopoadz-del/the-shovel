@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+import time
 
 import pytest
 
 from app.core.loop_watchdog import LagMonitor
+from tests import _wake_sidecar
 from tests._fixture_values import STUB_TOKEN_06
 
 # Measures the event loop under its own simulated load: CI runs it alone, not
@@ -118,6 +121,8 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
                 pass
             history.append({"role": "user", "content": q})
 
+    windows = {}
+
     async def run():
         # One unmeasured turn first: a cold process pays one-time costs
         # (imports, caches) on its first turn that are not the property
@@ -128,23 +133,34 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         # Idle baseline: the loop does nothing for IDLE_BASELINE_S on THIS
         # runner; the worst lag here is pure runner/OS scheduling noise.
         idle = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
+        t0 = time.monotonic()
         try:
             await asyncio.sleep(IDLE_BASELINE_S)
         finally:
             idle.stop()
+            windows["idle"] = (t0, time.monotonic())
         # Load phase: the real property under test.
         # Built exactly as before #396: the live capture (live_ms) stays OFF
         # in the gated measurement (advisor 10:31Z). With it ON, the timing
         # job segfaulted here (#396 9370c0c, exit 139): faulthandler reads
         # running threads' frames without the GIL.
         mon = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
+        t0 = time.monotonic()
         try:
             await asyncio.gather(*(user(n) for n in range(USERS)))
         finally:
             mon.stop()
+            windows["load"] = (t0, time.monotonic())
         return idle, mon
 
-    idle, mon = asyncio.run(run())
+    # Side-by-side control (non-gating, advisor 23:54Z 17 Nov): a separate
+    # process, no interpreter lock shared with this one, measures its own
+    # wake-up lateness over the same idle and load windows. Only printed.
+    side = _wake_sidecar.Sidecar().start(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        idle, mon = asyncio.run(run())
+    finally:
+        wakes = side.collect()
     worst = max(mon.stalls, default=(0, ""))
     excess = excess_over_baseline(mon.max_lag_ms, idle.max_lag_ms)
     # The control beside every result, pass or fail. pytest captures fd 2,
@@ -153,7 +169,9 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     lines = [f"LOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
              f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
              f"monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
-             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms"]
+             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms",
+             _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
+                                        mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     for line in lines:
         if reporter is not None:

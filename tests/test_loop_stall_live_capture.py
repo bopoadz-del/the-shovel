@@ -447,6 +447,12 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
         assert mon.live_dumps == [], mon.live_dumps[:1]
 
 
+# Also ``timing``: CI's timing step runs FIRST in each test job, and a red
+# gated measurement there ends the job before the serial step, so a capture
+# kept only in the serial step never ran in the job that stalled (main
+# 0239e32, production-like, advisor 23:54Z 17 Nov). The pass is a child
+# process, so a crash of its C timer cannot end the timing step either.
+@pytest.mark.timing
 def test_the_capture_runs_over_the_fifteen_user_load_in_its_own_process(tmp_path, request):
     """The NON-GATING second pass: the gated fifteen-user load, capture ON.
 

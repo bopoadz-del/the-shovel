@@ -26,6 +26,7 @@ import os
 import statistics
 import sys
 import time
+from pathlib import Path
 
 #: Snapshots timed per batch; each batch's median is one figure.
 SNAPSHOT_REPS = 20
@@ -54,6 +55,7 @@ def snapshot_figures(without, with_, figures: int = SNAPSHOT_FIGURES) -> dict:
 
 
 def main(data_dir: str) -> dict:
+    from tests import _wake_sidecar
     from tests import test_the_loop_is_never_blocked_under_load as load
 
     os.environ.update(load.load_env(data_dir))
@@ -76,19 +78,28 @@ def main(data_dir: str) -> dict:
                 pass
             history.append({"role": "user", "content": q})
 
+    windows: dict = {}
+
     async def run() -> "wd.LagMonitor":
         async for _ in agent.chat_stream(load._QUESTIONS[0], project_id=load.PID, user_id="capture-warm",
                                          conversation_id="capture-warm", history=[]):
             pass
         mon = wd.LagMonitor(asyncio.get_running_loop(), threshold_ms=load.LIMIT_MS, tick_ms=20,
                             log=False, live_ms=wd.DEFAULT_LIVE_MS).start()
+        t0 = time.monotonic()
         try:
             await asyncio.gather(*(user(n) for n in range(load.USERS)))
         finally:
             mon.stop()
+            windows["load"] = (t0, time.monotonic())
         return mon
 
-    mon = asyncio.run(run())
+    # The side-by-side control (tests/_wake_sidecar.py) over the same load.
+    side = _wake_sidecar.Sidecar().start(str(Path(__file__).resolve().parents[1]))
+    try:
+        mon = asyncio.run(run())
+    finally:
+        wakes = side.collect()
     worst = max(mon.live_dumps, default=(0.0, ""))
     return {
         "load_max_ms": round(mon.max_lag_ms),
@@ -96,6 +107,9 @@ def main(data_dir: str) -> dict:
         "live_dumps": len(mon.live_dumps),
         "near_misses": mon.live_near_misses,
         "wake_late_max_ms": round(mon.max_wake_late_ms),
+        "side_wake_late_max_ms": _wake_sidecar.window_max_ms(wakes, *windows["load"]),
+        "side_late_over_100ms_at": _wake_sidecar.late_in_window(wakes, *windows["load"]),
+        "side_error": side.error,
         "worst_dump_ms": round(worst[0]),
         "worst_dump": worst[1][:2000],
         "snapshot_us": snapshot_figures(wd.thread_cpu_ms, wd.cpu_snapshot),
