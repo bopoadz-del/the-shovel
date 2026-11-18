@@ -136,8 +136,9 @@ def test_trace_on_and_off_give_the_same_pool(monkeypatch, tmp_path, n_both):
 @pytest.mark.parametrize("n_both", [10, 15])
 def test_trace_follows_the_order_after_the_leg_share(
         monkeypatch, tmp_path, turn, n_both):
-    """S-R7c places the lexical leg's rank-1 hit at its own leg rank before
-    the cut; the trace reports that position, not the pre-share one."""
+    """The leg share puts the lexical leg's rank-1 hit in the window (the
+    first W <= 2 x share places) before the cut; the trace reports that
+    position, not the pre-share one."""
     monkeypatch.setenv("RAG_FUSION_LEG_SHARE", "2")
     semantic, lexical = _legs(n_both)
     _install(monkeypatch, tmp_path, semantic, lexical)
@@ -147,7 +148,7 @@ def test_trace_follows_the_order_after_the_leg_share(
 
     lex = rec["best_lexical_only"]
     assert lex["leg_rank"] == 1
-    assert lex["fused_rank"] == 1 < n_both + 1
+    assert lex["fused_rank"] <= 2 * 2 < n_both + 1
     assert lex["in_fused_list"] is True
     assert "x" in _ids(pooled)
     assert lex["pool_position"] == _ids(pooled).index("x") + 1

@@ -104,9 +104,10 @@ def _hybrid_enabled() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: Per leg, how many of its best candidates the OTHER leg did not return are
-#: guaranteed a place in the fused order at their own leg rank (S-R7c). One
-#: setting, the same number for both legs. 0 restores plain fusion.
+#: Per leg, how many of its top-ranked candidates (found by the other leg or
+#: not) are guaranteed a place at the head of the fused order
+#: (``guarantee_leg_share``). One setting, the same number for both legs.
+#: 0 restores plain fusion.
 FUSION_LEG_SHARE_DEFAULT = 2
 
 
@@ -128,68 +129,54 @@ def guarantee_leg_share(
     bm_rank: Dict[str, int],
     share: int,
 ) -> List["Chunk"]:
-    """Give each leg's best single-leg candidates a place by their own rank.
+    """Every chunk a leg ranks in its own top ``share`` opens the fused list.
 
     Reciprocal-rank fusion with k=60 ranks a chunk found by both legs at
     ANY depth (2/(60+50) = 0.0182) above the best hit of one leg
     (1/61 = 0.0164), so a passage only exact words can find (a figure, a
-    reference, a clause number) sits under every merely on-topic one. Here
-    the ``share`` best-ranked candidates of each leg that the other leg did
-    not return move up to the position of their own leg rank (never down:
-    a candidate already fused higher keeps its place). Everything else
-    keeps its fused order. When the legs agree there is no single-leg
-    candidate and the order is unchanged. On a tie of positions
-    the vector-leg candidate goes first, as fusion keeps the semantic
-    instance on a tie.
+    reference, a clause number) sits under every merely on-topic one, and
+    a leg's own first chunk that the other leg found only deep down sits
+    under chunks both legs ranked moderately. The guarantee is therefore
+    by LEG RANK, not by whether the other leg also found the chunk:
 
-    Being found by the other leg too never costs a chunk this place: a
-    candidate both legs returned that a leg ranks above that leg's last
-    single-leg pick moves up to its own leg rank in the same way. Without
-    this, a leg's rank-1 chunk that the other leg found only deep down
-    fused under the moved single-leg picks and under chunks both legs
-    ranked moderately, though it would hold rank 1 had the other leg
-    missed it. A chunk picked by both legs takes the better place; on a
-    tie of positions a single-leg pick goes before it. Single-leg picks
-    CAN move down: every lifted both-leg chunk placed above one pushes it
-    one place lower than on plain S-R7c.
+    * P1 (window): the window is the union of each leg's top ``share``
+      chunks; it fills the first W places, W = its size (at most
+      2 x ``share``).
+    * P2 (no penalty for agreement): membership depends only on the
+      chunk's own rank in the leg; the other leg finding it too never
+      takes it out of the window.
+    * P3 (order inside the window): by the fused score, ties by the
+      better leg rank, then by chunk id. Deterministic.
+    * P4: every chunk outside the window keeps its fused relative order;
+      the output is a permutation of ``order``; ``share`` 0 returns
+      ``order`` unchanged.
 
-    Limits, stated rather than claimed away:
-    * "a chunk both legs found is never lower than had one leg missed it"
-      cannot hold for every input under ANY order that keeps the
-      single-leg guarantee above: vector [a, b] with lexical [b, a] (share
-      >= 1) gives a place 1 had lexical missed a, and b place 1 had vector
-      missed b; one list has one first place.
-    * when a leg's single-leg picks sit deep, every both-leg chunk that
-      leg ranks above them is lifted to its leg rank, so the top of the
-      list follows that leg's order down to that depth and the agreement
-      of the two legs is overridden there.
+    Cost, stated: a chunk outside the window that fusion placed inside the
+    first W places (e.g. both legs rank it ``share`` + 1) moves down by at
+    most W places. A single-leg candidate that is NOT in its leg's top
+    ``share`` (both-leg chunks rank above it in that leg) is no longer
+    lifted, as it was by the earlier "best single-leg candidates" rule.
     """
-    fused_pos = {c.chunk_id: i for i, c in enumerate(order, 1)}
-    best: Dict[str, Tuple[int, int, int, str]] = {}
-    for leg_index, (mine, other) in enumerate(((sem_rank, bm_rank), (bm_rank, sem_rank))):
-        alone = sorted(
-            (r, cid) for cid, r in mine.items()
-            if cid not in other and cid in fused_pos
-        )[:share]
-        bar = alone[-1][0] if alone else 0
-        chosen = alone + [
-            (r, cid) for cid, r in mine.items()
-            if cid in other and cid in fused_pos and r < bar
-        ]
-        for r, cid in chosen:
-            pick = (min(r, fused_pos[cid]), int(cid in other), leg_index, cid)
-            if cid not in best or pick < best[cid]:
-                best[cid] = pick
-    picks = list(best.values())
-    picked = set(best)
-    by_id = {c.chunk_id: c for c in order}
-    out = [c for c in order if c.chunk_id not in picked]
-    last = -1
-    for target, _both, _leg, cid in sorted(picks):
-        at = min(max(target - 1, last + 1), len(out))
-        out.insert(at, by_id[cid])
-        last = at
-    return out
+    if share <= 0:
+        return list(order)
+    present = {c.chunk_id for c in order}
+    window_ids = {
+        cid for ranks in (sem_rank, bm_rank)
+        for cid, r in ranks.items() if r <= share and cid in present
+    }
+    if not window_ids:
+        return list(order)
+
+    def _key(c: "Chunk") -> Tuple[float, int, str]:
+        s, b = sem_rank.get(c.chunk_id), bm_rank.get(c.chunk_id)
+        fused = (
+            (1.0 / (RRF_K + s) if s is not None else 0.0)
+            + (1.0 / (RRF_K + b) if b is not None else 0.0)
+        )
+        return (-fused, min(r for r in (s, b) if r is not None), c.chunk_id)
+
+    window = sorted((c for c in order if c.chunk_id in window_ids), key=_key)
+    return window + [c for c in order if c.chunk_id not in window_ids]
 
 
 # ── The lexical leg's query tokeniser (both backends) ──────────────────────
@@ -2932,9 +2919,9 @@ def _rrf_combine(
     ``.vector_score`` / ``.lexical_score`` and the fused position on
     ``.fused_rank``, debug-only like ``.rrf_score``.
 
-    Before the ``top_k`` cut, ``guarantee_leg_share`` places each leg's best
-    single-leg candidates at their own leg rank (``RAG_FUSION_LEG_SHARE``
-    per leg); ``.fused_rank`` is the position after that step.
+    Before the ``top_k`` cut, ``guarantee_leg_share`` puts each leg's top
+    ``RAG_FUSION_LEG_SHARE`` chunks at the head of the order (the window);
+    ``.fused_rank`` is the position after that step.
 
     With ``project_id``, that full order (before the ``top_k`` cut) is
     summarised by leg into the turn memo (``record_fusion``) for the

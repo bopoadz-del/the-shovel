@@ -1,11 +1,12 @@
-"""S-R7c: each leg's best single-leg hits are represented in the pool.
+"""Each leg's top chunks open the fused list, by leg rank (the window).
 
 With k=60 a single-leg rank-1 hit scores 1/61 = 0.0164 and a chunk at rank
 50 in both legs scores 2/110 = 0.0182, so agreement at any depth outranks
-the best hit of one leg. ``guarantee_leg_share`` places the best
-``RAG_FUSION_LEG_SHARE`` single-leg candidates of each leg at their own leg
-rank; everything else keeps its fused order, and agreeing legs give the
-same order as plain fusion.
+the best hit of one leg. ``guarantee_leg_share`` puts the union of each
+leg's top ``RAG_FUSION_LEG_SHARE`` chunks (found by the other leg or not)
+in the first W places (P1), never drops a chunk from that window because
+the other leg found it too (P2), orders the window by fused score, then
+leg rank, then id (P3), and keeps everything else in fused order (P4).
 
 Every input is constructed here (invented ids, texts, scores). The real
 ``VectorStore.search`` / ``_rrf_combine`` / ``retrieve_with_filter`` run;
@@ -77,7 +78,7 @@ def test_agreeing_legs_pool_unchanged(monkeypatch, tmp_path, count):
     assert [c.score for c in shared] == [c.score for c in plain]
 
 
-# ── 4. the reorder on its own ──────────────────────────────────────────────
+# ── 4. the window on its own: P1-P4 on invented lists ──────────────────────
 
 class _C:
     def __init__(self, cid):
@@ -88,27 +89,95 @@ def _order(ids):
     return [_C(i) for i in ids]
 
 
-@pytest.mark.parametrize("share, expected", [
-    # b* in both legs; lx lexical rank 1, lz lexical rank 2; vx vector rank 1.
-    (0, ["b1", "b2", "b3", "vx", "lx", "lz"]),
-    (1, ["vx", "lx", "b1", "b2", "b3", "lz"]),
-    (2, ["vx", "lx", "lz", "b1", "b2", "b3"]),
+def _ranks(ids):
+    return {c: r for r, c in enumerate(ids, 1)}
+
+
+def _fused(sem, bm):
+    """Plain fusion of two invented legs (k=60, stable, lexical first)."""
+    sr, br = _ranks(sem), _ranks(bm)
+    ids = list(dict.fromkeys(bm + sem))
+    score = {c: (1 / (60 + sr[c]) if c in sr else 0) + (1 / (60 + br[c]) if c in br else 0)
+             for c in ids}
+    return sorted(ids, key=lambda c: -score[c]), sr, br, score
+
+
+def _run(sem, bm, share):
+    order, sr, br, _ = _fused(sem, bm)
+    return [c.chunk_id for c in guarantee_leg_share(_order(order), sr, br, share)]
+
+
+def _window(sem, bm, share):
+    return set(sem[:share]) | set(bm[:share])
+
+
+# Two shapes. A: the vector leg's first chunk ``top`` is found by the lexical
+# leg only deep down, under chunks both legs rank moderately. B: each leg
+# ranks first the chunk the other ranks second, plus single-leg tails.
+_SHAPE_A = (["top", "s2", "s3", "m1", "m2", "m3"],
+            ["x1", "m1", "m2", "m3"] + [f"f{i}" for i in range(40)] + ["top"])
+_SHAPE_B = (["a", "b", "p", "q", "r"], ["b", "a", "u", "q", "w"])
+SHAPES = [_SHAPE_A, _SHAPE_B]
+
+
+@pytest.mark.parametrize("sem, bm", SHAPES)
+@pytest.mark.parametrize("share", [1, 2])
+def test_p1_each_legs_top_chunks_fill_the_first_w_places(sem, bm, share):
+    out = _run(sem, bm, share)
+    window = _window(sem, bm, share)
+    assert set(out[:len(window)]) == window, out
+
+
+@pytest.mark.parametrize("sem, bm", SHAPES)
+@pytest.mark.parametrize("share", [1, 2])
+def test_p2_the_other_leg_finding_a_chunk_never_takes_it_out(sem, bm, share):
+    for mine, other, mine_is_sem in ((sem, bm, True), (bm, sem, False)):
+        for x in mine[:share]:
+            if x not in other:
+                continue
+            dropped = [c for c in other if c != x]
+            alone = _run(sem, dropped, share) if mine_is_sem else _run(dropped, bm, share)
+            alone_window = _window(sem, dropped, share) if mine_is_sem else _window(dropped, bm, share)
+            full = _run(sem, bm, share)
+            assert x in full[:len(_window(sem, bm, share))], (x, full)
+            assert x in alone[:len(alone_window)], (x, alone)
+
+
+@pytest.mark.parametrize("sem, bm, share, head", [
+    # A: top is in both legs (1/61 + 1/105) so it leads; x1 is lexical rank 1.
+    (*_SHAPE_A, 1, ["top", "x1"]),
+    # B: a and b tie on fused score and on leg rank 1: id decides.
+    (*_SHAPE_B, 1, ["a", "b"]),
 ])
-def test_share_places_single_leg_hits_by_leg_rank(share, expected):
-    order = _order(["b1", "b2", "b3", "vx", "lx", "lz"])
-    sem = {"vx": 1, "b1": 2, "b2": 3, "b3": 4}
-    bm = {"lx": 1, "lz": 2, "b1": 3, "b2": 4, "b3": 5}
-    out = guarantee_leg_share(order, sem, bm, share)
-    assert [c.chunk_id for c in out] == expected
+def test_p3_window_order_is_fused_score_then_leg_rank_then_id(sem, bm, share, head):
+    assert _run(sem, bm, share)[:len(head)] == head
 
 
-@pytest.mark.parametrize("share", [1, 3])
-def test_a_single_leg_hit_fused_higher_is_never_moved_down(share):
-    # lx is lexical rank 4 but already fused at position 1.
-    order = _order(["lx", "b1", "b2"])
-    out = guarantee_leg_share(order, {"b1": 1, "b2": 2},
-                              {"b1": 1, "b2": 2, "lx": 4}, share)
-    assert [c.chunk_id for c in out] == ["lx", "b1", "b2"]
+@pytest.mark.parametrize("sem, bm", SHAPES)
+@pytest.mark.parametrize("share", [1, 2])
+def test_p4_outside_the_window_keeps_fused_order_and_is_a_permutation(sem, bm, share):
+    order, _, _, _ = _fused(sem, bm)
+    out = _run(sem, bm, share)
+    window = _window(sem, bm, share)
+    assert sorted(out) == sorted(order)
+    assert [c for c in out if c not in window] == [c for c in order if c not in window]
+
+
+@pytest.mark.parametrize("sem, bm", SHAPES)
+def test_share_zero_changes_nothing(sem, bm):
+    order, _, _, _ = _fused(sem, bm)
+    assert _run(sem, bm, 0) == order
+
+
+@pytest.mark.parametrize("sem, bm", SHAPES)
+def test_a_window_chunk_never_needs_the_other_leg_to_lose_it(sem, bm):
+    """Shape A's ``top``: vector #1, lexical #45. Plain fusion puts the
+    moderate both-leg chunks above it; the window puts it first."""
+    plain, _, _, _ = _fused(sem, bm)
+    out = _run(sem, bm, 2)
+    first = sem[0]
+    assert out.index(first) < len(_window(sem, bm, 2))
+    assert out.index(first) <= plain.index(first)
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -119,51 +188,7 @@ def test_fusion_leg_share_setting(monkeypatch, raw, expected):
     assert vs.fusion_leg_share() == expected
 
 
-# ── 5. a chunk both legs found keeps the place one leg would give it ───────
-#
-# Invented A10 shape: the vector leg's rank-1 chunk ``top`` is also found by
-# the lexical leg, but only deep down, so plain fusion puts the chunks both
-# legs ranked moderately (m*) above it, and the moved single-leg picks
-# (lx, vy) go above those. Had the lexical leg missed ``top`` it would be a
-# single-leg pick at rank 1; being found twice must not cost it that place.
-
-@pytest.mark.parametrize("deep, mine, other", [
-    (45, "sem", "bm"),   # vector #1, lexical #45
-    (30, "bm", "sem"),   # the mirror: lexical #1, vector #30
-])
-def test_a_both_leg_chunk_above_a_single_leg_pick_keeps_its_leg_rank(deep, mine, other):
-    # Plain fusion order: the moderate both-leg chunks first, then top.
-    order = _order(["m1", "m2", "m3", "top", "s2", "s3", "x1"])
-    ranks = {
-        mine: {"top": 1, "s2": 2, "s3": 3, "m1": 4, "m2": 5, "m3": 6},
-        other: {"x1": 1, "m1": 2, "m2": 3, "m3": 4, "top": deep},
-    }
-    out = [c.chunk_id for c in guarantee_leg_share(order, ranks["sem"], ranks["bm"], 2)]
-    # Leg rank 1, tied with the other leg's rank-1 single-leg pick, which
-    # goes first; then the remaining single-leg picks, then fused order.
-    assert out == ["x1", "top", "s2", "s3", "m1", "m2", "m3"], out
-
-
-@pytest.mark.parametrize("top_rank", [4, 7])
-def test_a_both_leg_chunk_below_the_last_single_leg_pick_keeps_fused_order(top_rank):
-    # The leg's single-leg picks are s1 (rank 1) and s2 (rank 2); ``top``
-    # ranks below both, so it gets no guarantee and stays where fusion put it.
-    order = _order(["m1", "top", "s1", "s2"])
-    sem = {"s1": 1, "s2": 2, "m1": 3, "top": top_rank}
-    bm = {"m1": 1, "top": 40}
-    out = guarantee_leg_share(order, sem, bm, 2)
-    assert [c.chunk_id for c in out] == ["s1", "s2", "m1", "top"]
-
-
-@pytest.mark.parametrize("share", [0, 2])
-def test_no_single_leg_pick_means_no_both_leg_move(share):
-    # Both legs found every chunk: there is no single-leg pick to outrank,
-    # so the fused order stands whatever the share.
-    order = _order(["b1", "b2", "top"])
-    out = guarantee_leg_share(order, {"top": 1, "b1": 2, "b2": 3},
-                              {"b1": 1, "b2": 2, "top": 45}, share)
-    assert [c.chunk_id for c in out] == ["b1", "b2", "top"]
-
+# ── 5. through the real search path ────────────────────────────────────────
 
 @pytest.mark.parametrize("n_both", [10, 20])
 def test_vector_rank_one_found_deep_by_lexical_is_pooled_first(monkeypatch, tmp_path, n_both):
@@ -181,35 +206,6 @@ def test_vector_rank_one_found_deep_by_lexical_is_pooled_first(monkeypatch, tmp_
 
     pooled, _ = retriever.retrieve_with_filter(QUERY, PID, k=10)
     ids = _ids(pooled)
-    # Leg rank 1: only the lexical leg's tied rank-1 single-leg hit is ahead.
-    assert ids[:2] == ["l0", "v0"], ids
-
-
-# ── 6. the limit of "found twice never costs a place" ──────────────────────
-#
-# Each leg ranks first a chunk the other leg ranks second. Had lexical
-# missed ``a``, the single-leg guarantee puts ``a`` first; had vector missed
-# ``b``, it puts ``b`` first. With both legs present only one can be first,
-# so no order keeping that guarantee meets the property for both chunks.
-# This pins the guarantee on both counterfactuals and the conflict.
-
-def _run(sem, bm, share):
-    sr = {c: r for r, c in enumerate(sem, 1)}
-    br = {c: r for r, c in enumerate(bm, 1)}
-    ids = list(dict.fromkeys(bm + sem))
-    fused = sorted(ids, key=lambda c: -((1 / (60 + sr[c]) if c in sr else 0)
-                                        + (1 / (60 + br[c]) if c in br else 0)))
-    return [c.chunk_id for c in guarantee_leg_share(_order(fused), sr, br, share)]
-
-
-@pytest.mark.parametrize("share, tail", [(1, []), (2, ["p"])])
-def test_found_twice_property_conflicts_with_the_single_leg_guarantee(share, tail):
-    sem, bm = ["a", "b"] + tail, ["b", "a"] + [t + "x" for t in tail]
-    lexical_missed_a = _run(sem, [c for c in bm if c != "a"], share)
-    vector_missed_b = _run([c for c in sem if c != "b"], bm, share)
-    assert lexical_missed_a[0] == "a"
-    assert vector_missed_b[0] == "b"
-    full = _run(sem, bm, share)
-    assert full[0] in {"a", "b"}
-    lower = "b" if full[0] == "a" else "a"
-    assert full.index(lower) == 1
+    # Window = {v0, v1} | {l0, l1}; v0 is in both legs, so it leads.
+    assert ids[0] == "v0", ids
+    assert set(ids[:4]) == {"v0", "v1", "l0", "l1"}, ids
