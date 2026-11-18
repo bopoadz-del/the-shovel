@@ -17,6 +17,7 @@ trace can find them in the handed set; :func:`public_view` strips them.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 #: The two single-leg classes the trace follows.
@@ -33,6 +34,15 @@ NOT_HANDED = "not_handed"
 #: depth only: reading it changes no ranking. It covers any leg share the
 #: fusion guarantee can be set to without a second trace change.
 LEG_TOP_TRACED = 10
+
+#: How many documents per leg ``leg_docs`` lists, best leg rank first. The
+#: trace line stays small however many chunks a leg ranked; the leg's full
+#: document count is ``leg_docs_total``, so a shortened list is visible.
+LEG_DOCS_CAP = 50
+
+#: Hex characters of the id digest printed in place of a document id that
+#: is also the document's stored name (see :func:`public_view`).
+DOC_DIGEST_HEX = 12
 
 #: The two legs by their rank maps' roles in ``leg_summary``.
 LEG_NAMES = ("vector", "lexical")
@@ -79,7 +89,79 @@ def leg_summary(
         "fused_k": fused_k,
         **{f"best_{leg}": best[leg] for leg in LEGS},
         "leg_top": leg_top(order, sem_rank, bm_rank),
+        **_leg_docs_and_totals(order, sem_rank, bm_rank),
     }
+
+
+def _leg_docs_and_totals(
+    order: Iterable[Any],
+    sem_rank: Mapping[str, int],
+    bm_rank: Mapping[str, int],
+) -> Dict[str, Any]:
+    """``leg_docs`` cut to ``LEG_DOCS_CAP`` per leg, and each leg's full
+    document count as ``leg_docs_total`` (the fold runs once)."""
+    full = leg_docs(order, sem_rank, bm_rank, cap=None)
+    return {
+        "leg_docs": {name: docs[:LEG_DOCS_CAP] for name, docs in full.items()},
+        "leg_docs_total": {name: len(docs) for name, docs in full.items()},
+    }
+
+
+def leg_docs(
+    order: Iterable[Any],
+    sem_rank: Mapping[str, int],
+    bm_rank: Mapping[str, int],
+    cap: Optional[int] = LEG_DOCS_CAP,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Each leg's whole candidate list folded to DOCUMENTS: per document,
+    its best rank in that leg and how many of the leg's chunks it holds,
+    best rank first, at most ``cap`` documents per leg (``None``: all).
+
+    ``leg_top`` stops at ``LEG_TOP_TRACED`` and carries no id in the public
+    trace, so a document the answer needed but nobody handed cannot be
+    placed: inside a leg at rank 30, or in neither leg at all (recall).
+    This answers that from the document id the trace's ``chunks`` already
+    publish. It also shows one document filling a leg's head (``n_chunks``).
+    Measurement only: reading it changes no ranking."""
+    doc_of = {
+        getattr(c, "chunk_id", None): getattr(c, "doc_id", None) for c in order
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for name, mine in (("vector", sem_rank), ("lexical", bm_rank)):
+        per_doc: Dict[str, Dict[str, int]] = {}
+        for cid, r in mine.items():
+            doc = doc_of.get(cid)
+            if doc is None:
+                continue
+            entry = per_doc.setdefault(doc, {"best_leg_rank": r, "n_chunks": 0})
+            entry["n_chunks"] += 1
+            entry["best_leg_rank"] = min(entry["best_leg_rank"], r)
+        ranked = sorted(
+            per_doc.items(), key=lambda kv: (kv[1]["best_leg_rank"], kv[0]),
+        )
+        if cap is not None:
+            ranked = ranked[:cap]
+        out[name] = [{"doc_id": doc, **entry} for doc, entry in ranked]
+    return out
+
+
+def doc_digest(doc_id: str) -> str:
+    """A short stable digest of a document id, for a trace line that must
+    not print the id itself."""
+    return hashlib.sha256(str(doc_id).encode("utf-8")).hexdigest()[:DOC_DIGEST_HEX]
+
+
+def _public_doc(entry: Dict[str, Any], names: Mapping[str, str]) -> Dict[str, Any]:
+    """One ``leg_docs`` entry for the trace. A document whose id IS its
+    stored name (the vector store's parent-row fallback stores
+    ``original_name = id``) would put a file name on the log line, so that
+    id is replaced by ``doc_digest``; any other id is printed as is."""
+    doc = entry.get("doc_id")
+    if doc is None or names.get(doc) != doc:
+        return dict(entry)
+    view = {k: v for k, v in entry.items() if k != "doc_id"}
+    view["doc_digest"] = doc_digest(doc)
+    return view
 
 
 def leg_top(
@@ -196,18 +278,26 @@ class Follow:
 
 
 def public_view(
-    record: Optional[Dict[str, Any]], handed: Iterable[Any],
+    record: Optional[Dict[str, Any]],
+    handed: Iterable[Any],
+    names: Optional[Mapping[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """The trace form: counts and ranks, no chunk id. Adds each followed
     candidate's position in the handed set; a pooled candidate that was not
-    handed is marked ``not_handed``."""
+    handed is marked ``not_handed``. ``names`` (document id -> stored name)
+    lets ``leg_docs`` print a digest for an id that is also a name."""
     if not record:
         return None
     handed_ids = [getattr(c, "chunk_id", None) for c in handed]
     out = {
         k: v for k, v in record.items()
-        if not k.startswith("best_") and k != "leg_top"
+        if not k.startswith("best_") and k not in ("leg_top", "leg_docs")
     }
+    if "leg_docs" in record:
+        out["leg_docs"] = {
+            name: [_public_doc(e, names or {}) for e in entries]
+            for name, entries in (record.get("leg_docs") or {}).items()
+        }
     out["leg_top"] = {
         name: [
             {
