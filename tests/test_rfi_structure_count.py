@@ -182,3 +182,60 @@ def test_main_refuses_a_missing_or_unsafe_anchor(monkeypatch, env, code):
 @pytest.mark.parametrize("call", ["commit(", ".add("])
 def test_script_never_writes(call):
     assert call not in _SRC
+
+
+# --- letter script: what the English heading rule cannot see -------------
+
+_AR = "".join(chr(c) for c in range(0x0628, 0x0638))  # sixteen Arabic letters
+_GR = "".join(chr(c) for c in range(0x03B1, 0x03BA))  # nine Greek letters
+
+
+@pytest.mark.parametrize("ch, script", [
+    ("a", "LATIN"), (_AR[0], "ARABIC"), (_GR[0], "GREEK"), ("7", None), (":", None),
+])
+def test_letter_script_is_the_unicode_script_of_a_letter_only(ch, script):
+    assert m.letter_script(ch) == script
+
+
+@pytest.mark.parametrize("table, scripts", [
+    (m.DEFAULT_HEADINGS, {"LATIN"}),
+    ({"question": [_AR[:4]], "answer": [_AR[4:8]], "references": [_AR[8:12]]}, {"ARABIC"}),
+    ({"question": ["query"], "answer": [_AR[4:8]], "references": ["ref"]}, {"LATIN", "ARABIC"}),
+])
+def test_the_rule_sees_the_scripts_its_own_table_is_written_in(table, scripts):
+    assert m.table_scripts(table) == frozenset(scripts)
+
+
+@pytest.mark.parametrize("texts, script, unseen, mixed", [
+    (["plain words only here"], "LATIN", False, False),
+    ([_AR * 3, "ab"], "ARABIC", True, False),
+    (["a" * 90, _AR[:10]], "LATIN", False, True),     # 10 of 100 letters outside
+    (["a" * 99, _AR[:1]], "LATIN", False, False),     # 1 of 100: under the share
+    (["12 34 -- ::"], None, False, False),
+])
+def test_script_profile_mainly_or_in_part_outside_the_table(texts, script, unseen, mixed):
+    p = m.script_profile(m.script_counts(texts), frozenset({"LATIN"}))
+    assert (p["script"], p["unseen"], p["mixed"]) == (script, unseen, mixed)
+
+
+@pytest.mark.parametrize("seen, unseen", [
+    (frozenset({"LATIN"}), 1),
+    (frozenset({"LATIN", "ARABIC"}), 0),
+])
+def test_summary_counts_documents_by_script_over_every_document(seen, unseen):
+    docs = {"d1": [(0, "Question: x\nAnswer: y\nReference: z")],
+            "d2": [(0, _AR * 2)],
+            "d3": [(0, "123")]}
+    s = m.summarise((d, m.classify(c, PATS, seen)) for d, c in docs.items())
+    assert dict(s["by_script"]) == {"LATIN": 1, "ARABIC": 1, "(no letters)": 1}
+    assert s["unseen_script"] == unseen
+    assert s["rfi_like"] == 1
+
+
+@pytest.mark.parametrize("secret", ["zebra-" + _GR, _AR + " hidden"])
+def test_render_prints_script_names_never_text(secret):
+    docs = {"d1": [(0, secret * 3)], "d2": [(0, "Question: a\nAnswer: b\nRefs: c")]}
+    s = m.summarise((d, m.classify(c, PATS, frozenset({"LATIN"}))) for d, c in docs.items())
+    out = "\n".join(m.render("anc", s))
+    assert secret not in out and secret.split()[0] not in out
+    assert "outside the heading table's scripts: mainly=" in out
