@@ -625,3 +625,52 @@ async def test_a_non_computed_turn_through_the_stream_route_is_untouched(reply):
     ends = [e for e in decoded if e and e.get("type") == "end"]
     assert ends[0]["content"].strip() == reply
     assert answer_exit.FIGURE_REMOVED not in ends[0]["content"]
+
+
+# -- the exit check's own bounds and the renderer branch ---------------------
+
+@pytest.mark.parametrize("depth, statements", [
+    (2, ["two rows: total 7 m."]),
+    (5, ["two rows: total 7 m."]),
+    (9, []),
+    (14, []),
+])
+def test_plain_statements_are_read_only_to_a_bounded_depth(depth, statements):
+    from app.agents import answer_exit
+
+    leaf = {"statement": "two rows: total 7 m.", "stated_figures": []}
+    assert answer_exit._plain_statements(_nest(depth, leaf)) == statements
+
+
+@pytest.mark.parametrize("payload, has, lacks", [
+    # a flag is not a figure: True is never read as 1
+    ({"ok": True, "result": {"count": 4}}, {4.0}, {1.0}),
+    ({"selected": False, "rows": [{"q": 12.5, "where": "page 7"}]}, {12.5, 7.0}, {0.0}),
+    # a figure nested deeper than any tool result is not read
+    (_nest(12, {"sum": 99.0}), set(), {99.0}),
+    (_nest(3, {"sum": 41.0}), {41.0}, set()),
+], ids=["true", "false", "too-deep", "shallow"])
+def test_payload_numbers_skip_flags_and_stop_at_a_depth(payload, has, lacks):
+    from app.agents import answer_exit
+
+    found = answer_exit._payload_numbers(payload)
+    assert has <= found
+    assert not (lacks & found)
+
+
+@pytest.mark.parametrize("tool, rendered", [
+    # a declared computed tool: the #392 renderer words the lead
+    ("bill_rows_aggregate", True),
+    # a tool with no computed declaration: the tool's own statement sentence
+    ("an_undeclared_tool", False),
+], ids=["declared", "undeclared"])
+def test_the_lead_is_rendered_from_the_tools_declared_statement(rows, tool, rendered):
+    from app.agents import answer_exit
+
+    payload = _bill_payload(rows, ASK)
+    res = {"tool": tool, "payload": payload,
+           "figures": answer_exit._stated_figures(payload),
+           "statements": answer_exit._plain_statements(payload)}
+    lead = answer_exit._computed_lead(res, ASK)
+    assert ("**103.5 m**" in lead) is rendered
+    assert (lead == "\n".join(res["statements"])) is (not rendered)
