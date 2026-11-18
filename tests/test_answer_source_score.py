@@ -150,6 +150,41 @@ def test_mid_sentence_small_number_is_not_a_marker(answer, expected):
     assert len(ass.find_citations(answer, ["A.pdf", "B.pdf"])) == expected
 
 
+@pytest.mark.parametrize("answer, expected", [
+    # the answer contract's bracketed form, adjacent markers included
+    ("Grade C40 [1][2].", [("marker", "A.pdf"), ("marker", "B.pdf")]),
+    # a bracketed marker the panel does not number is not a citation
+    ("Grade C40 [3].", []),
+])
+def test_bracketed_marker_resolves_through_sources_list(answer, expected):
+    cites = ass.find_citations(answer, ["A.pdf", "B.pdf"])
+    assert [(c.kind, c.target) for c in cites] == expected
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ("Walls are 250 mm thick [3].", [250.0]),
+    # parentheses are not the marker form: the 3 stays a figure
+    ("Walls are 250 mm thick (3).", [250.0, 3.0]),
+])
+def test_bracketed_marker_is_never_a_figure(answer, expected):
+    assert ass.answer_numbers(answer, ["A.pdf"]) == expected
+
+
+@pytest.mark.parametrize("sources, handed, not_handed, numbers, unresolved", [
+    (["Spec A.pdf"], 1, 0, (1, 0), 0),
+    # the panel numbers no entry: the marker is unresolved, the figure unbacked
+    ([], 0, 0, (0, 1), 1),
+])
+def test_bracketed_marker_row_score(sources, handed, not_handed, numbers, unresolved):
+    row = {"id": "r", "answer": "Walls are 250 mm thick [1].", "sources_list": sources,
+           "handed": [_chunk("c1", "Spec A.pdf", "Walls shall be 250 mm thick.")]}
+    s = ass.score_row(row)
+    assert (s.citations_handed, s.citations_not_handed) == (handed, not_handed)
+    assert (s.numbers_found, s.numbers_not_found) == numbers
+    assert s.markers_unresolved == unresolved
+    assert s.as_dict()["markers_unresolved"] == unresolved
+
+
 @pytest.mark.parametrize("panel, expected", [
     ("SOURCES CITED\n2\n\n31 of 32 documents indexed\n\n1\nA.pdf\n2\nB.pdf", ["A.pdf", "B.pdf"]),
     ("SOURCES CITED\n1\n\n31 of 32 documents indexed\n\n1\nA.xlsx\nProject document", ["A.xlsx"]),
