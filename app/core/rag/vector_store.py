@@ -149,8 +149,20 @@ def guarantee_leg_share(
     fused under the moved single-leg picks and under chunks both legs
     ranked moderately, though it would hold rank 1 had the other leg
     missed it. A chunk picked by both legs takes the better place; on a
-    tie of positions a single-leg pick goes before it, so no single-leg
-    candidate is ever moved down.
+    tie of positions a single-leg pick goes before it. Single-leg picks
+    CAN move down: every lifted both-leg chunk placed above one pushes it
+    one place lower than on plain S-R7c.
+
+    Limits, stated rather than claimed away:
+    * "a chunk both legs found is never lower than had one leg missed it"
+      cannot hold for every input under ANY order that keeps the
+      single-leg guarantee above: vector [a, b] with lexical [b, a] (share
+      >= 1) gives a place 1 had lexical missed a, and b place 1 had vector
+      missed b; one list has one first place.
+    * when a leg's single-leg picks sit deep, every both-leg chunk that
+      leg ranks above them is lifted to its leg rank, so the top of the
+      list follows that leg's order down to that depth and the agreement
+      of the two legs is overridden there.
     """
     fused_pos = {c.chunk_id: i for i, c in enumerate(order, 1)}
     best: Dict[str, Tuple[int, int, int, str]] = {}

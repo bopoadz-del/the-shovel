@@ -183,3 +183,33 @@ def test_vector_rank_one_found_deep_by_lexical_is_pooled_first(monkeypatch, tmp_
     ids = _ids(pooled)
     # Leg rank 1: only the lexical leg's tied rank-1 single-leg hit is ahead.
     assert ids[:2] == ["l0", "v0"], ids
+
+
+# ── 6. the limit of "found twice never costs a place" ──────────────────────
+#
+# Each leg ranks first a chunk the other leg ranks second. Had lexical
+# missed ``a``, the single-leg guarantee puts ``a`` first; had vector missed
+# ``b``, it puts ``b`` first. With both legs present only one can be first,
+# so no order keeping that guarantee meets the property for both chunks.
+# This pins the guarantee on both counterfactuals and the conflict.
+
+def _run(sem, bm, share):
+    sr = {c: r for r, c in enumerate(sem, 1)}
+    br = {c: r for r, c in enumerate(bm, 1)}
+    ids = list(dict.fromkeys(bm + sem))
+    fused = sorted(ids, key=lambda c: -((1 / (60 + sr[c]) if c in sr else 0)
+                                        + (1 / (60 + br[c]) if c in br else 0)))
+    return [c.chunk_id for c in guarantee_leg_share(_order(fused), sr, br, share)]
+
+
+@pytest.mark.parametrize("share, tail", [(1, []), (2, ["p"])])
+def test_found_twice_property_conflicts_with_the_single_leg_guarantee(share, tail):
+    sem, bm = ["a", "b"] + tail, ["b", "a"] + [t + "x" for t in tail]
+    lexical_missed_a = _run(sem, [c for c in bm if c != "a"], share)
+    vector_missed_b = _run([c for c in sem if c != "b"], bm, share)
+    assert lexical_missed_a[0] == "a"
+    assert vector_missed_b[0] == "b"
+    full = _run(sem, bm, share)
+    assert full[0] in {"a", "b"}
+    lower = "b" if full[0] == "a" else "a"
+    assert full.index(lower) == 1
