@@ -766,6 +766,30 @@ def aggregate_project_bills(
     return out
 
 
+def _part_of_ask(
+    picked: dict[str, list[str]],
+    terms: Iterable[str] | str | None,
+    section: Iterable[str] | str | None,
+) -> dict[str, list[str]] | None:
+    """The part of the ask's selection that a call names, for an ask whose
+    words all together select no row (an ask of two parts: 'kerbs and
+    ducts'). Only the USER's selecting words are kept, those the call's terms
+    also name; the call never adds a word of its own. ``None`` when the call
+    names none of them or all of them (nothing narrower to read)."""
+    texts = [t for t in ([terms] if isinstance(terms, str) else list(terms or []))
+             + ([section] if isinstance(section, str) else list(section or [])) if t]
+    named = set().union(*(_forms(w) for w in _terms([_without_sizes(t) for t in texts]))) if texts else set()
+    called = [s for t in texts for s in sizes_in(t)]
+    part = {
+        "terms": [w for w in picked["terms"] if _forms(w) & named],
+        "section_terms": [w for w in picked["section_terms"] if _forms(w) & named],
+        "sizes": [t for t in picked["sizes"] if any(s.same(c) for s in sizes_in(t) for c in called)],
+    }
+    kept = sum(len(v) for v in part.values())
+    whole = sum(len(picked[k]) for k in part)
+    return part if 0 < kept < whole else None
+
+
 def _aggregate_bill(
     rows: Sequence[SheetRow],
     *,
@@ -784,6 +808,11 @@ def _aggregate_bill(
             result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
                                measure=read or MEASURE_QUANTITY, fold=True, sizes=picked["sizes"])
             result["selected_by"] = "ask"
+            part = _part_of_ask(picked, terms, section) if not result["rows"] else None
+            if part is not None:
+                result = aggregate(rows, terms=part["terms"], section=part["section_terms"],
+                                   measure=read or MEASURE_QUANTITY, fold=True, sizes=part["sizes"])
+                result["selected_by"] = "ask_part"
             # No column named: the quantity, and the statement says so.
             result["measure_unread"] = read is None
         else:
