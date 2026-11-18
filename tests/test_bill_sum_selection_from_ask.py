@@ -396,12 +396,18 @@ def test_stated_figures_are_read_only_to_a_bounded_depth(depth, values):
     assert [f["value"] for f in answer_exit._stated_figures(payload)] == values
 
 
-def test_a_self_referencing_payload_ends():
+@pytest.mark.parametrize("value, as_list", [
+    (2, False),
+    (9.5, True),
+])
+def test_a_self_referencing_payload_ends(value, as_list):
+    """A payload that holds itself (in a dict field or a list) ends and still
+    reads its figure."""
     from app.agents import answer_exit
 
-    payload: dict = {"stated_figures": [{"value": 2, "shown": "2 nr"}]}
-    payload["self"] = payload
-    assert {f["value"] for f in answer_exit._stated_figures(payload)} == {2.0}
+    payload: dict = {"stated_figures": [{"value": value, "shown": f"{value} nr"}]}
+    payload["self"] = [payload] if as_list else payload
+    assert {f["value"] for f in answer_exit._stated_figures(payload)} == {float(value)}
 
 
 @pytest.mark.parametrize("result, values", [
