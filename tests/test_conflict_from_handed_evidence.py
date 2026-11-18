@@ -109,3 +109,54 @@ def test_a_value_the_answer_did_not_state_is_not_a_conflict(question, drawing, m
     unrelated = "The erection sequence follows the approved programme [source: %s]." % drawing[1]
     out = _run_turn(question, drawing, method, unrelated)
     assert not out.get("conflicts")
+
+
+# ── what the turn records as handed evidence ────────────────────────────────
+
+def _excerpts(*parts: tuple[str, int, str, str]) -> dict:
+    """A pre-injected excerpt message in the marker form the model sees."""
+    return {"role": "system", "content": "\n".join(
+        f"[doc_id={doc} chunk={idx} score=0.800 class=project_corpus src={name}] {text}"
+        for doc, idx, name, text in parts)}
+
+
+@pytest.mark.parametrize("parts, expected", [
+    pytest.param(
+        [("d-a", 0, "Bracing Layout.pdf", "Bracing members are 120 mm angles."),
+         ("d-b", 1, "Bracing Method.pdf", "   ")],
+        [("d-a", "Bracing Layout.pdf", 0)],
+        id="blank-passage-not-recorded"),
+    pytest.param(
+        [("d-c", 2, "Purlin Schedule.pdf", ""),
+         ("d-d", 3, "Purlin Notes.pdf", "Purlins at 1.5 m centres."),
+         ("d-d", 3, "Purlin Notes.pdf", "Purlins at 1.5 m centres.")],
+        [("d-d", "Purlin Notes.pdf", 3)],
+        id="empty-passage-and-repeat-not-recorded"),
+])
+def test_only_passages_with_text_are_recorded_once_each(parts, expected):
+    token = answer_exit._TURN.set(None)
+    try:
+        turn = answer_exit.open_turn()
+        answer_exit.note_evidence(_excerpts(*parts), [], turn)
+        got = [(r["doc_id"], r["doc_name"], r["chunk_index"]) for r in turn.evidence]
+        assert got == expected
+        assert all(r["snippet"].strip() for r in turn.evidence)
+    finally:
+        answer_exit._TURN.reset(token)
+
+
+@pytest.mark.parametrize("parts", [
+    [("d-e", 0, "Truss Elevation.pdf", "Top chord grade S355.")],
+    [("d-f", 4, "Truss Method.pdf", "Bottom chord grade S275."),
+     ("d-g", 5, "Truss Notes.pdf", "Ties at 600 mm.")],
+])
+def test_no_open_turn_records_nothing_and_warns_nothing(parts, caplog):
+    """Outside a turn there is nothing to record into: a quiet no-op, never a
+    logged failure."""
+    token = answer_exit._TURN.set(None)
+    try:
+        with caplog.at_level("WARNING", logger=answer_exit._LOG.name):
+            answer_exit.note_evidence(_excerpts(*parts), [], None)
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+    finally:
+        answer_exit._TURN.reset(token)
