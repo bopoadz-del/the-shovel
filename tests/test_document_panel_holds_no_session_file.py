@@ -307,3 +307,41 @@ def test_asking_about_a_session_file_by_id_works_only_from_its_own_chat(client, 
     assert ask(other).status_code == 404
     res = ask(own)
     assert res.status_code == 200, res.text
+
+
+# ── a session file with no stored original, from its own chat ───────────────
+
+def _session_file_without_original(client, headers, pid, sid, name, tmp_path) -> str:
+    """A session file whose original was never stored (its maker read off a
+    real upload's metadata), as the preview/download fallbacks see one."""
+    from app.core import projects as store
+
+    maker = _upload(client, headers, pid, "probe.txt", b"probe", session_id=sid)["metadata"]["uploader_id"]
+    return store.add_document(
+        project_id=pid, original_name=name, file_path=str(tmp_path / "never-written.bin"), size=0,
+        metadata={"session_id": sid, "uploader_id": maker, "origin": "uploaded"})["id"]
+
+
+@pytest.mark.parametrize("tail,indexed,expected", [
+    ("/preview", "Laps 40 diameters.", 200),
+    ("/download", "Laps 40 diameters.", 200),
+    ("/preview", "", 404),
+    ("/download", "", 404),
+    ("/preview/raw", "", 404),
+])
+def test_a_session_file_without_its_original_falls_back_only_in_its_own_chat(
+        client, monkeypatch, tmp_path, tail, indexed, expected):
+    from app.routers import projects as projects_router
+
+    headers = _headers(client, f"nf{tail[1:4]}{len(indexed)}")
+    pid = _project(client, headers, f"Panel-nofile-{tail[1:4]}-{len(indexed)}-{_RUN}")
+    own = f"ws-{pid}-1212"
+    did = _session_file_without_original(client, headers, pid, own, "lap_schedule.pdf", tmp_path)
+    monkeypatch.setattr(projects_router, "_indexed_text", lambda _owner, _did: indexed)
+
+    url = _doc_url(pid, did, tail)
+    assert client.get(url, headers=headers).status_code == 404  # no chat: not found
+    res = client.get(url, headers=headers, params={"session_id": own})
+    assert res.status_code == expected, res.text
+    if expected == 200:
+        assert indexed in res.text
