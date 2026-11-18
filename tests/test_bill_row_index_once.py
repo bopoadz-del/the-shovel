@@ -159,3 +159,30 @@ def test_vocabulary_reading_selects_the_rows_the_per_row_reading_does(chunks, it
         hits += bool(got)
     # Each bill has an item that selects rows and one that selects none.
     assert 0 < hits < len(items)
+
+
+@pytest.mark.parametrize(("corpus", "bills", "ask", "items"), CASES)
+def test_item_rows_text_reuses_the_index_it_was_handed(corpus, bills, ask, items):
+    """``_item_rows_text`` with one shared ``indexes`` dict segments each bill
+    once for any number of items, and its text equals the unshared call."""
+    from app.core.rag.evidence_actions import _item_rows_text, bill_section_maps
+
+    maps = bill_section_maps(
+        lambda _pid, ids: [c for c in corpus if c.doc_id in ids], "p1", bills,
+    )
+    assert maps
+    calls = []
+
+    def segments(text):
+        calls.append(text)
+        return priced_row_segments(text)
+
+    shared: dict = {}
+    _item_rows_text(maps, {}, items[0], segments, shared)
+    once = len(calls)
+    assert once > 0
+    for item in items:
+        got = _item_rows_text(maps, {}, item, segments, shared)
+        assert got == _item_rows_text(maps, {}, item, priced_row_segments, None), item
+    # Every later item scored against the handed index: no bill re-segmented.
+    assert len(calls) == once
