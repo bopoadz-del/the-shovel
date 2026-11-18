@@ -10,6 +10,8 @@ corpus fixtures; SQLite paths run against an isolated in-memory-ish store.
 
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import contextlib
 from types import SimpleNamespace
 
@@ -95,6 +97,7 @@ def test_bm25_select_selects_ocr_column():
 def test_search_numpy_hydrates_ocr(tmp_path, monkeypatch, ocr_flag):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     store = vs.VectorStore(db_path=str(tmp_path / "rag.db"))
+    give_documents_table(store)
     store.upsert_chunks(
         "p", "d1", ["scanned steel beam"], np.ones((1, store.dim), dtype=np.float32),
         ocr_flags=[ocr_flag],
@@ -107,6 +110,7 @@ def test_search_numpy_hydrates_ocr(tmp_path, monkeypatch, ocr_flag):
 def test_search_numpy_returns_empty_for_no_rows(tmp_path, monkeypatch):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     store = vs.VectorStore(db_path=str(tmp_path / "rag.db"))
+    give_documents_table(store)
     got = store._search_numpy("p", np.ones(store.dim, dtype=np.float32), k=1)
     assert not got
 
@@ -119,6 +123,7 @@ def test_search_numpy_returns_empty_for_no_rows(tmp_path, monkeypatch):
 def test_bm25_sqlite_hydrates_ocr(tmp_path, monkeypatch, ocr_flag):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     store = vs.VectorStore(db_path=str(tmp_path / "rag.db"))
+    give_documents_table(store)
     store.upsert_chunks(
         "p", "d1", ["scanned steel beam"], np.ones((1, store.dim), dtype=np.float32),
         ocr_flags=[ocr_flag],
@@ -180,12 +185,17 @@ class _Session:
 
     def execute(self, stmt, params=None):
         self.sent.append(str(stmt))
+        # The documents table holds no chat-session file: the session-scope
+        # lookup (projects.session_hidden_document_ids) finds none.
+        if "documents.metadata" in str(stmt):
+            return _Result([])
         return _Result(self.rows)
 
 
 def _pg_store(tmp_path, monkeypatch, rows=(), visibility=True):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     real = vs.VectorStore(db_path=str(tmp_path / "rag.db"))
+    give_documents_table(real)
     st = object.__new__(vs.VectorStore)
     st._rag_chunk_cls = real._rag_chunk_cls
     st.dim = real.dim
@@ -239,6 +249,7 @@ def test_bm25_postgres_empty_query_returns_empty(tmp_path, monkeypatch):
 def test_upsert_chunks_rejects_mismatched_lengths(tmp_path, monkeypatch):
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
     store = vs.VectorStore(db_path=str(tmp_path / "rag.db"))
+    give_documents_table(store)
     with pytest.raises(ValueError):
         store.upsert_chunks(
             "p", "d", ["one", "two"], np.ones((1, store.dim), dtype=np.float32),
