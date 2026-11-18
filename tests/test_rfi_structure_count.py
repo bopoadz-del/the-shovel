@@ -107,6 +107,32 @@ def test_summary_counts(docs, counts):
     assert (s["documents"], s["rfi_like"], s["split"], s["same_chunk"]) == counts
 
 
+@pytest.mark.parametrize("docs,roles,q_then_a", [
+    # one complete form, one with question and answer but no references,
+    # one with only a references heading, one with an answer BEFORE its question
+    ({"a": [(0, Q), (1, A), (2, R)], "b": [(0, f"{Q}\n{A}")], "c": [(0, R)],
+      "d": [(0, f"{A}\n{Q}")]},
+     {"question": 3, "answer": 3, "references": 2}, 2),
+    ({"c": [(0, "plain text")], "e": [(0, Q)]},
+     {"question": 1, "answer": 0, "references": 0}, 0),
+])
+def test_summary_counts_each_role_heading_even_when_no_document_is_rfi_like(docs, roles, q_then_a):
+    s = m.summarise((d, m.classify(c, PATS)) for d, c in docs.items())
+    assert s["with_role"] == roles
+    assert s["q_then_a"] == q_then_a
+    line = next(x for x in m.render("anc", s) if "documents with a heading of" in x)
+    assert line.endswith(" ".join(f"{r}={roles[r]}" for r in m.ROLES)
+                         + f" question_then_answer={q_then_a}")
+
+
+@pytest.mark.parametrize("body,roles", [
+    (f"{Q}\n{R}", ("question", "references")),
+    ("plain text", ()),
+])
+def test_classify_names_the_roles_found(body, roles):
+    assert m.classify([(0, body)], PATS)["roles"] == roles
+
+
 @pytest.mark.parametrize("secret", ["Which grade applies to the slab", "general notes"])
 def test_render_prints_ids_and_counts_never_text(secret):
     docs = {"doc1": [(0, Q), (1, A), (2, R)]}
