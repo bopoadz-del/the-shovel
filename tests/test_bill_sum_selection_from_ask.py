@@ -121,15 +121,15 @@ ARABIC = [
 ]
 
 
-@pytest.mark.parametrize("ask, refs, measure, total, ignored", [
+@pytest.mark.parametrize("ask, refs, measure, total, ignored, unread", [
     # an Arabic cost question sums the amounts of the rows it names
-    ("ما هي تكلفة مواسير فخار؟", ["A1"], agg.MEASURE_AMOUNT, 600, []),
+    ("ما هي تكلفة مواسير فخار؟", ["A1"], agg.MEASURE_AMOUNT, 600, [], False),
     # an Arabic length question sums the quantities; an unknown word is named
-    ("ما هو طول مواسير الحديد", ["A1", "A2"], agg.MEASURE_QUANTITY, 30, ["الحديد"]),
-    # no measure word: the rows and count, and plainly no total
-    ("كم مجموع مواسير فخار", ["A1"], None, None, []),
+    ("ما هو طول مواسير الحديد", ["A1", "A2"], agg.MEASURE_QUANTITY, 30, ["الحديد"], False),
+    # no measure word: the quantity, said plainly to be the quantity
+    ("كم مجموع مواسير فخار", ["A1"], agg.MEASURE_QUANTITY, 20, [], True),
 ], ids=["cost", "length", "no-measure"])
-def test_an_arabic_ask(tmp_path, ask, refs, measure, total, ignored):
+def test_an_arabic_ask(tmp_path, ask, refs, measure, total, ignored, unread):
     path = tmp_path / "ar.xlsx"
     g.write_bill_workbook(ARABIC, str(path))
     rows = agg.join_page_continuations(agg.read_sheet_rows(str(path)))
@@ -139,8 +139,10 @@ def test_an_arabic_ask(tmp_path, ask, refs, measure, total, ignored):
     assert out["measure"] == measure
     assert out["sum"] == total
     assert out["ignored_ask_words"] == ignored
-    assert ("No total is given" in out["statement"]) is (measure is None)
-    assert [f["value"] for f in out["stated_figures"]] == ([] if total is None else [total])
+    said = "names no column, so this is the total quantity, not the amount" in out["statement"]
+    assert said is unread
+    assert out["measure_unread"] is unread
+    assert [f["value"] for f in out["stated_figures"]] == [total]
 
 
 #: Two different wordings a model might put in its call for the same ask.
@@ -237,7 +239,7 @@ def test_statement_names_the_rows_and_carries_the_tools_figure(rows, ask, why, f
 @pytest.mark.parametrize("ask, expect", [
     ("how many paint rows?", "No row was selected from the question"),
     ("total quantity of rows in the drainage section?", "Total quantity by unit: "),
-    ("how many clay pipes in the runs?", "No total is given: the question does not say"),
+    ("how many clay pipes in the runs?", "Total quantity 103.5 m. The question names no column"),
 ])
 def test_statement_for_no_match_mixed_units_and_no_measure(rows, ask, expect):
     out = agg._aggregate_bill(rows, ask=ask, terms="paint", section="", measure=agg.MEASURE_QUANTITY)
@@ -260,7 +262,8 @@ def test_statement_names_the_words_it_did_not_use(rows, ask, named):
 @pytest.mark.parametrize("ask, figures", [
     ("total length of clay pipes in the runs", [(103.5, "103.5 m")]),
     ("total quantity in the drainage section", [(73 + 18.5 + 40 + 12, "143.5 m"), (9, "9 nr")]),
-    ("how many clay pipes in the runs?", []),
+    ("how many fence rows?", [(120.0, "120 m")]),
+    ("how many paint rows?", []),
 ])
 def test_stated_figures_are_the_tools_totals(rows, ask, figures):
     out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)

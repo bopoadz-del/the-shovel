@@ -274,8 +274,9 @@ _ASK_STOPWORDS = _table(_ASK_STOPWORD_TEXT, _ASK_STOPWORD_TEXT_AR) | _AMOUNT_WOR
 def measure_from_ask(ask: str | None, default: str | None = None) -> str | None:
     """The column an ask totals: money words choose the amount, measure words
     the quantity (English or Arabic). An ask with neither returns ``default``
-    (``None``: the column cannot be read from the ask, and no total is given
-    -- a cost question is never answered with a sum of quantities)."""
+    (``None``: the column cannot be read from the ask; the caller totals the
+    quantity and says so plainly, so a quantity is never passed off as a
+    cost)."""
     words = {_bare(w) for w in _words(ask or "")}
     if words & _AMOUNT_WORDS:
         return MEASURE_AMOUNT
@@ -455,9 +456,6 @@ def statement(result: dict[str, Any]) -> str:
     if not rows:
         return f"{head}: no row of this bill matches.{unused}"
     listed = "; ".join(_row_label(r) for r in rows)
-    if result.get("measure_unread"):
-        return (f"{head}: {listed}. No total is given: the question does not say whether "
-                f"to total the amount or the quantity.{unused}")
     if result.get("sum") is not None:
         unit = f" {result['unit']}" if result.get("unit") else ""
         figure = f"total {measure} {_fmt(result['sum'])}{unit}"
@@ -465,6 +463,9 @@ def statement(result: dict[str, Any]) -> str:
         figure = f"total {measure} by unit: " + ", ".join(
             f"{_fmt(v)} {u}".rstrip() for u, v in (result.get("sum_by_unit") or {}).items())
     text = f"{head}: {listed}. {figure[0].upper()}{figure[1:]}."
+    if result.get("measure_unread"):
+        text += (" The question names no column, so this is the total quantity, "
+                 "not the amount (cost).")
     without = result.get("without_figure") or []
     if without:
         text += f" {len(without)} of them print no {measure} and add nothing: " + "; ".join(
@@ -476,7 +477,7 @@ def stated_figures(result: dict[str, Any]) -> list[dict[str, Any]]:
     """The figures a bill result states as its total, in the shape the
     answer's exit check reads (``app.agents.answer_exit``): the answer must
     carry each of them."""
-    if result.get("selected_by") == "none" or result.get("measure_unread") or not result.get("rows"):
+    if result.get("selected_by") == "none" or not result.get("rows"):
         return []
     if result.get("sum") is not None:
         pairs = [(result.get("unit") or "", result["sum"])]
@@ -555,9 +556,8 @@ def _aggregate_bill(
             result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
                                measure=read or MEASURE_QUANTITY, fold=True)
             result["selected_by"] = "ask"
-            if read is None:
-                # Rows and count stand; no column was named, so no total.
-                result.update(measure=None, measure_unread=True, sum=None, unit=None, sum_by_unit=None)
+            # No column named: the quantity, and the statement says so.
+            result["measure_unread"] = read is None
         else:
             result = {"measure": None, "terms": [], "section_terms": [],
                       "rows_scanned": len(join_page_continuations(rows)), "count": 0, "sum": None,
