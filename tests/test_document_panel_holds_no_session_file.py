@@ -595,3 +595,29 @@ def test_redlines_of_a_session_file_are_read_only_from_its_own_chat(client, name
     assert client.post(url, headers=headers, params={"session_id": own}).status_code == 400
     project_did = _upload(client, headers, pid, f"project_{name}", body)["id"]
     assert client.post(_doc_url(pid, project_did, "/redlines"), headers=headers).status_code == 400
+
+
+@pytest.mark.parametrize("meta,expected", [
+    ({"session_id": "ws-p-1", "uploader_id": "u1"}, True),
+    ('{"session_id": "ws-p-2", "uploader_id": "u2"}', True),   # stored as encoded JSON text
+    ({"uploader_id": "u3", "origin": "uploaded"}, False),
+    (None, False),
+])
+def test_is_session_document_reads_the_session_id_in_either_stored_form(meta, expected):
+    from app.core import projects as store
+
+    assert store.is_session_document(meta) is expected
+
+
+@pytest.mark.parametrize("name", ["stair_markup_a.txt", "stair_markup_b.txt"])
+def test_redlines_of_a_project_file_are_not_found_for_a_user_who_cannot_open_the_project(client, name):
+    """The route's first rule, unchanged: a caller who cannot open the
+    project gets 404 even for a project document, where the owner reaches it
+    (400, not a PDF)."""
+    owner = _headers(client, f"ro{name[-5]}")
+    stranger = _headers(client, f"rs{name[-5]}")
+    pid = _project(client, owner, f"Panel-ro-{name[-5]}-{_RUN}")
+    did = _upload(client, owner, pid, name, b"Cloud at landing 2.")["id"]
+    url = _doc_url(pid, did, "/redlines")
+    assert client.post(url, headers=stranger).status_code == 404
+    assert client.post(url, headers=owner).status_code == 400
