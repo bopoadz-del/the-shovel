@@ -26,6 +26,30 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 #: How much of one tool result the model is given.
 _TOOL_RESULT_CHARS = 20000
 
+
+def _shown_to_model(text: str) -> str:
+    """A tool result as the model gets it: whole when it fits; otherwise a
+    valid envelope that keeps every figure, unit and selection whole, with
+    how many rows each row list holds, and a preview of the rest -- never a
+    raw slice that no longer parses."""
+    if len(text) <= _TOOL_RESULT_CHARS:
+        return text
+    from app.agents.runtime import _compacted_tool_payload
+
+    note = f"Tool result exceeded {_TOOL_RESULT_CHARS} characters and was cut."
+    # The preview is re-escaped inside the envelope and the envelope adds its
+    # own fields, so keeping _TOOL_RESULT_CHARS of preview overshoots the cap.
+    # Shrink the PREVIEW until the envelope fits, measuring the real thing;
+    # the outline (figure, unit, selection, row counts) keeps a fixed budget
+    # and is never what gives way.
+    outline_budget = _TOOL_RESULT_CHARS // 4
+    keep = _TOOL_RESULT_CHARS
+    out = _compacted_tool_payload(text, keep, note=note, outline_budget=outline_budget)
+    while len(out) > _TOOL_RESULT_CHARS and keep > 0:
+        keep = max(0, keep - max(len(out) - _TOOL_RESULT_CHARS, 32))
+        out = _compacted_tool_payload(text, keep, note=note, outline_budget=outline_budget)
+    return out
+
 _STOP = ("I could not finish this answer within the steps a turn may take. "
          "Please narrow the question or split it into parts.")
 
@@ -443,7 +467,7 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 if envelope.get("status") != "success" and str(envelope.get("question") or "").strip():
                     questions.append(str(envelope["question"]).strip())
             else:
-                shown = json.dumps(_without_missing_pages(result_of_call), default=str)[:_TOOL_RESULT_CHARS]
+                shown = _shown_to_model(json.dumps(_without_missing_pages(result_of_call), default=str))
                 if isinstance(envelope, dict) and envelope.get("status") == "success":
                     tabled.extend(render.record_lists(envelope))
             msgs.append({**tool_msg, "content": shown})
