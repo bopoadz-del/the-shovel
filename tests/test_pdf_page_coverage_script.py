@@ -467,3 +467,111 @@ def test_stored_lines_print_a_failed_read_instead_of_raising(monkeypatch, fail):
     out = "\n".join(mod.stored_lines(row))
     assert ("READ FAILED" in out) is fail
     assert ("pages_without_chunk_runs: 2" in out) is (not fail)
+
+
+# --- #409 follow-up: a failing id is named by class; only marked lines publish --
+
+class _Boom:
+    """A session whose read raises with a message quoting a client path."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def execute(self, stmt, params):
+        raise self._exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+@pytest.mark.parametrize("exc, cls", [
+    (RuntimeError("could not read /data/Client Alpha/Harbour Tower.pdf"), "RuntimeError"),
+    (KeyError("Riverside_Mall_BOQ_rev2"), "KeyError"),
+])
+def test_main_loop_names_a_failure_by_class_and_goes_on(monkeypatch, capsys, exc, cls):
+    mod = _load()
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _Boom(exc))
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc def")
+    assert mod.main() == 1
+    out = capsys.readouterr().out
+    assert out.count(f"failed ({cls})") == 2        # both ids reported, loop went on
+    assert "done: ids=2 failed=2" in out
+    for secret in ("Client Alpha", "Harbour", "Riverside"):
+        assert secret not in out
+
+
+@pytest.mark.parametrize("ids, code", [
+    ("abc", 1),   # the run path: budgets, a skipped id, the tally (stdout)
+    ("", 2),      # the refusal path: no id given (stderr)
+])
+def test_every_printed_line_carries_the_mark(monkeypatch, capsys, ids, code):
+    mod = _load()
+    _session_with(monkeypatch, [], [])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", ids)
+    assert mod.main() == code
+    cap = capsys.readouterr()
+    lines = [ln for ln in (cap.out + cap.err).splitlines() if ln]
+    assert lines and all(ln.startswith(mod.MARK) for ln in lines)
+
+
+def summary_writes_unmarked(run: str, mark: str) -> list[str]:
+    """Lines that write to the step summary without selecting the mark."""
+    return [ln.strip() for ln in run.splitlines()
+            if "GITHUB_STEP_SUMMARY" in ln and f"^{mark}" not in ln]
+
+
+@pytest.mark.parametrize("run, bad", [
+    ("aws logs get-log-events --output text | tee -a \"$GITHUB_STEP_SUMMARY\"", 1),
+    ("sed -n 's/^PPC| //p' stream.txt | tee -a \"$GITHUB_STEP_SUMMARY\"", 0),
+])
+def test_summary_checker_flags_the_whole_stream(run, bad):
+    assert len(summary_writes_unmarked(run, "PPC| ")) == bad
+
+
+_WHOLE_STREAM_WF = """
+jobs:
+  report:
+    steps:
+      - run: |
+          aws logs get-log-events --log-stream-name s --output text | tee -a "$GITHUB_STEP_SUMMARY"
+"""
+
+
+@pytest.mark.parametrize("source, clean", [
+    ("committed", True),        # the real workflow file
+    ("whole-stream", False),    # the #409 shape: the whole container stream teed
+])
+def test_workflow_publishes_only_the_scripts_marked_lines(source, clean):
+    import yaml
+
+    mod = _load()
+    wf = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pdf-page-coverage.yml"
+    body = wf.read_text(encoding="utf-8") if source == "committed" else _WHOLE_STREAM_WF
+    doc = yaml.safe_load(body)
+    run = "\n".join(s["run"] for job in doc["jobs"].values() for s in job["steps"]
+                    if isinstance(s.get("run"), str))
+    assert "GITHUB_STEP_SUMMARY" in run
+    assert (summary_writes_unmarked(run, mod.MARK) == []) is clean
+    assert ("--output text | tee" not in run) is clean
+
+
+@pytest.mark.parametrize("broken", [True, False])
+def test_unreadable_budgets_are_named_by_class_and_the_run_goes_on(monkeypatch, capsys, broken):
+    mod = _load()
+    if broken:
+        def _raise():
+            raise OSError("/srv/Client Alpha/config")
+        monkeypatch.setattr(mod, "budgets", _raise)
+    _session_with(monkeypatch, [], [])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
+    assert mod.main() == 1
+    out = capsys.readouterr().out
+    assert ("budgets: unreadable (OSError)" in out) is broken
+    assert "Client Alpha" not in out and "done: ids=1 failed=1" in out
