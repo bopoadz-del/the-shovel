@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
+import gc
 import logging
 import os
 import re
@@ -360,6 +361,53 @@ def keep_deeper_sample(kept: str, snap: str) -> str:
     return snap if loop_depth(snap) >= loop_depth(kept) else kept
 
 
+class GcRecord:
+    """Every garbage-collection pass while installed: generation, duration, start.
+
+    A full (generation-2) pass holds the interpreter lock for its whole
+    duration, so the loop, the heartbeat thread and every other thread stop
+    together and no heartbeat sees it (measured 18 Nov: 0.5-0.9 s over a
+    1.09 M-object test heap, ~0.15 s over the server's own startup heap).
+    Recorded through ``gc.callbacks``: two clock reads per pass, no capture,
+    so it is on in the gated measurement too. Diagnostic only, never gated."""
+
+    def __init__(self) -> None:
+        self._started: Optional[float] = None
+        self.passes = 0
+        #: generation -> (worst duration_ms, monotonic_s at its start)
+        self.worst: dict[int, tuple[float, float]] = {}
+
+    def _callback(self, phase: str, info: dict) -> None:
+        if phase == "start":
+            self._started = time.monotonic()
+            return
+        began, self._started = self._started, None
+        if began is None:  # installed mid-pass: no start to measure from
+            return
+        took_ms = (time.monotonic() - began) * 1000
+        gen = int(info.get("generation", -1))
+        self.passes += 1
+        if took_ms >= self.worst.get(gen, (-1.0, 0.0))[0]:
+            self.worst[gen] = (took_ms, began)
+
+    def install(self) -> "GcRecord":
+        if self._callback not in gc.callbacks:
+            gc.callbacks.append(self._callback)
+        return self
+
+    def remove(self) -> None:
+        if self._callback in gc.callbacks:
+            gc.callbacks.remove(self._callback)
+
+
+def gc_summary(record: GcRecord, window_start: float) -> str:
+    """The GC fields for a result line: passes, and the worst full pass with
+    its offset into the window (``gc2_max=none`` when no full pass ran)."""
+    full = record.worst.get(2)
+    worst = f"{full[0]:.0f}ms@+{full[1] - window_start:.2f}s" if full else "none"
+    return f"gc_passes={record.passes} gc2_max={worst}"
+
+
 class LagMonitor:
     """Measures how late the loop serves a heartbeat; optionally logs stalls."""
 
@@ -428,6 +476,8 @@ class LagMonitor:
         #: tick sleep between the two it reads about one tick.
         self.max_unobserved_ms = 0.0
         self._last_served: Optional[float] = None
+        #: Diagnostic only, never gated: every GC pass while running.
+        self.gc = GcRecord()
 
     def note_snapshot(self, snapshot_ms: float) -> None:
         """Record one CPU snapshot's own duration."""
@@ -444,12 +494,14 @@ class LagMonitor:
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
+        self.gc.install()
         self._snap_thread.start()
         self._thread.start()
         return self
 
     def stop(self) -> None:
         self._stop.set()
+        self.gc.remove()
         self._thread.join(timeout=2)
         self._snap_thread.join(timeout=2)
         if self._live is not None:
