@@ -22,7 +22,10 @@ prose and ``not_eligible``).
 
 Usage: ``ops_public_view.py <kind> <response.json>`` prints Markdown lines;
 ``ops_public_view.py reason-gate <value>`` exits 1 unless the value is empty
-or a short code (the dispatch reason input).
+or a short code (the dispatch reason input);
+``ops_public_view.py hash <value>`` prints the value only when it has the
+shape of a plan hash (``HASH_RE``), otherwise ``<text len=N>`` (the mismatch
+message names both hashes without echoing whatever else a field carries).
 """
 from __future__ import annotations
 
@@ -32,19 +35,24 @@ import sys
 from typing import Any
 
 CODE_RE = re.compile(r"[A-Za-z0-9_:-]{1,80}")
+# A plan hash as the routes compute it: a sha256 hexdigest.
+HASH_RE = re.compile(r"[0-9a-f]{64}")
 # The operator's reason input: lower-case code, as stored on the row.
 REASON_RE = re.compile(r"[a-z0-9_-]{1,64}")
 
 _STAMP = ("by", "at", "reason")
 
 # kind -> ordered whitelist. A tuple value names the sub-fields of a dict.
+# A plan kind is always an execute=false answer, which never carries
+# ``refused``; tests/test_ops_public_view_matches_routes.py reads every key
+# below from the real routes.
 VIEWS: dict[str, dict[str, Any]] = {
     "exclude-plan": {"plan": {
         "document_id": None, "doc_type": None, "ingest_status": None,
         "chunk_count": None, "chunk_rows": None, "rows_to_delete": None,
         "project_chunk_total": None, "already_excluded": None,
         "plan_hash": None,
-    }, "executed": None, "refused": None},
+    }, "executed": None},
     "exclude-applied": {
         "executed": None, "refused": None, "chunks_deleted": None,
         "index_pruned": None, "chunk_rows_after": None,
@@ -57,7 +65,7 @@ VIEWS: dict[str, dict[str, Any]] = {
         "chunk_count": None, "chunk_rows": None, "excluded": _STAMP,
         "eligible": None, "not_eligible": None, "status_after": None,
         "plan_hash": None,
-    }, "executed": None, "refused": None},
+    }, "executed": None},
     "include-applied": {
         "executed": None, "refused": None, "excluded_after": _STAMP,
         "included_back": _STAMP, "ingest_status": None,
@@ -103,6 +111,11 @@ def view_lines(obj: Any, view: dict[str, Any], prefix: str = "") -> list[str]:
     return out
 
 
+def hash_view(value: str) -> str:
+    """The value when it has the shape of a plan hash, else its length."""
+    return value if HASH_RE.fullmatch(value) else f"<text len={len(value)}>"
+
+
 def reason_ok(value: str) -> bool:
     return value == "" or bool(REASON_RE.fullmatch(value))
 
@@ -114,8 +127,11 @@ def main(argv: list[str]) -> int:
         # The value itself is never echoed.
         print(f"reason refused: not a short code (a-z 0-9 _ -, at most 64); len={len(argv[1])}")
         return 1
+    if len(argv) == 2 and argv[0] == "hash":
+        print(hash_view(argv[1]))
+        return 0
     if len(argv) != 2 or argv[0] not in VIEWS:
-        print(f"usage: ops_public_view.py <{'|'.join(VIEWS)}> <response.json> | reason-gate <value>")
+        print(f"usage: ops_public_view.py <{'|'.join(VIEWS)}> <response.json> | reason-gate <value> | hash <value>")
         return 2
     try:
         with open(argv[1], encoding="utf-8") as fh:

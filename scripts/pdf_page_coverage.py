@@ -31,6 +31,12 @@ Per document it also prints the index's own page coverage (stored chunks by
 their ``page`` locator: which pages carry a chunk and how much text), read
 from the chunk table, so it answers even when the source file is gone.
 
+With ``COVERAGE_PAGELESS_SUMMARY`` set, each id is an anchor instead: the
+run prints, for the anchor document's own project, how many chunks carry no
+``page`` locator, by document id (counts and ids only, at most ``_MAX_DOCS``
+documents listed). The project is read from the anchor's row, never taken
+from an input, and never printed.
+
 Per document it also prints the stored failure evidence (the ledger reason,
 the parsed ``attempts_exhausted`` mark and the failure keys of the metadata)
 and, once per run, the extraction budgets read from the product helpers, so
@@ -74,6 +80,9 @@ _MIN_WITHHOLD_CHARS = 4
 # Bounded output: at most this many chars-by-range rows per document.
 _MAX_RANGE_ROWS = 25
 _MIN_RANGE_PAGES = 10
+# Bounded output: at most this many no-chunk page runs printed per range row,
+# so a page past the document-wide run list is still named by its own range.
+_MAX_RUNS_PER_RANGE = 12
 _ID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 
 
@@ -365,6 +374,8 @@ def stored_page_coverage(rows: Iterable[tuple], pages_in_file: int | None) -> di
         by_range.append({
             "pages": (start, end),
             "pages_with_chunk": len(hits),
+            "pages_without_chunk_runs": _runs(
+                p for p in range(start, end + 1) if p not in per_page),
             "chunks": sum(h[0] for h in hits),
             "chars": sum(h[1] for h in hits),
         })
@@ -391,12 +402,20 @@ def render_stored(cov: dict[str, Any]) -> list[str]:
          f"chunks_without_page={cov['chunks_without_page']} "
          f"chars_without_page={cov['chars_without_page']}"),
         f"   stored pages_without_chunk_runs: {shown or '-'}{more}",
-        "   stored pages | pages_with_chunk | chunks | chars",
+        "   stored pages | pages_with_chunk | chunks | chars | pages_without_chunk",
     ]
     for r in cov["by_range"]:
         a, b = r["pages"]
-        lines.append(f"   {a}-{b} | {r['pages_with_chunk']} | {r['chunks']} | {r['chars']}")
+        lines.append(f"   {a}-{b} | {r['pages_with_chunk']} | {r['chunks']} | {r['chars']} | "
+                     f"{_render_runs(r['pages_without_chunk_runs'], _MAX_RUNS_PER_RANGE)}")
     return lines
+
+
+def _render_runs(runs: list[tuple[int, int]], cap: int) -> str:
+    """Page runs as text, at most ``cap`` runs then a ``+N more runs`` count."""
+    shown = ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in runs[:cap])
+    more = f" (+{len(runs) - cap} more runs)" if len(runs) > cap else ""
+    return (shown or "-") + more
 
 
 def stored_lines(doc_row: tuple) -> list[str]:
@@ -412,6 +431,167 @@ def stored_lines(doc_row: tuple) -> list[str]:
     except Exception as exc:  # report it (by class), do not hide it
         return [f"   stored: READ FAILED: {type(exc).__name__}"]
     return render_stored(stored_page_coverage([tuple(r) for r in rows], pif))
+
+
+# Chunks with no page locator, by document, across ONE project (read-only).
+# The project is the anchor document's own (read from its row, never from an
+# input), and it is a bind parameter, so the read uses the project index.
+def _pageless_sql(table: str) -> str:
+    return (
+        "SELECT doc_id, "
+        "SUM(CASE WHEN page IS NULL OR page < 1 THEN 1 ELSE 0 END), COUNT(*) "
+        f"FROM {table} WHERE project_id = :pr GROUP BY doc_id"
+    )
+
+
+def pageless_summary(rows: Iterable[tuple], cap: int = _MAX_DOCS) -> dict[str, Any]:
+    """Pure count of chunks without a page locator, by document id.
+
+    ``rows`` is ``(doc_id, chunks_without_page, chunks)`` per document of one
+    project. A chunk with no page cannot be cited by page, so this is the
+    size of that defect in the working set: how many documents carry one,
+    how many chunks, and the ``cap`` documents with the most (ties by id)."""
+    docs = [(str(d), int(n or 0), int(t or 0)) for d, n, t in rows]
+    hit = sorted((r for r in docs if r[1] > 0), key=lambda r: (-r[1], r[0]))
+    return {
+        "documents": len(docs),
+        "documents_with_pageless": len(hit),
+        "chunks": sum(r[2] for r in docs),
+        "pageless_chunks": sum(r[1] for r in hit),
+        "top": hit[:cap],
+    }
+
+
+def render_pageless(anchor: str, summ: dict[str, Any]) -> list[str]:
+    lines = [
+        (f"== pageless in the project of id {anchor}: documents={summ['documents']} "
+         f"documents_with_pageless={summ['documents_with_pageless']} "
+         f"chunks={summ['chunks']} pageless_chunks={summ['pageless_chunks']}"),
+        "   doc_id | pageless_chunks | chunks",
+    ]
+    for did, n, t in summ["top"]:
+        lines.append(f"   {did} | {n} | {t}")
+    more = summ["documents_with_pageless"] - len(summ["top"])
+    if more > 0:
+        lines.append(f"   (+{more} more documents with pageless chunks)")
+    return lines
+
+
+# The same project's documents, for the by-kind table: the stored document
+# type and the file kind (the extension of the stored name). The name is
+# read only to take its extension and is never printed.
+_KIND_SQL = "SELECT id, original_name, doc_type FROM documents WHERE project_id = :pr"
+_NO_DOC_ROW = "(no document row)"
+
+
+def _accepted_kinds() -> frozenset:
+    """Every file kind the product accepts: its own upload/ingest constant
+    (``app.core.upload_limits.ALLOWED_UPLOAD_EXTENSIONS``), not a list here."""
+    from app.core.upload_limits import ALLOWED_UPLOAD_EXTENSIONS
+    return frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS)
+
+
+def _declared_types() -> tuple[frozenset, frozenset]:
+    """``(built-in, custom)`` document type names from the product's own type
+    registry (``app.core.doc_types.list_types``), not a list here. Built-in
+    names come from ``config/document_types.yaml`` plus the classifier's
+    default; a custom name was typed by a user, so it is user text and is
+    only ever counted, never printed."""
+    from app.core.doc_types import list_types
+    from app.core.doc_typing import DEFAULT_DOC_TYPE
+    builtin, custom = {DEFAULT_DOC_TYPE}, set()
+    for t in list_types():
+        name = t.get("name")
+        if name:
+            (builtin if t.get("source") == "builtin" else custom).add(str(name))
+    return frozenset(builtin), frozenset(custom - builtin)
+
+
+def file_kind(name: Any) -> str:
+    """The lower-case extension of a stored file name when it is a kind the
+    product accepts, else ``(other)``; ``(none)`` when there is no
+    extension. Only a fixed product list can print, so no part of a name
+    (a ``Firstname.Surname`` suffix) can leak through it."""
+    if not isinstance(name, str) or not name.strip():
+        return "(none)"
+    ext = os.path.splitext(name.strip())[1].lower()
+    if not ext:
+        return "(none)"
+    return ext if ext in _accepted_kinds() else "(other)"
+
+
+def stored_type(value: Any) -> str:
+    """The stored type when it is a built-in declared type, ``(custom)`` when
+    it is a user-declared custom type (its name is user text), else
+    ``(other)``."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "(none)"
+    if not isinstance(value, str):
+        return "(other)"
+    builtin, custom = _declared_types()
+    if value in builtin:
+        return value
+    return "(custom)" if value in custom else "(other)"
+
+
+def pageless_by_kind(chunk_rows: Iterable[tuple], doc_rows: Iterable[tuple],
+                     cap: int = _MAX_DOCS) -> list[tuple]:
+    """Pure: the pageless counts grouped by (file kind, stored type).
+
+    ``chunk_rows`` is ``(doc_id, chunks_without_page, chunks)`` per document;
+    ``doc_rows`` is ``(id, original_name, doc_type)``. A chunk whose doc_id
+    has no document row is grouped as ``(no document row)``, never guessed.
+    Returns ``(kind, type, documents, documents_with_pageless, chunks,
+    pageless_chunks)`` rows, most pageless chunks first (ties by kind, type),
+    at most ``cap`` of them."""
+    kinds = {str(i): (file_kind(n), stored_type(t)) for i, n, t in doc_rows}
+    groups: dict[tuple[str, str], list[int]] = {}
+    for d, n, t in chunk_rows:
+        key = kinds.get(str(d), (_NO_DOC_ROW, _NO_DOC_ROW))
+        g = groups.setdefault(key, [0, 0, 0, 0])
+        n, t = int(n or 0), int(t or 0)
+        g[0] += 1
+        g[1] += 1 if n > 0 else 0
+        g[2] += t
+        g[3] += n
+    out = [(k[0], k[1], *v) for k, v in groups.items()]
+    out.sort(key=lambda r: (-r[5], r[0], r[1]))
+    return out[:cap]
+
+
+def render_by_kind(groups: list[tuple]) -> list[str]:
+    lines = ["   by kind: file_kind | doc_type | documents | documents_with_pageless "
+             "| chunks | pageless_chunks | chunks_with_page"]
+    for kind, typ, docs, dwp, chunks, pl in groups:
+        lines.append(f"   {kind} | {typ} | {docs} | {dwp} | {chunks} | {pl} | {chunks - pl}")
+    pdf = [g for g in groups if g[0] == ".pdf"]
+    if pdf:
+        chunks, pl = sum(g[4] for g in pdf), sum(g[5] for g in pdf)
+        lines.append(f"   pdf-born (.pdf, every type listed above): chunks={chunks} "
+                     f"with_page={chunks - pl} without_page={pl}")
+    return lines
+
+
+def pageless_lines(anchor: str, doc_row: tuple) -> list[str]:
+    """The pageless count for the anchor document's project; a failed read
+    is printed by class, never raised. The project id is never printed."""
+    from app.core.db import SessionLocal
+
+    try:
+        sql = _pageless_sql(stored_chunk_table())
+        with SessionLocal() as s:
+            rows = s.execute(text(sql), {"pr": doc_row[1]}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return [f"== pageless in the project of id {anchor}: READ FAILED: {type(exc).__name__}"]
+    rows = [tuple(r) for r in rows]
+    lines = render_pageless(anchor, pageless_summary(rows))
+    try:
+        with SessionLocal() as s:
+            docs = s.execute(text(_KIND_SQL), {"pr": doc_row[1]}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return lines + [f"   by kind: READ FAILED: {type(exc).__name__}"]
+    # Every group is printed: the cap is the number of (kind, type) pairs.
+    return lines + render_by_kind(pageless_by_kind(rows, [tuple(d) for d in docs], cap=10_000))
 
 
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
@@ -483,36 +663,71 @@ def report(doc_row: tuple) -> list[str]:
     return withhold(diagnose(doc_row) + stored_lines(doc_row), doc_row)
 
 
+# Every line the script prints carries this mark; the workflow publishes the
+# marked lines only, never the rest of the container stream (entrypoint and
+# library output it does not control).
+MARK = "PPC| "
+
+
+def emit(line: str, *, err: bool = False) -> None:
+    stream = sys.stderr if err else sys.stdout
+    stream.write(f"{MARK}{line}" + chr(10))
+    stream.flush()
+
+
+def _one(prefix: str) -> bool:
+    """Report one id; True when it printed exactly one document."""
+    from app.core.db import SessionLocal
+
+    with SessionLocal() as s:
+        rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
+    if len(rows) != 1:
+        emit(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
+        return False
+    row = tuple(rows[0])
+    lines = (withhold(pageless_lines(prefix, row), row) if pageless_mode()
+             else report(row))
+    for line in lines:
+        emit(line)
+    return True
+
+
+def pageless_mode() -> bool:
+    """``COVERAGE_PAGELESS_SUMMARY``: each id is an anchor; print the
+    pageless-chunk count of its project instead of the per-page report."""
+    return os.environ.get("COVERAGE_PAGELESS_SUMMARY", "").strip().lower() in ("1", "true", "yes")
+
+
 def main() -> int:
     if os.environ.get("COVERAGE_DRIVE_PATH", "").strip():
         # Withdrawn: a path selector puts a client folder name into a public
         # run log. The value is not echoed.
-        sys.stderr.write("COVERAGE_DRIVE_PATH is withdrawn: select by document id\n")
+        emit("COVERAGE_DRIVE_PATH is withdrawn: select by document id", err=True)
         return 2
     try:
         ids = parse_ids(os.environ.get("COVERAGE_DOC_IDS", ""))
     except ValueError:
-        sys.stderr.write("COVERAGE_DOC_IDS holds a token that is not a document id\n")
+        emit("COVERAGE_DOC_IDS holds a token that is not a document id", err=True)
         return 2
     if not ids:
-        sys.stderr.write("COVERAGE_DOC_IDS is required\n")
+        emit("COVERAGE_DOC_IDS is required", err=True)
         return 2
     if len(ids) > _MAX_DOCS:
-        sys.stderr.write(f"{len(ids)} ids given, at most {_MAX_DOCS} per run\n")
+        emit(f"{len(ids)} ids given, at most {_MAX_DOCS} per run", err=True)
         return 2
-    from app.core.db import SessionLocal
-
-    print("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()), flush=True)
+    try:
+        emit("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()))
+    except Exception as exc:  # by class only: a message can quote a path
+        emit(f"budgets: unreadable ({type(exc).__name__})")
     failed = 0
     for prefix in ids:
-        with SessionLocal() as s:
-            rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
-        if len(rows) != 1:
-            print(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
-            failed += 1
-            continue
-        for line in report(tuple(rows[0])):
-            print(line, flush=True)
+        try:
+            ok = _one(prefix)
+        except Exception as exc:  # by class only: a message can quote a path or a name
+            emit(f"== id {prefix}: failed ({type(exc).__name__})")
+            ok = False
+        failed += 0 if ok else 1
+    emit(f"done: ids={len(ids)} failed={failed}")
     return 1 if failed else 0
 
 

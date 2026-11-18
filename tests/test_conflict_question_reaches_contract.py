@@ -29,9 +29,11 @@ _CASES = [
      [_row("Brookline Structural Notes.pdf", "Transfer slab depth 450 mm."),
       _row("Brookline Slab Drawing S-210.pdf", "Transfer slab depth 500 mm.")],
      {("Brookline Structural Notes.pdf", "450 mm"), ("Brookline Slab Drawing S-210.pdf", "500 mm")}),
-    ("How long is the deck curing period?", "That is 21 days.",
-     [_row("Millbrook Specification.pdf", "Deck curing period 21 days."),
-      _row("Millbrook Method Statement.pdf", "Deck curing period 28 days.")],
+    # A kind word and the words that run straight into it ("curing period")
+    # name only the kind (#453); the thing here is the podium deck.
+    ("What is the curing period of the podium deck?", "That is 21 days.",
+     [_row("Millbrook Specification.pdf", "Podium deck curing period 21 days."),
+      _row("Millbrook Method Statement.pdf", "Podium deck curing period 28 days.")],
      {("Millbrook Specification.pdf", "21 days"), ("Millbrook Method Statement.pdf", "28 days")}),
 ]
 

@@ -21,6 +21,22 @@ _PEAK = datetime(2026, 11, 9, 2, 0, tzinfo=timezone.utc)  # Monday 02:00 UTC
 _MILLION = 1_000_000
 
 
+def _freeze_utc(monkeypatch, moment: datetime) -> str:
+    """Pin usage_tracker's clock to ``moment`` and return its UTC day.
+
+    A test that reads the real clock, or computes "today" at collection time,
+    fails when the run crosses 00:00 UTC (the row is stamped on one day and the
+    cap reads the next). Every day-dependent test here runs on a fixed clock."""
+
+    class _Fixed(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment if tz is None else moment.astimezone(tz)
+
+    monkeypatch.setattr(usage_tracker, "datetime", _Fixed)
+    return moment.strftime("%Y-%m-%d")
+
+
 @pytest.fixture()
 def usage_db(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -152,9 +168,9 @@ def test_unknown_model_is_logged_once_per_pair(caplog, provider, model):
     ],
 )
 def test_cap_is_account_wide_and_still_sees_one_user(
-    usage_db, user_spend, other_spend, cap, over
+    usage_db, monkeypatch, user_spend, other_spend, cap, over
 ):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = _freeze_utc(monkeypatch, _PEAK)
     _insert("user-a", user_spend, today)
     _insert("user-b", other_spend, today)
     assert usage_tracker.daily_total("user-a")["cost_usd"] == pytest.approx(user_spend)
@@ -162,13 +178,17 @@ def test_cap_is_account_wide_and_still_sees_one_user(
 
 
 @pytest.mark.parametrize(
-    "day,cost,blocked",
+    "clock,day,cost,blocked",
     [
-        ("2020-01-01", 50.0, False),
-        (datetime.now(timezone.utc).strftime("%Y-%m-%d"), 50.0, True),
+        (datetime(2026, 11, 17, 23, 59, 59, tzinfo=timezone.utc), "2020-01-01", 50.0, False),
+        (datetime(2026, 11, 17, 23, 59, 59, tzinfo=timezone.utc), "2026-11-17", 50.0, True),
+        # One second later the same row belongs to yesterday: the cap rolls at 00:00 UTC.
+        (datetime(2026, 11, 18, 0, 0, 0, tzinfo=timezone.utc), "2026-11-17", 50.0, False),
+        (datetime(2026, 11, 18, 0, 0, 0, tzinfo=timezone.utc), "2026-11-18", 50.0, True),
     ],
 )
-def test_cap_rolls_with_the_utc_day(usage_db, day, cost, blocked):
+def test_cap_rolls_with_the_utc_day(usage_db, monkeypatch, clock, day, cost, blocked):
+    _freeze_utc(monkeypatch, clock)
     _insert("user-a", cost, day)
     assert usage_tracker.is_over_cap("user-a", 10.0) is blocked
 
@@ -248,8 +268,8 @@ def test_non_object_pricing_file_does_not_invent_a_zero(monkeypatch, tmp_path, b
 
 
 @pytest.mark.parametrize("cap", [0, -1])
-def test_non_positive_cap_does_not_block(usage_db, cap):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+def test_non_positive_cap_does_not_block(usage_db, monkeypatch, cap):
+    today = _freeze_utc(monkeypatch, _OFFPEAK)
     _insert("user-a", 99.0, today)
     assert usage_tracker.is_over_cap("user-a", cap) is False
 

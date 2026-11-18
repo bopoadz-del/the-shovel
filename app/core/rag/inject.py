@@ -1061,21 +1061,43 @@ def _leg_fields(c) -> Dict[str, Any]:
     return out
 
 
-def _trace_chunk(rank: int, c) -> Dict[str, Any]:
-    """Identity and rank of one chunk. Never its text."""
-    name = getattr(c, "source_name", "") or ""
-    if not name:
-        from app.core.rag.retriever import _doc_name_for_id
+def _public_fused(record, handed):
+    """The fused-candidate record in trace form. The stored names of the
+    documents its ``leg_docs`` list are read in one batch, only so that an
+    id equal to its document's name is printed as a digest (names are never
+    logged). A failed read treats every listed id as a name: fail closed."""
+    from app.core.rag.fusion_trace import public_view
 
-        name = _doc_name_for_id(getattr(c, "doc_id", "") or "")
+    ids = sorted({
+        e.get("doc_id")
+        for entries in ((record or {}).get("leg_docs") or {}).values()
+        for e in entries if e.get("doc_id")
+    })
+    names: Dict[str, str] = {}
+    if ids:
+        try:
+            from app.core import projects as _projects
+            names = _projects.document_names(ids)
+        except Exception:  # noqa: BLE001 -- digest every id rather than risk a name
+            _LOG.debug("leg_docs name lookup failed", exc_info=True)
+            names = {d: d for d in ids}
+    return public_view(record, handed, names)
+
+
+def _trace_chunk(rank: int, c) -> Dict[str, Any]:
+    """Identity and rank of one chunk. Never its text, never its document's
+    name: the document is named by ``doc_id`` alone (names never in logs;
+    an operator maps an id to a document in the app)."""
     score = getattr(c, "score", None)
     return {
         "rank": rank,
         "chunk_id": getattr(c, "chunk_id", None),
         "doc_id": getattr(c, "doc_id", None),
-        "doc_name": name,
         "score": round(float(score), 6) if score is not None else None,
         **_leg_fields(c),
+        # Its length, so a replay can refit the handed set's token budget
+        # (``_estimate_tokens``: characters // 4) exactly. Never the text.
+        "chars": len(getattr(c, "text", "") or ""),
         "layer": getattr(c, "layer", "own"),
         # What kind of document the chunk came from (doc_typing / S-R11),
         # so a trace shows which document kinds held the handed slots.
@@ -1107,8 +1129,13 @@ def _emit_retrieval_trace(
     top_score: float,
     k_info: Optional[Dict[str, Any]] = None,
     drop_reasons: Optional[Dict[str, str]] = None,
+    query_chars: Optional[int] = None,
 ) -> None:
     """Write the trace line. Best-effort: a logging failure never costs a turn.
+
+    The query is written as its source code (``query``: ``user_message`` or
+    ``followup_context``) and its length in characters (``query_chars``),
+    never its words. Chunks carry document ids, never document names.
 
     Every ``not_handed`` entry carries ``dropped_by``: the rule that left it
     out (``drop_reasons``, written by ``select_handed`` and
@@ -1130,7 +1157,6 @@ def _emit_retrieval_trace(
         # too (a chunk that already has one is skipped, so nothing is read
         # twice); a failed read leaves the fields empty.
         annotate_document_kinds(retrieved)
-        from app.core.rag.fusion_trace import public_view
         from app.core.rag.retriever import retrievable_project_ids
         from app.core.rag.vector_store import (
             _MISS, _memo_get, fused_candidates_record,
@@ -1144,6 +1170,7 @@ def _emit_retrieval_trace(
             "request_id": rid,
             "path": "pre_injection",
             "query": query_label,
+            "query_chars": query_chars,
             "project_id": project_id,
             "conversation_id": conversation_id,
             "agent": agent_name,
@@ -1155,7 +1182,7 @@ def _emit_retrieval_trace(
             "lexical": lexical,
             "degraded": any(v != "hit" for v in lexical.values()),
             "fused_candidates": (
-                public_view(fused_candidates_record(project_id), handed)
+                _public_fused(fused_candidates_record(project_id), handed)
                 if project_id else None
             ),
             "top_score": round(float(top_score or 0.0), 6),
@@ -1446,7 +1473,8 @@ def rag_inject(
         })
         _audit.write(audit_rec)
         _emit_retrieval_trace(
-            query_label=_query_label, project_id=project_id,
+            query_label=_query_label, query_chars=len(retrieval_query or ""),
+            project_id=project_id,
             conversation_id=conversation_id, agent_name=agent_name,
             retrieved=chunks, handed=[], threshold_fired=True,
             identifier_miss=identifier_miss, top_score=top_score,
@@ -1484,7 +1512,8 @@ def rag_inject(
     })
     _audit.write(audit_rec)
     _emit_retrieval_trace(
-        query_label=_query_label, project_id=project_id,
+        query_label=_query_label, query_chars=len(retrieval_query or ""),
+        project_id=project_id,
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,

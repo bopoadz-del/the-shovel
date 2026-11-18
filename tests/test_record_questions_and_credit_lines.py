@@ -248,7 +248,7 @@ def _wire_documents(monkeypatch, docs: list[dict], bodies: dict[str, str]) -> No
     from app.core import projects as projects_mod
 
     monkeypatch.setattr(projects_mod, "list_document_names", lambda pid: list(docs))
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: list(docs))
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: list(docs))
 
     def fetch(project_id, doc_id, filename):
         for d in docs:

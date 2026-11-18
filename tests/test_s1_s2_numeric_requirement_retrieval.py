@@ -18,6 +18,8 @@ Synthetic text only.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 PID = "FIXTURE-e-20260925-project"
@@ -159,6 +161,7 @@ def corpus(tmp_path, monkeypatch):
 
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     for doc_id, texts in TEXTS.items():
         store.upsert_chunks(PID, doc_id, texts, embedder.encode(texts))
     monkeypatch.setattr(ret, "_doc_name_for_id", lambda doc_id: NAMES.get(doc_id, ""))

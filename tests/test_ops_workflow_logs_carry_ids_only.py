@@ -199,3 +199,58 @@ def test_owner_document_workflows_publish_the_whitelist_only(name):
     for spec in on["workflow_dispatch"]["inputs"].values():
         if spec.get("type") != "boolean":
             assert "PUBLIC" in spec["description"]
+
+
+# --- #412 follow-up: a hash prints only when it has the shape of a hash ------
+
+_HASH = "9f2c0e7d" * 8
+_NOT_HASH = _HASH[:63] + " " + _NAME
+
+
+@pytest.mark.parametrize("value, shown", [
+    (_HASH, _HASH),                                    # a sha256 hexdigest prints
+    (_NOT_HASH, f"<text len={len(_NOT_HASH)}>"),       # a hash plus a name does not
+    (_DRIVE, f"<text len={len(_DRIVE)}>"),             # a path never prints
+    ("", "<text len=0>"),
+])
+def test_hash_view_prints_a_hash_and_withholds_anything_else(value, shown):
+    proc = subprocess.run([sys.executable, "-I", str(_SCRIPT), "hash", value],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == 0 and proc.stdout.strip() == shown
+
+
+_HASH_VAR_RE = re.compile(r"\$\{?(PLANNED|EXPECTED)\b")
+
+
+def raw_hash_echoes(run: str) -> list[str]:
+    """Printed lines naming a plan hash without the hash filter.
+
+    A write to ``$GITHUB_ENV`` is not printed, so it is skipped.
+    """
+    out = []
+    for ln in run.splitlines():
+        ln = ln.strip()
+        if not ln.startswith("echo ") or ln.endswith('>> "$GITHUB_ENV"'):
+            continue
+        if _HASH_VAR_RE.search(ln) and "ops_public_view.py hash" not in ln:
+            out.append(ln)
+    return out
+
+
+@pytest.mark.parametrize("run, bad", [
+    ('echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}"', 1),
+    ('echo "- expected (operator): $(python3 scripts/ops_public_view.py hash "$EXPECTED")"', 0),
+    ("echo \"PLANNED=$(jq -r '.plan.plan_hash' plan.json)\" >> \"$GITHUB_ENV\"", 0),
+])
+def test_raw_hash_echo_checker(run, bad):
+    assert len(raw_hash_echoes(run)) == bad
+
+
+@pytest.mark.parametrize("name", _WORKFLOWS)
+def test_owner_document_workflows_print_hashes_through_the_filter(name):
+    doc = yaml.safe_load((_WF / name).read_text(encoding="utf-8"))
+    run = "\n".join(s["run"] for s in _steps(doc) if isinstance(s.get("run"), str))
+    assert "ops_public_view.py hash" in run
+    assert raw_hash_echoes(run) == []
+    # The gate still compares the raw values.
+    assert '[ "$PLANNED" != "$EXPECTED" ]' in run

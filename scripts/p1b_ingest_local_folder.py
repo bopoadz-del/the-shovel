@@ -265,7 +265,7 @@ def main() -> int:
 
         from app.core import ingest_status as ist
 
-        for doc in projects_mod.list_documents(project_id):
+        for doc in projects_mod.list_documents(project_id, all_sessions=True):
             rel = (doc.get("metadata") or {}).get("local_drive_path")
             if not rel:
                 continue

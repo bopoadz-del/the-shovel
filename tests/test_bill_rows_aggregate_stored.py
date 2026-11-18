@@ -82,7 +82,7 @@ def test_reads_the_stored_sheet_with_or_without_encryption(tmp_path, key_mode, t
 def _project(monkeypatch, docs):
     from app.core import projects
 
-    monkeypatch.setattr(projects, "list_documents", lambda pid: docs)
+    monkeypatch.setattr(projects, "list_documents", lambda pid, **_kw: docs)
     monkeypatch.setattr(projects, "materialize_document_path", lambda d: d["path"])
 
 
