@@ -22,6 +22,8 @@ import re
 from pathlib import Path
 from typing import Iterator, List
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # A raw-SQL filter on a project id: ``project_id = :p``, ``project_id IN (``,
@@ -153,18 +155,20 @@ def unscoped_readers(root: Path, dirs=("app", "scripts")) -> List[str]:
     return found
 
 
-def test_every_project_reader_applies_the_session_scope():
-    unscoped = [f for f in unscoped_readers(ROOT) if f not in EXEMPT]
+@pytest.mark.parametrize("top", ["app", "scripts"])
+def test_every_project_reader_applies_the_session_scope(top):
+    unscoped = [f for f in unscoped_readers(ROOT, dirs=(top,)) if f not in EXEMPT]
     assert unscoped == [], (
         "these functions read a project's documents or chunks and apply no "
         "session scope (see the module docstring): " + ", ".join(unscoped))
 
 
-def test_every_exemption_still_names_an_unscoped_reader():
+@pytest.mark.parametrize("top", ["app", "scripts"])
+def test_every_exemption_still_names_an_unscoped_reader(top):
     """An exemption whose function is gone or now scoped is removed, so the
     list only shrinks and never hides a later reader of the same name."""
-    found = set(unscoped_readers(ROOT))
-    stale = sorted(set(EXEMPT) - found)
+    found = set(unscoped_readers(ROOT, dirs=(top,)))
+    stale = sorted(e for e in set(EXEMPT) - found if e.startswith(top + "/"))
     assert stale == [], stale
 
 
@@ -191,24 +195,30 @@ def planted_maintenance(session, project_id, all_sessions=True):
 '''
 
 
-def test_the_walk_flags_a_planted_unscoped_reader(tmp_path):
-    pkg = tmp_path / "app" / "planted"
-    pkg.mkdir(parents=True)
-    (tmp_path / "scripts").mkdir()
+@pytest.mark.parametrize("top", ["app", "scripts"])
+def test_the_walk_flags_a_planted_unscoped_reader(tmp_path, top):
+    for d in ("app", "scripts"):
+        (tmp_path / d).mkdir()
+    pkg = tmp_path / top / "planted"
+    pkg.mkdir()
     (pkg / "readers.py").write_text(_PLANTED, encoding="utf-8")
     assert unscoped_readers(tmp_path) == [
-        "app/planted/readers.py::planted_reader",
-        "app/planted/readers.py::planted_raw_reader",
+        f"{top}/planted/readers.py::planted_reader",
+        f"{top}/planted/readers.py::planted_raw_reader",
     ]
 
 
-def test_the_walk_flags_a_real_reader_with_its_scope_removed(tmp_path):
-    """The real ``list_document_names``, its scope helpers swapped for
-    look-alikes, is flagged; unchanged, it is not. The rule reads the
-    product code as it is written."""
+@pytest.mark.parametrize("reader", [
+    "list_document_names", "documents_matching_filename_terms",
+    "documents_matching_title_phrase", "compute_readiness",
+])
+def test_the_walk_flags_a_real_reader_with_its_scope_removed(tmp_path, reader):
+    """Each real reader, its scope helpers swapped for look-alikes, is
+    flagged; unchanged, it is not. The rule reads the product code as it is
+    written."""
     src = (ROOT / "app" / "core" / "projects.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(src).body
-              if isinstance(n, ast.FunctionDef) and n.name == "list_document_names")
+              if isinstance(n, ast.FunctionDef) and n.name == reader)
     body = ast.get_source_segment(src, fn)
     stripped = re.sub(r"\b(_in_scope_clause|document_in_scope)\b", r"not\1", body)
     assert stripped != body
@@ -218,7 +228,7 @@ def test_the_walk_flags_a_real_reader_with_its_scope_removed(tmp_path):
         "from app.core.projects import *\n" + body, encoding="utf-8")
     (tmp_path / "app" / "stripped.py").write_text(
         "from app.core.projects import *\n" + stripped, encoding="utf-8")
-    assert unscoped_readers(tmp_path) == ["app/stripped.py::list_document_names"]
+    assert unscoped_readers(tmp_path) == [f"app/stripped.py::{reader}"]
 
 
 
@@ -250,11 +260,16 @@ def unscoped_pass_through_callers(root: Path, dirs=("app", "scripts")) -> List[s
     return found
 
 
-def test_every_caller_of_a_pass_through_builder_scopes():
-    assert unscoped_pass_through_callers(ROOT) == []
+@pytest.mark.parametrize("top", ["app", "scripts"])
+def test_every_caller_of_a_pass_through_builder_scopes(top):
+    assert unscoped_pass_through_callers(ROOT, dirs=(top,)) == []
 
 
-def test_the_caller_check_flags_a_planted_unscoped_caller(tmp_path):
+@pytest.mark.parametrize("scoping", [
+    "vis = self._session_hidden_sql(s, pid, 'c.doc_id', p)",
+    "vis = self._hidden_sql(s, pid, all_sessions=True)",
+])
+def test_the_caller_check_flags_a_planted_unscoped_caller(tmp_path, scoping):
     (tmp_path / "app").mkdir()
     (tmp_path / "scripts").mkdir()
     planted = (
@@ -266,7 +281,7 @@ def test_the_caller_check_flags_a_planted_unscoped_caller(tmp_path):
         "    vis = self._hidden_doc_sql('c')",
         "    return self._relay(s, pid, term, vis)",
         "def scoped_leg(self, s, pid, term, p):",
-        "    vis = self._session_hidden_sql(s, pid, 'c.doc_id', p)",
+        "    " + scoping,
         "    return self._relay(s, pid, term, vis)",
     )
     (tmp_path / "app" / "legs.py").write_text("\n".join(planted) + "\n", encoding="utf-8")

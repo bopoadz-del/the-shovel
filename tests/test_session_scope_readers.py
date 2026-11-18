@@ -25,12 +25,19 @@ from app.core import projects as store
 from tests._fixture_values import PW_06
 
 _RUN = uuid.uuid4().hex[:8]
-SID, UID = f"ws-own-{_RUN}", f"u-own-{_RUN}"
-SCOPES = {
-    "project-wide": None,
-    "other session": (f"ws-other-{_RUN}", UID),
-    "other user": (SID, f"u-other-{_RUN}"),
-}
+# (session, user) of the session that owns the file, in two shapes of the
+# stored ids: a short session id, and the UI's long one. Unique per run.
+OWN = [(f"ws-own-1000-{_RUN}", f"u-own-{_RUN}"),
+       (f"ws-own-mwiqvj9k28n987unh726-{_RUN}", f"usr-0007-own-{_RUN}")]
+
+
+def _other_scopes(own):
+    sid, uid = own
+    return {
+        "project-wide": None,
+        "other session": (f"{sid}-other", uid),
+        "other user": (sid, f"{uid}-other"),
+    }
 
 
 @contextmanager
@@ -42,66 +49,70 @@ def _scope(scope):
         store.reset_session_scope(token)
 
 
-def _session_file(pid: str, name: str, **kw) -> str:
+def _session_file(pid: str, name: str, own, **kw) -> str:
     return store.add_document(pid, name, metadata={
-        "session_id": SID, "uploader_id": UID, "origin": "uploaded"}, **kw)["id"]
+        "session_id": own[0], "uploader_id": own[1], "origin": "uploaded"}, **kw)["id"]
 
 
 def _project(tag: str) -> str:
-    return store.create_project(f"ScopeReader-{tag}-{_RUN}")["id"]
+    return store.create_project(f"ScopeReader-{tag}-{uuid.uuid4().hex[:6]}")["id"]
 
 
-def _absent_outside_present_inside(read, did):
-    for label, scope in SCOPES.items():
+def _absent_outside_present_inside(read, did, own):
+    for label, scope in _other_scopes(own).items():
         with _scope(scope):
             assert did not in read(), label
-    with _scope((SID, UID)):
+    with _scope(own):
         assert did in read(), "own session"
 
 
 # ── app/core/projects.py ────────────────────────────────────────────────────
 
-def test_list_document_names():
+@pytest.mark.parametrize("own", OWN)
+def test_list_document_names(own):
     pid = _project("names")
-    own = store.add_document(pid, "zephyr_project_register.md")["id"]
-    did = _session_file(pid, "zephyr_session_register.md")
+    project_doc = store.add_document(pid, "zephyr_project_register.md")["id"]
+    did = _session_file(pid, "zephyr_session_register.md", own)
     read = lambda: {d["id"] for d in store.list_document_names(pid)}  # noqa: E731
-    _absent_outside_present_inside(read, did)
+    _absent_outside_present_inside(read, did, own)
     with _scope(None):
-        assert own in read()
+        assert project_doc in read()
 
 
-def test_documents_matching_filename_terms():
+@pytest.mark.parametrize("own", OWN)
+def test_documents_matching_filename_terms(own):
     pid = _project("terms")
-    own = store.add_document(pid, "quillon_marbury_project.md")["id"]
-    did = _session_file(pid, "quillon_marbury_session.md")
+    project_doc = store.add_document(pid, "quillon_marbury_project.md")["id"]
+    did = _session_file(pid, "quillon_marbury_session.md", own)
     read = lambda: {d["id"] for d in store.documents_matching_filename_terms(  # noqa: E731
         pid, ["quillon", "marbury"])}
-    _absent_outside_present_inside(read, did)
+    _absent_outside_present_inside(read, did, own)
     with _scope(None):
-        assert own in read()
+        assert project_doc in read()
 
 
-def test_documents_matching_title_phrase():
+@pytest.mark.parametrize("own", OWN)
+def test_documents_matching_title_phrase(own):
     pid = _project("title")
-    own = store.add_document(pid, "Ostrel Vantage Procedure rev1.md")["id"]
-    did = _session_file(pid, "Ostrel Vantage Procedure rev2.md")
+    project_doc = store.add_document(pid, "Ostrel Vantage Procedure rev1.md")["id"]
+    did = _session_file(pid, "Ostrel Vantage Procedure rev2.md", own)
     read = lambda: {d["id"] for d in store.documents_matching_title_phrase(  # noqa: E731
         pid, "ostrel vantage procedure")}
-    _absent_outside_present_inside(read, did)
+    _absent_outside_present_inside(read, did, own)
     with _scope(None):
-        assert own in read()
+        assert project_doc in read()
 
 
-def test_compute_readiness():
+@pytest.mark.parametrize("own", OWN)
+def test_compute_readiness(own):
     pid = _project("ready")
-    _session_file(pid, "invented_baseline.xer", role=store.ROLE_BASELINE)
-    _session_file(pid, "invented_daily.pdf", role=store.ROLE_DAILY)
-    for label, scope in SCOPES.items():
+    _session_file(pid, "invented_baseline.xer", own, role=store.ROLE_BASELINE)
+    _session_file(pid, "invented_daily.pdf", own, role=store.ROLE_DAILY)
+    for label, scope in _other_scopes(own).items():
         with _scope(scope):
             r = store.compute_readiness(pid)
         assert (r["baseline_schedule"], r["daily_reports"]) == (False, 0), label
-    with _scope((SID, UID)):
+    with _scope(own):
         r = store.compute_readiness(pid)
     assert (r["baseline_schedule"], r["daily_reports"]) == (True, 1)
 
@@ -109,64 +120,67 @@ def test_compute_readiness():
 # ── app/core/rag/vector_store.py ────────────────────────────────────────────
 
 @pytest.fixture()
-def chunked():
+def chunked(own):
     """A project with one project file and one session file, both chunked."""
     from app.core.rag.embeddings import get_embedder
     from app.core.rag.vector_store import get_store
 
     pid = _project("chunks")
-    own = store.add_document(pid, "invented_project_notes.md")["id"]
-    did = _session_file(pid, "invented_session_notes.md")
+    own_doc = store.add_document(pid, "invented_project_notes.md")["id"]
+    did = _session_file(pid, "invented_session_notes.md", own)
     emb = get_embedder()
     st = get_store(dim=emb.dim)
     own_texts = ["the gantry crane rests on plinth four"]
     sess_texts = ["the gantry crane carries a velquorine counterweight",
                   "velquorine ballast is checked weekly"]
-    st.upsert_chunks(pid, own, own_texts, emb.encode(own_texts))
+    st.upsert_chunks(pid, own_doc, own_texts, emb.encode(own_texts))
     st.upsert_chunks(pid, did, sess_texts, emb.encode(sess_texts))
-    return st, pid, own, did
+    return st, pid, own_doc, did, own
 
 
+@pytest.mark.parametrize("own", OWN)
 def test_count_by_doc(chunked):
-    st, pid, own, did = chunked
-    _absent_outside_present_inside(lambda: st.count_by_doc(pid), did)
+    st, pid, own_doc, did, own = chunked
+    _absent_outside_present_inside(lambda: st.count_by_doc(pid), did, own)
     with _scope(None):
-        assert st.count_by_doc(pid).get(own) == 1
+        assert st.count_by_doc(pid).get(own_doc) == 1
         # Maintenance still sees every row.
         assert st.count_by_doc(pid, all_sessions=True).get(did) == 2
 
 
+@pytest.mark.parametrize("own", OWN)
 def test_count_and_has_chunks(chunked):
-    st, pid, _own, _did = chunked
-    for label, scope in SCOPES.items():
+    st, pid, _own_doc, _did, own = chunked
+    for label, scope in _other_scopes(own).items():
         with _scope(scope):
             assert st.count(pid) == 1, label
-    with _scope((SID, UID)):
+    with _scope(own):
         assert st.count(pid) == 3
     with _scope(None):
         assert st.count(pid, all_sessions=True) == 3
 
     only = _project("only-session")
-    _session_file(only, "invented_only.md")
-    did = store.list_session_documents(only, SID, UID)[0]["id"]
+    _session_file(only, "invented_only.md", own)
+    did = store.list_session_documents(only, *own)[0]["id"]
     from app.core.rag.embeddings import get_embedder
     emb = get_embedder()
     st.upsert_chunks(only, did, ["an invented line"], emb.encode(["an invented line"]))
     with _scope(None):
         assert st.has_chunks(only) is False
-    with _scope((SID, UID)):
+    with _scope(own):
         assert st.has_chunks(only) is True
 
 
+@pytest.mark.parametrize("own", OWN)
 def test_term_chunk_counts_and_its_cache_are_scoped(chunked):
-    st, pid, _own, _did = chunked
-    for label, scope in SCOPES.items():
+    st, pid, _own_doc, _did, own = chunked
+    for label, scope in _other_scopes(own).items():
         with _scope(scope):
             assert st.term_chunk_counts(pid, ["velquorine", "gantry"]) == {
                 "velquorine": 0, "gantry": 1}, label
     # Same project, inside the TTL: the session's own counts, not the cache
     # the project-wide reads above filled.
-    with _scope((SID, UID)):
+    with _scope(own):
         assert st.term_chunk_counts(pid, ["velquorine", "gantry"]) == {
             "velquorine": 2, "gantry": 2}
     with _scope(None):
@@ -175,9 +189,10 @@ def test_term_chunk_counts_and_its_cache_are_scoped(chunked):
 
 # ── app/routers/projects.py (searchable_document_count, indexed_chunks) ─────
 
+@pytest.mark.parametrize("own", OWN)
 def test_project_route_counts_no_session_file(chunked):
-    st, pid, own, did = chunked
-    email = f"scopereader-{_RUN}@x.com"
+    st, pid, own_doc, did, own = chunked
+    email = f"scopereader-{own[0][-12:]}-{_RUN}@x.com"
     with TestClient(__import__("app.main", fromlist=["app"]).app) as client:
         client.post("/v1/users/register", json={"email": email, "password": PW_06})
         body = client.post("/v1/users/login",
@@ -192,4 +207,4 @@ def test_project_route_counts_no_session_file(chunked):
         proj = client.get(f"/v1/projects/{pid}", headers=headers).json()
     assert proj["searchable_document_count"] == 1
     assert proj["indexed_chunks"] == 1
-    assert {d["id"] for d in proj["documents"]} == {own}
+    assert {d["id"] for d in proj["documents"]} == {own_doc}
