@@ -17,6 +17,7 @@ Input (one JSON object per row, or a list of them)::
 
     {
       "id": "<row id>",
+      "rep": <repeat number, optional>,
       "answer": "<answer text>",
       "handed": [{"chunk_id": "...", "doc_id": "...", "doc_name": "...",
                   "text": "<chunk text, optional>"}],
@@ -215,6 +216,7 @@ def overlap(sentence: str, chunk_text: str) -> float | None:
 @dataclass
 class RowScore:
     id: str
+    rep: int | None = None
     numbers_found: int = 0
     numbers_not_found: int = 0
     citations_handed: int = 0
@@ -226,8 +228,13 @@ class RowScore:
     reasons: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
+        # ``row`` and ``rep`` are the key the trace page joins scores on
+        # (scripts/trace_page.py load_scores); ``id`` is kept for readers
+        # of the first output.
         return {
             "id": self.id,
+            "row": self.id,
+            "rep": self.rep,
             "numbers_found": self.numbers_found,
             "numbers_not_found": self.numbers_not_found,
             "citations_handed": self.citations_handed,
@@ -245,7 +252,9 @@ def score_row(row: dict[str, Any], *, overlap_floor: float = 0.2) -> RowScore:
     handed = list(row.get("handed") or [])
     tools = [str(t) for t in (row.get("tool_results") or [])]
     listed = [str(s) for s in (row.get("sources_list") or [])]
-    out = RowScore(id=str(row.get("id") or ""))
+    rep = row.get("rep")
+    out = RowScore(id=str(row.get("id") or ""),
+                   rep=rep if isinstance(rep, int) and not isinstance(rep, bool) else None)
 
     cites = find_citations(answer, listed)
     cited_text: list[str] = []

@@ -267,3 +267,9 @@ def test_output_carries_ids_and_counts_only(tmp_path, capsys, chunk_text, found,
     assert (rec["numbers_found"], rec["numbers_not_found"]) == (found, not_found)
     for leaked in ("Secret", "Private", "secret question"):
         assert leaked not in out
+
+
+@pytest.mark.parametrize("rep,shown", [(3, 3), (True, None), ("3", None), (None, None)])
+def test_output_carries_row_and_rep_the_trace_page_joins_on(rep, shown):
+    out = ass.score_row({"id": "Q7", "rep": rep, "answer": ""}).as_dict()
+    assert (out["row"], out["rep"], out["id"]) == ("Q7", shown, "Q7")
