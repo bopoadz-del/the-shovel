@@ -1,0 +1,142 @@
+"""Q-3: the read-only RFI structure count. Every input is built here; no
+document id, name or corpus text from production appears."""
+from __future__ import annotations
+
+import importlib.util
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "rfi_structure_count.py"
+_SRC = _SCRIPT.read_text(encoding="utf-8")
+
+
+def _load():
+    spec = importlib.util.spec_from_file_location("rfi_structure_count", _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+m = _load()
+PATS = m.compile_headings(m.DEFAULT_HEADINGS)
+
+Q = "Question:\nWhich grade applies to the slab?"
+A = "Response:\nUse the grade on the general notes."
+R = "References:\nSheet 7, clause 4."
+
+
+@pytest.mark.parametrize("chunks,expected", [
+    ([(0, f"{Q}\n{A}\n{R}")], True),          # all three blocks
+    ([(0, f"{Q}\n{R}")], False),               # no answer block
+    ([(0, f"{Q}\n{A}")], False),               # no references block
+    ([(0, f"{A}\n{R}\n{Q}")], False),          # answer only BEFORE the question
+])
+def test_rfi_like_needs_question_then_answer_and_references(chunks, expected):
+    assert m.classify(chunks, PATS)["rfi_like"] is expected
+
+
+@pytest.mark.parametrize("body,hit", [
+    ("Response: see sheet", True),           # heading at line start
+    ("the contractor's response: see sheet", False),  # word inside prose
+    ("2.1 Response\nsee sheet", True),       # numbered heading ending the line
+    ("Responsibility: the contractor", False),  # longer word, not the heading
+])
+def test_a_heading_is_a_label_at_line_start(body, hit):
+    assert bool(m.heading_hits(body, PATS)["answer"]) is hit
+
+
+@pytest.mark.parametrize("chunks,split,qa", [
+    ([(0, Q), (1, A), (2, R)], True, (0, 1)),
+    ([(0, f"{Q}\n{A}"), (1, R)], False, (0, 0)),
+    ([(5, f"{A}\n{R}"), (3, Q)], True, (3, 5)),   # read in chunk_index order
+])
+def test_split_is_question_and_answer_in_different_chunks(chunks, split, qa):
+    r = m.classify(chunks, PATS)
+    assert r["rfi_like"] is True
+    assert r["split"] is split
+    assert (r["question_chunk"], r["answer_chunk"]) == qa
+
+
+@pytest.mark.parametrize("raw,words", [
+    ("", m.DEFAULT_HEADINGS["answer"]),
+    (json.dumps({"question": ["Ask"], "answer": ["Reply Given"], "references": ["See"]}),
+     ("reply given",)),
+])
+def test_heading_table_reads_the_operator_table(raw, words):
+    assert m.headings(raw)["answer"] == words
+
+
+@pytest.mark.parametrize("raw", [
+    json.dumps({"question": ["Ask"], "answer": [], "references": ["See"]}),
+    json.dumps({"question": ["Ask"], "answer": ["Reply"]}),
+])
+def test_a_malformed_table_is_refused_not_counted_as_zero(raw):
+    with pytest.raises(ValueError):
+        m.headings(raw)
+
+
+@pytest.mark.parametrize("table,text_,expected", [
+    ({"question": ["ask"], "answer": ["reply given"], "references": ["see"]},
+     "Ask:\nx\nReply   Given:\ny\nSee:\nz", True),
+    ({"question": ["ask"], "answer": ["reply given"], "references": ["see"]},
+     f"{Q}\n{A}\n{R}", False),
+])
+def test_an_operator_table_replaces_the_default(table, text_, expected):
+    pats = m.compile_headings(m.headings(json.dumps(table)))
+    assert m.classify([(0, text_)], pats)["rfi_like"] is expected
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([("d1", 0, "a"), ("d1", 1, "b"), ("d2", 0, "c")], [("d1", 2), ("d2", 1)]),
+    ([("d9", 3, "x")], [("d9", 1)]),
+])
+def test_group_by_doc(rows, expected):
+    assert [(d, len(c)) for d, c in m.group_by_doc(rows)] == expected
+
+
+@pytest.mark.parametrize("docs,counts", [
+    ({"a": [(0, Q), (1, A), (2, R)], "b": [(0, f"{Q}\n{A}\n{R}")], "c": [(0, "plain text")]},
+     (3, 2, 1, 1)),
+    ({"c": [(0, "plain text")]}, (1, 0, 0, 0)),
+])
+def test_summary_counts(docs, counts):
+    s = m.summarise((d, m.classify(c, PATS)) for d, c in docs.items())
+    assert (s["documents"], s["rfi_like"], s["split"], s["same_chunk"]) == counts
+
+
+@pytest.mark.parametrize("secret", ["Which grade applies to the slab", "general notes"])
+def test_render_prints_ids_and_counts_never_text(secret):
+    docs = {"doc1": [(0, Q), (1, A), (2, R)]}
+    s = m.summarise((d, m.classify(c, PATS)) for d, c in docs.items())
+    out = "\n".join(m.render("anc", s))
+    assert secret not in out
+    assert "doc1 | 3 | 0 | 1 | yes" in out
+
+
+@pytest.mark.parametrize("cap,shown", [(1, 1), (5, 2)])
+def test_render_caps_the_id_list(cap, shown):
+    docs = {"a": [(0, f"{Q}\n{A}\n{R}")], "b": [(0, f"{Q}\n{A}\n{R}")]}
+    s = m.summarise(((d, m.classify(c, PATS)) for d, c in docs.items()), cap=cap)
+    assert len(s["rows"]) == shown
+
+
+@pytest.mark.parametrize("sql", [m._DOC_SQL, m._chunks_sql("chunks_v2")])
+def test_sql_is_a_select_with_bound_parameters(sql):
+    assert sql.lstrip().upper().startswith("SELECT ")
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b", sql, re.I)
+    assert ":p" in sql or ":pr" in sql
+
+
+@pytest.mark.parametrize("env,code", [({"RFI_ANCHOR_ID": ""}, 2), ({"RFI_ANCHOR_ID": "a%b"}, 2)])
+def test_main_refuses_a_missing_or_unsafe_anchor(monkeypatch, env, code):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert m.main() == code
+
+
+@pytest.mark.parametrize("call", ["commit(", ".add("])
+def test_script_never_writes(call):
+    assert call not in _SRC
