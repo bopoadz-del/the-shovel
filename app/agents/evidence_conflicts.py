@@ -41,8 +41,18 @@ its document. The comparison is deterministic; no model decides it.
     after a label is not a claim.
   * No thing, no conflict: when the asked words that name the thing are
     empty, nothing is compared.
+  * The value's thing is read from its own clause: a passage is cut at a
+    heading-path step, a semicolon or a line break, and only the words
+    within a few of the value say what it is a value of (a table row or a
+    page of text with no full stop is not one claim).
+  * The question's thing: its content words less the kind of value (a kind
+    word and the words that run straight into it, "concrete grade"). A
+    question that names only the kind names no thing: no conflict, since
+    two values found for it may belong to two different elements.
   * An answer that already states every one of the differing values has
-    told the user both; it is left as written.
+    told the user both; it is left as written -- unless it also says the
+    documents agree (match, are consistent): then it has not told the user
+    they differ, and the conflict statement leads.
 
 C3 PRECEDENCE. A sentence in the evidence that states which document kind
 takes precedence, prevails, governs or has priority (a pairwise statement
@@ -91,6 +101,36 @@ def _stem(word: str) -> str:
 _KIND_TERMS = frozenset(_stem(w) for w in (
     "date", "grade", "class", "length", "area", "volume", "mass", "weight", "time", "duration",
     "period", "pressure", "force", "percent", "percentage", "price", "cost", "sum"))
+
+
+def _question_thing(question: str) -> set[str]:
+    """The thing the question names: its content words, less the words that
+    only name the kind of value. A kind word ("grade", "date", "price") and
+    the words that run straight into it ("concrete grade", "completion
+    date") name the kind; a question made of nothing else names no thing,
+    and two values found for it may be about two different elements."""
+    words = [w for w in re.findall(r"[A-Za-z][A-Za-z'-]*", question or "") if len(w) > 1]
+    kind_phrase: set[str] = set()
+    for i, w in enumerate(words):
+        if _stem(w) not in _KIND_TERMS:
+            continue
+        j = i - 1
+        while j >= 0 and words[j].lower() not in _STOP and _stem(words[j]) not in _KIND_TERMS:
+            kind_phrase.add(_stem(words[j]))
+            j -= 1
+    return _terms(question) - _KIND_TERMS - kind_phrase
+
+
+#: A sentence that tells the user the documents agree, are consistent or
+#: match. An answer that says so while it states two differing values has
+#: not told the user they differ.
+_AGREE_RE = re.compile(
+    r"\b(?:agree|agrees|agreed|agreement|consistent|consistently|identical|match|matches|"
+    r"no\s+(?:conflict|conflicts|discrepanc(?:y|ies)|difference|differences))\b", re.IGNORECASE)
+
+
+def _claims_agreement(answer: str) -> bool:
+    return bool(_AGREE_RE.search(answer or ""))
 
 
 def _terms(text: str) -> set[str]:
@@ -286,25 +326,45 @@ def _row_text(row: dict[str, Any]) -> str:
     return str(row.get("snippet") or row.get("passage") or row.get("text") or "")
 
 
+#: A passage "sentence" can be a whole table row, a heading path or a page of
+#: text with no full stop. A value's claim is its own clause: the passage is
+#: cut at a heading-path step, a semicolon or a line break, and within the
+#: clause only the words near the value say what it is a value of.
+_CLAUSE_SPLIT_RE = re.compile(r"\s+>\s+|;\s*|\n+")
+_WINDOW_WORDS = 12
+
+
+def _clauses(text: str) -> list[str]:
+    return [c.strip() for s in _sentences(text) for c in _CLAUSE_SPLIT_RE.split(s) if c.strip()]
+
+
+def _window(sent: str, start: int, end: int) -> str:
+    """The value's own neighbourhood: up to ``_WINDOW_WORDS`` words on each
+    side, inside its clause."""
+    before = sent[:start].split()[-_WINDOW_WORDS:]
+    after = sent[end:].split()[:_WINDOW_WORDS]
+    return " ".join(before) + " " + " ".join(after)
+
+
 def _candidates(rows: list[dict[str, Any]]) -> list[_Cand]:
     out: list[_Cand] = []
     for ri, row in enumerate(rows):
         doc = _row_doc(row)
         if not doc:
             continue
-        for si, sent in enumerate(_sentences(_row_text(row))):
+        for si, sent in enumerate(_clauses(_row_text(row))):
             vals = extract(sent)
             if not vals:
                 continue
             masked = sent
             for v in sorted(vals, key=lambda v: -v.start):
-                masked = masked[: v.start] + " " + masked[v.end:]
-            sent_terms = _terms(masked)
+                masked = masked[: v.start] + " " * (v.end - v.start) + masked[v.end:]
             for i, v in enumerate(vals):
                 lo = vals[i - 1].end if i else 0
                 hi = vals[i + 1].start if i + 1 < len(vals) else len(sent)
                 local = sent[lo: v.start] + " " + sent[v.end: hi]
-                out.append(_Cand(doc, row, v, sent_terms, _terms(local), (ri, si)))
+                near = _terms(_window(masked, v.start, v.end))
+                out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si)))
     return out
 
 
@@ -409,7 +469,8 @@ def _states_answer(c: _Cand, sent: str, typed: list[Value], kind: str) -> bool:
     return any(same(c.value, a) for a in typed if a.kind == kind)
 
 
-def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, asked: set[str]) -> list[_Cand]:
+def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, asked: set[str],
+                from_question: bool = False) -> list[_Cand]:
     """Only the values that belong to the asked thing. The thing is the asked
     words that every document stating the answer's value uses for it; a value
     from a sentence that does not name all of them is about something else
@@ -425,9 +486,20 @@ def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, ask
     for n, c in named:
         if n == best:
             thing &= c.sent_terms
-    if not thing:
-        return []  # nothing names the thing: no two values can be shown to be about it
+    need = _named_enough(len(set(asked) - _KIND_TERMS)) if from_question else 1
+    if len(thing) < need:
+        # One word shared with the question is not the thing the question
+        # names: two values for two things that share a word are no conflict.
+        return []
     return [c for c in kept if thing <= c.sent_terms]
+
+
+def _named_enough(asked: int) -> int:
+    """How many of the asked thing's words a value's own words must name: a
+    third of them, and at least two when the question names two or more."""
+    if asked <= 0:
+        return 1
+    return min(asked, max(2, -(-asked // 3)))
 
 
 def _thing(kept: list[_Cand], asked: set[str]) -> list[str]:
@@ -450,10 +522,12 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
         cands = _candidates(rows)
         if not cands:
             return []
-        q_terms = _terms(question or "")
+        said = extract(answer)
+        q_terms = _question_thing(question) if question else set()
+        if question and not q_terms:
+            return []  # the question names only the kind of value: no thing to compare
         out: list[dict[str, Any]] = []
         seen: set[tuple[str, frozenset]] = set()
-        said = extract(answer)
         for sent in _sentences(answer):
             avals = extract(sent)
             typed = [v for v in avals if v.kind != "text"]
@@ -478,7 +552,7 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     anchored = any(same(c.value, a) for c in kept for a in typed if a.kind == kind)
                 if not anchored:
                     continue
-                kept = _same_thing(kept, sent, typed, kind, q_terms or query)
+                kept = _same_thing(kept, sent, typed, kind, q_terms or query, from_question=bool(q_terms))
                 classes: list[_Cand] = []
                 for c in kept:
                     if not any(same(c.value, k.value) for k in classes):
@@ -489,8 +563,8 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     told = all(_says_text(c.value.norm, answer) for c in classes)
                 else:
                     told = all(any(same(c.value, a) for a in said if a.kind == kind) for c in classes)
-                if told:
-                    continue  # the answer already states every differing value
+                if told and not _claims_agreement(answer):
+                    continue  # the answer already states every differing value as differing
                 key = (kind, frozenset(str(c.value.norm) for c in classes))
                 if key in seen:
                     continue
