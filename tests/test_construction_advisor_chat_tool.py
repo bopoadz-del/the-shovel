@@ -208,14 +208,15 @@ def _configs_breaking_the_rule(configs_dir) -> list[str]:
             if _allows_the_block(md) != _carries_the_line(md)]
 
 
-def test_every_config_on_disk_allows_the_block_exactly_when_it_carries_the_line():
+@pytest.mark.parametrize("allows", [True, False])
+def test_every_config_on_disk_carries_the_line_exactly_when_it_allows_the_block(allows):
+    # The two inputs are the two branches: configs whose loaded allowed
+    # blocks include the block must carry the line (block => line), and
+    # configs whose loaded allowed blocks do not must not (line => block).
     from app.agents.runtime import CONFIGS_DIR
-    configs = sorted(CONFIGS_DIR.glob("*.md"))
-    assert configs, "no agent config found on disk"
-    assert _configs_breaking_the_rule(CONFIGS_DIR) == []
-    # Both branches of the implication are exercised by the configs on disk.
-    with_block = [md for md in configs if _allows_the_block(md)]
-    assert 0 < len(with_block) < len(configs)
+    on_branch = [md for md in sorted(CONFIGS_DIR.glob("*.md")) if _allows_the_block(md) == allows]
+    assert on_branch, f"no config on disk on the allows={allows} branch"
+    assert [md.name for md in on_branch if _carries_the_line(md) != allows] == []
 
 
 def _write_config(directory, stem, frontmatter_tail):
