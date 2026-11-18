@@ -369,3 +369,79 @@ def test_stream_an_unanswered_part_follows_the_result_in_one_line(monkeypatch, a
     line = next(ln for ln in out.splitlines() if ln.startswith(_UNANSWERED))
     assert f"{EN['asked']}: {b}" in line
     assert out.index(_count(rows, a)) < out.index(line)
+
+
+# -- the fifth shape (live A3 count row, 18 Nov): a result cut to a preview
+# that does not parse, then a result. The cut call returned; its figure cannot
+# be read in this turn. It is STATED (the turn does not wait for it) and named
+# at the end in the one plain line; the readable result leads.
+
+_CUT_REASON = EN["result_cut"]
+
+
+def _cut(result: dict, keep: int) -> str:
+    """A tool message cut to a preview of its first ``keep`` characters."""
+    text = json.dumps({"name": TOOL, "ok": True, "result": result})
+    return json.dumps({"truncated": True, "note": "cut", "preview": text[:keep]})
+
+
+def _cut_turn(question: str, cut_args: dict, cut_content: str, args: dict, result: dict) -> list[dict]:
+    msgs = _turn(question, (cut_args, NO_FIGURE), (args, result))
+    msgs[3]["content"] = cut_content
+    return msgs
+
+
+@pytest.mark.parametrize("keep", [40, 120])
+@pytest.mark.parametrize("result,_a,args,figure", BILLS)
+def test_a_cut_unreadable_result_is_stated_and_named_after_the_readable_one(keep, result, _a, args, figure):
+    cut_args = {"terms": "gully"}
+    turn = _cut_turn("gully and kerb totals?", cut_args, _cut(result, keep), args, result)
+    # The cut call can never state a figure: the turn must not wait for it.
+    assert runtime._computed_turn_answer(turn, require_stated=True), "waited on a cut call"
+    for out in _answers(turn) + [runtime._computed_turn_answer(turn, require_stated=True)]:
+        assert out.startswith("Bill row count and total:"), out
+        line = _unanswered_line(out)
+        assert f"{EN['asked']}: gully" in line and _CUT_REASON in line, out
+        assert out.index(figure) < out.index(line)
+        assert out.count(_CUT_REASON) == 1, out
+
+
+@pytest.mark.parametrize("result,_a,args,figure", BILLS)
+def test_a_cut_preview_that_is_whole_json_is_read_not_called_cut(result, _a, args, figure):
+    whole = json.dumps({"name": TOOL, "ok": True, "result": result})
+    content = json.dumps({"truncated": True, "note": "cut", "preview": whole})
+    turn = _turn("totals?", (args, NO_FIGURE))
+    turn[3]["content"] = content
+    out = runtime._computed_turn_answer(turn, require_stated=True)
+    assert figure in out and _CUT_REASON not in out, out
+
+
+def test_a_cut_call_alone_is_the_answer_with_its_reason():
+    for result, _a, args, _f in BILLS:
+        turn = _turn("totals?", (args, NO_FIGURE))
+        turn[3]["content"] = _cut(result, 60)
+        out = runtime._computed_turn_answer(turn, require_stated=True)
+        assert out.startswith("Bill row count and total:") and _CUT_REASON in out, out
+        assert _UNANSWERED not in out, out
+
+
+@pytest.mark.parametrize("result,_a,args,figure", BILLS)
+def test_the_real_serializer_cut_then_a_zero_result(result, _a, args, figure):
+    """Live order (core loop): call 1's result is over the tool-result cap,
+    and the core serializer (``_tool_result_content``) cuts it to a preview
+    that does not parse; call 2 returns a count of 0. The 0 leads; call 1 is
+    named last with the reason; the turn does not wait for call 1."""
+    zero = {**result, "bills": [{**result["bills"][0], "count": 0, "sum": 0, "rows": [],
+                                 "sum_by_unit": {}}]}
+    full = {"name": TOOL, "ok": True, "result": result}
+    cap = len(json.dumps(full)) // 2
+    cut = runtime._tool_result_content(full, max_chars=cap)
+    assert json.loads(cut).get("truncated"), cut
+    turn = _turn("how many gully items, and the other part?", ({"terms": "gully"}, NO_FIGURE), (args, zero))
+    turn[3]["content"] = cut
+    for out in _answers(turn):
+        assert out.startswith("Bill row count and total:"), out
+        assert "**0**" in out, out
+        line = _unanswered_line(out)
+        assert f"{EN['asked']}: gully" in line and _CUT_REASON in line, out
+        assert out.index("**0**") < out.index(line), out

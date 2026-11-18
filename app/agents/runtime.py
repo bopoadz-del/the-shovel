@@ -6317,6 +6317,23 @@ def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _tool_message_cut_unreadable(msg: dict[str, Any]) -> bool:
+    """True when a tool message is a truncation envelope whose preview is
+    not whole JSON: the tool returned, but its result cannot be read here."""
+    raw = msg.get("content") or ""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not (isinstance(payload, dict) and payload.get("truncated")):
+        return False
+    try:
+        json.loads(payload.get("preview") or "")
+    except (TypeError, json.JSONDecodeError):
+        return True
+    return False
+
+
 def _computed_call(msg: dict[str, Any], spec: Any,
                    messages: list[dict[str, Any]], language: str) -> Any:
     """One computed call of the turn as ``computed_answer.Call``: its
@@ -6330,7 +6347,12 @@ def _computed_call(msg: dict[str, Any], spec: Any,
     error = ""
     err = _tool_error_payload(body)
     status = str(body.get("status") or "").strip().lower()
-    if payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
+    if not payload and _tool_message_cut_unreadable(msg):
+        # The call returned, but its result was cut to a preview that does
+        # not parse: say so, rather than leave the call open (an open call
+        # is waited for, and this one can never state anything).
+        error = computed_answer.RESULT_CUT_UNREADABLE
+    elif payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
         error = computed_answer.failure_text(err or body)
     elif body:
         try:

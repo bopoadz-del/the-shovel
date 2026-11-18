@@ -49,6 +49,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "quantity": "quantity",
         "amount": "amount",
         "tool_error": "the tool reported an error",
+        "result_cut": "the result was too long and was cut, so it could not be read in this turn",
         "code": "code",
         "unanswered": "Not answered in this turn: {parts}.",
     },
@@ -72,6 +73,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "quantity": "الكمية",
         "amount": "المبلغ",
         "tool_error": "أبلغت الأداة عن خطأ",
+        "result_cut": "كانت النتيجة أطول من الحد فقُطعت، فتعذّرت قراءتها في هذا الدور",
         "code": "الرمز",
         "unanswered": "لم تتم الإجابة عنه في هذا الدور: {parts}.",
     },
@@ -81,6 +83,13 @@ LABELS: Dict[str, Dict[str, str]] = {
 #: ONLY here (never in LABELS, so an error that happens to equal a label key
 #: is not shown as that label). A code is added by adding it to every
 #: language below.
+#: The reason a call carries when its result came back but was cut to a
+#: preview that does not parse: the call returned, its figure cannot be read
+#: in this turn. It is a stated outcome (the turn does not wait for it), and
+#: the call is named at the end like any other unanswered part. A platform
+#: condition, not a tool's code: worded in LABELS, never in REASONS.
+RESULT_CUT_UNREADABLE = "result_cut_unreadable"
+
 REASONS: Dict[str, Dict[str, str]] = {
     "en": {
         "no_derived_bill_sheet": "no bill sheet has been derived for this project",
@@ -180,6 +189,8 @@ def reason_text(error: str, lab: Dict[str, str], language: str,
     raw = str(error or "").strip()
     if not raw:
         return ""
+    if raw == RESULT_CUT_UNREADABLE:
+        return lab["result_cut"]
     worded = (REASONS.get(language) or REASONS[DEFAULT_LANGUAGE]).get(raw)
     if worded:
         return worded
@@ -452,7 +463,7 @@ def failure_text(payload: Optional[Dict[str, Any]]) -> str:
 
 
 __all__: Tuple[str, ...] = (
-    "LABELS", "REASONS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
+    "LABELS", "REASONS", "RESULT_CUT_UNREADABLE", "has_words", "question_language", "render_call", "heading_for", "join_calls",
     "Call", "selection", "covers", "unanswered", "answer_turn",
     "tool_call_args", "failure_text", "scrub", "reason_text", "MAX_CODE_CHARS",
 )
