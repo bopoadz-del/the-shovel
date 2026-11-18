@@ -54,7 +54,8 @@ def _event(ts: float, payload, wrapped: bool = False):
 
 
 def _row(rid, start, t_end, **over):
-    rec = {"id": rid, "rep": 1, "time_utc": _iso(start), "sha_before": "abc1234",
+    # the tester stamps time_utc when the turn ENDS
+    rec = {"id": rid, "rep": 1, "time_utc": _iso(start + (t_end or 0)), "sha_before": "abc1234",
            "sha_after": "abc1234", "question": "Q?", "expected": "E", "answer": "x" * 120,
            "sources": {"list": "S"}, "timing": {"t_end": t_end}}
     rec.update(over)
@@ -97,6 +98,17 @@ def test_each_line_goes_to_the_row_whose_window_covers_it(offset, expected):
 def test_slack_decides_a_line_just_after_the_end(slack, unmatched):
     rows = [tp.row_from_record(_row("A1", T0, 30))]
     assert tp.assign([(T0 + 38, _payload())], rows, slack_s=slack)[1] == unmatched
+
+
+@pytest.mark.parametrize("offset,owned", [
+    (12, True),    # 2 s after the turn started (end 50 - t_end 40): the turn's own line
+    (60, False),   # past the end + slack; reading time_utc as the start would claim it
+])
+def test_time_utc_is_the_end_of_the_turn(offset, owned):
+    row = tp.row_from_record({"id": "A7", "time_utc": _iso(T0 + 50), "timing": {"t_end": 40}})
+    assert (row["start"], row["end"]) == (T0 + 10, T0 + 50)
+    by_row, unmatched = tp.assign([(T0 + offset, _payload())], [row], slack_s=5)
+    assert (len(by_row[0]) == 1, unmatched) == (owned, 0 if owned else 1)
 
 
 # ── nothing but ids, ranks, scores ───────────────────────────────────────

@@ -154,17 +154,21 @@ def _epoch(stamp: str) -> Optional[float]:
 def row_from_record(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The fields of one tester row the page may use. Never the question,
     the expected answer, the answer text or the sources."""
-    start = _epoch(rec.get("time_utc", ""))
-    if start is None:
+    # ``time_utc`` is stamped when the tester writes the row, i.e. when the
+    # turn ENDS; the turn started ``t_end`` seconds earlier.
+    end = _epoch(rec.get("time_utc", ""))
+    if end is None:
         return None
     timing = rec.get("timing") if isinstance(rec.get("timing"), dict) else {}
     t_end = timing.get("t_end")
+    t_end = float(t_end) if isinstance(t_end, (int, float)) else None
     answer = rec.get("answer")
     return {
         "id": _safe_str(rec.get("id")),
         "rep": rec.get("rep") if isinstance(rec.get("rep"), int) else None,
-        "start": start,
-        "t_end": float(t_end) if isinstance(t_end, (int, float)) else None,
+        "start": end - t_end if t_end is not None else None,
+        "end": end,
+        "t_end": t_end,
         "sha_before": _safe_str(rec.get("sha_before")),
         "sha_after": _safe_str(rec.get("sha_after")),
         "answer_chars": len(answer) if isinstance(answer, str) else None,
@@ -182,7 +186,7 @@ def load_rows(pattern: str) -> List[Dict[str, Any]]:
         row = row_from_record(rec) if isinstance(rec, dict) else None
         if row is not None:
             rows.append(row)
-    rows.sort(key=lambda r: r["start"])
+    rows.sort(key=_row_start)
     return rows
 
 
@@ -217,25 +221,31 @@ def assign(
     rows: List[Dict[str, Any]],
     slack_s: float = 15.0,
     default_window_s: float = 400.0,
+    lead_s: float = 2.0,
 ) -> Tuple[Dict[int, List[Tuple[float, Dict[str, Any]]]], int]:
-    """Each trace line goes to the latest row that started at or before it
-    and whose window (its end time plus ``slack_s``) still covers it. A line
-    no row covers is counted as unmatched, never guessed onto a row."""
+    """Each trace line goes to the latest-starting row whose turn covers it:
+    from its start (end minus ``t_end``, less ``lead_s``) to its end plus
+    ``slack_s``. A row without ``t_end`` is taken to have run
+    ``default_window_s``. A line no row covers is counted as unmatched,
+    never guessed onto a row."""
     by_row: Dict[int, List[Tuple[float, Dict[str, Any]]]] = {i: [] for i in range(len(rows))}
     unmatched = 0
     for ts, payload in events:
         owner = None
         for i, row in enumerate(rows):
-            if row["start"] > ts:
+            if _row_start(row, default_window_s) - lead_s > ts:
                 break
-            window = row["t_end"] if row["t_end"] is not None else default_window_s
-            if ts <= row["start"] + window + slack_s:
+            if ts <= row["end"] + slack_s:
                 owner = i
         if owner is None:
             unmatched += 1
         else:
             by_row[owner].append((ts, payload))
     return by_row, unmatched
+
+
+def _row_start(row: Dict[str, Any], default_window_s: float = 400.0) -> float:
+    return row["start"] if row["start"] is not None else row["end"] - default_window_s
 
 
 # ── projection (the allowlist) ───────────────────────────────────────────
@@ -367,7 +377,7 @@ def render(
         parts.append(_kv(head))
         for n, (ts, payload) in enumerate(lines, 1):
             view = project_trace(payload)
-            parts.append(f"<h3>trace {n} (+{ts - row['start']:.1f} s)</h3>")
+            parts.append(f"<h3>trace {n} (+{ts - _row_start(row):.1f} s)</h3>")
             parts.append(_kv(view["summary"]))
             parts.append("<h4>fused candidates</h4>" + _kv(view["fused_counts"]))
             for leg, entries in view["leg_top"].items():
