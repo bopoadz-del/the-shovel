@@ -338,6 +338,28 @@ class LiveDump:
             _live_owner_lock.release()
 
 
+def loop_depth(sample: str) -> int:
+    """How many frames the ``[loop]`` stack in a ``sample_stacks`` string has
+    (0 when the sample carries no loop stack)."""
+    if not sample.startswith("[loop] "):
+        return 0
+    loop_part = sample[len("[loop] "):].split(" || ", 1)[0]
+    return loop_part.count(" <- ") + 1 if loop_part else 0
+
+
+def keep_deeper_sample(kept: str, snap: str) -> str:
+    """Which of two samples taken during ONE stall to keep.
+
+    A stall ends when the loop gets back to its own scheduler, so the last
+    sample before the heartbeat is served is often the loop already idle in
+    ``select`` / ``_read_from_self``: the frames that blocked it are gone. The
+    loop stack is deepest while it is inside the call that blocks it, so keep
+    the deeper loop stack; on a tie keep the newer one (most recent frames)."""
+    if not snap:
+        return kept
+    return snap if loop_depth(snap) >= loop_depth(kept) else kept
+
+
 class LagMonitor:
     """Measures how late the loop serves a heartbeat; optionally logs stalls."""
 
@@ -449,9 +471,7 @@ class LagMonitor:
                 while not served.wait(0.05):
                     if self._stop.is_set():
                         return
-                    snap = sample_stacks(self._loop_ident)
-                    if snap:
-                        sample = snap
+                    sample = keep_deeper_sample(sample, sample_stacks(self._loop_ident))
             lag_ms = heartbeat_lag_ms(posted, served_at[0] if served_at else None,
                                       time.monotonic())
             self.max_lag_ms = max(self.max_lag_ms, lag_ms)
