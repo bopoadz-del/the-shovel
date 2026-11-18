@@ -160,9 +160,27 @@ def group_by_doc(rows: Iterable[tuple]) -> Iterator[tuple[str, list[tuple[int, s
         yield cur, buf
 
 
-def _chunks_sql(table: str) -> str:
-    return (f"SELECT doc_id, chunk_index, text FROM {table} "
-            "WHERE project_id = :pr ORDER BY doc_id, chunk_index")
+def drop_hidden(rows: Iterable[tuple], hidden: set[str]) -> Iterator[tuple]:
+    """Pure: the ``(doc_id, chunk_index, text)`` rows whose document is not in
+    ``hidden``, in the same order."""
+    for row in rows:
+        if str(row[0]) not in hidden:
+            yield row
+
+
+def project_chunk_rows(s: Any, table: str, project_id: str) -> Iterator[tuple]:
+    """The project's own chunks, ``(doc_id, chunk_index, text)`` ordered by
+    document. A chat session's file is that session's, not the project's
+    (``projects.document_in_scope``), so the documents the product's own
+    ``session_hidden_document_ids`` names are dropped: the count reads what
+    the project's retrieval may read, never a session upload."""
+    from app.core.projects import session_hidden_document_ids
+
+    hidden = {str(d) for d in session_hidden_document_ids(project_id, s)}
+    sql = (f"SELECT doc_id, chunk_index, text FROM {table} "
+           "WHERE project_id = :pr ORDER BY doc_id, chunk_index")
+    rows = s.execute(text(sql).execution_options(stream_results=True), {"pr": project_id})
+    return drop_hidden(rows, hidden)
 
 
 def emit(line: str, *, err: bool = False) -> None:
@@ -191,8 +209,7 @@ def main() -> int:
             if len(docs) != 1:
                 emit(f"== id {anchor}: {len(docs)} matching documents, need exactly 1")
                 return 1
-            rows = s.execute(text(_chunks_sql(table)).execution_options(stream_results=True),
-                             {"pr": docs[0][1]})
+            rows = project_chunk_rows(s, table, docs[0][1])
             summ = summarise((d, classify(ch, pats)) for d, ch in group_by_doc(rows))
     except Exception as exc:  # by class only: a message can quote text
         emit(f"== id {anchor}: READ FAILED: {type(exc).__name__}")

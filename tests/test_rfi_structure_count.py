@@ -123,7 +123,49 @@ def test_render_caps_the_id_list(cap, shown):
     assert len(s["rows"]) == shown
 
 
-@pytest.mark.parametrize("sql", [m._DOC_SQL, m._chunks_sql("chunks_v2")])
+class _FakeSession:
+    """Records the one chunk read and returns invented rows."""
+
+    def __init__(self, rows):
+        self.rows, self.sql, self.params = rows, None, None
+
+    def execute(self, stmt, params):
+        self.sql, self.params = str(stmt), params
+        return iter(self.rows)
+
+
+_ROWS = [("doc-a", 0, "x"), ("doc-a", 1, "y"), ("doc-s", 0, "z"), ("doc-b", 0, "w")]
+
+
+@pytest.mark.parametrize("hidden, kept", [
+    (set(), ["doc-a", "doc-a", "doc-s", "doc-b"]),
+    ({"doc-s"}, ["doc-a", "doc-a", "doc-b"]),
+])
+def test_project_chunk_rows_drop_the_session_hidden_documents(monkeypatch, hidden, kept):
+    import app.core.projects as projects
+    seen = {}
+
+    def fake_hidden(project_id, db_session=None):
+        seen["args"] = (project_id, db_session)
+        return set(hidden)
+
+    monkeypatch.setattr(projects, "session_hidden_document_ids", fake_hidden)
+    sess = _FakeSession(_ROWS)
+    out = list(m.project_chunk_rows(sess, "chunks_v2", "proj-1"))
+    assert [r[0] for r in out] == kept
+    assert seen["args"] == ("proj-1", sess) and sess.params == {"pr": "proj-1"}
+    test_sql_is_a_select_with_bound_parameters(sess.sql)
+
+
+@pytest.mark.parametrize("rows, hidden, kept", [
+    (_ROWS, {"doc-a", "doc-b"}, [("doc-s", 0, "z")]),
+    (_ROWS, {"absent"}, _ROWS),
+])
+def test_drop_hidden_keeps_order_and_only_visible_rows(rows, hidden, kept):
+    assert list(m.drop_hidden(rows, hidden)) == kept
+
+
+@pytest.mark.parametrize("sql", [m._DOC_SQL])
 def test_sql_is_a_select_with_bound_parameters(sql):
     assert sql.lstrip().upper().startswith("SELECT ")
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b", sql, re.I)
