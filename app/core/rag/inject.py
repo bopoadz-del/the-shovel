@@ -1082,7 +1082,22 @@ def _trace_chunk(rank: int, c) -> Dict[str, Any]:
         # Empty when the kind is unknown; never guessed from the name here.
         "doc_type": (getattr(c, "doc_type", "") or "").strip(),
         "doc_role": (getattr(c, "doc_role", "") or "").strip(),
+        # The chunk's own locator: the 1-based page its text starts on, as
+        # stored at index time. None for non-PDF sources and rows indexed
+        # before pages were recorded. Lets a trace say WHICH page of a long
+        # volume was handed or left out, without reading any text.
+        "page": _trace_page(c),
     }
+
+
+def _trace_page(c) -> Optional[int]:
+    """The stored page of one chunk, or None when it has none."""
+    page = getattr(c, "page", None)
+    try:
+        page = int(page) if page is not None else None
+    except (TypeError, ValueError):
+        return None
+    return page if page and page > 0 else None
 
 
 def _dropped_by(c, drop_reasons: Optional[Dict[str, str]],
