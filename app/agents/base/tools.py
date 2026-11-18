@@ -341,7 +341,9 @@ def bill_rows_statement(result: dict) -> list[Statement]:
         # (named by its heading path, with the rows behind it) before the
         # total of all, so the user sees what was added and can say which
         # section was meant.
-        parts = [p for p in bill.get("by_section") or [] if isinstance(p, dict)]
+        by_section = bill.get("by_section")
+        parts = [p for p in (by_section.values() if isinstance(by_section, dict) else [])
+                 if isinstance(p, dict)]
         if len(parts) > 1:
             for part in parts:
                 path = [str(t) for t in part.get("section") or []]

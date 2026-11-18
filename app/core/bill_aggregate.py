@@ -580,8 +580,23 @@ def aggregate(
         "sum_by_unit": ({u: s for u, s in sums.items()} if measure == MEASURE_QUANTITY else None),
         "without_figure": without,
         "rows": used,
-        "by_section": [_section_total(p, measure) for p in sections.values()],
+        "by_section": _by_section(sections.values(), measure),
     }
+
+
+def _by_section(parts: Iterable[dict[str, Any]], measure: str) -> dict[str, dict[str, Any]]:
+    """Each section's total keyed by its heading path, in the order the bill
+    prints them. An object, not a list of objects: a list of objects is a
+    list of ROWS to the result's size cap (``runtime._row_lists``), which
+    drops it from the never-cut outline; a section total is a figure."""
+    out: dict[str, dict[str, Any]] = {}
+    for part in parts:
+        key = base = _section_name(part["section"])
+        n = 2
+        while key in out:  # two paths printed alike stay two sections
+            key, n = f"{base} ({n})", n + 1
+        out[key] = _section_total(part, measure)
+    return out
 
 
 def _section_total(part: dict[str, Any], measure: str) -> dict[str, Any]:
@@ -708,7 +723,7 @@ def statement(result: dict[str, Any]) -> str:
         figure = f"total {measure} by unit: " + ", ".join(
             f"{_fmt(v)} {u}".rstrip() for u, v in (result.get("sum_by_unit") or {}).items())
     text = f"{head}: {listed}. {figure[0].upper()}{figure[1:]}."
-    parts = result.get("by_section") or []
+    parts = list((result.get("by_section") or {}).values())
     if len(parts) > 1:
         text += f" The rows sit in {len(parts)} sections: " + "; ".join(
             f"{_section_name(p['section'])}: {p['count']} row(s), total {measure} "
@@ -724,18 +739,21 @@ def statement(result: dict[str, Any]) -> str:
     return text + unused
 
 
-def stated_figures(result: dict[str, Any]) -> list[dict[str, Any]]:
+def stated_figures(result: dict[str, Any]) -> dict[str, Any]:
     """The figures a bill result states as its total, in the shape the
     answer's exit check reads (``app.agents.answer_exit``): the answer must
-    carry each of them."""
+    carry each of them. ``values`` and ``shown`` are parallel lists of plain
+    values (never a list of objects, which the result's size cap would read
+    as rows and drop from the never-cut outline)."""
     if result.get("selected_by") == "none" or not result.get("rows"):
-        return []
-    if result.get("sum") is not None:
+        pairs: list[tuple[str, Any]] = []
+    elif result.get("sum") is not None:
         pairs = [(result.get("unit") or "", result["sum"])]
     else:
         pairs = list((result.get("sum_by_unit") or {}).items())
-    return [{"value": float(v), "shown": f"{_fmt(v)} {u}".rstrip(), "measure": result.get("measure")}
-            for u, v in pairs]
+    return {"values": [float(v) for _, v in pairs],
+            "shown": [f"{_fmt(v)} {u}".rstrip() for u, v in pairs],
+            "measure": result.get("measure")}
 
 
 def aggregate_project_bills(

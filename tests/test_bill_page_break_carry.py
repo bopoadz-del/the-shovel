@@ -55,7 +55,7 @@ def test_a_section_over_a_page_break_is_counted_and_summed_whole(tmp_path, head)
                               ask="How many chambers 1.8 x 1.8 m? total quantity")
     assert out["count"] == 5
     assert out["sum"] == 18.0
-    assert [p["section"] for p in out["by_section"]] == [list(OPEN)]
+    assert [p["section"] for p in out["by_section"].values()] == [list(OPEN)]
     # the next section is untouched
     gullies = agg._aggregate_bill(rows, terms=None, section=None, measure="quantity",
                                   ask="How many gullies?")

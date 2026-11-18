@@ -142,7 +142,7 @@ def test_an_arabic_ask(tmp_path, ask, refs, measure, total, ignored, unread):
     said = "names no column, so this is the total quantity, not the amount" in out["statement"]
     assert said is unread
     assert out["measure_unread"] is unread
-    assert [f["value"] for f in out["stated_figures"]] == [total]
+    assert out["stated_figures"]["values"] == [total]
 
 
 @pytest.mark.parametrize("ask, refs, measure, total", [
@@ -227,7 +227,7 @@ def test_the_calls_terms_never_stand_in_for_the_ask(rows, ask, call, selected_by
     said = "No row was selected from the question" in out["statement"]
     assert said is (selected_by == "none")
     if selected_by == "none":
-        assert out["count"] == 0 and out["sum"] is None and out["stated_figures"] == []
+        assert out["count"] == 0 and out["sum"] is None and out["stated_figures"]["values"] == []
 
 
 @pytest.mark.parametrize("terms, fold, refs", [
@@ -301,7 +301,8 @@ def test_statement_names_the_words_it_did_not_use(rows, ask, named):
 ])
 def test_stated_figures_are_the_tools_totals(rows, ask, figures):
     out = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)
-    assert [(f["value"], f["shown"]) for f in out["stated_figures"]] == figures
+    figs = out["stated_figures"]
+    assert list(zip(figs["values"], figs["shown"])) == figures
 
 
 @pytest.fixture
@@ -501,7 +502,8 @@ def test_exit_check_runs_on_the_turns_result_and_end_event(rows, answer, kept):
 
 
 @pytest.mark.parametrize("payload, values", [
-    ({"result": {"bills": [{"stated_figures": [{"value": 5, "shown": "5 m"}, {"value": True}]}]}}, [5.0]),
+    ({"result": {"bills": [{"stated_figures": {"values": [5, True, "6"], "shown": ["5 m"]}}]}}, [5.0]),
+    ({"result": {"bills": [{"stated_figures": {"values": [2.5, 4], "shown": ["2.5 m"]}}]}}, [2.5, 4.0]),
     ({"result": {"bills": [{"statement": "no figure"}]}}, []),
 ])
 def test_only_numeric_stated_figures_are_recorded(payload, values):
@@ -529,7 +531,7 @@ def test_stated_figures_are_read_only_to_a_bounded_depth(depth, values):
     cannot recurse without end."""
     from app.agents import answer_exit
 
-    payload = _nest(depth, {"stated_figures": [{"value": 7, "shown": "7 m"}]})
+    payload = _nest(depth, {"stated_figures": {"values": [7], "shown": ["7 m"]}})
     assert [f["value"] for f in answer_exit._stated_figures(payload)] == values
 
 
@@ -542,7 +544,7 @@ def test_a_self_referencing_payload_ends(value, as_list):
     reads its figure."""
     from app.agents import answer_exit
 
-    payload: dict = {"stated_figures": [{"value": value, "shown": f"{value} nr"}]}
+    payload: dict = {"stated_figures": {"values": [value], "shown": [f"{value} nr"]}}
     payload["self"] = [payload] if as_list else payload
     assert {f["value"] for f in answer_exit._stated_figures(payload)} == {float(value)}
 
@@ -558,7 +560,7 @@ def test_a_result_that_selected_no_row_states_no_figure(result, values):
     """A bill result whose ask selected nothing, or that holds no row, states
     no figure even when a sum field is present; otherwise each total is
     stated (one per unit when the units differ)."""
-    assert [f["value"] for f in agg.stated_figures(result)] == values
+    assert agg.stated_figures(result)["values"] == values
 
 
 @pytest.mark.parametrize("texts, expected", [
@@ -710,7 +712,7 @@ async def test_a_non_computed_turn_through_the_stream_route_is_untouched(reply):
 def test_plain_statements_are_read_only_to_a_bounded_depth(depth, statements):
     from app.agents import answer_exit
 
-    leaf = {"statement": "two rows: total 7 m.", "stated_figures": []}
+    leaf = {"statement": "two rows: total 7 m.", "stated_figures": {"values": [], "shown": []}}
     assert answer_exit._plain_statements(_nest(depth, leaf)) == statements
 
 
@@ -855,7 +857,7 @@ def test_a_call_for_the_absent_part_of_a_two_part_ask_is_a_zero(tmp_path, word, 
                               measure=agg.MEASURE_QUANTITY)
     assert out["count"] == expect_rows and out["selected_by"] == by, out["statement"]
     if by == "ask_absent":
-        assert out["terms"] == [absent] and out["stated_figures"] == []
+        assert out["terms"] == [absent] and out["stated_figures"]["values"] == []
         assert "no row of this bill matches" in out["statement"]
 
 

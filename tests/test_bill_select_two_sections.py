@@ -67,10 +67,10 @@ def _result(rows, ask):
 ], ids=["two-steel", "two-100", "one-copper", "one-rail"])
 def test_each_section_the_rows_sit_in_carries_its_own_total(rows, ask, sections, total):
     res = _result(rows, ask)
-    got = [(p["section"], p["count"], p["sum"]) for p in res["by_section"]]
+    got = [(p["section"], p["count"], p["sum"]) for p in res["by_section"].values()]
     assert got == sections
     assert res["sum"] == total
-    assert sum(p["sum"] for p in res["by_section"]) == total
+    assert sum(p["sum"] for p in res["by_section"].values()) == total
 
 
 @pytest.mark.parametrize("ask, named, absent", [
@@ -123,7 +123,38 @@ def test_section_entries_keep_the_unit_rule(rows, ask, units):
     res = _result(rows, ask)
     if units is None:
         # nothing in this bill prints both words in one description
-        assert res["count"] == 0 and res["by_section"] == []
+        assert res["count"] == 0 and res["by_section"] == {}
     else:
         assert res["sum_by_unit"] == units
-        assert all(p["unit"] == "m" for p in res["by_section"])
+        assert all(p["unit"] == "m" for p in res["by_section"].values())
+
+
+@pytest.mark.parametrize("ask, row_lists", [
+    # two sections and a row without a figure: the rows are the only lists of rows
+    ("What is the total length of steel ducts?", {"rows": 3}),
+    ("What is the total length of the timber rail?", {"rows": 1}),
+], ids=["two-sections", "one-section"])
+def test_a_bill_result_holds_no_list_of_objects_but_its_rows(rows, ask, row_lists):
+    """Section totals and stated figures are figures, not rows: the result's
+    size cap counts every list of objects as rows and drops it from the
+    never-cut outline (#428), so only the rows may be such lists."""
+    from app.agents import runtime
+
+    res = agg._aggregate_bill(rows, ask=ask, terms="", section="", measure=agg.MEASURE_QUANTITY)
+    found = {path: len(items) for path, items in runtime._row_lists(res)}
+    assert found == row_lists
+    assert isinstance(res["by_section"], dict) and isinstance(res["stated_figures"], dict)
+
+
+@pytest.mark.parametrize("paths, keys", [
+    # two heading paths printed alike stay two sections
+    ([("Works", "Upper runs"), ("Works", "Upper runs", "")],
+     ["Works > Upper runs", "Works > Upper runs (2)"]),
+    ([("Works", "Upper runs"), ("Works", "Lower runs")],
+     ["Works > Upper runs", "Works > Lower runs"]),
+], ids=["printed-alike", "distinct"])
+def test_section_totals_are_keyed_one_per_path(paths, keys):
+    parts = [{"section": list(p), "count": 1, "sums": {"m": 2.0}} for p in paths]
+    out = agg._by_section(parts, agg.MEASURE_QUANTITY)
+    assert list(out) == keys
+    assert [v["section"] for v in out.values()] == [list(p) for p in paths]

@@ -306,18 +306,23 @@ def recovered_answer(turn: Turn | None = None) -> str:
 
 
 def _stated_figures(payload: Any, depth: int = 0) -> list[dict[str, Any]]:
-    """Every ``stated_figures`` entry anywhere in a tool payload (each a
-    ``value`` number and the ``shown`` text the tool prints it as)."""
+    """Every figure of each ``stated_figures`` anywhere in a tool payload,
+    as a ``value`` number and the ``shown`` text the tool prints it as."""
     out: list[dict[str, Any]] = []
     if depth > 6:
         return out
     if isinstance(payload, dict):
         for key, value in payload.items():
-            if key == "stated_figures" and isinstance(value, list):
-                out.extend({"value": float(f["value"]), "shown": str(f.get("shown") or f["value"])}
-                           for f in value
-                           if isinstance(f, dict) and isinstance(f.get("value"), (int, float))
-                           and not isinstance(f.get("value"), bool))
+            if key == "stated_figures" and isinstance(value, dict):
+                # Parallel lists of plain values: ``values`` and ``shown``.
+                values = value.get("values")
+                shown = value.get("shown")
+                values = values if isinstance(values, list) else []
+                shown = shown if isinstance(shown, list) else []
+                out.extend({"value": float(v),
+                            "shown": str(shown[i]) if i < len(shown) and shown[i] else str(v)}
+                           for i, v in enumerate(values)
+                           if isinstance(v, (int, float)) and not isinstance(v, bool))
             else:
                 out.extend(_stated_figures(value, depth + 1))
     elif isinstance(payload, list):
