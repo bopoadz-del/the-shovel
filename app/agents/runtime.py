@@ -3128,6 +3128,217 @@ def _effective_fetch_document_max_chars() -> int:
     return _FETCH_DOCUMENT_MAX_CHARS
 
 
+#: The never-cut part of a cut result: every field but its rows, and how
+#: many rows each row list holds ("rows_total"). It rides inside the
+#: truncation envelope, beside the window, so the size cap never takes the
+#: figure, the unit or the selection with the rows.
+OUTLINE_KEY = "whole_result_fields"
+ROWS_TOTAL_KEY = "rows_total"
+#: The private tool-message key holding the WHOLE result when the content
+#: was cut. Not an OpenAI message key, so _sanitize_messages_for_provider
+#: never sends it; the answer path reads it by reference.
+FULL_RESULT_KEY = "full_result"
+
+
+def _row_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
+    """Every list of rows (a list whose items include a dict or a list) in
+    ``node``, with its path. Lists of plain values (words, page numbers) are
+    selections, not rows, and are never listed."""
+    out: list[tuple[str, list[Any]]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            out.extend(_row_lists(v, f"{path}.{k}" if path else str(k)))
+    elif isinstance(node, list):
+        if any(isinstance(v, (dict, list)) for v in node):
+            out.append((path, node))
+        for i, v in enumerate(node):
+            out.extend(_row_lists(v, f"{path}[{i}]"))
+    return out
+
+
+#: Over budget, the outline keeps each part's scalar fields; a text field
+#: keeps this many characters and a list of plain values this many entries.
+_OUTLINE_TEXT_CHARS = 200
+_OUTLINE_LIST_ITEMS = 20
+#: The outline key naming, per list of parts it had to shorten, how many
+#: parts the result holds (the list itself holds the parts shown).
+PARTS_TOTAL_KEY = "parts_total"
+
+
+def _is_part_list(node: list[Any]) -> bool:
+    """A list of parts: every item an object, and some item holds rows."""
+    return bool(node) and all(isinstance(v, dict) for v in node) and any(_row_lists(v) for v in node)
+
+
+def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
+    """``node`` with only its scalar and statement fields: numbers, flags,
+    texts (each cut to _OUTLINE_TEXT_CHARS), lists of plain values (the
+    first _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
+    every part, so reduced; every other list of rows is dropped and its
+    length counted in ``totals`` under its path."""
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            sub = f"{path}.{k}" if path else str(k)
+            if isinstance(v, list) and any(isinstance(x, (dict, list)) for x in v) and not _is_part_list(v):
+                totals[sub] = len(v)
+                continue
+            out[k] = _scalar_fields(v, sub, totals)
+        return out
+    if isinstance(node, list):
+        if _is_part_list(node):
+            return [_scalar_fields(v, f"{path}[{i}]", totals) for i, v in enumerate(node)]
+        return [_scalar_fields(v, path, totals) for v in node[:_OUTLINE_LIST_ITEMS]]
+    if isinstance(node, str) and len(node) > _OUTLINE_TEXT_CHARS:
+        return node[:_OUTLINE_TEXT_CHARS]
+    return node
+
+
+def _part_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
+    """Every non-empty list of objects in ``node`` (outline keys skipped)."""
+    out: list[tuple[str, list[Any]]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in (ROWS_TOTAL_KEY, PARTS_TOTAL_KEY):
+                continue
+            out.extend(_part_lists(v, f"{path}.{k}" if path else str(k)))
+    elif isinstance(node, list) and node and any(isinstance(v, dict) for v in node):
+        out.append((path, node))
+    return out
+
+
+def _part_index(key: str, path: str) -> int:
+    """The index of the part of list ``path`` that ``key`` lies under, or -1."""
+    head = f"{path}["
+    if not key.startswith(head):
+        return -1
+    digits = key[len(head):].split("]", 1)[0]
+    return int(digits) if digits.isdigit() else -1
+
+
+def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Halve the longest list of parts until ``work`` fits ``budget``, and
+    name each shortened list's whole length under PARTS_TOTAL_KEY, so the
+    parts shown are said to be N of M. The top-level fields always stay."""
+    parts: dict[str, int] = {}
+    while len(json.dumps(work, default=str)) > budget:
+        found = _part_lists(work)
+        if not found:
+            break
+        path, longest = max(found, key=lambda pl: len(json.dumps(pl[1], default=str)))
+        parts.setdefault(path, len(longest))
+        del longest[len(longest) // 2:]
+        work[PARTS_TOTAL_KEY] = parts
+        # The row counts of the parts no longer shown go with them.
+        totals = work.get(ROWS_TOTAL_KEY)
+        if isinstance(totals, dict):
+            for key in [k for k in totals if _part_index(k, path) >= len(longest)]:
+                del totals[key]
+    return work
+
+
+def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
+    """Every field of ``payload`` except its innermost row lists, with how
+    many rows each of those held under ``rows_total`` -- the figure, the
+    unit, the selection and the count of rows, never cut. A list that holds
+    the parts of a result (one entry per bill) keeps its parts; only the rows
+    inside them go. None only when the result has no rows (a long text is
+    paged, not outlined).
+
+    The outline is NEVER dropped for its size. Over ``budget`` it keeps the
+    scalar and statement fields of every part and drops every other list
+    (``_scalar_fields``); still over, it shows the first parts of the
+    longest list of parts and names how many there are (``_fit_parts``)."""
+    try:
+        work = json.loads(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        _LOG.info("tool result outline: the result does not serialize", exc_info=True)
+        return None
+    if not isinstance(work, dict):
+        return None
+    totals: dict[str, int] = {}
+    for path, rows in _row_lists(work):
+        if any(inner for v in rows for _, inner in _row_lists(v)):
+            continue  # holds parts with rows of their own: keep the parts
+        totals[path] = len(rows)
+        del rows[:]
+    if not totals:
+        return None
+    work[ROWS_TOTAL_KEY] = totals
+    if len(json.dumps(work)) <= budget:
+        return work
+    whole = json.loads(json.dumps(payload, default=str))
+    dropped: dict[str, int] = {}
+    reduced = _scalar_fields(whole, "", dropped)
+    reduced[ROWS_TOTAL_KEY] = {**dropped, **totals}
+    return _fit_parts(reduced, budget)
+
+
+ROWS_SHOWN_KEY = "rows_shown"
+
+
+def _rows_in_window(payload: Any, text: str, start: int, end: int) -> dict[str, int]:
+    """Per innermost list of rows (the paths of ``rows_total``), how many
+    WHOLE rows lie inside the character window ``text[start:end]`` of the
+    serialized ``payload``. Each row is found by its own serialization, in
+    order, so a row the window cuts in half is not counted."""
+    shown: dict[str, int] = {}
+    try:
+        work = json.loads(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        _LOG.info("tool result rows: the result does not serialize", exc_info=True)
+        return shown
+    for path, rows in _row_lists(work):
+        if any(inner for v in rows for _, inner in _row_lists(v)):
+            continue  # a list of parts: its rows are counted in the parts
+        cursor, n = 0, 0
+        for row in rows:
+            piece = json.dumps(row)
+            at = text.find(piece, cursor)
+            if at < 0:
+                break
+            cursor = at + len(piece)
+            if at >= start and cursor <= end:
+                n += 1
+        shown[path] = n
+    return shown
+
+
+def _rows_note(shown: dict[str, int], totals: dict[str, int]) -> str:
+    """'rows shown: N of M (path)' for every list the window shortened."""
+    return "; ".join(f"rows shown: {n} of {totals[p]} ({p})"
+                     for p, n in shown.items() if p in totals and n < totals[p])
+
+
+def _tool_result_was_cut(content: Any) -> bool:
+    """True when a serialized tool result is not the whole result: a
+    character window."""
+    if not isinstance(content, str) or not content.startswith("{"):
+        return False
+    try:
+        head = json.loads(content)
+    except (TypeError, ValueError):
+        _LOG.info("tool result: content is not JSON, so it is not a cut envelope", exc_info=True)
+        return False
+    return isinstance(head, dict) and bool(head.get("truncated"))
+
+
+def _tool_message_extra(payload: dict[str, Any], content: str, name: str = "") -> dict[str, Any]:
+    """The private keys a tool message carries besides its content: the
+    whole result, by reference, when the content was cut AND the tool
+    DECLARES a computed result (``tool_registry``), the only kind the answer
+    path renders. A document read or a search is never held: nothing renders
+    it, and its model copy already says it was cut and where to read on.
+    The key is turn-local: ``_sanitize_messages_for_provider`` never sends
+    it, and ``agent_memory.append_message`` stores only a role and a text."""
+    if not _tool_result_was_cut(content):
+        return {}
+    kind, _spec = _declared_kind({"name": name})
+    if kind != "computed":
+        return {}
+    return {FULL_RESULT_KEY: payload}
+
+
 def _tool_result_content(
     payload: dict[str, Any],
     offset: int = 0,
@@ -3167,11 +3378,18 @@ def _tool_result_content(
     if len(text) <= cap and not start:
         return text
     window = text[start:]
+    # The figure, the unit, the selection and the row counts ride beside the
+    # window, whole: a window that cuts the rows never cuts the statement.
+    outline = _result_outline(payload, cap // 4)
 
     def _envelope(keep: int) -> str:
         shown = min(keep, len(window))
         next_offset = start + shown
         more = next_offset < len(text)
+        totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
+        rows_shown = ({p: n for p, n in _rows_in_window(payload, text, start, next_offset).items()
+                       if p in totals} if totals else {})
+        rows_note = _rows_note(rows_shown, totals)
         return json.dumps(
             {
                 "truncated": True,
@@ -3214,6 +3432,9 @@ def _tool_result_content(
                         "statement about what this result contains is safe."
                     )
                 ),
+                **({OUTLINE_KEY: outline} if outline is not None else {}),
+                **({ROWS_SHOWN_KEY: rows_shown} if rows_shown else {}),
+                **({"rows_note": rows_note} if rows_note else {}),
                 "preview": window[:keep],
             },
             default=str,
@@ -4168,7 +4389,7 @@ def _strip_reasoning_blocks(text: str) -> str:
 #: addressed to the MODEL -- how to read the rest, what it may not conclude.
 #: Never user-facing. ``tests/test_tool_directive_echo.py`` builds both
 #: envelopes and checks every string key outside ``preview`` is listed here.
-_TOOL_DIRECTIVE_KEYS: tuple[str, ...] = ("note", "scope_of_absence")
+_TOOL_DIRECTIVE_KEYS: tuple[str, ...] = ("note", "scope_of_absence", "rows_note")
 
 #: Words in a row an answer sentence must share with a tool directive before
 #: the run counts as copied. Five words in the same order is a quotation, not
@@ -6317,24 +6538,57 @@ def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _render_computed_call(msg: dict[str, Any], spec: Any,
-                          messages: list[dict[str, Any]], language: str,
-                          question: str = "") -> tuple[str, bool]:
-    """(One computed call as the answer, whether the call stated anything).
+def _tool_message_cut_unreadable(msg: dict[str, Any]) -> bool:
+    """True when a tool message's content is not its whole result and the
+    whole result is not held by reference: a truncation envelope whose
+    preview is not whole JSON. The tool returned, but its result cannot
+    be read here -- it was too large to show, it did not return nothing."""
+    if isinstance(msg.get(FULL_RESULT_KEY), dict):
+        return False
+    raw = msg.get("content") or ""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        _LOG.info("tool message %s: content is not JSON, so it is not a cut envelope", msg.get("name"), exc_info=True)
+        return False
+    if not (isinstance(payload, dict) and payload.get("truncated")):
+        return False
+    try:
+        json.loads(payload.get("preview") or "")
+    except (TypeError, json.JSONDecodeError):
+        return True
+    return False
 
-    A call that failed or stated no figure still answers plainly: what was
-    asked and why there is no figure. A failure counts as stated (its error
-    is what it says); a success with no figure does not."""
+
+def _computed_call(msg: dict[str, Any], spec: Any,
+                   messages: list[dict[str, Any]], language: str) -> Any:
+    """One computed call of the turn as ``computed_answer.Call``: its
+    statements, or its failure, and the arguments it was asked with."""
     from app.agents.core import computed_answer
 
-    payload = _tool_message_payload(msg) or {}
+    # The whole result, by reference, when the content handed to the model
+    # was cut; the content is never re-parsed for figures it lost.
+    full = msg.get(FULL_RESULT_KEY)
+    cut_unreadable = _tool_message_cut_unreadable(msg)
+    if isinstance(full, dict):
+        payload = full
+    elif cut_unreadable:
+        payload = {}
+    else:
+        payload = _tool_message_payload(msg) or {}
     inner = payload.get("result")
     body = inner if isinstance(inner, dict) else payload
     statements: list[Any] = []
     error = ""
     err = _tool_error_payload(body)
     status = str(body.get("status") or "").strip().lower()
-    if payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
+    if cut_unreadable:
+        # The call returned, but its result was cut and the whole result is
+        # not held: say it was too large to show, rather than leave the call
+        # open (an open call is waited for, and this one can never state
+        # anything) or read it as no figure.
+        error = computed_answer.RESULT_CUT_UNREADABLE
+    elif payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
         error = computed_answer.failure_text(err or body)
     elif body:
         try:
@@ -6345,21 +6599,24 @@ def _render_computed_call(msg: dict[str, Any], spec: Any,
                 statements = list(spec.statement(payload) or [])
         except (TypeError, ValueError, KeyError, AttributeError):
             _LOG.warning("computed tool %s: its result states no figure", spec.name, exc_info=True)
-    text = computed_answer.render_call(
-        computed_answer.heading_for(spec.display_name or spec.name, language), statements,
+    return computed_answer.Call(
+        tool=str(spec.name),
+        heading=computed_answer.heading_for(spec.display_name or spec.name, language),
+        statements=tuple(statements),
         asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
-        error=error, language=language,
-        declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
-    return text, bool(statements or error)
+        error=error, declared=tuple(getattr(spec, "reason_codes", ()) or ()))
 
 
 def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
                           require_stated: bool = False) -> str:
-    """Every computed call of the current turn (after the user's last
-    question), in call order, worded in the question's language.
+    """The one answer the computed calls of the current turn (after the
+    user's last question) give, worded in the question's language
+    (``computed_answer.answer_turn``: results lead, a repeat is shown once,
+    a call with no figure only when no result answered its part).
 
-    ``require_stated``: answer only when every one of them stated its
-    figures or its failure; otherwise "" (so no call is left out)."""
+    ``require_stated``: answer only when every call that is still shown
+    stated its figures or its failure; otherwise "" (so no call is left
+    out)."""
     from app.agents.core import computed_answer
 
     msgs = list(messages or [])
@@ -6371,17 +6628,16 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
             start, question = i + 1, content
             break
     language = computed_answer.question_language(question)
-    rendered = []
+    calls = []
     for m in msgs[start:]:
         if m.get("role") != "tool":
             continue
         kind, spec = _declared_kind(m)
         if kind == "computed" and spec.statement is not None:
-            text, stated = _render_computed_call(m, spec, msgs, language, question)
-            if require_stated and not stated:
-                return ""
-            rendered.append(text)
-    return computed_answer.join_calls(rendered, language)
+            calls.append(_computed_call(m, spec, msgs, language))
+    if require_stated and any(not c.stated for c in computed_answer.unanswered(calls)):
+        return ""
+    return computed_answer.answer_turn(calls, language, question)
 
 
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -11502,7 +11758,7 @@ _LAST_TOOL_PREVIEW = 6000
 
 
 def _compacted_tool_payload(
-    content: str, keep: int, note: str | None = None,
+    content: str, keep: int, note: str | None = None, outline_budget: int | None = None,
 ) -> str:
     """A truncated tool result that says exactly what it lost.
 
@@ -11525,6 +11781,36 @@ def _compacted_tool_payload(
       own contract, stated with the tool's authority behind it.
     """
     kept = max(0, int(keep))
+    try:
+        whole = json.loads(content)
+    except (TypeError, ValueError):
+        whole = None
+    if isinstance(whole, dict) and whole.get("truncated"):
+        # Cut once already: its outline is kept whole, not cut again.
+        outline = whole.get(OUTLINE_KEY) if isinstance(whole.get(OUTLINE_KEY), dict) else None
+    else:
+        # Small beside the preview; the hop's budget pass measures the
+        # real length of what it built, outline included.
+        # ``outline_budget`` lets a caller that shrinks the preview to fit
+        # a cap keep the outline whole: only the preview gives way.
+        budget = outline_budget if outline_budget is not None else kept // 4
+        outline = _result_outline(whole, max(1, int(budget)))
+    totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
+    countable = bool(totals) and isinstance(whole, dict) and not whole.get("truncated")
+
+    def _shown(k: int) -> tuple[dict[str, int], str]:
+        if not countable:
+            return {}, ""
+        rs = {p: n for p, n in _rows_in_window(whole, content, 0, k).items() if p in totals}
+        return rs, _rows_note(rs, totals)
+
+    rows_shown, rows_note = _shown(kept)
+    if rows_shown:
+        # The count of rows shown is paid for out of the preview, so an
+        # envelope for a given ``keep`` is no longer than before: a caller
+        # that budgets by ``keep`` (the TPM pass) still fits.
+        kept = max(0, kept - len(json.dumps({ROWS_SHOWN_KEY: rows_shown, "rows_note": rows_note})))
+        rows_shown, rows_note = _shown(kept)
     dropped = max(0, len(content) - kept)
     return json.dumps(
         {
@@ -11544,6 +11830,9 @@ def _compacted_tool_payload(
                 "enough to know that. Offer to re-run narrowed to the "
                 "section, page, or code the user wants."
             ),
+            **({OUTLINE_KEY: outline} if outline is not None else {}),
+            **({ROWS_SHOWN_KEY: rows_shown} if rows_shown else {}),
+            **({"rows_note": rows_note} if rows_note else {}),
             "preview": content[:kept],
         },
         default=str,
