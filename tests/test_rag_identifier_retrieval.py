@@ -6,6 +6,8 @@ semantically-similar boilerplate that lacks the requested identifier.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 
@@ -25,6 +27,7 @@ def isolated_store(tmp_path, monkeypatch):
     # Use the default project database path (honours DATA_DIR) so that
     # retriever.get_store() returns the same cached instance.
     store = get_store(dim=e.dim)
+    give_documents_table(store)
     # On PostgreSQL, DATA_DIR does not change the database URL, so rows
     # written by earlier tests survive into this test's store. Truncate the
     # chunk table up-front to guarantee isolation regardless of backend.

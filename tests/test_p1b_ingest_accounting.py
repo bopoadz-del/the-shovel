@@ -243,7 +243,7 @@ def harness(tmp_path, monkeypatch):
         projects_mod, "get_or_create_project",
         lambda name, **kw: ({"id": kw.get("project_id") or name}, False),
     )
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: list(docs))
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: list(docs))
     monkeypatch.setattr(
         projects_mod, "update_document_metadata", lambda did, meta: None,
     )

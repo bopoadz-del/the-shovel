@@ -2,6 +2,8 @@
 worker process, and turn timing from arrival. Synthetic data."""
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import asyncio
 import os
 
@@ -111,6 +113,7 @@ def test_retrieval_runs_end_to_end_in_the_worker(tmp_path, monkeypatch):
     vs.reset_store_cache()
     e = emb.Embedder(model_name="fake")
     st = vs.get_store(dim=e.dim)
+    give_documents_table(st)
     texts = [f"Clause {i}: the contractor shall give notice of suspension in writing." for i in range(10)]
     st.upsert_chunks("synthetic-worker-project", "doc-w", texts, e.encode(texts))
     kwargs = {"user_message": "What notice of suspension is required?",

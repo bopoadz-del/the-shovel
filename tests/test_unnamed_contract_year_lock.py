@@ -61,6 +61,8 @@ top-k — not the live numbers.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 from app.core.contract_data_chunks import contract_data_particulars_chunks
@@ -226,6 +228,7 @@ def two_year_corpus(tmp_path, monkeypatch):
 
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     with store._lock, store._session_factory()() as session:
         session.execute(_sa_delete(store._rag_chunk_cls))
         session.commit()
@@ -959,6 +962,7 @@ def wave2_corpus(tmp_path, monkeypatch):
 
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     with store._lock, store._session_factory()() as session:
         session.execute(_sa_delete(store._rag_chunk_cls))
         session.commit()
@@ -1462,6 +1466,7 @@ def a3_schedule_steal_corpus(tmp_path, monkeypatch):
 
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     with store._lock, store._session_factory()() as session:
         session.execute(_sa_delete(store._rag_chunk_cls))
         session.commit()
@@ -1732,6 +1737,7 @@ def live_two_filled_years_corpus(tmp_path, monkeypatch):
 
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     with store._lock, store._session_factory()() as session:
         session.execute(_sa_delete(store._rag_chunk_cls))
         session.commit()
