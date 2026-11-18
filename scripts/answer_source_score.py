@@ -157,7 +157,19 @@ def cited_chunks(cite: Citation, handed: list[dict[str, Any]]) -> list[dict[str,
     if cite.kind == "key":
         return [c for c in handed
                 if cite.target in (str(c.get("chunk_id")), str(c.get("doc_id")))]
-    return [c for c in handed if name_matches(cite.target, str(c.get("doc_name") or ""))]
+    return [c for c in handed if _cite_names(cite, str(c.get("doc_name") or ""))]
+
+
+def _cite_names(cite: Citation, doc_name: str) -> bool:
+    """A citation names a document. A Sources-panel line reads
+    ``<document name>, <section>``: a marker resolved through the panel names
+    the document when the line is the name followed by a comma."""
+    if name_matches(cite.target, doc_name):
+        return True
+    if cite.kind != "marker" or not doc_name.strip():
+        return False
+    head, sep, _ = _fold(cite.target).partition(_fold(doc_name) + ",")
+    return bool(sep) and not head
 
 
 # --- numbers -----------------------------------------------------------------
