@@ -1076,6 +1076,9 @@ def _trace_chunk(rank: int, c) -> Dict[str, Any]:
         "doc_name": name,
         "score": round(float(score), 6) if score is not None else None,
         **_leg_fields(c),
+        # Its length, so a replay can refit the handed set's token budget
+        # (``_estimate_tokens``: characters // 4) exactly. Never the text.
+        "chars": len(getattr(c, "text", "") or ""),
         "layer": getattr(c, "layer", "own"),
         # What kind of document the chunk came from (doc_typing / S-R11),
         # so a trace shows which document kinds held the handed slots.
