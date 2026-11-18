@@ -827,9 +827,9 @@ def _absent_part_of_ask(
     two-part question ('kerbs, and X?'), so it is answered as that part --
     no row -- not with the other part's rows. The call never adds a word of
     its own: only the ask's ignored words it names are returned."""
+    # A call that names no word meets no word below: it returns [] (the
+    # call's selection, not the absent part, is then read).
     named = _named_forms(_call_texts(terms, section))
-    if not named:
-        return []
     selecting = picked["terms"] + picked["section_terms"]
     if any(_forms(w) & named for w in selecting):
         return []

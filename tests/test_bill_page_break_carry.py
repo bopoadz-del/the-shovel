@@ -106,3 +106,22 @@ def test_only_the_head_of_the_next_page_continues_the_open_heading(tmp_path, bil
 ], ids=["cut-short", "continued", "sibling", "other-bill", "same", "empty"])
 def test_continues(path, open_path, expected):
     assert agg._continues(path, open_path) is expected
+
+
+def _sheet_row(path, ref, pages):
+    return agg.SheetRow(path=tuple(path), ref=ref, description=f"item {ref}", unit="nr",
+                        quantity="1", rate="", amount="", pages=list(pages))
+
+
+@pytest.mark.parametrize("rows", [
+    # a row with no page between two paged rows
+    [(OPEN, "D1", [2]), (CONTINUED, "D2", []), (NEXT, "D6", [3])],
+    # a row with no page after a section's rows
+    [(OPEN, "D1", [2]), (OPEN, "D2", [2]), (RUNNING, "D3", [])],
+], ids=["pageless-middle", "pageless-last"])
+def test_a_sheet_with_a_pageless_row_is_read_as_stored(rows):
+    """Print order cannot be rebuilt without every row's page: the rows are
+    read in stored order with their stored paths, none moved or carried."""
+    stored = [_sheet_row(*r) for r in rows]
+    out = agg.carry_open_heading(stored)
+    assert [(r.ref, r.path, r.pages) for r in out] == [(r.ref, r.path, r.pages) for r in stored]

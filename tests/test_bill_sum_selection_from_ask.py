@@ -867,3 +867,17 @@ def test_an_ask_that_selects_nothing_is_not_an_absent_part(tmp_path, ask):
                               section="", measure=agg.MEASURE_QUANTITY)
     assert out["selected_by"] == "none"
     assert "No row was selected from the question" in out["statement"]
+
+
+@pytest.mark.parametrize("terms, section, absent", [
+    # a call that names no word is not the absent part
+    (None, None, []),
+    ("", [], []),
+    # a call naming only the ask's absent word is that part
+    ("ducts", None, ["ducts"]),
+    # a call naming a selecting word is not the absent part
+    ("kerb ducts", None, []),
+], ids=["no-call-words", "empty-call-words", "absent-word", "selecting-word"])
+def test_the_absent_part_is_only_the_asks_ignored_words_a_call_names(terms, section, absent):
+    picked = {"terms": ["kerb"], "section_terms": [], "ignored": ["ducts"]}
+    assert agg._absent_part_of_ask(picked, terms, section) == absent
