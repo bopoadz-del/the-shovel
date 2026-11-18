@@ -13889,6 +13889,7 @@ def _parse_agent_file(path: Path) -> Agent:
     if not body:
         raise ValueError(f"empty system prompt in {path}")
     body, hat_ids = _apply_hat_kernels(body, config.get("hats"), path)
+    body = _apply_answer_export_capability(body)
     return Agent(
         name=name,
         description=config.get("description", ""),
@@ -13905,6 +13906,19 @@ def _parse_agent_file(path: Path) -> Agent:
             in ("true", "1", "yes", "on")
         ),
     )
+
+
+def _apply_answer_export_capability(body: str) -> str:
+    """Tell every agent which files the user can download from its answer.
+
+    The workspace puts download controls under every finished answer, and the
+    conversation export route renders them. An agent that is not told says it
+    "can't produce a .docx" while the button sits under its own reply. The
+    section comes from the one declaration both the route and the controls
+    follow (``ANSWER_EXPORT_FORMATS``)."""
+    from app.core.answer_report_intent import answer_export_capability_note
+
+    return body + answer_export_capability_note()
 
 
 def _apply_hat_kernels(body: str, hats_cfg: Any, path: Path) -> tuple[str, list[str]]:

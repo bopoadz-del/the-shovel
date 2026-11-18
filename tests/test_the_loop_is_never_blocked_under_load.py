@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -48,12 +49,16 @@ _QUESTIONS = (
 )
 
 
-@pytest.fixture
-def seeded(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")
-    monkeypatch.setenv("RAG_GENERAL_KNOWLEDGE_PROJECTS", "")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_06)
+#: The environment both the gated run and the capture pass seed under.
+def load_env(data_dir: str) -> dict:
+    return {"DATA_DIR": data_dir, "RAG_EMBEDDING_MODEL": "fake",
+            "RAG_GENERAL_KNOWLEDGE_PROJECTS": "", "DEEPSEEK_API_KEY": STUB_TOKEN_06}
+
+
+def seed_corpus() -> None:
+    """The synthetic corpus, seeded under the environment ``load_env`` sets.
+    Shared with the non-gating capture pass (tests/_loop_capture_pass.py) so
+    both measure the same load."""
     from app.core.rag import embeddings as emb, vector_store as vs
     emb.reset_embedder_cache()
     vs.reset_store_cache()
@@ -69,6 +74,14 @@ def seeded(tmp_path, monkeypatch):
     for doc in sorted({d for d, _ in texts}):
         chunk_texts = [t for d, t in texts if d == doc]
         store.upsert_chunks(PID, doc, chunk_texts, e.encode(chunk_texts))
+
+
+@pytest.fixture
+def seeded(tmp_path, monkeypatch):
+    for k, v in load_env(str(tmp_path)).items():
+        monkeypatch.setenv(k, v)
+    from app.core.rag import embeddings as emb, vector_store as vs
+    seed_corpus()
     yield
     emb.reset_embedder_cache()
     vs.reset_store_cache()
@@ -88,7 +101,7 @@ def _scripted_llm():
     return call
 
 
-def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeypatch):
+def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeypatch, request):
     from app.agents import runtime as rt
 
     rt.load_agents()
@@ -120,6 +133,10 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         finally:
             idle.stop()
         # Load phase: the real property under test.
+        # Built exactly as before #396: the live capture (live_ms) stays OFF
+        # in the gated measurement (advisor 10:31Z). With it ON, the timing
+        # job segfaulted here (#396 9370c0c, exit 139): faulthandler reads
+        # running threads' frames without the GIL.
         mon = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
         try:
             await asyncio.gather(*(user(n) for n in range(USERS)))
@@ -130,6 +147,19 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     idle, mon = asyncio.run(run())
     worst = max(mon.stalls, default=(0, ""))
     excess = excess_over_baseline(mon.max_lag_ms, idle.max_lag_ms)
+    # The control beside every result, pass or fail. pytest captures fd 2,
+    # so a passing run would hide a stderr print: write through the terminal
+    # reporter, which writes to the real terminal past the capture.
+    lines = [f"LOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
+             f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
+             f"monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
+             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms"]
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    for line in lines:
+        if reporter is not None:
+            reporter.write_line(line)
+        else:
+            sys.__stderr__.write(line + "\n")
     assert excess < LIMIT_MS, (
         f"event loop lag under {USERS} concurrent users exceeded the limit ABOVE the "
         f"runner's idle noise: load_max={mon.max_lag_ms:.0f} ms, idle_baseline="

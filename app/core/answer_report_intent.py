@@ -73,6 +73,62 @@ ANSWER_REPORT_BLOCKED_ACTIONS = frozenset({
 })
 
 
+# The file formats a finished chat answer can be downloaded in: the formats
+# the conversation export route renders, and the download controls under
+# every assistant answer in the workspace. Declared once here; the route's
+# accepted-format pattern and the agents' capability line are both derived
+# from it, so the model is never told less (or more) than the product does.
+ANSWER_EXPORT_FORMATS: dict[str, str] = {"docx": "Word", "xlsx": "Excel"}
+
+# Accepted by the route only to answer with a plain refusal (not offered).
+ANSWER_EXPORT_DECLINED_FORMATS: dict[str, str] = {"pdf": "PDF"}
+
+
+def answer_export_format_pattern() -> str:
+    """Query pattern for the export route: offered + declined formats."""
+    names = list(ANSWER_EXPORT_FORMATS) + list(ANSWER_EXPORT_DECLINED_FORMATS)
+    return "^(" + "|".join(re.escape(n) for n in names) + ")$"
+
+
+def answer_export_declined_message(fmt: str) -> str:
+    offered = " or ".join(f"'{n}'" for n in ANSWER_EXPORT_FORMATS)
+    return (
+        f"format='{fmt}' is not offered — export as {offered} "
+        "(operator decision 2026-07-24)."
+    )
+
+
+def answer_export_capability_note() -> str:
+    """System-prompt section: what the user can download from an answer.
+
+    Built from ``ANSWER_EXPORT_FORMATS`` so the model's idea of what it can
+    hand over is the product's, not a guess.
+    """
+    offered = [
+        f"{label} (.{ext})" for ext, label in ANSWER_EXPORT_FORMATS.items()
+    ]
+    buttons = " and ".join(f"'{label}'" for label in ANSWER_EXPORT_FORMATS.values())
+    declined = ", ".join(
+        f"{label} (.{ext})" for ext, label in ANSWER_EXPORT_DECLINED_FORMATS.items()
+    )
+    lines = [
+        "\n\n## Files you can hand the user\n",
+        "Every finished answer you give carries download buttons under it: "
+        f"{buttons}. Pressing one gives the user that answer as a file: "
+        f"{', '.join(offered)}; markdown tables become worksheets in a workbook.",
+        "So you CAN deliver your answer as one of those files. Never tell the "
+        "user you cannot produce, create, attach or send such a file. When they "
+        "ask for one, write the full content in your answer and tell them to "
+        "press the matching button under it.",
+    ]
+    if declined:
+        lines.append(
+            f"Not offered: {declined}. Say so plainly and offer one of the "
+            "formats above instead."
+        )
+    return "\n".join(lines) + "\n"
+
+
 def answer_report_export_enabled() -> bool:
     """Kill-switch. Default on; ``ANSWER_REPORT_EXPORT=0`` restores 567147a."""
     return (os.getenv("ANSWER_REPORT_EXPORT") or "1").strip().lower() not in (

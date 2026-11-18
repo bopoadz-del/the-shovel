@@ -74,6 +74,7 @@ _INLINE_FILE_CITE_RE = re.compile(
 )
 _PAGE_RE = re.compile(r"(?:,|\s)\s*(?P<sec>(?:pp?\.|pages?|section|clause|§)\s*[\w.\-–, ]+?)\s*$", re.IGNORECASE)
 _PARENS_TAIL_RE = re.compile(r"\((?P<inner>[^()]*)\)\s*$")
+_FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
 
 
 def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -94,7 +95,14 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
             text = text[: tail.start()].strip()
         text = re.sub(rf"\s*[—–-]+\s*{re.escape(CALCULATOR_SUFFIX)}\s*$", "", text, flags=re.IGNORECASE).strip()
     section = ""
-    sec = _PAGE_RE.search(text) if kind == "document" else None
+    # A locator follows the document's name, never sits inside it: a file
+    # name ("Headwall Sections.dwg", "Spec Section 03.pdf") stays whole, and
+    # the page or section is looked for only after its extension.
+    named = None
+    for named in _FILE_NAME_END_RE.finditer(text):
+        pass
+    start = named.end() if named else 0
+    sec = _PAGE_RE.search(text, start) if kind == "document" else None
     if sec:
         section = sec.group("sec").strip()
         text = text[: sec.start()].strip().rstrip(",")
