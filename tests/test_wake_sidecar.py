@@ -9,6 +9,7 @@ Every test builds its own wake-up list; no document text.
 """
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -71,24 +72,113 @@ def test_an_empty_window_prints_none_not_zero():
     assert "side_wake_late_max=none side_idle_wake_late_max=none" in line
 
 
-@pytest.mark.parametrize("run_s,min_inside", [(0.3, 3), (0.8, 12)])
-def test_a_real_side_process_ticks_until_its_stdin_closes(run_s, min_inside):
+@pytest.mark.parametrize("run_s", [1.0, 2.0])
+def test_a_real_side_process_ticks_until_its_stdin_closes(run_s):
+    """Counted from the side process's FIRST wake-up, not from its start: an
+    interpreter that is slow to start on a loaded shard does not fail this."""
     import time
     sc = side.Sidecar().start(_REPO)
     t0 = time.monotonic()
     time.sleep(run_s)
-    t1 = time.monotonic()
     wakes = sc.collect()
+    t1 = time.monotonic()
     assert sc.error == ""
     assert sc.proc.returncode == 0
-    inside = [w for w in wakes if t0 <= w[0] <= t1]
-    assert len(inside) >= min_inside, wakes[:5]
+    assert wakes, "the side process never woke inside the run"
+    first, last = wakes[0][0], wakes[-1][0]
+    assert t0 - 1.0 <= first <= last <= t1
+    # At least a third of the 20 ms ticks that fit between the first and the
+    # last wake-up (scheduling slack), and every wake-up's lateness >= 0.
+    assert len(wakes) - 1 >= (last - first) / (3 * side.TICK_MS / 1000), (len(wakes), last - first)
     assert all(late >= 0 for _, late in wakes)
 
 
-@pytest.mark.parametrize("earlier_error", ["", "start failed: no such interpreter"])
+@pytest.mark.parametrize("earlier_error", ["", "start failed: FileNotFoundError"])
 def test_a_side_process_that_never_started_reports_no_wake_ups(earlier_error):
     sc = side.Sidecar()
     sc.error = earlier_error
     assert sc.collect() == []
     assert sc.error == earlier_error
+
+
+# --- STRICTLY REPORT-ONLY (advisor 00:54Z 18 Nov) ---------------------------
+# Nothing the side process does may raise into, or mask, the gated test, and
+# side_error carries the exception class and the return code only.
+
+_SECRET = "/home/runner/private-path token=abc123"
+
+
+def _child(code: str) -> list:
+    return [sys.executable, "-c", code]
+
+
+@pytest.mark.parametrize("printed,expected_error", [
+    ("WAKE_SIDECAR not json at all", "collect failed: JSONDecodeError rc=0"),
+    ('WAKE_SIDECAR {"wakes": 1}', "collect failed: ValueError rc=0"),
+    ('WAKE_SIDECAR [[1.0, "late"]]', "collect failed: ValueError rc=0"),
+])
+def test_a_side_process_that_prints_garbage_is_an_error_not_a_raise(printed, expected_error):
+    code = f"import sys; sys.stdin.read(); sys.stderr.write({_SECRET!r}); print({printed!r})"
+    sc = side.Sidecar(_child(code)).start(_REPO)
+    assert sc.collect() == []
+    assert sc.error == expected_error
+    assert _SECRET not in sc.error
+
+
+@pytest.mark.parametrize("code,expected_error", [
+    (f"import sys; sys.stderr.write({_SECRET!r}); sys.exit(3)", "no result rc=3"),
+    ("import os; os._exit(0)", "no result rc=0"),
+])
+def test_a_side_process_that_dies_is_an_error_with_its_return_code_only(code, expected_error):
+    sc = side.Sidecar(_child(code)).start(_REPO)
+    assert sc.collect() == []
+    assert sc.error == expected_error
+    assert _SECRET not in sc.error
+
+
+@pytest.mark.parametrize("argv,expected_error", [
+    (["/no/such/interpreter-for-the-side-process"], "start failed: FileNotFoundError"),
+    ([12345], "start failed: TypeError"),
+])
+def test_a_side_process_that_cannot_start_is_an_error_by_class_only(argv, expected_error):
+    sc = side.Sidecar(argv).start(_REPO)
+    assert sc.proc is None
+    assert sc.error == expected_error
+    assert sc.collect() == []
+
+
+@pytest.mark.parametrize("wakes", [[["x", 1.0]], None])
+def test_the_summary_line_never_raises(wakes):
+    line = side.summary_line(wakes, "", idle=(0.0, 1.0), load=(1.0, 2.0), load_max_ms=5.0, wake_late_max_ms=6.0)
+    assert line.startswith("LOOP_LAG_SIDE_BY_SIDE side_error='summary failed: ")
+    assert line.endswith("Error'")
+
+
+@pytest.mark.parametrize("wakes,expected_max", [([[1.5, 120.0], [1.6, 3.0]], 120.0), ([["x", 1.0]], None)])
+def test_the_capture_pass_figures_never_raise(wakes, expected_max):
+    figures = side.window_figures(wakes, (1.0, 2.0))
+    assert figures["side_wake_late_max_ms"] == expected_max
+    assert ("side_figures_error" in figures) is (expected_max is None)
+
+
+# --- ORDER and MARKER of the capture pass (advisor 00:54Z 18 Nov) ------------
+_GATED = "test_fifteen_users_never_block_the_loop_for_more_than_250_ms"
+_CAPTURE = "test_the_capture_runs_over_the_fifteen_user_load_in_its_own_process"
+
+
+@pytest.mark.parametrize("paths", [
+    ["tests/test_the_loop_is_never_blocked_under_load.py"],
+    ["tests/test_loop_stall_live_capture.py", "tests/test_the_loop_is_never_blocked_under_load.py",
+     "tests/test_wake_sidecar.py"],
+])
+def test_the_capture_pass_is_timing_and_runs_after_the_gated_test(paths):
+    """Collected exactly as CI's timing step selects (``-m timing``): the
+    capture pass must be there (the marker is pinned: removing it drops the
+    pass from the step) and must come AFTER the gated measurement."""
+    import subprocess
+    proc = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "timing",
+                           "-p", "no:cacheprovider", *paths],
+                          cwd=_REPO, capture_output=True, text=True, timeout=120, check=False)
+    ids = [ln.split("::")[-1] for ln in proc.stdout.splitlines() if "::" in ln]
+    assert _GATED in ids and _CAPTURE in ids, proc.stdout[-2000:]
+    assert ids.index(_GATED) < ids.index(_CAPTURE), ids
