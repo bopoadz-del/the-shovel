@@ -434,3 +434,122 @@ def test_the_app_declares_before_it_serves(invented, monkeypatch, names):
         assert not any(d in tool_registry._DEFERRED for d in declarers)
         for n in names:
             assert tool_registry._RESULTS[n].kind == "search"
+
+
+# -- #425 follow-up: the loop never waits for the import (neither by running
+# -- it nor by waiting on the lock); the hand-off and the commit are pinned.
+
+def _wait_drained(declarer, timeout_s=10.0):
+    deadline = time.monotonic() + timeout_s
+    while declarer in tool_registry._DEFERRED and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("name, warm_up_running", [
+    ("zz_loop_lag_50_first_read", False),   # nothing else is declaring
+    ("zz_loop_lag_50_during_warm", True),   # the warm-up thread is mid-import
+])
+def test_a_first_loop_read_during_a_slow_declarer_keeps_loop_lag_under_50ms(invented, name, warm_up_running):
+    """The real loop watchdog: a first read on the loop while a declarer sleeps
+    half a second in a thread (the heavy import) leaves the loop's lag under
+    50 ms. With the warm-up running, the loop would otherwise wait on the lock;
+    without it, the loop would otherwise run the import itself."""
+    started = threading.Event()
+    ran_on: list[int] = []
+
+    def declarer():
+        ran_on.append(threading.get_ident())
+        started.set()
+        time.sleep(0.5)           # the import
+        _declare(name)
+
+    invented(name, declarer)
+    warm = None
+    if warm_up_running:
+        warm = threading.Thread(target=tool_registry.declare_deferred_results)
+        warm.start()
+        assert started.wait(10)
+    loop_ident: list[int] = []
+
+    def read():
+        loop_ident.append(threading.get_ident())
+        tool_registry.result_spec(name)
+
+    lag = _loop_lag_while(read, 0.8)
+    if warm is not None:
+        warm.join(10)
+    _wait_drained(declarer)
+    assert lag < 50, f"loop lag {lag:.0f} ms during a 500 ms declaration"
+    assert len(ran_on) == 1 and ran_on[0] not in loop_ident
+    assert tool_registry._RESULTS[name].kind == "search"
+
+
+@pytest.mark.parametrize("name, reads", [("zz_one_worker_a", 3), ("zz_one_worker_b", 9)])
+def test_many_loop_reads_during_a_slow_declarer_start_one_worker(invented, name, reads):
+    """At most one ``deferred-declarers`` worker exists at a time, however many
+    loop reads arrive while it runs."""
+    import asyncio
+
+    release = threading.Event()
+
+    def declarer():
+        release.wait(10)
+        _declare(name)
+
+    invented(name, declarer)
+
+    async def run():
+        for _ in range(reads):
+            tool_registry.result_spec(name)
+            await asyncio.sleep(0)
+        return [t for t in threading.enumerate() if t.name == "deferred-declarers"]
+
+    try:
+        workers = asyncio.run(run())
+    finally:
+        release.set()
+    assert len(workers) == 1
+    _wait_drained(declarer)
+    assert tool_registry._RESULTS[name].kind == "search"
+    assert not tool_registry._OFFLOOP_RUNNING
+
+
+@pytest.mark.parametrize("name, fails", [("zz_drain_ok", False), ("zz_drain_fails", True)])
+def test_the_off_loop_drain_runs_the_declarers_and_frees_the_slot(invented, clock, name, fails):
+    """``_drain_off_loop`` (the worker's body) runs what is pending and, ok or
+    failed, frees the one-worker slot so a later loop read can start another."""
+    def declarer():
+        if fails:
+            raise RuntimeError("invented import failure")
+        _declare(name)
+
+    invented(name, declarer)
+    tool_registry._OFFLOOP_RUNNING = True
+    tool_registry._drain_off_loop()
+    assert tool_registry._OFFLOOP_RUNNING is False
+    assert (declarer in tool_registry._DEFERRED) is fails
+    assert (name in tool_registry._RESULTS) is (not fails)
+
+
+@pytest.mark.parametrize("name, other_label, conflicts", [
+    ("zz_commit_race_conflict", "Invented elsewhere", True),
+    ("zz_commit_race_same", "Invented", False),
+])
+def test_a_name_declared_by_another_thread_meanwhile_is_not_overwritten(invented, clock, name, other_label, conflicts):
+    """Commit re-checks: if another thread declared the same name with a
+    different spec while the declarer ran, the declarer counts as failed and
+    the other thread's declaration stands; an identical one commits cleanly."""
+    def other_thread():
+        tool_registry.declare_result(name, owner="base", display_name=other_label, kind="search")
+
+    def declarer():
+        _declare(name)                       # staged, display name "Invented"
+        t = threading.Thread(target=other_thread)
+        t.start()
+        t.join(10)
+
+    invented(name, declarer)
+    tool_registry.declare_deferred_results()
+    assert tool_registry._RESULTS[name].display_name == other_label
+    assert (declarer in tool_registry._DEFERRED) is conflicts
+    assert (declarer in tool_registry._RETRY_AT) is conflicts
