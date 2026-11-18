@@ -72,8 +72,11 @@ def test_a_removed_record_sees_no_later_pass(gc_quiet):
     assert rec._callback not in gc.callbacks
 
 
-def test_install_twice_registers_one_callback(gc_quiet):
-    rec = GcRecord().install().install()
+@pytest.mark.parametrize("installs", [1, 2, 3])
+def test_installing_again_registers_one_callback(gc_quiet, installs):
+    rec = GcRecord()
+    for _ in range(installs):
+        rec.install()
     try:
         assert gc.callbacks.count(rec._callback) == 1
         gc.collect(1)
@@ -94,42 +97,44 @@ def test_the_summary_names_the_worst_full_pass_and_when(worst, start, expected):
     assert gc_summary(rec, start) == expected
 
 
-def test_the_summary_counts_passes():
+@pytest.mark.parametrize("passes", [0, 7])
+def test_the_summary_counts_passes(passes):
     rec = GcRecord()
-    rec.passes = 7
-    assert gc_summary(rec, 0.0) == "gc_passes=7 gc2_max=none"
+    rec.passes = passes
+    assert gc_summary(rec, 0.0) == f"gc_passes={passes} gc2_max=none"
 
 
-def test_a_frozen_cycle_survives_full_passes_until_released(gc_quiet):
-    before = _Node()
-    ref_before = weakref.ref(before)
+@pytest.mark.parametrize("made_before_freeze", [True, False])
+def test_only_a_cycle_alive_at_the_freeze_survives_full_passes(gc_quiet, made_before_freeze):
+    node = _Node() if made_before_freeze else None
     try:
         assert freeze_long_lived_heap() == gc.get_freeze_count() > 0
-        after = _Node()
-        ref_after = weakref.ref(after)
-        del before, after
+        if node is None:
+            node = _Node()
+        ref = weakref.ref(node)
+        del node
         gc.collect(2)
-        # Created after the freeze: collected as before.
-        assert ref_after() is None
-        # Alive at the freeze: out of the collector's reach.
-        assert ref_before() is not None
+        # Alive at the freeze: out of the collector's reach. Made after: collected.
+        assert (ref() is not None) is made_before_freeze
     finally:
         release_long_lived_heap()
     assert gc.get_freeze_count() == 0
     gc.collect(2)
-    assert ref_before() is None
+    assert ref() is None
 
 
-def test_the_server_freezes_its_heap_at_startup_and_releases_it_at_shutdown():
+@pytest.mark.parametrize("lifecycles", [1, 2])
+def test_the_server_freezes_its_heap_at_startup_and_releases_it_at_shutdown(lifecycles):
     from app.main import app
 
     release_long_lived_heap()
-    assert gc.get_freeze_count() == 0
-    with TestClient(app) as client:
-        frozen_while_serving = gc.get_freeze_count()
-        assert client.get("/livez").status_code == 200
-    assert frozen_while_serving > 0
-    assert gc.get_freeze_count() == 0
+    for _ in range(lifecycles):
+        assert gc.get_freeze_count() == 0
+        with TestClient(app) as client:
+            frozen_while_serving = gc.get_freeze_count()
+            assert client.get("/livez").status_code == 200
+        assert frozen_while_serving > 0
+        assert gc.get_freeze_count() == 0
 
 
 @pytest.mark.parametrize("phases, expected_passes", [
