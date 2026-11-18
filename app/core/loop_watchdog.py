@@ -338,6 +338,28 @@ class LiveDump:
             _live_owner_lock.release()
 
 
+def loop_depth(sample: str) -> int:
+    """How many frames the ``[loop]`` stack in a ``sample_stacks`` string has
+    (0 when the sample carries no loop stack)."""
+    if not sample.startswith("[loop] "):
+        return 0
+    loop_part = sample[len("[loop] "):].split(" || ", 1)[0]
+    return loop_part.count(" <- ") + 1 if loop_part else 0
+
+
+def keep_deeper_sample(kept: str, snap: str) -> str:
+    """Which of two samples taken during ONE stall to keep.
+
+    A stall ends when the loop gets back to its own scheduler, so the last
+    sample before the heartbeat is served is often the loop already idle in
+    ``select`` / ``_read_from_self``: the frames that blocked it are gone. The
+    loop stack is deepest while it is inside the call that blocks it, so keep
+    the deeper loop stack; on a tie keep the newer one (most recent frames)."""
+    if not snap:
+        return kept
+    return snap if loop_depth(snap) >= loop_depth(kept) else kept
+
+
 class LagMonitor:
     """Measures how late the loop serves a heartbeat; optionally logs stalls."""
 
@@ -380,6 +402,26 @@ class LagMonitor:
         #: near misses, counted (their dump is not kept). A heartbeat already
         #: served never adds one -- serving it cancels the timer.
         self.live_near_misses = 0
+        #: Diagnostic only, never gated (advisor 07:28Z 18 Nov, STAMP TO
+        #: POST): how long after its stamp each heartbeat was actually posted
+        #: to the loop -- the cost of the CPU snapshot taken in between. A lag
+        #: about equal to its stamp-to-post was the monitor's own /proc reads,
+        #: not the loop. ``max_stamp_to_post_ms`` is the worst of any
+        #: heartbeat; ``stall_stamp_to_post`` is ``(lag_ms, stamp_to_post_ms)``
+        #: for each recorded stall (same order as ``stalls``);
+        #: ``worst_lag_stamp_to_post`` is that pair for the heartbeat with the
+        #: largest lag, stall or not.
+        self.max_stamp_to_post_ms = 0.0
+        self.stall_stamp_to_post: list[tuple[float, float]] = []
+        self.worst_lag_stamp_to_post: tuple[float, float] = (0.0, 0.0)
+
+    def note_stamp_to_post(self, lag_ms: float, stamp_to_post_ms: float, stalled: bool) -> None:
+        """Record one heartbeat's stamp-to-post time beside its lag."""
+        self.max_stamp_to_post_ms = max(self.max_stamp_to_post_ms, stamp_to_post_ms)
+        if lag_ms >= self.worst_lag_stamp_to_post[0]:
+            self.worst_lag_stamp_to_post = (lag_ms, stamp_to_post_ms)
+        if stalled:
+            self.stall_stamp_to_post.append((lag_ms, stamp_to_post_ms))
 
     def start(self) -> "LagMonitor":
         self.loop.call_soon_threadsafe(self._note_loop_thread)
@@ -428,6 +470,7 @@ class LagMonitor:
             if posted - self._cpu_at >= _CPU_SNAPSHOT_S:
                 self._proc_before, self._cpu_before = cpu_snapshot()
                 self._cpu_at, self._host_before = posted, host_cpu()
+            stamp_to_post_ms = (time.monotonic() - posted) * 1000
             try:
                 self.loop.call_soon_threadsafe(_serve)
             except RuntimeError:
@@ -449,9 +492,7 @@ class LagMonitor:
                 while not served.wait(0.05):
                     if self._stop.is_set():
                         return
-                    snap = sample_stacks(self._loop_ident)
-                    if snap:
-                        sample = snap
+                    sample = keep_deeper_sample(sample, sample_stacks(self._loop_ident))
             lag_ms = heartbeat_lag_ms(posted, served_at[0] if served_at else None,
                                       time.monotonic())
             self.max_lag_ms = max(self.max_lag_ms, lag_ms)
@@ -459,6 +500,7 @@ class LagMonitor:
             # threshold is a stall even if this thread woke too late to sample
             # it during the stall (it then samples below).
             stalled = stalled or lag_ms >= self.threshold * 1000
+            self.note_stamp_to_post(lag_ms, stamp_to_post_ms, stalled)
             if stalled:
                 # A detected stall is ALWAYS recorded with its stack. sample is
                 # never empty (sample_stacks falls back to the main thread), but
@@ -534,6 +576,24 @@ class LagMonitor:
             if dump:
                 idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
                 keep_worst(self.live_dumps, (late_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
+
+
+def stamp_to_post_summary(max_stamp_to_post_ms: float, stall_pairs: list,
+                          worst_lag_pair: tuple) -> str:
+    """The STAMP TO POST fields for a result line (diagnostic, not gated).
+
+    ``worst_stall`` is the stall with the largest lag and its stamp-to-post
+    time; ``none`` when no stall was recorded. ``worst_lag`` is the same pair
+    for the heartbeat with the largest lag, so a window without a recorded
+    stall still carries it."""
+    if stall_pairs:
+        lag, s2p = max(stall_pairs, key=lambda p: p[0])
+        worst_stall = f"lag={lag:.0f}ms/s2p={s2p:.0f}ms"
+    else:
+        worst_stall = "none"
+    return (f"stamp_to_post_max={max_stamp_to_post_ms:.0f}ms "
+            f"worst_stall={worst_stall} "
+            f"worst_lag={worst_lag_pair[0]:.0f}ms/s2p={worst_lag_pair[1]:.0f}ms")
 
 
 def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> Optional[LagMonitor]:

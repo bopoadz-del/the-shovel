@@ -8,6 +8,8 @@ Synthetic project ids and tokens only — no client, project or person names.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 
@@ -33,6 +35,9 @@ def scoped_store(tmp_path, monkeypatch):
 
     _emb.reset_embedder_cache()
     _vs.reset_store_cache()
+    # The fresh database needs the documents table production has, or the
+    # store cannot compute the session scope and reads nothing.
+    give_documents_table(_vs.get_store())
     yield _ret
     _emb.reset_embedder_cache()
     _vs.reset_store_cache()
@@ -78,6 +83,7 @@ def test_store_search_scopes_the_query(scoped_store):
     _index(ret, OWN_B, "doc_b", TOKEN_B)
     emb = get_embedder()
     store = get_store(dim=emb.dim)
+    give_documents_table(store)
     hits = store.search(OWN_A, emb.encode_queries([TOKEN_B])[0], k=10)
     assert all(c.project_id == OWN_A for c in hits)
     assert all(c.project_id != OWN_B for c in hits)

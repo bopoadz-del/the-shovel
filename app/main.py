@@ -253,6 +253,13 @@ async def lifespan(app: FastAPI):
     from app.core.cde.poll import start_event_poller
     start_event_poller()
 
+    # Readiness waits for the result declarations (about a second: they import
+    # the formula registry). In a worker thread, so the loop is never held by
+    # that import; before serving, so no request's first read has to declare.
+    # A declarer that fails is logged and backed off (it never raises out of
+    # here); the warm-up below runs the step again.
+    await asyncio.to_thread(_declare_deferred_results)
+
     # Model warm-up runs AFTER the port is listening — see _warm_models.
     warm_task = None
     if os.getenv("WARM_MODELS_BLOCKING", "").strip().lower() in ("1", "true", "yes"):

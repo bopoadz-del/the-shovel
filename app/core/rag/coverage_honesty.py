@@ -126,12 +126,16 @@ def live_coverage(project_id: str) -> Optional[tuple[int, int]]:
     if not (project_id or "").strip():
         return None
     try:
-        from app.core.projects import count_documents
+        from app.core.projects import count_documents, session_hidden_document_ids
         from app.core.rag.vector_store import get_store
 
         total = int(count_documents(project_id) or 0)
         by_doc = get_store().count_by_doc(project_id) or {}
-        indexed = sum(1 for n in by_doc.values() if int(n or 0) > 0)
+        # Other sessions' files are neither counted nor searched here.
+        hidden = session_hidden_document_ids(project_id)
+        indexed = sum(
+            1 for d, n in by_doc.items() if int(n or 0) > 0 and str(d) not in hidden
+        )
         return indexed, total
     except Exception:  # honesty must not break an answer
         logger.warning(

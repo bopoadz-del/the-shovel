@@ -8,6 +8,8 @@ and one that matches nothing; a dense bill against a sparse one, swapped.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import os
 import tempfile
 import uuid
@@ -262,6 +264,7 @@ def sqlite_store(monkeypatch):
     db_path = os.path.join(tmpdir, f"v_{uuid.uuid4().hex}.db")
     vs.reset_store_cache()
     store = vs.VectorStore(db_path=db_path, dim=embedder.dim)
+    give_documents_table(store)
     for doc_id, text in [
         ("bill", "Geotextile separator membrane m2 3120 6.75 21060.00"),
         ("spec", "Geotextile membrane shall be laid with 300 mm laps"),

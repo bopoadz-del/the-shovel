@@ -175,7 +175,7 @@ def two_bills(tmp_path, monkeypatch):
         {"id": "gone", "original_name": "gone.bill.xlsx", "path": "",
          "metadata": {**derived, "derived_from": "s3"}},
     ]
-    monkeypatch.setattr(projects, "list_documents", lambda pid: docs)
+    monkeypatch.setattr(projects, "list_documents", lambda pid, **_kw: docs)
     monkeypatch.setattr(projects, "materialize_document_path", lambda d: d["path"])
 
 

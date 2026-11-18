@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from app.core.loop_watchdog import LagMonitor
+from app.core.loop_watchdog import LagMonitor, stamp_to_post_summary
 from tests import _wake_sidecar
 from tests._fixture_values import STUB_TOKEN_06
 
@@ -48,6 +48,18 @@ def excess_over_baseline(load_max_ms: float, idle_baseline_ms: float) -> float:
     0. This is what the limit is applied to, so a runner that deschedules the
     process for the same amount whether idle or loaded does not fail the gate."""
     return max(0.0, load_max_ms - idle_baseline_ms)
+
+
+def wake_late_when(wake_late_at, window_start: float) -> str:
+    """WHEN in a window each late watchdog wake-up happened, printed only.
+
+    ``wake_late_at`` is ``LagMonitor.wake_late_at``: ``(late_ms, monotonic_s)``
+    pairs. Each becomes ``<late>ms@+<seconds since the window began>s``, in
+    time order, so one early event (a first-use initialisation under load)
+    reads apart from a hold that repeats through the window. Never gates.
+    """
+    marks = sorted(wake_late_at, key=lambda pair: pair[1])
+    return ",".join(f"{late:.0f}ms@+{at - window_start:.2f}s" for late, at in marks) or "none"
 
 _QUESTIONS = (
     "What is the defects notification period?",
@@ -173,7 +185,12 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     lines = [f"LOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
              f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
              f"monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
-             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms",
+             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms "
+             f"load_s={windows['load'][1] - windows['load'][0]:.2f} "
+             f"wake_late_when={wake_late_when(mon.wake_late_at, windows['load'][0])} "
+             f"idle_wake_late_when={wake_late_when(idle.wake_late_at, windows['idle'][0])} "
+             + stamp_to_post_summary(mon.max_stamp_to_post_ms, mon.stall_stamp_to_post,
+                                     mon.worst_lag_stamp_to_post),
              _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
                                         mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
@@ -283,3 +300,15 @@ def test_the_monitor_sees_a_blocked_loop():
 ])
 def test_excess_over_baseline_subtracts_runner_noise(load_max, baseline, expected):
     assert excess_over_baseline(load_max, baseline) == expected
+
+
+@pytest.mark.parametrize("marks,start,expected", [
+    # one early late wake: its offset from the window's start, not the clock
+    ([(548.4, 101.42)], 100.0, "548ms@+1.42s"),
+    # several, recorded worst-first: printed in time order
+    ([(373.0, 57.5), (210.2, 51.25)], 50.0, "210ms@+1.25s,373ms@+7.50s"),
+    # none recorded
+    ([], 10.0, "none"),
+])
+def test_wake_late_when_prints_offsets_in_time_order(marks, start, expected):
+    assert wake_late_when(marks, start) == expected

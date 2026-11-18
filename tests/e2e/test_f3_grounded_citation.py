@@ -18,6 +18,8 @@ model prompt, not the plumbing — and that is a useful thing to be able to say.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import re
 
 import pytest
@@ -52,6 +54,7 @@ def ingested(monkeypatch, tmp_path):
     reset_embedder_cache()
     emb = get_embedder()
     store = vs.get_store(dim=emb.dim)
+    give_documents_table(store)
 
     project_id = "client_tower"
     store.upsert_chunks(
