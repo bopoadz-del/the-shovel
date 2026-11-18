@@ -74,6 +74,9 @@ _MIN_WITHHOLD_CHARS = 4
 # Bounded output: at most this many chars-by-range rows per document.
 _MAX_RANGE_ROWS = 25
 _MIN_RANGE_PAGES = 10
+# Bounded output: at most this many no-chunk page runs printed per range row,
+# so a page past the document-wide run list is still named by its own range.
+_MAX_RUNS_PER_RANGE = 12
 _ID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 
 
@@ -365,6 +368,8 @@ def stored_page_coverage(rows: Iterable[tuple], pages_in_file: int | None) -> di
         by_range.append({
             "pages": (start, end),
             "pages_with_chunk": len(hits),
+            "pages_without_chunk_runs": _runs(
+                p for p in range(start, end + 1) if p not in per_page),
             "chunks": sum(h[0] for h in hits),
             "chars": sum(h[1] for h in hits),
         })
@@ -391,12 +396,20 @@ def render_stored(cov: dict[str, Any]) -> list[str]:
          f"chunks_without_page={cov['chunks_without_page']} "
          f"chars_without_page={cov['chars_without_page']}"),
         f"   stored pages_without_chunk_runs: {shown or '-'}{more}",
-        "   stored pages | pages_with_chunk | chunks | chars",
+        "   stored pages | pages_with_chunk | chunks | chars | pages_without_chunk",
     ]
     for r in cov["by_range"]:
         a, b = r["pages"]
-        lines.append(f"   {a}-{b} | {r['pages_with_chunk']} | {r['chunks']} | {r['chars']}")
+        lines.append(f"   {a}-{b} | {r['pages_with_chunk']} | {r['chunks']} | {r['chars']} | "
+                     f"{_render_runs(r['pages_without_chunk_runs'], _MAX_RUNS_PER_RANGE)}")
     return lines
+
+
+def _render_runs(runs: list[tuple[int, int]], cap: int) -> str:
+    """Page runs as text, at most ``cap`` runs then a ``+N more runs`` count."""
+    shown = ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in runs[:cap])
+    more = f" (+{len(runs) - cap} more runs)" if len(runs) > cap else ""
+    return (shown or "-") + more
 
 
 def stored_lines(doc_row: tuple) -> list[str]:
