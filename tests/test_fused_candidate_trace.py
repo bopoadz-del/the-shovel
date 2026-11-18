@@ -333,3 +333,46 @@ def test_pre_injection_chunk_carries_its_length_not_its_text(text):
     entry = _trace_chunk(1, c)
     assert entry["chars"] == len(text)
     assert text not in json.dumps(entry)
+
+
+# ── leg_docs: each leg folded to documents (measurement only) ─────────────
+
+class _D:
+    def __init__(self, cid, doc):
+        self.chunk_id = cid
+        self.doc_id = doc
+        self.text = "t"
+
+
+@pytest.mark.parametrize("sem, bm, want_vec, want_lex", [
+    # one document fills the lexical head; the other appears only in vector
+    ({"a1": 1, "b1": 2}, {"a1": 3, "a2": 1, "a3": 2},
+     [("A", 1, 1), ("B", 2, 1)], [("A", 1, 3)]),
+    # the same chunks, ranks moved: best rank and order follow the leg
+    ({"a1": 2, "b1": 1}, {"a1": 1, "a2": 4, "b1": 2},
+     [("B", 1, 1), ("A", 2, 1)], [("A", 1, 2), ("B", 2, 1)]),
+])
+def test_leg_docs_folds_each_leg_to_best_rank_and_count(sem, bm, want_vec, want_lex):
+    docs = {"a1": "A", "a2": "A", "a3": "A", "b1": "B"}
+    order = [_D(cid, d) for cid, d in docs.items()]
+    out = ft.leg_docs(order, sem, bm)
+    for name, want in (("vector", want_vec), ("lexical", want_lex)):
+        got = [(e["doc_id"], e["best_leg_rank"], e["n_chunks"]) for e in out[name]]
+        assert got == want
+
+
+@pytest.mark.parametrize("in_lexical", [True, False])
+def test_leg_docs_places_a_document_or_states_it_absent(in_lexical):
+    order = [_D("a1", "A"), _D("z9", "Z")]
+    bm = {"a1": 1, **({"z9": 40} if in_lexical else {})}
+    view = ft.public_view(
+        ft.Follow(ft.leg_summary(order, {"a1": 1}, bm, 10)).finish(order, order, order),
+        order,
+    )
+    lex = {e["doc_id"]: e["best_leg_rank"] for e in view["leg_docs"]["lexical"]}
+    vec = {e["doc_id"] for e in view["leg_docs"]["vector"]}
+    assert ("Z" in lex) is in_lexical
+    if in_lexical:
+        assert lex["Z"] == 40
+    assert "Z" not in vec
+    assert all("chunk_id" not in e for es in view["leg_docs"].values() for e in es)

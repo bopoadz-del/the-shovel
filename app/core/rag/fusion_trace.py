@@ -79,7 +79,45 @@ def leg_summary(
         "fused_k": fused_k,
         **{f"best_{leg}": best[leg] for leg in LEGS},
         "leg_top": leg_top(order, sem_rank, bm_rank),
+        "leg_docs": leg_docs(order, sem_rank, bm_rank),
     }
+
+
+def leg_docs(
+    order: Iterable[Any],
+    sem_rank: Mapping[str, int],
+    bm_rank: Mapping[str, int],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Each leg's whole candidate list folded to DOCUMENTS: per document,
+    its best rank in that leg and how many of the leg's chunks it holds,
+    best rank first.
+
+    ``leg_top`` stops at ``LEG_TOP_TRACED`` and carries no id in the public
+    trace, so a document the answer needed but nobody handed cannot be
+    placed: inside a leg at rank 30, or in neither leg at all (recall).
+    This answers that from the document id the trace's ``chunks`` already
+    publish. It also shows one document filling a leg's head (``n_chunks``).
+    Measurement only: reading it changes no ranking."""
+    doc_of = {
+        getattr(c, "chunk_id", None): getattr(c, "doc_id", None) for c in order
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for name, mine in (("vector", sem_rank), ("lexical", bm_rank)):
+        per_doc: Dict[str, Dict[str, int]] = {}
+        for cid, r in mine.items():
+            doc = doc_of.get(cid)
+            if doc is None:
+                continue
+            entry = per_doc.setdefault(doc, {"best_leg_rank": r, "n_chunks": 0})
+            entry["n_chunks"] += 1
+            entry["best_leg_rank"] = min(entry["best_leg_rank"], r)
+        out[name] = [
+            {"doc_id": doc, **entry}
+            for doc, entry in sorted(
+                per_doc.items(), key=lambda kv: (kv[1]["best_leg_rank"], kv[0]),
+            )
+        ]
+    return out
 
 
 def leg_top(
