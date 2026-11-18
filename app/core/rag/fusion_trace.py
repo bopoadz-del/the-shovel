@@ -44,6 +44,12 @@ LEG_DOCS_CAP = 50
 #: is also the document's stored name (see :func:`public_view`).
 DOC_DIGEST_HEX = 12
 
+#: How many of each leg's chunks ``leg_chunk_digests`` lists, by leg rank.
+#: A measurement depth only, set to the leg's own retrieval depth so every
+#: chunk a leg returned is placed; a longer leg is cut at this depth (its
+#: chunk count is still in ``n_candidates`` and ``leg_docs``).
+LEG_CHUNKS_TRACED = 50
+
 #: The two legs by their rank maps' roles in ``leg_summary``.
 LEG_NAMES = ("vector", "lexical")
 
@@ -90,7 +96,32 @@ def leg_summary(
         **{f"best_{leg}": best[leg] for leg in LEGS},
         "leg_top": leg_top(order, sem_rank, bm_rank),
         **_leg_docs_and_totals(order, sem_rank, bm_rank),
+        "leg_ranked": leg_ranked(order, sem_rank, bm_rank),
     }
+
+
+def leg_ranked(
+    order: Iterable[Any],
+    sem_rank: Mapping[str, int],
+    bm_rank: Mapping[str, int],
+    depth: int = LEG_CHUNKS_TRACED,
+) -> Dict[str, List[Optional[str]]]:
+    """Each leg's chunk ids by leg rank, position ``i`` holding rank
+    ``i + 1`` (``None`` for a rank no fused candidate carries), cut at
+    ``depth``. Private: :func:`public_view` prints digests only.
+
+    ``leg_top`` stops at ``LEG_TOP_TRACED`` and ``leg_docs`` folds to
+    documents, so a wanted chunk of a document that holds many leg slots
+    cannot be placed inside its own leg. With this list it can: digest the
+    wanted id offline (:func:`id_digest`) and find its position.
+    Measurement only: reading it changes no ranking."""
+    present = {getattr(c, "chunk_id", None) for c in order}
+    out: Dict[str, List[Optional[str]]] = {}
+    for name, mine in (("vector", sem_rank), ("lexical", bm_rank)):
+        by_rank = {r: cid for cid, r in mine.items() if cid in present}
+        top = min(depth, max(by_rank, default=0))
+        out[name] = [by_rank.get(r) for r in range(1, top + 1)]
+    return out
 
 
 def _leg_docs_and_totals(
@@ -149,6 +180,11 @@ def doc_digest(doc_id: str) -> str:
     """A short stable digest of a document id, for a trace line that must
     not print the id itself."""
     return hashlib.sha256(str(doc_id).encode("utf-8")).hexdigest()[:DOC_DIGEST_HEX]
+
+
+#: The same digest for a chunk id: one function, so an offline reader
+#: digests a wanted chunk id exactly as the trace did.
+id_digest = doc_digest
 
 
 def _public_doc(entry: Dict[str, Any], names: Mapping[str, str]) -> Dict[str, Any]:
@@ -291,8 +327,15 @@ def public_view(
     handed_ids = [getattr(c, "chunk_id", None) for c in handed]
     out = {
         k: v for k, v in record.items()
-        if not k.startswith("best_") and k not in ("leg_top", "leg_docs")
+        if not k.startswith("best_")
+        and k not in ("leg_top", "leg_docs", "leg_ranked")
     }
+    if "leg_ranked" in record:
+        ranked = record.get("leg_ranked") or {}
+        out["leg_chunk_digests"] = {
+            name: [id_digest(c) if c is not None else None for c in ids]
+            for name, ids in ranked.items()
+        }
     if "leg_docs" in record:
         out["leg_docs"] = {
             name: [_public_doc(e, names or {}) for e in entries]
