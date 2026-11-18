@@ -96,12 +96,36 @@ def test_an_unreadable_pinned_document_is_a_404(case):
 
 @pytest.mark.parametrize("own", ["session-file", "project-file"])
 def test_the_callers_own_document_is_not_refused(own):
+    """From the chat the turn runs in (the bound session scope): the caller's
+    own file of THAT chat, and any project document, are readable by id."""
     uid = _user(f"pin-mine-{own}")
     pid = store.create_project(f"PinMine-{own}-{_RUN}", user_id=uid)["id"]
     did = (_session_doc(pid, "invented_mine.md", "ws-b", uid) if own == "session-file"
            else store.add_document(pid, "invented_project.md")["id"])
-    assert privileges.raise_if_inaccessible_document_ids(
-        {"user_id": uid}, {"document_ids": [did]}) is None
+    token = store.bind_session_scope("ws-b", uid)
+    try:
+        assert privileges.raise_if_inaccessible_document_ids(
+            {"user_id": uid}, {"document_ids": [did]}) is None
+    finally:
+        store.reset_session_scope(token)
+
+
+@pytest.mark.parametrize("from_chat", ["ws-other", None])
+def test_the_callers_own_session_file_from_another_chat_is_a_404(from_chat):
+    """Advisor ruling (12:39Z, #451): a file attached to a chat is reachable
+    by id only from that chat; from another chat, or from no chat, it is not
+    found -- its maker included."""
+    uid = _user(f"pin-elsewhere-{from_chat}")
+    pid = store.create_project(f"PinElse-{from_chat}-{_RUN}", user_id=uid)["id"]
+    did = _session_doc(pid, "invented_mine_elsewhere.md", "ws-b", uid)
+    token = store.bind_session_scope(from_chat, uid)
+    try:
+        with pytest.raises(HTTPException) as err:
+            privileges.raise_if_inaccessible_document_ids(
+                {"user_id": uid}, {"document_ids": [did]})
+        assert err.value.status_code == 404
+    finally:
+        store.reset_session_scope(token)
 
 
 # ── projects.session_hidden_document_ids ────────────────────────────────────
