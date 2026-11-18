@@ -11,6 +11,8 @@ matching rows -- into plain text:
   the same tool answered the same part of the question (``covers``), and
   then after every result, in one plain line (a narrower or broader
   selection is a different part; an empty selection is never answered);
+* a result of no matching rows beside a figure is one plain line at the end,
+  and only for a part no figure answered (``covers``);
 * a part that did not return (one bill of several) is NAMED, never skipped,
   so a partial result is never shown as complete -- after the parts that did;
 * a turn where no call returned a result says what was asked and why there is
@@ -52,6 +54,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "result_cut": "the result was too large to show in this turn; the tool did return",
         "code": "code",
         "unanswered": "Not answered in this turn: {parts}.",
+        "zero_line": "No matching rows: {parts}.",
     },
     "ar": {
         "heading": "نتيجة محسوبة",
@@ -76,6 +79,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "result_cut": "كانت النتيجة أكبر من أن تُعرض في هذا الدور، وقد أعادتها الأداة",
         "code": "الرمز",
         "unanswered": "لم تتم الإجابة عنه في هذا الدور: {parts}.",
+        "zero_line": "لا توجد بنود مطابقة: {parts}.",
     },
 }
 
@@ -370,6 +374,12 @@ def covers(result: Call, other: Call) -> bool:
                for st in result.statements)
 
 
+def _only_zero(call: Call) -> bool:
+    """True when every figure the call returned is a count of no rows."""
+    figures = [st for st in call.statements if st.figure is not None]
+    return bool(figures) and all(getattr(st, "count", None) == 0 for st in figures)
+
+
 def unanswered(calls: Sequence[Call]) -> List[Call]:
     """The calls with no figure whose part no result of the turn answered,
     one per (tool, selection), in call order."""
@@ -392,11 +402,18 @@ def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str
     than one different result, each says what was asked. A call with no
     figure is shown only when no result answered its part (``covers``):
     after the results in one plain line, or -- when no call returned a
-    result -- as the answer, saying what was asked and why there is none."""
+    result -- as the answer, saying what was asked and why there is none.
+    A result of no matching rows leads only when no call found rows; beside
+    a figure it is dropped when a lead answered its part, else it is named
+    in one plain line after the results."""
     lab = labels_for(language)
+    leads = [c for c in calls if c.answered and not _only_zero(c)]
+    # A zero leads only when no call found rows. Beside a figure it is the one
+    # plain line at the end, and only for a part no lead already answered.
+    zeros = [c for c in calls if c.answered and _only_zero(c)] if leads else []
     shown: List[Tuple[Call, List[str]]] = []
     for c in calls:
-        if not c.answered:
+        if not c.answered or c in zeros:
             continue
         body = _body_lines(c.statements, lab, language, c.declared)
         if any(o.tool == c.tool and ob == body for o, ob in shown):
@@ -419,6 +436,16 @@ def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str
         blocks.append("\n".join(head + body))
     if len(blocks) > 1:
         blocks.insert(0, lab["several"].format(n=len(blocks)))
+    zero_parts: List[str] = []
+    for z in zeros:
+        if any(covers(lead, z) for lead in leads):
+            continue
+        for st in z.statements:
+            what = _what(st, lab) if st.figure is not None else ""
+            if what and what not in zero_parts:
+                zero_parts.append(what)
+    if zero_parts:
+        blocks.append(lab["zero_line"].format(parts=lab["list_sep"].join(zero_parts)))
     if missing:
         parts = []
         for c in missing:

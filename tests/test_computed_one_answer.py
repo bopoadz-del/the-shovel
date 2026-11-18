@@ -514,9 +514,13 @@ def test_the_live_fifth_shape_a_cut_result_then_a_zero_result(result, args, rows
     turn[3]["content"] = cut
     turn[3].update(runtime._tool_message_extra(full, cut))
     for out in _answers(turn):
-        assert f"**{rows}**" in out and "**0**" in out, out
-        assert out.index(f"**{rows}**") < out.index("**0**"), out
+        assert f"**{rows}**" in out, out
         assert _CUT_REASON not in out, out
+        # The 0 answers a different part (gully): one plain line, at the end.
+        line = _zero_line(out)
+        assert "gully" in line and out.rstrip().endswith(line), out
+        assert out.index(f"**{rows}**") < out.index(line), out
+        assert EN["several"].split("}", 1)[1] not in out and "**0**" not in out, out
 
 
 @pytest.mark.parametrize("content,held", [
@@ -560,3 +564,120 @@ def test_stream_a_result_over_the_cap_reaches_the_model_whole_and_the_answer(mon
     totals = env[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY]
     assert want in totals.values(), totals
     assert f"**{want}**" in answer_text(events)
+
+
+# -- a zero beside a figure (Advisor 06:33Z): the zero result is the one plain
+# line at the end, and only when it answers a DIFFERENT selection; a zero for
+# the selection a figure already answered is not shown at all.
+
+_ZERO = EN["zero_line"].split("{")[0]
+
+
+def _zero_line(out: str) -> str:
+    return next((ln for ln in out.splitlines() if ln.startswith(_ZERO)), "")
+
+
+def _zero_of(result: dict, terms: list[str]) -> dict:
+    return {**result, "bills": [{**result["bills"][0], "terms": terms, "count": 0, "sum": 0,
+                                 "rows": [], "sum_by_unit": {}}]}
+
+
+@pytest.mark.parametrize("zero_first", [True, False])
+@pytest.mark.parametrize("result,_a,args,figure", BILLS)
+def test_a_zero_for_the_part_a_figure_answered_is_not_shown(zero_first, result, _a, args, figure):
+    zero = (args, _zero_of(result, result["bills"][0]["terms"]))
+    lead = (args, result)
+    turn = _turn("how many, and the total?", *((zero, lead) if zero_first else (lead, zero)))
+    for out in _answers(turn):
+        assert figure in out, out
+        assert _zero_line(out) == "" and "**0**" not in out, out
+        assert EN["several"].split("}", 1)[1] not in out, out
+
+
+@pytest.mark.parametrize("zero_first", [True, False])
+@pytest.mark.parametrize("result,_a,args,figure", BILLS)
+def test_a_zero_for_a_different_part_is_one_plain_line_at_the_end(zero_first, result, _a, args, figure):
+    zero = ({"terms": "gully"}, _zero_of(result, ["gully"]))
+    lead = (args, result)
+    turn = _turn("how many gully, and the total?", *((zero, lead) if zero_first else (lead, zero)))
+    for out in _answers(turn):
+        line = _zero_line(out)
+        assert "gully" in line and out.rstrip().endswith(line), out
+        assert out.index(figure) < out.index(line), out
+        assert "**0**" not in out and out.count(_ZERO) == 1, out
+
+
+@pytest.mark.parametrize("terms", [["gully"], ["manhole", "cover"]])
+def test_zeros_alone_are_the_answer(terms):
+    result = BILLS[0][0]
+    turn = _turn("how many?", ({"terms": terms}, _zero_of(result, terms)))
+    for out in _answers(turn):
+        assert "**0**" in out and _zero_line(out) == "", out
+
+
+def test_the_zero_line_is_worded_in_every_language():
+    assert all("zero_line" in lab and "{parts}" in lab["zero_line"] for lab in LABELS.values())
+
+
+# -- the mechanics of the cap, each rule with two inputs.
+
+@pytest.mark.parametrize("payload", [
+    [{"ref": "A.1", "quantity": 2}, {"ref": "A.2", "quantity": 3}],
+    [[1, 2], [3, 4], [5, 6]],
+])
+def test_only_an_object_result_has_an_outline(payload):
+    assert runtime._result_outline(payload, 10_000) is None
+
+
+@pytest.mark.parametrize("content", [b'{"truncated": true}', bytearray(b'{"truncated": true, "preview": "{"}')])
+def test_content_that_is_not_text_is_not_a_cut_envelope(content):
+    assert runtime._tool_result_was_cut(content) is False
+
+
+@pytest.mark.parametrize("cap", [0, -40])
+@pytest.mark.parametrize("result,_a,_b,_f", BILLS)
+def test_a_cap_below_one_falls_back_to_the_default_cap(cap, result, _a, _b, _f):
+    full = {"name": TOOL, "ok": True, "result": result}
+    assert len(json.dumps(full)) < runtime._TOOL_RESULT_MAX_CHARS
+    assert json.loads(runtime._tool_result_content(full, max_chars=cap)) == full
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_compacting_a_cut_result_keeps_its_outline_whole(result, args, rows, total):
+    full = {"name": TOOL, "ok": True, "result": result}
+    cut = runtime._tool_result_content(full, max_chars=4000)
+    first = json.loads(cut)[runtime.OUTLINE_KEY]
+    again = json.loads(runtime._compacted_tool_payload(cut, 500))
+    assert again["truncated"] and again[runtime.OUTLINE_KEY] == first, again
+    bill = again[runtime.OUTLINE_KEY]["result"]["bills"][0]
+    assert bill["sum"] == total and again[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY] == {
+        "result.bills[0].rows": rows}
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_the_live_fifth_shape_a_result_over_the_cap_then_a_zero(monkeypatch, a, b, rows):
+    """The real stream route: call 1 is over the model's cap, call 2 asks
+    for a word no row holds. Call 1's figure leads; the zero is one line at
+    the end; nothing says the tool did not return."""
+    from app.agents.driver import loop as driver_loop
+    from tests.lane5_core_support import answer_text, call, drive, install_driver_stream
+
+    absent = "zzinvented"
+    many = [(f"{r}{i}", d, u, q) for i in range(40) for r, d, u, q in rows]
+    monkeypatch.setattr(driver_loop, "_TOOL_RESULT_CHARS", 3000)
+    _install_stream_bill(monkeypatch, many, [True, True])
+    install_driver_stream(monkeypatch)
+    events, seen = drive(monkeypatch, f"how many {a} items, and {absent}?", [
+        {"content": "", "tool_calls": [call(TOOL, {"terms": a}, "s0")]},
+        {"content": "", "tool_calls": [call(TOOL, {"terms": absent}, "s1")]},
+        {"content": ""},
+    ], project_id="p-invented")
+    for m in seen[-1]["messages"]:
+        if m.get("role") == "tool":
+            assert len(m["content"]) <= 3000 and json.loads(m["content"]), m["content"][:200]
+    out = answer_text(events)
+    want = sum(a in d.lower() for _r, d, _u, _q in many)
+    assert f"**{want}**" in out, out
+    assert EN["not_returned"] not in out and _CUT_REASON not in out, out
+    line = _zero_line(out)
+    assert absent in line and out.index(f"**{want}**") < out.index(line), out

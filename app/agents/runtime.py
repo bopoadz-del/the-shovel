@@ -11616,7 +11616,7 @@ _LAST_TOOL_PREVIEW = 6000
 
 
 def _compacted_tool_payload(
-    content: str, keep: int, note: str | None = None,
+    content: str, keep: int, note: str | None = None, outline_budget: int | None = None,
 ) -> str:
     """A truncated tool result that says exactly what it lost.
 
@@ -11649,7 +11649,10 @@ def _compacted_tool_payload(
     else:
         # Small beside the preview; the hop's budget pass measures the
         # real length of what it built, outline included.
-        outline = _result_outline(whole, max(1, kept // 4))
+        # ``outline_budget`` lets a caller that shrinks the preview to fit
+        # a cap keep the outline whole: only the preview gives way.
+        budget = outline_budget if outline_budget is not None else kept // 4
+        outline = _result_outline(whole, max(1, int(budget)))
     dropped = max(0, len(content) - kept)
     return json.dumps(
         {
