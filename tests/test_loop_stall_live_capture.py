@@ -484,3 +484,61 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
     else:
         assert mon.live_near_misses == 0, mon.live_near_misses
         assert mon.live_dumps == [], mon.live_dumps[:1]
+
+
+
+@pytest.mark.parametrize("hold", [True, False])
+@own_process
+def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monkeypatch, hold):
+    """CI 076bcbf (virgin, 18 Nov): a 0.6 s hold gave no dump, max_lag 0, no
+    stall. The monitor read its dump file after every heartbeat and every
+    sleep, right after ``cancel``: ``os.fstat`` releases the GIL with no
+    timer pending, no heartbeat in flight and no sleep to oversleep, and a
+    thread waiting for the GIL takes it there (reproduced 3 of 3 by starting
+    the hold inside that read). Now a round too short for a timer to fire
+    reads nothing, so a quiet monitor never hands the GIL over unwatched; a
+    round the hold made late is read and names the holder."""
+    n = _size_for(0.6) if hold else 0
+    reads: list = []
+    real_take = loop_watchdog.LiveDump.take
+
+    def take(self):
+        if threading.current_thread().name == "loop-watchdog":
+            reads.append(time.monotonic())
+        return real_take(self)
+
+    monkeypatch.setattr(loop_watchdog.LiveDump, "take", take)
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
+                                       tick_ms=10, log=False, live_ms=150).start()
+        await asyncio.sleep(0.3)
+        quiet_reads = len(reads)
+        done, release = threading.Event(), threading.Event()
+
+        def work():
+            _gil_holding_call(n)
+            done.set()
+            release.wait(5)
+
+        if hold:
+            worker = threading.Thread(target=work, name="gil-holder")
+            worker.start()
+            while not done.is_set():
+                await asyncio.sleep(0.01)
+        else:
+            await asyncio.sleep(0.6)
+        await asyncio.sleep(0.2)
+        mon.stop()
+        release.set()
+        return mon, quiet_reads
+
+    mon, quiet_reads = asyncio.run(run())
+    assert quiet_reads == 0, f"{quiet_reads} reads in 0.3 s of quiet rounds"
+    if hold:
+        assert reads, "the late round was never read"
+        assert mon.live_dumps, f"no live dump; max_lag={mon.max_lag_ms:.0f} stalls={len(mon.stalls)}"
+        _, during = max(mon.live_dumps)
+        assert "[gil-holder]" in during and "_gil_holding_call" in during, during
+    else:
+        assert reads == [] and mon.live_dumps == [] and mon.stalls == []

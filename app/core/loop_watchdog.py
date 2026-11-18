@@ -596,10 +596,15 @@ class LagMonitor:
             sample = ""
             stalled = not served.wait(self.threshold)
             resumed = time.monotonic()
+            could_fire = False
             if live is not None and not stalled:
                 # Back with the GIL: the gap the serve re-armed for is over.
                 # Cancelled here, the monitor's own work below never fires it.
                 live.cancel()
+                # Both timers of this round (the post's, the serve's) were
+                # armed at ``posted`` or later; neither can have fired unless
+                # the round lasted ``live_ms``. Only then is the file read.
+                could_fire = time.monotonic() - posted >= live.after_s
             if stalled:
                 # Sample now and keep re-sampling while the stall persists, so
                 # the stack we keep is the loop caught in the act (the deepest,
@@ -646,7 +651,13 @@ class LagMonitor:
                 # sees the event also sees both.
                 self.stall_recorded.set()
             elif live is not None:
-                dump = live.take()
+                # Nothing is pending from the cancel above to the sleep's arm.
+                # Reading the file releases the GIL (os.fstat, os.read), and a
+                # thread waiting for it takes it there: a hold begun at that
+                # read had no timer, no heartbeat in flight and no sleep to
+                # oversleep (CI 076bcbf: a 0.6 s hold, max_lag 0, no dump).
+                # A round too short for any timer to fire has nothing to read.
+                dump = live.take() if could_fire else ""
                 # How long past the serve this thread got the GIL back: a hold
                 # that began after the serve shows here, not in lag_ms.
                 gap_ms = (resumed - served_at[0]) * 1000 if served_at else 0.0
@@ -677,6 +688,7 @@ class LagMonitor:
         (tick + live), and the oversleep itself is measured: ``wake_late``
         is how long past its tick this thread could not run."""
         if live is not None:
+            armed_from = time.monotonic()
             live.arm(self.tick + live.after_s)
         slept_from = time.monotonic()
         self._stop.wait(self.tick)
@@ -686,7 +698,11 @@ class LagMonitor:
         self._note_wake_late(late_ms, woke)
         if live is not None:
             live.cancel()
-            dump = live.take()
+            # Read only when the timer could have fired (armed at
+            # ``armed_from`` or later for tick + live): the same unwatched
+            # GIL release as the heartbeat's read (``_run``).
+            fired = time.monotonic() - armed_from >= self.tick + live.after_s
+            dump = live.take() if fired else ""
             if dump:
                 idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
                 keep_worst(self.live_dumps, (late_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
