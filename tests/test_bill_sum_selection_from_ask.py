@@ -371,3 +371,58 @@ def test_only_numeric_stated_figures_are_recorded(payload, values):
     from app.agents import answer_exit
 
     assert [f["value"] for f in answer_exit._stated_figures(payload)] == values
+
+
+def _nest(depth: int, leaf: dict) -> dict:
+    node: dict = leaf
+    for _ in range(depth):
+        node = {"result": node}
+    return node
+
+
+@pytest.mark.parametrize("depth, values", [
+    (3, [7.0]),
+    (6, [7.0]),
+    (8, []),
+    (12, []),
+])
+def test_stated_figures_are_read_only_to_a_bounded_depth(depth, values):
+    """The payload walk stops at a fixed depth: a figure nested deeper than
+    any tool result is not read, and a deep (or self-referencing) payload
+    cannot recurse without end."""
+    from app.agents import answer_exit
+
+    payload = _nest(depth, {"stated_figures": [{"value": 7, "shown": "7 m"}]})
+    assert [f["value"] for f in answer_exit._stated_figures(payload)] == values
+
+
+def test_a_self_referencing_payload_ends():
+    from app.agents import answer_exit
+
+    payload: dict = {"stated_figures": [{"value": 2, "shown": "2 nr"}]}
+    payload["self"] = payload
+    assert {f["value"] for f in answer_exit._stated_figures(payload)} == {2.0}
+
+
+@pytest.mark.parametrize("result, values", [
+    ({"selected_by": "ask", "rows": [{"q": 1}], "sum": 4.0, "unit": "m"}, [4.0]),
+    ({"selected_by": "none", "rows": [{"q": 1}], "sum": 4.0, "unit": "m"}, []),
+    ({"selected_by": "ask", "rows": [], "sum": 4.0, "unit": "m"}, []),
+    ({"selected_by": "ask", "rows": [{"q": 1}], "sum": None, "sum_by_unit": {"m": 2.0, "nr": 3.0}}, [2.0, 3.0]),
+    ({"selected_by": "none", "rows": [], "sum": None, "sum_by_unit": {"m": 2.0}}, []),
+])
+def test_a_result_that_selected_no_row_states_no_figure(result, values):
+    """A bill result whose ask selected nothing, or that holds no row, states
+    no figure even when a sum field is present; otherwise each total is
+    stated (one per unit when the units differ)."""
+    assert [f["value"] for f in agg.stated_figures(result)] == values
+
+
+@pytest.mark.parametrize("texts, expected", [
+    (("Cost  VALUE",), frozenset({"cost", "value"})),
+    (("القيمة", "أسعار كلفة"), frozenset({"قيمه", "اسعار", "كلفه"})),
+])
+def test_word_tables_fold_case_article_and_letter_variants(texts, expected):
+    """The ask-word tables hold each word in its looked-up form: case folded,
+    the Arabic article dropped and letter variants made one."""
+    assert agg._table(*texts) == expected
