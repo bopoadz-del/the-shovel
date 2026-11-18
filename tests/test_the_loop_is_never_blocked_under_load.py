@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
+import time
 
 import pytest
 
 from app.core.loop_watchdog import LagMonitor
+from tests import _wake_sidecar
 from tests._fixture_values import STUB_TOKEN_06
 
 # Measures the event loop under its own simulated load: CI runs it alone, not
@@ -34,6 +38,9 @@ LIMIT_MS = 250
 #: baseline removes that runner noise without weakening the 250 ms limit.
 IDLE_BASELINE_S = 3.0
 PID = "synthetic-load-project"
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: Wall-clock cap for the capture pass's child process; its load takes well under it.
+_PASS_TIMEOUT_S = 100
 
 
 def excess_over_baseline(load_max_ms: float, idle_baseline_ms: float) -> float:
@@ -118,6 +125,8 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
                 pass
             history.append({"role": "user", "content": q})
 
+    windows = {}
+
     async def run():
         # One unmeasured turn first: a cold process pays one-time costs
         # (imports, caches) on its first turn that are not the property
@@ -128,23 +137,34 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         # Idle baseline: the loop does nothing for IDLE_BASELINE_S on THIS
         # runner; the worst lag here is pure runner/OS scheduling noise.
         idle = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
+        t0 = time.monotonic()
         try:
             await asyncio.sleep(IDLE_BASELINE_S)
         finally:
             idle.stop()
+            windows["idle"] = (t0, time.monotonic())
         # Load phase: the real property under test.
         # Built exactly as before #396: the live capture (live_ms) stays OFF
         # in the gated measurement (advisor 10:31Z). With it ON, the timing
         # job segfaulted here (#396 9370c0c, exit 139): faulthandler reads
         # running threads' frames without the GIL.
         mon = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
+        t0 = time.monotonic()
         try:
             await asyncio.gather(*(user(n) for n in range(USERS)))
         finally:
             mon.stop()
+            windows["load"] = (t0, time.monotonic())
         return idle, mon
 
-    idle, mon = asyncio.run(run())
+    # Side-by-side control (non-gating, advisor 23:54Z 17 Nov): a separate
+    # process, no interpreter lock shared with this one, measures its own
+    # wake-up lateness over the same idle and load windows. Only printed.
+    side = _wake_sidecar.Sidecar().start(_REPO)
+    try:
+        idle, mon = asyncio.run(run())
+    finally:
+        wakes = side.collect()
     worst = max(mon.stalls, default=(0, ""))
     excess = excess_over_baseline(mon.max_lag_ms, idle.max_lag_ms)
     # The control beside every result, pass or fail. pytest captures fd 2,
@@ -153,7 +173,9 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     lines = [f"LOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
              f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
              f"monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
-             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms"]
+             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms",
+             _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
+                                        mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     for line in lines:
         if reporter is not None:
@@ -165,6 +187,43 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         f"runner's idle noise: load_max={mon.max_lag_ms:.0f} ms, idle_baseline="
         f"{idle.max_lag_ms:.0f} ms, excess={excess:.0f} ms >= {LIMIT_MS} ms; "
         f"at the worst stall (every thread): {worst[1][:12000]}")
+
+
+# ORDER (stated here, pinned by tests/test_wake_sidecar.py): the capture pass
+# is defined AFTER the gated test in this module, and pytest runs a module's
+# tests in definition order, so its own fifteen-user load (capture ON) never
+# runs immediately before the gated measurement on the same machine (advisor
+# 00:54Z 18 Nov). CI's timing step has no stop-at-first-failure (no -x), so
+# the pass still runs and prints its figures when the gate is red. It is
+# ``timing`` (module pytestmark) so it runs in the job whose gate it explains;
+# it is a child process, so a crash of its C timer cannot end the step.
+def test_the_capture_runs_over_the_fifteen_user_load_in_its_own_process(tmp_path, request):
+    """The NON-GATING second pass: the gated fifteen-user load, capture ON.
+
+    Logging only: what the capture saw is printed (``LOOP_CAPTURE_PASS``), and
+    no latency figure is asserted -- the gate is the capture-OFF measurement.
+    The pass runs in a child process (tests/_loop_capture_pass.py), so a crash
+    of the capture's C timer ends the child and is printed with its exit code;
+    it cannot take a test process down with it. The one assertion: a child
+    that exits cleanly printed its result (a silent exit is a broken harness)."""
+    try:
+        proc = subprocess.run([sys.executable, "-m", "tests._loop_capture_pass", str(tmp_path)],
+                              cwd=_REPO, capture_output=True, text=True, timeout=_PASS_TIMEOUT_S, check=False)
+        rc, out, err = proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        rc, out, err = None, exc.stdout or "", exc.stderr or ""
+        out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
+        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
+    found = [ln for ln in out.splitlines() if ln.startswith("LOOP_CAPTURE_RESULT ")]
+    result = json.loads(found[-1].split(" ", 1)[1]) if found else None
+    line = (f"LOOP_CAPTURE_PASS rc={rc} " + (json.dumps(result) if result is not None
+            else f"no result; stderr tail: {err[-1500:]!r}"))
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(line)
+    else:
+        sys.__stderr__.write(line + "\n")
+    assert not (rc == 0 and result is None), line
 
 
 def test_the_monitor_sees_a_blocked_loop():
