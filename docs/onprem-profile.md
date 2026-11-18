@@ -34,6 +34,33 @@ once and never prints a value.
 | credential | Any non-empty `*_API_KEY`, `*_ACCESS_TOKEN` or `*_DSN` is a credential for a remote service. | `SENTRY_DSN`, `RESEND_API_KEY`, `GOOGLE_ACCESS_TOKEN` |
 | endpoint | Any non-empty `*_URL` with a host must be inside the box: loopback, private or link-local address, a single-label (compose service) name, or a name that resolves only to such addresses. A name that does not resolve is refused. The service's own inbound addresses (`FRONTEND_URL`, `PUBLIC_BASE_URL`, `RENDER_EXTERNAL_URL`) are not dialled and are not checked. | `DATABASE_URL` on a hosted database |
 
+A refusal line is the setting's name and a fixed verdict. It never prints the
+value, nor anything read from it: not the provider the setting names, not the
+model id, not the host it dials. Read the setting itself to see which host.
+
+### Internal names are judged by resolving them, once, at start
+
+A dotted internal name (for example `db.plant.internal`) passes only if, **at
+start**, it resolves to inside addresses (loopback, private or link-local),
+and only to such addresses. A name that does not resolve is refused. So the
+box's resolver must already answer for every internal name when the service
+starts.
+
+**A later change of that name's address is NOT caught.** The check runs once
+at boot. If the name is re-pointed at an outside address after start, the
+running service follows it and nothing here notices. Network isolation (the
+deployment's job, see the design boundary above) is what stops that, not this
+check. The re-check happens on the next start.
+
+Why resolution, and not a list of internal suffixes taken from settings: a
+suffix list trusts a name by how it is spelt. A name under a trusted suffix
+that resolves to a public address (a split-horizon mistake, a stale record)
+would pass, and that is exactly the egress this check exists to refuse.
+Resolution judges where the name actually points at start. A suffix list
+would also be one more setting that must itself be trusted and kept per site.
+Both rules share the boot-time limit above, so a suffix list would add no
+cover against a later change.
+
 The offline model flags are asserted, never set from Python: `transformers`
 reads them at import time. They live in the deployment env
 (`deploy/onprem/onprem.env.example`, `Dockerfile.onprem`).

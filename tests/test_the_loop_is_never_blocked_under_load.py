@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from app.core.loop_watchdog import LagMonitor, stamp_to_post_summary
+from app.core.loop_watchdog import LagMonitor, gc_summary, stamp_to_post_summary
 from tests import _wake_sidecar
 from tests._fixture_values import STUB_TOKEN_06
 
@@ -191,7 +191,8 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
              f"idle_wake_late_when={wake_late_when(idle.wake_late_at, windows['idle'][0])} "
              + stamp_to_post_summary(mon.max_stamp_to_post_ms, mon.stall_stamp_to_post,
                                      mon.worst_lag_stamp_to_post, mon.max_snapshot_ms,
-                                     mon.max_unobserved_ms),
+                                     mon.max_unobserved_ms)
+             + " " + gc_summary(mon.gc, windows["load"][0]),
              _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
                                         mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")

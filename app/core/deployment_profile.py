@@ -61,7 +61,9 @@ of services:
   shown to stay inside, so it does not pass.
 
 Network isolation itself is the deployment's job; this check only proves the
-configuration does not need egress. It never prints a setting's value.
+configuration does not need egress. It never prints a setting's value, nor
+anything read from one (the provider a setting names, the host it dials): a
+refusal line is the setting's name and a fixed verdict.
 """
 
 from __future__ import annotations
@@ -161,6 +163,16 @@ class Offender:
     reason: str
 
 
+# The refusal prints a setting's NAME and one of these verdicts, never anything
+# read from a value: not the provider it names, not the host it dials.
+_VERDICT_UNSUPPORTED_PROVIDER = (
+    "names a provider the runtime does not support; the runtime would route it "
+    "to its default cloud provider, which is outside the box."
+)
+_VERDICT_PROVIDER_OUTSIDE = "names a provider whose endpoint is not shown to be inside the box."
+_VERDICT_ENDPOINT_OUTSIDE = "dials a host that is not shown to be inside the box."
+
+
 def _process_env() -> Mapping[str, str]:
     return os.environ
 
@@ -191,7 +203,7 @@ def _as_ip(text: str):
     try:
         return ipaddress.ip_address(literal)
     except ValueError:
-        logger.debug("on-prem check: %r is not an address literal", literal)
+        logger.debug("on-prem check: a host is not an address literal")
         return None
 
 
@@ -270,8 +282,8 @@ def _host_is_inside(host: str, resolve: Callable[[str], list[str]]) -> bool:
     try:
         addresses = [_as_ip(a) for a in resolve(host)]
     except (OSError, ValueError) as exc:
-        logger.warning("on-prem check: %s did not resolve (%s); treated as outside.",
-                       host, type(exc).__name__)
+        logger.warning("on-prem check: a dotted name did not resolve (%s); treated as outside.",
+                       type(exc).__name__)
         addresses = []
     return bool(addresses) and all(a is not None and _address_is_inside(a) for a in addresses)
 
@@ -415,8 +427,7 @@ def _provider_offenders(env, resolve) -> Iterable[Offender]:
         if named and cfg.get("provider") != named:
             yield Offender(
                 role,
-                f"'{named}' is not a supported provider; the runtime would route it "
-                f"to '{cfg.get('provider')}', which is outside the box.",
+                _VERDICT_UNSUPPORTED_PROVIDER,
             )
             continue
         key = cfg.get("env_key")
@@ -424,7 +435,7 @@ def _provider_offenders(env, resolve) -> Iterable[Offender]:
             continue  # no model configured: nothing is called
         host = _url_host(cfg.get("url") or "")
         if host and not _host_is_inside(host, resolve):
-            yield Offender(role, f"provider '{cfg.get('provider')}' calls {host}, outside the box.")
+            yield Offender(role, _VERDICT_PROVIDER_OUTSIDE)
 
 
 def _embedder_offenders(env) -> Iterable[Offender]:
@@ -437,7 +448,7 @@ def _embedder_offenders(env) -> Iterable[Offender]:
     if missing:
         yield Offender(
             "RAG_EMBEDDING_MODEL",
-            f"the embedder '{name}' would be fetched from the model hub; set "
+            "names a model-hub embedder that would be fetched from the hub; set "
             f"{' and '.join(missing)}=1 with the weights pre-seeded, or point "
             "RAG_EMBEDDING_MODEL at a local directory.",
         )
@@ -479,7 +490,7 @@ def check_onprem_ready(
                 continue
             outside = [h for h in hosts if not _host_is_inside(h, resolve)]
             if outside:
-                add(Offender(name, f"points at {outside[0]}, which is not shown to be inside the box."))
+                add(Offender(name, _VERDICT_ENDPOINT_OUTSIDE))
     return [found[k] for k in sorted(found)]
 
 
