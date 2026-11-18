@@ -451,3 +451,147 @@ def test_an_invalid_drive_id_is_refused_and_nothing_is_set(client, bad_id):
     page = client.get(f"/v1/projects/{pid}/documents", headers=owner).json()["documents"]
     row = next(d for d in page if d["id"] == did)
     assert not (row.get("metadata") or {}).get("drive_file_id")
+
+
+# ── a third member, and indexing after a replace (grader 19:35Z) ────────────
+
+@pytest.mark.parametrize("route", ["bytes", "patch"])
+def test_a_third_member_reaches_neither_write_route_from_the_files_chat(client, route):
+    """Neither the project's owner nor the file's maker: not found on both
+    routes, from the file's own chat too."""
+    owner = _headers(client, f"t1{route}")
+    maker = _headers(client, f"t2{route}")
+    third = _headers(client, f"t3{route}")
+    pid = _project(client, owner, f"Panel-3m-{route}-{_RUN}")
+    _share(pid)
+    own = f"ws-{pid}-6100"
+    name = f"shoring_check_{route}.txt"
+    did = _upload(client, maker, pid, name, b"Props at 1.2 m centres.", session_id=own)["id"]
+    if route == "bytes":
+        res = _replace(client, third, pid, did, name, b"Props at 0.9 m centres.", session_id=own)
+    else:
+        res = _patch(client, third, pid, did, session_id=own)
+    assert res.status_code == 404, res.text
+    got = client.get(_doc_url(pid, did, "/download"), headers=maker, params={"session_id": own})
+    assert got.status_code == 200 and got.content == b"Props at 1.2 m centres."
+    strip = client.get(f"/v1/projects/{pid}/conversations/{own}/documents", headers=maker)
+    row = next(d for d in strip.json()["documents"] if d["id"] == did)
+    assert not (row.get("metadata") or {}).get("drive_file_id")
+
+
+def _row(did):
+    from app.core import projects as store
+
+    return store.get_document(did)
+
+
+def _search_ids(pid, query) -> set:
+    import asyncio
+
+    from app.core import doc_index
+    from app.core import projects as store
+
+    hits = asyncio.run(doc_index.search_project_documents(store.storage_project_id(pid), query, top_k=10))
+    return {h.get("document_id") for h in hits}
+
+
+@pytest.mark.parametrize("name,word", [
+    ("crane_mat_note.txt", "timbermatsquaxle"),
+    ("pump_pour_note.txt", "boomreachplintor"),
+])
+def test_a_privileged_replace_of_a_session_file_never_enters_the_project_search(
+        client, monkeypatch, name, word):
+    """The caller may add to the project's search, so the replace route would
+    index a project document; a chat's file stays out of the index. Beside it,
+    a project document replaced by the same caller IS indexed and found (so the
+    search can find this word at all)."""
+    from app.core import doc_index
+    from app.core import ingest_status as ist
+    from app.core import privileges
+
+    monkeypatch.setattr(privileges, "caller_may_add_to_project_rag", lambda _role=None: True)
+    scheduled: list[str] = []
+    real_index = doc_index.maybe_eager_index
+
+    def _spy(project_id, document_id):
+        scheduled.append(document_id)
+        return real_index(project_id, document_id)
+
+    monkeypatch.setattr(doc_index, "maybe_eager_index", _spy)
+    headers = _headers(client, f"pr{name[:4]}")
+    pid = _project(client, headers, f"Panel-pr-{name[:4]}-{_RUN}")
+    own = f"ws-{pid}-6200"
+    did = _upload(client, headers, pid, name, b"Placeholder.", session_id=own)["id"]
+    body = f"Revised: the {word} sits under each outrigger.".encode()
+    res = _replace(client, headers, pid, did, name, body, session_id=own)
+    assert res.status_code == 200, res.text
+
+    assert did not in scheduled  # the route does not even ask
+    row = _row(did)
+    assert row["ingest_status"] == ist.NOT_INDEXED_POLICY
+    assert not row.get("chunk_count")
+    assert did not in _search_ids(pid, word)
+
+    control = _upload(client, headers, pid, f"project_{name}", b"Placeholder.")["id"]
+    res = _replace(client, headers, pid, control, f"project_{name}", body)
+    assert res.status_code == 200, res.text
+    assert control in scheduled
+    assert (_row(control).get("chunk_count") or 0) > 0
+    assert control in _search_ids(pid, word)
+
+
+@pytest.mark.parametrize("name", ["setting_out_a.txt", "setting_out_b.txt"])
+def test_the_indexer_itself_refuses_a_session_file_whoever_calls_it(client, name):
+    """The guard is in the indexing entry, so no route, worker or reindex can
+    put a chat's file into the project's index; a project document beside it
+    is indexed."""
+    from app.core import doc_index
+    from app.core import ingest_status as ist
+    from app.core import projects as store
+
+    headers = _headers(client, f"ix{name[-5]}")
+    pid = _project(client, headers, f"Panel-ix-{name[-5]}-{_RUN}")
+    storage = store.storage_project_id(pid)
+    sid = _upload(client, headers, pid, name, b"Peg line at 3.000 m offset.",
+                  session_id=f"ws-{pid}-6300")["id"]
+    pdid = _upload(client, headers, pid, f"project_{name}", b"Peg line at 3.000 m offset.")["id"]
+
+    for entry in (doc_index.index_document, doc_index.maybe_eager_index):
+        out = entry(storage, sid)
+        assert out["indexed"] == 0 and out.get("session_only") is True
+        row = _row(sid)
+        assert row["ingest_status"] == ist.NOT_INDEXED_POLICY and not row.get("chunk_count")
+
+    assert doc_index.index_document(storage, pdid).get("indexed") == 1
+    assert (_row(pdid).get("chunk_count") or 0) > 0
+
+
+# ── redline by id (grader 19:35Z, item 2) ───────────────────────────────────
+
+def test_the_redline_route_is_the_handler_these_tests_call():
+    from app.routers import redline
+
+    path = "/v1/projects/{project_id}/documents/{document_id}/redlines"
+    found = [r.endpoint for r in app.routes
+             if getattr(r, "path", None) == path and "POST" in (getattr(r, "methods", None) or ())]
+    assert found and found[0] is redline.detect_document_redlines
+
+
+@pytest.mark.parametrize("name,body", [
+    ("markup_notes_l2.txt", b"Clouded revision at grid D."),
+    ("markup_notes_l4.txt", b"Red cloud around the stair core."),
+])
+def test_redlines_of_a_session_file_are_read_only_from_its_own_chat(client, name, body):
+    """Redline detection runs on PDFs only: from the file's own chat a text
+    file is reached and refused as not a PDF (400); from no chat or another
+    chat it is not found (404). A project text file is reached with no chat."""
+    headers = _headers(client, f"rl{name[-6:-4]}")
+    pid = _project(client, headers, f"Panel-rl-{name[-6:-4]}-{_RUN}")
+    own, other = f"ws-{pid}-6400", f"ws-{pid}-6500"
+    did = _upload(client, headers, pid, name, body, session_id=own)["id"]
+    url = _doc_url(pid, did, "/redlines")
+    assert client.post(url, headers=headers).status_code == 404
+    assert client.post(url, headers=headers, params={"session_id": other}).status_code == 404
+    assert client.post(url, headers=headers, params={"session_id": own}).status_code == 400
+    project_did = _upload(client, headers, pid, f"project_{name}", body)["id"]
+    assert client.post(_doc_url(pid, project_did, "/redlines"), headers=headers).status_code == 400

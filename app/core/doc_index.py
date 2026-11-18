@@ -4175,6 +4175,21 @@ def _index_document(
             "total_chunks": 0,
         }
 
+    # A chat session's file is pinned to that session and never enters the
+    # project's search, whichever entry point (upload, replace-bytes, Drive,
+    # worker, reindex) asked. Nothing is written: the row keeps the policy
+    # status its upload stamped.
+    if _projects.is_session_document(doc.get("metadata")):
+        return {
+            "status": "skipped",
+            "session_only": True,
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": doc.get("original_name", ""),
+            "indexed": 0,
+            "total_chunks": 0,
+        }
+
     filename = doc.get("original_name", "")
     ext = _ext_of(filename)
     fingerprint = f"{doc.get('uploaded_at', '')}:{doc.get('size', 0)}"

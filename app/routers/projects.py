@@ -1368,7 +1368,10 @@ async def restore_document_bytes(
     )
     from app.core import privileges
 
-    if privileges.caller_may_add_to_project_rag(auth.get("role")):
+    # A chat session's file never enters the project's search (W2, as the
+    # upload route stamps it), whoever replaces its bytes.
+    if privileges.caller_may_add_to_project_rag(auth.get("role")) and not store.is_session_document(
+            doc.get("metadata")):
         background_tasks.add_task(
             doc_index.maybe_eager_index, store.storage_project_id(project_id), document_id,
         )
