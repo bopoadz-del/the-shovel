@@ -24,11 +24,6 @@ its document. The comparison is deterministic; no model decides it.
     documents' values is the value the answer itself stated. A value the
     answer did not state is never turned into a conflict about something
     else.
-  * The value must belong to the asked thing: the thing is the asked words
-    (the question's, else the answer sentence's) that every document stating
-    the answer's value uses; another document's value counts only when its
-    sentence names all of them. Two documents giving values for different
-    things that share words (two elements, two sections) are no conflict.
   * A document that holds two different values of the kind for the asked
     thing, equally well matched, is left out (no claim on doubt).
 
@@ -353,24 +348,6 @@ def _precedence(docs: list[str], rows: list[dict[str, Any]]) -> tuple[str | None
 
 # ── Detection ───────────────────────────────────────────────────────────────
 
-def _states_answer(c: _Cand, sent: str, typed: list[Value], kind: str) -> bool:
-    if kind == "text":
-        return c.value.norm in " ".join(sent.split()).casefold()
-    return any(same(c.value, a) for a in typed if a.kind == kind)
-
-
-def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, asked: set[str]) -> list[_Cand]:
-    """Only the values that belong to the asked thing. The thing is the asked
-    words that every document stating the answer's value uses for it; a value
-    from a sentence that does not name all of them is about something else
-    that merely shares words (another element, section or revision)."""
-    anchors = [c for c in kept if _states_answer(c, sent, typed, kind)]
-    thing = set(asked)
-    for c in anchors:
-        thing &= c.sent_terms
-    return [c for c in kept if thing <= c.sent_terms]
-
-
 def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | None = None) -> list[dict[str, Any]]:
     """Conflicts over the evidence for the values the answer states.
 
@@ -411,7 +388,6 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     anchored = any(same(c.value, a) for c in kept for a in typed if a.kind == kind)
                 if not anchored:
                     continue
-                kept = _same_thing(kept, sent, typed, kind, q_terms or query)
                 classes: list[_Cand] = []
                 for c in kept:
                     if not any(same(c.value, k.value) for k in classes):
