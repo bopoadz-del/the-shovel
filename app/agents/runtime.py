@@ -3156,13 +3156,18 @@ def _row_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
     return out
 
 
-#: Over budget, the outline keeps each part's scalar fields; a text field
-#: keeps this many characters and a list of plain values this many entries.
-_OUTLINE_TEXT_CHARS = 200
+#: Over budget, the outline keeps each part's scalar fields and a list of
+#: plain values this many entries. A statement (a text field) is NEVER cut:
+#: rows and parts give way first, and past that the floor below holds.
 _OUTLINE_LIST_ITEMS = 20
 #: The outline key naming, per list of parts it had to shorten, how many
 #: parts the result holds (the list itself holds the parts shown).
 PARTS_TOTAL_KEY = "parts_total"
+#: The outline key present only when the outline is at its floor -- every
+#: list of parts down to its first part and still over budget, so it is kept
+#: over budget rather than cut. It states the budget, the outline's own size
+#: and exactly which fields are kept.
+OUTLINE_FLOOR_KEY = "outline_floor"
 
 
 def _is_part_list(node: list[Any]) -> bool:
@@ -3172,8 +3177,8 @@ def _is_part_list(node: list[Any]) -> bool:
 
 def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
     """``node`` with only its scalar and statement fields: numbers, flags,
-    texts (each cut to _OUTLINE_TEXT_CHARS), lists of plain values (the
-    first _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
+    texts (whole, never cut), lists of plain values (the first
+    _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
     every part, so reduced; every other list of rows is dropped and its
     length counted in ``totals`` under its path."""
     if isinstance(node, dict):
@@ -3189,8 +3194,6 @@ def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
         if _is_part_list(node):
             return [_scalar_fields(v, f"{path}[{i}]", totals) for i, v in enumerate(node)]
         return [_scalar_fields(v, path, totals) for v in node[:_OUTLINE_LIST_ITEMS]]
-    if isinstance(node, str) and len(node) > _OUTLINE_TEXT_CHARS:
-        return node[:_OUTLINE_TEXT_CHARS]
     return node
 
 
@@ -3219,15 +3222,20 @@ def _part_index(key: str, path: str) -> int:
 def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
     """Halve the longest list of parts until ``work`` fits ``budget``, and
     name each shortened list's whole length under PARTS_TOTAL_KEY, so the
-    parts shown are said to be N of M. The top-level fields always stay."""
+    parts shown are said to be N of M. The top-level fields always stay, and
+    every list of parts keeps at least its first part. When nothing more can
+    give way and ``work`` is still over budget, the outline is at its floor:
+    it is kept as it is -- no statement cut -- and says so under
+    OUTLINE_FLOOR_KEY."""
     parts: dict[str, int] = {}
     while len(json.dumps(work, default=str)) > budget:
-        found = _part_lists(work)
+        found = [(p, lst) for p, lst in _part_lists(work) if len(lst) > 1]
         if not found:
+            work[OUTLINE_FLOOR_KEY] = _floor_statement(work, budget)
             break
         path, longest = max(found, key=lambda pl: len(json.dumps(pl[1], default=str)))
         parts.setdefault(path, len(longest))
-        del longest[len(longest) // 2:]
+        del longest[max(1, len(longest) // 2):]
         work[PARTS_TOTAL_KEY] = parts
         # The row counts of the parts no longer shown go with them.
         totals = work.get(ROWS_TOTAL_KEY)
@@ -3235,6 +3243,20 @@ def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
             for key in [k for k in totals if _part_index(k, path) >= len(longest)]:
                 del totals[key]
     return work
+
+
+def _floor_statement(work: dict[str, Any], budget: int) -> dict[str, Any]:
+    """What an outline at its floor keeps: every top-level field, and the
+    first part of each list of parts, every statement whole."""
+    kept = [k for k in work if k not in (ROWS_TOTAL_KEY, PARTS_TOTAL_KEY, OUTLINE_FLOOR_KEY)]
+    firsts = [f"{p}[0]" for p, _lst in _part_lists(work)]
+    return {
+        "budget": budget,
+        "chars": len(json.dumps(work, default=str)),
+        "kept": kept + firsts,
+        "rule": "over budget at its floor: statements are kept whole, never cut; "
+                "rows and parts were shortened first",
+    }
 
 
 def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
@@ -3248,7 +3270,9 @@ def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     The outline is NEVER dropped for its size. Over ``budget`` it keeps the
     scalar and statement fields of every part and drops every other list
     (``_scalar_fields``); still over, it shows the first parts of the
-    longest list of parts and names how many there are (``_fit_parts``)."""
+    longest list of parts and names how many there are (``_fit_parts``);
+    still over with one part per list, it is kept at that floor, whole, and
+    states what it kept (OUTLINE_FLOOR_KEY)."""
     try:
         work = json.loads(json.dumps(payload, default=str))
     except (TypeError, ValueError):

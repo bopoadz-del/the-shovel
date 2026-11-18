@@ -672,9 +672,20 @@ def test_stream_the_live_fifth_shape_a_result_over_the_cap_then_a_zero(monkeypat
         {"content": "", "tool_calls": [call(TOOL, {"terms": absent}, "s1")]},
         {"content": ""},
     ], project_id="p-invented")
+    cut = []
     for m in seen[-1]["messages"]:
         if m.get("role") == "tool":
-            assert len(m["content"]) <= 3000 and json.loads(m["content"]), m["content"][:200]
+            env = json.loads(m["content"])
+            assert len(m["content"]) <= 3000, len(m["content"])
+            if env.get("truncated"):
+                cut.append(env)
+    # Exactly one result was over the cap, and exactly what was cut: the
+    # rest counted, every row of the call-1 list counted in the outline.
+    assert len(cut) == 1, cut
+    env = cut[0]
+    assert env["chars_shown"] + env["chars_dropped"] == env["chars_total"] > 3000, env
+    matching = sum(a in d.lower() for _r, d, _u, _q in many)
+    assert list(env[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY].values()) == [matching], env
     out = answer_text(events)
     want = sum(a in d.lower() for _r, d, _u, _q in many)
     assert f"**{want}**" in out, out
@@ -718,13 +729,15 @@ def test_an_outline_over_its_budget_keeps_the_statement_fields_never_dropped(res
         assert (got["count"], got["sum"], got["terms"], got["filename"]) == (
             want["count"], want["sum"], want["terms"], want["filename"])
         assert "rows" not in got or got["rows"] == []
+        # Every statement shown is the whole statement, never a cut copy.
+        assert {k: got[k] for k, v in want.items() if isinstance(v, str)} == {
+            k: v for k, v in want.items() if isinstance(v, str)}
     if len(bills) < figures:
         # The parts shown are said to be N of M.
         assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": figures}, outline
     else:
         assert runtime.PARTS_TOTAL_KEY not in outline
         assert len(bills[0].get("pages_read", [])) <= runtime._OUTLINE_LIST_ITEMS
-        assert len(bills[0].get("working", "")) <= runtime._OUTLINE_TEXT_CHARS
     assert all(isinstance(v, int) for v in outline[runtime.ROWS_TOTAL_KEY].values())
 
 
@@ -957,3 +970,63 @@ def test_a_cut_result_compacted_again_is_not_recounted(monkeypatch, result, args
     monkeypatch.setattr(runtime, "_rows_in_window", scanned)
     again = json.loads(runtime._compacted_tool_payload(cut, 500))
     assert runtime.ROWS_SHOWN_KEY not in again and again[runtime.OUTLINE_KEY]
+
+
+# -- #428 follow-up: a statement is never cut in the model's copy ----------
+
+def _statement(word: str, n: int) -> str:
+    return " ".join(f"{word}{i}" for i in range(n))
+
+
+@pytest.mark.parametrize("where", ["in_a_part", "top_level"])
+@pytest.mark.parametrize("n", [80, 400])
+def test_a_statement_over_two_hundred_characters_is_never_cut(where, n):
+    long = _statement("per-unit", n)
+    assert len(long) > 200
+    result = _many_bills(12, 4)
+    if where == "in_a_part":
+        result["bills"][0]["working"] = long
+    else:
+        result["basis"] = long
+    full = {"name": TOOL, "ok": True, "result": result}
+    outline = runtime._result_outline(full, 900)
+    got = (outline["result"]["bills"][0]["working"] if where == "in_a_part"
+           else outline["result"]["basis"])
+    assert got == long
+    # Parts gave way before any statement did.
+    assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": 12}
+    assert 1 <= len(outline["result"]["bills"]) < 12
+
+
+@pytest.mark.parametrize("n,budget", [(400, 300), (900, 1000)])
+def test_top_level_statements_over_the_budget_hold_at_a_stated_floor(n, budget):
+    long = _statement("basis", n)
+    assert len(long) > budget
+    full = {"name": TOOL, "ok": True, "result": _many_bills(6, 3), "basis": long}
+    outline = runtime._result_outline(full, budget)
+    assert outline["basis"] == long and outline["name"] == TOOL
+    assert len(outline["result"]["bills"]) == 1
+    assert outline["result"]["bills"][0]["count"] == 3
+    assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": 6}
+    floor = outline[runtime.OUTLINE_FLOOR_KEY]
+    body = {k: v for k, v in outline.items() if k != runtime.OUTLINE_FLOOR_KEY}
+    assert floor["budget"] == budget
+    assert floor["chars"] == len(json.dumps(body)) > budget
+    assert floor["kept"] == ["name", "ok", "result", "basis", "result.bills[0]"]
+
+
+@pytest.mark.parametrize("n,budget", [(120, 1000), (60, 700)])
+def test_an_outline_that_fits_its_budget_has_no_floor(n, budget):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(n, 4)}
+    outline = runtime._result_outline(full, budget)
+    assert runtime.OUTLINE_FLOOR_KEY not in outline
+    assert len(json.dumps(outline)) <= budget
+
+
+@pytest.mark.parametrize("budget", [1, 40])
+def test_a_list_of_parts_keeps_its_first_part_at_any_budget(budget):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(9, 2)}
+    outline = runtime._result_outline(full, budget)
+    first = outline["result"]["bills"]
+    assert len(first) == 1 and first[0]["filename"] == "bill-0.xlsx", first
+    assert outline[runtime.OUTLINE_FLOOR_KEY]["kept"][-1] == "result.bills[0]"
