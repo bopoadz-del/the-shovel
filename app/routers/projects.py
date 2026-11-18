@@ -63,7 +63,6 @@ def _owned_or_404(
     role: str = "user",
     doc_limit: Optional[int] = None,
     doc_offset: int = 0,
-    session_files: bool = True,
 ):
     """Load a project the caller can access, or 404 (never leak existence).
 
@@ -88,18 +87,15 @@ def _owned_or_404(
     (delete/clear/archive) stay owner-only.
 
     ``doc_limit``/``doc_offset`` paginate the returned documents (default None
-    = all, for mutating callers that need the full set). ``session_files=False``
-    is the project's own list: chat sessions' files are listed by their
-    session, not here (``store.list_documents``).
+    = all, for mutating callers that need the full set).
     """
     proj = store.get_project(
         project_id, user_id=user_id, include_admin_approved=read_only,
-        doc_limit=doc_limit, doc_offset=doc_offset, session_files=session_files,
+        doc_limit=doc_limit, doc_offset=doc_offset,
     )
     if proj is None and read_only and (role or "").lower() == "admin":
         proj = store.get_project(
             project_id, doc_limit=doc_limit, doc_offset=doc_offset,
-            session_files=session_files,
         )
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -365,7 +361,6 @@ async def get_project(project_id: str, auth: dict = Depends(require_user)):
     proj = _owned_or_404(
         project_id, auth["user_id"], read_only=True,
         role=auth.get("role") or "user", doc_limit=_DOC_FIRST_PAGE,
-        session_files=False,
     )
     # `documents` is now the first page only; `document_count` is the true total
     # (a cheap COUNT). Gate enrichment on the TOTAL, not the page length.
@@ -373,9 +368,7 @@ async def get_project(project_id: str, auth: dict = Depends(require_user)):
     proj["documents_truncated"] = len(proj.get("documents") or []) < doc_count
     # The chat pane states these two totals, never the length of one page:
     # the documents the project holds, and how many of them search reaches.
-    proj["held_document_count"] = store.count_documents(
-        project_id, visible_only=True, session_files=False,
-    )
+    proj["held_document_count"] = store.count_documents(project_id, visible_only=True)
     proj["searchable_document_count"] = None
 
     # Live chunk counts come from the vector store, not the legacy doc_index
@@ -446,17 +439,15 @@ async def list_project_documents(
     # doc_limit=0 makes the check itself cheap — no document rows loaded.
     proj = _owned_or_404(
         project_id, auth["user_id"], read_only=True,
-        role=auth.get("role", "user"), doc_limit=0, session_files=False,
+        role=auth.get("role", "user"), doc_limit=0,
     )
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     return {
         "documents": store.list_documents(
             project_id, limit=limit, offset=offset, newest_first=True,
-            session_files=False,
         ),
-        "total": proj.get("document_count")
-        or store.count_documents(project_id, session_files=False),
+        "total": proj.get("document_count") or store.count_documents(project_id),
         "offset": offset,
         "limit": limit,
     }

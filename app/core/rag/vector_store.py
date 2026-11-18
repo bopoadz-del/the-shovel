@@ -937,6 +937,13 @@ def _memoised(key: tuple, compute):
     return _memo_put(key, compute()) if hit is _MISS else hit
 
 
+def _projects_scope_key():
+    """The turn's chat-session scope, for memo keys of scoped searches."""
+    from app.core import projects as _projects
+
+    return _projects.current_session_scope()
+
+
 def hidden_document_predicate(prefix: str = "", *, postgres: bool = True) -> str:
     """The condition that hides a document from retrieval.
 
@@ -1354,6 +1361,37 @@ class VectorStore:
             f"AND {hidden_document_predicate('d.', postgres=self._use_pgvector)})"
         )
 
+    def _session_hidden_ids(self, session: Session, project_id: str) -> Set[str]:
+        """Chat-session files out of the turn's session scope.
+
+        The document list's rule (``projects.document_in_scope``) applied to
+        search: another session's files, or another user's, are never
+        candidates. Empty when the documents table cannot gate this store."""
+        if not self._docs_visibility_ready(session):
+            return set()
+        from app.core import projects as _projects
+
+        try:
+            return _projects.session_hidden_document_ids(project_id, db_session=session)
+        except SQLAlchemyError:
+            session.rollback()
+            self._visibility_ready = False
+            return set()
+
+    def _session_hidden_sql(
+        self, session: Session, project_id: str, column: str, params: Dict[str, Any],
+    ) -> str:
+        """AND-clause leaving out ``_session_hidden_ids``; binds into ``params``."""
+        ids = sorted(self._session_hidden_ids(session, project_id))
+        if not ids:
+            return ""
+        names = []
+        for i, did in enumerate(ids):
+            key = f"_session_hidden_{i}"
+            params[key] = did
+            names.append(f":{key}")
+        return f" AND {column} NOT IN ({', '.join(names)})"
+
     def _hidden_doc_ids(self, session: Session, project_id: str) -> Set[str]:
         if not self._docs_visibility_ready(session):
             return set()
@@ -1373,7 +1411,7 @@ class VectorStore:
             session.rollback()
             self._visibility_ready = False
             return set()
-        return {str(r) for r in rows}
+        return {str(r) for r in rows} | self._session_hidden_ids(session, project_id)
 
     def check_identity(self) -> Optional[Dict[str, Any]]:
         """Read-only: compare the stored corpus identity (model/dim/normalized)
@@ -1879,7 +1917,10 @@ class VectorStore:
             session.rollback()
             self._visibility_ready = False
             return set()
-        return {str(r) for r in rows}
+        wanted = {str(d) for d in doc_ids}
+        return {str(r) for r in rows} | (
+            self._session_hidden_ids(session, project_id) & wanted
+        )
 
     def chunks_containing_all(
         self,
@@ -1950,6 +1991,9 @@ class VectorStore:
                     vis = ""
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql(self._table_name)
+                        vis += self._session_hidden_sql(
+                            session, project_id, f"{self._table_name}.doc_id", params,
+                        )
                     sql = text(
                         "SELECT chunk_id, project_id, doc_id, chunk_index, text, "
                         "knowledge_layer, authority, page, ocr "
@@ -2201,6 +2245,9 @@ class VectorStore:
                 with self._session_factory()() as session:
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql(self._table_name)
+                        vis += self._session_hidden_sql(
+                            session, project_id, f"{self._table_name}.doc_id", params,
+                        )
                     sql = text(
                         "SELECT chunk_id, project_id, doc_id, chunk_index, text, "
                         "knowledge_layer, authority, page, ocr "
@@ -2350,11 +2397,17 @@ class VectorStore:
                         .exists()
                     )
                     stmt = stmt.where(~hidden)
+                    in_other_session = self._session_hidden_ids(session, project_id)
+                    if in_other_session:
+                        stmt = stmt.where(
+                            self._rag_chunk_cls.doc_id.not_in(sorted(in_other_session)),
+                        )
                 # ``distance + 0`` is not an expression HNSW can serve, so a
                 # small project is ranked exactly from its own rows.
                 order = distance + 0 if self._project_is_small(session, project_id) else distance
                 stmt = stmt.order_by(order).limit(k)
                 key = ("vector", self._table_name, project_id, k,
+                       _projects_scope_key(),
                        hashlib.sha1(np.asarray(query_vec, dtype=np.float32).tobytes()).hexdigest())
                 rows = _memo_get(key)
                 if rows is _MISS:
@@ -2474,8 +2527,12 @@ class VectorStore:
             with self._lock:
                 with self._session_factory()() as session:
                     vis = ""
+                    scope_params = dict(scope_params or {})
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql("c")
+                        vis += self._session_hidden_sql(
+                            session, project_id, "c.doc_id", scope_params,
+                        )
                     rows = self._bm25_postgres_rows(
                         session, project_id, safe_query, int(k), vis + scope_sql,
                         scope_params,
@@ -2739,8 +2796,12 @@ class VectorStore:
         try:
             with self._lock:
                 with self._session_factory()() as session:
+                    scope_params = dict(scope_params or {})
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql("c")
+                        vis += self._session_hidden_sql(
+                            session, project_id, "c.doc_id", scope_params,
+                        )
                     sql = text(
                         f"""
                         SELECT c.chunk_id, c.project_id, c.doc_id, c.chunk_index,

@@ -187,13 +187,19 @@ def test_the_projects_document_list_holds_no_sessions_files(client, second_sessi
         legacy_session, {"session_id": x, "uploader_id": owner_id, "origin": "uploaded"})
     sessions_files = made_in_x | {attached_in_y, legacy_session}
 
-    # The store: the project's own list leaves the session files out; the
-    # full row set the internal callers read (retrieval, bills, name
-    # matching) still holds them.
-    assert {d["id"] for d in store.list_documents(pid, session_files=False)} == projects_own
-    assert store.count_documents(pid, session_files=False) == len(projects_own)
-    assert sessions_files <= {d["id"] for d in store.list_documents(pid)}
-    assert store.count_documents(pid) == len(projects_own | sessions_files)
+    # The store: by default the list and the count leave every session's
+    # files out; inside session X, X's files of the user who made them are
+    # in; only maintenance that asks for every row sees them all.
+    assert {d["id"] for d in store.list_documents(pid)} == projects_own
+    assert store.count_documents(pid) == len(projects_own)
+    token = store.bind_session_scope(x, owner_id)
+    try:
+        in_x = {d["id"] for d in store.list_documents(pid)}
+    finally:
+        store.reset_session_scope(token)
+    assert in_x == projects_own | made_in_x | {legacy_session}, in_x
+    assert sessions_files <= {d["id"] for d in store.list_documents(pid, all_sessions=True)}
+    assert store.count_documents(pid, all_sessions=True) == len(projects_own | sessions_files)
 
     pages_path = app.url_path_for(projects_router.list_project_documents.__name__, project_id=pid)
     for viewer in (owner, stranger):

@@ -1066,6 +1066,10 @@ async def chat(request: ChatRequest, auth: dict = Depends(require_user)):
     if "chat" not in BLOCK_REGISTRY:
         raise HTTPException(500, "Chat block not available")
     await _off_loop(_check_chat_conversation, request, auth)
+    # The turn's chat session: only its files (and the project's own) are
+    # listed or searched while it runs (projects.document_in_scope).
+    from app.core import projects as _scope_store
+    _scope_store.bind_session_scope(request.conversation_id, auth.get("user_id"))
 
     try:
         if "chat" not in block_instances:
@@ -1157,6 +1161,10 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
     if "chat" not in BLOCK_REGISTRY:
         raise HTTPException(500, "Chat block not available")
     await _off_loop(_check_chat_conversation, request, auth)
+    # The turn's chat session: only its files (and the project's own) are
+    # listed or searched while it runs (projects.document_in_scope).
+    from app.core import projects as _scope_store
+    _scope_store.bind_session_scope(request.conversation_id, auth.get("user_id"))
 
     async def event_stream():
         rid = get_request_id()
@@ -1347,6 +1355,11 @@ async def chat_stream_v1(
     # caller cannot stream into a victim's ws-{pid} conversation.
     if conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, conversation_id, auth))
+    # The turn's chat session: only its files (and the project's own) are
+    # listed or searched while it runs, the attachment lookup below included
+    # (projects.document_in_scope). Set in the request's context, which the
+    # stream inherits.
+    projects_store.bind_session_scope(conversation_id, user_id)
 
     # ── S4: resolve the composer's `[attached: X]` marker(s) server-side.
     # Gated on project OWNERSHIP first — marker resolution lists the project's

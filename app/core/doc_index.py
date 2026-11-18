@@ -2638,7 +2638,7 @@ def index_project(
     Persists the result as JSON and returns a summary dict.
     """
     _checked_profile(profile)
-    docs = _projects.list_documents(project_id)
+    docs = _projects.list_documents(project_id, all_sessions=True)
     # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
     prior = _entries_of(_load_index(project_id))
 
@@ -4880,7 +4880,7 @@ def _search_project_documents_traced(
     # which populates the ``chunks`` table the hybrid retriever queries.
     if not chunks and _load_index(project_id) is None:
         try:
-            for doc in _projects.list_documents(project_id):
+            for doc in _projects.list_documents(project_id, all_sessions=True):
                 try:
                     index_document(project_id, doc["id"])
                 except Exception:
