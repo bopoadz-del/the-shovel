@@ -13,6 +13,18 @@ export function withSessionId(form, sessionId) {
   return form
 }
 
+/** True when a document record may sit in the project's document list.
+ *  A file attached to a chat session belongs to THAT session: it is shown
+ *  in the session's own group and nowhere in the project's list, in any
+ *  chat. The server records the session in the row's metadata and its
+ *  project listings already leave such rows out; this is the same rule for
+ *  a row the client adds by itself (an upload's response). */
+export function belongsToProjectList(doc) {
+  const meta = doc && typeof doc === 'object' ? doc.metadata : null
+  const sid = meta && typeof meta === 'object' ? meta.session_id : null
+  return !String(sid ?? '').trim()
+}
+
 /** The sidebar tag for a session document's origin. The server writes
  *  "uploaded" or "produced"; anything else is shown as uploaded, the
  *  server's own default for a session file without an origin. */
