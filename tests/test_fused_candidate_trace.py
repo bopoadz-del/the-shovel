@@ -475,3 +475,41 @@ def test_doc_digest_is_the_ids_own_sha256_prefix(doc_id):
     # two different ids never share a digest here: the digest reads the id
     other = doc_id + "x"
     assert ft.doc_digest(other) != ft.doc_digest(doc_id)
+
+
+# ── 7. every leg chunk is placeable by digest (leg_chunk_digests) ──────────
+
+@pytest.mark.parametrize("wanted, vec_rank, lex_rank", [
+    ("w1", 3, None),   # vector leg only, below leg_top's ids
+    ("w2", None, 2),   # lexical leg only
+])
+def test_leg_chunk_digests_place_a_wanted_chunk_by_leg_rank(
+        wanted, vec_rank, lex_rank):
+    order = [_C("a"), _C("b"), _C("w1"), _C("w2")]
+    sem = {"a": 1, "b": 2, "w1": 3}
+    bm = {"b": 1, "w2": 2}
+    summary = ft.leg_summary(order, sem, bm, 10)
+    rec = ft.Follow(summary).finish(order, order, order[:1])
+    view = ft.public_view(rec, order[:1])
+    digests = view["leg_chunk_digests"]
+    assert "leg_ranked" not in view
+    assert wanted not in json.dumps(view)
+    d = ft.id_digest(wanted)
+    for leg, rank in (("vector", vec_rank), ("lexical", lex_rank)):
+        if rank is None:
+            assert d not in digests[leg]
+        else:
+            assert digests[leg].index(d) + 1 == rank
+
+
+@pytest.mark.parametrize("depth, expected_len", [(2, 2), (50, 3)])
+def test_leg_ranked_is_cut_at_depth_and_keeps_rank_gaps(depth, expected_len):
+    order = [_C("a"), _C("c")]
+    # rank 2 belongs to a chunk outside the fused order: its slot is None,
+    # so position still equals leg rank.
+    ranked = ft.leg_ranked(order, {"a": 1, "gone": 2, "c": 3}, {}, depth)
+    assert len(ranked["vector"]) == expected_len
+    assert ranked["vector"][0] == "a" and ranked["vector"][1] is None
+    if expected_len == 3:
+        assert ranked["vector"][2] == "c"
+    assert ranked["lexical"] == []
