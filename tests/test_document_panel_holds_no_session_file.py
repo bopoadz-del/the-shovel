@@ -220,6 +220,40 @@ def test_a_project_document_is_deleted_by_its_owner_as_before(client, name):
     assert did not in page_ids
 
 
+@pytest.mark.parametrize("method,tail,handler", [
+    ("DELETE", "", "delete_document"),
+    ("GET", "/preview", "preview_document"),
+    ("GET", "/preview/raw", "preview_document_raw"),
+    ("GET", "/download", "download_document"),
+])
+def test_the_by_id_routes_are_the_handlers_these_tests_call(method, tail, handler):
+    """The HTTP routes exercised below are app.routers.projects' handlers."""
+    from app.routers import projects as projects_router
+
+    path = "/v1/projects/{project_id}/documents/{document_id}" + tail
+    found = [r.endpoint for r in app.routes
+             if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or ())]
+    assert found and found[0] is getattr(projects_router, handler)
+
+
+@pytest.mark.parametrize("name,body", [
+    ("joint_layout.txt", b"Joints at 6 m centres."),
+    ("drain_falls.txt", b"Falls of 1 in 80 to gullies."),
+])
+def test_raw_preview_of_a_session_file_is_reached_only_from_its_own_chat(client, name, body):
+    """``/preview/raw`` serves PDFs only: from the file's own chat a text file
+    is reached and refused as not a PDF (400); from anywhere else it is not
+    found (404)."""
+    headers = _headers(client, f"raw{name[:4]}")
+    pid = _project(client, headers, f"Panel-raw-{name[:4]}-{_RUN}")
+    own, other = f"ws-{pid}-8800", f"ws-{pid}-9900"
+    did = _upload(client, headers, pid, name, body, session_id=own)["id"]
+    url = _doc_url(pid, did, "/preview/raw")
+    assert client.get(url, headers=headers).status_code == 404
+    assert client.get(url, headers=headers, params={"session_id": other}).status_code == 404
+    assert client.get(url, headers=headers, params={"session_id": own}).status_code == 400
+
+
 @pytest.mark.parametrize("tail", ["/preview", "/download"])
 def test_a_session_file_is_fetched_by_id_only_from_its_own_chat(client, tail):
     first = _headers(client, f"f1{tail[1:4]}")
