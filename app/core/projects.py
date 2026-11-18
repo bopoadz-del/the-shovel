@@ -2571,6 +2571,12 @@ def _names_a_session(meta: Dict[str, Any]) -> bool:
     return bool(meta.get("session_id"))
 
 
+def is_session_document(meta: Any) -> bool:
+    """True when this metadata belongs to a file attached inside one chat
+    session. Such a file is never part of the project's search index."""
+    return _names_a_session(coerce_document_metadata(meta))
+
+
 def document_in_scope(meta: Any, scope: Optional[Tuple[str, str]] = None) -> bool:
     """True when a document with this metadata may be listed or retrieved now.
 

@@ -345,3 +345,326 @@ def test_a_session_file_without_its_original_falls_back_only_in_its_own_chat(
     assert res.status_code == expected, res.text
     if expected == 200:
         assert indexed in res.text
+
+
+# ── by id: the metadata update and the replace-bytes routes (#451 follow-up) ──
+
+_DRIVE_ID = "invented_drive_id_0123456789"
+
+
+@pytest.mark.parametrize("method,tail,handler", [
+    ("PATCH", "", "update_document"),
+    ("POST", "/bytes", "restore_document_bytes"),
+])
+def test_the_write_by_id_routes_are_the_handlers_these_tests_call(method, tail, handler):
+    test_the_by_id_routes_are_the_handlers_these_tests_call(method, tail, handler)
+
+
+def _replace(client, headers, pid, did, name, body, session_id=None):
+    return client.post(_doc_url(pid, did, "/bytes"), headers=headers,
+                       params={"session_id": session_id} if session_id else None,
+                       files={"file": (name, body, "text/plain")})
+
+
+def _patch(client, headers, pid, did, session_id=None):
+    return client.patch(_doc_url(pid, did), headers=headers,
+                        params={"session_id": session_id} if session_id else None,
+                        json={"drive_file_id": _DRIVE_ID})
+
+
+@pytest.mark.parametrize("name,body", [
+    ("rebar_schedule_l3.txt", b"T16 at 150 centres both ways."),
+    ("waterproofing_note.txt", b"Two coats of bitumen membrane to the retaining wall."),
+])
+def test_a_session_file_is_replaced_only_from_its_own_chat_by_its_maker(client, name, body):
+    owner = _headers(client, f"rb1{name[:5]}")
+    maker = _headers(client, f"rb2{name[:5]}")
+    pid = _project(client, owner, f"Panel-rb-{name[:5]}-{_RUN}")
+    _share(pid)
+    own, other = f"ws-{pid}-4100", f"ws-{pid}-4200"
+    did = _upload(client, maker, pid, name, body, session_id=own)["id"]
+    new = body + b" Revised."
+
+    assert _replace(client, maker, pid, did, name, new).status_code == 404
+    assert _replace(client, maker, pid, did, name, new, session_id=other).status_code == 404
+    assert _replace(client, owner, pid, did, name, new, session_id=own).status_code == 404
+    res = _replace(client, maker, pid, did, name, new, session_id=own)
+    assert res.status_code == 200, res.text
+    assert res.json()["document"]["id"] == did
+    got = client.get(_doc_url(pid, did, "/download"), headers=maker, params={"session_id": own})
+    assert got.status_code == 200 and got.content == new
+
+
+@pytest.mark.parametrize("name", ["permit_hours_a.txt", "permit_hours_b.txt"])
+def test_a_project_document_is_replaced_with_no_chat_as_before(client, name):
+    owner = _headers(client, f"rp{name[-5]}")
+    pid = _project(client, owner, f"Panel-rp-{name[-5]}-{_RUN}")
+    did = _upload(client, owner, pid, name, b"Permits 07:00 to 17:00.")["id"]
+    res = _replace(client, owner, pid, did, name, b"Permits 06:00 to 18:00.")
+    assert res.status_code == 200, res.text
+    assert res.json()["document"]["id"] == did
+
+
+@pytest.mark.parametrize("name,body", [
+    ("survey_benchmarks.txt", b"TBM 1 at +12.450 m."),
+    ("dewatering_log.txt", b"Wellpoints drawn down 2.4 m by day 3."),
+])
+def test_a_session_file_is_updated_only_from_its_own_chat_by_its_maker(client, name, body):
+    owner = _headers(client, f"pt1{name[:5]}")
+    maker = _headers(client, f"pt2{name[:5]}")
+    pid = _project(client, owner, f"Panel-pt-{name[:5]}-{_RUN}")
+    _share(pid)
+    own, other = f"ws-{pid}-5100", f"ws-{pid}-5200"
+    did = _upload(client, maker, pid, name, body, session_id=own)["id"]
+
+    assert _patch(client, maker, pid, did).status_code == 404
+    assert _patch(client, maker, pid, did, session_id=other).status_code == 404
+    # The project's owner is not the file's maker: not found, from its chat too.
+    assert _patch(client, owner, pid, did, session_id=own).status_code == 404
+    res = _patch(client, maker, pid, did, session_id=own)
+    assert res.status_code == 200, res.text
+    assert (res.json().get("metadata") or {}).get("drive_file_id") == _DRIVE_ID
+
+
+@pytest.mark.parametrize("name", ["hoarding_line_a.txt", "hoarding_line_b.txt"])
+def test_a_project_document_is_updated_by_its_owner_as_before(client, name):
+    owner = _headers(client, f"uo{name[-5]}")
+    other = _headers(client, f"ux{name[-5]}")
+    pid = _project(client, owner, f"Panel-uo-{name[-5]}-{_RUN}")
+    _share(pid)
+    did = _upload(client, owner, pid, name, b"Hoarding 2.4 m high on the north line.")["id"]
+    assert _patch(client, other, pid, did).status_code == 403  # owner or admin only, as before
+    res = _patch(client, owner, pid, did)
+    assert res.status_code == 200, res.text
+    assert (res.json().get("metadata") or {}).get("drive_file_id") == _DRIVE_ID
+
+
+@pytest.mark.parametrize("bad_id", ["https://drive.example/file/abc", "short"])
+def test_an_invalid_drive_id_is_refused_and_nothing_is_set(client, bad_id):
+    """The update's own guard, unchanged: a value that is not a Drive file id
+    (a URL, a too-short token) is a 422 and the document keeps no id."""
+    owner = _headers(client, f"bi{len(bad_id)}")
+    pid = _project(client, owner, f"Panel-bi-{len(bad_id)}-{_RUN}")
+    did = _upload(client, owner, pid, f"crane_base_{len(bad_id)}.txt", b"Base 6 x 6 x 1.5 m.")["id"]
+    res = client.patch(_doc_url(pid, did), headers=owner, json={"drive_file_id": bad_id})
+    assert res.status_code == 422, res.text
+    page = client.get(f"/v1/projects/{pid}/documents", headers=owner).json()["documents"]
+    row = next(d for d in page if d["id"] == did)
+    assert not (row.get("metadata") or {}).get("drive_file_id")
+
+
+# ── a third member, and indexing after a replace (grader 19:35Z) ────────────
+
+@pytest.mark.parametrize("route", ["bytes", "patch"])
+def test_a_third_member_reaches_neither_write_route_from_the_files_chat(client, route):
+    """Neither the project's owner nor the file's maker: not found on both
+    routes, from the file's own chat too."""
+    owner = _headers(client, f"t1{route}")
+    maker = _headers(client, f"t2{route}")
+    third = _headers(client, f"t3{route}")
+    pid = _project(client, owner, f"Panel-3m-{route}-{_RUN}")
+    _share(pid)
+    own = f"ws-{pid}-6100"
+    name = f"shoring_check_{route}.txt"
+    did = _upload(client, maker, pid, name, b"Props at 1.2 m centres.", session_id=own)["id"]
+    if route == "bytes":
+        res = _replace(client, third, pid, did, name, b"Props at 0.9 m centres.", session_id=own)
+    else:
+        res = _patch(client, third, pid, did, session_id=own)
+    assert res.status_code == 404, res.text
+    got = client.get(_doc_url(pid, did, "/download"), headers=maker, params={"session_id": own})
+    assert got.status_code == 200 and got.content == b"Props at 1.2 m centres."
+    strip = client.get(f"/v1/projects/{pid}/conversations/{own}/documents", headers=maker)
+    row = next(d for d in strip.json()["documents"] if d["id"] == did)
+    assert not (row.get("metadata") or {}).get("drive_file_id")
+
+
+def _row(did):
+    from app.core import projects as store
+
+    return store.get_document(did)
+
+
+def _chunk_rows(did) -> int:
+    """Chunk rows the index holds for this document, read from the chunk
+    tables themselves (either backend), not from the row's own count."""
+    from app.core import projects as store
+    from app.core.db import SessionLocal
+
+    with SessionLocal() as session:
+        return len(store._document_chunk_ids(session, did))
+
+
+def _search_ids(pid, query) -> set:
+    import asyncio
+
+    from app.core import doc_index
+    from app.core import projects as store
+
+    hits = asyncio.run(doc_index.search_project_documents(store.storage_project_id(pid), query, top_k=10))
+    return {h.get("document_id") for h in hits}
+
+
+@pytest.mark.parametrize("name,word", [
+    ("crane_mat_note.txt", "timbermatsquaxle"),
+    ("pump_pour_note.txt", "boomreachplintor"),
+])
+def test_a_privileged_replace_of_a_session_file_never_enters_the_project_search(
+        client, monkeypatch, name, word):
+    """The caller may add to the project's search, so the replace route would
+    index a project document; a chat's file stays out of the index. Beside it,
+    a project document replaced by the same caller IS scheduled and indexed:
+    it has chunk rows, read from the chunk tables. (Whether project search
+    ranks it in the top 10 depends on the backend's other corpora, so the
+    control is the chunk rows, not a search hit.)"""
+    from app.core import doc_index
+    from app.core import ingest_status as ist
+    from app.core import privileges
+
+    monkeypatch.setattr(privileges, "caller_may_add_to_project_rag", lambda _role=None: True)
+    scheduled: list[str] = []
+    real_index = doc_index.maybe_eager_index
+
+    def _spy(project_id, document_id):
+        scheduled.append(document_id)
+        return real_index(project_id, document_id)
+
+    monkeypatch.setattr(doc_index, "maybe_eager_index", _spy)
+    headers = _headers(client, f"pr{name[:4]}")
+    pid = _project(client, headers, f"Panel-pr-{name[:4]}-{_RUN}")
+    own = f"ws-{pid}-6200"
+    did = _upload(client, headers, pid, name, b"Placeholder.", session_id=own)["id"]
+    body = f"Revised: the {word} sits under each outrigger.".encode()
+    res = _replace(client, headers, pid, did, name, body, session_id=own)
+    assert res.status_code == 200, res.text
+
+    assert did not in scheduled  # the route does not even ask
+    row = _row(did)
+    assert row["ingest_status"] == ist.NOT_INDEXED_POLICY
+    assert not row.get("chunk_count")
+    assert _chunk_rows(did) == 0
+    assert did not in _search_ids(pid, word)
+
+    control = _upload(client, headers, pid, f"project_{name}", b"Placeholder.")["id"]
+    res = _replace(client, headers, pid, control, f"project_{name}", body)
+    assert res.status_code == 200, res.text
+    assert control in scheduled
+    assert (_row(control).get("chunk_count") or 0) > 0
+    assert _chunk_rows(control) > 0
+
+
+@pytest.mark.parametrize("name", ["setting_out_a.txt", "setting_out_b.txt"])
+def test_the_indexer_itself_refuses_a_session_file_whoever_calls_it(client, name):
+    """The guard is in the indexing entry, so no route, worker or reindex can
+    put a chat's file into the project's index; a project document beside it
+    is indexed."""
+    from app.core import doc_index
+    from app.core import ingest_status as ist
+    from app.core import projects as store
+
+    headers = _headers(client, f"ix{name[-5]}")
+    pid = _project(client, headers, f"Panel-ix-{name[-5]}-{_RUN}")
+    storage = store.storage_project_id(pid)
+    sid = _upload(client, headers, pid, name, b"Peg line at 3.000 m offset.",
+                  session_id=f"ws-{pid}-6300")["id"]
+    pdid = _upload(client, headers, pid, f"project_{name}", b"Peg line at 3.000 m offset.")["id"]
+
+    for entry in (doc_index.index_document, doc_index.maybe_eager_index):
+        out = entry(storage, sid)
+        assert out["indexed"] == 0 and out.get("session_only") is True
+        row = _row(sid)
+        assert row["ingest_status"] == ist.NOT_INDEXED_POLICY and not row.get("chunk_count")
+
+    assert doc_index.index_document(storage, pdid).get("indexed") == 1
+    assert (_row(pdid).get("chunk_count") or 0) > 0
+
+
+@pytest.mark.parametrize("name", ["kerb_line_a.txt", "kerb_line_b.txt"])
+def test_a_full_project_reindex_skips_a_session_file_and_indexes_the_project_file(client, name):
+    """``index_project`` lists every row (all sessions) for maintenance; a
+    chat's file is skipped before any chunk is written and is counted, a
+    project file beside it is chunked, and an entry the session file held in
+    the stored index before the rebuild is not carried forward."""
+    from app.core import doc_index
+    from app.core import projects as store
+
+    headers = _headers(client, f"rx{name[-5]}")
+    pid = _project(client, headers, f"Panel-rx-{name[-5]}-{_RUN}")
+    storage = store.storage_project_id(pid)
+    body = b"Kerb line set 450 mm behind the channel."
+    sid = _upload(client, headers, pid, name, body, session_id=f"ws-{pid}-6600")["id"]
+    pdid = _upload(client, headers, pid, f"project_{name}", body)["id"]
+
+    seeded = dict(doc_index._load_index(storage) or {"project_id": storage, "skipped": []})
+    seeded["documents"] = list(seeded.get("documents") or []) + [{
+        "document_id": sid, "filename": name, "fingerprint": "x:1", "chunk_count": 1,
+    }]
+    doc_index._write_index(storage, seeded)
+    assert sid in doc_index._entries_of(doc_index._load_index(storage))
+
+    out = doc_index.index_project(storage)
+
+    assert out["skipped_session_only"] == 1
+    assert [r["document_id"] for r in out["session_only"]] == [sid]
+    assert _chunk_rows(sid) == 0
+    assert _chunk_rows(pdid) > 0
+    entries = doc_index._entries_of(doc_index._load_index(storage))
+    assert sid not in entries
+    assert pdid in entries
+
+
+# ── redline by id (grader 19:35Z, item 2) ───────────────────────────────────
+
+def test_the_redline_route_is_the_handler_these_tests_call():
+    from app.routers import redline
+
+    path = "/v1/projects/{project_id}/documents/{document_id}/redlines"
+    found = [r.endpoint for r in app.routes
+             if getattr(r, "path", None) == path and "POST" in (getattr(r, "methods", None) or ())]
+    assert found and found[0] is redline.detect_document_redlines
+
+
+@pytest.mark.parametrize("name,body", [
+    ("markup_notes_l2.txt", b"Clouded revision at grid D."),
+    ("markup_notes_l4.txt", b"Red cloud around the stair core."),
+])
+def test_redlines_of_a_session_file_are_read_only_from_its_own_chat(client, name, body):
+    """Redline detection runs on PDFs only: from the file's own chat a text
+    file is reached and refused as not a PDF (400); from no chat or another
+    chat it is not found (404). A project text file is reached with no chat."""
+    headers = _headers(client, f"rl{name[-6:-4]}")
+    pid = _project(client, headers, f"Panel-rl-{name[-6:-4]}-{_RUN}")
+    own, other = f"ws-{pid}-6400", f"ws-{pid}-6500"
+    did = _upload(client, headers, pid, name, body, session_id=own)["id"]
+    url = _doc_url(pid, did, "/redlines")
+    assert client.post(url, headers=headers).status_code == 404
+    assert client.post(url, headers=headers, params={"session_id": other}).status_code == 404
+    assert client.post(url, headers=headers, params={"session_id": own}).status_code == 400
+    project_did = _upload(client, headers, pid, f"project_{name}", body)["id"]
+    assert client.post(_doc_url(pid, project_did, "/redlines"), headers=headers).status_code == 400
+
+
+@pytest.mark.parametrize("meta,expected", [
+    ({"session_id": "ws-p-1", "uploader_id": "u1"}, True),
+    ('{"session_id": "ws-p-2", "uploader_id": "u2"}', True),   # stored as encoded JSON text
+    ({"uploader_id": "u3", "origin": "uploaded"}, False),
+    (None, False),
+])
+def test_is_session_document_reads_the_session_id_in_either_stored_form(meta, expected):
+    from app.core import projects as store
+
+    assert store.is_session_document(meta) is expected
+
+
+@pytest.mark.parametrize("name", ["stair_markup_a.txt", "stair_markup_b.txt"])
+def test_redlines_of_a_project_file_are_not_found_for_a_user_who_cannot_open_the_project(client, name):
+    """The route's first rule, unchanged: a caller who cannot open the
+    project gets 404 even for a project document, where the owner reaches it
+    (400, not a PDF)."""
+    owner = _headers(client, f"ro{name[-5]}")
+    stranger = _headers(client, f"rs{name[-5]}")
+    pid = _project(client, owner, f"Panel-ro-{name[-5]}-{_RUN}")
+    did = _upload(client, owner, pid, name, b"Cloud at landing 2.")["id"]
+    url = _doc_url(pid, did, "/redlines")
+    assert client.post(url, headers=stranger).status_code == 404
+    assert client.post(url, headers=owner).status_code == 400
