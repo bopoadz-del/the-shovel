@@ -209,21 +209,55 @@ def test_the_capture_runs_over_the_fifteen_user_load_in_its_own_process(tmp_path
     try:
         proc = subprocess.run([sys.executable, "-m", "tests._loop_capture_pass", str(tmp_path)],
                               cwd=_REPO, capture_output=True, text=True, timeout=_PASS_TIMEOUT_S, check=False)
-        rc, out, err = proc.returncode, proc.stdout, proc.stderr
+        rc, out = proc.returncode, proc.stdout
     except subprocess.TimeoutExpired as exc:
-        rc, out, err = None, exc.stdout or "", exc.stderr or ""
+        rc, out = type(exc).__name__, exc.stdout or ""
         out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
-        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
-    found = [ln for ln in out.splitlines() if ln.startswith("LOOP_CAPTURE_RESULT ")]
-    result = json.loads(found[-1].split(" ", 1)[1]) if found else None
-    line = (f"LOOP_CAPTURE_PASS rc={rc} " + (json.dumps(result) if result is not None
-            else f"no result; stderr tail: {err[-1500:]!r}"))
+    line, silent = capture_pass_line(rc, out)
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line(line)
     else:
         sys.__stderr__.write(line + "\n")
-    assert not (rc == 0 and result is None), line
+    assert not (rc == 0 and silent), line
+
+
+def capture_pass_line(rc, out: str) -> tuple[str, bool]:
+    """The printed ``LOOP_CAPTURE_PASS`` line for the child's exit code and
+    stdout, and whether the child was SILENT (printed no result line at all).
+
+    Report-only (advisor 01:50Z 18 Nov): a result line that does not parse, or
+    is not a JSON object, is printed as its exception class -- it never raises,
+    so malformed output cannot turn the required job red. The child's stderr is
+    never printed (public log): only the return code and an exception class."""
+    found = [ln for ln in (out or "").splitlines() if ln.startswith("LOOP_CAPTURE_RESULT ")]
+    if not found:
+        return f"LOOP_CAPTURE_PASS rc={rc} no result", True
+    try:
+        result = json.loads(found[-1].split(" ", 1)[1])
+        if not isinstance(result, dict):
+            raise TypeError("result is not a JSON object")
+        return f"LOOP_CAPTURE_PASS rc={rc} " + json.dumps(result), False
+    except (ValueError, TypeError) as exc:  # report-only: the class is printed, never raised
+        return f"LOOP_CAPTURE_PASS rc={rc} result_error={type(exc).__name__}", False
+
+
+@pytest.mark.parametrize("rc,out,expected,silent", [
+    (0, 'x\nLOOP_CAPTURE_RESULT {"load_max_ms": 97}\n',
+     'LOOP_CAPTURE_PASS rc=0 {"load_max_ms": 97}', False),
+    (0, 'LOOP_CAPTURE_RESULT {"load_max_ms": 1}\nLOOP_CAPTURE_RESULT {"load_max_ms": 2}\n',
+     'LOOP_CAPTURE_PASS rc=0 {"load_max_ms": 2}', False),      # the last result line wins
+    (0, "warming up\n", "LOOP_CAPTURE_PASS rc=0 no result", True),
+    (139, "", "LOOP_CAPTURE_PASS rc=139 no result", True),
+    ("TimeoutExpired", "half a line", "LOOP_CAPTURE_PASS rc=TimeoutExpired no result", True),
+    (0, "LOOP_CAPTURE_RESULT {not json /home/runner/secret",
+     "LOOP_CAPTURE_PASS rc=0 result_error=JSONDecodeError", False),
+    (1, "LOOP_CAPTURE_RESULT ", "LOOP_CAPTURE_PASS rc=1 result_error=JSONDecodeError", False),
+    (0, "LOOP_CAPTURE_RESULT [1, 2]", "LOOP_CAPTURE_PASS rc=0 result_error=TypeError", False),
+    (0, 'LOOP_CAPTURE_RESULT "a string"', "LOOP_CAPTURE_PASS rc=0 result_error=TypeError", False),
+])
+def test_the_capture_line_never_raises_and_prints_only_class_and_code(rc, out, expected, silent):
+    assert capture_pass_line(rc, out) == (expected, silent)
 
 
 def test_the_monitor_sees_a_blocked_loop():
