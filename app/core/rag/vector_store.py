@@ -1371,8 +1371,12 @@ class VectorStore:
             return set()
         from app.core import projects as _projects
 
+        # One lookup per turn, not one per search leg: the turn's legs share
+        # the scope, and a session file uploaded mid-turn is not this turn's.
+        key = ("session_hidden", project_id, _projects.current_session_scope())
         try:
-            return _projects.session_hidden_document_ids(project_id, db_session=session)
+            return set(_memoised(key, lambda: frozenset(
+                _projects.session_hidden_document_ids(project_id, db_session=session))))
         except SQLAlchemyError:
             session.rollback()
             self._visibility_ready = False
