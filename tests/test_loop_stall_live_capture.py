@@ -283,12 +283,15 @@ def test_a_thread_born_inside_the_window_is_not_summed_as_a_delta(threads_after,
     assert got == expected
 
 
-@pytest.mark.parametrize("snapshot_s,stalled", [(0.35, True), (0.0, False)])
-def test_the_heartbeat_is_stamped_before_the_monitors_snapshot(monkeypatch, snapshot_s, stalled):
-    """Ruling (advisor 04:18Z): the stamp stays BEFORE the CPU snapshot, so a
-    slow snapshot still counts as lag, exactly as the timing test measured it
-    since #380. The live timer is armed with the stamp, so such a stall
-    carries a dump naming what ran during it -- here the snapshot itself."""
+@pytest.mark.parametrize("snapshot_s,slow", [(0.35, True), (0.0, False)])
+def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(monkeypatch, snapshot_s, slow):
+    """Ruling (advisor 09:17Z 18 Nov, STAMP TO POST outcome A; it replaces the
+    04:18Z ruling that kept the stamp before the snapshot): the heartbeat is
+    stamped at the post and the CPU snapshot runs after the post, so a slow
+    snapshot is never a stall of the loop. Its duration is its own figure,
+    and the live timer is still armed with the stamp: a slow snapshot fires
+    it and its dump names the snapshot (the monitor's own late wake), never
+    a stall."""
     def snapshot(*_a, **_k):
         time.sleep(snapshot_s)
         return 0.0, {}
@@ -304,11 +307,13 @@ def test_the_heartbeat_is_stamped_before_the_monitors_snapshot(monkeypatch, snap
         return mon
 
     mon = asyncio.run(run())
-    if stalled:
-        assert mon.max_lag_ms >= 250 and mon.stalls, mon.max_lag_ms
+    assert mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
+    assert mon.max_lag_ms < 100, mon.max_lag_ms
+    if slow:
+        assert mon.max_snapshot_ms >= 300, mon.max_snapshot_ms
         assert any("snapshot" in text for _, text in mon.live_dumps), mon.live_dumps[:1]
     else:
-        assert mon.stalls == [] and mon.live_dumps == [], (mon.max_lag_ms, mon.stalls[:1])
+        assert mon.max_snapshot_ms < 100 and mon.live_dumps == [], (mon.max_snapshot_ms, mon.live_dumps[:1])
 
 
 @pytest.mark.parametrize("lags,kept", [
