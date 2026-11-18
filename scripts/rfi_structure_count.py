@@ -29,6 +29,18 @@ or in part (at least ``_MIXED_SHARE`` of their letters), in a script the
 heading table does not use: the documents the rule cannot see. The table's
 own scripts are read from the table, never assumed.
 
+A second, independent selector answers "does the project hold RFI forms at
+all": the documents whose own NAME or PATH names the RFI document class, read
+with the product's document-class vocabulary
+(``app.core.rag.handed_set.named_source_kinds``; the class is
+``RFI_SAMPLE_KIND``, default ``rfi``). The run counts them, how many the
+heading rule calls RFI-like, and prints, for the first ``RFI_SAMPLES`` of them
+(default 3), a heading SKELETON: one line per heading-like cell (a short label
+ending in ``:``, an all-capitals label, or a cell opening with a word of the
+heading table) with its chunk index, line, cell position, word count, letter
+case, terminator, table role and whether the line-start rule sees it. The
+skeleton carries shapes only, never the words.
+
 The output is a public workflow log: document ids, counts, chunk indexes and
 Unicode script names only; never text, a heading, a name, a path or a
 project id.
@@ -66,6 +78,18 @@ MARK = "RFI| "
 _MIXED_SHARE = 0.05
 
 _DOC_SQL = "SELECT id, project_id FROM documents WHERE id LIKE :p ORDER BY id"
+_NAMES_SQL = "SELECT id, original_name, file_path FROM documents WHERE project_id = :pr"
+_DEFAULT_SAMPLES = 3
+_MAX_SAMPLES = 10
+# Per sample, the heading-like cells printed (in document order).
+_MAX_SKELETON = 60
+# A heading-like cell has at most this many words.
+_HEADING_MAX_WORDS = 6
+# How extraction lays out a form's table on one line: tabs, pipes, or runs
+# of three or more spaces between cells.
+_CELL_SPLIT = re.compile(r"\t+|\s*\|\s*|\s{3,}")
+_LEAD = re.compile(r"^[ \t>*\-\d.()\[\]#]*")
+_NAME_SEPS = re.compile(r"[_\-./\\]+")
 
 
 def headings(raw: str | None = None) -> dict[str, tuple[str, ...]]:
@@ -217,6 +241,108 @@ def render(anchor: str, s: dict[str, Any]) -> list[str]:
     return lines
 
 
+def name_kinds(name: str | None, path: str | None) -> tuple[str, ...]:
+    """The document classes a document's own name or path names, read with
+    the product's class vocabulary. Separators (``_ - . /`` and a backslash)
+    count as spaces, so ``RFI_012`` names its class like ``RFI 012`` does."""
+    from app.core.rag.handed_set import named_source_kinds
+
+    joined = " ".join(_NAME_SEPS.sub(" ", x or "") for x in (name, path))
+    return named_source_kinds(joined)
+
+
+def sample_count(raw: str | None = None) -> int:
+    """``RFI_SAMPLES``: how many named documents get a skeleton (default 3,
+    at most ``_MAX_SAMPLES``). Raises ValueError on a non-integer."""
+    raw = os.environ.get("RFI_SAMPLES", "") if raw is None else raw
+    if not raw.strip():
+        return _DEFAULT_SAMPLES
+    return max(0, min(_MAX_SAMPLES, int(raw)))
+
+
+def letter_case(label: str) -> str:
+    """Pure: ``UPPER``, ``lower``, ``Title``, ``mixed`` or ``caseless``."""
+    letters = [c for c in label if c.isalpha()]
+    if not any(c.isupper() or c.islower() for c in letters):
+        return "caseless"
+    if not any(c.islower() for c in letters):
+        return "UPPER"
+    if not any(c.isupper() for c in letters):
+        return "lower"
+    words = [w for w in label.split() if any(c.isalpha() for c in w)]
+    if all(next(c for c in w if c.isalpha()).isupper() for w in words):
+        return "Title"
+    return "mixed"
+
+
+def _role_at_start(cell: str, pats: dict[str, re.Pattern[str]]) -> str:
+    for role in ROLES:
+        if pats[role].match(cell):
+            return role
+    return "-"
+
+
+def heading_skeleton(chunks: list[tuple[int, str]], pats: dict[str, re.Pattern[str]],
+                     cap: int = _MAX_SKELETON) -> list[dict[str, Any]]:
+    """Pure: the heading-like cells of one document, in document order, as
+    SHAPES (no words). A line is split into cells on tabs, ``|`` and runs of
+    3+ spaces. A cell is heading-like when its label (what precedes its first
+    ``:``, after numbering and bullets) has 1..``_HEADING_MAX_WORDS`` words
+    with letters and the cell has a ``:``, or the label is in capitals, or
+    the cell opens with a word of the heading table. ``rule`` says whether
+    the line-start rule (``heading_hits``) sees a heading of that role on
+    that line; ``value`` whether text follows the label in the same cell."""
+    out: list[dict[str, Any]] = []
+    for idx, body in sorted(chunks, key=lambda c: c[0]):
+        for ln, line in enumerate((body or "").splitlines()):
+            rule_roles = {r for r, offs in heading_hits(line, pats).items() if offs}
+            cells = [c for c in _CELL_SPLIT.split(line) if c.strip()]
+            for pos, raw in enumerate(cells):
+                cell = _LEAD.sub("", raw).strip()
+                label, colon, rest = cell.partition(":")
+                label = label.strip()
+                words = [w for w in label.split() if any(ch.isalpha() for ch in w)]
+                if not words or len(words) > _HEADING_MAX_WORDS:
+                    continue
+                role = _role_at_start(cell, pats)
+                case = letter_case(label)
+                if not (colon or case == "UPPER" or role != "-"):
+                    continue
+                end = "colon" if colon else ("eol" if len(cells) == 1 else "none")
+                out.append({
+                    "chunk": idx, "line": ln, "cell": pos, "words": len(words),
+                    "case": case, "end": end, "role": role,
+                    "rule": role != "-" and role in rule_roles,
+                    "value": bool(rest.strip()),
+                })
+                if len(out) >= cap:
+                    return out
+    return out
+
+
+def render_samples(kind: str, named_rows: list[dict[str, Any]],
+                   samples: list[tuple[str, int, list[dict[str, Any]]]]) -> list[str]:
+    """The named-class count and each sample's skeleton (shapes, no words)."""
+    with_role = {r: sum(1 for x in named_rows if r in x["roles"]) for r in ROLES}
+    lines = [
+        (f"== documents whose own name or path names the class {kind}: {len(named_rows)} "
+         f"(rfi_like={sum(1 for x in named_rows if x['rfi_like'])}; with a heading of: "
+         + " ".join(f"{r}={with_role[r]}" for r in ROLES) + ")"),
+    ]
+    for doc, nchunks, cells in samples:
+        lines.append(f"   sample {doc}: chunks={nchunks} heading_like={len(cells)} "
+                     f"table_role={sum(1 for c in cells if c['role'] != '-')} "
+                     f"seen_by_rule={sum(1 for c in cells if c['rule'])}")
+        lines.append("     chunk | line | cell | words | case | end | role | rule | value")
+        lines += [
+            (f"     {c['chunk']} | {c['line']} | {c['cell']} | {c['words']} | {c['case']} | "
+             f"{c['end']} | {c['role']} | {'yes' if c['rule'] else 'no'} | "
+             f"{'yes' if c['value'] else 'no'}")
+            for c in cells
+        ]
+    return lines
+
+
 def group_by_doc(rows: Iterable[tuple]) -> Iterator[tuple[str, list[tuple[int, str]]]]:
     """``(doc_id, chunk_index, text)`` rows ordered by doc_id -> one list per doc."""
     cur: str | None = None
@@ -272,6 +398,12 @@ def main() -> int:
     except (ValueError, json.JSONDecodeError):
         emit("RFI_HEADINGS_JSON is malformed", err=True)
         return 2
+    try:
+        n_samples = sample_count()
+    except ValueError:
+        emit("RFI_SAMPLES must be an integer", err=True)
+        return 2
+    kind = os.environ.get("RFI_SAMPLE_KIND", "").strip() or "rfi"
     from app.core.db import SessionLocal
     from app.core.models import rag_chunk_table_name
 
@@ -282,12 +414,23 @@ def main() -> int:
             if len(docs) != 1:
                 emit(f"== id {anchor}: {len(docs)} matching documents, need exactly 1")
                 return 1
+            named = {str(d) for d, name, path in s.execute(text(_NAMES_SQL), {"pr": docs[0][1]})
+                     if kind in name_kinds(name, path)}
             rows = project_chunk_rows(s, table, docs[0][1])
-            summ = summarise((d, classify(ch, pats, seen)) for d, ch in group_by_doc(rows))
+            per_doc: list[tuple[str, dict[str, Any]]] = []
+            samples: list[tuple[str, int, list[dict[str, Any]]]] = []
+            for d, ch in group_by_doc(rows):
+                r = classify(ch, pats, seen)
+                per_doc.append((d, r))
+                if d in named and len(samples) < n_samples:
+                    samples.append((d, r["chunks"], heading_skeleton(ch, pats)))
+            summ = summarise(per_doc)
     except Exception as exc:  # by class only: a message can quote text
         emit(f"== id {anchor}: READ FAILED: {type(exc).__name__}")
         return 1
     for line in render(anchor, summ):
+        emit(line)
+    for line in render_samples(kind, [r for d, r in per_doc if d in named], samples):
         emit(line)
     emit("done")
     return 0
