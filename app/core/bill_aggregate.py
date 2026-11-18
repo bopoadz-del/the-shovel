@@ -104,7 +104,87 @@ def read_sheet_rows(xlsx_path: str) -> list[SheetRow]:
     from app.core import file_crypto
 
     with file_crypto.open_plaintext(xlsx_path) as readable:
-        return _read_workbook_rows(readable)
+        return carry_open_heading(_read_workbook_rows(readable))
+
+
+_REF_NUMBER_RE = re.compile(r"^(.*?)(\d+)\s*$")
+
+
+def _ref_number(ref: str) -> tuple[str, int] | None:
+    m = _REF_NUMBER_RE.match((ref or "").strip())
+    return (m.group(1).strip().casefold(), int(m.group(2))) if m else None
+
+
+def _continues(path: tuple[str, ...], open_path: tuple[str, ...]) -> bool:
+    """``path`` is the heading open at the page break, re-printed at the head
+    of the next page: equal to it, or a strict prefix of it (``(Bill 3,)``
+    under ``(Bill 3, Manholes)``, the path cut short by a repeated outer
+    heading). A path whose last label EXTENDS the open label (more words) is
+    NOT a continuation: a new subsection whose heading extends the open label
+    reads the same, and merging it would add its rows to the open section's
+    count and sum. A true 'continued' line is therefore left under its own
+    heading (under-counted, the safe side). Only the labels are compared; no
+    word of any bill is named."""
+    n = len(path)
+    return 0 < n <= len(open_path) and path == open_path[:n]
+
+
+def carry_open_heading(rows: Sequence[SheetRow]) -> list[SheetRow]:
+    """Rows in print order, the rows a page break moved under another heading
+    put back under the heading that was open when the page broke.
+
+    The derived sheet groups rows by heading path, and the extractor's path
+    carries over a page break; a label re-printed at the head of the next page
+    (the bill's running heading, or the section's 'continued' line) changes
+    the path of the rows that follow it, so the rest of the section lands in
+    another sheet. Here the rows are put back in print order (page, then the
+    order the sheets were first printed), and the FIRST block of a page (rows
+    of one sheet on that page) takes the path open at the end of the previous
+    page when its own path continues it (:func:`_continues`: equal to the
+    open path or a strict prefix of it) AND the item numbers are the
+    evidence: the block's first reference has the open section's last
+    reference's prefix and the next number. A heading alone (the running
+    heading) is not evidence: it cannot be told from a new section without
+    naming a word. A label re-printed with more words is never carried: it
+    cannot be told from a new subsection that extends the open label.
+    Only reading changes: the stored sheet is not touched.
+    """
+    blocks: list[tuple[int, int, list[SheetRow]]] = []
+    sheet = -1
+    prev_path: tuple[str, ...] | None = None
+    for row in rows:
+        if row.path != prev_path:
+            sheet, prev_path = sheet + 1, row.path
+        page = row.pages[0] if row.pages else -1
+        if blocks and blocks[-1][1] == sheet and (blocks[-1][2][-1].pages[:1] or [-1])[0] == page:
+            blocks[-1][2].append(row)
+        else:
+            blocks.append((page, sheet, [row]))
+    if any(page < 0 for page, _, _ in blocks):
+        # A row with no page: print order cannot be rebuilt; read as stored.
+        return [SheetRow(**{**r.__dict__, "pages": list(r.pages)}) for r in rows]
+    blocks.sort(key=lambda b: (b[0], b[1]))
+    out: list[SheetRow] = []
+    open_path: tuple[str, ...] | None = None
+    open_ref: str = ""
+    last_page = -1
+    for page, _, block in blocks:
+        path = block[0].path
+        if open_path is not None and page == last_page + 1 and _continues(path, open_path):
+            first = next((r.ref for r in block if r.ref), "")
+            a, b = _ref_number(open_ref), _ref_number(first)
+            # Carried only on positive evidence: the block's first reference
+            # is the next number of the open section's sequence. An empty or
+            # number-less reference, or a sequence that restarts or jumps,
+            # leaves the block where it was printed (a wrong carry adds rows
+            # of another section to this one's sum).
+            if a and b and a[0] == b[0] and b[1] == a[1] + 1:
+                path = open_path
+        out.extend(SheetRow(**{**r.__dict__, "path": path, "pages": list(r.pages)}) for r in block)
+        last_page = page
+        open_path = path
+        open_ref = next((r.ref for r in reversed(block) if r.ref), open_ref)
+    return out
 
 
 def _read_workbook_rows(xlsx_path: str) -> list[SheetRow]:
