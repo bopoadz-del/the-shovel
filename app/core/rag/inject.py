@@ -1093,11 +1093,9 @@ def _trace_chunk(rank: int, c) -> Dict[str, Any]:
 def _trace_page(c) -> Optional[int]:
     """The stored page of one chunk, or None when it has none."""
     page = getattr(c, "page", None)
-    try:
-        page = int(page) if page is not None else None
-    except (TypeError, ValueError):
+    if isinstance(page, bool) or not isinstance(page, int):
         return None
-    return page if page and page > 0 else None
+    return page if page > 0 else None
 
 
 def _dropped_by(c, drop_reasons: Optional[Dict[str, str]],
