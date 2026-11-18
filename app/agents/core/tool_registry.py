@@ -27,7 +27,9 @@ answers the call itself.
 """
 from __future__ import annotations
 
+import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
@@ -238,9 +240,40 @@ def declare_results_when_read(declarer: Callable[[], None]) -> None:
     _DEFERRED.append(declarer)
 
 
-def _declare_deferred() -> None:
-    while _DEFERRED:
-        _DEFERRED.pop(0)()
+_DEFERRED_LOCK = threading.RLock()
+_DEFERRED_RUNNING = False
+_LOG = logging.getLogger(__name__)
+
+
+def declare_deferred_results() -> None:
+    """Run every waiting declarer, under one lock, so a second thread's first
+    read waits until the declarations exist. A declarer leaves the list only
+    after it SUCCEEDS: one that raises is logged by its exception class and
+    tried again on the next read -- never silently lost. A read made from
+    inside a declarer (same thread) does not re-enter the loop.
+
+    The lock is taken ONLY while declarers are pending: every tool call reads
+    the declarations, so once the list is empty a read must never queue on
+    it. The app runs this in its background warm-up (app.main._warm_models,
+    off the event loop); the first read is only the fallback."""
+    global _DEFERRED_RUNNING
+    if not _DEFERRED:
+        return
+    with _DEFERRED_LOCK:
+        if _DEFERRED_RUNNING:
+            return
+        _DEFERRED_RUNNING = True
+        try:
+            for declarer in list(_DEFERRED):
+                try:
+                    declarer()
+                except Exception as exc:  # retried on the next read
+                    _LOG.warning("deferred result declarer %s failed (%s); retried on the next read",
+                                 getattr(declarer, "__qualname__", "?"), type(exc).__name__)
+                    continue
+                _DEFERRED.remove(declarer)
+        finally:
+            _DEFERRED_RUNNING = False
 
 
 def get(name: str) -> Optional[ToolSpec]:
@@ -252,13 +285,13 @@ def result_spec(name: str) -> Optional[Union[ToolSpec, ResultSpec]]:
     """What ``name`` declares about its result: the tool's spec, else the
     block's result declaration, else None."""
     load()
-    _declare_deferred()
+    declare_deferred_results()
     return _TOOLS.get(name) or _RESULTS.get(name)
 
 
 def tools_of_kind(kind: str) -> List[str]:
     load()
-    _declare_deferred()
+    declare_deferred_results()
     names = {n for n, s in _TOOLS.items() if s.kind == kind}
     names.update(n for n, s in _RESULTS.items() if s.kind == kind)
     return sorted(names)
