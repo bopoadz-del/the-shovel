@@ -19,7 +19,8 @@ import time
 
 import pytest
 
-from app.core.loop_watchdog import LagMonitor, stamp_to_post_summary
+from app.core.loop_watchdog import (LagMonitor, freeze_long_lived_heap, gc_summary,
+                                    release_long_lived_heap, stamp_to_post_summary)
 from tests import _wake_sidecar
 from tests._fixture_values import STUB_TOKEN_06
 
@@ -146,6 +147,11 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
         async for _ in agent.chat_stream(_QUESTIONS[0], project_id=PID, user_id="load-warm",
                                          conversation_id="load-warm", history=[]):
             pass
+        # The server freezes its startup heap when lifespan finishes
+        # (app/main.py); this test stands in for that process without
+        # lifespan, so it takes the same step at the same point. Released
+        # below, so no other test runs with a frozen heap.
+        freeze_long_lived_heap()
         # Idle baseline: the loop does nothing for IDLE_BASELINE_S on THIS
         # runner; the worst lag here is pure runner/OS scheduling noise.
         idle = LagMonitor(asyncio.get_running_loop(), threshold_ms=LIMIT_MS, tick_ms=20, log=False).start()
@@ -176,6 +182,7 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     try:
         idle, mon = asyncio.run(run())
     finally:
+        release_long_lived_heap()
         wakes = side.collect()
     worst = max(mon.stalls, default=(0, ""))
     excess = excess_over_baseline(mon.max_lag_ms, idle.max_lag_ms)
@@ -191,7 +198,8 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
              f"idle_wake_late_when={wake_late_when(idle.wake_late_at, windows['idle'][0])} "
              + stamp_to_post_summary(mon.max_stamp_to_post_ms, mon.stall_stamp_to_post,
                                      mon.worst_lag_stamp_to_post, mon.max_snapshot_ms,
-                                     mon.max_unobserved_ms),
+                                     mon.max_unobserved_ms)
+             + " " + gc_summary(mon.gc, windows["load"][0]),
              _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
                                         mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")

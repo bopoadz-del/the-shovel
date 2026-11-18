@@ -283,9 +283,15 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(interval)
 
     sweep_task = asyncio.create_task(_plaintext_sweep_loop())
+    # Startup is done: everything alive now lives as long as the process.
+    # Freeze it, so a full garbage collection (which holds the interpreter
+    # lock, loop included, for its whole pass) no longer re-scans it.
+    logger.info("startup heap frozen: %d objects out of the collector's reach",
+                loop_watchdog.freeze_long_lived_heap())
     try:
         yield
     finally:
+        loop_watchdog.release_long_lived_heap()
         sweep_task.cancel()
         try:
             await sweep_task
