@@ -931,6 +931,14 @@ def _memo_put(key: tuple, value):
     return value
 
 
+def _retrieval_trace_on() -> bool:
+    """The retrieval trace's own switch (``inject.retrieval_trace_enabled``),
+    read lazily: ``inject`` imports this module."""
+    from app.core.rag.inject import retrieval_trace_enabled
+
+    return retrieval_trace_enabled()
+
+
 def record_fusion(project_id: str, summary: Dict[str, Any]) -> None:
     """Append one fusion's leg summary (``fusion_trace.leg_summary``) to the
     turn's list for ``project_id``. Outside a turn nothing is kept."""
@@ -2932,6 +2940,8 @@ def _rrf_combine(
     With ``project_id``, that full order (before the ``top_k`` cut) is
     summarised by leg into the turn memo (``record_fusion``) for the
     retrieval trace. Counts and ranks only; the trace changes no ranking.
+    With the trace off (``RAG_RETRIEVAL_TRACE=0``) the summary is not
+    computed at all: nothing would read it.
     """
     sem_rank = {c.chunk_id: r for r, c in enumerate(semantic, 1)}
     bm_rank = {c.chunk_id: r for r, c in enumerate(bm25, 1)}
@@ -2965,7 +2975,7 @@ def _rrf_combine(
     order = guarantee_leg_share(
         [c for _, c in scored], sem_rank, bm_rank, fusion_leg_share(),
     )
-    if project_id is not None:
+    if project_id is not None and _retrieval_trace_on():
         from app.core.rag.fusion_trace import leg_summary
 
         record_fusion(project_id, leg_summary(order, sem_rank, bm_rank, top_k))

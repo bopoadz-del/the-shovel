@@ -120,7 +120,8 @@ def _inject(ask, rid="rid-trace-0001", project_id="synth-p1"):
 
 
 @pytest.mark.parametrize("ask", PHRASINGS)
-def test_one_line_with_ids_names_scores_ranks(ask, trace_log, monkeypatch):
+def test_one_line_with_ids_scores_ranks_and_no_names_or_query_words(
+        ask, trace_log, monkeypatch):
     monkeypatch.setattr("app.core.rag.inject.retrieve_with_filter", _fake_retrieve())
     sys_msg, _audit = _inject(ask)
     assert sys_msg is not None
@@ -135,11 +136,18 @@ def test_one_line_with_ids_names_scores_ranks(ask, trace_log, monkeypatch):
     assert p["path"] == "pre_injection"
     assert p["query"] == "user_message"
     assert p["handed_k"] == 3
-    got = [(c["rank"], c["chunk_id"], c["doc_id"], c["doc_name"], c["score"])
+    assert p["query_chars"] == len(ask)
+    got = [(c["rank"], c["chunk_id"], c["doc_id"], c["score"])
            for c in p["chunks"]]
-    want = [(i + 1, cid, did, name, score)
-            for i, (cid, did, name, score) in enumerate(_SYNTH)]
+    want = [(i + 1, cid, did, score)
+            for i, (cid, did, _name, score) in enumerate(_SYNTH)]
     assert got == want
+    # Names never in logs: no document name, and not the question's words.
+    line = rec.getMessage()
+    assert all("doc_name" not in c for c in p["chunks"] + p["not_handed"])
+    for _cid, _did, name, _score in _SYNTH:
+        assert name not in line
+    assert ask not in line
 
 
 @pytest.mark.parametrize("ask", PHRASINGS)
