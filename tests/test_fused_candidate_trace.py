@@ -376,3 +376,15 @@ def test_leg_docs_places_a_document_or_states_it_absent(in_lexical):
         assert lex["Z"] == 40
     assert "Z" not in vec
     assert all("chunk_id" not in e for es in view["leg_docs"].values() for e in es)
+
+
+@pytest.mark.parametrize("orphan_in_order", [False, True])
+def test_leg_docs_never_counts_a_chunk_it_cannot_tie_to_a_document(orphan_in_order):
+    # a leg rank for a chunk the candidate list cannot place (absent from
+    # it, or present with no doc_id) is not a document: it is not listed
+    # and adds to no document's count
+    order = [_D("a1", "A")] + ([_D("x7", None)] if orphan_in_order else [])
+    out = ft.leg_docs(order, {"x7": 1, "a1": 2}, {"a1": 1, "x7": 2})
+    for name, rank in (("vector", 2), ("lexical", 1)):
+        got = [(e["doc_id"], e["best_leg_rank"], e["n_chunks"]) for e in out[name]]
+        assert got == [("A", rank, 1)]
