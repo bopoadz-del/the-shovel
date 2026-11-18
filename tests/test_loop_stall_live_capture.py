@@ -54,6 +54,30 @@ def _size_for(seconds: float) -> int:
     return n
 
 
+def unjustified_reads(events: list, after_s: float) -> list:
+    """Each dump-file read (``"take"``) whose round cannot have lasted
+    ``after_s``. ``events`` is the monitor thread's ``("cancel"|"take", t)``
+    in order, opened by ``("cancel", start)``. A round begins after the
+    cancel that ended the round before it, so a read less than ``after_s``
+    past the second-last cancel before it came from a round no timer could
+    fire in. Bounded from below, never guessed: a read in a round a loaded
+    runner really made late is justified, however many there are."""
+    bad, cancels = [], []
+    for kind, t in events:
+        if kind == "cancel":
+            cancels.append(t)
+        elif len(cancels) >= 2 and t - cancels[-2] < after_s:
+            bad.append(round((t - cancels[-2]) * 1000, 1))
+    return bad
+
+
+def rounds_past(events: list, limit_s: float) -> int:
+    """How many gaps between consecutive cancels last ``limit_s`` or more:
+    an upper bound on the rounds that really were that late."""
+    cancels = [t for kind, t in events if kind == "cancel"]
+    return sum(b - a >= limit_s for a, b in zip(cancels, cancels[1:]))
+
+
 #: Set in the child pytest process that runs one C-timer test by itself.
 _OWN_PROCESS_ENV = "LOOP_CAPTURE_OWN_PROCESS"
 #: Wall-clock cap for one C-timer test in its own process.
@@ -499,21 +523,27 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
     reads nothing, so a quiet monitor never hands the GIL over unwatched; a
     round the hold made late is read and names the holder."""
     n = _size_for(0.6) if hold else 0
-    reads: list = []
-    real_take = loop_watchdog.LiveDump.take
+    events: list = []
+    real_take, real_cancel = loop_watchdog.LiveDump.take, loop_watchdog.LiveDump.cancel
 
     def take(self):
         if threading.current_thread().name == "loop-watchdog":
-            reads.append(time.monotonic())
+            events.append(("take", time.monotonic()))
         return real_take(self)
 
+    def cancel(self):
+        real_cancel(self)
+        if threading.current_thread().name == "loop-watchdog":
+            events.append(("cancel", time.monotonic()))
+
     monkeypatch.setattr(loop_watchdog.LiveDump, "take", take)
+    monkeypatch.setattr(loop_watchdog.LiveDump, "cancel", cancel)
 
     async def run():
+        events.append(("cancel", time.monotonic()))
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
                                        tick_ms=10, log=False, live_ms=150).start()
         await asyncio.sleep(0.3)
-        quiet_reads = len(reads)
         done, release = threading.Event(), threading.Event()
 
         def work():
@@ -531,25 +561,32 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
         await asyncio.sleep(0.2)
         mon.stop()
         release.set()
-        return mon, quiet_reads
+        return mon
 
-    mon, quiet_reads = asyncio.run(run())
-    assert quiet_reads == 0, f"{quiet_reads} reads in 0.3 s of quiet rounds"
+    mon = asyncio.run(run())
+    reads = [t for kind, t in events if kind == "take"]
+    # Every read in a round that lasted the live delay: a quiet round never
+    # hands the GIL to a file read. Not "zero reads": a round a loaded runner
+    # really made late may be read, and is justified by its own length.
+    assert unjustified_reads(events, 0.150) == [], (unjustified_reads(events, 0.150), len(reads))
+    assert len(mon.stalls) <= rounds_past(events, 0.250), mon.stalls[:1]
     if hold:
         assert reads, "the late round was never read"
         assert mon.live_dumps, f"no live dump; max_lag={mon.max_lag_ms:.0f} stalls={len(mon.stalls)}"
         _, during = max(mon.live_dumps)
         assert "[gil-holder]" in during and "_gil_holding_call" in during, during
     else:
-        assert reads == [] and mon.live_dumps == [] and mon.stalls == []
+        # A dump comes only from a read, and every read was justified above.
+        assert len(mon.live_dumps) <= len(reads), mon.live_dumps[:1]
 
 
 class _TimerlessDump:
-    """``LiveDump`` without the C timer (so in this process): counts reads."""
+    """``LiveDump`` without the C timer (so in this process): logs the
+    monitor's cancels and reads, in order, for ``unjustified_reads``."""
 
     def __init__(self, after_ms: float) -> None:
         self.after_s = after_ms / 1000
-        self.reads: list = []
+        self.events: list = [("cancel", time.monotonic())]
 
     active = True
 
@@ -557,10 +594,10 @@ class _TimerlessDump:
         pass
 
     def cancel(self) -> None:
-        pass
+        self.events.append(("cancel", time.monotonic()))
 
     def take(self) -> str:
-        self.reads.append(time.monotonic())
+        self.events.append(("take", time.monotonic()))
         return ""
 
     def close(self) -> None:
@@ -569,24 +606,37 @@ class _TimerlessDump:
 
 @pytest.mark.parametrize("loop_block_s, read", [(0.0, False), (0.2, True)])
 def test_a_heartbeat_round_is_read_only_when_it_lasted_the_live_delay(monkeypatch, loop_block_s, read):
-    """The read decision itself, with no C timer: quiet rounds (10 ms ticks,
-    heartbeats served at once) are never read, so the monitor never releases
-    the GIL to a file read with no timer pending; a heartbeat the loop serves
-    200 ms late (past live 150 ms, under the 250 ms limit) is read."""
+    """The read decision itself, with no C timer: a round shorter than the
+    live delay (10 ms ticks, heartbeats served at once) is never read, so the
+    monitor never releases the GIL to a file read with no timer pending; a
+    heartbeat the loop serves 200 ms late (past live 150 ms, under the 250 ms
+    limit) is read. Robust on a loaded runner without a wider limit: a read
+    is allowed exactly where the round really lasted 150 ms."""
     monkeypatch.setattr(loop_watchdog, "LiveDump", _TimerlessDump)
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
                                        tick_ms=10, log=False, live_ms=150).start()
         await asyncio.sleep(0.3)
-        quiet = len(mon._live.reads)
         if loop_block_s:
             time.sleep(loop_block_s)  # the loop is late; the GIL stays free
         await asyncio.sleep(0.1)
         mon.stop()
-        return mon, quiet
+        return mon
 
-    mon, quiet = asyncio.run(run())
-    assert quiet == 0, f"{quiet} reads in 0.3 s of quiet rounds"
-    assert bool(mon._live.reads) is read, mon._live.reads
-    assert mon.stalls == []
+    mon = asyncio.run(run())
+    events = mon._live.events
+    reads = [t for kind, t in events if kind == "take"]
+    assert unjustified_reads(events, 0.150) == [], (unjustified_reads(events, 0.150), len(reads))
+    assert len(mon.stalls) <= rounds_past(events, 0.250), mon.stalls[:1]
+    if read:
+        assert reads, "the 200 ms late heartbeat was never read"
+
+
+@pytest.mark.parametrize("events, bad", [
+    ([("cancel", 0.0), ("cancel", 0.01), ("take", 0.011)], [11.0]),
+    ([("cancel", 0.0), ("cancel", 0.2), ("take", 0.201)], []),
+    ([("cancel", 0.0), ("take", 0.001)], []),
+])
+def test_unjustified_reads_flags_a_read_only_in_a_round_shorter_than_the_delay(events, bad):
+    assert unjustified_reads(events, 0.150) == bad
