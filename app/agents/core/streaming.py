@@ -1433,7 +1433,7 @@ async def _chat_stream_impl(
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
-                **_tool_message_extra(_tool_payload, _tool_content),
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
             }))
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})

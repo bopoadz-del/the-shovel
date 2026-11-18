@@ -3156,13 +3156,99 @@ def _row_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
     return out
 
 
+#: Over budget, the outline keeps each part's scalar fields; a text field
+#: keeps this many characters and a list of plain values this many entries.
+_OUTLINE_TEXT_CHARS = 200
+_OUTLINE_LIST_ITEMS = 20
+#: The outline key naming, per list of parts it had to shorten, how many
+#: parts the result holds (the list itself holds the parts shown).
+PARTS_TOTAL_KEY = "parts_total"
+
+
+def _is_part_list(node: list[Any]) -> bool:
+    """A list of parts: every item an object, and some item holds rows."""
+    return bool(node) and all(isinstance(v, dict) for v in node) and any(_row_lists(v) for v in node)
+
+
+def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
+    """``node`` with only its scalar and statement fields: numbers, flags,
+    texts (each cut to _OUTLINE_TEXT_CHARS), lists of plain values (the
+    first _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
+    every part, so reduced; every other list of rows is dropped and its
+    length counted in ``totals`` under its path."""
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            sub = f"{path}.{k}" if path else str(k)
+            if isinstance(v, list) and any(isinstance(x, (dict, list)) for x in v) and not _is_part_list(v):
+                totals[sub] = len(v)
+                continue
+            out[k] = _scalar_fields(v, sub, totals)
+        return out
+    if isinstance(node, list):
+        if _is_part_list(node):
+            return [_scalar_fields(v, f"{path}[{i}]", totals) for i, v in enumerate(node)]
+        return [_scalar_fields(v, path, totals) for v in node[:_OUTLINE_LIST_ITEMS]]
+    if isinstance(node, str) and len(node) > _OUTLINE_TEXT_CHARS:
+        return node[:_OUTLINE_TEXT_CHARS]
+    return node
+
+
+def _part_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
+    """Every non-empty list of objects in ``node`` (outline keys skipped)."""
+    out: list[tuple[str, list[Any]]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in (ROWS_TOTAL_KEY, PARTS_TOTAL_KEY):
+                continue
+            out.extend(_part_lists(v, f"{path}.{k}" if path else str(k)))
+    elif isinstance(node, list) and node and any(isinstance(v, dict) for v in node):
+        out.append((path, node))
+    return out
+
+
+def _part_index(key: str, path: str) -> int:
+    """The index of the part of list ``path`` that ``key`` lies under, or -1."""
+    head = f"{path}["
+    if not key.startswith(head):
+        return -1
+    digits = key[len(head):].split("]", 1)[0]
+    return int(digits) if digits.isdigit() else -1
+
+
+def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Halve the longest list of parts until ``work`` fits ``budget``, and
+    name each shortened list's whole length under PARTS_TOTAL_KEY, so the
+    parts shown are said to be N of M. The top-level fields always stay."""
+    parts: dict[str, int] = {}
+    while len(json.dumps(work, default=str)) > budget:
+        found = _part_lists(work)
+        if not found:
+            break
+        path, longest = max(found, key=lambda pl: len(json.dumps(pl[1], default=str)))
+        parts.setdefault(path, len(longest))
+        del longest[len(longest) // 2:]
+        work[PARTS_TOTAL_KEY] = parts
+        # The row counts of the parts no longer shown go with them.
+        totals = work.get(ROWS_TOTAL_KEY)
+        if isinstance(totals, dict):
+            for key in [k for k in totals if _part_index(k, path) >= len(longest)]:
+                del totals[key]
+    return work
+
+
 def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     """Every field of ``payload`` except its innermost row lists, with how
     many rows each of those held under ``rows_total`` -- the figure, the
     unit, the selection and the count of rows, never cut. A list that holds
     the parts of a result (one entry per bill) keeps its parts; only the rows
-    inside them go. None when the result has no rows, or when even its
-    outline is over ``budget`` (a long text is paged, not outlined)."""
+    inside them go. None only when the result has no rows (a long text is
+    paged, not outlined).
+
+    The outline is NEVER dropped for its size. Over ``budget`` it keeps the
+    scalar and statement fields of every part and drops every other list
+    (``_scalar_fields``); still over, it shows the first parts of the
+    longest list of parts and names how many there are (``_fit_parts``)."""
     try:
         work = json.loads(json.dumps(payload, default=str))
     except (TypeError, ValueError):
@@ -3179,7 +3265,49 @@ def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     if not totals:
         return None
     work[ROWS_TOTAL_KEY] = totals
-    return work if len(json.dumps(work)) <= budget else None
+    if len(json.dumps(work)) <= budget:
+        return work
+    whole = json.loads(json.dumps(payload, default=str))
+    dropped: dict[str, int] = {}
+    reduced = _scalar_fields(whole, "", dropped)
+    reduced[ROWS_TOTAL_KEY] = {**dropped, **totals}
+    return _fit_parts(reduced, budget)
+
+
+ROWS_SHOWN_KEY = "rows_shown"
+
+
+def _rows_in_window(payload: Any, text: str, start: int, end: int) -> dict[str, int]:
+    """Per innermost list of rows (the paths of ``rows_total``), how many
+    WHOLE rows lie inside the character window ``text[start:end]`` of the
+    serialized ``payload``. Each row is found by its own serialization, in
+    order, so a row the window cuts in half is not counted."""
+    shown: dict[str, int] = {}
+    try:
+        work = json.loads(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        _LOG.info("tool result rows: the result does not serialize", exc_info=True)
+        return shown
+    for path, rows in _row_lists(work):
+        if any(inner for v in rows for _, inner in _row_lists(v)):
+            continue  # a list of parts: its rows are counted in the parts
+        cursor, n = 0, 0
+        for row in rows:
+            piece = json.dumps(row)
+            at = text.find(piece, cursor)
+            if at < 0:
+                break
+            cursor = at + len(piece)
+            if at >= start and cursor <= end:
+                n += 1
+        shown[path] = n
+    return shown
+
+
+def _rows_note(shown: dict[str, int], totals: dict[str, int]) -> str:
+    """'rows shown: N of M (path)' for every list the window shortened."""
+    return "; ".join(f"rows shown: {n} of {totals[p]} ({p})"
+                     for p, n in shown.items() if p in totals and n < totals[p])
 
 
 def _tool_result_was_cut(content: Any) -> bool:
@@ -3195,10 +3323,18 @@ def _tool_result_was_cut(content: Any) -> bool:
     return isinstance(head, dict) and bool(head.get("truncated"))
 
 
-def _tool_message_extra(payload: dict[str, Any], content: str) -> dict[str, Any]:
+def _tool_message_extra(payload: dict[str, Any], content: str, name: str = "") -> dict[str, Any]:
     """The private keys a tool message carries besides its content: the
-    whole result, by reference, when the content was cut."""
+    whole result, by reference, when the content was cut AND the tool
+    DECLARES a computed result (``tool_registry``), the only kind the answer
+    path renders. A document read or a search is never held: nothing renders
+    it, and its model copy already says it was cut and where to read on.
+    The key is turn-local: ``_sanitize_messages_for_provider`` never sends
+    it, and ``agent_memory.append_message`` stores only a role and a text."""
     if not _tool_result_was_cut(content):
+        return {}
+    kind, _spec = _declared_kind({"name": name})
+    if kind != "computed":
         return {}
     return {FULL_RESULT_KEY: payload}
 
@@ -3250,6 +3386,10 @@ def _tool_result_content(
         shown = min(keep, len(window))
         next_offset = start + shown
         more = next_offset < len(text)
+        totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
+        rows_shown = ({p: n for p, n in _rows_in_window(payload, text, start, next_offset).items()
+                       if p in totals} if totals else {})
+        rows_note = _rows_note(rows_shown, totals)
         return json.dumps(
             {
                 "truncated": True,
@@ -3293,6 +3433,8 @@ def _tool_result_content(
                     )
                 ),
                 **({OUTLINE_KEY: outline} if outline is not None else {}),
+                **({ROWS_SHOWN_KEY: rows_shown} if rows_shown else {}),
+                **({"rows_note": rows_note} if rows_note else {}),
                 "preview": window[:keep],
             },
             default=str,
@@ -11654,6 +11796,10 @@ def _compacted_tool_payload(
         budget = outline_budget if outline_budget is not None else kept // 4
         outline = _result_outline(whole, max(1, int(budget)))
     dropped = max(0, len(content) - kept)
+    totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
+    rows_shown = ({p: n for p, n in _rows_in_window(whole, content, 0, kept).items() if p in totals}
+                  if totals and isinstance(whole, dict) and not whole.get("truncated") else {})
+    rows_note = _rows_note(rows_shown, totals)
     return json.dumps(
         {
             "truncated": True,
@@ -11673,6 +11819,8 @@ def _compacted_tool_payload(
                 "section, page, or code the user wants."
             ),
             **({OUTLINE_KEY: outline} if outline is not None else {}),
+            **({ROWS_SHOWN_KEY: rows_shown} if rows_shown else {}),
+            **({"rows_note": rows_note} if rows_note else {}),
             "preview": content[:kept],
         },
         default=str,

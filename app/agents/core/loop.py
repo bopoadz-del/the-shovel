@@ -729,7 +729,7 @@ async def _chat_impl(
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
-                **_tool_message_extra(_tool_payload, _tool_content),
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
             })
             from app.agents import answer_exit as _answer_exit
             _answer_exit.note_tool_message(tc, messages[-1])

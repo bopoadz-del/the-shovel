@@ -484,7 +484,7 @@ def test_a_cut_result_held_by_reference_states_its_figure(result, args, rows, to
     cut = runtime._tool_result_content(full, max_chars=4000)
     turn = _turn("how many items, and the total?", (args, result))
     turn[3]["content"] = cut
-    turn[3].update(runtime._tool_message_extra(full, cut))
+    turn[3].update(runtime._tool_message_extra(full, cut, TOOL))
     assert runtime._computed_turn_answer(turn, require_stated=True), "waited on a cut call it holds"
     for out in _answers(turn):
         assert f"**{rows}**" in out, out
@@ -512,7 +512,7 @@ def test_the_live_fifth_shape_a_cut_result_then_a_zero_result(result, args, rows
     cut = runtime._tool_result_content(full, max_chars=4000)
     turn = _turn("how many items, and gully?", (args, result), ({"terms": "gully"}, zero))
     turn[3]["content"] = cut
-    turn[3].update(runtime._tool_message_extra(full, cut))
+    turn[3].update(runtime._tool_message_extra(full, cut, TOOL))
     for out in _answers(turn):
         assert f"**{rows}**" in out, out
         assert _CUT_REASON not in out, out
@@ -529,7 +529,7 @@ def test_the_live_fifth_shape_a_cut_result_then_a_zero_result(result, args, rows
 ])
 def test_only_a_cut_result_is_held_by_reference(content, held):
     payload = {"ok": True, "result": {"rows": [1]}}
-    extra = runtime._tool_message_extra(payload, content)
+    extra = runtime._tool_message_extra(payload, content, TOOL)
     assert (runtime.FULL_RESULT_KEY in extra) is held
     if held:
         assert extra[runtime.FULL_RESULT_KEY] is payload
@@ -681,3 +681,231 @@ def test_stream_the_live_fifth_shape_a_result_over_the_cap_then_a_zero(monkeypat
     assert EN["not_returned"] not in out and _CUT_REASON not in out, out
     line = _zero_line(out)
     assert absent in line and out.index(f"**{want}**") < out.index(line), out
+
+
+# ── #428 grader 0840Z: (a) the model's copy never loses the outline ─────────
+
+def _many_bills(n: int, rows_each: int) -> dict:
+    """An invented result stating ``n`` figures: ``n`` bills, each with rows."""
+    bills = [_bill(f"bill-{i}.xlsx", ["kerb"], "m",
+                   [(f"K.{i}.{j}", 1, float(j + 1)) for j in range(rows_each)])["bills"][0]
+             for i in range(n)]
+    return {"status": "success", "bills": bills}
+
+
+def _one_bill_wide(rows: int, pages: int) -> dict:
+    """An invented result stating ONE figure whose non-row fields are large."""
+    result = _long_bill("bill-wide.xlsx", "duct", "nr", rows)
+    result["bills"][0]["pages_read"] = list(range(1, pages + 1))
+    result["bills"][0]["working"] = "summed per unit " * 400
+    return result
+
+
+@pytest.mark.parametrize("result,figures", [
+    (_many_bills(120, 4), 120),     # many stated figures
+    (_one_bill_wide(30, 3000), 1),  # one stated figure, wide fields
+], ids=["many_figures", "one_figure"])
+def test_an_outline_over_its_budget_keeps_the_statement_fields_never_dropped(result, figures):
+    full = {"name": TOOL, "ok": True, "result": result}
+    cap = 4000
+    env = json.loads(runtime._tool_result_content(full, max_chars=cap))
+    outline = env.get(runtime.OUTLINE_KEY)
+    assert outline is not None, "the outline was dropped"
+    assert outline["name"] == TOOL and outline["ok"] is True
+    bills = outline["result"]["bills"]
+    assert bills, outline
+    for got, want in zip(bills, result["bills"]):
+        assert (got["count"], got["sum"], got["terms"], got["filename"]) == (
+            want["count"], want["sum"], want["terms"], want["filename"])
+        assert "rows" not in got or got["rows"] == []
+    if len(bills) < figures:
+        # The parts shown are said to be N of M.
+        assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": figures}, outline
+    else:
+        assert runtime.PARTS_TOTAL_KEY not in outline
+        assert len(bills[0].get("pages_read", [])) <= runtime._OUTLINE_LIST_ITEMS
+        assert len(bills[0].get("working", "")) <= runtime._OUTLINE_TEXT_CHARS
+    assert all(isinstance(v, int) for v in outline[runtime.ROWS_TOTAL_KEY].values())
+
+
+@pytest.mark.parametrize("payload", [
+    {"ok": True, "result": {"bills": [{"count": 3, "rows": [{"r": "x" * 900}] * 3}]}},
+    {"ok": True, "rows": [{"r": "y" * 900}] * 5, "sum": 7},
+])
+def test_an_outline_never_returns_none_for_a_result_with_rows(payload):
+    outline = runtime._result_outline(payload, 40)
+    assert outline is not None and outline["ok"] is True, outline
+
+
+# ── (b) N of M rows shown ─────────────────────────────────────────────────────
+
+def _whole_rows_in(preview: str, rows: list[dict]) -> int:
+    cursor, n = 0, 0
+    for r in rows:
+        piece = json.dumps(r)
+        at = preview.find(piece, cursor)
+        if at < 0:
+            break
+        cursor, n = at + len(piece), n + 1
+    return n
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+@pytest.mark.parametrize("cap", [3000, 6000])
+def test_a_cut_result_says_how_many_rows_are_shown_of_how_many(result, args, rows, total, cap):
+    full = {"name": TOOL, "ok": True, "result": result}
+    env = json.loads(runtime._tool_result_content(full, max_chars=cap))
+    path = "result.bills[0].rows"
+    shown = env[runtime.ROWS_SHOWN_KEY][path]
+    assert shown == _whole_rows_in(env["preview"], result["bills"][0]["rows"])
+    assert 0 <= shown < rows
+    assert f"rows shown: {shown} of {rows} ({path})" in env["rows_note"], env["rows_note"]
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_the_compacted_copy_also_says_how_many_rows_are_shown(result, args, rows, total):
+    text = json.dumps({"name": TOOL, "ok": True, "result": result})
+    env = json.loads(runtime._compacted_tool_payload(text, 2500, outline_budget=2000))
+    shown = env[runtime.ROWS_SHOWN_KEY]["result.bills[0].rows"]
+    assert shown == _whole_rows_in(env["preview"], result["bills"][0]["rows"]) and shown < rows
+    assert f"{shown} of {rows}" in env["rows_note"]
+
+
+@pytest.mark.parametrize("result", [BILLS[0][0], BILLS[1][0]])
+def test_a_whole_result_carries_no_rows_shown(result):
+    full = {"name": TOOL, "ok": True, "result": result}
+    assert runtime.ROWS_SHOWN_KEY not in runtime._tool_result_content(full, max_chars=8000)
+
+
+# ── (c) the reference: only a declared computed result, never stored or logged ──
+
+def _fetch_result(n: int) -> dict:
+    return {"status": "success", "document_id": "d-1", "filename": "invented-spec.pdf",
+            "content": "Cure under wet hessian. " * n,
+            "pages": [{"page": i, "text": "p"} for i in range(n)]}
+
+
+@pytest.mark.parametrize("n", [600, 1500])
+def test_a_cut_document_read_is_never_held_by_reference(n):
+    payload = _fetch_result(n)
+    cut = runtime._tool_result_content(payload, max_chars=4000)
+    assert runtime._tool_result_was_cut(cut)
+    assert runtime._tool_message_extra(payload, cut, "fetch_document") == {}
+    assert runtime._tool_message_extra(payload, cut, "search_project_documents") == {}
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_a_cut_computed_result_is_held_by_reference(result, args, rows, total):
+    full = {"name": TOOL, "ok": True, "result": result}
+    cut = runtime._tool_result_content(full, max_chars=4000)
+    assert runtime._tool_message_extra(full, cut, TOOL)[runtime.FULL_RESULT_KEY] is full
+    assert runtime._tool_message_extra(full, cut, "") == {}
+
+
+_DEEPSEEK = {"provider": "deepseek", "url": "https://api.deepseek.com/v1/chat/completions",
+             "env_key": "DEEPSEEK_API_KEY", "default_model": "deepseek-chat"}
+
+
+def _core_stream(monkeypatch, caplog, rows, term, cap, conversation_id=None):
+    """The CORE stream route (``Agent.chat_stream``), the provider scripted:
+    hop 1 asks for the bill tool, which runs for real on an invented bill;
+    hop 2 says nothing, so the answer is the computed one. Returns the
+    events and what the provider was sent, hop by hop."""
+    import asyncio
+    import logging
+    from unittest.mock import patch
+
+    from app.agents.runtime import Agent
+
+    monkeypatch.setattr("app.agents.runtime._llm_config", lambda: dict(_DEEPSEEK))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "invented-key")
+    monkeypatch.setenv("SYNTHESIS_STREAMING", "0")
+    monkeypatch.setattr(runtime, "_TOOL_RESULT_MAX_CHARS", cap)
+    _install_stream_bill(monkeypatch, rows, [True])
+
+    async def _is_ready(_pid):
+        return True
+
+    # The project is indexed and retrieval hands nothing: the turn is the tool's.
+    monkeypatch.setattr("app.agents.runtime._project_is_rag_ready_off_process", _is_ready)
+    monkeypatch.setattr("app.agents.runtime.project_is_rag_ready", lambda _pid: True)
+    monkeypatch.setattr("app.agents.runtime.rag_inject",
+                        lambda **kwargs: (None, {"project_id": "p-invented", "chunks": []}))
+    sent: list[list[dict]] = []
+
+    async def fake_call(_self, messages, api_key, **kwargs):
+        sent.append(runtime._sanitize_messages_for_provider(messages))
+        if len(sent) == 1:
+            return {"status": "success", "choice": {"message": {
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "s0", "type": "function", "function": {
+                    "name": TOOL, "arguments": json.dumps({"terms": term})}}]}}}
+        return {"status": "success", "choice": {"message": {"role": "assistant", "content": ""}}}
+
+    agent = Agent(name="project-assistant", description="pa", system_prompt="x",
+                  allowed_blocks=["construction"])
+
+    async def go():
+        return [ev async for ev in agent.chat_stream(
+            user_message=f"how many {term} items, and the total?", history=[],
+            project_id="p-invented", conversation_id=conversation_id, user_id=None)]
+
+    caplog.set_level(logging.DEBUG)
+    with patch.object(Agent, "_call_llm", fake_call):
+        events = asyncio.run(go())
+    return events, sent
+
+
+def _tokens(events) -> str:
+    return "".join(e.get("content", "") for e in events if e.get("type") == "token")
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_core_stream_a_computed_result_over_the_cap_states_its_figure(monkeypatch, caplog, a, b, rows):
+    """(d) through the CORE stream route, which holds the reference: the
+    model gets a valid envelope within the cap (outline and N of M rows);
+    the answer states the whole figure; the provider never gets the key."""
+    many = [(f"{r}{i}", d, u, q) for i in range(40) for r, d, u, q in rows]
+    events, sent = _core_stream(monkeypatch, caplog, many, a, 3000)
+    want = sum(a in d.lower() for _r, d, _u, _q in many)
+    out = _tokens(events)
+    assert f"**{want}**" in out, (out, events[-3:])
+    assert _CUT_REASON not in out and EN["not_returned"] not in out, out
+    assert len(sent) >= 2, sent
+    tool_msgs = [m for m in sent[1] if m.get("role") == "tool"]
+    assert tool_msgs, sent[1]
+    for m in tool_msgs:
+        assert runtime.FULL_RESULT_KEY not in m
+        env = json.loads(m["content"])
+        assert len(m["content"]) <= 3000 and env["truncated"], m["content"][:200]
+        # The core loop hands the tool's own result (no name/ok wrapper).
+        outline = env[runtime.OUTLINE_KEY]
+        assert outline["bills"][0]["count"] == want
+        assert "rows shown:" in env["rows_note"] and f"of {want} (bills[0].rows)" in env["rows_note"]
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_core_stream_the_reference_is_never_stored_reloaded_or_logged(monkeypatch, caplog, a, b, rows):
+    """(c) the turn is persisted by ``agent_memory.append_message`` (role and
+    text only) and reloaded by ``agent_memory.get_messages``: neither carries
+    the key or a row past the model's window, and no log line of the turn
+    does."""
+    import uuid
+
+    from app.core import agent_memory
+
+    marker = "zzpastwindow"
+    many = [(f"{r}{i}", d, u, q) for i in range(40) for r, d, u, q in rows]
+    many.append(("Z.999", f"{a} {marker} final row", many[0][2], "1"))
+    cid = f"ws-p-invented-{uuid.uuid4().int % 10**13}"
+    agent_memory.get_or_create_conversation(cid, "project-assistant")
+    events, sent = _core_stream(monkeypatch, caplog, many, a, 3000, conversation_id=cid)
+    held = [m for m in sent[1] if m.get("role") == "tool"]
+    assert held and marker not in held[0]["content"], "the marker row must lie past the window"
+    stored = agent_memory.get_messages(cid, limit=None)
+    assert stored, "the turn was not persisted"
+    assert {m["role"] for m in stored} <= {"user", "assistant"}
+    for m in stored:
+        assert runtime.FULL_RESULT_KEY not in json.dumps(m, default=str)
+    assert runtime.FULL_RESULT_KEY not in caplog.text
+    assert f"{marker} final row" not in caplog.text
