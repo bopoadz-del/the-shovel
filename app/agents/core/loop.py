@@ -142,7 +142,7 @@ async def _chat_impl(
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
-        _text_needs_tool_recovery, _tool_result_content, _tool_result_errored,
+        _text_needs_tool_recovery, _tool_message_extra, _tool_result_content, _tool_result_errored,
         _vo_draft_ready_for_synthesis, answer_report_export_enabled,
         fulfill_wbs_export, inspect, json, message_wants_answer_report,
         message_wants_wbs_export, os, time,
@@ -700,9 +700,11 @@ async def _chat_impl(
             if isinstance(_inner, dict) and _inner.get("status") == "error":
                 ok = False
                 err = str(_inner.get("error") or "")[:200]
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
             _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
+                _tool_payload,
                 offset=_requested_char_offset(tc),
             )
             # Half a document is not a deliverable: locking synthesis here
@@ -727,6 +729,7 @@ async def _chat_impl(
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
+                **_tool_message_extra(_tool_payload, _tool_content),
             })
             from app.agents import answer_exit as _answer_exit
             _answer_exit.note_tool_message(tc, messages[-1])

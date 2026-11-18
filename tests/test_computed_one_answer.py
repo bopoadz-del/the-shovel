@@ -445,3 +445,118 @@ def test_the_real_serializer_cut_then_a_zero_result(result, _a, args, figure):
         line = _unanswered_line(out)
         assert f"{EN['asked']}: gully" in line and _CUT_REASON in line, out
         assert out.index("**0**") < out.index(line), out
+
+
+# -- a result over the size cap (Advisor 06:33Z): its statement is never cut.
+# The figure, the unit, the selection and the row count ride whole beside the
+# window (``whole_result_fields``); the answer reads the whole result by
+# reference (``full_result``), never by re-parsing a preview.
+
+def _long_bill(filename: str, word: str, unit: str, n: int) -> dict:
+    """An invented bill with ``n`` matching rows of quantity 1..n."""
+    return _bill(filename, [word], unit,
+                 [(f"{word[0].upper()}.{i}", 1 + i // 10, float(i + 1)) for i in range(n)])
+
+
+LONG_BILLS = [
+    (_long_bill("bill-gamma.xlsx", "kerb", "m", 60), {"terms": "kerb"}, 60, 1830),
+    (_long_bill("bill-delta.xlsx", "duct", "nr", 85), {"terms": "duct"}, 85, 3655),
+]
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_a_result_over_the_cap_keeps_its_figure_selection_and_row_count(result, args, rows, total):
+    full = {"name": TOOL, "ok": True, "result": result}
+    cap = 4000
+    assert len(json.dumps(full)) > cap
+    env = json.loads(runtime._tool_result_content(full, max_chars=cap))
+    assert env["truncated"] and env["next_char_offset"], env  # still paged
+    whole = env[runtime.OUTLINE_KEY]
+    bill = whole["result"]["bills"][0]
+    assert bill["sum"] == total and bill["count"] == rows and bill["terms"] == result["bills"][0]["terms"]
+    assert bill["rows"] == []  # only the rows go
+    assert whole[runtime.ROWS_TOTAL_KEY] == {"result.bills[0].rows": rows}
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_a_cut_result_held_by_reference_states_its_figure(result, args, rows, total):
+    full = {"name": TOOL, "ok": True, "result": result}
+    cut = runtime._tool_result_content(full, max_chars=4000)
+    turn = _turn("how many items, and the total?", (args, result))
+    turn[3]["content"] = cut
+    turn[3].update(runtime._tool_message_extra(full, cut))
+    assert runtime._computed_turn_answer(turn, require_stated=True), "waited on a cut call it holds"
+    for out in _answers(turn):
+        assert f"**{rows}**" in out, out
+        assert _CUT_REASON not in out and _UNANSWERED not in out, out
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_a_cut_result_without_its_reference_is_too_large_not_no_figure(result, args, rows, total):
+    full = {"name": TOOL, "ok": True, "result": result}
+    cut = runtime._tool_result_content(full, max_chars=60)
+    turn = _turn("how many items, and the total?", (args, result))
+    turn[3]["content"] = cut
+    for out in _answers(turn):
+        assert _CUT_REASON in out, out
+        assert "too large to show" in _CUT_REASON
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_the_live_fifth_shape_a_cut_result_then_a_zero_result(result, args, rows, total):
+    """Live A3 (18 Nov): call 1 over the cap, call 2 a count of 0. Call 1's
+    figure survives and leads."""
+    zero = {**result, "bills": [{**result["bills"][0], "terms": ["gully"], "count": 0, "sum": 0,
+                                 "rows": [], "sum_by_unit": {}}]}
+    full = {"name": TOOL, "ok": True, "result": result}
+    cut = runtime._tool_result_content(full, max_chars=4000)
+    turn = _turn("how many items, and gully?", (args, result), ({"terms": "gully"}, zero))
+    turn[3]["content"] = cut
+    turn[3].update(runtime._tool_message_extra(full, cut))
+    for out in _answers(turn):
+        assert f"**{rows}**" in out and "**0**" in out, out
+        assert out.index(f"**{rows}**") < out.index("**0**"), out
+        assert _CUT_REASON not in out, out
+
+
+@pytest.mark.parametrize("content,held", [
+    (json.dumps({"truncated": True, "preview": "{"}), True),
+    (json.dumps({"ok": True, "result": {}}), False),
+])
+def test_only_a_cut_result_is_held_by_reference(content, held):
+    payload = {"ok": True, "result": {"rows": [1]}}
+    extra = runtime._tool_message_extra(payload, content)
+    assert (runtime.FULL_RESULT_KEY in extra) is held
+    if held:
+        assert extra[runtime.FULL_RESULT_KEY] is payload
+
+
+def test_the_whole_result_never_reaches_the_provider():
+    msg = {"role": "tool", "tool_call_id": "c1", "name": TOOL, "content": "{}",
+           runtime.FULL_RESULT_KEY: {"ok": True}}
+    assert runtime.FULL_RESULT_KEY not in runtime._sanitize_messages_for_provider([msg])[-1]
+
+
+@pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
+def test_stream_a_result_over_the_cap_reaches_the_model_whole_and_the_answer(monkeypatch, a, b, rows):
+    """The real stream route with the model's per-result cap lowered: the
+    model is handed a VALID envelope whose outline carries the count of rows
+    and the selection, and the answer states the figure."""
+    from app.agents.driver import loop as driver_loop
+    from tests.lane5_core_support import answer_text, call, drive, install_driver_stream
+
+    many = [(f"{r}{i}", d, u, q) for i in range(40) for r, d, u, q in rows]
+    monkeypatch.setattr(driver_loop, "_TOOL_RESULT_CHARS", 3000)
+    _install_stream_bill(monkeypatch, many, [True])
+    install_driver_stream(monkeypatch)
+    events, seen = drive(monkeypatch, f"how many {a} items, and the total?", [
+        {"content": "", "tool_calls": [call(TOOL, {"terms": a}, "s0")]},
+        {"content": ""},
+    ], project_id="p-invented")
+    tool_msgs = [m for m in seen[-1]["messages"] if m.get("role") == "tool"]
+    env = json.loads(tool_msgs[-1]["content"])  # whole JSON, not a raw slice
+    assert env["truncated"], env
+    want = sum(a in d.lower() for _r, d, _u, _q in many)
+    totals = env[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY]
+    assert want in totals.values(), totals
+    assert f"**{want}**" in answer_text(events)
