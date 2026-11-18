@@ -49,6 +49,18 @@ def excess_over_baseline(load_max_ms: float, idle_baseline_ms: float) -> float:
     process for the same amount whether idle or loaded does not fail the gate."""
     return max(0.0, load_max_ms - idle_baseline_ms)
 
+
+def wake_late_when(wake_late_at, window_start: float) -> str:
+    """WHEN in a window each late watchdog wake-up happened, printed only.
+
+    ``wake_late_at`` is ``LagMonitor.wake_late_at``: ``(late_ms, monotonic_s)``
+    pairs. Each becomes ``<late>ms@+<seconds since the window began>s``, in
+    time order, so one early event (a first-use initialisation under load)
+    reads apart from a hold that repeats through the window. Never gates.
+    """
+    marks = sorted(wake_late_at, key=lambda pair: pair[1])
+    return ",".join(f"{late:.0f}ms@+{at - window_start:.2f}s" for late, at in marks) or "none"
+
 _QUESTIONS = (
     "What is the defects notification period?",
     "What compaction is required under the pavement?",
@@ -173,7 +185,10 @@ def test_fifteen_users_never_block_the_loop_for_more_than_250_ms(seeded, monkeyp
     lines = [f"LOOP_LAG_RESULT load_max={mon.max_lag_ms:.0f}ms idle_control={idle.max_lag_ms:.0f}ms "
              f"excess={excess:.0f}ms limit={LIMIT_MS}ms stalls={len(mon.stalls)} "
              f"monitor_wake_late_max={mon.max_wake_late_ms:.0f}ms "
-             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms",
+             f"idle_wake_late_max={idle.max_wake_late_ms:.0f}ms "
+             f"load_s={windows['load'][1] - windows['load'][0]:.2f} "
+             f"wake_late_when={wake_late_when(mon.wake_late_at, windows['load'][0])} "
+             f"idle_wake_late_when={wake_late_when(idle.wake_late_at, windows['idle'][0])}",
              _wake_sidecar.summary_line(wakes, side.error, windows["idle"], windows["load"],
                                         mon.max_lag_ms, mon.max_wake_late_ms)]
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
@@ -209,21 +224,55 @@ def test_the_capture_runs_over_the_fifteen_user_load_in_its_own_process(tmp_path
     try:
         proc = subprocess.run([sys.executable, "-m", "tests._loop_capture_pass", str(tmp_path)],
                               cwd=_REPO, capture_output=True, text=True, timeout=_PASS_TIMEOUT_S, check=False)
-        rc, out, err = proc.returncode, proc.stdout, proc.stderr
+        rc, out = proc.returncode, proc.stdout
     except subprocess.TimeoutExpired as exc:
-        rc, out, err = None, exc.stdout or "", exc.stderr or ""
+        rc, out = type(exc).__name__, exc.stdout or ""
         out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
-        err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
-    found = [ln for ln in out.splitlines() if ln.startswith("LOOP_CAPTURE_RESULT ")]
-    result = json.loads(found[-1].split(" ", 1)[1]) if found else None
-    line = (f"LOOP_CAPTURE_PASS rc={rc} " + (json.dumps(result) if result is not None
-            else f"no result; stderr tail: {err[-1500:]!r}"))
+    line, silent = capture_pass_line(rc, out)
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line(line)
     else:
         sys.__stderr__.write(line + "\n")
-    assert not (rc == 0 and result is None), line
+    assert not (rc == 0 and silent), line
+
+
+def capture_pass_line(rc, out: str) -> tuple[str, bool]:
+    """The printed ``LOOP_CAPTURE_PASS`` line for the child's exit code and
+    stdout, and whether the child was SILENT (printed no result line at all).
+
+    Report-only (advisor 01:50Z 18 Nov): a result line that does not parse, or
+    is not a JSON object, is printed as its exception class -- it never raises,
+    so malformed output cannot turn the required job red. The child's stderr is
+    never printed (public log): only the return code and an exception class."""
+    found = [ln for ln in (out or "").splitlines() if ln.startswith("LOOP_CAPTURE_RESULT ")]
+    if not found:
+        return f"LOOP_CAPTURE_PASS rc={rc} no result", True
+    try:
+        result = json.loads(found[-1].split(" ", 1)[1])
+        if not isinstance(result, dict):
+            raise TypeError("result is not a JSON object")
+        return f"LOOP_CAPTURE_PASS rc={rc} " + json.dumps(result), False
+    except (ValueError, TypeError) as exc:  # report-only: the class is printed, never raised
+        return f"LOOP_CAPTURE_PASS rc={rc} result_error={type(exc).__name__}", False
+
+
+@pytest.mark.parametrize("rc,out,expected,silent", [
+    (0, 'x\nLOOP_CAPTURE_RESULT {"load_max_ms": 97}\n',
+     'LOOP_CAPTURE_PASS rc=0 {"load_max_ms": 97}', False),
+    (0, 'LOOP_CAPTURE_RESULT {"load_max_ms": 1}\nLOOP_CAPTURE_RESULT {"load_max_ms": 2}\n',
+     'LOOP_CAPTURE_PASS rc=0 {"load_max_ms": 2}', False),      # the last result line wins
+    (0, "warming up\n", "LOOP_CAPTURE_PASS rc=0 no result", True),
+    (139, "", "LOOP_CAPTURE_PASS rc=139 no result", True),
+    ("TimeoutExpired", "half a line", "LOOP_CAPTURE_PASS rc=TimeoutExpired no result", True),
+    (0, "LOOP_CAPTURE_RESULT {not json /home/runner/secret",
+     "LOOP_CAPTURE_PASS rc=0 result_error=JSONDecodeError", False),
+    (1, "LOOP_CAPTURE_RESULT ", "LOOP_CAPTURE_PASS rc=1 result_error=JSONDecodeError", False),
+    (0, "LOOP_CAPTURE_RESULT [1, 2]", "LOOP_CAPTURE_PASS rc=0 result_error=TypeError", False),
+    (0, 'LOOP_CAPTURE_RESULT "a string"', "LOOP_CAPTURE_PASS rc=0 result_error=TypeError", False),
+])
+def test_the_capture_line_never_raises_and_prints_only_class_and_code(rc, out, expected, silent):
+    assert capture_pass_line(rc, out) == (expected, silent)
 
 
 def test_the_monitor_sees_a_blocked_loop():
@@ -249,3 +298,15 @@ def test_the_monitor_sees_a_blocked_loop():
 ])
 def test_excess_over_baseline_subtracts_runner_noise(load_max, baseline, expected):
     assert excess_over_baseline(load_max, baseline) == expected
+
+
+@pytest.mark.parametrize("marks,start,expected", [
+    # one early late wake: its offset from the window's start, not the clock
+    ([(548.4, 101.42)], 100.0, "548ms@+1.42s"),
+    # several, recorded worst-first: printed in time order
+    ([(373.0, 57.5), (210.2, 51.25)], 50.0, "210ms@+1.25s,373ms@+7.50s"),
+    # none recorded
+    ([], 10.0, "none"),
+])
+def test_wake_late_when_prints_offsets_in_time_order(marks, start, expected):
+    assert wake_late_when(marks, start) == expected

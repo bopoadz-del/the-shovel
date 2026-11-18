@@ -240,6 +240,10 @@ _LIVE_FRAMES = 12
 #: At most this many live dumps are kept per monitor (the worst ones); each is
 #: a whole-process stack text, and a monitor runs for the life of the process.
 LIVE_KEEP = 16
+#: A watchdog wake-up at least this late is kept WITH ITS TIME
+#: (``LagMonitor.wake_late_at``), so a report can say WHEN in a window the
+#: thread could not run, not only how late it was at worst.
+WAKE_LATE_NOTE_MS = 200.0
 _FH_THREAD = re.compile(r"^(Current thread|Thread) (0x[0-9a-fA-F]+)")
 _FH_FRAME = re.compile(r'^\s+File "(.*)", line (\d+) in (.*)$')
 #: faulthandler has ONE process-wide timer; one monitor at a time may own it.
@@ -368,6 +372,10 @@ class LagMonitor:
         #: between heartbeats, which ``max_lag_ms`` cannot see (see
         #: ``_sleep_watched``). Reported beside the lag, never folded into it.
         self.max_wake_late_ms = 0.0
+        #: ``(late_ms, monotonic_s_at_wake)`` of each wake-up at least
+        #: ``WAKE_LATE_NOTE_MS`` late, the LIVE_KEEP worst. Plain arithmetic,
+        #: no capture, so it is on in the gated measurement too.
+        self.wake_late_at: list[tuple[float, float]] = []
         #: Heartbeats late past ``live_ms`` but served under the threshold:
         #: near misses, counted (their dump is not kept). A heartbeat already
         #: served never adds one -- serving it cancels the timer.
@@ -491,11 +499,17 @@ class LagMonitor:
                 gap_ms = (resumed - served_at[0]) * 1000 if served_at else 0.0
                 if dump and gap_ms >= live.after_s * 1000:
                     self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
+                    self._note_wake_late(gap_ms, resumed)
                     idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
                     keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
                 elif dump:  # late past live_ms, under the limit
                     self.live_near_misses += 1
             self._sleep_watched(live, armed_names if live is not None else {})
+
+    def _note_wake_late(self, late_ms: float, at: float) -> None:
+        """Keep a wake-up at least ``WAKE_LATE_NOTE_MS`` late with its time."""
+        if late_ms >= WAKE_LATE_NOTE_MS:
+            keep_worst(self.wake_late_at, (round(late_ms, 1), at))
 
     def _sleep_watched(self, live: Optional[LiveDump], armed_names: dict) -> None:
         """Sleep one tick, and catch a GIL hold that starts during the sleep.
@@ -510,8 +524,10 @@ class LagMonitor:
             live.arm(self.tick + live.after_s)
         slept_from = time.monotonic()
         self._stop.wait(self.tick)
-        late_ms = max(0.0, (time.monotonic() - slept_from - self.tick) * 1000)
+        woke = time.monotonic()
+        late_ms = max(0.0, (woke - slept_from - self.tick) * 1000)
         self.max_wake_late_ms = max(self.max_wake_late_ms, late_ms)
+        self._note_wake_late(late_ms, woke)
         if live is not None:
             live.cancel()
             dump = live.take()

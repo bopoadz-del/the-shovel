@@ -20,6 +20,11 @@ on:
         required: false
         default: ""
         type: string
+      pageless_summary:
+        description: "instead of the page report, count chunks with no page locator by document id in each id's own project (ids and counts only)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -43,10 +48,11 @@ jobs:
       - name: Run the read-only page-coverage diagnosis as a one-off task
         env:
           IDS: ${{ inputs.doc_ids }}
+          PAGELESS: ${{ inputs.pageless_summary }}
         run: |
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$SERVICE_FOR_NETWORK" --query 'services[0].networkConfiguration' --output json)
           container=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query 'taskDefinition.containerDefinitions[0].name' --output text)
-          overrides=$(jq -cn --arg c "$container" --arg ids "$IDS" '{containerOverrides:[{name:$c, environment:[{name:"WORKER_COMMAND",value:"python -m scripts.pdf_page_coverage"},{name:"COVERAGE_DOC_IDS",value:$ids}]}]}')
+          overrides=$(jq -cn --arg c "$container" --arg ids "$IDS" --arg pl "$PAGELESS" '{containerOverrides:[{name:$c, environment:[{name:"WORKER_COMMAND",value:"python -m scripts.pdf_page_coverage"},{name:"COVERAGE_DOC_IDS",value:$ids},{name:"COVERAGE_PAGELESS_SUMMARY",value:$pl}]}]}')
           arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" --task-definition "$TASK_FAMILY" --launch-type FARGATE --network-configuration "$netcfg" --overrides "$overrides" --query 'tasks[0].taskArn' --output text)
           for attempt in $(seq 1 30); do
             aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null && break
