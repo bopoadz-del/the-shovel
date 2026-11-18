@@ -704,9 +704,35 @@ def test_kind_sql_is_one_select_bound_to_the_project():
     ("no extension", "(none)"),
     (None, "(none)"),
     ("Client Alpha.final draft", "(other)"),  # a suffix with a space is name text, withheld
+    ("Jordan.Whitfield", "(other)"),  # a word as the suffix: a short alphanumeric name part, withheld
+    ("Jordan.Whitfield.dwg", ".dwg"),
 ])
-def test_file_kind_is_a_short_extension_or_a_placeholder(name, kind):
+def test_file_kind_is_an_accepted_kind_or_a_placeholder(name, kind):
     assert _load().file_kind(name) == kind
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("drawing", "drawing"),
+    ("document", "document"),
+    ("whitfield", "(other)"),  # a lower-case word that is not a declared type, withheld
+    ("Free Text Type", "(other)"),
+    ("", "(none)"),
+])
+def test_stored_type_is_a_declared_type_or_a_placeholder(value, shown):
+    assert _load().stored_type(value) == shown
+
+
+@pytest.mark.parametrize("filename", ["Sheet A-101 drawing.pdf", "site photo.jpg", "notes.txt"])
+def test_declared_types_cover_every_type_the_classifier_writes(filename):
+    from app.core.projects import classify_doc_type
+    assert classify_doc_type(filename) in _load()._declared_types()
+
+
+@pytest.mark.parametrize("ext", [".pdf", ".xer"])
+def test_accepted_kinds_are_the_products_upload_constant(ext):
+    from app.core.upload_limits import ALLOWED_UPLOAD_EXTENSIONS
+    kinds = _load()._accepted_kinds()
+    assert kinds == frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS) and ext in kinds
 
 
 @pytest.mark.parametrize("chunks, docs, expected", [

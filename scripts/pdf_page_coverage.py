@@ -481,26 +481,44 @@ def render_pageless(anchor: str, summ: dict[str, Any]) -> list[str]:
 # type and the file kind (the extension of the stored name). The name is
 # read only to take its extension and is never printed.
 _KIND_SQL = "SELECT id, original_name, doc_type FROM documents WHERE project_id = :pr"
-_EXT_RE = re.compile(r"^\.[a-z0-9]{1,8}$")
 _NO_DOC_ROW = "(no document row)"
 
 
+def _accepted_kinds() -> frozenset:
+    """Every file kind the product accepts: its own upload/ingest constant
+    (``app.core.upload_limits.ALLOWED_UPLOAD_EXTENSIONS``), not a list here."""
+    from app.core.upload_limits import ALLOWED_UPLOAD_EXTENSIONS
+    return frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS)
+
+
+def _declared_types() -> frozenset:
+    """Every document type the product declares: the type registry
+    (``app.core.doc_types.list_types``: ``config/document_types.yaml`` plus
+    the declared custom types) and the classifier's default, not a list here."""
+    from app.core.doc_types import list_types
+    from app.core.doc_typing import DEFAULT_DOC_TYPE
+    names = {str(t.get("name")) for t in list_types() if t.get("name")}
+    return frozenset(names | {DEFAULT_DOC_TYPE})
+
+
 def file_kind(name: Any) -> str:
-    """The lower-case extension of a stored file name, or ``(none)``. A
-    suffix that is not a short alphanumeric extension prints as ``(other)``,
-    so no part of a name can leak through it."""
+    """The lower-case extension of a stored file name when it is a kind the
+    product accepts, else ``(other)``; ``(none)`` when there is no
+    extension. Only a fixed product list can print, so no part of a name
+    (a ``Firstname.Surname`` suffix) can leak through it."""
     if not isinstance(name, str) or not name.strip():
         return "(none)"
     ext = os.path.splitext(name.strip())[1].lower()
     if not ext:
         return "(none)"
-    return ext if _EXT_RE.match(ext) else "(other)"
+    return ext if ext in _accepted_kinds() else "(other)"
 
 
 def stored_type(value: Any) -> str:
+    """The stored type when it is one the product declares, else ``(other)``."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return "(none)"
-    return value if isinstance(value, str) and _CODE_RE.match(value) else "(other)"
+    return value if isinstance(value, str) and value in _declared_types() else "(other)"
 
 
 def pageless_by_kind(chunk_rows: Iterable[tuple], doc_rows: Iterable[tuple],
