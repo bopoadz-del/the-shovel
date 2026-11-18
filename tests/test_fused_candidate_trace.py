@@ -333,3 +333,145 @@ def test_pre_injection_chunk_carries_its_length_not_its_text(text):
     entry = _trace_chunk(1, c)
     assert entry["chars"] == len(text)
     assert text not in json.dumps(entry)
+
+
+# ── leg_docs: each leg folded to documents (measurement only) ─────────────
+
+class _D:
+    def __init__(self, cid, doc):
+        self.chunk_id = cid
+        self.doc_id = doc
+        self.text = "t"
+
+
+@pytest.mark.parametrize("sem, bm, want_vec, want_lex", [
+    # one document fills the lexical head; the other appears only in vector
+    ({"a1": 1, "b1": 2}, {"a1": 3, "a2": 1, "a3": 2},
+     [("A", 1, 1), ("B", 2, 1)], [("A", 1, 3)]),
+    # the same chunks, ranks moved: best rank and order follow the leg
+    ({"a1": 2, "b1": 1}, {"a1": 1, "a2": 4, "b1": 2},
+     [("B", 1, 1), ("A", 2, 1)], [("A", 1, 2), ("B", 2, 1)]),
+])
+def test_leg_docs_folds_each_leg_to_best_rank_and_count(sem, bm, want_vec, want_lex):
+    docs = {"a1": "A", "a2": "A", "a3": "A", "b1": "B"}
+    order = [_D(cid, d) for cid, d in docs.items()]
+    out = ft.leg_docs(order, sem, bm)
+    for name, want in (("vector", want_vec), ("lexical", want_lex)):
+        got = [(e["doc_id"], e["best_leg_rank"], e["n_chunks"]) for e in out[name]]
+        assert got == want
+
+
+@pytest.mark.parametrize("in_lexical", [True, False])
+def test_leg_docs_places_a_document_or_states_it_absent(in_lexical):
+    order = [_D("a1", "A"), _D("z9", "Z")]
+    bm = {"a1": 1, **({"z9": 40} if in_lexical else {})}
+    view = ft.public_view(
+        ft.Follow(ft.leg_summary(order, {"a1": 1}, bm, 10)).finish(order, order, order),
+        order,
+    )
+    lex = {e["doc_id"]: e["best_leg_rank"] for e in view["leg_docs"]["lexical"]}
+    vec = {e["doc_id"] for e in view["leg_docs"]["vector"]}
+    assert ("Z" in lex) is in_lexical
+    if in_lexical:
+        assert lex["Z"] == 40
+    assert "Z" not in vec
+    assert all("chunk_id" not in e for es in view["leg_docs"].values() for e in es)
+
+
+@pytest.mark.parametrize("orphan_in_order", [False, True])
+def test_leg_docs_never_counts_a_chunk_it_cannot_tie_to_a_document(orphan_in_order):
+    # a leg rank for a chunk the candidate list cannot place (absent from
+    # it, or present with no doc_id) is not a document: it is not listed
+    # and adds to no document's count
+    order = [_D("a1", "A")] + ([_D("x7", None)] if orphan_in_order else [])
+    out = ft.leg_docs(order, {"x7": 1, "a1": 2}, {"a1": 1, "x7": 2})
+    for name, rank in (("vector", 2), ("lexical", 1)):
+        got = [(e["doc_id"], e["best_leg_rank"], e["n_chunks"]) for e in out[name]]
+        assert got == [("A", rank, 1)]
+
+
+# ── leg_docs cap and per-leg total ───────────────────────────────────────
+
+def _many_docs(n_docs: int):
+    """``n_docs`` documents, one chunk each, ranked 1..n in both legs in
+    opposite orders."""
+    order = [_D(f"c{i}", f"D{i:03d}") for i in range(1, n_docs + 1)]
+    sem = {f"c{i}": i for i in range(1, n_docs + 1)}
+    bm = {f"c{i}": n_docs + 1 - i for i in range(1, n_docs + 1)}
+    return order, sem, bm
+
+
+@pytest.mark.parametrize("n_docs", [ft.LEG_DOCS_CAP - 1, ft.LEG_DOCS_CAP,
+                                    ft.LEG_DOCS_CAP + 1, 3 * ft.LEG_DOCS_CAP])
+def test_leg_docs_is_capped_best_rank_first_and_states_the_total(n_docs):
+    order, sem, bm = _many_docs(n_docs)
+    summary = ft.leg_summary(order, sem, bm, 10)
+    listed = min(n_docs, ft.LEG_DOCS_CAP)
+    assert summary["leg_docs_total"] == {"vector": n_docs, "lexical": n_docs}
+    for name, mine in (("vector", sem), ("lexical", bm)):
+        got = [e["best_leg_rank"] for e in summary["leg_docs"][name]]
+        assert got == list(range(1, listed + 1))
+    # the vector leg keeps D001.. ; the lexical leg keeps the far end
+    assert summary["leg_docs"]["vector"][0]["doc_id"] == "D001"
+    assert summary["leg_docs"]["lexical"][0]["doc_id"] == f"D{n_docs:03d}"
+    # the total survives the public view, so a shortened list is visible
+    view = ft.public_view(summary, order)
+    assert view["leg_docs_total"] == {"vector": n_docs, "lexical": n_docs}
+    assert len(view["leg_docs"]["vector"]) == listed
+
+
+@pytest.mark.parametrize("cap, want", [(None, 5), (2, 2)])
+def test_leg_docs_cap_argument_bounds_each_leg(cap, want):
+    order, sem, bm = _many_docs(5)
+    out = ft.leg_docs(order, sem, bm, cap=cap)
+    assert [len(out["vector"]), len(out["lexical"])] == [want, want]
+
+
+# ── an id that is also its document's stored name is digested ────────────
+
+@pytest.mark.parametrize("stored_name, digested", [
+    ("A", True),           # parent-row fallback: original_name == id
+    ("spec.pdf", False),   # an uploaded document: the id is not a name
+])
+def test_leg_docs_digest_an_id_that_is_its_own_name(stored_name, digested):
+    order = [_D("a1", "A")]
+    summary = ft.leg_summary(order, {"a1": 1}, {"a1": 1}, 10)
+    view = ft.public_view(summary, order, {"A": stored_name})
+    entry = view["leg_docs"]["vector"][0]
+    if digested:
+        assert "doc_id" not in entry
+        assert entry["doc_digest"] == ft.doc_digest("A")
+        assert "A" not in json.dumps(view["leg_docs"])
+    else:
+        assert entry["doc_id"] == "A" and "doc_digest" not in entry
+    # the record itself is not changed by the view
+    assert summary["leg_docs"]["vector"][0]["doc_id"] == "A"
+
+
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_trace_name_read_failure_digests_every_listed_id(monkeypatch, read_fails):
+    from app.core import projects
+    from app.core.rag import inject
+
+    def _names(ids):
+        if read_fails:
+            raise RuntimeError("db down")
+        return {d: "upload.pdf" for d in ids}
+
+    monkeypatch.setattr(projects, "document_names", _names)
+    order = [_D("a1", "A")]
+    summary = ft.leg_summary(order, {"a1": 1}, {"a1": 1}, 10)
+    entry = inject._public_fused(summary, order)["leg_docs"]["lexical"][0]
+    assert ("doc_digest" in entry) is read_fails
+    assert ("doc_id" in entry) is (not read_fails)
+
+
+@pytest.mark.parametrize("doc_id", ["A", "spec-rev-B.pdf"])
+def test_doc_digest_is_the_ids_own_sha256_prefix(doc_id):
+    import hashlib
+
+    want = hashlib.sha256(doc_id.encode("utf-8")).hexdigest()[:ft.DOC_DIGEST_HEX]
+    assert ft.doc_digest(doc_id) == want
+    # two different ids never share a digest here: the digest reads the id
+    other = doc_id + "x"
+    assert ft.doc_digest(other) != ft.doc_digest(doc_id)

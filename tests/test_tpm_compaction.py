@@ -58,6 +58,17 @@ def _boq(rows: int = 400) -> str:
     return json.dumps({"status": "success", "items": body})
 
 
+def _allowance(payload: dict) -> int:
+    """What a compacted result was allowed: its preview, plus the count of
+    rows shown that the preview paid for (#428: the count never makes the
+    envelope longer than its allowance)."""
+    extra = 0
+    if "rows_shown" in payload:
+        extra = len(json.dumps({"rows_shown": payload["rows_shown"],
+                                "rows_note": payload.get("rows_note", "")}))
+    return payload["chars_shown"] + extra
+
+
 def _turn(*tool_contents: str, user: str = "How many m3 of demolition?"):
     msgs: list = [
         {"role": "system", "content": "you are a construction assistant"},
@@ -128,7 +139,7 @@ def test_the_last_tool_result_keeps_the_larger_share():
     assert len(tools) == 2
     first = json.loads(tools[0]["content"])
     second = json.loads(tools[1]["content"])
-    assert first["chars_shown"] == _TOOL_PREVIEW_FLOOR
+    assert _allowance(first) == _TOOL_PREVIEW_FLOOR
     # A relationship, not the constant: the last result's share is capped at
     # _LAST_TOOL_PREVIEW but is trimmed further when the hop still does not
     # fit -- tool results yield before retrieved evidence does. Asserting
@@ -185,14 +196,14 @@ def test_the_last_result_is_cut_to_the_floor_when_nothing_else_is_left():
     out = _compact_messages_for_tpm(_turn(a, b), budget=3000)
     tools = _tools(out)
     for t in tools:
-        assert json.loads(t["content"])["chars_shown"] == _TOOL_PREVIEW_FLOOR
+        assert _allowance(json.loads(t["content"])) == _TOOL_PREVIEW_FLOOR
 
 
 def test_a_single_tool_result_gets_the_larger_share():
     """The common case: one tool, one answer. It is both first and last."""
     out = _compact_messages_for_tpm(_turn(_boq(400)), budget=9000)
     payload = json.loads(_tools(out)[0]["content"])
-    assert payload["chars_shown"] == _LAST_TOOL_PREVIEW
+    assert _allowance(payload) == _LAST_TOOL_PREVIEW
     assert payload["chars_dropped"] > 0
 
 

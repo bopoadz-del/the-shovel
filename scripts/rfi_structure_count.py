@@ -21,8 +21,17 @@ question and its answer are SPLIT). Nothing is chunked, re-split, embedded
 or written: the SQL is parameterised SELECTs. The project is the anchor
 document's own (read from its row, never taken from an input or printed).
 
-The output is a public workflow log: document ids, counts and chunk indexes
-only; never text, a heading, a name, a path or a project id.
+The heading rule only sees headings written in the letters of the heading
+table. So the run also counts, over EVERY document of the project, the
+dominant Unicode letter script of its text (the first word of each letter's
+Unicode name: LATIN, ARABIC, ...), and how many documents are written mainly,
+or in part (at least ``_MIXED_SHARE`` of their letters), in a script the
+heading table does not use: the documents the rule cannot see. The table's
+own scripts are read from the table, never assumed.
+
+The output is a public workflow log: document ids, counts, chunk indexes and
+Unicode script names only; never text, a heading, a name, a path or a
+project id.
 """
 from __future__ import annotations
 
@@ -30,6 +39,8 @@ import json
 import os
 import re
 import sys
+import unicodedata
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -50,6 +61,9 @@ ROLES = ("question", "answer", "references")
 _MAX_IDS = 200
 _ID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 MARK = "RFI| "
+# A document is "in part" in another script when at least this share of its
+# letters are in scripts the heading table does not use.
+_MIXED_SHARE = 0.05
 
 _DOC_SQL = "SELECT id, project_id FROM documents WHERE id LIKE :p ORDER BY id"
 
@@ -90,7 +104,44 @@ def heading_hits(chunk_text: str, pats: dict[str, re.Pattern[str]]) -> dict[str,
     return {role: [m.start() for m in pats[role].finditer(chunk_text or "")] for role in ROLES}
 
 
-def classify(chunks: list[tuple[int, str]], pats: dict[str, re.Pattern[str]]) -> dict[str, Any]:
+def letter_script(ch: str) -> str | None:
+    """The Unicode script of one letter (first word of its Unicode name), or
+    None for a non-letter."""
+    if not ch.isalpha():
+        return None
+    return unicodedata.name(ch, "?").split(" ", 1)[0]
+
+
+def script_counts(texts: Iterable[str]) -> Counter:
+    """Pure: letters per Unicode script over the given texts."""
+    out: Counter = Counter()
+    for t in texts:
+        for ch in t or "":
+            sc = letter_script(ch)
+            if sc:
+                out[sc] += 1
+    return out
+
+
+def table_scripts(table: dict[str, tuple[str, ...]]) -> frozenset[str]:
+    """The scripts the heading table itself is written in."""
+    return frozenset(script_counts(w for words in table.values() for w in words))
+
+
+def script_profile(counts: Counter, seen: frozenset[str]) -> dict[str, Any]:
+    """Pure: a document's dominant script (most letters; ties by name) and
+    whether it is mainly, or in part, in a script outside ``seen``."""
+    total = sum(counts.values())
+    if not total:
+        return {"script": None, "unseen": False, "mixed": False}
+    dom = min(counts, key=lambda k: (-counts[k], k))
+    outside = sum(n for k, n in counts.items() if k not in seen)
+    return {"script": dom, "unseen": dom not in seen,
+            "mixed": dom in seen and outside / total >= _MIXED_SHARE}
+
+
+def classify(chunks: list[tuple[int, str]], pats: dict[str, re.Pattern[str]],
+             seen: frozenset[str] = frozenset()) -> dict[str, Any]:
     """Pure: one document's chunks ``(chunk_index, text)`` -> RFI-like or not,
     and where its first question heading and the first answer heading after
     it land. Order is (chunk_index, offset), so overlapping chunks read in
@@ -104,6 +155,7 @@ def classify(chunks: list[tuple[int, str]], pats: dict[str, re.Pattern[str]]) ->
     a = next((h for h in found["answer"] if q is not None and h > q), None)
     rfi = q is not None and a is not None and bool(found["references"])
     return {
+        **script_profile(script_counts(b for _, b in ordered), seen),
         "rfi_like": rfi,
         "chunks": len(ordered),
         "question_chunk": q[0] if q else None,
@@ -124,8 +176,12 @@ def summarise(per_doc: Iterable[tuple[str, dict[str, Any]]], cap: int = _MAX_IDS
     rfi = [(d, r) for d, r in docs if r["rfi_like"]]
     sizes = sorted(r["chunks"] for _, r in rfi)
     split = [d for d, r in rfi if r["split"]]
+    by_script = Counter(r.get("script") or "(no letters)" for _, r in docs)
     return {
         "documents": len(docs),
+        "by_script": sorted(by_script.items(), key=lambda kv: (-kv[1], kv[0])),
+        "unseen_script": sum(1 for _, r in docs if r.get("unseen")),
+        "mixed_script": sum(1 for _, r in docs if r.get("mixed")),
         "rfi_like": len(rfi),
         "split": len(split),
         "same_chunk": len(rfi) - len(split),
@@ -149,6 +205,10 @@ def render(anchor: str, s: dict[str, Any]) -> list[str]:
         ("   documents with a heading of: "
          + " ".join(f"{r}={s['with_role'][r]}" for r in ROLES)
          + f" question_then_answer={s['q_then_a']}"),
+        ("   documents by dominant letter script: "
+         + " ".join(f"{k}={n}" for k, n in s["by_script"])),
+        (f"   outside the heading table's scripts: mainly={s['unseen_script']} "
+         f"in_part={s['mixed_script']} (the rule cannot see these headings)"),
         "   doc_id | chunks | question_chunk | answer_chunk | split",
     ]
     lines += [f"   {d} | {n} | {q} | {a} | {'yes' if sp else 'no'}" for d, n, q, a, sp in s["rows"]]
@@ -206,7 +266,9 @@ def main() -> int:
         emit("RFI_ANCHOR_ID must be one document id or unambiguous prefix", err=True)
         return 2
     try:
-        pats = compile_headings(headings())
+        table = headings()
+        pats = compile_headings(table)
+        seen = table_scripts(table)
     except (ValueError, json.JSONDecodeError):
         emit("RFI_HEADINGS_JSON is malformed", err=True)
         return 2
@@ -221,7 +283,7 @@ def main() -> int:
                 emit(f"== id {anchor}: {len(docs)} matching documents, need exactly 1")
                 return 1
             rows = project_chunk_rows(s, table, docs[0][1])
-            summ = summarise((d, classify(ch, pats)) for d, ch in group_by_doc(rows))
+            summ = summarise((d, classify(ch, pats, seen)) for d, ch in group_by_doc(rows))
     except Exception as exc:  # by class only: a message can quote text
         emit(f"== id {anchor}: READ FAILED: {type(exc).__name__}")
         return 1
