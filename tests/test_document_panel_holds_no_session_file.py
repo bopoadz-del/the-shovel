@@ -485,6 +485,16 @@ def _row(did):
     return store.get_document(did)
 
 
+def _chunk_rows(did) -> int:
+    """Chunk rows the index holds for this document, read from the chunk
+    tables themselves (either backend), not from the row's own count."""
+    from app.core import projects as store
+    from app.core.db import SessionLocal
+
+    with SessionLocal() as session:
+        return len(store._document_chunk_ids(session, did))
+
+
 def _search_ids(pid, query) -> set:
     import asyncio
 
@@ -503,8 +513,10 @@ def test_a_privileged_replace_of_a_session_file_never_enters_the_project_search(
         client, monkeypatch, name, word):
     """The caller may add to the project's search, so the replace route would
     index a project document; a chat's file stays out of the index. Beside it,
-    a project document replaced by the same caller IS indexed and found (so the
-    search can find this word at all)."""
+    a project document replaced by the same caller IS scheduled and indexed:
+    it has chunk rows, read from the chunk tables. (Whether project search
+    ranks it in the top 10 depends on the backend's other corpora, so the
+    control is the chunk rows, not a search hit.)"""
     from app.core import doc_index
     from app.core import ingest_status as ist
     from app.core import privileges
@@ -530,6 +542,7 @@ def test_a_privileged_replace_of_a_session_file_never_enters_the_project_search(
     row = _row(did)
     assert row["ingest_status"] == ist.NOT_INDEXED_POLICY
     assert not row.get("chunk_count")
+    assert _chunk_rows(did) == 0
     assert did not in _search_ids(pid, word)
 
     control = _upload(client, headers, pid, f"project_{name}", b"Placeholder.")["id"]
@@ -537,7 +550,7 @@ def test_a_privileged_replace_of_a_session_file_never_enters_the_project_search(
     assert res.status_code == 200, res.text
     assert control in scheduled
     assert (_row(control).get("chunk_count") or 0) > 0
-    assert control in _search_ids(pid, word)
+    assert _chunk_rows(control) > 0
 
 
 @pytest.mark.parametrize("name", ["setting_out_a.txt", "setting_out_b.txt"])
