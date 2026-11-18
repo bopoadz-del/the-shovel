@@ -1399,10 +1399,7 @@ async def _chat_stream_impl(
             _tool_payload = {
                 **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
-            _tool_content = _tool_result_content(
-                _tool_payload,
-                offset=_requested_char_offset(tc),
-            )
+            _tool_content = _tool_result_content(_tool_payload, offset=_requested_char_offset(tc))
             # A successful deliverable tool (anything but search) means the
             # model now has authoritative data to synthesize from — stop
             # offering tools so the next call is a clean, tool-free answer.
