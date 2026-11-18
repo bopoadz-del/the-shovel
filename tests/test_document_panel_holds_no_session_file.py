@@ -345,3 +345,95 @@ def test_a_session_file_without_its_original_falls_back_only_in_its_own_chat(
     assert res.status_code == expected, res.text
     if expected == 200:
         assert indexed in res.text
+
+
+# ── by id: the metadata update and the replace-bytes routes (#451 follow-up) ──
+
+_DRIVE_ID = "invented_drive_id_0123456789"
+
+
+@pytest.mark.parametrize("method,tail,handler", [
+    ("PATCH", "", "update_document"),
+    ("POST", "/bytes", "restore_document_bytes"),
+])
+def test_the_write_by_id_routes_are_the_handlers_these_tests_call(method, tail, handler):
+    test_the_by_id_routes_are_the_handlers_these_tests_call(method, tail, handler)
+
+
+def _replace(client, headers, pid, did, name, body, session_id=None):
+    return client.post(_doc_url(pid, did, "/bytes"), headers=headers,
+                       params={"session_id": session_id} if session_id else None,
+                       files={"file": (name, body, "text/plain")})
+
+
+def _patch(client, headers, pid, did, session_id=None):
+    return client.patch(_doc_url(pid, did), headers=headers,
+                        params={"session_id": session_id} if session_id else None,
+                        json={"drive_file_id": _DRIVE_ID})
+
+
+@pytest.mark.parametrize("name,body", [
+    ("rebar_schedule_l3.txt", b"T16 at 150 centres both ways."),
+    ("waterproofing_note.txt", b"Two coats of bitumen membrane to the retaining wall."),
+])
+def test_a_session_file_is_replaced_only_from_its_own_chat_by_its_maker(client, name, body):
+    owner = _headers(client, f"rb1{name[:5]}")
+    maker = _headers(client, f"rb2{name[:5]}")
+    pid = _project(client, owner, f"Panel-rb-{name[:5]}-{_RUN}")
+    _share(pid)
+    own, other = f"ws-{pid}-4100", f"ws-{pid}-4200"
+    did = _upload(client, maker, pid, name, body, session_id=own)["id"]
+    new = body + b" Revised."
+
+    assert _replace(client, maker, pid, did, name, new).status_code == 404
+    assert _replace(client, maker, pid, did, name, new, session_id=other).status_code == 404
+    assert _replace(client, owner, pid, did, name, new, session_id=own).status_code == 404
+    res = _replace(client, maker, pid, did, name, new, session_id=own)
+    assert res.status_code == 200, res.text
+    assert res.json()["document"]["id"] == did
+    got = client.get(_doc_url(pid, did, "/download"), headers=maker, params={"session_id": own})
+    assert got.status_code == 200 and got.content == new
+
+
+@pytest.mark.parametrize("name", ["permit_hours_a.txt", "permit_hours_b.txt"])
+def test_a_project_document_is_replaced_with_no_chat_as_before(client, name):
+    owner = _headers(client, f"rp{name[-5]}")
+    pid = _project(client, owner, f"Panel-rp-{name[-5]}-{_RUN}")
+    did = _upload(client, owner, pid, name, b"Permits 07:00 to 17:00.")["id"]
+    res = _replace(client, owner, pid, did, name, b"Permits 06:00 to 18:00.")
+    assert res.status_code == 200, res.text
+    assert res.json()["document"]["id"] == did
+
+
+@pytest.mark.parametrize("name,body", [
+    ("survey_benchmarks.txt", b"TBM 1 at +12.450 m."),
+    ("dewatering_log.txt", b"Wellpoints drawn down 2.4 m by day 3."),
+])
+def test_a_session_file_is_updated_only_from_its_own_chat_by_its_maker(client, name, body):
+    owner = _headers(client, f"pt1{name[:5]}")
+    maker = _headers(client, f"pt2{name[:5]}")
+    pid = _project(client, owner, f"Panel-pt-{name[:5]}-{_RUN}")
+    _share(pid)
+    own, other = f"ws-{pid}-5100", f"ws-{pid}-5200"
+    did = _upload(client, maker, pid, name, body, session_id=own)["id"]
+
+    assert _patch(client, maker, pid, did).status_code == 404
+    assert _patch(client, maker, pid, did, session_id=other).status_code == 404
+    # The project's owner is not the file's maker: not found, from its chat too.
+    assert _patch(client, owner, pid, did, session_id=own).status_code == 404
+    res = _patch(client, maker, pid, did, session_id=own)
+    assert res.status_code == 200, res.text
+    assert (res.json().get("metadata") or {}).get("drive_file_id") == _DRIVE_ID
+
+
+@pytest.mark.parametrize("name", ["hoarding_line_a.txt", "hoarding_line_b.txt"])
+def test_a_project_document_is_updated_by_its_owner_as_before(client, name):
+    owner = _headers(client, f"uo{name[-5]}")
+    other = _headers(client, f"ux{name[-5]}")
+    pid = _project(client, owner, f"Panel-uo-{name[-5]}-{_RUN}")
+    _share(pid)
+    did = _upload(client, owner, pid, name, b"Hoarding 2.4 m high on the north line.")["id"]
+    assert _patch(client, other, pid, did).status_code == 403  # owner or admin only, as before
+    res = _patch(client, owner, pid, did)
+    assert res.status_code == 200, res.text
+    assert (res.json().get("metadata") or {}).get("drive_file_id") == _DRIVE_ID

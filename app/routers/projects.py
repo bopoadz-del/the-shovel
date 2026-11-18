@@ -1280,11 +1280,15 @@ async def restore_document_bytes(
     document_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    session_id: Optional[str] = None,
     auth: dict = Depends(require_user),
 ):
     """Replace the stored bytes of an existing document. The row id stays.
 
     Same access as adding a document: anyone who can open the project.
+    A file attached to a chat: only from that chat (``session_id``), by the
+    user who attached it; from anywhere else it is not found (404), the same
+    rule as delete, fetch and ask by id (``store.document_in_scope``).
     Drive-sourced rows are refused — those originals stay in Drive and this
     route does not start archiving them. Chunks already indexed are kept.
     """
@@ -1295,7 +1299,8 @@ async def restore_document_bytes(
     doc = store.get_document(document_id)
     owner = (doc or {}).get("project_id")
     resolved = store.storage_project_id(project_id)
-    if not doc or owner not in {project_id, resolved}:
+    if not doc or owner not in {project_id, resolved} or not store.document_in_scope(
+            doc.get("metadata"), _chat_scope(session_id, auth["user_id"])):
         raise HTTPException(404, f"Document '{document_id}' not found")
 
     inspection = store.document_byte_inspection(doc)
@@ -1477,33 +1482,43 @@ async def update_document(
     project_id: str,
     document_id: str,
     req: UpdateDocumentRequest,
+    session_id: Optional[str] = None,
     auth: dict = Depends(require_user),
 ):
-    """Set ``drive_file_id`` on an existing document. Owner or admin only.
+    """Set ``drive_file_id`` on an existing document. A project document:
+    owner or admin only, as before. A file attached to a chat: only from
+    that chat (``session_id``), by the user who attached it; from anywhere
+    else, and for anyone else, it is not found (404) -- the same rule as
+    delete, fetch and ask by id (``store.document_in_scope``).
 
     Does not re-upload or re-index. Preview hydrate uses the id on the
     next cite-click (SA ``files.get`` + media, then public download).
     """
     from app.core.gdrive_service import is_valid_drive_file_id
 
-    is_admin = auth.get("role") == "admin"
-    proj = store.get_project(
-        project_id,
-        user_id=None if is_admin else auth["user_id"],
-        include_admin_approved=True,
-    )
-    if not proj:
-        raise HTTPException(404, f"Project '{project_id}' not found")
-    if proj.get("user_id") != auth["user_id"] and not is_admin:
-        raise HTTPException(403, "Admin or project owner required")
+    doc = store.get_document(document_id)
+    meta = store.coerce_document_metadata((doc or {}).get("metadata"))
+    if meta.get("session_id"):
+        _session_scope(project_id, auth["user_id"])  # can open the project, else 404
+    else:
+        is_admin = auth.get("role") == "admin"
+        proj = store.get_project(
+            project_id,
+            user_id=None if is_admin else auth["user_id"],
+            include_admin_approved=True,
+        )
+        if not proj:
+            raise HTTPException(404, f"Project '{project_id}' not found")
+        if proj.get("user_id") != auth["user_id"] and not is_admin:
+            raise HTTPException(403, "Admin or project owner required")
 
     drive_file_id = (req.drive_file_id or "").strip()
     if not is_valid_drive_file_id(drive_file_id):
         raise HTTPException(422, "drive_file_id is not a valid Drive file id")
 
     resolved_id = store.storage_project_id(project_id)
-    doc = store.get_document(document_id)
-    if not doc or doc.get("project_id") not in {project_id, resolved_id}:
+    if not doc or doc.get("project_id") not in {project_id, resolved_id} or not store.document_in_scope(
+            meta, _chat_scope(session_id, auth["user_id"])):
         raise HTTPException(
             404, f"Document '{document_id}' not found in project '{project_id}'"
         )
