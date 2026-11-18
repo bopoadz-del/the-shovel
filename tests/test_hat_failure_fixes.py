@@ -306,7 +306,7 @@ class _FakeExtractor:
 
 def _wire_docs(monkeypatch, docs, result, tool="drawing_qto"):
     import app.core.projects as projects_mod
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: docs,
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: docs,
                         raising=False)
     fake = _FakeExtractor(result)
     monkeypatch.setattr(runtime_module, "block_instances", {tool: fake}, raising=False)

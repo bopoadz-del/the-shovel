@@ -131,7 +131,7 @@ def project(tmp_path, monkeypatch):
                      "metadata": {**derived, "derived_from": f"src-{name}"}})
     docs.append({"id": "doc-gone", "original_name": "gone.xlsx", "path": "",
                  "metadata": {**derived, "derived_from": "src-gone"}})
-    monkeypatch.setattr(projects, "list_documents", lambda pid: docs)
+    monkeypatch.setattr(projects, "list_documents", lambda pid, **_kw: docs)
     monkeypatch.setattr(projects, "materialize_document_path", lambda d: d["path"])
 
 

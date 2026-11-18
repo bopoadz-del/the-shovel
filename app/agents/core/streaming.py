@@ -151,7 +151,7 @@ async def _chat_stream_impl(
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
         _strip_answer_routing_preamble, _summarize_result, _text_needs_tool_recovery,
-        _timing_log, _tool_result_content, _tool_result_errored, _turn_progress,
+        _timing_log, _tool_message_extra, _tool_result_content, _tool_result_errored, _turn_progress,
         _vo_draft_ready_for_synthesis,
         _withhold_names_in_streamed_segment, answer_report_export_enabled, fulfill_wbs_export,
         json, message_wants_answer_report, message_wants_wbs_export, os, time,
@@ -1396,11 +1396,10 @@ async def _chat_stream_impl(
                 # the model has searched enough; force it to answer.
                 excluded_tools.add("search_project_documents")
             stream_tool_results.append(tool_result)
-            _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
-                offset=_requested_char_offset(tc),
-            )
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
+            _tool_content = _tool_result_content(_tool_payload, offset=_requested_char_offset(tc))
             # A successful deliverable tool (anything but search) means the
             # model now has authoritative data to synthesize from — stop
             # offering tools so the next call is a clean, tool-free answer.
@@ -1431,6 +1430,7 @@ async def _chat_stream_impl(
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
             }))
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})

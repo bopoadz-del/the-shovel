@@ -264,12 +264,12 @@ def test_the_stall_names_the_threads_that_burned_cpu_across_it(after, expected):
 @pytest.mark.parametrize("threshold_ms,tick_ms", [(250.0, 50.0), (120.0, 10.0)])
 def test_a_new_monitor_starts_clean_with_no_cpu_snapshot(threshold_ms, tick_ms):
     """``LagMonitor.__init__`` stores the limits in seconds and starts with no
-    stall, no lag and no CPU snapshot (the first heartbeat takes one)."""
+    stall, no lag and no CPU reading (the snapshot thread takes the first)."""
     loop = asyncio.new_event_loop()
     try:
         mon = loop_watchdog.LagMonitor(loop, threshold_ms=threshold_ms, tick_ms=tick_ms, log=False)
         assert (mon.threshold, mon.tick) == (threshold_ms / 1000, tick_ms / 1000)
-        assert (mon.max_lag_ms, mon.stalls, mon._cpu_before) == (0.0, [], {})
+        assert (mon.max_lag_ms, mon.stalls, mon._snap) == (0.0, [], None)
         assert not mon.stall_recorded.is_set()
     finally:
         loop.close()
@@ -419,3 +419,62 @@ def test_blank_stat_lines_are_skipped_not_reported_unreadable(tmp_path, caplog, 
         got = loop_watchdog.host_cpu(str(f))
     assert got["total"] == 10
     assert not [r for r in caplog.records if "unreadable" in r.getMessage()]
+
+
+# --- a stall keeps the loop stack from INSIDE the stall, not the idle loop after it ---
+
+def _sample(loop_frames, others=("[w1] a.py:1 f",)):
+    loop = " <- ".join(loop_frames)
+    return " || ".join([f"[loop] {loop}", *others])
+
+
+@pytest.mark.parametrize("frames,depth", [
+    (["sel.py:119 _read_from_self", "events.py:84 _run"], 2),
+    (["x.py:9 blocking", "y.py:3 handler", "events.py:84 _run", "base.py:1936 _run_once"], 4),
+])
+def test_loop_depth_counts_the_loop_frames_only(frames, depth):
+    # other threads' frames (with their own ' <- ') must not count
+    deep_other = ("[w1] " + " <- ".join(f"o.py:{i} g" for i in range(7)),)
+    assert loop_watchdog.loop_depth(_sample(frames, deep_other)) == depth
+
+
+@pytest.mark.parametrize("sample", ["", "[w1] a.py:1 f <- b.py:2 g"])
+def test_a_sample_without_a_loop_stack_has_depth_zero(sample):
+    assert loop_watchdog.loop_depth(sample) == 0
+
+
+_IDLE = ["sel.py:119 _read_from_self", "events.py:84 _run", "base.py:1936 _run_once"]
+_BLOCKED = ["lock.py:5 acquire", "app.py:40 read_row", "events.py:84 _run", "base.py:1936 _run_once"]
+
+
+@pytest.mark.parametrize("kept,snap,want", [
+    # the stall ends: the newer sample is the idle loop -> keep the blocking frames
+    (_sample(_BLOCKED), _sample(_IDLE), _sample(_BLOCKED)),
+    # the stall deepens: the newer sample is deeper -> it replaces the older one
+    (_sample(_IDLE), _sample(_BLOCKED), _sample(_BLOCKED)),
+])
+def test_the_deeper_loop_stack_of_one_stall_is_kept(kept, snap, want):
+    assert loop_watchdog.keep_deeper_sample(kept, snap) == want
+
+
+@pytest.mark.parametrize("frames", [_IDLE, _BLOCKED])
+def test_on_equal_depth_the_newer_sample_is_kept(frames):
+    older = _sample(frames, ("[w1] old.py:1 f",))
+    newer = _sample(frames, ("[w1] new.py:2 g",))
+    assert loop_watchdog.keep_deeper_sample(older, newer) == newer
+
+
+@pytest.mark.parametrize("kept", [_sample(_IDLE), _sample(_BLOCKED)])
+def test_an_empty_resample_never_replaces_a_kept_sample(kept):
+    assert loop_watchdog.keep_deeper_sample(kept, "") == kept
+
+
+@pytest.mark.parametrize("kept", [
+    "[w1] a.py:1 f",
+    "[w2] b.py:2 g <- c.py:3 h || [w3] d.py:4 k",
+])
+def test_an_empty_resample_never_wipes_a_sample_without_a_loop_stack(kept):
+    # both have loop depth 0, so only the empty-resample rule keeps the
+    # threads' frames that were already captured during the stall
+    assert loop_watchdog.loop_depth(kept) == 0
+    assert loop_watchdog.keep_deeper_sample(kept, "") == kept

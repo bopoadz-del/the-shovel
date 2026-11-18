@@ -188,3 +188,21 @@ def test_bulk_insert_refuses_the_retired_legacy_namespace(client):
     assert "retired" in resp.json()["detail"]
     with SessionLocal() as s:
         assert s.get(Project, PROJ) is None, "a refused request wrote rows"
+
+
+@pytest.mark.parametrize("namespace", ["", "   "])
+def test_bulk_insert_refuses_a_blank_namespace_and_writes_nothing(client, namespace):
+    """A blank namespace would select the RETIRED legacy table: refused 400
+    by the route itself (``admin_corpus_bulk_insert``), before any row."""
+    from app.routers import admin as admin_router
+
+    _ensure_schema()
+    _wipe_test_rows()
+    path = app.url_path_for(admin_router.admin_corpus_bulk_insert.__name__)
+    resp = client.post(path, json={**_payload(), "namespace": namespace})
+    assert resp.status_code == 400, resp.text
+    assert "retired legacy chunks table" in resp.json()["detail"]
+    with SessionLocal() as session:
+        assert session.query(Project).filter(Project.id == PROJ).count() == 0
+        assert session.query(Document).filter(Document.project_id == PROJ).count() == 0
+    assert get_store().count_by_doc(PROJ, all_sessions=True) == {}

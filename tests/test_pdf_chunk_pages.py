@@ -9,6 +9,8 @@ Synthetic PDFs and text only.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import numpy as np
 import pytest
 
@@ -152,6 +154,7 @@ def store(tmp_path, monkeypatch):
     embedder = _emb.get_embedder()
     st = _vs.VectorStore(db_path=str(tmp_path / "pages.db"), dim=embedder.dim,
                          namespace="pagetest")
+    give_documents_table(st)
     yield st, embedder
     st.close()
     _emb.reset_embedder_cache()
@@ -201,6 +204,7 @@ def test_a_table_created_before_pages_gains_the_column(tmp_path):
     con.close()
     _vs.reset_store_cache()
     st = _vs.VectorStore(db_path=str(db), dim=8, namespace="oldpages", model_name="fake")
+    give_documents_table(st)
     texts = ["delta synthetic"]
     st.upsert_chunks("p1", "d3", texts, np.ones((1, 8), dtype=np.float32), pages=[5])
     assert [c.page for c in st.chunks_for_docs("p1", ["d3"])] == [5]

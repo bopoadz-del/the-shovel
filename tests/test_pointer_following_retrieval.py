@@ -17,6 +17,8 @@ clause number or figure comes from a real corpus.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 PID = "synthetic-pointer-project"
@@ -113,6 +115,7 @@ def corpus(tmp_path, monkeypatch):
 
     embedder = get_embedder()
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     names = {}
     for doc_id, (name, texts) in DOCS.items():
         store.upsert_chunks(PID, doc_id, texts, embedder.encode(texts))
