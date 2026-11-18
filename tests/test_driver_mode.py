@@ -429,8 +429,16 @@ def test_the_exit_check_reads_a_tool_result_whole_even_when_the_model_got_it_cut
     monkeypatch.setattr(agent, "_run_tool_call", fake_tool)
     events = _run(agent, user_message="What is the retention?", project_id="synthetic-proj")
     shown = seen[1]["messages"][-1]["content"]
-    assert len(shown) <= loop._TOOL_RESULT_CHARS  # the model's copy is cut to the cap...
-    assert json.loads(shown)["truncated"] is True  # ...as whole JSON that says so
+    assert len(shown) <= loop._TOOL_RESULT_CHARS  # the model's copy is cut to the cap
+    env = json.loads(shown)
+    whole = json.dumps(big)
+    # Exactly what the cut kept: the leading slice of the whole result, the
+    # rest counted, and the outline naming both rows it did not show.
+    assert (env["truncated"], env["chars_total"]) == (True, len(whole))
+    assert env["preview"] == whole[:env["chars_shown"]]
+    assert env["chars_shown"] + env["chars_dropped"] == len(whole)
+    assert env["whole_result_fields"] == {
+        "ok": True, "result": {"results": []}, "rows_total": {"result.results": 2}}
     text = "".join(e["content"] for e in events if e["type"] == "token")
     assert "5 %" in text  # the exit check saw the whole result
 

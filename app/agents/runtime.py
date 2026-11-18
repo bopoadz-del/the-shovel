@@ -3156,13 +3156,18 @@ def _row_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
     return out
 
 
-#: Over budget, the outline keeps each part's scalar fields; a text field
-#: keeps this many characters and a list of plain values this many entries.
-_OUTLINE_TEXT_CHARS = 200
+#: Over budget, the outline keeps each part's scalar fields and a list of
+#: plain values this many entries. A statement (a text field) is NEVER cut:
+#: rows and parts give way first, and past that the floor below holds.
 _OUTLINE_LIST_ITEMS = 20
 #: The outline key naming, per list of parts it had to shorten, how many
 #: parts the result holds (the list itself holds the parts shown).
 PARTS_TOTAL_KEY = "parts_total"
+#: The outline key present only when the outline is at its floor -- every
+#: list of parts down to its first part and still over budget, so it is kept
+#: over budget rather than cut. It states the budget, the outline's own size
+#: and exactly which fields are kept.
+OUTLINE_FLOOR_KEY = "outline_floor"
 
 
 def _is_part_list(node: list[Any]) -> bool:
@@ -3172,8 +3177,8 @@ def _is_part_list(node: list[Any]) -> bool:
 
 def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
     """``node`` with only its scalar and statement fields: numbers, flags,
-    texts (each cut to _OUTLINE_TEXT_CHARS), lists of plain values (the
-    first _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
+    texts (whole, never cut), lists of plain values (the first
+    _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
     every part, so reduced; every other list of rows is dropped and its
     length counted in ``totals`` under its path."""
     if isinstance(node, dict):
@@ -3189,8 +3194,6 @@ def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
         if _is_part_list(node):
             return [_scalar_fields(v, f"{path}[{i}]", totals) for i, v in enumerate(node)]
         return [_scalar_fields(v, path, totals) for v in node[:_OUTLINE_LIST_ITEMS]]
-    if isinstance(node, str) and len(node) > _OUTLINE_TEXT_CHARS:
-        return node[:_OUTLINE_TEXT_CHARS]
     return node
 
 
@@ -3219,15 +3222,20 @@ def _part_index(key: str, path: str) -> int:
 def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
     """Halve the longest list of parts until ``work`` fits ``budget``, and
     name each shortened list's whole length under PARTS_TOTAL_KEY, so the
-    parts shown are said to be N of M. The top-level fields always stay."""
+    parts shown are said to be N of M. The top-level fields always stay, and
+    every list of parts keeps at least its first part. When nothing more can
+    give way and ``work`` is still over budget, the outline is at its floor:
+    it is kept as it is -- no statement cut -- and says so under
+    OUTLINE_FLOOR_KEY."""
     parts: dict[str, int] = {}
     while len(json.dumps(work, default=str)) > budget:
-        found = _part_lists(work)
+        found = [(p, lst) for p, lst in _part_lists(work) if len(lst) > 1]
         if not found:
+            work[OUTLINE_FLOOR_KEY] = _floor_statement(work, budget)
             break
         path, longest = max(found, key=lambda pl: len(json.dumps(pl[1], default=str)))
         parts.setdefault(path, len(longest))
-        del longest[len(longest) // 2:]
+        del longest[max(1, len(longest) // 2):]
         work[PARTS_TOTAL_KEY] = parts
         # The row counts of the parts no longer shown go with them.
         totals = work.get(ROWS_TOTAL_KEY)
@@ -3235,6 +3243,20 @@ def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
             for key in [k for k in totals if _part_index(k, path) >= len(longest)]:
                 del totals[key]
     return work
+
+
+def _floor_statement(work: dict[str, Any], budget: int) -> dict[str, Any]:
+    """What an outline at its floor keeps: every top-level field, and the
+    first part of each list of parts, every statement whole."""
+    kept = [k for k in work if k not in (ROWS_TOTAL_KEY, PARTS_TOTAL_KEY, OUTLINE_FLOOR_KEY)]
+    firsts = [f"{p}[0]" for p, _lst in _part_lists(work)]
+    return {
+        "budget": budget,
+        "chars": len(json.dumps(work, default=str)),
+        "kept": kept + firsts,
+        "rule": "over budget at its floor: statements are kept whole, never cut; "
+                "rows and parts were shortened first",
+    }
 
 
 def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
@@ -3248,7 +3270,9 @@ def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     The outline is NEVER dropped for its size. Over ``budget`` it keeps the
     scalar and statement fields of every part and drops every other list
     (``_scalar_fields``); still over, it shows the first parts of the
-    longest list of parts and names how many there are (``_fit_parts``)."""
+    longest list of parts and names how many there are (``_fit_parts``);
+    still over with one part per list, it is kept at that floor, whole, and
+    states what it kept (OUTLINE_FLOOR_KEY)."""
     try:
         work = json.loads(json.dumps(payload, default=str))
     except (TypeError, ValueError):
@@ -3272,6 +3296,73 @@ def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     reduced = _scalar_fields(whole, "", dropped)
     reduced[ROWS_TOTAL_KEY] = {**dropped, **totals}
     return _fit_parts(reduced, budget)
+
+
+#: Present, True, only in a MINIMAL outline: the outline's fields were
+#: dropped because the outline alone did not fit the cap (``_minimal_outline``).
+OUTLINE_CUT_KEY = "outline_cut"
+
+
+def _minimal_outline(outline: dict[str, Any], chars_total: int, with_totals: bool = True) -> dict[str, Any]:
+    """The defined last resort for an outline that does not fit the cap even
+    with no preview beside it. A statement is never cut, so a long one can
+    make the outline larger than the cap by itself. It is then REPLACED, not
+    cut: this keeps that it was cut, the outline's own size, the size of the
+    whole result, the row totals and how many parts each list of parts holds
+    (or, ``with_totals`` False, the rows' sum and how many lists they
+    cover), and a floor note that the statements were dropped for size."""
+    totals = outline.get(ROWS_TOTAL_KEY) if isinstance(outline.get(ROWS_TOTAL_KEY), dict) else {}
+    out: dict[str, Any] = {
+        OUTLINE_CUT_KEY: True,
+        "outline_chars": len(json.dumps(outline, default=str)),
+        "result_chars": chars_total,
+    }
+    if with_totals:
+        out[ROWS_TOTAL_KEY] = totals
+        if isinstance(outline.get(PARTS_TOTAL_KEY), dict):
+            out[PARTS_TOTAL_KEY] = outline[PARTS_TOTAL_KEY]
+    else:
+        out["rows_total_sum"] = sum(v for v in totals.values() if isinstance(v, int))
+        out["row_lists"] = len(totals)
+    out[OUTLINE_FLOOR_KEY] = {
+        "rule": "statements were dropped for size: the outline alone was larger than the cap, "
+                "so only its size and the row totals are kept. Do not answer from this outline; "
+                "re-run the tool narrowed to the part the user asked about.",
+    }
+    return out
+
+
+def _fit_cap(build: Callable[[int, Any], str], cap: int, outline: Any, chars_total: int, keep: int) -> str:
+    """``build(keep, outline)`` shrunk until it fits ``cap``, GUARANTEED.
+
+    The preview gives way first, measured on the real envelope. With no
+    preview left and still over the cap, the outline steps down: the minimal
+    outline with its row totals, then with their sum only, then none. Past
+    that a bare cut marker is returned. Every rung says the result was cut.
+    The result is never longer than ``cap`` unless ``cap`` is below the
+    smallest valid cut marker, ``{"truncated": true}`` (19 characters)."""
+    rungs: list[Any] = [outline]
+    if isinstance(outline, dict):
+        rungs += [_minimal_outline(outline, chars_total), _minimal_outline(outline, chars_total, False), None]
+    for rung in rungs:
+        k = max(0, int(keep))
+        out = build(k, rung)
+        while len(out) > cap and k > 0:
+            k = max(0, k - max(len(out) - cap, 32))
+            out = build(k, rung)
+        if len(out) <= cap:
+            return out
+    bare = [
+        {"truncated": True, "chars_total": chars_total,
+         "note": "The result was cut for size; nothing of it fits the cap. Re-run the tool narrowed."},
+        {"truncated": True, "chars_total": chars_total},
+        {"truncated": True},
+    ]
+    for marker in bare:
+        out = json.dumps(marker)
+        if len(out) <= cap:
+            return out
+    return out
 
 
 ROWS_SHOWN_KEY = "rows_shown"
@@ -3382,7 +3473,7 @@ def _tool_result_content(
     # window, whole: a window that cuts the rows never cuts the statement.
     outline = _result_outline(payload, cap // 4)
 
-    def _envelope(keep: int) -> str:
+    def _envelope(keep: int, outline: Any) -> str:
         shown = min(keep, len(window))
         next_offset = start + shown
         more = next_offset < len(text)
@@ -3443,14 +3534,12 @@ def _tool_result_content(
     # Embedding the preview as a JSON string RE-escapes it — every `"` becomes
     # `\"` and every `\` becomes `\\` — so escape-heavy content (exactly what
     # this guards) can nearly double. A fixed budget therefore overshoots the
-    # cap; shrink until the ENVELOPE fits, measuring the real thing.
-    keep = cap
-    out = _envelope(keep)
-    while len(out) > cap and keep > 0:
-        overshoot = len(out) - cap
-        keep = max(0, keep - max(overshoot, 32))
-        out = _envelope(keep)
-    return out
+    # cap; shrink until the ENVELOPE fits, measuring the real thing. A
+    # statement is never cut, so the outline alone can exceed the cap:
+    # _fit_cap then replaces it by a minimal one and the result always fits.
+    # A named call, as in _compacted_tool_payload, so the envelope's callers
+    # (and the tests that name them) are visible from a static call graph.
+    return _fit_cap(lambda k, o: _envelope(k, o), cap, outline, len(text), cap)
 
 
 def _persist_failed_turn(conversation_id: str | None) -> None:
@@ -11759,6 +11848,7 @@ _LAST_TOOL_PREVIEW = 6000
 
 def _compacted_tool_payload(
     content: str, keep: int, note: str | None = None, outline_budget: int | None = None,
+    max_chars: int | None = None,
 ) -> str:
     """A truncated tool result that says exactly what it lost.
 
@@ -11779,6 +11869,11 @@ def _compacted_tool_payload(
       same cut with different phrasing produces "the BOQ contains no
       demolition in cubic metres" -- a false statement about the customer's
       own contract, stated with the tool's authority behind it.
+
+    ``max_chars``, when given, is a hard cap the result is GUARANTEED to fit
+    (``_fit_cap``): the preview gives way first, then the outline is replaced
+    by a minimal one, because a statement is never cut and an outline can
+    exceed the cap by itself.
     """
     kept = max(0, int(keep))
     try:
@@ -11795,6 +11890,15 @@ def _compacted_tool_payload(
         # a cap keep the outline whole: only the preview gives way.
         budget = outline_budget if outline_budget is not None else kept // 4
         outline = _result_outline(whole, max(1, int(budget)))
+    if max_chars is not None:
+        return _fit_cap(lambda k, o: _compacted_envelope(content, whole, k, note, o),
+                        int(max_chars), outline, len(content), kept)
+    return _compacted_envelope(content, whole, kept, note, outline)
+
+
+def _compacted_envelope(content: str, whole: Any, kept: int, note: str | None, outline: Any) -> str:
+    """The envelope of ``_compacted_tool_payload`` for one preview length
+    and one outline."""
     totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
     countable = bool(totals) and isinstance(whole, dict) and not whole.get("truncated")
 

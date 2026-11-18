@@ -33,6 +33,7 @@ import {
 } from '../chat/session'
 import { activityForTool, plainMetadata } from '../chat/userFacingText'
 import {
+  belongsToProjectList,
   readSessionDocuments,
   sessionDocumentsView,
   withSessionId,
@@ -96,6 +97,9 @@ interface DocumentRecord {
    * read / failed (with the reason).
    */
   document_state?: { state: string; line: string } | null
+  /** The row's stored metadata. ``session_id`` names the chat session a
+   *  file was attached to; such a file is that session's, not the project's. */
+  metadata?: { session_id?: string | null; [key: string]: unknown } | null
 }
 
 interface DriveFile {
@@ -361,7 +365,7 @@ function friendlyErrorMessage(raw: string): string {
 interface DocumentsPanelProps {
   projectId: string
   /** The open chat session (W2): an upload is recorded on it and listed
-   *  under "This session" as well as in the project's documents. */
+   *  under "This session" only, never in the project's documents. */
   sessionId?: string | null
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
@@ -1108,7 +1112,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         const project = await apiGet<ProjectDetail>(`/v1/projects/${id}`)
         if (cancelled) return
         setWsState({ tag: 'ready', project })
-        setDocuments(project.documents ?? [])
+        setDocuments((project.documents ?? []).filter(belongsToProjectList))
         setDocTotals({
           held: project.held_document_count ?? null,
           searchable: project.searchable_document_count ?? null,
@@ -1210,8 +1214,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // ── Document mutation callbacks ───────────────────────────────────────────
 
   // The list is newest first, so a new document goes on top. The totals
-  // move with the list; a new upload is not searchable yet.
+  // move with the list; a new upload is not searchable yet. A file attached
+  // to a chat session is that session's: it is listed under "This session"
+  // (refreshSessionDocuments), never in the project's list, which outlives
+  // the chat it was attached in.
   const handleDocumentAdded = useCallback((doc: DocumentRecord) => {
+    if (!belongsToProjectList(doc)) return
     if (documentsRef.current.some((d) => d.id === doc.id)) return
     documentsRef.current = [doc, ...documentsRef.current]
     setDocuments((prev) => (prev.some((d) => d.id === doc.id) ? prev : [doc, ...prev]))
@@ -1938,7 +1946,8 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               // S4: keep the real document_id so the next send carries it as
               // document_ids — the [attached: name] marker alone is lossy.
               if (docId) pendingAttachedDocIdsRef.current.push(docId)
-              // The stored file shows in the documents list at once.
+              // A project file shows in the documents list at once; a
+              // session file shows under "This session" (handleDocumentAdded).
               if (isDocumentRecord(stored)) handleDocumentAdded(stored)
               refreshSessionDocuments()
             }}
@@ -1951,6 +1960,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           expanded={rightExpanded}
           onToggleExpand={() => setRightExpanded((v) => !v)}
           projectId={id ?? ''}
+          sessionId={conversationId}
           documents={documents.map((d) => ({
             id: d.id,
             original_name: d.original_name,

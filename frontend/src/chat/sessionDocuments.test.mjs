@@ -7,6 +7,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  belongsToProjectList,
+  documentPath,
   readSessionDocuments,
   sessionDocumentTag,
   sessionDocumentsFailed,
@@ -99,3 +101,57 @@ test('before the first reply the group is loading, not empty', () => {
     assert.equal(sessionDocumentsView(state, active).kind, 'loading')
   }
 })
+
+// TESTER 10:40Z: a file attached in one chat showed in the project's
+// document list of every later chat. The server never listed it; the client
+// put the upload's response row into the project's list, which outlives the
+// chat. A row naming a session is the session's, not the project's.
+test('a session file does not belong in the project list; a project file does', () => {
+  for (const sessionFile of [
+    { id: 'd1', original_name: 'a.txt', metadata: { session_id: 'ws-p1-1000', origin: 'uploaded' } },
+    { id: 'd2', original_name: 'b.txt', metadata: { session_id: 'ws-p1-mwiq9k', uploader_id: 'u1' } },
+  ]) {
+    assert.equal(belongsToProjectList(sessionFile), false)
+  }
+  for (const projectFile of [
+    { id: 'd3', original_name: 'c.txt', metadata: { provenance: 'user_upload', uploader_id: 'u1' } },
+    { id: 'd4', original_name: 'd.txt' },
+    { id: 'd5', original_name: 'e.txt', metadata: null },
+    { id: 'd6', original_name: 'f.txt', metadata: { session_id: '  ' } },
+  ]) {
+    assert.equal(belongsToProjectList(projectFile), true)
+  }
+})
+
+// The hole the server-side enumeration test cannot see: rows the CLIENT
+// writes into the project's list. Every write that adds rows goes through
+// belongsToProjectList: the project load and the one add handler.
+test('every row the workspace adds to the project list passes the session rule', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
+  const adds = src.split('\n').filter((line) => /setDocuments\(/.test(line)
+    && (/project\.documents/.test(line) || /\[doc, \.\.\.prev\]/.test(line)))
+  assert.equal(adds.length, 2, adds.join('\n'))
+  assert.ok(adds.some((l) => /\.filter\(belongsToProjectList\)/.test(l)), adds.join('\n'))
+  const handler = src.slice(src.indexOf('const handleDocumentAdded = useCallback'))
+  const body = handler.slice(0, handler.indexOf('}, [])'))
+  assert.ok(/if \(!belongsToProjectList\(doc\)\) return/.test(body), body)
+  assert.ok(body.indexOf('belongsToProjectList') < body.indexOf('setDocuments('), body)
+})
+
+// #451: a content-by-id request names the open chat; a file attached to a
+// chat is reachable by id only from it.
+for (const [sid, tail, expected] of [
+  ['ws-p1-1000', '/preview', '/v1/projects/p1/documents/d9/preview?session_id=ws-p1-1000'],
+  ['ws p1/2000', '/download', '/v1/projects/p1/documents/d9/download?session_id=ws%20p1%2F2000'],
+]) {
+  test(`documentPath names the open chat (${tail})`, () => {
+    assert.equal(documentPath('p1', 'd9', tail, sid), expected)
+  })
+}
+
+for (const sid of [null, '   ']) {
+  test(`documentPath with no open chat carries no session (${JSON.stringify(sid)})`, () => {
+    assert.equal(documentPath('p1', 'd9', '/preview/raw', sid), '/v1/projects/p1/documents/d9/preview/raw')
+  })
+}
