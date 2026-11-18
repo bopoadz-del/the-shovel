@@ -177,6 +177,86 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
     return out
 
 
+#: Length units a size is printed in, and their factor to metres (the base
+#: unit). Units, not sizes: no size of any bill is listed here.
+_LENGTH_UNITS = {"mm": 0.001, "cm": 0.01, "m": 1.0, "km": 1000.0,
+                 "مم": 0.001, "ملم": 0.001, "سم": 0.01, "م": 1.0, "كم": 1000.0}
+#: The readings of a size printed with no unit at all: it is read in each of
+#: these units, so ``1800 x 1800`` (millimetres) and ``1.8 x 1.8`` (metres)
+#: are one size.
+_UNITLESS_READINGS = (1.0, 0.01, 0.001)
+#: Arabic-Indic and Eastern Arabic-Indic digits, and the Arabic decimal and
+#: thousands separators, read as the Latin ones.
+_DIGITS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
+                         **{chr(0x06F0 + i): str(i) for i in range(10)},
+                         "٫": ".", "٬": ","})
+_NUM = r"\d+(?:[.,]\d+)*"
+_UNIT = "(?:" + "|".join(sorted(map(re.escape, _LENGTH_UNITS), key=len, reverse=True)) + r")(?![^\W_])"
+_MEMBER = rf"{_NUM}(?:\s*{_UNIT})?"
+_SIZE_SEP = r"\s*(?:x|×|\*|by|في)\s*"
+#: A size: one number, or numbers joined by ``x`` (a dimension), each with
+#: its unit when printed. Not a number glued to a letter (a code: ``DN150``).
+_SIZE_RE = re.compile(rf"(?<![^\W_])(?<!\.){_MEMBER}(?:{_SIZE_SEP}{_MEMBER})*", re.IGNORECASE)
+_MEMBER_RE = re.compile(rf"({_NUM})\s*({_UNIT})?", re.IGNORECASE)
+
+
+def _number(text: str) -> float:
+    """``1.8`` and ``1,8`` -> 1.8; ``1,800`` and ``1,800.5`` -> thousands."""
+    seps = re.findall(r"[.,]", text)
+    if not seps:
+        return float(text)
+    last = seps[-1]
+    head, _, tail = text.rpartition(last)
+    if all(s == last for s in seps) and (len(seps) > 1 or (last == "," and len(tail) == 3)):
+        # One mark repeated, or a lone comma before three digits: thousands.
+        return float(text.replace(last, ""))
+    # The last mark is the decimal point; any other mark groups thousands.
+    return float(re.sub(r"[.,]", "", head) + "." + tail)
+
+
+@dataclass(frozen=True)
+class Size:
+    """A size as printed (``text``) and every canonical reading of it: a
+    tuple of member lengths in metres per reading."""
+
+    text: str
+    readings: frozenset[tuple[float, ...]]
+
+    def same(self, other: Size) -> bool:
+        return bool(self.readings & other.readings)
+
+
+def sizes_in(text: str) -> list[Size]:
+    """Every size printed in ``text``, each read to metres.
+
+    A member with no unit takes the unit printed on the next member, else on
+    the one before (``1.8 x 1.8 m`` is metres throughout); a size with no unit
+    on any member is read in each of :data:`_UNITLESS_READINGS`."""
+    out: list[Size] = []
+    for m in _SIZE_RE.finditer((text or "").translate(_DIGITS)):
+        members = [(_number(n), (u or "").casefold()) for n, u in _MEMBER_RE.findall(m.group(0))]
+        units = [u for _, u in members]
+        if not any(units):
+            factors = [(f,) * len(members) for f in _UNITLESS_READINGS]
+        else:
+            filled = []
+            for i, u in enumerate(units):
+                after = next((x for x in units[i:] if x), "")
+                filled.append(_LENGTH_UNITS[u or after or next(x for x in reversed(units[:i]) if x)])
+            factors = [tuple(filled)]
+        readings = frozenset(tuple(round(v * f, 9) for (v, _), f in zip(members, fs)) for fs in factors)
+        out.append(Size(" ".join(m.group(0).split()), readings))
+    return out
+
+
+def _without_sizes(text: str) -> str:
+    return _SIZE_RE.sub(" ", (text or "").translate(_DIGITS))
+
+
+def _has_size(text: str, size: Size) -> bool:
+    return any(size.same(s) for s in sizes_in(text))
+
+
 def _words(text: str) -> set[str]:
     return {w.casefold() for w in _WORD_RE.findall(text or "")}
 
@@ -216,10 +296,18 @@ def _contains(words: set[str], terms: set[str], fold: bool) -> bool:
     return all(_forms(t) & have for t in terms)
 
 
-def matches(row: SheetRow, terms: set[str], section_terms: set[str], *, fold: bool = False) -> bool:
-    if terms and not _contains(_words(row.description), terms, fold):
+def matches(row: SheetRow, terms: set[str], section_terms: set[str], *, fold: bool = False,
+            sizes: Sequence[Size] = ()) -> bool:
+    """Every term is a word of the description, every section term a word of
+    the heading path, and every size is printed (as a size, in any unit) in
+    the heading path or the description."""
+    if terms and not _contains(_words(_without_sizes(row.description)), terms, fold):
         return False
-    return not section_terms or _contains(_words(" ".join(row.path)), section_terms, fold)
+    if sizes:
+        printed = sizes_in(" ".join(row.path)) + sizes_in(row.description)
+        if not all(any(want.same(s) for s in printed) for want in sizes):
+            return False
+    return not section_terms or _contains(_words(_without_sizes(" ".join(row.path))), section_terms, fold)
 
 
 #: Words of an ask that never pick rows: function words, the words of asking,
@@ -305,21 +393,32 @@ def selection_from_ask(rows: Sequence[SheetRow], ask: str | None) -> dict[str, l
     * a word the bill prints in a heading path is a section word (the bill's
       own categories), else a word it prints in a description is a
       description word, else it selects nothing and is reported as ignored;
-    * a plural and its singular agree (:func:`_forms`).
+    * a plural and its singular agree (:func:`_forms`);
+    * a number (with its unit, or a dimension ``a x b``) is a SIZE
+      (:func:`sizes_in`), read to metres on the ask and on the bill alike, so
+      every spelling of one size selects the same rows; a size the bill
+      prints nowhere selects nothing and is reported as ignored.
 
     The result depends only on the ask and the bill, never on the model.
     """
     path_words: set[str] = set()
     desc_words: set[str] = set()
+    printed: list[Size] = []
     for row in rows:
-        path_words |= _words(" ".join(row.path))
-        desc_words |= _words(row.description)
+        path_words |= _words(_without_sizes(" ".join(row.path)))
+        desc_words |= _words(_without_sizes(row.description))
+        printed += sizes_in(" ".join(row.path)) + sizes_in(row.description)
     path_forms = set().union(*(_forms(w) for w in path_words)) if path_words else set()
     desc_forms = set().union(*(_forms(w) for w in desc_words)) if desc_words else set()
     terms: list[str] = []
     section: list[str] = []
     ignored: list[str] = []
-    for word in _WORD_RE.findall(ask or ""):
+    sizes: list[str] = []
+    for size in sizes_in(ask or ""):
+        bucket = sizes if any(size.same(p) for p in printed) else ignored
+        if size.text not in bucket:
+            bucket.append(size.text)
+    for word in _WORD_RE.findall(_without_sizes(ask or "")):
         word = word.casefold()
         if _bare(word) in _ASK_STOPWORDS or word in terms or word in section or word in ignored:
             continue
@@ -329,7 +428,8 @@ def selection_from_ask(rows: Sequence[SheetRow], ask: str | None) -> dict[str, l
             terms.append(word)
         else:
             ignored.append(word)
-    return {"terms": sorted(terms), "section_terms": sorted(section), "ignored": sorted(ignored)}
+    return {"terms": sorted(terms), "section_terms": sorted(section), "sizes": sizes,
+            "ignored": sorted(ignored)}
 
 
 def aggregate(
@@ -339,10 +439,13 @@ def aggregate(
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
     fold: bool = False,
+    sizes: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
 
     ``fold`` lets a plural and its singular agree (the ask-derived selection).
+    ``sizes`` are sizes as written (``1.8 x 1.8 m``); a row matches only when
+    it prints each of them, in any spelling (:func:`sizes_in`).
 
     Quantities are summed per unit: adding cubic metres to metres is not a
     total, so a mixed-unit match returns one sum per unit and no single sum.
@@ -352,7 +455,8 @@ def aggregate(
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
     want, where = _terms(terms), _terms(section)
-    if not want and not where:
+    asked = [s for text in sizes for s in sizes_in(text)]
+    if not want and not where and not asked:
         raise ValueError("give description terms or a section to match")
     items = join_page_continuations(rows)
     used, without = [], []
@@ -362,7 +466,7 @@ def aggregate(
     # sections is told what each section adds, not only the total of all.
     sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for row in items:
-        if not matches(row, want, where, fold=fold):
+        if not matches(row, want, where, fold=fold, sizes=asked):
             continue
         value = row.figure(measure)
         entry = {
@@ -387,6 +491,7 @@ def aggregate(
         "measure": measure,
         "terms": sorted(want),
         "section_terms": sorted(where),
+        "sizes": [s.text for s in asked],
         "rows_scanned": len(items),
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
@@ -486,6 +591,8 @@ def statement(result: dict[str, Any]) -> str:
         why.append(f"whose description contains {_quoted(result['terms'])}")
     if result.get("section_terms"):
         why.append(f"in the section {_quoted(result['section_terms'])}")
+    if result.get("sizes"):
+        why.append(f"of size {_quoted(result['sizes'])}")
     ignored = result.get("ignored_ask_words") or []
     unused = (f" Words of the question found nowhere in this bill, so not used: {_quoted(ignored)}."
               if ignored else "")
@@ -599,15 +706,15 @@ def _aggregate_bill(
         result["selected_by"] = "call"
     else:
         picked = selection_from_ask(rows, ask)
-        if picked["terms"] or picked["section_terms"]:
+        if picked["terms"] or picked["section_terms"] or picked["sizes"]:
             read = measure_from_ask(ask)
             result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
-                               measure=read or MEASURE_QUANTITY, fold=True)
+                               measure=read or MEASURE_QUANTITY, fold=True, sizes=picked["sizes"])
             result["selected_by"] = "ask"
             # No column named: the quantity, and the statement says so.
             result["measure_unread"] = read is None
         else:
-            result = {"measure": None, "terms": [], "section_terms": [],
+            result = {"measure": None, "terms": [], "section_terms": [], "sizes": [],
                       "rows_scanned": len(join_page_continuations(rows)), "count": 0, "sum": None,
                       "unit": None, "sum_by_unit": None, "without_figure": [], "rows": [],
                       "selected_by": "none"}

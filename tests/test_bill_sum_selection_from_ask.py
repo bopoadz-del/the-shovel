@@ -64,7 +64,7 @@ def rows(tmp_path):
 ], ids=["section+terms", "reworded", "ignored", "section-only"])
 def test_selection_is_a_rule_over_the_ask_and_the_bill(rows, ask, terms, section, ignored):
     picked = agg.selection_from_ask(rows, ask)
-    assert picked == {"terms": terms, "section_terms": section, "ignored": ignored}
+    assert picked == {"terms": terms, "section_terms": section, "sizes": [], "ignored": ignored}
 
 
 @pytest.mark.parametrize("ask, measure", [

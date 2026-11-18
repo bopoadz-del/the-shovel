@@ -49,7 +49,8 @@ def rows(tmp_path):
 def _result(rows, ask):
     picked = agg.selection_from_ask(rows, ask)
     out = agg.aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
-                        measure=agg.measure_from_ask(ask, agg.MEASURE_QUANTITY), fold=True)
+                        measure=agg.measure_from_ask(ask, agg.MEASURE_QUANTITY), fold=True,
+                        sizes=picked["sizes"])
     out.update(status="success", filename="bill.xlsx")
     return out
 
