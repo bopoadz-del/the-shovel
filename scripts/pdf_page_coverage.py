@@ -483,36 +483,62 @@ def report(doc_row: tuple) -> list[str]:
     return withhold(diagnose(doc_row) + stored_lines(doc_row), doc_row)
 
 
+# Every line the script prints carries this mark; the workflow publishes the
+# marked lines only, never the rest of the container stream (entrypoint and
+# library output it does not control).
+MARK = "PPC| "
+
+
+def emit(line: str, *, err: bool = False) -> None:
+    stream = sys.stderr if err else sys.stdout
+    stream.write(f"{MARK}{line}" + chr(10))
+    stream.flush()
+
+
+def _one(prefix: str) -> bool:
+    """Report one id; True when it printed exactly one document."""
+    from app.core.db import SessionLocal
+
+    with SessionLocal() as s:
+        rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
+    if len(rows) != 1:
+        emit(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
+        return False
+    for line in report(tuple(rows[0])):
+        emit(line)
+    return True
+
+
 def main() -> int:
     if os.environ.get("COVERAGE_DRIVE_PATH", "").strip():
         # Withdrawn: a path selector puts a client folder name into a public
         # run log. The value is not echoed.
-        sys.stderr.write("COVERAGE_DRIVE_PATH is withdrawn: select by document id\n")
+        emit("COVERAGE_DRIVE_PATH is withdrawn: select by document id", err=True)
         return 2
     try:
         ids = parse_ids(os.environ.get("COVERAGE_DOC_IDS", ""))
     except ValueError:
-        sys.stderr.write("COVERAGE_DOC_IDS holds a token that is not a document id\n")
+        emit("COVERAGE_DOC_IDS holds a token that is not a document id", err=True)
         return 2
     if not ids:
-        sys.stderr.write("COVERAGE_DOC_IDS is required\n")
+        emit("COVERAGE_DOC_IDS is required", err=True)
         return 2
     if len(ids) > _MAX_DOCS:
-        sys.stderr.write(f"{len(ids)} ids given, at most {_MAX_DOCS} per run\n")
+        emit(f"{len(ids)} ids given, at most {_MAX_DOCS} per run", err=True)
         return 2
-    from app.core.db import SessionLocal
-
-    print("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()), flush=True)
+    try:
+        emit("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()))
+    except Exception as exc:  # by class only: a message can quote a path
+        emit(f"budgets: unreadable ({type(exc).__name__})")
     failed = 0
     for prefix in ids:
-        with SessionLocal() as s:
-            rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
-        if len(rows) != 1:
-            print(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
-            failed += 1
-            continue
-        for line in report(tuple(rows[0])):
-            print(line, flush=True)
+        try:
+            ok = _one(prefix)
+        except Exception as exc:  # by class only: a message can quote a path or a name
+            emit(f"== id {prefix}: failed ({type(exc).__name__})")
+            ok = False
+        failed += 0 if ok else 1
+    emit(f"done: ids={len(ids)} failed={failed}")
     return 1 if failed else 0
 
 
