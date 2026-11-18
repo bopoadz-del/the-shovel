@@ -432,3 +432,34 @@ def test_word_tables_fold_case_article_and_letter_variants(texts, expected):
     """The ask-word tables hold each word in its looked-up form: case folded,
     the Arabic article dropped and letter variants made one."""
     assert agg._table(*texts) == expected
+
+
+# -- the live shape: the headline total is the model's own addition of the rows,
+# -- off from the tool's sum (TESTER 18 Nov: 5,858 stated, the rows add to 4,858)
+
+_LIVE_ROWS = (633, 488, 828, 957, 844, 221, 552, 200, 135)
+_OTHER_ROWS = (1250, 740, 310)
+
+
+def _added(rows, total):
+    return (f"The total is {total:,} m over {len(rows)} rows: "
+            + " + ".join(str(r) for r in rows) + f" = {total:,} m.")
+
+
+@pytest.mark.parametrize("rows, headline, kept", [
+    (_LIVE_ROWS, sum(_LIVE_ROWS) + 1000, False),
+    (_OTHER_ROWS, sum(_OTHER_ROWS) + 1000, False),
+    (_LIVE_ROWS, sum(_LIVE_ROWS), True),
+    (_OTHER_ROWS, sum(_OTHER_ROWS), True),
+], ids=["live-off-by-1000", "other-off-by-1000", "live-right", "other-right"])
+def test_a_headline_the_model_added_itself_does_not_replace_the_tools_sum(rows, headline, kept):
+    from app.agents import answer_exit
+
+    tool_sum = float(sum(rows))
+    shown = f"{sum(rows):,} m"
+    answer = _added(rows, headline)
+    out = answer_exit.hold_stated_figures(answer, _turn((tool_sum, shown)))
+    assert (out == answer) is kept
+    if not kept:
+        assert out.startswith(answer)
+        assert f"The tool's own figure is {shown}." in out
