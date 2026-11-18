@@ -27,9 +27,11 @@ answers the call itself.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
@@ -205,6 +207,10 @@ class ResultSpec:
 
 
 _RESULTS: Dict[str, ResultSpec] = {}
+# While a deferred declarer runs, its declarations are collected here (per
+# thread) and committed to _RESULTS only when it returns: one that raises
+# part-way leaves nothing behind, so its retry cannot hit "declared twice".
+_STAGE = threading.local()
 
 
 def declare_result(name: str, *, owner: str, display_name: str, kind: str,
@@ -223,10 +229,13 @@ def declare_result(name: str, *, owner: str, display_name: str, kind: str,
         raise ValueError(f"result {name!r}: a computed result, and only a computed result, declares a statement")
     spec = ResultSpec(name, owner, display_name.strip(), kind, statement,
                       _reason_codes("result", name, reason_codes))
+    staged = getattr(_STAGE, "results", None)
     existing = _RESULTS.get(name)
+    if existing is None and staged is not None:
+        existing = staged.get(name)
     if (existing is not None and existing != spec) or name in _TOOLS:
         raise ValueError(f"result {name!r} is declared twice")
-    _RESULTS[name] = spec
+    (_RESULTS if staged is None else staged)[name] = spec
 
 
 _DEFERRED: List[Callable[[], None]] = []
@@ -243,37 +252,104 @@ def declare_results_when_read(declarer: Callable[[], None]) -> None:
 _DEFERRED_LOCK = threading.RLock()
 _DEFERRED_RUNNING = False
 _LOG = logging.getLogger(__name__)
+#: After a declarer fails it is not run again for this many seconds: a
+#: declarer that always fails (a heavy import that breaks) must not be re-run,
+#: under the lock, by every tool call. Reads in between see what is declared.
+DEFERRED_RETRY_INTERVAL_S = 30.0
+#: The clock the back-off reads (monotonic; a test substitutes a fake one).
+_clock: Callable[[], float] = time.monotonic
+_RETRY_AT: Dict[Callable[[], None], float] = {}
+# Set while a worker thread drains the list for a read made on an event loop.
+_OFFLOOP_LOCK = threading.Lock()
+_OFFLOOP_RUNNING = False
 
 
-def declare_deferred_results() -> None:
-    """Run every waiting declarer, under one lock, so a second thread's first
-    read waits until the declarations exist. A declarer leaves the list only
-    after it SUCCEEDS: one that raises is logged by its exception class and
-    tried again on the next read -- never silently lost. A read made from
-    inside a declarer (same thread) does not re-enter the loop.
+def _due() -> bool:
+    """Is any pending declarer allowed to run now? Unlocked: a read while
+    every pending declarer is backing off must not touch the lock."""
+    now = _clock()
+    return any(_RETRY_AT.get(d, 0.0) <= now for d in list(_DEFERRED))
 
-    The lock is taken ONLY while declarers are pending: every tool call reads
-    the declarations, so once the list is empty a read must never queue on
-    it. The app runs this in its background warm-up (app.main._warm_models,
-    off the event loop); the first read is only the fallback."""
+
+def _on_event_loop() -> bool:
+    """Is this thread running an event loop? (``_get_running_loop`` is the
+    non-raising form of ``get_running_loop``, exported by asyncio.)"""
+    return asyncio._get_running_loop() is not None
+
+
+def _drain_off_loop() -> None:
+    global _OFFLOOP_RUNNING
+    try:
+        _run_pending()
+    finally:
+        with _OFFLOOP_LOCK:
+            _OFFLOOP_RUNNING = False
+
+
+def _start_off_loop() -> None:
+    """Hand the pending declarers to a worker thread (at most one at a time)."""
+    global _OFFLOOP_RUNNING
+    with _OFFLOOP_LOCK:
+        if _OFFLOOP_RUNNING:
+            return
+        _OFFLOOP_RUNNING = True
+    threading.Thread(target=_drain_off_loop, name="deferred-declarers", daemon=True).start()
+
+
+def _run_pending() -> None:
     global _DEFERRED_RUNNING
-    if not _DEFERRED:
-        return
     with _DEFERRED_LOCK:
         if _DEFERRED_RUNNING:
             return
         _DEFERRED_RUNNING = True
         try:
             for declarer in list(_DEFERRED):
+                if _RETRY_AT.get(declarer, 0.0) > _clock():
+                    continue
+                _STAGE.results = staged = {}
                 try:
                     declarer()
-                except Exception as exc:  # retried on the next read
-                    _LOG.warning("deferred result declarer %s failed (%s); retried on the next read",
-                                 getattr(declarer, "__qualname__", "?"), type(exc).__name__)
+                    for name, spec in staged.items():
+                        if _RESULTS.get(name, spec) != spec:
+                            raise ValueError(f"result {name!r} is declared twice")
+                except Exception as exc:  # retried after the back-off interval
+                    _RETRY_AT[declarer] = _clock() + DEFERRED_RETRY_INTERVAL_S
+                    _LOG.warning("deferred result declarer %s failed (%s); retried in %.0f s",
+                                 getattr(declarer, "__qualname__", "?"), type(exc).__name__,
+                                 DEFERRED_RETRY_INTERVAL_S)
                     continue
+                finally:
+                    _STAGE.results = None
+                _RESULTS.update(staged)        # commit: all of it, only on success
                 _DEFERRED.remove(declarer)
+                _RETRY_AT.pop(declarer, None)
         finally:
             _DEFERRED_RUNNING = False
+
+
+def declare_deferred_results() -> None:
+    """Run every waiting declarer, under one lock, so a second thread's first
+    read waits until the declarations exist. A declarer's declarations are
+    collected and committed only when it SUCCEEDS: one that raises leaves
+    nothing declared, stays in the list, is logged by its exception class, and
+    is tried again no sooner than ``DEFERRED_RETRY_INTERVAL_S`` later. A read
+    made from inside a declarer (same thread) does not re-enter the loop.
+
+    The lock is taken ONLY while a pending declarer is due: every tool call
+    reads the declarations, so once the list is empty (or everything left is
+    backing off) a read must never queue on it.
+
+    A read made ON an event loop never runs a declarer itself (the declarers
+    import heavy libraries; seconds of import there stall every user) and
+    never waits on the lock: it hands the work to a worker thread and reads
+    what is declared now. The app declares before it serves (app.main's
+    lifespan, off the loop), so such a read is only the fallback."""
+    if not _DEFERRED or not _due():
+        return
+    if _on_event_loop():
+        _start_off_loop()
+        return
+    _run_pending()
 
 
 def get(name: str) -> Optional[ToolSpec]:
