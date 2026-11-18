@@ -377,7 +377,7 @@ def _turn_for(payloads, ask=ASK):
 def _lead(turn):
     from app.agents import answer_exit
 
-    return answer_exit._computed_lead(answer_exit._rested_result(turn), turn.question)
+    return "\n\n".join(answer_exit.computed_leads(turn))
 
 
 def _leads(content, lead):
@@ -437,18 +437,42 @@ def test_a_total_when_the_tool_selected_nothing_gets_the_plain_statement(rows, r
         assert out == reply
 
 
-@pytest.mark.parametrize("first_ask", [NO_SELECT_ASK, "fencing"])
-def test_only_the_call_the_answer_rests_on_leads(rows, first_ask):
-    """An earlier call (one that selected nothing, or another selection) is
-    exploratory: the lead is the last call that stated a figure."""
+@pytest.mark.parametrize("first_ask, leads", [
+    (NO_SELECT_ASK, ["103.5"]),
+    ("fencing", ["120", "103.5"]),
+    (ASK, ["103.5"]),
+], ids=["first-selected-nothing", "two-selections", "same-ask-twice"])
+def test_every_figure_stating_call_leads_in_call_order_once(rows, first_ask, leads):
+    """A call that selected nothing does not lead; every call that stated a
+    figure leads, in call order; an identical statement is shown once."""
     from app.agents import answer_exit
 
     turn = _turn_for([_bill_payload(rows, first_ask), _bill_payload(rows, ASK)])
-    lead = _lead(turn)
-    assert "103.5" in lead and "120" not in lead
+    stated = answer_exit.computed_leads(turn)
+    assert len(stated) == len(leads)
+    for lead, figure in zip(stated, leads):
+        assert figure in lead
     out = answer_exit.hold_stated_figures("The runs carry 103.5 m of clay pipe.", turn)
-    assert out.startswith(lead)
+    assert out.startswith("\n\n".join(stated))
+    assert sum(out.count(lead) for lead in stated) == len(stated)
     assert answer_exit.FIGURE_REMOVED not in out
+
+
+@pytest.mark.parametrize("reply, kept", [
+    ("The clay runs are on rows R1, R2 and R4. That is 103.5 m.", True),
+    ("The clay runs are on rows R1, R2 and R4. Re-added they make 112 m.", False),
+], ids=["all-figures-the-tools", "one-foreign-figure"])
+def test_commentary_is_whole_or_nothing(rows, reply, kept):
+    """The model's text is kept whole when every figure in it is the tool's
+    or the user's, and withheld whole (never cut sentence by sentence) when
+    any one figure is its own."""
+    from app.agents import answer_exit
+
+    turn = _turn_for([_bill_payload(rows, ASK)])
+    out = answer_exit.hold_stated_figures(reply, turn)
+    assert (reply in out) is kept
+    assert ("rows R1, R2 and R4" in out) is kept
+    assert (answer_exit.FIGURE_REMOVED in out) is (not kept)
 
 
 @pytest.mark.parametrize("answer, kept", [

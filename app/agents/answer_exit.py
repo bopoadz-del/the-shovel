@@ -354,8 +354,6 @@ def _plain_statements(payload: Any, depth: int = 0) -> list[str]:
 _ANSWER_NUMBER_RE = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
 #: A list marker at the start of a line ("1." "2)" "-" "*") is layout, not a figure.
 _LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+")
-#: A sentence end inside one line (a decimal point is never followed by a space).
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?؟])\s+")
 
 
 def _answer_numbers(text: str) -> set[float]:
@@ -385,16 +383,21 @@ def _same(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
 
 
-def _rested_result(turn: Turn) -> dict[str, Any] | None:
-    """The computed result the answer rests on: the LAST computed result of
-    the turn that stated a figure. An earlier one is exploratory; one that
-    selected nothing states no figure and forces nothing. Every call of a
-    turn selects its rows from the same ask, so the last call with a figure
-    holds the turn's selection."""
-    for res in reversed(turn.computed_results):
+def computed_leads(turn: Turn | None) -> list[str]:
+    """The tool statements a computed answer leads with: one per computed
+    result of the turn that stated a figure, in call order, an identical
+    statement once. A result that selected nothing states no figure and does
+    not lead. Which call is "the" answer is never guessed: every call that
+    stated a figure is shown, the user's ask chose each one's rows."""
+    if turn is None:
+        return []
+    leads: list[str] = []
+    for res in turn.computed_results:
         if res["figures"]:
-            return res
-    return None
+            lead = _computed_lead(res, turn.question or "")
+            if lead and lead not in leads:
+                leads.append(lead)
+    return leads
 
 
 def _computed_lead(res: dict[str, Any], question: str) -> str:
@@ -419,44 +422,33 @@ def _computed_lead(res: dict[str, Any], question: str) -> str:
     return "\n".join(res["statements"]) or "; ".join(f["shown"] for f in res["figures"])
 
 
-def _without_foreign_figures(text: str, allowed: set[float]) -> tuple[str, bool]:
-    """``text`` less every sentence that states a number found in neither
-    the tool's result nor the user's question (the model's own arithmetic).
-    Returns (kept text, whether anything was removed)."""
-    kept_lines: list[str] = []
-    removed = False
+def _states_a_foreign_figure(text: str, allowed: set[float]) -> bool:
+    """Whether ``text`` states a number found in neither the tool's results
+    nor the user's question (the model's own arithmetic). A list marker at
+    the start of a line is layout, not a figure."""
     for line in text.split("\n"):
         marker = _LIST_MARKER_RE.match(line)
-        prefix = marker.group(0) if marker else ""
-        sentences = _SENTENCE_END_RE.split(line[len(prefix):])
-        keep = [s for s in sentences
-                if all(any(_same(n, a) for a in allowed) for n in _answer_numbers(s))]
-        if len(keep) == len(sentences):
-            kept_lines.append(line)
-            continue
-        removed = True
-        if any(k.strip() for k in keep):
-            kept_lines.append(prefix + " ".join(keep))
-    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
-    return out, removed
+        body = line[len(marker.group(0)):] if marker else line
+        if any(not any(_same(n, a) for a in allowed) for n in _answer_numbers(body)):
+            return True
+    return False
 
 
 #: The one correction line a computed answer may carry.
-FIGURE_REMOVED = ("A figure in the reply that the tool did not state was removed; "
+FIGURE_REMOVED = ("The reply's own text stated a figure the tool did not and was withheld; "
                   "the tool's figure above stands.")
 
 
 def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
     """The exit check for a computed turn: the user reads the TOOL's
-    statement first, never the model's arithmetic.
+    statements first, never the model's arithmetic.
 
-    * The answer's lead is the statement of the computed result the answer
-      rests on (:func:`_rested_result`), rendered from the tool's result by
-      the route; the model's words follow it unchanged.
-    * Any sentence of the model's that states a number neither the tool's
-      results nor the user's question hold (another total, a re-added sum)
-      is removed, and one line says so. Which number is "the headline" is
-      never guessed: the tool's statement is the headline by construction.
+    * The answer leads with :func:`computed_leads`: every computed result
+      that stated a figure, in call order, an identical statement once.
+    * The model's own text follows WHOLE or not at all: when any of it
+      states a number neither the tool's results, the leads nor the user's
+      question hold (another total, a re-added sum), all of it is withheld
+      and one line says so. A copy of a lead inside it is dropped (one copy).
     * When no computed result of the turn stated a figure (its ask selected
       nothing) and the reply states a figure anyway, the reply is replaced
       by the tool's plain statement that nothing was selected.
@@ -468,18 +460,21 @@ def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
     allowed = _answer_numbers(turn.question or "")
     for res in turn.computed_results:
         allowed |= _payload_numbers(res["payload"])
-    rested = _rested_result(turn)
-    if rested is None:
-        _kept, removed = _without_foreign_figures(text, allowed)
-        if not removed:
+    leads = computed_leads(turn)
+    if not leads:
+        if not _states_a_foreign_figure(text, allowed):
             return text
         plain = list(dict.fromkeys(s for res in turn.computed_results for s in res["statements"]))
-        return "\n".join(plain) if plain else _kept
-    lead = _computed_lead(rested, turn.question or "")
-    allowed |= _answer_numbers(lead)
-    body = text.replace(lead, "").strip() if lead and lead in text else text
-    kept, removed = _without_foreign_figures(body, allowed)
-    parts = [lead, kept] + ([FIGURE_REMOVED] if removed else [])
+        # A result is recorded only with a figure or a statement, so a turn
+        # whose results stated no figure always has a plain statement here.
+        return "\n".join(plain)
+    body = text
+    for lead in leads:
+        allowed |= _answer_numbers(lead)
+        body = body.replace(lead, "")
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    withheld = _states_a_foreign_figure(body, allowed)
+    parts = leads + ([FIGURE_REMOVED] if withheld else [body])
     return "\n\n".join(p for p in parts if p)
 
 
