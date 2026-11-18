@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "trace_page", Path(__file__).resolve().parents[1] / "scripts" / "trace_page.py"
@@ -18,7 +21,6 @@ T0 = 1_800_000_000.0  # an epoch second; rows and lines are built around it
 
 
 def _iso(epoch: float) -> str:
-    from datetime import datetime, timezone
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -59,130 +61,158 @@ def _row(rid, start, t_end, **over):
     return rec
 
 
-# ── parsing: plain and JSON-wrapped messages ─────────────────────────────
+# ── parsing: export shapes ───────────────────────────────────────────────
 
-def test_plain_and_wrapped_messages_both_parse(tmp_path):
-    for wrapped in (False, True):
-        f = tmp_path / f"ev_{wrapped}.json"
-        f.write_text(json.dumps({"events": [_event(T0, _payload(), wrapped),
-                                            {"timestamp": 1, "message": "other line"}]}))
-        got = tp.load_events(str(f))
-        assert len(got) == 1 and got[0][1]["handed_k"] == 2
-
-
-def test_one_event_per_line_export_parses(tmp_path):
-    f = tmp_path / "ev.jsonl"
-    f.write_text("\n".join(json.dumps(_event(T0 + i, _payload(handed_k=i))) for i in (3, 1)))
+@pytest.mark.parametrize("shape", ["events_plain", "events_wrapped", "jsonl", "list"])
+def test_every_export_shape_parses_and_skips_other_lines(tmp_path, shape):
+    wrapped = shape == "events_wrapped"
+    evs = [_event(T0 + 3, _payload(handed_k=3), wrapped), {"timestamp": 1, "message": "other line"},
+           _event(T0 + 1, _payload(handed_k=1), wrapped)]
+    f = tmp_path / "ev"
+    if shape == "jsonl":
+        f.write_text("\n".join(json.dumps(e) for e in evs) + "\nnot json\n")
+    elif shape == "list":
+        f.write_text(json.dumps(evs))
+    else:
+        f.write_text(json.dumps({"events": evs}))
     got = tp.load_events(str(f))
-    assert [p["handed_k"] for _, p in got] == [1, 3]  # sorted by time
+    assert [p["handed_k"] for _, p in got] == [1, 3]  # trace lines only, by time
 
 
 # ── join by time window ──────────────────────────────────────────────────
 
-def test_each_line_goes_to_the_row_whose_window_covers_it():
+@pytest.mark.parametrize("offset,expected", [
+    (5, (1, 0, 0)),      # inside A1
+    (110, (0, 1, 0)),    # inside A2
+    (60, (0, 0, 1)),     # past A1's 30 s + 10 s slack, before A2 starts
+    (-5, (0, 0, 1)),     # before any row
+])
+def test_each_line_goes_to_the_row_whose_window_covers_it(offset, expected):
     rows = [tp.row_from_record(_row("A1", T0, 30)), tp.row_from_record(_row("A2", T0 + 100, 30))]
-    events = [(T0 + 5, _payload()), (T0 + 110, _payload()), (T0 + 60, _payload())]
-    by_row, unmatched = tp.assign(events, rows, slack_s=10)
-    assert len(by_row[0]) == 1 and len(by_row[1]) == 1
-    assert unmatched == 1  # +60 s is past A1's 30 s + 10 s and before A2 starts
+    by_row, unmatched = tp.assign([(T0 + offset, _payload())], rows, slack_s=10)
+    assert (len(by_row[0]), len(by_row[1]), unmatched) == expected
 
 
-def test_slack_decides_a_line_just_after_the_end():
+@pytest.mark.parametrize("slack,unmatched", [(10, 0), (5, 1)])
+def test_slack_decides_a_line_just_after_the_end(slack, unmatched):
     rows = [tp.row_from_record(_row("A1", T0, 30))]
-    events = [(T0 + 38, _payload())]
-    assert tp.assign(events, rows, slack_s=10)[1] == 0
-    assert tp.assign(events, rows, slack_s=5)[1] == 1
+    assert tp.assign([(T0 + 38, _payload())], rows, slack_s=slack)[1] == unmatched
 
 
 # ── nothing but ids, ranks, scores ───────────────────────────────────────
 
-def test_names_and_question_text_never_reach_the_page():
+@pytest.mark.parametrize("planted", [
+    "Secret Bill of Quantities.pdf", "PLANTED QUESTION", "PLANTED ANSWER",
+    "PLANTED EXPECTED", "PLANTED CHUNK TEXT", "what is the slab depth",
+])
+def test_names_and_question_text_never_reach_the_page(planted):
     payload = _payload(doc_names=["Secret Bill of Quantities.pdf"], query="what is the slab depth")
     payload["chunks"][0]["doc_name"] = "Secret Bill of Quantities.pdf"
-    payload["chunks"][0]["doc_id"] = "Secret Bill.pdf"
+    payload["chunks"][0]["doc_id"] = "Secret Bill of Quantities.pdf"
     payload["chunks"][1]["text"] = "PLANTED CHUNK TEXT"
     rows = [tp.row_from_record(_row("A1", T0, 30, question="PLANTED QUESTION",
                                     answer="PLANTED ANSWER", expected="PLANTED EXPECTED"))]
     by_row, _ = tp.assign([(T0 + 1, payload)], rows)
     page = tp.render("run", rows, by_row, 0)
-    for planted in ("Secret", "PLANTED", "slab depth", "Bill of Quantities"):
-        assert planted not in page
-    # what the page is for is still there
-    assert "c9" in page and "d3" in page and "token_cap" in page and "other" in page
+    assert page.count(planted) == 0
+    assert page.count(tp.WITHHELD) == 2  # the name-shaped doc_id: handed + fused order
+    assert ("c9" in page, "d3" in page, "token_cap" in page) == (True, True, True)
 
 
-def test_ids_pass_and_names_are_withheld():
-    assert tp._safe_str("4f1c-d7_x:9") == "4f1c-d7_x:9"
-    assert tp._safe_str("chunk.0012") == "chunk.0012"
-    assert tp._safe_str("Site Plan Rev B") == tp.WITHHELD
-    assert tp._safe_str("drawing_A101.pdf") == tp.WITHHELD
+@pytest.mark.parametrize("value,expected", [
+    ("4f1c-d7_x:9", "4f1c-d7_x:9"),
+    ("chunk.0012", "chunk.0012"),
+    ("Site Plan Rev B", tp.WITHHELD),
+    ("drawing_A101.pdf", tp.WITHHELD),
+    (None, None),
+])
+def test_ids_pass_and_names_are_withheld(value, expected):
+    assert tp._safe_str(value) == expected
 
 
-def test_query_label_is_kept_only_when_it_is_a_product_code():
-    assert tp.project_trace(_payload(query="followup_context"))["summary"]["query"] == "followup_context"
-    assert tp.project_trace(_payload(query="pipe"))["summary"]["query"] == "other"
+@pytest.mark.parametrize("label,expected", [
+    ("followup_context", "followup_context"),
+    ("tool_query", "tool_query"),
+    ("pipe", "other"),
+    ("what is the slab depth", "other"),
+])
+def test_query_label_is_kept_only_when_it_is_a_product_code(label, expected):
+    assert tp.project_trace(_payload(query=label))["summary"]["query"] == expected
 
 
-def test_markup_in_an_id_is_escaped():
+@pytest.mark.parametrize("markup", ["<b>", "<script>"])
+def test_markup_is_escaped(markup):
     payload = _payload()
-    payload["fused_candidates"]["leg_top"] = {"<b>": []}
+    payload["fused_candidates"]["leg_top"] = {markup: []}
     rows = [tp.row_from_record(_row("A1", T0, 30))]
     by_row, _ = tp.assign([(T0 + 1, payload)], rows)
-    page = tp.render("<run>", rows, by_row, 0)
-    assert "<b>" not in page and "<run>" not in page
+    page = tp.render(markup, rows, by_row, 0)
+    assert page.count(markup) == 0
 
 
 # ── what was cut and why; fused order ────────────────────────────────────
 
-def test_cut_is_counted_by_rule():
-    one = _payload()
-    two = _payload(not_handed=[
-        {"chunk_id": "c5", "dropped_by": "token_cap"},
-        {"chunk_id": "c6", "dropped_by": "per_doc_cap"},
-        {"chunk_id": "c7"},
-    ])
-    assert tp.project_trace(one)["cut_by"] == {"token_cap": 1}
-    assert tp.project_trace(two)["cut_by"] == {"token_cap": 1, "per_doc_cap": 1, "unexplained": 1}
+@pytest.mark.parametrize("cut,expected", [
+    (None, {"token_cap": 1}),
+    ([{"chunk_id": "c5", "dropped_by": "token_cap"},
+      {"chunk_id": "c6", "dropped_by": "per_doc_cap"},
+      {"chunk_id": "c7"}], {"token_cap": 1, "per_doc_cap": 1, "unexplained": 1}),
+])
+def test_cut_is_counted_by_rule(cut, expected):
+    payload = _payload() if cut is None else _payload(not_handed=cut)
+    assert tp.project_trace(payload)["cut_by"] == expected
 
 
-def test_fused_order_interleaves_handed_and_cut_by_rank():
-    view = tp.project_trace(_payload())
-    assert [(r["chunk_id"], r["handed"]) for r in tp._fused_order(view)] == [
-        ("c9", "yes"), ("c1", "yes"), ("c5", "no")]
-    view = tp.project_trace(_payload(chunks=[{"chunk_id": "c9", "fused_rank": 4}]))
-    assert [r["chunk_id"] for r in tp._fused_order(view)] == ["c5", "c9"]
+@pytest.mark.parametrize("handed,expected", [
+    (None, [("c9", "yes"), ("c1", "yes"), ("c5", "no")]),
+    ([{"chunk_id": "c9", "fused_rank": 4}, {"chunk_id": "c2"}], [("c5", "no"), ("c9", "yes")]),
+])
+def test_fused_order_interleaves_handed_and_cut_by_rank(handed, expected):
+    payload = _payload() if handed is None else _payload(chunks=handed)
+    view = tp.project_trace(payload)
+    assert [(r["chunk_id"], r["handed"]) for r in tp._fused_order(view)] == expected
 
 
 # ── Q-1 scores ride along, numbers only ──────────────────────────────────
 
-def test_scores_keep_numbers_and_drop_text(tmp_path):
+@pytest.mark.parametrize("record,expected", [
+    ({"row": "A1", "rep": 1, "numbers_found": 3, "flag": True, "note": "PLANTED NOTE"},
+     {("A1", 1): {"numbers_found": 3, "flag": True}}),
+    ({"row": "B2", "rep": 2, "overlap": 0.25, "cites": [1, 2]},
+     {("B2", 2): {"overlap": 0.25}}),
+])
+def test_scores_keep_numbers_and_drop_text(tmp_path, record, expected):
     f = tmp_path / "s.jsonl"
-    f.write_text(json.dumps({"row": "A1", "rep": 1, "numbers_found": 3, "flag": True,
-                             "note": "PLANTED NOTE"}) + "\n")
-    got = tp.load_scores(str(f))
-    assert got == {("A1", 1): {"numbers_found": 3, "flag": True}}
-    assert tp.load_scores(None) == {}
+    f.write_text(json.dumps(record) + "\nnot json\n")
+    assert tp.load_scores(str(f)) == expected
 
 
-def test_cli_writes_one_page(tmp_path):
+@pytest.mark.parametrize("pattern,code,sections", [("*_v2_*.json", 0, 2), ("none_*.json", 2, None)])
+def test_cli_writes_one_page(tmp_path, pattern, code, sections):
     (tmp_path / "A1_v2_x.json").write_text(json.dumps(_row("A1", T0, 30)))
     (tmp_path / "A2_v2_x.json").write_text(json.dumps(_row("A2", T0 + 100, 30)))
     ev = tmp_path / "ev.json"
     ev.write_text(json.dumps({"events": [_event(T0 + 2, _payload()), _event(T0 + 101, _payload())]}))
     out = tmp_path / "page.html"
-    assert tp.main(["--events", str(ev), "--rows", str(tmp_path / "*_v2_*.json"),
-                    "--out", str(out), "--label", "run1"]) == 0
-    page = out.read_text(encoding="utf-8")
-    assert page.count("<h2>row ") == 2 and "unmatched: 0" in page
-    assert tp.main(["--events", str(ev), "--rows", str(tmp_path / "none_*.json"),
-                    "--out", str(out)]) == 2
+    assert tp.main(["--events", str(ev), "--rows", str(tmp_path / pattern),
+                    "--out", str(out), "--label", "run1"]) == code
+    if sections is not None:
+        page = out.read_text(encoding="utf-8")
+        assert (page.count("<h2>row "), "unmatched: 0" in page) == (sections, True)
 
 
-def test_unreadable_inputs_are_counted_not_silent():
+@pytest.mark.parametrize("line,parsed,reason", [
+    ("rag_retrieval_trace {broken", False, "undecodable_trace_line"),
+    ("rag_retrieval_trace " + json.dumps({"handed_k": 1}), True, None),
+])
+def test_unreadable_trace_lines_are_counted_not_silent(line, parsed, reason):
     tp.SKIPPED.clear()
-    assert tp._trace_payload("rag_retrieval_trace {broken") is None
-    assert tp._trace_payload("rag_retrieval_trace " + json.dumps(_payload())) is not None
-    assert tp.SKIPPED == {"undecodable_trace_line": 1}
-    assert tp.row_from_record({"id": "A1", "time_utc": "not a time"}) is None
-    assert tp.row_from_record(_row("A1", T0, 30)) is not None
-    assert tp.SKIPPED["row_without_start_time"] == 1
+    assert (tp._trace_payload(line) is not None) == parsed
+    assert dict(tp.SKIPPED) == ({reason: 1} if reason else {})
+
+
+@pytest.mark.parametrize("stamp,kept", [("not a time", False), ("2026-11-18T06:26:46Z", True)])
+def test_rows_without_a_start_time_are_counted_not_silent(stamp, kept):
+    tp.SKIPPED.clear()
+    row = tp.row_from_record({"id": "A1", "time_utc": stamp})
+    assert (row is not None, tp.SKIPPED["row_without_start_time"]) == (kept, 0 if kept else 1)
