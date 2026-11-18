@@ -206,8 +206,9 @@ def test_a_write_drops_the_expired_entries(chunked, monkeypatch, ttl_past):
 
 # ── 3. the content-hash lookup a project walk uses ──────────────────────────
 
-@pytest.mark.parametrize("uploader", [OWN[1], f"u-other-{_RUN}"])
-def test_a_session_copy_does_not_make_the_project_walk_skip_the_file(uploader):
+@pytest.mark.parametrize("who", ["same user", "other user"])
+def test_a_session_copy_does_not_make_the_project_walk_skip_the_file(who):
+    uploader = OWN[1] if who == "same user" else f"u-other-{_RUN}"
     pid = _project("sha")
     body = f"invented drawing register {uuid.uuid4().hex}".encode()
     sha = hashlib.sha256(body).hexdigest()
