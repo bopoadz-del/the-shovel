@@ -345,31 +345,39 @@ def _plain_statements(payload: Any, depth: int = 0) -> list[str]:
     return out
 
 
-_ANSWER_NUMBER_RE = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
+#: Arabic-Indic and Eastern Arabic-Indic digits and the Arabic decimal mark
+#: read as the Latin ones; every thousands separator (comma, space, no-break
+#: and thin spaces, the Arabic thousands mark) reads as a comma.
+_NUMBER_FORMS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
+                               **{chr(0x06F0 + i): str(i) for i in range(10)},
+                               "٫": ".", "٬": ",", " ": " ",
+                               " ": " ", " ": " ", " ": " "})
+_ANSWER_NUMBER_RE = re.compile(r"(?<![\w.])\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
 #: A list marker at the start of a line ("1." "2)" "-" "*") is layout, not a figure.
 _LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*•])\s+")
+#: A number and the word printed right after it (its unit: ``m``, ``items``).
+_CLAIM_RE = re.compile(r"(?<![\w.])(\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|\d+(?:\.\d+)?)\s*([^\W\d_]+)")
+
+
+def _number_text(text: str) -> str:
+    return (text or "").translate(_NUMBER_FORMS)
+
+
+def _as_number(text: str) -> float:
+    return float(re.sub(r"[, ]", "", text))
 
 
 def _answer_numbers(text: str) -> set[float]:
-    return {float(n.replace(",", "")) for n in _ANSWER_NUMBER_RE.findall(text or "")}
+    """Every number written in ``text``; a number grouped by any thousands
+    separator (or written in Arabic digits) is ONE number."""
+    return {_as_number(n) for n in _ANSWER_NUMBER_RE.findall(_number_text(text))}
 
 
-def _payload_numbers(payload: Any, depth: int = 0) -> set[float]:
-    """Every number a tool result holds, as a value or written in its text
-    (row quantities, references, pages, counts, totals)."""
-    out: set[float] = set()
-    if depth > 8 or isinstance(payload, bool):
-        return out
-    if isinstance(payload, (int, float)):
-        out.add(float(payload))
-    elif isinstance(payload, str):
-        out |= _answer_numbers(payload)
-    elif isinstance(payload, dict):
-        for value in payload.values():
-            out |= _payload_numbers(value, depth + 1)
-    elif isinstance(payload, list):
-        for value in payload:
-            out |= _payload_numbers(value, depth + 1)
+def _unit_claims(text: str) -> dict[str, set[float]]:
+    """The numbers ``text`` states per unit word (``{"m": {18.0}}``)."""
+    out: dict[str, set[float]] = {}
+    for num, unit in _CLAIM_RE.findall(_number_text(text)):
+        out.setdefault(unit.casefold(), set()).add(_as_number(num))
     return out
 
 
@@ -417,13 +425,40 @@ def _computed_lead(res: dict[str, Any], question: str) -> str:
 
 
 def _states_a_foreign_figure(text: str, allowed: set[float]) -> bool:
-    """Whether ``text`` states a number found in neither the tool's results
-    nor the user's question (the model's own arithmetic). A list marker at
+    """Whether ``text`` states a number that is not ``allowed`` (the model's
+    own arithmetic, or a row's quantity read as a total). A list marker at
     the start of a line is layout, not a figure."""
     for line in text.split("\n"):
         marker = _LIST_MARKER_RE.match(line)
         body = line[len(marker.group(0)):] if marker else line
         if any(not any(_same(n, a) for a in allowed) for n in _answer_numbers(body)):
+            return True
+    return False
+
+
+def _restates_a_claim(text: str, figures: list[dict[str, Any]]) -> bool:
+    """Whether ``text`` states two different figures in a unit the tool
+    stated exactly ONE figure in (a self-correction: '2,246 m ... correction,
+    5,244 m'). Which of the two is meant is not the reader's to guess."""
+    stated: dict[str, set[float]] = {}
+    for fig in figures:
+        for unit, values in _unit_claims(fig["shown"]).items():
+            stated.setdefault(unit, set()).update(values)
+    said = _unit_claims(text)
+    return any(len(stated[u]) == 1 and len(said.get(u, ())) > 1 for u in stated)
+
+
+def _lines(text: str) -> list[str]:
+    return [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+
+
+def _several_line(line: str) -> bool:
+    """``line`` is the computed renderer's own 'N computed results' header."""
+    from app.agents.core import computed_answer
+
+    for lab in computed_answer.LABELS.values():
+        pattern = re.escape(lab.get("several", "")).replace(re.escape("{n}"), r"\d+")
+        if pattern and re.fullmatch(pattern, line):
             return True
     return False
 
@@ -438,11 +473,16 @@ def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
     statements first, never the model's arithmetic.
 
     * The answer leads with :func:`computed_leads`: every computed result
-      that stated a figure, in call order, an identical statement once.
+      that stated a figure, in call order, an identical statement once. A
+      lead whose every line the text already carries (the computed-result
+      recovery rendered it) is not stated again.
+    * The numbers the rest may state are the tool's stated figures, the
+      leads' own numbers and the user's question's numbers -- NOT every
+      number of the tool's payload (a row quantity is not a total).
     * The model's own text follows WHOLE or not at all: when any of it
-      states a number neither the tool's results, the leads nor the user's
-      question hold (another total, a re-added sum), all of it is withheld
-      and one line says so. A copy of a lead inside it is dropped (one copy).
+      states another number, or states two different figures in a unit the
+      tool stated one figure in (a self-correction), all of it is withheld
+      and one line says so.
     * When no computed result of the turn stated a figure (its ask selected
       nothing) and the reply states a figure anyway, the reply is replaced
       by the tool's plain statement that nothing was selected.
@@ -452,8 +492,9 @@ def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
     if not isinstance(text, str) or not text.strip() or turn is None or not turn.computed_results:
         return text
     allowed = _answer_numbers(turn.question or "")
-    for res in turn.computed_results:
-        allowed |= _payload_numbers(res["payload"])
+    for fig in turn.stated_figures:
+        allowed.add(fig["value"])
+        allowed |= _answer_numbers(fig["shown"])
     leads = computed_leads(turn)
     if not leads:
         if not _states_a_foreign_figure(text, allowed):
@@ -462,13 +503,28 @@ def hold_stated_figures(text: str, turn: Turn | None = None) -> str:
         # A result is recorded only with a figure or a statement, so a turn
         # whose results stated no figure always has a plain statement here.
         return "\n".join(plain)
-    body = text
+    lead_lines: set[str] = set()
     for lead in leads:
         allowed |= _answer_numbers(lead)
-        body = body.replace(lead, "")
-    body = re.sub(r"\n{3,}", "\n\n", body).strip()
-    withheld = _states_a_foreign_figure(body, allowed)
-    parts = leads + ([FIGURE_REMOVED] if withheld else [body])
+        lead_lines.update(_lines(lead))
+    present = set(_lines(text))
+    missing = [lead for lead in leads if not set(_lines(lead)) <= present]
+    shown = [lead for lead in leads if lead not in missing]
+    # The rest of the text: every line that is neither a lead's line nor the
+    # renderer's own count header, in its order.
+    rest = "\n".join(ln for ln in text.split("\n")
+                     if ln.strip() not in lead_lines and not _several_line(ln.strip()))
+    rest = re.sub(r"\n{3,}", "\n\n", rest).strip()
+    withheld = bool(rest) and (_states_a_foreign_figure(rest, allowed)
+                               or _restates_a_claim(rest, turn.stated_figures))
+    if shown:
+        # The text already states the tool's results (the computed recovery):
+        # it stands as rendered, a missing lead first, the model's rest held.
+        kept = text if not withheld else "\n".join(
+            ln for ln in text.split("\n") if ln.strip() in lead_lines or _several_line(ln.strip()))
+        parts = missing + [kept.strip()] + ([FIGURE_REMOVED] if withheld else [])
+    else:
+        parts = leads + ([FIGURE_REMOVED] if withheld else [rest])
     return "\n\n".join(p for p in parts if p)
 
 

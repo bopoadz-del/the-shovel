@@ -588,9 +588,7 @@ def _invented_bill(tmp_path, quantities):
 
 
 def _live_reply(quantities, headline):
-    right = sum(quantities)
-    return (f"The total length of clay pipe in the runs is {headline:,} m.\n\n"
-            f"Check: {' + '.join(str(q) for q in quantities)} = {right:,} m.")
+    return f"The total length of clay pipe in the runs is {headline:,} m."
 
 
 async def _through_the_stream_route(payload, ask, reply):
@@ -615,28 +613,63 @@ async def _through_the_stream_route(payload, ask, reply):
     return ends[0]
 
 
-@pytest.mark.parametrize("quantities, off", [
-    (_LIVE_ROWS, 1000),
-    (_OTHER_ROWS, 10),
-    (_LIVE_ROWS, 0),
-    (_OTHER_ROWS, 0),
-], ids=["live-off-by-a-digit", "other-off", "live-right", "other-right"])
-async def test_the_live_shape_through_the_stream_route(tmp_path, quantities, off):
+@pytest.mark.parametrize("quantities, headline", [
+    (_LIVE_ROWS, lambda q: sum(q) + 1000),
+    (_OTHER_ROWS, lambda q: sum(q) + 10),
+    # a wrong total that equals a ROW's quantity: a payload number, not a figure the tool stated
+    (_LIVE_ROWS, lambda q: max(q)),
+    (_OTHER_ROWS, lambda q: max(q)),
+    (_LIVE_ROWS, sum),
+    (_OTHER_ROWS, sum),
+], ids=["live-off-by-a-digit", "other-off", "live-row-quantity", "other-row-quantity",
+        "live-right", "other-right"])
+async def test_the_live_shape_through_the_stream_route(tmp_path, quantities, headline):
     from app.agents import answer_exit
 
     bill_rows = _invented_bill(tmp_path, quantities)
     payload = _bill_payload(bill_rows, ASK)
-    right = sum(quantities)
-    end = await _through_the_stream_route(payload, ASK, _live_reply(quantities, right + off))
+    right, said = sum(quantities), headline(quantities)
+    end = await _through_the_stream_route(payload, ASK, _live_reply(quantities, said))
     content = end["content"]
-    turn = _turn_for([payload])
-    lead = _lead(turn)
+    lead = _lead(_turn_for([payload]))
     assert f"{right:,}" in lead
     assert _leads(content, lead)
-    assert f"{right + off:,}" in content if not off else f"{right + off:,}" not in content
-    assert content.count(answer_exit.FIGURE_REMOVED) == (1 if off else 0)
-    if not off:
-        assert content.endswith(_live_reply(quantities, right))
+    wrong = said != right
+    assert (_live_reply(quantities, said) in content) is (not wrong)
+    assert content.count(answer_exit.FIGURE_REMOVED) == (1 if wrong else 0)
+
+
+@pytest.mark.parametrize("correction, withheld", [
+    # the right figure, then a second figure for the same claim: withheld whole
+    (lambda right: f"The runs total {right + 7:,} m. Correction: the runs total {right:,} m.", True),
+    (lambda right: f"The runs total {right:,} m. Correction: the runs total {right + 7:,} m.", True),
+    # the one figure stated once: kept
+    (lambda right: f"The runs total {right:,} m.", False),
+], ids=["wrong-then-right", "right-then-wrong", "stated-once"])
+@pytest.mark.parametrize("quantities", [_LIVE_ROWS, _OTHER_ROWS], ids=["live", "other"])
+async def test_a_self_correcting_reply_is_withheld_whole_through_the_stream_route(
+        tmp_path, quantities, correction, withheld):
+    from app.agents import answer_exit
+
+    payload = _bill_payload(_invented_bill(tmp_path, quantities), ASK)
+    reply = correction(sum(quantities))
+    content = (await _through_the_stream_route(payload, ASK, reply))["content"]
+    assert (reply in content) is (not withheld)
+    assert content.count(answer_exit.FIGURE_REMOVED) == (1 if withheld else 0)
+
+
+@pytest.mark.parametrize("text, numbers", [
+    ("1,234.5 m", {1234.5}),
+    ("1 234.5 m", {1234.5}),
+    ("1 234 m and 1 234 m", {1234.0}),
+    ("١٬٢٣٤٫٥ m", {1234.5}),
+    ("12 and 345", {12.0, 345.0}),
+    ("1.8 and 18", {1.8, 18.0}),
+], ids=["comma", "space", "thin-spaces", "arabic", "not-grouped", "two-numbers"])
+def test_every_thousands_separator_reads_as_one_number(text, numbers):
+    from app.agents import answer_exit
+
+    assert answer_exit._answer_numbers(text) == numbers
 
 
 @pytest.mark.parametrize("reply", [
@@ -675,20 +708,16 @@ def test_plain_statements_are_read_only_to_a_bounded_depth(depth, statements):
     assert answer_exit._plain_statements(_nest(depth, leaf)) == statements
 
 
-@pytest.mark.parametrize("payload, has, lacks", [
-    # a flag is not a figure: True is never read as 1
-    ({"ok": True, "result": {"count": 4}}, {4.0}, {1.0}),
-    ({"selected": False, "rows": [{"q": 12.5, "where": "page 7"}]}, {12.5, 7.0}, {0.0}),
-    # a figure nested deeper than any tool result is not read
-    (_nest(12, {"sum": 99.0}), set(), {99.0}),
-    (_nest(3, {"sum": 41.0}), {41.0}, set()),
-], ids=["true", "false", "too-deep", "shallow"])
-def test_payload_numbers_skip_flags_and_stop_at_a_depth(payload, has, lacks):
+@pytest.mark.parametrize("figures, reply, restated", [
+    ([{"value": 18.0, "shown": "18 m"}], "18 m, or rather 20 m", True),
+    ([{"value": 18.0, "shown": "18 m"}], "18 m over 4 rows", False),
+    # the tool stated two figures in the unit: two figures are not a correction
+    ([{"value": 18.0, "shown": "18 m"}, {"value": 20.0, "shown": "20 m"}], "18 m and 20 m", False),
+], ids=["two-for-one", "one-for-one", "two-for-two"])
+def test_restates_a_claim(figures, reply, restated):
     from app.agents import answer_exit
 
-    found = answer_exit._payload_numbers(payload)
-    assert has <= found
-    assert not (lacks & found)
+    assert answer_exit._restates_a_claim(reply, figures) is restated
 
 
 @pytest.mark.parametrize("tool, rendered", [
