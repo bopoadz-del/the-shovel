@@ -11,9 +11,20 @@ keyed digests of the tokens the scorer itself compares:
 
 Digests are ``HMAC-SHA256(salt, kind + token)`` cut to 12 hex characters and
 printed sorted, so no word order, no text and no length of text is printed.
-The salt arrives as ``CHUNK_DIGEST_SALT`` (at least 16 characters), is never
-printed, and is discarded by the operator after the run: without it a digest
-cannot be turned back into a word.
+The salt is the HMAC key. It arrives as ``CHUNK_DIGEST_SALT`` (at least 16
+characters) and is never printed. The offline step below needs the same key
+again, so the operator KEEPS it (privately, off the repository) until the
+offline step has run; it is not discarded after the live run. Without the key
+a digest cannot be turned back into a word.
+
+TWO CONDITIONS this script is approved under (both must stay true):
+
+1. The key is a high-entropy secret the operator sets for the run. It is
+   never committed, never a workflow input, never printed, never logged.
+2. The digest output stays in the task's private log and on the operator's
+   local machine. It is never copied into a report, a PR, an issue or any
+   public page (a digest set plus a guessable vocabulary is a dictionary
+   attack surface, which is why the key must also stay private).
 
 Offline, ``surrogate_texts`` turns the digests back into a stand-in text per
 chunk built ONLY from the scored answers' own tokens whose digest the chunk
@@ -24,7 +35,8 @@ invented rows). The scorer is not changed.
 
 Live (one-off task, ``WORKER_COMMAND=python scripts/chunk_token_digest.py``):
     CHUNK_DIGEST_IDS   comma-separated chunk ids (at most ``_MAX_IDS``)
-    CHUNK_DIGEST_SALT  the run's salt (never printed)
+    CHUNK_DIGEST_SALT  the run's key (never printed; kept by the operator
+                       for the offline step)
 Offline:
     python scripts/chunk_token_digest.py --surrogate DIGESTS.jsonl ROWS.json \\
         --salt-env CHUNK_DIGEST_SALT > chunk_text.json
