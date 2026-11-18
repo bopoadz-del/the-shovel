@@ -49,9 +49,13 @@ def test_query_ref_carries_length_and_hash_never_words(query):
     _assert_no_words([ref], query)
 
 
-def test_query_ref_joins_equal_queries_and_splits_different_ones():
-    a, b = "zebrawood lintel tolerance", "quarrystone parapet coping"
-    assert _query_ref(a) == _query_ref(a)
+@pytest.mark.parametrize("a,b", [
+    ("zebrawood lintel tolerance", "quarrystone parapet coping"),
+    # Same length, one letter apart: the hash, not the length, splits them.
+    ("grout joint width", "grout joint widtk"),
+])
+def test_query_ref_joins_equal_queries_and_splits_different_ones(a, b):
+    assert _query_ref(a) == _query_ref(str(a))
     assert _query_ref(a) != _query_ref(b)
     assert _query_ref(None) == _query_ref("")
 
