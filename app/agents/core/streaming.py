@@ -129,7 +129,7 @@ async def _chat_stream_impl(
         _build_missing_reference_answer, _build_sources_from_audit, _chunks,
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _cost_grounding_enabled, _empty_router_verdict,
-        _file_tool_hint, _final_text_needs_forced_retry, _forced_retry_min_seconds, _forced_retry_nudge,
+        _file_tool_hint, _final_text_needs_forced_retry, forced_retry_reason, _forced_retry_min_seconds, _forced_retry_nudge,
         _fulfill_answer_report, _has_unread_windows,
         _is_capability_request, _is_cost_shaped_query, _llm_config,
         _log_dataset_turn,
@@ -1280,7 +1280,8 @@ async def _chat_stream_impl(
                                 )
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
-                            _LOG.info("chat_stream: unusable final_text, forcing no-tools retry")
+                            _LOG.info("chat_stream: unusable final_text reason=%s, forcing no-tools retry",
+                                      forced_retry_reason(final_text))
                             if _timing:
                                 _timing_log("TIMING chat_stream EMPTY-FINAL raw=%dc -> forced retry, cum=%.1fs",
                                              len(raw_content), time.monotonic() - _turn_t0)
@@ -1298,6 +1299,7 @@ async def _chat_stream_impl(
                                 _timing_log("TIMING chat_stream forced-retry call=%.1fs status=%s cum=%.1fs",
                                              time.monotonic() - _fr_t0, forced_resp.get("status"), time.monotonic() - _turn_t0)
                             if forced_resp.get("status") == "error":
+                                _LOG.warning("chat_stream: forced retry failed reason=provider_error; fallback shown")
                                 final_text = _EMPTY_RESPONSE_FALLBACK
                             else:
                                 served_model = (forced_resp.get("raw") or {}).get("model") or served_model
@@ -1307,6 +1309,10 @@ async def _chat_stream_impl(
                                     messages=messages, tool_results=stream_tool_results,
                                 )
                                 if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                                    _LOG.warning(
+                                        "chat_stream: forced retry unusable reason=%s raw=%dc; fallback shown",
+                                        forced_retry_reason(final_text), len(forced_msg.get("content") or ""),
+                                    )
                                     final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
