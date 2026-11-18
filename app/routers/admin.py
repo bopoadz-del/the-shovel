@@ -1711,7 +1711,8 @@ def admin_corpus_bulk_insert(
             # Residual store-side guard (model identity) — surfaced, not 500.
             raise HTTPException(status_code=400, detail=str(exc))
         counts["chunks"] += written
-        verified[doc_id] = store.count_by_doc(project_id).get(doc_id, 0)
+        # The write check reads back the row it just wrote, whatever its session.
+        verified[doc_id] = store.count_by_doc(project_id, all_sessions=True).get(doc_id, 0)
 
     return {
         "status": "ok",

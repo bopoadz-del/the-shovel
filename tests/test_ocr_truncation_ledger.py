@@ -314,7 +314,7 @@ def test_fetch_document_content_carries_the_partial_read_note(
         "pages_ocrd": ocrd,
         "pages_in_file": in_file,
     }
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: [doc])
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: [doc])
     import app.core.rag.retriever as _retriever
     monkeypatch.setattr(_retriever, "available", lambda: False)
     monkeypatch.setattr(
