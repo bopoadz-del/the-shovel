@@ -63,14 +63,23 @@ def test_a_section_over_a_page_break_is_counted_and_summed_whole(tmp_path, head)
 
 
 @pytest.mark.parametrize("head, first_ref, carried", [
-    # the item numbers go on (D3 -> D4): the open heading is kept
+    # the item numbers go on (D3 -> D4): the evidence; the open heading is kept
     (RUNNING, "D4", True),
-    # they restart (D3 -> D1): a new section, not the rest of the open one
+    (CONTINUED, "D4", True),
+    # they restart (D3 -> D1) or jump (D3 -> D9): a new section
     (RUNNING, "D1", False),
-    # no number to compare: the heading's own evidence decides
-    (CONTINUED, "", True),
-], ids=["sequence-continues", "sequence-restarts", "no-ref"])
-def test_the_item_number_sequence_can_refute_the_carry(tmp_path, head, first_ref, carried):
+    (CONTINUED, "D9", False),
+    # no reference, or one with no number: no evidence, NOT carried, even
+    # under a re-printed label (grader 1515Z point 3: a wrong carry inflates a sum)
+    (CONTINUED, "", False),
+    (RUNNING, "", False),
+    (RUNNING, "item", False),
+    # the next number under another prefix (D3 -> E4) is another sequence
+    (RUNNING, "E4", False),
+], ids=["running-sequence-continues", "continued-sequence-continues", "sequence-restarts",
+        "sequence-jumps", "continued-no-ref", "running-heading-alone-no-ref", "ref-without-number",
+        "other-prefix"])
+def test_only_the_item_number_sequence_carries_a_block(tmp_path, head, first_ref, carried):
     rows = _read(tmp_path, _bill(head, first_ref))
     on_3 = [r.path for r in rows if r.pages == [3] and "Chamber" in r.description]
     assert on_3 == [OPEN if carried else head] * 2

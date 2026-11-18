@@ -146,9 +146,11 @@ def carry_open_heading(rows: Sequence[SheetRow]) -> list[SheetRow]:
     another sheet. Here the rows are put back in print order (page, then the
     order the sheets were first printed), and the FIRST block of a page (rows
     of one sheet on that page) takes the path open at the end of the previous
-    page when its own path continues it (:func:`_continues`) and the item
-    numbers do not say otherwise (the block's first reference, when it and
-    the open section's last one share a prefix, must be the next number).
+    page when its own path continues it (:func:`_continues`) AND the item
+    numbers are the evidence: the block's first reference has the open
+    section's last reference's prefix and the next number. A heading alone
+    (the running heading, or a label re-printed with more words) is not
+    evidence: it cannot be told from a new section without naming a word.
     Only reading changes: the stored sheet is not touched.
     """
     blocks: list[tuple[int, int, list[SheetRow]]] = []
@@ -175,7 +177,12 @@ def carry_open_heading(rows: Sequence[SheetRow]) -> list[SheetRow]:
         if open_path is not None and page == last_page + 1 and _continues(path, open_path):
             first = next((r.ref for r in block if r.ref), "")
             a, b = _ref_number(open_ref), _ref_number(first)
-            if not (a and b and a[0] == b[0] and b[1] != a[1] + 1):
+            # Carried only on positive evidence: the block's first reference
+            # is the next number of the open section's sequence. An empty or
+            # number-less reference, or a sequence that restarts or jumps,
+            # leaves the block where it was printed (a wrong carry adds rows
+            # of another section to this one's sum).
+            if a and b and a[0] == b[0] and b[1] == a[1] + 1:
                 path = open_path
         out.extend(SheetRow(**{**r.__dict__, "path": path, "pages": list(r.pages)}) for r in block)
         last_page = page
