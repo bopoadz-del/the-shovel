@@ -5,10 +5,17 @@ answers with its own statements (``tool_registry.Statement``). This module
 turns those statements -- and a computed call that FAILED or found NO
 matching rows -- into plain text:
 
-* every computed call of the turn is shown, in call order (none is dropped);
+* ONE ANSWER PER TURN (``answer_turn``): the calls that returned a result
+  lead, in call order; identical results (same tool, same stated lines) are
+  one result; a call that returned no figure is shown only when no result of
+  the same tool answered the same part of the question (``covers``), and
+  then after every result, in one plain line (a narrower or broader
+  selection is a different part; an empty selection is never answered);
+* a result of no matching rows beside a figure is one plain line at the end,
+  and only for a part no figure answered (``covers``);
 * a part that did not return (one bill of several) is NAMED, never skipped,
-  so a partial result is never shown as complete;
-* a call that failed, or stated nothing, says what was asked and why there is
+  so a partial result is never shown as complete -- after the parts that did;
+* a turn where no call returned a result says what was asked and why there is
   no figure, instead of the generic "unable to generate" sentence;
 * every label and every connecting word comes from ``LABELS``, keyed by the
   language of the user's question. Figures, units, sources, row labels and the
@@ -18,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 #: Labels per language. A language is added by adding one entry; nothing
@@ -43,7 +51,10 @@ LABELS: Dict[str, Dict[str, str]] = {
         "quantity": "quantity",
         "amount": "amount",
         "tool_error": "the tool reported an error",
+        "result_cut": "the result was too large to show in this turn; the tool did return",
         "code": "code",
+        "unanswered": "Not answered in this turn: {parts}.",
+        "zero_line": "No matching rows: {parts}.",
     },
     "ar": {
         "heading": "نتيجة محسوبة",
@@ -65,7 +76,10 @@ LABELS: Dict[str, Dict[str, str]] = {
         "quantity": "الكمية",
         "amount": "المبلغ",
         "tool_error": "أبلغت الأداة عن خطأ",
+        "result_cut": "كانت النتيجة أكبر من أن تُعرض في هذا الدور، وقد أعادتها الأداة",
         "code": "الرمز",
+        "unanswered": "لم تتم الإجابة عنه في هذا الدور: {parts}.",
+        "zero_line": "لا توجد بنود مطابقة: {parts}.",
     },
 }
 
@@ -73,6 +87,13 @@ LABELS: Dict[str, Dict[str, str]] = {
 #: ONLY here (never in LABELS, so an error that happens to equal a label key
 #: is not shown as that label). A code is added by adding it to every
 #: language below.
+#: The reason a call carries when its result came back but was cut to a
+#: preview that does not parse: the call returned, its figure cannot be read
+#: in this turn. It is a stated outcome (the turn does not wait for it), and
+#: the call is named at the end like any other unanswered part. A platform
+#: condition, not a tool's code: worded in LABELS, never in REASONS.
+RESULT_CUT_UNREADABLE = "result_cut_unreadable"
+
 REASONS: Dict[str, Dict[str, str]] = {
     "en": {
         "no_derived_bill_sheet": "no bill sheet has been derived for this project",
@@ -172,6 +193,8 @@ def reason_text(error: str, lab: Dict[str, str], language: str,
     raw = str(error or "").strip()
     if not raw:
         return ""
+    if raw == RESULT_CUT_UNREADABLE:
+        return lab["result_cut"]
     worded = (REASONS.get(language) or REASONS[DEFAULT_LANGUAGE]).get(raw)
     if worded:
         return worded
@@ -249,8 +272,7 @@ def render_call(heading: str, statements: Sequence[Any], *, asked: Dict[str, Any
     echoed on the asked line."""
     lab = labels_for(language)
     lines: List[str] = [f"{heading}:"]
-    for st in statements:
-        lines.extend(_statement_lines(st, lab, language, declared))
+    lines.extend(_body_lines(statements, lab, language, declared))
     if not statements:
         asked_line = _asked_line(asked, lab, question)
         if asked_line:
@@ -258,6 +280,18 @@ def render_call(heading: str, statements: Sequence[Any], *, asked: Dict[str, Any
         reason = reason_text(error, lab, language, declared) if error else lab["no_figure"]
         lines.append(f"- {lab['not_returned']}: {reason}")
     return "\n".join(lines)
+
+
+def _body_lines(statements: Sequence[Any], lab: Dict[str, str], language: str,
+                declared: Sequence[str]) -> List[str]:
+    """The stated lines of one call: the parts that returned a figure first,
+    then the parts that did not (each still named), each group in its order."""
+    ordered = ([st for st in statements if st.figure is not None]
+               + [st for st in statements if st.figure is None])
+    lines: List[str] = []
+    for st in ordered:
+        lines.extend(_statement_lines(st, lab, language, declared))
+    return lines
 
 
 def heading_for(display_name: str, language: str) -> str:
@@ -275,6 +309,152 @@ def join_calls(rendered: Iterable[str], language: str) -> str:
     if len(parts) > 1:
         parts.insert(0, labels_for(language)["several"].format(n=len(parts)))
     return "\n\n".join(parts)
+
+
+_TOKEN_RE = re.compile(r"\w+(?:[.,]\w+)*")
+
+
+def selection(asked: Any) -> frozenset:
+    """The part of the question a call asks about: the case-folded words and
+    numbers of every argument VALUE (keys are the model's names, not the
+    user's words), nested lists and objects included, order ignored."""
+    if isinstance(asked, dict):
+        return frozenset().union(*(selection(v) for v in asked.values()))
+    if isinstance(asked, (list, tuple, set, frozenset)):
+        return frozenset().union(*(selection(v) for v in asked))
+    if asked is None or isinstance(asked, bool):
+        return frozenset()
+    return frozenset(_TOKEN_RE.findall(str(asked).casefold()))
+
+
+@dataclass(frozen=True)
+class Call:
+    """One computed call of the turn, as the answer reads it."""
+    tool: str
+    heading: str
+    statements: Tuple[Any, ...] = ()
+    asked: Dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    declared: Tuple[str, ...] = ()
+
+    @property
+    def answered(self) -> bool:
+        """True when the call returned at least one figure."""
+        return any(st.figure is not None for st in self.statements)
+
+    @property
+    def stated(self) -> bool:
+        """True when the call says something: a statement or its failure."""
+        return bool(self.statements or self.error)
+
+
+def _stated_selection(st: Any) -> frozenset:
+    """The part of the question one statement names: its match words and its
+    section words (the selection the tool says this figure is for)."""
+    return selection([tuple(getattr(st, "terms", ()) or ()), tuple(getattr(st, "within", ()) or ())])
+
+
+def covers(result: Call, other: Call) -> bool:
+    """True when ``result`` answered the part of the question ``other`` asked:
+    the same tool, and ``other``'s selection is non-empty and EQUAL to
+    ``result``'s (the same words, case and order aside), or one of
+    ``result``'s statements that returned a figure names exactly that
+    selection. A narrower or a broader selection is a different part: a
+    success for "pipes 100mm" does not answer "pipes", and one for "bills 1 2
+    3" does not answer "bill 2" unless it states that part. An empty
+    selection names no part, so nothing answers it."""
+    if result.tool != other.tool:
+        return False
+    wanted = selection(other.asked)
+    if not wanted:
+        return False
+    if wanted == selection(result.asked):
+        return True
+    return any(st.figure is not None and _stated_selection(st) == wanted
+               for st in result.statements)
+
+
+def _only_zero(call: Call) -> bool:
+    """True when every figure the call returned is a count of no rows."""
+    figures = [st for st in call.statements if st.figure is not None]
+    return bool(figures) and all(getattr(st, "count", None) == 0 for st in figures)
+
+
+def unanswered(calls: Sequence[Call]) -> List[Call]:
+    """The calls with no figure whose part no result of the turn answered,
+    one per (tool, selection), in call order."""
+    results = [c for c in calls if c.answered]
+    out: List[Call] = []
+    for c in calls:
+        if c.answered or any(covers(r, c) for r in results):
+            continue
+        if any(o.tool == c.tool and selection(o.asked) == selection(c.asked) for o in out):
+            continue
+        out.append(c)
+    return out
+
+
+def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str:
+    """The one answer of a turn from its computed calls.
+
+    Results lead, in call order; a result identical to one already shown
+    (same tool, same stated lines) is not repeated. When one tool shows more
+    than one different result, each says what was asked. A call with no
+    figure is shown only when no result answered its part (``covers``):
+    after the results in one plain line, or -- when no call returned a
+    result -- as the answer, saying what was asked and why there is none.
+    A result of no matching rows leads only when no call found rows; beside
+    a figure it is dropped when a lead answered its part, else it is named
+    in one plain line after the results."""
+    lab = labels_for(language)
+    leads = [c for c in calls if c.answered and not _only_zero(c)]
+    # A zero leads only when no call found rows. Beside a figure it is the one
+    # plain line at the end, and only for a part no lead already answered.
+    zeros = [c for c in calls if c.answered and _only_zero(c)] if leads else []
+    shown: List[Tuple[Call, List[str]]] = []
+    for c in calls:
+        if not c.answered or c in zeros:
+            continue
+        body = _body_lines(c.statements, lab, language, c.declared)
+        if any(o.tool == c.tool and ob == body for o, ob in shown):
+            continue
+        shown.append((c, body))
+    missing = unanswered(calls)
+    if not shown:
+        return "\n\n".join(render_call(c.heading, c.statements, asked=c.asked, error=c.error,
+                                        language=language, declared=c.declared,
+                                        question=question) for c in missing)
+    per_tool: Dict[str, int] = {}
+    for c, _ in shown:
+        per_tool[c.tool] = per_tool.get(c.tool, 0) + 1
+    blocks: List[str] = []
+    for c, body in shown:
+        head = [f"{c.heading}:"]
+        asked_line = _asked_line(c.asked, lab, question) if per_tool[c.tool] > 1 else ""
+        if asked_line:
+            head.append(f"- {asked_line}")
+        blocks.append("\n".join(head + body))
+    if len(blocks) > 1:
+        blocks.insert(0, lab["several"].format(n=len(blocks)))
+    zero_parts: List[str] = []
+    for z in zeros:
+        if any(covers(lead, z) for lead in leads):
+            continue
+        for st in z.statements:
+            what = _what(st, lab) if st.figure is not None else ""
+            if what and what not in zero_parts:
+                zero_parts.append(what)
+    if zero_parts:
+        blocks.append(lab["zero_line"].format(parts=lab["list_sep"].join(zero_parts)))
+    if missing:
+        parts = []
+        for c in missing:
+            asked_line = _asked_line(c.asked, lab, question)
+            reason = reason_text(c.error, lab, language, c.declared) if c.error else lab["no_figure"]
+            what = f"{c.heading} ({asked_line})" if asked_line else c.heading
+            parts.append(f"{what}, {lab['not_returned']}: {reason}")
+        blocks.append(lab["unanswered"].format(parts=lab["list_sep"].join(parts)))
+    return "\n\n".join(blocks)
 
 
 def tool_call_args(messages: Sequence[Dict[str, Any]], call_id: str) -> Dict[str, Any]:
@@ -310,6 +490,7 @@ def failure_text(payload: Optional[Dict[str, Any]]) -> str:
 
 
 __all__: Tuple[str, ...] = (
-    "LABELS", "REASONS", "has_words", "question_language", "render_call", "heading_for", "join_calls",
+    "LABELS", "REASONS", "RESULT_CUT_UNREADABLE", "has_words", "question_language", "render_call", "heading_for", "join_calls",
+    "Call", "selection", "covers", "unanswered", "answer_turn",
     "tool_call_args", "failure_text", "scrub", "reason_text", "MAX_CODE_CHARS",
 )
