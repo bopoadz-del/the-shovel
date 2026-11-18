@@ -477,6 +477,70 @@ def render_pageless(anchor: str, summ: dict[str, Any]) -> list[str]:
     return lines
 
 
+# The same project's documents, for the by-kind table: the stored document
+# type and the file kind (the extension of the stored name). The name is
+# read only to take its extension and is never printed.
+_KIND_SQL = "SELECT id, original_name, doc_type FROM documents WHERE project_id = :pr"
+_EXT_RE = re.compile(r"^\.[a-z0-9]{1,8}$")
+_NO_DOC_ROW = "(no document row)"
+
+
+def file_kind(name: Any) -> str:
+    """The lower-case extension of a stored file name, or ``(none)``. A
+    suffix that is not a short alphanumeric extension prints as ``(other)``,
+    so no part of a name can leak through it."""
+    if not isinstance(name, str) or not name.strip():
+        return "(none)"
+    ext = os.path.splitext(name.strip())[1].lower()
+    if not ext:
+        return "(none)"
+    return ext if _EXT_RE.match(ext) else "(other)"
+
+
+def stored_type(value: Any) -> str:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "(none)"
+    return value if isinstance(value, str) and _CODE_RE.match(value) else "(other)"
+
+
+def pageless_by_kind(chunk_rows: Iterable[tuple], doc_rows: Iterable[tuple],
+                     cap: int = _MAX_DOCS) -> list[tuple]:
+    """Pure: the pageless counts grouped by (file kind, stored type).
+
+    ``chunk_rows`` is ``(doc_id, chunks_without_page, chunks)`` per document;
+    ``doc_rows`` is ``(id, original_name, doc_type)``. A chunk whose doc_id
+    has no document row is grouped as ``(no document row)``, never guessed.
+    Returns ``(kind, type, documents, documents_with_pageless, chunks,
+    pageless_chunks)`` rows, most pageless chunks first (ties by kind, type),
+    at most ``cap`` of them."""
+    kinds = {str(i): (file_kind(n), stored_type(t)) for i, n, t in doc_rows}
+    groups: dict[tuple[str, str], list[int]] = {}
+    for d, n, t in chunk_rows:
+        key = kinds.get(str(d), (_NO_DOC_ROW, _NO_DOC_ROW))
+        g = groups.setdefault(key, [0, 0, 0, 0])
+        n, t = int(n or 0), int(t or 0)
+        g[0] += 1
+        g[1] += 1 if n > 0 else 0
+        g[2] += t
+        g[3] += n
+    out = [(k[0], k[1], *v) for k, v in groups.items()]
+    out.sort(key=lambda r: (-r[5], r[0], r[1]))
+    return out[:cap]
+
+
+def render_by_kind(groups: list[tuple]) -> list[str]:
+    lines = ["   by kind: file_kind | doc_type | documents | documents_with_pageless "
+             "| chunks | pageless_chunks | chunks_with_page"]
+    for kind, typ, docs, dwp, chunks, pl in groups:
+        lines.append(f"   {kind} | {typ} | {docs} | {dwp} | {chunks} | {pl} | {chunks - pl}")
+    pdf = [g for g in groups if g[0] == ".pdf"]
+    if pdf:
+        chunks, pl = sum(g[4] for g in pdf), sum(g[5] for g in pdf)
+        lines.append(f"   pdf-born (.pdf, every type listed above): chunks={chunks} "
+                     f"with_page={chunks - pl} without_page={pl}")
+    return lines
+
+
 def pageless_lines(anchor: str, doc_row: tuple) -> list[str]:
     """The pageless count for the anchor document's project; a failed read
     is printed by class, never raised. The project id is never printed."""
@@ -488,7 +552,15 @@ def pageless_lines(anchor: str, doc_row: tuple) -> list[str]:
             rows = s.execute(text(sql), {"pr": doc_row[1]}).all()
     except Exception as exc:  # report it (by class), do not hide it
         return [f"== pageless in the project of id {anchor}: READ FAILED: {type(exc).__name__}"]
-    return render_pageless(anchor, pageless_summary([tuple(r) for r in rows]))
+    rows = [tuple(r) for r in rows]
+    lines = render_pageless(anchor, pageless_summary(rows))
+    try:
+        with SessionLocal() as s:
+            docs = s.execute(text(_KIND_SQL), {"pr": doc_row[1]}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return lines + [f"   by kind: READ FAILED: {type(exc).__name__}"]
+    # Every group is printed: the cap is the number of (kind, type) pairs.
+    return lines + render_by_kind(pageless_by_kind(rows, [tuple(d) for d in docs], cap=10_000))
 
 
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
