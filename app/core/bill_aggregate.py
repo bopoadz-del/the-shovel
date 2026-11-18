@@ -123,16 +123,16 @@ def _ref_number(ref: str) -> tuple[str, int] | None:
 
 def _continues(path: tuple[str, ...], open_path: tuple[str, ...]) -> bool:
     """``path`` is the heading open at the page break, re-printed at the head
-    of the next page: equal to it down to its own last level, and that last
-    label holds every word of the open level it stands at. That is the open
-    path cut short by a repeated outer heading (``(Bill 3,)`` under
-    ``(Bill 3, Manholes)``) or its innermost label re-printed with more words
-    (a 'continued' line). Only the word boxes' text is compared; no word of
-    any bill is named."""
+    of the next page: equal to it, or a strict prefix of it (``(Bill 3,)``
+    under ``(Bill 3, Manholes)``, the path cut short by a repeated outer
+    heading). A path whose last label EXTENDS the open label (more words) is
+    NOT a continuation: a new subsection whose heading extends the open label
+    reads the same, and merging it would add its rows to the open section's
+    count and sum. A true 'continued' line is therefore left under its own
+    heading (under-counted, the safe side). Only the labels are compared; no
+    word of any bill is named."""
     n = len(path)
-    if not path or path == open_path or n > len(open_path) or path[:-1] != open_path[:n - 1]:
-        return False
-    return _words(open_path[n - 1]) <= _words(path[-1])
+    return 0 < n <= len(open_path) and path == open_path[:n]
 
 
 def carry_open_heading(rows: Sequence[SheetRow]) -> list[SheetRow]:
@@ -146,11 +146,13 @@ def carry_open_heading(rows: Sequence[SheetRow]) -> list[SheetRow]:
     another sheet. Here the rows are put back in print order (page, then the
     order the sheets were first printed), and the FIRST block of a page (rows
     of one sheet on that page) takes the path open at the end of the previous
-    page when its own path continues it (:func:`_continues`) AND the item
-    numbers are the evidence: the block's first reference has the open
-    section's last reference's prefix and the next number. A heading alone
-    (the running heading, or a label re-printed with more words) is not
-    evidence: it cannot be told from a new section without naming a word.
+    page when its own path continues it (:func:`_continues`: equal to the
+    open path or a strict prefix of it) AND the item numbers are the
+    evidence: the block's first reference has the open section's last
+    reference's prefix and the next number. A heading alone (the running
+    heading) is not evidence: it cannot be told from a new section without
+    naming a word. A label re-printed with more words is never carried: it
+    cannot be told from a new subsection that extends the open label.
     Only reading changes: the stored sheet is not touched.
     """
     blocks: list[tuple[int, int, list[SheetRow]]] = []

@@ -660,6 +660,33 @@ async def test_a_self_correcting_reply_is_withheld_whole_through_the_stream_rout
     assert content.count(answer_exit.FIGURE_REMOVED) == (1 if withheld else 0)
 
 
+@pytest.mark.parametrize("correction, withheld", [
+    (lambda right, other: f"The runs total {other:,} m. Correction: the runs total {right:,} m.", True),
+    (lambda right, other: f"The runs total {right:,} m. Correction: the runs total {other:,} m.", True),
+    (lambda right, other: f"The runs total {right:,} m.", False),
+], ids=["question-figure-then-right", "right-then-question-figure", "stated-once"])
+@pytest.mark.parametrize("quantities, offset", [(_LIVE_ROWS, 7), (_OTHER_ROWS, 300)], ids=["live", "other"])
+async def test_a_self_correction_between_two_allowed_figures_is_withheld_whole(
+        tmp_path, quantities, offset, correction, withheld):
+    """Grader 1845Z point 1: BOTH figures of the correction are allowed numbers
+    (the second one is in the user's own question), so the foreign-number rule
+    withholds nothing; only the self-correction rule (two figures in a unit the
+    tool stated one figure in) can withhold the reply."""
+    from app.agents import answer_exit
+
+    right = sum(quantities)
+    other = right + offset
+    ask = f"{ASK} An earlier take-off said {other:,} m."
+    payload = _bill_payload(_invented_bill(tmp_path, quantities), ask)
+    reply = correction(right, other)
+    allowed = answer_exit._answer_numbers(ask) | {float(right)}
+    assert answer_exit._answer_numbers(reply) <= allowed  # no foreign number in the reply
+    content = (await _through_the_stream_route(payload, ask, reply))["content"]
+    assert f"{right:,}" in content
+    assert (reply in content) is (not withheld)
+    assert content.count(answer_exit.FIGURE_REMOVED) == (1 if withheld else 0)
+
+
 @pytest.mark.parametrize("text, numbers", [
     ("1,234.5 m", {1234.5}),
     ("1 234.5 m", {1234.5}),
