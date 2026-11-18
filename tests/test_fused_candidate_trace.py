@@ -464,3 +464,14 @@ def test_trace_name_read_failure_digests_every_listed_id(monkeypatch, read_fails
     entry = inject._public_fused(summary, order)["leg_docs"]["lexical"][0]
     assert ("doc_digest" in entry) is read_fails
     assert ("doc_id" in entry) is (not read_fails)
+
+
+@pytest.mark.parametrize("doc_id", ["A", "spec-rev-B.pdf"])
+def test_doc_digest_is_the_ids_own_sha256_prefix(doc_id):
+    import hashlib
+
+    want = hashlib.sha256(doc_id.encode("utf-8")).hexdigest()[:ft.DOC_DIGEST_HEX]
+    assert ft.doc_digest(doc_id) == want
+    # two different ids never share a digest here: the digest reads the id
+    other = doc_id + "x"
+    assert ft.doc_digest(other) != ft.doc_digest(doc_id)
