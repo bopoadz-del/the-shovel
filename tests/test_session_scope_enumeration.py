@@ -8,7 +8,7 @@ project id must do one of:
 * apply the scope clause (``_in_scope_clause`` / ``document_in_scope``);
 * subtract the session-hidden set (``session_hidden_document_ids``,
   ``VectorStore._session_hidden_ids`` / ``_session_hidden_sql`` /
-  ``_hidden_doc_ids`` / ``_hidden_doc_ids_among``);
+  ``_hidden_doc_ids`` / ``_hidden_doc_ids_among`` / ``_session_visible``);
 * take or pass ``all_sessions`` (the explicit, visible opt-out);
 
 or be named in ``EXEMPT`` below with a one-line reason. The walk is by
@@ -35,7 +35,7 @@ _SQL_SELECT = re.compile(r"^\s*(?:WITH\b.*?)?SELECT\b", re.IGNORECASE | re.DOTAL
 SCOPE_MARKERS = frozenset({
     "_in_scope_clause", "document_in_scope", "session_hidden_document_ids",
     "_session_hidden_ids", "_session_hidden_sql", "_hidden_doc_ids",
-    "_hidden_doc_ids_among", "all_sessions",
+    "_hidden_doc_ids_among", "_session_visible", "all_sessions",
 })
 
 # path::function -> why it may read every session's rows. Maintenance,
@@ -55,7 +55,6 @@ EXEMPT = {
     # session's own listing: matches session AND uploader in the query
     "app/core/projects.py::list_session_documents": "is the session's own listing",
     # ingest de-duplication and supersede: must see every stored copy
-    "app/core/projects.py::find_document_by_sha": "ingest de-duplication by content hash",
     "app/core/projects.py::supersede_older_duplicates": "maintenance: retire older copies",
     "app/core/projects.py::audit_document_sizes": "maintenance: size audit of every row",
     # read-only maintenance plans and censuses (RQ-1..RQ-4, S10)

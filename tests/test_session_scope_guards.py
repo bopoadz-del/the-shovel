@@ -10,8 +10,10 @@ the function itself or the route that calls it:
   database session, so retrieval sees the rows of the transaction it runs in.
 * ``coverage_honesty.live_coverage`` counts neither another session's file
   nor its chunks; an empty project id has no coverage to report.
-* ``VectorStore._hidden_doc_ids_among``: a store the documents table cannot
-  gate hides nothing.
+* ``VectorStore._hidden_doc_ids_among``: a store that cannot compute the
+  session scope (the documents table cannot gate it, or reading it fails)
+  hides every candidate -- fails closed. This corrects the rule as first
+  written here ("hides nothing"), which let another session's file through.
 * ``agents.agent_chat`` / ``agents.agent_chat_stream``: an unknown agent is a
   404; the non-streaming route answers and keeps another session's file out
   of the model's input; the streaming route honours the per-user driver
@@ -147,8 +149,12 @@ def test_live_coverage_counts_no_other_sessions_file(monkeypatch, chunks):
 
 # ── VectorStore._hidden_doc_ids_among ───────────────────────────────────────
 
+@pytest.mark.parametrize("cause", ["visibility-not-ready", "database-error"])
 @pytest.mark.parametrize("hidden_by", ["excluded", "other-session"])
-def test_a_store_the_documents_table_cannot_gate_hides_nothing(monkeypatch, hidden_by):
+def test_a_store_that_cannot_compute_the_scope_hides_every_candidate(
+        monkeypatch, hidden_by, cause):
+    from sqlalchemy.exc import OperationalError
+
     from app.core.rag.vector_store import get_store
 
     pid = store.create_project(f"Ungated-{hidden_by}-{_RUN}")["id"]
@@ -162,11 +168,18 @@ def test_a_store_the_documents_table_cannot_gate_hides_nothing(monkeypatch, hidd
             s.commit()
     else:
         did = _session_doc(pid, "invented_sess.md", "ws-d", "u-1")
+    own = store.add_document(pid, "invented_own_project_file.md")["id"]
     vs = get_store()
     with vs._session_factory()() as s:
-        assert vs._hidden_doc_ids_among(s, pid, [did]) == {did}
-        monkeypatch.setattr(vs, "_docs_visibility_ready", lambda _s=None: False)
-        assert vs._hidden_doc_ids_among(s, pid, [did]) == set()
+        assert vs._hidden_doc_ids_among(s, pid, [did, own]) == {did}
+        if cause == "visibility-not-ready":
+            monkeypatch.setattr(vs, "_docs_visibility_ready", lambda _s=None: False)
+        else:
+            def _unreadable(*_a, **_k):
+                raise OperationalError("SELECT documents", {}, Exception("invented"))
+            monkeypatch.setattr(store, "session_hidden_document_ids", _unreadable)
+        # Nothing can be shown safely: the project's own file is held back too.
+        assert vs._hidden_doc_ids_among(s, pid, [did, own]) == {did, own}
 
 
 # ── agents.agent_chat / agents.agent_chat_stream ────────────────────────────

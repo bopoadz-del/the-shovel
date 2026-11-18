@@ -2055,21 +2055,29 @@ def find_document_by_sha(
     """Return the FIRST existing document in this project with this content
     hash, or None. Used by the Drive walker to skip unchanged files on
     re-walk. Returns None for empty/None hashes so a missing sha cannot
-    accidentally match other null-sha rows."""
+    accidentally match other null-sha rows.
+
+    Only a row in the current session scope counts (``document_in_scope``):
+    the project's own documents, plus the current chat session's files. A
+    session upload of the same bytes is not the project's copy, so it does
+    not make a project walk skip the project file."""
     if not content_sha256:
         return None
     _ensure_db()
     project_id = storage_project_id(project_id)
+    scope = current_session_scope()
     with SessionLocal() as session:
-        document = session.scalars(
+        rows = session.scalars(
             select(Document)
             .where(
                 Document.project_id == project_id,
                 Document.content_sha256 == content_sha256,
+                _in_scope_clause(scope),
             )
             .order_by(Document.uploaded_at)
-            .limit(1)
-        ).first()
+        ).all()
+        document = next(
+            (d for d in rows if document_in_scope(d.metadata_, scope)), None)
     return _document_as_dict(document) if document else None
 
 

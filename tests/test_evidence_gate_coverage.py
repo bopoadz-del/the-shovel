@@ -6,6 +6,8 @@ document, a project or a tester row.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import asyncio
 from types import SimpleNamespace
 
@@ -303,6 +305,7 @@ def small_store(tmp_path):
 
     vs.reset_store_cache()
     store = vs.VectorStore(db_path=str(tmp_path / "terms.db"), dim=8)
+    give_documents_table(store)
     rng = np.random.default_rng(0)
 
     def index(project_id, doc_id, texts):
