@@ -705,6 +705,37 @@ _FORCED_RETRY_NUDGES = {
     "platform_only": _USER_TERMS_RETRY_NUDGE,
 }
 
+
+def log_forced_retry_start(where: str, text: str) -> None:
+    """Trace the forced no-tools retry by the rule that fired, never the text.
+
+    Evaluating the rule is CPU work: the turn paths call this through
+    ``_off_loop`` like the neighbouring decision calls.
+    """
+    _LOG.info("%s: unusable final_text reason=%s, forcing no-tools retry",
+              where, forced_retry_reason(text))
+
+
+def forced_retry_failed(where: str, resp: dict) -> bool:
+    """True when the forced retry's provider call errored; traced as such."""
+    if resp.get("status") != "error":
+        return False
+    _LOG.warning("%s: forced retry failed reason=provider_error; fallback shown", where)
+    return True
+
+
+def forced_retry_still_unusable(where: str, text: str, *, raw_len: int | None = None) -> bool:
+    """The retry's own decision (same rule as the first), traced by rule name.
+
+    Our own fallback line is not traced again: reaching it means the retry
+    call already failed and was logged as ``provider_error``.
+    """
+    reason = forced_retry_reason(text)
+    if reason is not None and text != _EMPTY_RESPONSE_FALLBACK:
+        raw = "" if raw_len is None else f" raw={raw_len}c"
+        _LOG.warning("%s: forced retry unusable reason=%s%s; fallback shown", where, reason, raw)
+    return reason is not None
+
 # Keys that strongly indicate an internal search tool argument payload.
 _SEARCH_TOOL_ARG_KEYS = {
     "query",
