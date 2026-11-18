@@ -136,6 +136,7 @@ def test_one_failed_read_does_not_close_the_store_for_good(chunked, monkeypatch,
             with monkeypatch.context() as m:
                 _break_scope(m, st, cause)
                 assert st.count(pid) == 0
+                assert st.term_chunk_counts(pid, ["tarnwick"]) == {"tarnwick": 0}
             assert st._visibility_ready is True
         else:
             # A probe that failed long enough ago is made again.
@@ -145,6 +146,8 @@ def test_one_failed_read_does_not_close_the_store_for_good(chunked, monkeypatch,
                                 raising=False)
         assert st.count(pid) == 1
         assert set(st.count_by_doc(pid)) == {own_doc}
+        # A closed answer was not remembered: the count is read again.
+        assert st.term_chunk_counts(pid, ["tarnwick"]) == {"tarnwick": 1}
 
 
 @pytest.mark.parametrize("age", [0.0, 5.0])
@@ -231,3 +234,26 @@ def test_inside_a_session_its_own_copy_counts_and_another_does_not(which):
     with _scope(scope):
         found = store.find_document_by_sha(pid, sha)
     assert (found or {}).get("id") == (sess if which == "own session" else None)
+
+
+@pytest.mark.parametrize("doc_ids", [[], ()])
+def test_no_ids_asks_the_database_nothing(monkeypatch, doc_ids):
+    from app.core.rag.vector_store import get_store
+
+    st = get_store()
+    monkeypatch.setattr(st, "_visibility_ready", True)
+
+    class _NoQueries:
+        def execute(self, *_a, **_k):
+            raise AssertionError("no id was asked about; nothing may be read")
+
+    assert st._hidden_doc_ids_among(_NoQueries(), "invented-project", doc_ids) == set()
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_a_missing_hash_matches_no_row(missing):
+    """A row stored without a hash is not 'the same bytes' as another."""
+    pid = _project("nosha")
+    store.add_document(pid, "invented_unhashed.md", content_sha256=missing)
+    with _scope(None):
+        assert store.find_document_by_sha(pid, missing) is None

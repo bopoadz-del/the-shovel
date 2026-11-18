@@ -939,6 +939,8 @@ def _memoised(key: tuple, compute):
 
 
 _TERM_COUNT_CACHE_LOCK = Lock()
+# The session-scope clause when the scope cannot be computed: no row.
+_NO_ROW_SQL = " AND 1 = 0"
 
 
 def _projects_scope_key():
@@ -1423,7 +1425,7 @@ class VectorStore:
         ``AND 1 = 0`` (no row) when the hidden set cannot be computed."""
         hidden = self._session_hidden_ids(session, project_id)
         if hidden is None:
-            return " AND 1 = 0"
+            return _NO_ROW_SQL
         ids = sorted(hidden)
         if not ids:
             return ""
@@ -2831,15 +2833,20 @@ class VectorStore:
                     params: Dict[str, Any] = {}
                     if self._docs_visibility_ready(session):
                         vis = self._hidden_doc_sql("c")
-                    # Outside the readiness guard: a store that cannot compute the
-                    # session scope reads no row (fail closed), not every row.
-                    vis += self._session_hidden_sql(
+                    session_vis = self._session_hidden_sql(
                         session, project_id, "c.doc_id", params,
                     )
-                    for term in todo:
-                        counts[term] = self._term_chunk_count(
+                    if session_vis == _NO_ROW_SQL:
+                        # The scope cannot be computed: no chunk counts, and
+                        # nothing remembered -- the next readable call counts.
+                        return {t: 0 for t in wanted}
+                    vis += session_vis
+                    counts = {**counts, **{
+                        term: self._term_chunk_count(
                             session, project_id, term, vis, params,
                         )
+                        for term in todo
+                    }}
             self._term_count_cache_put(cache, cache_key, stamp, counts, now)
         return {t: counts[t] for t in wanted}
 
