@@ -18,7 +18,12 @@ source names, chunk text lengths and the question's own words.
     relevant document still hands all of it. Copies of one document (the same
     title in two folders, a duplicate upload) are one document family and
     count once; a chunk whose text repeats one already handed from the same
-    family is not handed twice.
+    family is not handed twice. The share holds in CHARACTERS too: slots are
+    not equal, and two long chunks of one document can take most of the
+    budget in two slots. While another family competes, a family's later
+    chunk that would take the family past the share of the character budget
+    is deferred behind the other documents the same way (never dropped). A
+    family's first chunk is never deferred for its size.
 
 (c) A document ask (not only a figure ask) gets the evidence loop's plan when
     the first pass covers fewer distinct sources than the kinds of document
@@ -120,6 +125,18 @@ def _text_key(chunk: Any) -> str:
 
 # --- (b) diversity ---------------------------------------------------------
 
+def _competing_families(chunks: Sequence[Any], margin: float) -> set[str]:
+    """Families whose best chunk scores within ``margin`` of the top chunk."""
+    ordered = sorted(chunks, key=_score, reverse=True)
+    if not ordered:
+        return set()
+    top = _score(ordered[0])
+    best_by_family: dict[str, float] = {}
+    for c in ordered:
+        best_by_family.setdefault(family_key(c), _score(c))
+    return {f for f, s in best_by_family.items() if s >= top - margin}
+
+
 def diversify(
     chunks: Sequence[Any], *, slots: int, share: float, margin: float,
     reasons: dict[str, str] | None = None, deferred_ids: set | None = None,
@@ -136,11 +153,7 @@ def diversify(
     ordered = sorted(chunks, key=_score, reverse=True)
     if not ordered:
         return []
-    top = _score(ordered[0])
-    best_by_family: dict[str, float] = {}
-    for c in ordered:
-        best_by_family.setdefault(family_key(c), _score(c))
-    competitors = {f for f, s in best_by_family.items() if s >= top - margin}
+    competitors = _competing_families(ordered, margin)
     cap = max(1, math.ceil(share * max(1, slots)))
     seen_text: set[tuple[str, str]] = set()
     taken: dict[str, int] = {}
@@ -163,6 +176,45 @@ def diversify(
         taken[fam] = taken.get(fam, 0) + 1
         lead.append(c)
     return lead + deferred
+
+
+def share_characters(
+    ordered: Sequence[Any], *, budget: int, share: float, competing: bool,
+    deferred_ids: set | None = None,
+) -> list:
+    """Rule (b) counted in characters. Walks ``ordered`` as the budget walk
+    will (a chunk that does not fit the room left is passed over in place);
+    a chunk whose family already holds a chunk, and that would take the
+    family past ``share`` of ``budget`` characters, is deferred behind the
+    rest, in order. Chunks already in ``deferred_ids`` stay deferred. Nothing
+    is dropped, and nothing moves when no other family competes."""
+    if not competing:
+        return list(ordered)
+    already = set(deferred_ids or ())
+    limit = share * budget
+    room = budget
+    held: dict[str, int] = {}
+    lead: list = []
+    tail: list = []
+    for c in ordered:
+        size = len(getattr(c, "text", "") or "")
+        cid = getattr(c, "chunk_id", None)
+        if cid in already:
+            tail.append(c)
+            continue
+        if size > room and lead:
+            lead.append(c)
+            continue
+        fam = family_key(c)
+        if fam in held and held[fam] + size > limit:
+            if deferred_ids is not None:
+                deferred_ids.add(cid)
+            tail.append(c)
+            continue
+        lead.append(c)
+        room -= size
+        held[fam] = held.get(fam, 0) + size
+    return lead + tail
 
 
 # --- (a) character budget --------------------------------------------------
@@ -244,6 +296,10 @@ def select_handed(
     deferred_ids: set = set()
     ordered = diversify(chunks, slots=k, share=doc_share(), margin=doc_margin(),
                         reasons=reasons, deferred_ids=deferred_ids)
+    ordered = share_characters(
+        ordered, budget=budget, share=doc_share(),
+        competing=len(_competing_families(chunks, doc_margin())) > 1,
+        deferred_ids=deferred_ids)
     skipped: list = []
     tie_lost: set = set()
     # A tie band never spans a deferral: the tie-break must not move a chunk
