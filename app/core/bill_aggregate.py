@@ -334,10 +334,6 @@ def _without_sizes(text: str) -> str:
     return _SIZE_RE.sub(" ", (text or "").translate(_DIGITS))
 
 
-def _has_size(text: str, size: Size) -> bool:
-    return any(size.same(s) for s in sizes_in(text))
-
-
 def _words(text: str) -> set[str]:
     return {w.casefold() for w in _WORD_RE.findall(text or "")}
 
@@ -663,6 +659,21 @@ def _row_label(entry: dict[str, Any]) -> str:
     return f"{name} ({where})" if where else name
 
 
+#: How many rows a statement names before it states how many more there are.
+#: A statement is never cut downstream (the result outline keeps it whole),
+#: so its length must not grow with the bill: the rows themselves stay in
+#: the result's ``rows``.
+STATEMENT_ROWS_NAMED = 12
+
+
+def _labels(entries: Sequence[dict[str, Any]]) -> str:
+    """The labels of ``entries``, the first STATEMENT_ROWS_NAMED of them by
+    name and the rest as a count, so the text is bounded for any bill."""
+    named = "; ".join(_row_label(e) for e in entries[:STATEMENT_ROWS_NAMED])
+    more = len(entries) - STATEMENT_ROWS_NAMED
+    return f"{named}; and {more} more row(s), listed under rows" if more > 0 else named
+
+
 def _quoted(words: Iterable[str]) -> str:
     return ", ".join(f'"{w}"' for w in words)
 
@@ -689,7 +700,7 @@ def statement(result: dict[str, Any]) -> str:
     head = f"{result.get('count', 0)} row(s) {' '.join(why)}".rstrip()
     if not rows:
         return f"{head}: no row of this bill matches.{unused}"
-    listed = "; ".join(_row_label(r) for r in rows)
+    listed = _labels(rows)
     if result.get("sum") is not None:
         unit = f" {result['unit']}" if result.get("unit") else ""
         figure = f"total {measure} {_fmt(result['sum'])}{unit}"
@@ -708,8 +719,8 @@ def statement(result: dict[str, Any]) -> str:
                  "not the amount (cost).")
     without = result.get("without_figure") or []
     if without:
-        text += f" {len(without)} of them print no {measure} and add nothing: " + "; ".join(
-            _row_label(w) for w in without) + "."
+        text += f" {len(without)} of them print no {measure} and add nothing: " + _labels(
+            without) + "."
     return text + unused
 
 
@@ -778,6 +789,35 @@ def aggregate_project_bills(
     return out
 
 
+def _call_texts(terms: Iterable[str] | str | None, section: Iterable[str] | str | None) -> list[str]:
+    return [t for t in ([terms] if isinstance(terms, str) else list(terms or []))
+            + ([section] if isinstance(section, str) else list(section or [])) if t]
+
+
+def _named_forms(texts: Sequence[str]) -> set[str]:
+    return set().union(*(_forms(w) for w in _terms([_without_sizes(t) for t in texts]))) if texts else set()
+
+
+def _absent_part_of_ask(
+    picked: dict[str, list[str]],
+    terms: Iterable[str] | str | None,
+    section: Iterable[str] | str | None,
+) -> list[str]:
+    """The user's words a call names when the call names ONLY words of the
+    ask that this bill holds nowhere (``picked['ignored']``) and none of the
+    words that select rows: that call asks about the absent part of a
+    two-part question ('kerbs, and X?'), so it is answered as that part --
+    no row -- not with the other part's rows. The call never adds a word of
+    its own: only the ask's ignored words it names are returned."""
+    named = _named_forms(_call_texts(terms, section))
+    if not named:
+        return []
+    selecting = picked["terms"] + picked["section_terms"]
+    if any(_forms(w) & named for w in selecting):
+        return []
+    return [w for w in picked["ignored"] if _forms(w) & named]
+
+
 def _part_of_ask(
     picked: dict[str, list[str]],
     terms: Iterable[str] | str | None,
@@ -788,9 +828,8 @@ def _part_of_ask(
     ducts'). Only the USER's selecting words are kept, those the call's terms
     also name; the call never adds a word of its own. ``None`` when the call
     names none of them or all of them (nothing narrower to read)."""
-    texts = [t for t in ([terms] if isinstance(terms, str) else list(terms or []))
-             + ([section] if isinstance(section, str) else list(section or [])) if t]
-    named = set().union(*(_forms(w) for w in _terms([_without_sizes(t) for t in texts]))) if texts else set()
+    texts = _call_texts(terms, section)
+    named = _named_forms(texts)
     called = [s for t in texts for s in sizes_in(t)]
     part = {
         "terms": [w for w in picked["terms"] if _forms(w) & named],
@@ -815,7 +854,15 @@ def _aggregate_bill(
         result["selected_by"] = "call"
     else:
         picked = selection_from_ask(rows, ask)
-        if picked["terms"] or picked["section_terms"] or picked["sizes"]:
+        selects = bool(picked["terms"] or picked["section_terms"] or picked["sizes"])
+        absent = _absent_part_of_ask(picked, terms, section) if selects else []
+        if absent:
+            read = measure_from_ask(ask)
+            result = aggregate(rows, terms=absent, section=None,
+                               measure=read or MEASURE_QUANTITY, fold=True)
+            result["selected_by"] = "ask_absent"
+            result["measure_unread"] = read is None
+        elif selects:
             read = measure_from_ask(ask)
             result = aggregate(rows, terms=picked["terms"], section=picked["section_terms"],
                                measure=read or MEASURE_QUANTITY, fold=True, sizes=picked["sizes"])

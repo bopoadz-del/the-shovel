@@ -797,3 +797,71 @@ async def test_a_recovered_answer_states_each_result_once_through_the_stream_rou
         body = "\n".join(answer_exit._lines(norm(lead))[1:])
         assert shown.count(body) == 1, (body, content)
     assert answer_exit.FIGURE_REMOVED not in content
+
+
+# ── #411 1613Z: a statement is bounded; a split call's absent part is a zero ──
+
+def _items(word, n, page_rows=4):
+    return [_row(("Works", "Items"), 1 + i // page_rows, f"W{i}", f"{word} item number {i}", "m", "2")
+            for i in range(n)]
+
+
+def _sheet(tmp_path, items):
+    path = tmp_path / f"bill{len(list(tmp_path.iterdir()))}.xlsx"
+    g.write_bill_workbook(items, str(path))
+    return agg.join_page_continuations(agg.read_sheet_rows(str(path)))
+
+
+def _many(tmp_path, word, n):
+    return _sheet(tmp_path, _items(word, n))
+
+
+@pytest.mark.parametrize("n, named, more", [(5, 5, None), (40, agg.STATEMENT_ROWS_NAMED, 40 - agg.STATEMENT_ROWS_NAMED)])
+def test_statement_names_at_most_a_bounded_number_of_rows(tmp_path, n, named, more):
+    """The statement is never cut downstream, so it must not grow with the
+    bill: the first rows are named, the rest are counted (rows stay whole)."""
+    rows = _many(tmp_path, "lintel", n)
+    out = agg._aggregate_bill(rows, ask="how many lintel rows?", terms="", section="",
+                              measure=agg.MEASURE_QUANTITY)
+    assert out["count"] == n and len(out["rows"]) == n
+    text = out["statement"]
+    assert sum(f"W{i} (p. " in text for i in range(n)) == named
+    if more is None:
+        assert "more row(s)" not in text
+    else:
+        assert f"and {more} more row(s), listed under rows" in text
+    assert f"Total quantity {2 * n} m" in text
+
+
+def test_statement_length_does_not_grow_past_the_named_rows(tmp_path):
+    short = agg._aggregate_bill(_many(tmp_path, "lintel", 20), ask="how many lintel rows?", terms="",
+                                section="", measure=agg.MEASURE_QUANTITY)["statement"]
+    long = agg._aggregate_bill(_many(tmp_path, "lintel", 400), ask="how many lintel rows?", terms="",
+                               section="", measure=agg.MEASURE_QUANTITY)["statement"]
+    assert len(long) - len(short) < 10, (len(short), len(long))
+
+
+@pytest.mark.parametrize("word, absent", [("lintel", "zzqwerty"), ("sill", "zzasdfgh")])
+@pytest.mark.parametrize("call, expect_rows, by", [
+    ("{absent}", 0, "ask_absent"),   # the call names only the part the bill holds nowhere
+    ("{word}", 6, "ask"),            # the call names the part that selects
+    ("", 6, "ask"),                  # the call names nothing: the whole ask
+    ("unrelated", 6, "ask"),         # the call's own word is never added
+])
+def test_a_call_for_the_absent_part_of_a_two_part_ask_is_a_zero(tmp_path, word, absent, call, expect_rows, by):
+    rows = _sheet(tmp_path, _items(word, 6) + [_row(("Works", "Copings"), 9, f"K{i}", f"coping unit {i}", "m", "3") for i in range(3)])
+    out = agg._aggregate_bill(rows, ask=f"how many {word} items, and {absent}?",
+                              terms=call.format(word=word, absent=absent), section="",
+                              measure=agg.MEASURE_QUANTITY)
+    assert out["count"] == expect_rows and out["selected_by"] == by, out["statement"]
+    if by == "ask_absent":
+        assert out["terms"] == [absent] and out["stated_figures"] == []
+        assert "no row of this bill matches" in out["statement"]
+
+
+@pytest.mark.parametrize("ask", ["how many zzqwerty items?", "how many zzasdfgh and zzzxcv?"])
+def test_an_ask_that_selects_nothing_is_not_an_absent_part(tmp_path, ask):
+    out = agg._aggregate_bill(_many(tmp_path, "lintel", 4), ask=ask, terms=ask.split()[2].strip("?"),
+                              section="", measure=agg.MEASURE_QUANTITY)
+    assert out["selected_by"] == "none"
+    assert "No row was selected from the question" in out["statement"]
