@@ -109,6 +109,12 @@ def classify(chunks: list[tuple[int, str]], pats: dict[str, re.Pattern[str]]) ->
         "question_chunk": q[0] if q else None,
         "answer_chunk": a[0] if a else None,
         "split": bool(rfi and q[0] != a[0]),
+        # Which roles' headings the document carries at all, and whether an
+        # answer heading follows a question heading (references aside): a
+        # zero rfi_like count is then read as "no such headings" or "one
+        # block missing", not as "no RFIs".
+        "roles": tuple(r for r in ROLES if found[r]),
+        "q_then_a": a is not None,
     }
 
 
@@ -127,6 +133,8 @@ def summarise(per_doc: Iterable[tuple[str, dict[str, Any]]], cap: int = _MAX_IDS
         "chunks_median": sizes[len(sizes) // 2] if sizes else 0,
         "chunks_max": sizes[-1] if sizes else 0,
         "chunks_total": sum(sizes),
+        "with_role": {r: sum(1 for _, x in docs if r in x["roles"]) for r in ROLES},
+        "q_then_a": sum(1 for _, x in docs if x["q_then_a"]),
         "rows": sorted(((d, r["chunks"], r["question_chunk"], r["answer_chunk"], r["split"])
                         for d, r in rfi))[:cap],
     }
@@ -138,6 +146,9 @@ def render(anchor: str, s: dict[str, Any]) -> list[str]:
          f"rfi_like={s['rfi_like']} split={s['split']} same_chunk={s['same_chunk']}"),
         (f"   chunks per RFI-like document: min={s['chunks_min']} median={s['chunks_median']} "
          f"max={s['chunks_max']} total={s['chunks_total']}"),
+        ("   documents with a heading of: "
+         + " ".join(f"{r}={s['with_role'][r]}" for r in ROLES)
+         + f" question_then_answer={s['q_then_a']}"),
         "   doc_id | chunks | question_chunk | answer_chunk | split",
     ]
     lines += [f"   {d} | {n} | {q} | {a} | {'yes' if sp else 'no'}" for d, n, q, a, sp in s["rows"]]
