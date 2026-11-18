@@ -69,6 +69,10 @@ def _turn(monkeypatch, steps, message=ASK):
     from app.main import app
     from app.routers import chat as chat_router
 
+    from app.routers.exit_frames import with_answer_exit
+
+    # The route under test answers through the exit wrapper under test.
+    assert chat_router.with_answer_exit is with_answer_exit
     monkeypatch.setattr(chat_router, "_predispatch_concurrent_stream", _scripted(steps))
     with TestClient(app) as c:
         email = f"bill-{uuid.uuid4().hex[:8]}@x.com"

@@ -458,6 +458,15 @@ def test_every_figure_stating_call_leads_in_call_order_once(rows, first_ask, lea
     assert answer_exit.FIGURE_REMOVED not in out
 
 
+@pytest.mark.parametrize("with_turn", [False, True], ids=["no-turn", "turn-without-results"])
+def test_no_turn_or_no_computed_result_has_no_lead(with_turn):
+    """Outside a turn, or on a turn no computed result reached, nothing leads."""
+    from app.agents import answer_exit
+
+    turn = answer_exit.Turn() if with_turn else None
+    assert answer_exit.computed_leads(turn) == []
+
+
 @pytest.mark.parametrize("reply, kept", [
     ("The clay runs are on rows R1, R2 and R4. That is 103.5 m.", True),
     ("The clay runs are on rows R1, R2 and R4. Re-added they make 112 m.", False),
