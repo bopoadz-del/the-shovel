@@ -1699,31 +1699,59 @@ class VectorStore:
 
     # ── Read ─────────────────────────────────────────────────────────────
 
-    def count(self, project_id: Optional[str] = None) -> int:
+    def count(
+        self, project_id: Optional[str] = None, *, all_sessions: bool = False,
+    ) -> int:
+        """Chunk rows, of ``project_id`` when given.
+
+        A project's count leaves out the chunks of chat-session files out of
+        the current session scope (``_session_hidden_ids``), as search does;
+        ``all_sessions`` counts every row."""
         with self._lock:
             with self._session_factory()() as session:
                 stmt = select(func.count()).select_from(self._rag_chunk_cls)
                 if project_id is not None:
                     stmt = stmt.where(self._rag_chunk_cls.project_id == project_id)
+                    hidden = (
+                        set() if all_sessions
+                        else self._session_hidden_ids(session, project_id)
+                    )
+                    if hidden:
+                        stmt = stmt.where(
+                            self._rag_chunk_cls.doc_id.not_in(sorted(hidden)))
                 return int(session.scalar(stmt) or 0)
 
     def has_chunks(self, project_id: str) -> bool:
-        """Whether the project has any chunk: one index probe, not a count."""
+        """Whether the project has any chunk in the current session scope:
+        one index probe, not a count. Another session's file's chunks do
+        not make the project searchable (``_session_hidden_ids``)."""
         with self._lock:
             with self._session_factory()() as session:
-                return session.execute(
+                stmt = (
                     select(self._rag_chunk_cls.chunk_id)
                     .where(self._rag_chunk_cls.project_id == project_id)
-                    .limit(1)
-                ).first() is not None
+                )
+                hidden = self._session_hidden_ids(session, project_id)
+                if hidden:
+                    stmt = stmt.where(
+                        self._rag_chunk_cls.doc_id.not_in(sorted(hidden)))
+                return session.execute(stmt.limit(1)).first() is not None
 
-    def count_by_doc(self, project_id: str) -> Dict[str, int]:
+    def count_by_doc(
+        self, project_id: str, *, all_sessions: bool = False,
+    ) -> Dict[str, int]:
         """Return a ``{doc_id: chunk_count}`` map for ``project_id``.
 
         Uses the ``idx_chunks_doc`` index; one small GROUP BY regardless of
         corpus size. This is the source of truth for per-document chunk
         counts, including chunks written by ``/v1/admin/corpus/bulk-insert``
         (which bypasses the legacy ``doc_index`` JSON blob).
+
+        Chat-session files out of the current session scope are left out
+        (``_session_hidden_ids``, the rule every search leg applies), so a
+        project-wide count never counts another session's file.
+        ``all_sessions`` is for maintenance that must see every row
+        (reconcile, ingest bookkeeping, the admin write check).
         """
         with self._lock:
             with self._session_factory()() as session:
@@ -1732,7 +1760,11 @@ class VectorStore:
                     .where(self._rag_chunk_cls.project_id == project_id)
                     .group_by(self._rag_chunk_cls.doc_id)
                 )
-                return {row[0]: int(row[1]) for row in session.execute(stmt).all()}
+                counts = {row[0]: int(row[1]) for row in session.execute(stmt).all()}
+                if all_sessions or not counts:
+                    return counts
+                hidden = self._session_hidden_ids(session, project_id)
+                return {d: n for d, n in counts.items() if str(d) not in hidden}
 
     def doc_chunk_texts(
         self, project_id: str, doc_ids: List[str]
@@ -2729,9 +2761,11 @@ class VectorStore:
         ``text_search`` tsvector on PostgreSQL, ``chunks_fts`` on SQLite),
         so "the index contains this word" means what a lexical re-query
         could find. A term the index cannot match (a stopword, punctuation
-        only) counts 0. Counts are cached per project for
-        ``_TERM_COUNT_TTL_S``. Backend errors propagate: the caller decides
-        what an unreadable index means.
+        only) counts 0. Chat-session files out of the turn's session scope
+        are not counted, as the other search legs do not read them. Counts
+        are cached per project AND session scope for ``_TERM_COUNT_TTL_S``,
+        so one session's counts are never served to another. Backend errors
+        propagate: the caller decides what an unreadable index means.
         """
         import time as _time
 
@@ -2740,28 +2774,34 @@ class VectorStore:
         cache = getattr(self, "_term_count_cache", None)
         if cache is None:
             cache = self._term_count_cache = {}
-        stamp, counts = cache.get(project_id, (now, {}))
+        cache_key = (project_id, _projects_scope_key())
+        stamp, counts = cache.get(cache_key, (now, {}))
         if now - stamp >= self._TERM_COUNT_TTL_S:
             stamp, counts = now, {}
         todo = [t for t in wanted if t not in counts]
         if todo:
             with self._lock:
                 with self._session_factory()() as session:
-                    vis = (
-                        self._hidden_doc_sql("c")
-                        if self._docs_visibility_ready(session) else ""
-                    )
+                    vis = ""
+                    params: Dict[str, Any] = {}
+                    if self._docs_visibility_ready(session):
+                        vis = self._hidden_doc_sql("c")
+                        vis += self._session_hidden_sql(
+                            session, project_id, "c.doc_id", params,
+                        )
                     for term in todo:
                         counts[term] = self._term_chunk_count(
-                            session, project_id, term, vis,
+                            session, project_id, term, vis, params,
                         )
-            cache[project_id] = (stamp, counts)
+            cache[cache_key] = (stamp, counts)
         return {t: counts[t] for t in wanted}
 
     def _term_chunk_count(
         self, session: Session, project_id: str, term: str, vis: str,
+        params: Optional[Dict[str, Any]] = None,
     ) -> int:
         table = self._table_name
+        params = dict(params or {})
         if self._use_pgvector:
             sql = (
                 f"SELECT count(*) FROM {table} c "
@@ -2769,7 +2809,7 @@ class VectorStore:
                 "AND c.text_search @@ plainto_tsquery('english', :q)" + vis
             )
             return int(session.execute(
-                text(sql), {"project_id": project_id, "q": term},
+                text(sql), {**params, "project_id": project_id, "q": term},
             ).scalar() or 0)
         tokens = _FTS5_SAFE_RE.sub(" ", term).split()
         if not tokens:
@@ -2782,7 +2822,7 @@ class VectorStore:
         )
         phrase = '"' + " ".join(tokens) + '"'
         return int(session.execute(
-            text(sql), {"project_id": project_id, "q": phrase},
+            text(sql), {**params, "project_id": project_id, "q": phrase},
         ).scalar() or 0)
 
     def _bm25_sqlite(

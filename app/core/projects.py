@@ -2271,7 +2271,8 @@ def backfill_chunk_counts_from_table(
         by_project.setdefault(doc.project_id, []).append(doc)
 
     for pid, group in by_project.items():
-        counts = store.count_by_doc(pid)
+        # Maintenance: every row's ledger, session files included.
+        counts = store.count_by_doc(pid, all_sessions=True)
         for doc in group:
             real = int(counts.get(doc.id, 0) or 0)
             if real > 0 and int(doc.chunk_count or 0) != real:
@@ -2404,11 +2405,16 @@ def documents_matching_filename_terms(
         or_(name_l.like(f"%{tok}%"), path_l.like(f"%{tok}%"))
         for tok in cleaned
     ]
+    scope = current_session_scope()
     stmt = (
-        select(Document.id, Document.original_name, Document.file_path)
+        select(Document.id, Document.original_name, Document.file_path,
+               Document.metadata_)
         .where(Document.project_id == source_id)
         .where(and_(*term_clauses) if require_all else or_(*term_clauses))
         .where(Document.retrieval_visible.is_(True))
+        # A chat session's file is that session's, not the project's
+        # (``document_in_scope``): the same clause as ``list_documents``.
+        .where(_in_scope_clause(scope))
     )
     if require_all:
         min_terms = len(cleaned)
@@ -2429,6 +2435,8 @@ def documents_matching_filename_terms(
 
     scored: List[Tuple[int, Dict[str, str]]] = []
     for row in rows:
+        if not document_in_scope(row.metadata_, scope):
+            continue
         blob = f"{row.original_name or ''} {row.file_path or ''}".lower()
         hits = sum(1 for tok in cleaned if tok in blob)
         if hits < min_terms:
@@ -2480,14 +2488,19 @@ def documents_matching_title_phrase(
     # expression is the one the trigram index (Alembic 0022) is on.
     path_l = func.lower(Document.file_path)
     needle = f"%{cleaned}%"
+    scope = current_session_scope()
     stmt = (
-        select(Document.id, Document.original_name, Document.file_path)
+        select(Document.id, Document.original_name, Document.file_path,
+               Document.metadata_)
         .where(Document.project_id == source_id)
         .where(or_(name_l.like(needle), path_l.like(needle)))
         # Its sibling documents_matching_filename_terms has always skipped
         # retired files. This one did not, and at limit=8 a retired copy can
         # also crowd the live file out of the list.
         .where(Document.retrieval_visible.is_(True))
+        # A chat session's file is that session's, not the project's
+        # (``document_in_scope``): the same clause as ``list_documents``.
+        .where(_in_scope_clause(scope))
         .limit(max(1, int(limit or 8)))
     )
     try:
@@ -2507,6 +2520,7 @@ def documents_matching_title_phrase(
             "file_path": row.file_path or "",
         }
         for row in rows
+        if document_in_scope(row.metadata_, scope)
     ]
 
 
@@ -2668,20 +2682,24 @@ def list_document_names(project_id: str) -> List[Dict[str, Any]]:
 
     For callers that match names (which file did the user mean?): one narrow
     query, no per-document file check -- unlike ``list_documents``, which
-    stats every stored file.
+    stats every stored file. A chat session's file out of the current scope
+    is not a name the user can mean here (``document_in_scope``).
     """
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
+    scope = current_session_scope()
     with SessionLocal() as session:
         rows = session.execute(
             select(Document.id, Document.original_name, Document.doc_type,
                    Document.file_path, Document.metadata_)
             .where(Document.project_id == source_id)
+            .where(_in_scope_clause(scope))
             .order_by(Document.uploaded_at)
         ).all()
     return [{"id": r.id, "original_name": r.original_name, "doc_type": r.doc_type,
              "file_path": r.file_path} for r in rows
-            if not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
+            if document_in_scope(r.metadata_, scope)
+            and not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
 
 
 def list_session_documents(
@@ -2986,13 +3004,16 @@ def compute_readiness(project_id: str) -> Dict[str, Any]:
     # Readiness only needs each doc's role — NOT the full serialized rows.
     # Loading all documents here (via list_documents) meant get_project paid the
     # full doc-load TWICE (~8s on the 2713-doc master corpus). Select just the
-    # doc_role column instead.
+    # doc_role column instead. A chat session's file out of the current scope
+    # is not the project's baseline or report (``document_in_scope``).
+    scope = current_session_scope()
     with SessionLocal() as session:
-        roles = list(
-            session.scalars(
-                select(Document.doc_role).where(Document.project_id == source_id)
-            ).all()
-        )
+        rows = session.execute(
+            select(Document.doc_role, Document.metadata_)
+            .where(Document.project_id == source_id)
+            .where(_in_scope_clause(scope))
+        ).all()
+        roles = [r.doc_role for r in rows if document_in_scope(r.metadata_, scope)]
         project = session.get(Project, source_id)
     aconex = bool(project.aconex_connected) if project else False
 
