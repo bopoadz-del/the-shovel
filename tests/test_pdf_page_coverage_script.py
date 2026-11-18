@@ -430,6 +430,35 @@ def test_stored_by_range_is_bounded_and_sums_to_total(n_pages):
     assert sum(r["pages_with_chunk"] for r in cov["by_range"]) == n_pages
 
 
+@pytest.mark.parametrize("gaps, page, named", [
+    # a gap far past the first 40 document-wide runs is still named by its range row
+    (set(range(2, 600, 4)), 302, True),
+    # the same page carrying a chunk is not named
+    (set(range(2, 600, 4)) - {302}, 302, False),
+])
+def test_each_range_row_names_its_own_pages_without_a_chunk(gaps, page, named):
+    mod = _load()
+    rows = [(p, 1, 10) for p in range(1, 591) if p not in gaps]
+    cov = mod.stored_page_coverage(rows, 590)
+    assert len(cov["pages_without_chunk_runs"]) > 40
+    row = next(r for r in cov["by_range"] if r["pages"][0] <= page <= r["pages"][1])
+    assert ((page, page) in row["pages_without_chunk_runs"]) is named
+    line = next(x for x in mod.render_stored(cov)
+                if x.startswith(f"   {row['pages'][0]}-{row['pages'][1]} |"))
+    assert (str(page) in line.split(" | ")[-1].split(", ")) is named
+    assert sum(len(list(range(a, b + 1)))
+               for r in cov["by_range"] for a, b in r["pages_without_chunk_runs"]
+               ) == cov["pages_without_chunk"]
+
+
+@pytest.mark.parametrize("n_runs, shown, more", [(3, 3, ""), (20, 12, " (+8 more runs)")])
+def test_range_row_runs_are_bounded(n_runs, shown, more):
+    mod = _load()
+    text = mod._render_runs([(p, p) for p in range(1, 2 * n_runs, 2)], mod._MAX_RUNS_PER_RANGE)
+    assert text.endswith(more)
+    assert len(text.removesuffix(more).split(", ")) == shown
+
+
 @pytest.mark.parametrize("namespace, table", [("v2", "chunks_v2"), ("x9", "chunks_x9")])
 def test_stored_sql_is_a_select_on_the_namespaced_table_with_a_bound_id(monkeypatch, namespace, table):
     mod = _load()
