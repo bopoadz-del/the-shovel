@@ -415,14 +415,12 @@ def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, ask
     from a sentence that does not name all of them is about something else
     that merely shares words (another element, section or revision)."""
     anchors = [c for c in kept if _states_answer(c, sent, typed, kind)]
-    if not anchors:
-        return []
     # The thing is named by the anchor that names the most asked words: a
     # second, loosely worded passage stating the same value never shrinks the
     # thing to a word other things share. A word that only names the value's
     # own kind ("date" for a date) is said by the value itself.
     named = [(len(asked & c.sent_terms), c) for c in anchors]
-    best = max(n for n, _c in named)
+    best = max((n for n, _c in named), default=0)
     thing = set(asked) - _KIND_TERMS
     for n, c in named:
         if n == best:

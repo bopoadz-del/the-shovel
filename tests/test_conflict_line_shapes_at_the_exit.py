@@ -214,3 +214,42 @@ def test_detect_names_the_thing_both_documents_share(question, docs, answer, val
     found = detect(answer, rows, question)
     assert len(found) == 1
     assert set(found[0]["thing"]) == {_stem(w) for w in thing}
+
+
+# ── a line that cannot name a document in words is not emitted ─────────────
+
+@pytest.mark.parametrize("unnamed", ["4471.pdf", "22-0913.xlsx"])
+def test_a_conflict_whose_document_has_no_name_in_words_is_not_stated(unnamed):
+    from app.agents import answer_contract
+
+    rows = [{"doc_name": unnamed, "snippet": "Minimum cover to pile cap reinforcement is 75 mm."},
+            {"doc_name": "Pile Cap Method Statement.pdf",
+             "snippet": "Spacers give a cover to pile cap reinforcement of 50 mm."}]
+    out = answer_contract.apply("The cover to the pile cap reinforcement is 50 mm.", sources=rows,
+                                question="What cover is required to the pile cap reinforcement?")
+    assert out.conflicts == []
+    assert "differ" not in out.text
+
+
+# ── the replacement keeps the answer's other paragraphs as written ──────────
+
+@pytest.mark.parametrize("question, docs, answer, values, names", _AGREE_HEADLINE)
+def test_replacement_keeps_other_paragraphs(question, docs, answer, values, names):
+    out = _run(question, docs, answer + "\n\nLaps are forty bar diameters.", cited=1)
+    assert out["content"].endswith("\n\nLaps are forty bar diameters.")
+
+
+# ── a thing named only by the value's kind word is no thing ─────────────────
+
+@pytest.mark.parametrize("question, answer, rows", [
+    ("What is the date?", "The date is 30 June 2027.",
+     [{"doc_name": "Larch Contract Data.pdf", "snippet": "Completion date: 30 June 2027."},
+      {"doc_name": "Larch Handover Plan.pdf", "snippet": "Handover date: 14 July 2027."}]),
+    ("Which grade?", "It is grade C40.",
+     [{"doc_name": "Larch Column Notes.pdf", "snippet": "Columns are grade C40 throughout."},
+      {"doc_name": "Larch Blinding Notes.pdf", "snippet": "Blinding is grade C15 throughout."}]),
+])
+def test_a_thing_named_only_by_the_kind_word_is_no_conflict(question, answer, rows):
+    from app.agents.evidence_conflicts import detect
+
+    assert detect(answer, rows, question) == []

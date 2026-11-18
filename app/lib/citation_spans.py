@@ -29,29 +29,23 @@ MARKER_RE = re.compile(r"(?<=[^\d\s,.])\s(\d{1,2})(?=[.;]?(?:\n|$)|[.;]\s)")
 # A bracketed numbered marker the answer contract writes (``[3]``, ``[2][4]``).
 BRACKET_MARKER_RE = re.compile(r"\[\d{1,3}\]")
 
-
-def _blank(m: re.Match[str]) -> str:
-    return " " * len(m.group(0))
+#: A matched span as spaces of the same length (positions stay aligned).
+_SPACES = lambda m: " " * len(m.group(0))
 
 
 def blank_named(text: str) -> str:
     """Blank the named and keyed citation spans."""
-    return KEYED_CITE_RE.sub(_blank, NAMED_CITE_RE.sub(_blank, text or ""))
+    return KEYED_CITE_RE.sub(_SPACES, NAMED_CITE_RE.sub(_SPACES, text or ""))
 
 
 def blank_markers(text: str, listed: int) -> str:
     """Blank bare numbered markers that a Sources panel of ``listed`` entries
     numbers (a marker exists only when the panel numbers it)."""
-    if listed <= 0:
-        return text
-
-    def drop(m: re.Match[str]) -> str:
-        return " " * len(m.group(0)) if 1 <= int(m.group(1)) <= listed else m.group(0)
-
-    return MARKER_RE.sub(drop, text)
+    return MARKER_RE.sub(
+        lambda m: " " * len(m.group(0)) if 1 <= int(m.group(1)) <= listed else m.group(0), text)
 
 
 def blank_citations(text: str, listed: int = 0) -> str:
     """Every citation span blanked: named and keyed citations, bracketed
     markers, and bare markers a panel of ``listed`` entries numbers."""
-    return blank_markers(BRACKET_MARKER_RE.sub(_blank, blank_named(text)), listed)
+    return blank_markers(BRACKET_MARKER_RE.sub(_SPACES, blank_named(text)), listed)

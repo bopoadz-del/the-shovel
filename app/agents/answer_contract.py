@@ -222,8 +222,6 @@ def _drop_single_value(body: str, found: list[dict[str, Any]]) -> str:
     rules = []
     for c in found:
         kind = c.get("kind")
-        if not kind or kind == "text":
-            continue
         classes: list[Any] = []
         for v in c["values"]:
             got = [x for x in extract(str(v["value"])) if x.kind == kind]
@@ -231,8 +229,6 @@ def _drop_single_value(body: str, found: list[dict[str, Any]]) -> str:
                 classes.append(got[0])
         if len(classes) >= 2:
             rules.append((kind, classes, set(c.get("thing") or [])))
-    if not rules:
-        return body
     out: list[str] = []
     for line in body.split("\n"):
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
