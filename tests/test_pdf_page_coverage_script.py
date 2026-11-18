@@ -575,3 +575,86 @@ def test_unreadable_budgets_are_named_by_class_and_the_run_goes_on(monkeypatch, 
     out = capsys.readouterr().out
     assert ("budgets: unreadable (OSError)" in out) is broken
     assert "Client Alpha" not in out and "done: ids=1 failed=1" in out
+
+
+# --- pageless-chunk count by document id (one project) ------------------------
+
+def test_pageless_sql_is_one_select_bound_to_the_project():
+    sql = _load()._pageless_sql("rag_chunks_x")
+    assert sql.lstrip().upper().startswith("SELECT")
+    assert ":pr" in sql and "GROUP BY doc_id" in sql
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b", sql, re.IGNORECASE)
+
+
+@pytest.mark.parametrize("rows, n_hit, pageless, top", [
+    ([("dA", 0, 5), ("dB", 3, 9), ("dC", 7, 7)], 2, 10, [("dC", 7, 7), ("dB", 3, 9)]),
+    ([("dZ", 2, 4), ("dY", 2, 2), ("dX", None, 1)], 2, 4, [("dY", 2, 2), ("dZ", 2, 4)]),
+])
+def test_pageless_summary_counts_and_orders_by_count_then_id(rows, n_hit, pageless, top):
+    summ = _load().pageless_summary(rows)
+    assert summ["documents"] == len(rows)
+    assert summ["documents_with_pageless"] == n_hit
+    assert summ["pageless_chunks"] == pageless
+    assert summ["top"] == top
+
+
+@pytest.mark.parametrize("n, cap, listed, more", [(5, 3, 3, 2), (2, 3, 2, 0)])
+def test_pageless_listing_is_capped_and_says_how_many_more(n, cap, listed, more):
+    mod = _load()
+    summ = mod.pageless_summary([(f"d{i}", i + 1, 10) for i in range(n)], cap=cap)
+    lines = mod.render_pageless("anc", summ)
+    assert len([ln for ln in lines if re.match(r"^   d\d+ \|", ln)]) == listed
+    assert any(f"+{more} more" in ln for ln in lines) == (more > 0)
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+@pytest.mark.parametrize("flag, pageless_read", [("1", True), ("", False)])
+def test_main_pageless_mode_reads_the_anchor_project_and_prints_no_project(
+    monkeypatch, capsys, flag, pageless_read,
+):
+    mod = _load()
+    pid, seen = "proj-secret-0001", []
+    doc = ("d0c1d", pid, "client_file.pdf", 10, "/data/x/client_file.pdf",
+           "indexed", 3, 2, 0, None, None)
+
+    class _S:
+        def execute(self, stmt, params):
+            seen.append(params)
+            if "p" in params:
+                return _Rows([doc])
+            return _Rows([("d0c1d", 2, 3), ("d0c2e", 0, 4)])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    monkeypatch.setattr(mod, "report", lambda row: ["per-page report"])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "d0c1d")
+    monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", flag)
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert ({"pr": pid} in seen) == pageless_read
+    assert ("pageless_chunks=2" in out) == pageless_read
+    assert ("per-page report" in out) != pageless_read
+    assert pid not in out and "client_file" not in out
+
+
+@pytest.mark.parametrize("flag", ["1", ""])
+def test_pageless_mode_keeps_the_ids_required_guard(monkeypatch, flag):
+    mod = _load()
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "")
+    monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", flag)
+    assert mod.main() == 2
