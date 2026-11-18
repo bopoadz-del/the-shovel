@@ -1061,6 +1061,29 @@ def _leg_fields(c) -> Dict[str, Any]:
     return out
 
 
+def _public_fused(record, handed):
+    """The fused-candidate record in trace form. The stored names of the
+    documents its ``leg_docs`` list are read in one batch, only so that an
+    id equal to its document's name is printed as a digest (names are never
+    logged). A failed read treats every listed id as a name: fail closed."""
+    from app.core.rag.fusion_trace import public_view
+
+    ids = sorted({
+        e.get("doc_id")
+        for entries in ((record or {}).get("leg_docs") or {}).values()
+        for e in entries if e.get("doc_id")
+    })
+    names: Dict[str, str] = {}
+    if ids:
+        try:
+            from app.core import projects as _projects
+            names = _projects.document_names(ids)
+        except Exception:  # noqa: BLE001 -- digest every id rather than risk a name
+            _LOG.debug("leg_docs name lookup failed", exc_info=True)
+            names = {d: d for d in ids}
+    return public_view(record, handed, names)
+
+
 def _trace_chunk(rank: int, c) -> Dict[str, Any]:
     """Identity and rank of one chunk. Never its text, never its document's
     name: the document is named by ``doc_id`` alone (names never in logs;
@@ -1134,7 +1157,6 @@ def _emit_retrieval_trace(
         # too (a chunk that already has one is skipped, so nothing is read
         # twice); a failed read leaves the fields empty.
         annotate_document_kinds(retrieved)
-        from app.core.rag.fusion_trace import public_view
         from app.core.rag.retriever import retrievable_project_ids
         from app.core.rag.vector_store import (
             _MISS, _memo_get, fused_candidates_record,
@@ -1160,7 +1182,7 @@ def _emit_retrieval_trace(
             "lexical": lexical,
             "degraded": any(v != "hit" for v in lexical.values()),
             "fused_candidates": (
-                public_view(fused_candidates_record(project_id), handed)
+                _public_fused(fused_candidates_record(project_id), handed)
                 if project_id else None
             ),
             "top_score": round(float(top_score or 0.0), 6),

@@ -388,3 +388,79 @@ def test_leg_docs_never_counts_a_chunk_it_cannot_tie_to_a_document(orphan_in_ord
     for name, rank in (("vector", 2), ("lexical", 1)):
         got = [(e["doc_id"], e["best_leg_rank"], e["n_chunks"]) for e in out[name]]
         assert got == [("A", rank, 1)]
+
+
+# ── leg_docs cap and per-leg total ───────────────────────────────────────
+
+def _many_docs(n_docs: int):
+    """``n_docs`` documents, one chunk each, ranked 1..n in both legs in
+    opposite orders."""
+    order = [_D(f"c{i}", f"D{i:03d}") for i in range(1, n_docs + 1)]
+    sem = {f"c{i}": i for i in range(1, n_docs + 1)}
+    bm = {f"c{i}": n_docs + 1 - i for i in range(1, n_docs + 1)}
+    return order, sem, bm
+
+
+@pytest.mark.parametrize("n_docs", [ft.LEG_DOCS_CAP - 1, ft.LEG_DOCS_CAP,
+                                    ft.LEG_DOCS_CAP + 1, 3 * ft.LEG_DOCS_CAP])
+def test_leg_docs_is_capped_best_rank_first_and_states_the_total(n_docs):
+    order, sem, bm = _many_docs(n_docs)
+    summary = ft.leg_summary(order, sem, bm, 10)
+    listed = min(n_docs, ft.LEG_DOCS_CAP)
+    assert summary["leg_docs_total"] == {"vector": n_docs, "lexical": n_docs}
+    for name, mine in (("vector", sem), ("lexical", bm)):
+        got = [e["best_leg_rank"] for e in summary["leg_docs"][name]]
+        assert got == list(range(1, listed + 1))
+    # the vector leg keeps D001.. ; the lexical leg keeps the far end
+    assert summary["leg_docs"]["vector"][0]["doc_id"] == "D001"
+    assert summary["leg_docs"]["lexical"][0]["doc_id"] == f"D{n_docs:03d}"
+    # the total survives the public view, so a shortened list is visible
+    view = ft.public_view(summary, order)
+    assert view["leg_docs_total"] == {"vector": n_docs, "lexical": n_docs}
+    assert len(view["leg_docs"]["vector"]) == listed
+
+
+@pytest.mark.parametrize("cap, want", [(None, 5), (2, 2)])
+def test_leg_docs_cap_argument_bounds_each_leg(cap, want):
+    order, sem, bm = _many_docs(5)
+    out = ft.leg_docs(order, sem, bm, cap=cap)
+    assert [len(out["vector"]), len(out["lexical"])] == [want, want]
+
+
+# ── an id that is also its document's stored name is digested ────────────
+
+@pytest.mark.parametrize("stored_name, digested", [
+    ("A", True),           # parent-row fallback: original_name == id
+    ("spec.pdf", False),   # an uploaded document: the id is not a name
+])
+def test_leg_docs_digest_an_id_that_is_its_own_name(stored_name, digested):
+    order = [_D("a1", "A")]
+    summary = ft.leg_summary(order, {"a1": 1}, {"a1": 1}, 10)
+    view = ft.public_view(summary, order, {"A": stored_name})
+    entry = view["leg_docs"]["vector"][0]
+    if digested:
+        assert "doc_id" not in entry
+        assert entry["doc_digest"] == ft.doc_digest("A")
+        assert "A" not in json.dumps(view["leg_docs"])
+    else:
+        assert entry["doc_id"] == "A" and "doc_digest" not in entry
+    # the record itself is not changed by the view
+    assert summary["leg_docs"]["vector"][0]["doc_id"] == "A"
+
+
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_trace_name_read_failure_digests_every_listed_id(monkeypatch, read_fails):
+    from app.core import projects
+    from app.core.rag import inject
+
+    def _names(ids):
+        if read_fails:
+            raise RuntimeError("db down")
+        return {d: "upload.pdf" for d in ids}
+
+    monkeypatch.setattr(projects, "document_names", _names)
+    order = [_D("a1", "A")]
+    summary = ft.leg_summary(order, {"a1": 1}, {"a1": 1}, 10)
+    entry = inject._public_fused(summary, order)["leg_docs"]["lexical"][0]
+    assert ("doc_digest" in entry) is read_fails
+    assert ("doc_id" in entry) is (not read_fails)
