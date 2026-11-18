@@ -148,9 +148,9 @@ def leg_docs(
     its best rank in that leg and how many of the leg's chunks it holds,
     best rank first, at most ``cap`` documents per leg (``None``: all).
 
-    ``leg_top`` stops at ``LEG_TOP_TRACED``, so a document the answer needed
-    but nobody handed cannot be placed past that depth: inside a leg at rank
-    30, or in neither leg at all (recall).
+    ``leg_top`` stops at ``LEG_TOP_TRACED`` and carries no id in the public
+    trace, so a document the answer needed but nobody handed cannot be
+    placed: inside a leg at rank 30, or in neither leg at all (recall).
     This answers that from the document id the trace's ``chunks`` already
     publish. It also shows one document filling a leg's head (``n_chunks``).
     Measurement only: reading it changes no ranking."""
@@ -200,19 +200,6 @@ def _public_doc(entry: Dict[str, Any], names: Mapping[str, str]) -> Dict[str, An
     return view
 
 
-def _public_leg_top_id(entry: Dict[str, Any], names: Mapping[str, str]) -> Dict[str, Any]:
-    """The chunk id of one ``leg_top`` entry for the trace, so a chunk the
-    answer needed can be placed in a leg by id (the ``chunks`` list of the
-    same line already prints the handed ids). A chunk of a document whose id
-    IS its stored name would put a file name on the line, so that chunk id is
-    replaced by ``chunk_digest``, as ``_public_doc`` does for ``leg_docs``."""
-    cid = entry.get("chunk_id")
-    doc = entry.get("doc_id")
-    if doc is not None and names.get(doc) == doc:
-        return {"chunk_digest": doc_digest(str(cid))}
-    return {"chunk_id": cid}
-
-
 def leg_top(
     order: Iterable[Any],
     sem_rank: Mapping[str, int],
@@ -233,7 +220,6 @@ def leg_top(
         getattr(c, "chunk_id", None): len(getattr(c, "text", "") or "")
         for c in chunks
     }
-    doc_of = {getattr(c, "chunk_id", None): getattr(c, "doc_id", None) for c in chunks}
     out: Dict[str, List[Dict[str, Any]]] = {}
     for name, mine, other in (
         ("vector", sem_rank, bm_rank), ("lexical", bm_rank, sem_rank),
@@ -244,7 +230,6 @@ def leg_top(
         out[name] = [
             {
                 "chunk_id": cid,
-                "doc_id": doc_of.get(cid),
                 "leg_rank": r,
                 "other_leg_rank": other.get(cid),
                 "fused_rank": position[cid],
@@ -333,8 +318,7 @@ def public_view(
     handed: Iterable[Any],
     names: Optional[Mapping[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """The trace form: counts and ranks. Chunk ids only in ``leg_top`` (each
-    leg's own head, so a miss can be placed); ``best_*`` carry none. Adds each followed
+    """The trace form: counts and ranks, no chunk id. Adds each followed
     candidate's position in the handed set; a pooled candidate that was not
     handed is marked ``not_handed``. ``names`` (document id -> stored name)
     lets ``leg_docs`` print a digest for an id that is also a name."""
@@ -360,8 +344,7 @@ def public_view(
     out["leg_top"] = {
         name: [
             {
-                **_public_leg_top_id(e, names or {}),
-                **{k: v for k, v in e.items() if k not in ("chunk_id", "doc_id")},
+                **{k: v for k, v in e.items() if k != "chunk_id"},
                 "handed_position": (
                     handed_ids.index(e.get("chunk_id")) + 1
                     if e.get("chunk_id") in handed_ids else None

@@ -1062,21 +1062,26 @@ def _leg_fields(c) -> Dict[str, Any]:
     return out
 
 
-def _public_fused(record, handed):
+def _public_fused(record, handed, *, read_names: bool = True):
     """The fused-candidate record in trace form. The stored names of the
-    documents its ``leg_docs`` and ``leg_top`` list are read in one batch,
-    only so that an id equal to its document's name is printed as a digest
-    (names are never logged). A failed read treats every listed id as a name: fail closed."""
+    documents its ``leg_docs`` list are read in one batch, only so that an
+    id equal to its document's name is printed as a digest (names are never
+    logged). A failed read treats every listed id as a name: fail closed.
+
+    ``read_names=False`` (the tool search path, which adds no database read):
+    no lookup is made and every listed id is treated as a name, the same
+    fail-closed form, so ``leg_docs`` prints digests only."""
     from app.core.rag.fusion_trace import public_view
 
     ids = sorted({
         e.get("doc_id")
-        for key in ("leg_docs", "leg_top")
-        for entries in ((record or {}).get(key) or {}).values()
+        for entries in ((record or {}).get("leg_docs") or {}).values()
         for e in entries if e.get("doc_id")
     })
     names: Dict[str, str] = {}
-    if ids:
+    if ids and not read_names:
+        names = {d: d for d in ids}
+    elif ids:
         try:
             from app.core import projects as _projects
             names = _projects.document_names(ids)
@@ -1235,13 +1240,14 @@ def emit_search_trace(
 
     ``trace`` is what ``doc_index._search_trace`` built: ``retrieved_k``,
     ``chunks`` (handed, with ``result_rank``) and ``not_handed`` (dropped by
-    the per-document collapse, with the reason), and, where the search ran,
-    its fused-candidate record (``fused``) and lexical-leg states
-    (``lexical``). Those two are written in the pre_injection line's shape
-    (``fused_candidates``, ``lexical``, ``degraded``), so a search the model
-    ran itself can be placed leg by leg like the turn's own retrieval. The
-    query is written as a label, never its words. Best-effort, like the
-    retriever's line."""
+    the per-document collapse, with the reason), and, where the search ran
+    in a turn, its own fused-candidate record (``fused``) and lexical-leg
+    states (``lexical``). Those are written as the pre_injection line writes
+    them (``fused_candidates`` through the same ``public_view``: ranks,
+    handed positions and ``leg_chunk_digests``, no chunk id; ``lexical``;
+    ``degraded``), with no database read: every ``leg_docs`` id is digested.
+    The query is written as a label, never its words. Best-effort, like the
+    retriever's line: a failure here never touches the search's results."""
     if not retrieval_trace_enabled():
         return
     try:
@@ -1264,7 +1270,8 @@ def emit_search_trace(
             "handed_docs": len({e.get("doc_id") for e in handed}),
             "lexical": lexical,
             "degraded": any(v != "hit" for v in lexical.values()),
-            "fused_candidates": _public_fused(trace.get("fused"), handed_refs),
+            "fused_candidates": _public_fused(
+                trace.get("fused"), handed_refs, read_names=False),
             "top_score": max((e.get("score") or 0.0 for e in handed), default=0.0),
             "chunks": handed,
             "not_handed": list(trace.get("not_handed") or []),

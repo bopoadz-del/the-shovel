@@ -239,16 +239,8 @@ def test_a_search_with_nothing_found_returns_an_empty_trace(corpus, query, empty
         corpus["chunks"] = []
     rows, trace = doc_index._search_project_documents_traced("p-test", query, 5)
     assert rows == []
-    base = {k: trace[k] for k in ("retrieved_k", "chunks", "not_handed")}
-    assert base == {"retrieved_k": 0, "chunks": [], "not_handed": []}
-    assert doc_index._empty_search_trace() == base
-    if empty_chunks:
-        # The retrieval ran: its leg record rides along (outside a turn memo
-        # nothing was kept, and the trace says so).
-        assert trace["fused"] is None and trace["lexical"] == {}
-    else:
-        # A blank query never reaches retrieval.
-        assert trace == base
+    assert trace == {"retrieved_k": 0, "chunks": [], "not_handed": []}
+    assert doc_index._empty_search_trace() == trace
 
 
 @pytest.mark.parametrize("query, rows_expected", [

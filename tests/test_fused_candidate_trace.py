@@ -248,10 +248,7 @@ def test_pre_injection_line_carries_fused_candidates(
     assert fc["n_lexical_only"] == 1
     assert fc["best_lexical_only"]["fused_rank"] == n_both + 1
     assert fc["best_lexical_only"]["handed_position"] is None
-    # Chunk ids only in each leg's own head (leg_top), never in best_*.
-    assert "chunk_id" not in json.dumps(
-        {k: v for k, v in fc.items() if k != "leg_top"})
-    assert fc["leg_top"]["lexical"][0]["chunk_id"] == "x"
+    assert "chunk_id" not in json.dumps(fc)
 
 
 @pytest.mark.parametrize("handed", [[], [_C("b1")]])
@@ -312,15 +309,13 @@ def test_leg_top_lists_each_legs_own_ranks(sem, bm, depth, want_vec, want_lex):
 
 
 @pytest.mark.parametrize("handed_n", [1, 2])
-def test_leg_top_public_view_states_pool_handed_and_ids(handed_n):
+def test_leg_top_public_view_states_pool_and_handed_without_ids(handed_n):
     order = [_T("b1", "aaaa"), _T("lx", "bb"), _T("v9", "c")]
     summary = ft.leg_summary(order, {"b1": 1, "v9": 2}, {"b1": 2, "lx": 1}, 10)
     rec = ft.Follow(summary).finish(order, order, order[:2])
     view = ft.public_view(rec, order[:handed_n])
     lex = view["leg_top"]["lexical"]
-    # Each leg's head names its chunks, so a miss can be placed by id.
-    assert [e["chunk_id"] for e in lex] == ["lx", "b1"]
-    assert [e["chunk_id"] for e in view["leg_top"]["vector"]] == ["b1", "v9"]
+    assert all("chunk_id" not in e for es in view["leg_top"].values() for e in es)
     assert [e["leg_rank"] for e in lex] == [1, 2]
     assert [e["pool_position"] for e in lex] == [2, 1]
     assert [e["handed_position"] for e in lex] == [2 if handed_n == 2 else None, 1]
