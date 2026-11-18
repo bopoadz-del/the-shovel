@@ -241,7 +241,7 @@ async def test_search_tool_calls_doc_index(monkeypatch):
     captured = {}
     operator = "Per the project specification, what compaction is required?"
 
-    async def fake_search(project_id, query, top_k=5, *, trace_path=None, turn=None):
+    async def fake_search(project_id, query, top_k=5, *, trace_path=None, turn=None, conversation_id=None):
         captured["turn"] = turn
         captured["project_id"] = project_id
         captured["query"] = query
