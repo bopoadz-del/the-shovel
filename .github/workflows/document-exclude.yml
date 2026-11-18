@@ -116,7 +116,7 @@ jobs:
           {
             echo "### Plan (execute=false)"
             python3 scripts/ops_public_view.py exclude-plan plan.json
-            echo "- expected_plan_hash (operator): ${EXPECTED}"
+            echo "- expected_plan_hash (operator): $(python3 scripts/ops_public_view.py hash "$EXPECTED")"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           echo "PLANNED=$(jq -r '.plan.plan_hash' plan.json)" >> "$GITHUB_ENV"
 
@@ -129,8 +129,11 @@ jobs:
           [ -n "$REASON" ] || { echo "::error::reason is required with execute=true"; exit 1; }
           printf '%s' "$REASON" | grep -Eq '^[a-z0-9_-]{1,64}$' || { echo "::error::reason must be a code (a-z 0-9 _ -, at most 64); no write was made"; exit 1; }
           if [ "$PLANNED" != "$EXPECTED" ]; then
-            echo "::error::live plan_hash=${PLANNED} != expected_plan_hash=${EXPECTED}; no write was made"
-            echo "**REFUSED:** plan ${PLANNED} != expected ${EXPECTED}; nothing written." >> "$GITHUB_STEP_SUMMARY"
+            # Each hash prints only if it has a hash's shape, else its length.
+            live=$(python3 scripts/ops_public_view.py hash "$PLANNED")
+            want=$(python3 scripts/ops_public_view.py hash "$EXPECTED")
+            echo "::error::live plan_hash=${live} != expected_plan_hash=${want}; no write was made"
+            echo "**REFUSED:** plan ${live} != expected ${want}; nothing written." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
