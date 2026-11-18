@@ -776,3 +776,17 @@ def test_a_long_plain_ascii_piece_is_plain_not_a_dns_label(value):
     """Plain ASCII is not held to DNS label rules: a piece longer than a
     label (63) is still a plain word, not an unclassifiable name."""
     assert _offenders({**_CLEAN_ONPREM, "GRANARY_SETTING": value}) == [], "stage=fail-closed"
+
+
+@pytest.mark.parametrize("bare_numbers_are_hosts", [False, True])
+def test_an_empty_token_dials_no_host(bare_numbers_are_hosts):
+    """An empty token (what the separator split leaves at a value's edges)
+    names no host, whether or not bare numbers count as hosts."""
+    assert dp._token_host("", bare_numbers_are_hosts) is None, "stage=endpoint"
+
+
+@pytest.mark.parametrize("value", [" , ; ", "\t|  =  |\n"])
+def test_a_separator_only_value_dials_no_host(value):
+    """A value made only of separators splits into empty tokens and dials nothing."""
+    assert dp._dialled_hosts(value) == [], "stage=endpoint"
+    assert dp._dialled_hosts(value, bare_numbers_are_hosts=True) == [], "stage=endpoint"
