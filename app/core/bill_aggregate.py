@@ -110,7 +110,78 @@ def read_sheet_rows(xlsx_path: str) -> list[SheetRow]:
     from app.core import file_crypto
 
     with file_crypto.open_plaintext(xlsx_path) as readable:
-        return _read_workbook_rows(readable)
+        return carry_open_heading(_read_workbook_rows(readable))
+
+
+_REF_NUMBER_RE = re.compile(r"^(.*?)(\d+)\s*$")
+
+
+def _ref_number(ref: str) -> tuple[str, int] | None:
+    m = _REF_NUMBER_RE.match((ref or "").strip())
+    return (m.group(1).strip().casefold(), int(m.group(2))) if m else None
+
+
+def _continues(path: tuple[str, ...], open_path: tuple[str, ...]) -> bool:
+    """``path`` is the heading open at the page break, re-printed at the head
+    of the next page: equal to it down to its own last level, and that last
+    label holds every word of the open level it stands at. That is the open
+    path cut short by a repeated outer heading (``(Bill 3,)`` under
+    ``(Bill 3, Manholes)``) or its innermost label re-printed with more words
+    (a 'continued' line). Only the word boxes' text is compared; no word of
+    any bill is named."""
+    n = len(path)
+    if not path or path == open_path or n > len(open_path) or path[:-1] != open_path[:n - 1]:
+        return False
+    return _words(open_path[n - 1]) <= _words(path[-1])
+
+
+def carry_open_heading(rows: Sequence[SheetRow]) -> list[SheetRow]:
+    """Rows in print order, the rows a page break moved under another heading
+    put back under the heading that was open when the page broke.
+
+    The derived sheet groups rows by heading path, and the extractor's path
+    carries over a page break; a label re-printed at the head of the next page
+    (the bill's running heading, or the section's 'continued' line) changes
+    the path of the rows that follow it, so the rest of the section lands in
+    another sheet. Here the rows are put back in print order (page, then the
+    order the sheets were first printed), and the FIRST block of a page (rows
+    of one sheet on that page) takes the path open at the end of the previous
+    page when its own path continues it (:func:`_continues`) and the item
+    numbers do not say otherwise (the block's first reference, when it and
+    the open section's last one share a prefix, must be the next number).
+    Only reading changes: the stored sheet is not touched.
+    """
+    blocks: list[tuple[int, int, list[SheetRow]]] = []
+    sheet = -1
+    prev_path: tuple[str, ...] | None = None
+    for row in rows:
+        if row.path != prev_path:
+            sheet, prev_path = sheet + 1, row.path
+        page = row.pages[0] if row.pages else -1
+        if blocks and blocks[-1][1] == sheet and (blocks[-1][2][-1].pages[:1] or [-1])[0] == page:
+            blocks[-1][2].append(row)
+        else:
+            blocks.append((page, sheet, [row]))
+    if any(page < 0 for page, _, _ in blocks):
+        # A row with no page: print order cannot be rebuilt; read as stored.
+        return [SheetRow(**{**r.__dict__, "pages": list(r.pages)}) for r in rows]
+    blocks.sort(key=lambda b: (b[0], b[1]))
+    out: list[SheetRow] = []
+    open_path: tuple[str, ...] | None = None
+    open_ref: str = ""
+    last_page = -1
+    for page, _, block in blocks:
+        path = block[0].path
+        if open_path is not None and page == last_page + 1 and _continues(path, open_path):
+            first = next((r.ref for r in block if r.ref), "")
+            a, b = _ref_number(open_ref), _ref_number(first)
+            if not (a and b and a[0] == b[0] and b[1] != a[1] + 1):
+                path = open_path
+        out.extend(SheetRow(**{**r.__dict__, "path": path, "pages": list(r.pages)}) for r in block)
+        last_page = page
+        open_path = path
+        open_ref = next((r.ref for r in reversed(block) if r.ref), open_ref)
+    return out
 
 
 def _read_workbook_rows(xlsx_path: str) -> list[SheetRow]:
@@ -454,8 +525,10 @@ def aggregate(
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
-    want, where = _terms(terms), _terms(section)
-    asked = [s for text in sizes for s in sizes_in(text)]
+    # A size in the call's own terms is matched as a size too, never as words.
+    texts = [terms] if isinstance(terms, str) else list(terms or [])
+    want, where = _terms([_without_sizes(t) for t in texts]), _terms(section)
+    asked = [s for text in [*sizes, *texts] for s in sizes_in(text)]
     if not want and not where and not asked:
         raise ValueError("give description terms or a section to match")
     items = join_page_continuations(rows)
