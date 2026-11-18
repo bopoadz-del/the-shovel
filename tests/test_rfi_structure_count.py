@@ -298,18 +298,27 @@ def test_letter_case(label, case):
     assert m.letter_case(label) == case
 
 
-def test_skeleton_line_start_heading_is_seen_by_the_rule():
-    cells = m.heading_skeleton([(0, "Question: which grade?\nplain prose line here")], PATS)
+@pytest.mark.parametrize("chunks,expected", [
+    ([(0, "Question: which grade?\nplain prose line here")],
+     [(0, 0, 0, "question", True, "colon", True)]),
+    ([(4, "intro prose line here\nReply:")],
+     [(4, 1, 0, "answer", True, "colon", False)]),
+])
+def test_skeleton_line_start_heading_is_seen_by_the_rule(chunks, expected):
+    cells = m.heading_skeleton(chunks, PATS)
     assert [(c["chunk"], c["line"], c["cell"], c["role"], c["rule"], c["end"], c["value"])
-            for c in cells] == [(0, 0, 0, "question", True, "colon", True)]
+            for c in cells] == expected
 
 
-def test_skeleton_table_cell_heading_is_not_seen_by_the_rule():
-    # The same label in the second cell of a table row: the line-start rule
-    # misses it, the skeleton records it with rule=no.
-    cells = m.heading_skeleton([(3, "Ref: 12 | Response: see sheet")], PATS)
-    roles = [(c["cell"], c["role"], c["rule"]) for c in cells]
-    assert roles == [(0, "references", True), (1, "answer", False)]
+@pytest.mark.parametrize("body,expected", [
+    # A label in the second cell of a table row: the line-start rule misses
+    # it, the skeleton records it with rule=no.
+    ("Ref: 12 | Response: see sheet", [(0, "references", True), (1, "answer", False)]),
+    ("Raised by: site\tQuery: grade", [(0, "-", False), (1, "question", False)]),
+])
+def test_skeleton_table_cell_heading_is_not_seen_by_the_rule(body, expected):
+    cells = m.heading_skeleton([(3, body)], PATS)
+    assert [(c["cell"], c["role"], c["rule"]) for c in cells] == expected
 
 
 @pytest.mark.parametrize("body,count", [
@@ -322,11 +331,19 @@ def test_skeleton_heading_like_cells(body, count):
     assert len(m.heading_skeleton([(0, body)], PATS)) == count
 
 
-def test_skeleton_reads_chunks_in_index_order_and_caps():
-    cells = m.heading_skeleton([(2, "Reply: b"), (1, "Query: a")], PATS)
-    assert [(c["chunk"], c["role"]) for c in cells] == [(1, "question"), (2, "answer")]
-    many = "\n".join(f"Item {i}: x" for i in range(10))
-    assert len(m.heading_skeleton([(0, many)], PATS, cap=4)) == 4
+@pytest.mark.parametrize("chunks,expected", [
+    ([(2, "Reply: b"), (1, "Query: a")], [(1, "question"), (2, "answer")]),
+    ([(1, "Query: a"), (0, "Ref: c")], [(0, "references"), (1, "question")]),
+])
+def test_skeleton_reads_chunks_in_index_order(chunks, expected):
+    cells = m.heading_skeleton(chunks, PATS)
+    assert [(c["chunk"], c["role"]) for c in cells] == expected
+
+
+@pytest.mark.parametrize("n,cap,expected", [(10, 4, 4), (3, 4, 3)])
+def test_skeleton_caps_the_cells(n, cap, expected):
+    many = "\n".join(f"Item {i}: x" for i in range(n))
+    assert len(m.heading_skeleton([(0, many)], PATS, cap=cap)) == expected
 
 
 def test_skeleton_and_render_carry_no_words():
