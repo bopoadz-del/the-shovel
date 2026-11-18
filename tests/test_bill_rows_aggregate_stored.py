@@ -148,7 +148,7 @@ async def test_the_tool_answers_through_the_agent_when_a_sheet_is_unreadable(
     _project(monkeypatch, [bad, good] if bad_first else [good, bad])
 
     out = await runtime._run_tool_call(_tool_call({"terms": "pipe", "measure": "amount"}),
-                                       project_id="p", user_message="total cost of pipe")
+                                       project_id="p")
 
     assert out["ok"] is True
     sums = {b["document_id"]: b.get("sum") for b in out["result"]["bills"]}
@@ -169,8 +169,7 @@ async def test_count_and_sum_over_a_stored_sheet_answers_inside_the_budget(
     _project(monkeypatch, [_derived("big", path)])
 
     started = time.perf_counter()
-    out = await runtime._run_tool_call(_tool_call({"terms": terms}), project_id="p",
-                                       user_message=f"total quantity of {terms}")
+    out = await runtime._run_tool_call(_tool_call({"terms": terms}), project_id="p")
     elapsed = time.perf_counter() - started
 
     bill = out["result"]["bills"][0]
