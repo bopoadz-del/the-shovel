@@ -3,8 +3,10 @@
 A turn may call one computed tool several times. The answer LEADS with a
 result; a result identical to one already shown is one result; a call with no
 figure is mentioned only when no result of the same tool answered the same
-part of the question (same tool, its argument words contained in the
-result's), and then at the end in one plain line; with no result at all the
+part of the question (same tool, the SAME selection of words, or a
+statement of the result that names exactly that selection; a narrower or a
+broader selection is a different part, and an empty one is never answered),
+and then at the end in one plain line; with no result at all the
 no-figure calls are the answer. Every bill here is invented; two inputs per
 decision; through the real recovery (``_recover_answer_from_tool_messages``
 and ``_postprocess_answer``).
@@ -18,19 +20,21 @@ import pytest
 from app.agents import runtime
 from app.agents.core import computed_answer
 from app.agents.core.computed_answer import LABELS, Call, covers, selection
+from app.agents.core.tool_registry import Statement
 
 EN = LABELS["en"]
 TOOL = "bill_rows_aggregate"
 
 
-def _bill(filename: str, terms: list[str], unit: str, rows: list[tuple[str, int, float]]) -> dict:
+def _bill(filename: str, terms: list[str], unit: str, rows: list[tuple[str, int, float]],
+          section_terms: tuple[str, ...] = ()) -> dict:
     entries = [{"ref": ref, "pages": [page], "section": ["Invented section"],
                 "description": " ".join(terms) + f" item {ref}", "unit": unit,
                 "quantity": qty} for ref, page, qty in rows]
     total = sum(q for _r, _p, q in rows)
     return {"status": "success", "bills": [{
         "document_id": f"doc-{filename}", "filename": filename, "derived_from": None,
-        "status": "success", "measure": "quantity", "terms": terms, "section_terms": [],
+        "status": "success", "measure": "quantity", "terms": terms, "section_terms": list(section_terms),
         "rows_scanned": 40, "count": len(rows), "sum": total, "unit": unit,
         "sum_by_unit": {unit: total}, "without_figure": [], "rows": entries}]}
 
@@ -39,9 +43,9 @@ NO_FIGURE = {"status": "success", "bills": []}
 
 BILLS = [
     (_bill("bill-alpha.xlsx", ["kerb"], "m", [("K.1", 3, 120.5), ("K.4", 4, 79.5)]),
-     {"terms": "kerb"}, {"terms": "kerb", "section": "drainage"}, "**200 m**"),
+     {"terms": "kerb"}, {"terms": "Kerb "}, "**200 m**"),
     (_bill("bill-beta.xlsx", ["duct", "pvc"], "nr", [("D.2", 7, 11.0), ("D.3", 7, 6.0)]),
-     {"terms": ["PVC", "duct"]}, {"terms": ["duct", "pvc"], "section": "ducts"}, "**17 nr**"),
+     {"terms": ["PVC", "duct"]}, {"terms": ["duct", "pvc"]}, "**17 nr**"),
 ]
 
 
@@ -148,15 +152,57 @@ def test_a_selection_is_the_case_folded_words_of_the_argument_values(asked, expe
     assert selection(asked) == expected
 
 
-@pytest.mark.parametrize("other_tool,other_args,covered", [
-    (TOOL, {"terms": "kerb"}, True),
-    (TOOL, {"terms": "kerb", "section": "roads"}, False),
-    ("zz_other_invented_tool", {"terms": "kerb"}, False),
-    (TOOL, {}, True),
+COVER_CASES = [
+    # (the result's arguments, its statements' (terms, within), the same
+    #  selection asked again, a broader one, a narrower one)
+    ({"terms": "Kerb", "section": "drainage"}, [(("kerb",), ("drainage",))],
+     {"section": "DRAINAGE ", "terms": "kerb"}, {"terms": "kerb"},
+     {"terms": "kerb", "section": "drainage", "type": "B"}),
+    ({"terms": ["pipes", "100mm"]}, [(("pipes", "100mm"), ())],
+     {"terms": ["100MM", "Pipes"]}, {"terms": "pipes"},
+     {"terms": ["pipes", "100mm", "ductile"]}),
+]
+
+
+def _result(args: dict, stated: list, figure: float | None = 4.0) -> Call:
+    return Call(tool=TOOL, heading="H", asked=args, statements=tuple(
+        Statement(figure=f, what="quantity", basis="count", count=None if f is None else 4,
+                  terms=t, within=w)
+        for t, w, f in ((*x, figure) if len(x) == 2 else x for x in stated)))
+
+
+@pytest.mark.parametrize("args,stated,same,broader,narrower", COVER_CASES)
+def test_a_result_covers_only_the_same_selection(args, stated, same, broader, narrower):
+    result = _result(args, stated)
+    assert covers(result, Call(tool=TOOL, heading="H", asked=same)) is True
+    # A narrower success does not answer a broader failure, and a broader
+    # success does not answer a narrower one it does not state.
+    assert covers(result, Call(tool=TOOL, heading="H", asked=broader)) is False
+    assert covers(result, Call(tool=TOOL, heading="H", asked=narrower)) is False
+    assert covers(result, Call(tool="zz_other_invented_tool", heading="H", asked=same)) is False
+
+
+@pytest.mark.parametrize("args,stated,_s,_b,_n", COVER_CASES)
+@pytest.mark.parametrize("empty", [{}, {"terms": None, "flag": True}])
+def test_an_empty_selection_is_never_covered(args, stated, _s, _b, _n, empty):
+    assert covers(_result(args, stated), Call(tool=TOOL, heading="H", asked=empty)) is False
+
+
+@pytest.mark.parametrize("terms,sections,part", [
+    ("pipes", ["Bill 1", "Bill 2", "Bill 3"], "Bill 2"),
+    ("gully", ["Section A", "Section C"], "Section C"),
 ])
-def test_a_result_covers_a_call_of_the_same_tool_whose_words_it_holds(other_tool, other_args, covered):
-    result = Call(tool=TOOL, heading="H", asked={"terms": "Kerb", "section": "drainage"})
-    assert covers(result, Call(tool=other_tool, heading="H", asked=other_args)) is covered
+def test_a_broader_success_covers_a_narrower_part_only_when_its_statement_names_it(
+        terms, sections, part):
+    args = {"terms": terms, "section": sections}
+    asked = Call(tool=TOOL, heading="H", asked={"terms": terms, "section": part})
+    named = [((terms,), (s,)) for s in sections]
+    assert covers(_result(args, named), asked) is True
+    # The part is not among the stated ones: not answered.
+    assert covers(_result(args, [n for n in named if n[1] != (part,)]), asked) is False
+    # The part is stated, but with no figure: not answered.
+    failed = [(t, w, None if w == (part,) else 4.0) for t, w in named]
+    assert covers(_result(args, failed), asked) is False
 
 
 FAILED = {"status": "error", "reason": "no_derived_bill_sheet"}
@@ -169,6 +215,10 @@ FAILED = {"status": "error", "reason": "no_derived_bill_sheet"}
     (({"terms": "gully"}, NO_FIGURE), False),
     # A part no result answered, but the call stated its failure: answer.
     (({"terms": "gully"}, FAILED), True),
+    # Empty arguments name no part, so no result answered it: wait.
+    (({}, NO_FIGURE), False),
+    # A narrower part than the result's, said nothing: wait.
+    (({"terms": "kerb", "section": "roads"}, NO_FIGURE), False),
 ])
 @pytest.mark.parametrize("result,_x,args,_f", BILLS)
 def test_require_stated_waits_only_for_a_call_no_result_answered(first, answers, result, _x, args, _f):
@@ -177,6 +227,50 @@ def test_require_stated_waits_only_for_a_call_no_result_answered(first, answers,
     assert bool(out) is answers, out
     if answers:
         assert out.startswith("Bill row count and total:"), out
+
+
+SUBSET_TURNS = [
+    # (terms, unit, rows, section): a bill matched on ``terms`` within ``section``
+    (["kerb"], "m", [("K.1", 3, 120.5), ("K.4", 4, 79.5)], "drainage"),
+    (["duct", "pvc"], "nr", [("D.2", 7, 11.0), ("D.3", 7, 6.0)], "ducts"),
+]
+
+
+def _unanswered_line(out: str) -> str:
+    return next((ln for ln in out.splitlines() if ln.startswith(EN["unanswered"].split("{")[0])), "")
+
+
+@pytest.mark.parametrize("terms,unit,rows,section", SUBSET_TURNS)
+@pytest.mark.parametrize("failed_first", [True, False])
+def test_a_narrower_success_does_not_answer_a_broader_failure(terms, unit, rows, section, failed_first):
+    narrow = _bill("bill-n.xlsx", terms, unit, rows, section_terms=(section,))
+    calls = [({"terms": " ".join(terms)}, FAILED),
+             ({"terms": " ".join(terms), "section": section}, narrow)]
+    question = f"{' '.join(terms)} total, and within {section}?"
+    for out in _answers(_turn(question, *(calls if failed_first else calls[::-1]))):
+        assert out.startswith("Bill row count and total:"), out
+        line = _unanswered_line(out)
+        assert line and f"{EN['asked']}: {' '.join(terms)})" in line, out
+
+
+@pytest.mark.parametrize("terms,unit,rows,section", SUBSET_TURNS)
+def test_a_broader_success_does_not_answer_a_narrower_failure(terms, unit, rows, section):
+    broad = _bill("bill-b.xlsx", terms, unit, rows)
+    question = f"{' '.join(terms)} total, and within {section}?"
+    turn = _turn(question, ({"terms": " ".join(terms), "section": section}, FAILED),
+                 ({"terms": " ".join(terms)}, broad))
+    for out in _answers(turn):
+        line = _unanswered_line(out)
+        assert line and section in line, out
+
+
+@pytest.mark.parametrize("result,_a,args,figure", BILLS)
+@pytest.mark.parametrize("empty", [{}, {"flag": True}])
+def test_a_failed_call_with_empty_arguments_is_still_named(result, _a, args, figure, empty):
+    for out in _answers(_turn("totals?", (empty, FAILED), (args, result))):
+        line = _unanswered_line(out)
+        assert line and out.index(figure) < out.index(line), out
+        assert EN["no_figure"] not in out  # its own declared reason, not a generic one
 
 
 @pytest.mark.parametrize("question", ["total?", "kerb and gully totals?"])

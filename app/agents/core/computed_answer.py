@@ -9,7 +9,8 @@ matching rows -- into plain text:
   lead, in call order; identical results (same tool, same stated lines) are
   one result; a call that returned no figure is shown only when no result of
   the same tool answered the same part of the question (``covers``), and
-  then after every result, in one plain line;
+  then after every result, in one plain line (a narrower or broader
+  selection is a different part; an empty selection is never answered);
 * a part that did not return (one bill of several) is NAMED, never skipped,
   so a partial result is never shown as complete -- after the parts that did;
 * a turn where no call returned a result says what was asked and why there is
@@ -332,11 +333,30 @@ class Call:
         return bool(self.statements or self.error)
 
 
+def _stated_selection(st: Any) -> frozenset:
+    """The part of the question one statement names: its match words and its
+    section words (the selection the tool says this figure is for)."""
+    return selection([tuple(getattr(st, "terms", ()) or ()), tuple(getattr(st, "within", ()) or ())])
+
+
 def covers(result: Call, other: Call) -> bool:
     """True when ``result`` answered the part of the question ``other`` asked:
-    the same tool, and every word of ``other``'s selection is in ``result``'s
-    (the same selection, or the same one asked again with more detail)."""
-    return result.tool == other.tool and selection(other.asked) <= selection(result.asked)
+    the same tool, and ``other``'s selection is non-empty and EQUAL to
+    ``result``'s (the same words, case and order aside), or one of
+    ``result``'s statements that returned a figure names exactly that
+    selection. A narrower or a broader selection is a different part: a
+    success for "pipes 100mm" does not answer "pipes", and one for "bills 1 2
+    3" does not answer "bill 2" unless it states that part. An empty
+    selection names no part, so nothing answers it."""
+    if result.tool != other.tool:
+        return False
+    wanted = selection(other.asked)
+    if not wanted:
+        return False
+    if wanted == selection(result.asked):
+        return True
+    return any(st.figure is not None and _stated_selection(st) == wanted
+               for st in result.statements)
 
 
 def unanswered(calls: Sequence[Call]) -> List[Call]:
