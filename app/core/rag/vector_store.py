@@ -900,6 +900,30 @@ def _memo_get(key: tuple):
     return _MISS if memo is None else memo.get(key, _MISS)
 
 
+def _query_ref(query: Optional[str]) -> str:
+    """A query as a log may carry it: its length in characters and a short
+    sha256, never its words. Equal queries give equal refs, so log lines
+    still join on it."""
+    q = query or ""
+    digest = hashlib.sha256(q.encode("utf-8")).hexdigest()[:12]
+    return f"chars={len(q)} sha256={digest}"
+
+
+def _error_ref(exc: BaseException) -> str:
+    """A database error as a log may carry it: its class, the driver's class
+    and the SQLSTATE when there is one. Never its message: SQLAlchemy
+    renders the bound parameters into it (the query) and FTS5 echoes the
+    MATCH text."""
+    orig = getattr(exc, "orig", None)
+    parts = [type(exc).__name__]
+    if orig is not None:
+        parts.append(type(orig).__name__)
+        state = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+        if state:
+            parts.append(f"sqlstate={state}")
+    return " ".join(parts)
+
+
 def _memo_put(key: tuple, value):
     memo = _TURN_MEMO.get()
     if memo is not None:
@@ -2114,15 +2138,15 @@ class VectorStore:
                 state = "no_lexeme_match"
                 logger.info(
                     "lexical leg empty: no query lexeme in project=%s; "
-                    "semantic-only for this layer. query=%r",
-                    project_id, (query_text or "")[:120],
+                    "semantic-only for this layer. query %s",
+                    project_id, _query_ref(query_text),
                 )
             else:
                 state = "no_chunks"
                 logger.warning(
                     "lexical leg empty: project=%s has no chunks at all; "
-                    "semantic-only for this layer. query=%r",
-                    project_id, (query_text or "")[:120],
+                    "semantic-only for this layer. query %s",
+                    project_id, _query_ref(query_text),
                 )
             _memo_put(("lexical_leg", project_id), state)
             return sem_results[:k]
@@ -2489,9 +2513,9 @@ class VectorStore:
             # half-working retriever is what let this class of bug live in
             # production while every test stayed green.
             logger.error(
-                "bm25_search (postgres) unavailable on %s: %s; query=%r — "
+                "bm25_search (postgres) unavailable on %s: %s; query %s — "
                 "retrieval is running SEMANTIC-ONLY for this request",
-                table, e, query, exc_info=True,
+                table, _error_ref(e), _query_ref(query),
             )
             return []
         return [
@@ -2765,9 +2789,9 @@ class VectorStore:
         except OperationalError as e:
             # FTS5 raises on malformed MATCH input. Treat as "no matches."
             logger.warning(
-                "bm25_search (sqlite) FTS5 MATCH failed: %s; query=%r",
-                e,
-                safe_query,
+                "bm25_search (sqlite) FTS5 MATCH failed: %s; query %s",
+                _error_ref(e),
+                _query_ref(safe_query),
             )
             return []
         return [
