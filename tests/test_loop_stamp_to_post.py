@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from typing import Optional
 
 import pytest
 
@@ -128,8 +129,15 @@ def _run(mon: LagMonitor, body) -> LagMonitor:
     return mon
 
 
-async def _block_then_wait(mon: LagMonitor, block_s: float) -> None:
+async def _block_then_wait(mon: LagMonitor, block_s: float, seen: Optional[dict] = None) -> None:
+    """Block the loop thread for ``block_s``. ``seen['blocked_ms']`` is how long
+    the loop itself was away: from the block's start to its next turn (on a
+    loaded runner that is longer than ``block_s``)."""
+    t0 = time.monotonic()
     time.sleep(block_s)  # the loop thread itself is blocked
+    await asyncio.sleep(0)  # the loop's next turn: the queued heartbeat is served here
+    if seen is not None:
+        seen["blocked_ms"] = (time.monotonic() - t0) * 1000
     deadline = time.monotonic() + 5
     while not mon.stall_recorded.is_set() and time.monotonic() < deadline:
         await asyncio.sleep(0.02)
@@ -159,11 +167,14 @@ def test_a_blocked_loop_with_an_instant_snapshot_is_one_stall_of_the_block(block
     """(b) The gate keeps its teeth: a loop truly blocked past the limit is
     one stall, and its lag is about the block."""
     _slow_snapshot(0.0, monkeypatch)
-    mon = _run(_monitor(), lambda m: _block_then_wait(m, block_s))
+    seen: dict = {}
+    mon = _run(_monitor(), lambda m: _block_then_wait(m, block_s, seen))
     assert len(mon.stalls) == 1, [lag for lag, _ in mon.stalls]
     lag, s2p = mon.stall_stamp_to_post[0]
     assert lag >= block_s * 1000 - 50, (lag, block_s)
-    assert lag <= block_s * 1000 + 100, (lag, block_s)
+    # The block and nothing more: at most what the loop itself was away,
+    # plus one tick (the heartbeat may be posted that much before it).
+    assert lag <= seen["blocked_ms"] + 20 + 50, (lag, seen)
     assert s2p < 20, (lag, s2p)
     assert mon.max_lag_ms == pytest.approx(lag)
 
@@ -181,13 +192,14 @@ def test_a_blocked_loop_while_a_slow_snapshot_runs_is_one_stall_of_the_block(sna
         started.clear()
         while not started.is_set():
             await asyncio.sleep(0.002)
-        await _block_then_wait(mon, block_s)
+        await _block_then_wait(mon, block_s, seen)
 
+    seen: dict = {}
     mon = _run(_monitor(), block_inside_a_snapshot)
     assert len(mon.stalls) == 1, [lag for lag, _ in mon.stalls]
     lag, s2p = mon.stall_stamp_to_post[0]
     assert lag >= 300, (lag, snapshot_s)
-    assert lag <= block_s * 1000 + 100, (lag, snapshot_s)
+    assert lag <= seen["blocked_ms"] + 20 + 50, (lag, seen, snapshot_s)
     assert s2p < 20, (lag, s2p)
 
 
