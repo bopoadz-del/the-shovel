@@ -14250,8 +14250,6 @@ def _plain_tool_error_sentence(payload: dict[str, Any] | None) -> str:
 def _plain_sentence_for_tool_error_json(text: str) -> str:
     """Plain sentence if ``text`` is a tool-error JSON blob, else ''."""
     obj = _parse_json_object(text)
-    if not obj:
-        return ""
     payload = _tool_error_payload(obj)
     if not payload:
         return ""
