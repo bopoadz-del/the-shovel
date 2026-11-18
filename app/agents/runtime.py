@@ -3298,6 +3298,73 @@ def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
     return _fit_parts(reduced, budget)
 
 
+#: Present, True, only in a MINIMAL outline: the outline's fields were
+#: dropped because the outline alone did not fit the cap (``_minimal_outline``).
+OUTLINE_CUT_KEY = "outline_cut"
+
+
+def _minimal_outline(outline: dict[str, Any], chars_total: int, with_totals: bool = True) -> dict[str, Any]:
+    """The defined last resort for an outline that does not fit the cap even
+    with no preview beside it. A statement is never cut, so a long one can
+    make the outline larger than the cap by itself. It is then REPLACED, not
+    cut: this keeps that it was cut, the outline's own size, the size of the
+    whole result, the row totals and how many parts each list of parts holds
+    (or, ``with_totals`` False, the rows' sum and how many lists they
+    cover), and a floor note that the statements were dropped for size."""
+    totals = outline.get(ROWS_TOTAL_KEY) if isinstance(outline.get(ROWS_TOTAL_KEY), dict) else {}
+    out: dict[str, Any] = {
+        OUTLINE_CUT_KEY: True,
+        "outline_chars": len(json.dumps(outline, default=str)),
+        "result_chars": chars_total,
+    }
+    if with_totals:
+        out[ROWS_TOTAL_KEY] = totals
+        if isinstance(outline.get(PARTS_TOTAL_KEY), dict):
+            out[PARTS_TOTAL_KEY] = outline[PARTS_TOTAL_KEY]
+    else:
+        out["rows_total_sum"] = sum(v for v in totals.values() if isinstance(v, int))
+        out["row_lists"] = len(totals)
+    out[OUTLINE_FLOOR_KEY] = {
+        "rule": "statements were dropped for size: the outline alone was larger than the cap, "
+                "so only its size and the row totals are kept. Do not answer from this outline; "
+                "re-run the tool narrowed to the part the user asked about.",
+    }
+    return out
+
+
+def _fit_cap(build: Callable[[int, Any], str], cap: int, outline: Any, chars_total: int, keep: int) -> str:
+    """``build(keep, outline)`` shrunk until it fits ``cap``, GUARANTEED.
+
+    The preview gives way first, measured on the real envelope. With no
+    preview left and still over the cap, the outline steps down: the minimal
+    outline with its row totals, then with their sum only, then none. Past
+    that a bare cut marker is returned. Every rung says the result was cut.
+    The result is never longer than ``cap`` unless ``cap`` is below the
+    smallest valid cut marker, ``{"truncated": true}`` (19 characters)."""
+    rungs: list[Any] = [outline]
+    if isinstance(outline, dict):
+        rungs += [_minimal_outline(outline, chars_total), _minimal_outline(outline, chars_total, False), None]
+    for rung in rungs:
+        k = max(0, int(keep))
+        out = build(k, rung)
+        while len(out) > cap and k > 0:
+            k = max(0, k - max(len(out) - cap, 32))
+            out = build(k, rung)
+        if len(out) <= cap:
+            return out
+    bare = [
+        {"truncated": True, "chars_total": chars_total,
+         "note": "The result was cut for size; nothing of it fits the cap. Re-run the tool narrowed."},
+        {"truncated": True, "chars_total": chars_total},
+        {"truncated": True},
+    ]
+    for marker in bare:
+        out = json.dumps(marker)
+        if len(out) <= cap:
+            return out
+    return out
+
+
 ROWS_SHOWN_KEY = "rows_shown"
 
 
@@ -3406,7 +3473,7 @@ def _tool_result_content(
     # window, whole: a window that cuts the rows never cuts the statement.
     outline = _result_outline(payload, cap // 4)
 
-    def _envelope(keep: int) -> str:
+    def _envelope(keep: int, outline: Any) -> str:
         shown = min(keep, len(window))
         next_offset = start + shown
         more = next_offset < len(text)
@@ -3467,14 +3534,10 @@ def _tool_result_content(
     # Embedding the preview as a JSON string RE-escapes it — every `"` becomes
     # `\"` and every `\` becomes `\\` — so escape-heavy content (exactly what
     # this guards) can nearly double. A fixed budget therefore overshoots the
-    # cap; shrink until the ENVELOPE fits, measuring the real thing.
-    keep = cap
-    out = _envelope(keep)
-    while len(out) > cap and keep > 0:
-        overshoot = len(out) - cap
-        keep = max(0, keep - max(overshoot, 32))
-        out = _envelope(keep)
-    return out
+    # cap; shrink until the ENVELOPE fits, measuring the real thing. A
+    # statement is never cut, so the outline alone can exceed the cap:
+    # _fit_cap then replaces it by a minimal one and the result always fits.
+    return _fit_cap(_envelope, cap, outline, len(text), cap)
 
 
 def _persist_failed_turn(conversation_id: str | None) -> None:
@@ -11783,6 +11846,7 @@ _LAST_TOOL_PREVIEW = 6000
 
 def _compacted_tool_payload(
     content: str, keep: int, note: str | None = None, outline_budget: int | None = None,
+    max_chars: int | None = None,
 ) -> str:
     """A truncated tool result that says exactly what it lost.
 
@@ -11803,6 +11867,11 @@ def _compacted_tool_payload(
       same cut with different phrasing produces "the BOQ contains no
       demolition in cubic metres" -- a false statement about the customer's
       own contract, stated with the tool's authority behind it.
+
+    ``max_chars``, when given, is a hard cap the result is GUARANTEED to fit
+    (``_fit_cap``): the preview gives way first, then the outline is replaced
+    by a minimal one, because a statement is never cut and an outline can
+    exceed the cap by itself.
     """
     kept = max(0, int(keep))
     try:
@@ -11819,6 +11888,15 @@ def _compacted_tool_payload(
         # a cap keep the outline whole: only the preview gives way.
         budget = outline_budget if outline_budget is not None else kept // 4
         outline = _result_outline(whole, max(1, int(budget)))
+    if max_chars is not None:
+        return _fit_cap(lambda k, o: _compacted_envelope(content, whole, k, note, o),
+                        int(max_chars), outline, len(content), kept)
+    return _compacted_envelope(content, whole, kept, note, outline)
+
+
+def _compacted_envelope(content: str, whole: Any, kept: int, note: str | None, outline: Any) -> str:
+    """The envelope of ``_compacted_tool_payload`` for one preview length
+    and one outline."""
     totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
     countable = bool(totals) and isinstance(whole, dict) and not whole.get("truncated")
 

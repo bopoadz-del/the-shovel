@@ -719,9 +719,20 @@ def _one_bill_wide(rows: int, pages: int) -> dict:
 def test_an_outline_over_its_budget_keeps_the_statement_fields_never_dropped(result, figures):
     full = {"name": TOOL, "ok": True, "result": result}
     cap = 4000
-    env = json.loads(runtime._tool_result_content(full, max_chars=cap))
+    out = runtime._tool_result_content(full, max_chars=cap)
+    # The cap holds in every case (before #443's last resort, one input here
+    # came back at 8048 characters against this 4000 cap).
+    assert len(out) <= cap, len(out)
+    env = json.loads(out)
     outline = env.get(runtime.OUTLINE_KEY)
     assert outline is not None, "the outline was dropped"
+    floor = runtime._result_outline(full, cap // 4)
+    if len(json.dumps(floor)) > cap:
+        # The outline alone is over the cap: it is replaced, and says so.
+        assert outline[runtime.OUTLINE_CUT_KEY] is True
+        assert outline[runtime.ROWS_TOTAL_KEY] == floor[runtime.ROWS_TOTAL_KEY]
+        return
+    assert runtime.OUTLINE_CUT_KEY not in outline
     assert outline["name"] == TOOL and outline["ok"] is True
     bills = outline["result"]["bills"]
     assert bills, outline
@@ -1030,3 +1041,106 @@ def test_a_list_of_parts_keeps_its_first_part_at_any_budget(budget):
     first = outline["result"]["bills"]
     assert len(first) == 1 and first[0]["filename"] == "bill-0.xlsx", first
     assert outline[runtime.OUTLINE_FLOOR_KEY]["kept"][-1] == "result.bills[0]"
+
+
+# -- The cap is a guarantee: an outline over the cap by itself is replaced --
+
+
+def _over_cap(cap: int, bills: int) -> tuple[dict, str]:
+    """A result whose top-level statement alone is longer than ``cap``."""
+    long = _statement("basis", cap // 3)
+    assert len(long) > cap
+    return {"name": TOOL, "ok": True, "result": _many_bills(bills, 3), "basis": long}, long
+
+
+def _assert_minimal(env: dict, full: dict, long: str, cap: int, chars_total: int) -> None:
+    assert env["truncated"] is True
+    outline = env[runtime.OUTLINE_KEY]
+    assert outline[runtime.OUTLINE_CUT_KEY] is True
+    replaced = runtime._result_outline(full, cap // 4)
+    assert outline[runtime.ROWS_TOTAL_KEY] == replaced[runtime.ROWS_TOTAL_KEY]
+    assert outline[runtime.PARTS_TOTAL_KEY] == replaced[runtime.PARTS_TOTAL_KEY]
+    assert outline["result_chars"] == chars_total
+    assert outline["outline_chars"] > cap
+    assert "dropped for size" in outline[runtime.OUTLINE_FLOOR_KEY]["rule"]
+    assert long not in json.dumps(env)
+
+
+@pytest.mark.parametrize("cap,bills", [(3000, 6), (6000, 11)])
+def test_a_statement_longer_than_the_cap_fits_through_the_tool_envelope(cap, bills):
+    full, long = _over_cap(cap, bills)
+    out = runtime._tool_result_content(full, max_chars=cap)
+    assert len(out) <= cap, len(out)
+    env = json.loads(out)
+    _assert_minimal(env, full, long, cap, len(json.dumps(full)))
+    # The outline at its floor shows the first part; the minimal one keeps
+    # that part's row count and how many parts there are.
+    assert env[runtime.OUTLINE_KEY][runtime.ROWS_TOTAL_KEY] == {"result.bills[0].rows": 3}
+    assert env[runtime.OUTLINE_KEY][runtime.PARTS_TOTAL_KEY] == {"result.bills": bills}
+
+
+@pytest.mark.parametrize("cap,bills", [(3000, 6), (6000, 11)])
+def test_a_statement_longer_than_the_cap_fits_through_the_compaction(cap, bills):
+    full, long = _over_cap(cap, bills)
+    content = json.dumps(full)
+    out = runtime._compacted_tool_payload(content, cap, outline_budget=cap // 4, max_chars=cap)
+    assert len(out) <= cap, len(out)
+    _assert_minimal(json.loads(out), full, long, cap, len(content))
+
+
+@pytest.mark.parametrize("n", [9000, 12000])
+def test_the_driver_never_hands_the_model_more_than_its_cap(n):
+    from app.agents.driver import loop
+
+    full = {"name": TOOL, "ok": True, "result": _many_bills(5, 3), "basis": _statement("basis", n)}
+    text = json.dumps(full)
+    assert len(text) > loop._TOOL_RESULT_CHARS
+    out = loop._shown_to_model(text)
+    assert len(out) <= loop._TOOL_RESULT_CHARS, len(out)
+    assert json.loads(out)[runtime.OUTLINE_KEY][runtime.OUTLINE_CUT_KEY] is True
+
+
+@pytest.mark.parametrize("cap", [19, 60])
+def test_below_any_envelope_the_result_is_a_bare_cut_marker_within_the_cap(cap):
+    full, _long = _over_cap(3000, 4)
+    for out in (runtime._tool_result_content(full, max_chars=cap),
+                runtime._compacted_tool_payload(json.dumps(full), cap, max_chars=cap)):
+        assert len(out) <= cap, out
+        assert json.loads(out)["truncated"] is True
+
+
+@pytest.mark.parametrize("n,cap", [(120, 4000), (60, 8000)])
+def test_an_outline_that_fits_is_kept_whole_beside_a_preview(n, cap):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(n, 4)}
+    text = json.dumps(full)
+    assert len(text) > cap
+    for out, outline in (
+        (runtime._tool_result_content(full, max_chars=cap), runtime._result_outline(full, cap // 4)),
+        (runtime._compacted_tool_payload(text, cap, outline_budget=cap // 4, max_chars=cap),
+         runtime._result_outline(full, cap // 4)),
+    ):
+        env = json.loads(out)
+        assert len(out) <= cap
+        assert env[runtime.OUTLINE_KEY] == outline
+        assert runtime.OUTLINE_CUT_KEY not in env[runtime.OUTLINE_KEY]
+        assert env["preview"] and text.startswith(env["preview"])
+
+
+@pytest.mark.parametrize("lists", [30, 80])
+@pytest.mark.parametrize("rung", ["sum_only", "no_outline"])
+def test_the_outline_steps_down_one_rung_at_a_time_until_it_fits(lists, rung):
+    totals = {f"result.bills[{i}].rows": i + 1 for i in range(lists)}
+    outline = {"basis": "x" * 500, runtime.ROWS_TOTAL_KEY: totals}
+
+    def build(keep: int, o) -> str:
+        return json.dumps({"truncated": True, "outline": o, "preview": "p" * keep})
+
+    with_totals = runtime._minimal_outline(outline, 9999)
+    sum_only = runtime._minimal_outline(outline, 9999, with_totals=False)
+    assert sum_only["rows_total_sum"] == sum(range(1, lists + 1))
+    assert sum_only["row_lists"] == lists
+    assert runtime.ROWS_TOTAL_KEY not in sum_only
+    want = build(0, sum_only if rung == "sum_only" else None)
+    cap = len(want)
+    assert len(build(0, with_totals)) > cap
+    assert runtime._fit_cap(build, cap, outline, 9999, 500) == want
