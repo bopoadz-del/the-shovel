@@ -259,3 +259,39 @@ def test_a_dead_snapshot_never_reaches_the_heartbeat(fail, monkeypatch):
     else:
         assert text.startswith("sum window="), text[:80]
         assert mon.snapshots >= 2
+
+
+@pytest.mark.parametrize("readings,expected", [([350.0, 12.0], (2, 350.0)), ([5.0], (1, 5.0))])
+def test_each_snapshot_is_counted_and_the_slowest_kept(readings, expected):
+    mon = _monitor()
+    try:
+        for ms in readings:
+            mon.note_snapshot(ms)
+        assert (mon.snapshots, mon.max_snapshot_ms) == expected
+    finally:
+        mon.loop.close()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_the_snapshot_thread_publishes_its_reading_and_never_raises(fail, monkeypatch):
+    """``_snap_run`` publishes ``(process, threads, host, t0)``; a reading that
+    raises is skipped and leaves nothing published, without an exception."""
+    mon = _monitor()
+
+    def snapshot():
+        mon._stop.set()  # one pass of the loop
+        if fail:
+            raise OSError("no /proc here")
+        return 7.0, {1: 3.0}
+
+    monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
+    monkeypatch.setattr(loop_watchdog, "host_cpu", lambda: {"total": 9})
+    try:
+        mon._snap_run()
+    finally:
+        mon.loop.close()
+    if fail:
+        assert (mon._snap, mon.snapshots) == (None, 0)
+    else:
+        assert mon._snap[:3] == (7.0, {1: 3.0}, {"total": 9})
+        assert mon.snapshots == 1

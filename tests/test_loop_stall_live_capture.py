@@ -332,6 +332,27 @@ def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(mon
         assert mon.live_dumps == [], mon.live_dumps[:1]
 
 
+@pytest.mark.parametrize("live_ms", [150.0, 0.0])
+@own_process
+def test_stop_ends_both_threads_and_hands_the_dump_timer_back(live_ms):
+    """``stop`` joins the heartbeat and snapshot threads and releases the
+    process-wide dump timer, so the next monitor can own it."""
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
+                                       tick_ms=10, log=False, live_ms=live_ms).start()
+        await asyncio.sleep(0.1)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert not mon._thread.is_alive() and not mon._snap_thread.is_alive()
+    nxt = loop_watchdog.LiveDump(150)
+    try:
+        assert nxt.active, "the stopped monitor still owns the dump timer"
+    finally:
+        nxt.close()
+
+
 @pytest.mark.parametrize("lags,kept", [
     ([5.0, 1.0, 9.0, 3.0], [9.0, 5.0, 3.0]),
     ([2.0, 4.0], [4.0, 2.0]),
