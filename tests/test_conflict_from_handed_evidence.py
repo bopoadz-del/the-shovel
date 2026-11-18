@@ -160,3 +160,39 @@ def test_no_open_turn_records_nothing_and_warns_nothing(parts, caplog):
         assert [r for r in caplog.records if r.levelname == "WARNING"] == []
     finally:
         answer_exit._TURN.reset(token)
+
+
+# ── different things that share words are not a conflict ────────────────────
+
+# (question, document the answer cites, second document about a DIFFERENT
+#  thing that shares words with the asked thing, answer)
+_DIFFERENT_THINGS = [
+    pytest.param(
+        "What grade is the steel for the gantry columns?",
+        ("dwg-3", "GN-510 Gantry Columns.pdf", 4,
+         "Notes. 2. Gantry columns shall be grade S275 hot-rolled sections."),
+        ("ms-3", "Method Statement for Gantry Rafters.pdf", 6,
+         "Materials. The gantry rafters are fabricated from grade S355 steel delivered to site."),
+        "The gantry columns are grade S275 steel [source: GN-510 Gantry Columns.pdf].",
+        id="two-elements",
+    ),
+    pytest.param(
+        "What cover is required to the pile cap reinforcement?",
+        ("dwg-4", "PC-330 Pile Cap Details.pdf", 9,
+         "Note 3. Minimum concrete cover to pile cap reinforcement is 75 mm."),
+        ("ms-4", "Method Statement Ground Beams.pdf", 2,
+         "Fixing. Spacers give a cover to ground beam reinforcement of 50 mm throughout."),
+        "The cover to the pile cap reinforcement is 75 mm [source: PC-330 Pile Cap Details.pdf].",
+        id="two-sections",
+    ),
+]
+
+
+@pytest.mark.parametrize("question, cited, other, answer", _DIFFERENT_THINGS)
+def test_values_for_different_things_that_share_words_are_not_a_conflict(question, cited, other, answer):
+    """Every handed chunk is checked now, so a second document that gives a
+    different value for a DIFFERENT thing sharing the question's words must
+    not be read as disagreeing: the value must belong to the asked thing."""
+    out = _run_turn(question, cited, other, answer)
+    assert not out.get("conflicts"), out.get("conflicts")
+    assert "differ" not in out["content"]
