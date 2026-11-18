@@ -909,3 +909,51 @@ def test_core_stream_the_reference_is_never_stored_reloaded_or_logged(monkeypatc
         assert runtime.FULL_RESULT_KEY not in json.dumps(m, default=str)
     assert runtime.FULL_RESULT_KEY not in caplog.text
     assert f"{marker} final row" not in caplog.text
+
+
+# ── CI-M on b1c728e: each new rule pinned by its own inputs ─────────────────
+
+@pytest.mark.parametrize("n,budget", [(120, 1000), (60, 700)])
+def test_an_outline_over_its_budget_fits_it_and_names_the_parts_it_holds(n, budget):
+    full = {"name": TOOL, "ok": True, "result": _many_bills(n, 4)}
+    outline = runtime._result_outline(full, budget)
+    assert len(json.dumps(outline)) <= budget, len(json.dumps(outline))
+    assert outline[runtime.PARTS_TOTAL_KEY] == {"result.bills": n}
+    shown = len(outline["result"]["bills"])
+    assert 0 < shown < n
+    # Only the parts still shown keep their row counts.
+    assert all(runtime._part_index(k, "result.bills") < shown
+               for k in outline[runtime.ROWS_TOTAL_KEY])
+
+
+@pytest.mark.parametrize("key,path,index", [
+    ("bills[7].rows", "bills", 7),
+    ("x[7].rows", "b", -1),          # a key under another list
+    ("result.bills[12].rows", "result.bills", 12),
+    ("result.extra[3].rows", "result.bills", -1),
+])
+def test_a_part_index_is_read_only_under_its_own_list(key, path, index):
+    assert runtime._part_index(key, path) == index
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_rows_are_counted_per_list_of_rows_never_per_list_of_parts(result, args, rows, total):
+    full = {"name": TOOL, "ok": True, "result": result}
+    text = json.dumps(full)
+    shown = runtime._rows_in_window(full, text, 0, len(text))
+    assert shown == {"result.bills[0].rows": rows}, shown
+
+
+@pytest.mark.parametrize("result,args,rows,total", LONG_BILLS)
+def test_a_cut_result_compacted_again_is_not_recounted(monkeypatch, result, args, rows, total):
+    """A cut envelope no longer holds its rows: compacting it again keeps
+    its outline and never scans it for rows it cannot see."""
+    full = {"name": TOOL, "ok": True, "result": result}
+    cut = runtime._tool_result_content(full, max_chars=4000)
+
+    def scanned(*_a, **_k):
+        raise AssertionError("a cut envelope was scanned for rows")
+
+    monkeypatch.setattr(runtime, "_rows_in_window", scanned)
+    again = json.loads(runtime._compacted_tool_payload(cut, 500))
+    assert runtime.ROWS_SHOWN_KEY not in again and again[runtime.OUTLINE_KEY]
