@@ -292,3 +292,14 @@ def test_declared_snake_case_codes_are_kept_in_order(codes):
         assert tool_registry._RESULTS[name].reason_codes == codes
     finally:
         tool_registry._RESULTS.pop(name, None)
+
+
+@pytest.mark.parametrize("value, question", [
+    (12000.0, "excavate 12,000 m3 of soil"),
+    (4500, "a slab of 4,500 m2"),
+])
+def test_a_figure_typed_with_thousands_separators_is_the_users(value, question):
+    from app.agents.core.computed_answer import _typed_by_user
+
+    assert str(value) not in question  # only the figure form appears
+    assert _typed_by_user(value, question) is True

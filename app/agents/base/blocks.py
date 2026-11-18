@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.core.tool_registry import Statement, ToolCall, block_args, declare_result
+from app.agents.core.tool_registry import (
+    Statement,
+    ToolCall,
+    block_args,
+    declare_result,
+    declare_results_when_read,
+)
 
 
 def improvised_statement(result: dict) -> list[Statement]:
@@ -49,7 +55,10 @@ def _declare_calculator_aliases() -> None:
                        kind="computed", statement=calculation_statement)
 
 
-_declare_calculator_aliases()
+# Deferred to the first read: the display names come from the formula
+# registry, and loading it imports every formula module (sympy among them),
+# which must not happen at app start (tests/test_boot_does_not_import_heavy_libraries.py).
+declare_results_when_read(_declare_calculator_aliases)
 
 
 @block_args("construction", owner="base")

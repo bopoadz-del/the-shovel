@@ -291,3 +291,38 @@ def test_a_failed_tool_is_a_calculator_by_its_declared_kind_alone(name, expected
     # only the declaration can decide.
     msg = {"role": "tool", "name": name, "content": "{}"}
     assert runtime._is_calc_tool_error(msg, {}, {"error": "invented failure"}) is expected
+
+
+# A declaration that needs another registry is deferred to the first read, so
+# load() at app start never pulls that registry's (heavy) imports.
+@pytest.mark.parametrize("name, reader", [
+    ("zz_invented_deferred_a", lambda n: tool_registry.result_spec(n)),
+    ("zz_invented_deferred_b", lambda n: n in tool_registry.tools_of_kind("search")),
+])
+def test_a_deferred_declaration_runs_on_first_read_not_on_load(name, reader):
+    runs = []
+
+    def declarer():
+        runs.append(name)
+        tool_registry.declare_result(name, owner="base", display_name="Invented", kind="search")
+
+    tool_registry.declare_results_when_read(declarer)
+    try:
+        tool_registry.load()
+        assert runs == []
+        assert name not in tool_registry._RESULTS
+        assert reader(name)
+        assert runs == [name]
+        reader(name)
+        assert runs == [name]  # once, not on every read
+    finally:
+        tool_registry._RESULTS.pop(name, None)
+        if declarer in tool_registry._DEFERRED:
+            tool_registry._DEFERRED.remove(declarer)
+
+
+@pytest.mark.parametrize("action", sorted(runtime._HAT_CALC_ALIASES)[-2:])
+def test_a_calculator_alias_reads_its_registry_display_name(action):
+    spec = tool_registry.result_spec(action)
+    calc = formula_registry.get(runtime._HAT_CALC_ALIASES[action])
+    assert spec.display_name == ((calc.display_name if calc and calc.display_name else None) or action)

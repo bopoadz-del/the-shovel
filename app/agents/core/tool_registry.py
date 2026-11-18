@@ -227,6 +227,22 @@ def declare_result(name: str, *, owner: str, display_name: str, kind: str,
     _RESULTS[name] = spec
 
 
+_DEFERRED: List[Callable[[], None]] = []
+
+
+def declare_results_when_read(declarer: Callable[[], None]) -> None:
+    """Run ``declarer`` (which calls ``declare_result``) on the first read of
+    the result declarations, not at import. For a declaration that needs
+    another registry -- one that imports libraries too heavy for app start --
+    so ``load()`` at boot stays cheap."""
+    _DEFERRED.append(declarer)
+
+
+def _declare_deferred() -> None:
+    while _DEFERRED:
+        _DEFERRED.pop(0)()
+
+
 def get(name: str) -> Optional[ToolSpec]:
     load()
     return _TOOLS.get(name)
@@ -236,11 +252,13 @@ def result_spec(name: str) -> Optional[Union[ToolSpec, ResultSpec]]:
     """What ``name`` declares about its result: the tool's spec, else the
     block's result declaration, else None."""
     load()
+    _declare_deferred()
     return _TOOLS.get(name) or _RESULTS.get(name)
 
 
 def tools_of_kind(kind: str) -> List[str]:
     load()
+    _declare_deferred()
     names = {n for n, s in _TOOLS.items() if s.kind == kind}
     names.update(n for n, s in _RESULTS.items() if s.kind == kind)
     return sorted(names)
