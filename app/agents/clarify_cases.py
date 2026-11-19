@@ -264,14 +264,16 @@ def _head_noun(phrase: str) -> str:
     return ""
 
 
-def _question_asks(question: str) -> tuple[set[str], set[str]] | None:
-    """What the question asks for, as ``(kinds, heads)``.
+def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
+    """What the question asks for, as ``(kinds, heads, qualifiers)``.
 
-    ``kinds`` is a subset of {measure, clause, code}; ``heads`` is a set of
-    head nouns to match against case subjects. Returns ``("none", set())``
-    for a non-value ask (a party or an action: "who", "what must happen"),
-    and ``None`` for a generic question that does not narrow the cases
-    ("what is the value?").
+    ``kinds`` is a subset of {measure, clause, code}; ``heads`` is the set of
+    head nouns to match against case subjects; ``qualifiers`` is the set of
+    non-head content words the question's subject names (the words that tell
+    one case of the same measure apart from another: "fresh concrete" vs
+    "ambient"). Returns ``("none", set(), set())`` for a non-value ask (a
+    party or an action: "who", "what must happen"), and ``None`` for a
+    generic question that does not narrow the cases ("what is the value?").
     """
     q = (question or "").lower().strip().rstrip("?.!")
     if ":" in q:
@@ -281,7 +283,7 @@ def _question_asks(question: str) -> tuple[set[str], set[str]] | None:
     if re.search(r"\b(?:who|whom)\b", q) or re.search(
         r"\bwhat (?:must|should|will|would|shall) happen\b", q
     ):
-        return ("none", set())
+        return ("none", set(), set())
 
     kinds: set[str] = set()
     if re.search(r"\bhow (?:many|much|long|often|far|deep|high|thick|wide|fast)\b", q):
@@ -321,6 +323,7 @@ def _question_asks(question: str) -> tuple[set[str], set[str]] | None:
                     subj = m.group(1)
 
     heads: set[str] = set()
+    qualifiers: set[str] = set()
     if subj:
         words = subj.split()
         cut_i = next(
@@ -331,9 +334,10 @@ def _question_asks(question: str) -> tuple[set[str], set[str]] | None:
         h = _head_noun(subj)
         if h and h not in _GENERIC_HEADS:
             heads.add(h)
+            qualifiers = _subject_tokens(subj) - {h}
     if not kinds and not heads:
         return None
-    return kinds, heads
+    return kinds, heads, qualifiers
 
 
 def _kind_of_value(value: str) -> str:
@@ -356,13 +360,31 @@ def _case_kind(case: Case) -> str:
     return case.kind or _kind_of_value(case.value)
 
 
-def _relevant(case: Case, kinds: set[str], heads: set[str]) -> bool:
-    """True when the case could answer the question: its kind matches and,
-    when the question names a subject, its subject shares the head noun."""
+def _relevant(
+    case: Case,
+    kinds: set[str],
+    heads: set[str],
+    qualifiers: set[str] = frozenset(),
+) -> bool:
+    """True when the case could answer the question.
+
+    Its kind must match; when the question names a subject, the case's head
+    noun must match; and when the question's subject names a qualifier too
+    ("fresh concrete temperature", not just "temperature"), the case must
+    share at least one of those qualifier words -- so a same-measure but
+    different-thing case ("ambient temperature") is not kept. A case with no
+    qualifier of its own stays (conservative: the head alone still matches).
+    """
     if kinds and _case_kind(case) not in kinds:
         return False
     if heads:
-        return _head_noun(case.subject) in heads
+        c_head = _head_noun(case.subject)
+        if c_head not in heads:
+            return False
+        if qualifiers:
+            c_quals = _subject_tokens(case.subject) - {c_head}
+            if c_quals and not (c_quals & qualifiers):
+                return False
     return True
 
 
@@ -397,9 +419,9 @@ def clarifying_question(question: str, draft: str, cases: list[Case]) -> str | N
     asks = _question_asks(question)
     if asks is not None and asks[0] == "none":
         return None  # a party or an action: not a value to compare
-    kinds, heads = asks if asks is not None else (set(), set())
+    kinds, heads, qualifiers = asks if asks is not None else (set(), set(), set())
 
-    relevant = [c for c in cases if _relevant(c, kinds, heads)]
+    relevant = [c for c in cases if _relevant(c, kinds, heads, qualifiers)]
     if len(relevant) < 2:
         return None
 

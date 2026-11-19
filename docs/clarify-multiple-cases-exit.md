@@ -196,6 +196,37 @@ mutation gate 34 run / 34 killed / 0 red; two-input lint 0 new; ruff clean;
 scan_repo_hygiene 0 live names. #498 stays a draft until A1 (the bill
 write) is live.
 
+## Done: the exit is wired and the relevance filter names qualifiers (M72)
+
+Two general changes land the detector in the answer exit, with no case name,
+structure or value in code:
+
+1. **The exit hook is live.** ``runtime._apply_clarify_cases`` runs at the
+   end of ``_postprocess_answer``, beside ``apply_first_line_hard_rule``. It
+   reads the handed evidence (``build_evidence(..., tool_passages=True)``,
+   retrieval records only -- the client's documents and the encoded
+   knowledge) into passages, calls the pure detector on the final draft, and
+   when it fires replaces the draft with the ONE clarifying question and
+   records it on the turn (``Turn.questions`` + a ``which_case`` marker on
+   ``Turn.awaiting_inputs``, so the ``{"missing": [...]}`` carrier the route
+   observer reads stays non-empty). Kill-switch ``CLARIFY_CASES=0``; a
+   failure passes the answer through.
+
+2. **A qualifier narrows the ask.** Wiring surfaced a false positive the
+   replay had not: "what maximum fresh concrete temperature" (a specific
+   subject) kept an "ambient temperature" case because both reduce to the
+   head noun "temperature", and the exit asked. The relevance filter now
+   keeps a case only when its head matches AND, when the question's subject
+   names a qualifier word too, the case shares at least one of those
+   qualifiers ("fresh" / "concrete" vs "ambient"). A generic ask ("what is
+   the temperature?") names no qualifier and still asks across cases.
+
+Local after the fold: 105 passed across
+``tests/test_clarify_cases.py`` + ``tests/test_clarify_cases_exit.py``;
+two-input lint 0 new; ruff clean; scan_hardwiring 0 new; scan_repo_hygiene
+clean. The full ``_postprocess_answer``-touching suite (40 files, 3093
+tests) passes with ``RAG_EMBEDDING_MODEL=fake``.
+
 ## Not in this PR
 
 - The instruction text: #495 (part a).

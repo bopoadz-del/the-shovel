@@ -227,6 +227,56 @@ def test_case2_different_subjects_asks():
     assert "Which one is meant?" in q
 
 
+@pytest.mark.parametrize(
+    "question,case_a,case_b",
+    [
+        (
+            "what maximum fresh concrete temperature is recommended?",
+            ("temperature of fresh concrete at placing", "32°C", "a.pdf"),
+            ("ambient temperature", "20°C", "a.pdf"),
+        ),
+        (
+            "what is the mixing water temperature limit?",
+            ("mixing water temperature", "70°C", "a.pdf"),
+            ("ambient temperature", "20°C", "a.pdf"),
+        ),
+    ],
+)
+def test_specific_subject_keeps_only_the_matching_case(question, case_a, case_b):
+    """A qualifier ("fresh concrete", "mixing water") names WHICH case, so a
+    same-measure but different-thing case is dropped and no ask fires."""
+    q = clarifying_question(
+        question,
+        f"The value is {case_a[1]}.",
+        _cases(case_a, case_b),
+    )
+    assert q is None
+
+
+@pytest.mark.parametrize(
+    "case_a,case_b",
+    [
+        (
+            ("temperature of fresh concrete at placing", "32°C", "a.pdf"),
+            ("ambient temperature", "20°C", "a.pdf"),
+        ),
+        (
+            ("mixing water temperature", "70°C", "a.pdf"),
+            ("ambient temperature", "20°C", "a.pdf"),
+        ),
+    ],
+)
+def test_generic_subject_asks_across_cases(case_a, case_b):
+    """Naming only the measure ("temperature") names no case, so two cases of
+    it ask which one."""
+    q = clarifying_question(
+        "what is the temperature?",
+        f"The value is {case_a[1]}.",
+        _cases(case_a, case_b),
+    )
+    assert q is not None
+
+
 # Case 3 -- same subject, different values: the both-values statement (#453),
 # not this mechanism.
 def test_case3_same_subject_different_values_no_ask():
