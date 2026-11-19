@@ -21,22 +21,23 @@ _CONFIGS = _ROOT / "app" / "agents" / "configs"
 _RETIRED = ("kimi", "moonshot")
 
 
-def _retired_hits(root: Path) -> list[str]:
-    """Every ``file:line`` under ``root`` that names a retired vendor."""
+def _retired_hits(root: Path, names=_RETIRED) -> list[str]:
+    """Every ``file:line`` under ``root`` that names one of ``names``."""
     hits: list[str] = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         text = path.read_text(encoding="utf-8", errors="replace")
         for n, line in enumerate(text.splitlines(), 1):
             low = line.lower()
-            if any(name in low for name in _RETIRED):
+            if any(name in low for name in names):
                 hits.append(f"{path.relative_to(root)}:{n}")
     return hits
 
 
-def test_agent_configs_never_name_the_retired_vendor():
+@pytest.mark.parametrize("name", _RETIRED)
+def test_agent_configs_never_name_the_retired_vendor(name):
     assert _CONFIGS.is_dir()
     assert any(_CONFIGS.iterdir()), "the configs directory must not be empty"
-    assert _retired_hits(_CONFIGS) == []
+    assert _retired_hits(_CONFIGS, (name,)) == []
 
 
 @pytest.mark.parametrize(
@@ -115,10 +116,14 @@ def test_enhancer_passes_the_callers_model_through(caller):
     assert out["model_used"] == caller
 
 
-def test_enhancer_reports_the_served_model_over_the_callers():
-    chat = _FakeChat(served_model="served-after-remap")
+@pytest.mark.parametrize(
+    "asked,served",
+    [("asked-model-a", "served-after-remap-a"), ("asked-model-b", "served-after-remap-b")],
+)
+def test_enhancer_reports_the_served_model_over_the_callers(asked, served):
+    chat = _FakeChat(served_model=served)
     out = asyncio.run(
-        _enhancer(chat).process("Door D2 width 900", {"action": "extract", "model": "asked-model"})
+        _enhancer(chat).process("Door D2 width 900", {"action": "extract", "model": asked})
     )
-    assert chat.sent[0]["model"] == "asked-model"
-    assert out["model_used"] == "served-after-remap"
+    assert chat.sent[0]["model"] == asked
+    assert out["model_used"] == served
