@@ -7177,7 +7177,13 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
     calculation enum is built from the live registry so it never drifts from the
     library. For cost build-ups the model is told to pass real rates from RAG;
     the library's defaults are indicative fallbacks only (keeps cost grounded)."""
+    from app.agents.driver.tools import calculator_catalogue
     from app.lib import construction_formulas as _cf
+    # The same labelled catalogue the driver schema offers (one registry, one
+    # builder): each calculator with its inputs' labels, units and ranges, so
+    # the default path fills params by label and unit, not by guessing from a
+    # bare name.
+    _specs, _lines = calculator_catalogue(None)
     return {
         "type": "function",
         "function": {
@@ -7191,7 +7197,10 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
                 "are indicative GCC fallbacks only. For concrete/raft/slab volume, "
                 "use calculation=concrete_volume; the project's documented waste "
                 "factor (5%) is applied and volume_m3 is the with-waste figure "
-                "(30×20×1.5 m → 945 m3). Deterministic: call once."
+                "(30×20×1.5 m → 945 m3). Deterministic: call once. Fill params "
+                "by each input's key as listed below, matching the user's figures "
+                "by label and unit; leave out an input the user did not give.\n"
+                + "\n".join(_lines)
             ),
             "parameters": {
                 "type": "object",
