@@ -56,6 +56,21 @@ def test_parse_pages_rejects_a_bad_range(raw):
 
 
 @pytest.mark.parametrize("sections,want", [
+    # two titles; a title's rows are summed over its sub-paths
+    ([{"path": ["T1", "a"], "rows": 2}, {"path": ["T1", "b"], "rows": 3},
+      {"path": ["T2"], "rows": 4}],
+     {"section_count": 2, "rows_per_section": [5, 4], "rows_empty_title": 0}),
+    # an empty path and a blank first element are rows with no title
+    ([{"path": [], "rows": 2}, {"path": ["  ", "x"], "rows": 1},
+      {"path": ["T"], "rows": 6}],
+     {"section_count": 1, "rows_per_section": [6], "rows_empty_title": 3}),
+    ([], {"section_count": 0, "rows_per_section": [], "rows_empty_title": 0}),
+])
+def test_section_counts_are_by_title(sections, want):
+    assert bpo.section_counts(sections) == want
+
+
+@pytest.mark.parametrize("sections,want", [
     ([{"path": ["A"], "rows": 1}, {"path": ["A", "B"], "rows": 2},
       {"path": ["A", "B", "C"], "rows": 3}, {"path": ["A", "B", "C", "D"], "rows": 4}],
      {"1": 1, "2": 2, "3+": 7}),
@@ -209,6 +224,10 @@ def test_summary_line_never_carries_plan_or_exception_text(tmp_path, plan, code)
     _assert_public(summary, _LEAKS)
     if code is None:
         assert rc == 0 and summary["rows_by_path_depth"] == {"1": 1, "2": 4}
+        # section counts reach the public line as numbers only
+        # (both sections carry the same title: one section of 5 rows)
+        assert (summary["section_count"], summary["rows_per_section"],
+                summary["rows_empty_title"]) == (1, [5], 0)
         assert summary["private_plan_saved"] is True
         # the full plan, labels included, is kept privately in the work dir
         kept = json.loads((tmp_path / "plan_0_2.json").read_text(encoding="utf-8"))
