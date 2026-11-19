@@ -172,19 +172,123 @@ def test_a_hand_case_naming_no_registered_formula_is_a_gap(name, tmp_path, monke
     assert "hand_value:cases.json[0]:unknown_formula" in fr.certification_gaps()
 
 
+# --- the edges of the check ------------------------------------------------
+
+@pytest.mark.parametrize("row,field", [
+    (["not", "an", "object"], "not_an_object"),
+    ({"formula": "", "inputs": {}, "expect": {"x": 1}, "working": "w"}, "formula"),
+    ({"formula": "syn_ks1_area", "inputs": [4, 2.5], "expect": {"area_m2": 10.0}, "working": "w"}, "inputs"),
+    ({"formula": "syn_ks1_rate", "inputs": {"amount": 1, "days": 1}, "expect": [], "working": "w"}, "expect"),
+    ({"formula": "syn_ks1_rate", "inputs": {"amount": 1, "days": 1}, "expect": {"per_day": 1.0}, "working": " "},
+     "working"),
+])
+def test_each_missing_field_of_a_hand_case_is_named(row, field, tmp_path, monkeypatch):
+    _hand_dir(tmp_path, monkeypatch, [row])
+    assert f"hand_value:cases.json[0]:{field}" in fr.certification_gaps()
+    assert fr.hand_value_cases() == []
+
+
+@pytest.mark.parametrize("text,problem", [
+    ("{not json", "unreadable:JSONDecodeError"),
+    ('{"formula": "syn_ks1_area"}', "not_a_list"),
+])
+def test_an_unreadable_or_non_list_file_is_a_gap(text, problem, tmp_path, monkeypatch):
+    d = _hand_dir(tmp_path, monkeypatch, [_GOOD["syn_ks1_area"]], name="good.json")
+    (d / "bad.json").write_text(text, encoding="utf-8")
+    fr.clear_hand_value_cache()
+    assert f"hand_value:bad.json:{problem}" in fr.certification_gaps()
+    assert len(fr.hand_value_cases()) == 1  # the good file is still read
+
+
+@pytest.mark.parametrize("name", _PROBES)
+def test_clearing_the_cache_rereads_the_directory(name, tmp_path, monkeypatch):
+    _register(name, standard=_STANDARD[name])
+    d = _hand_dir(tmp_path, monkeypatch, [_WRONG[name]])
+    assert not fr.certified(name)
+    (d / "cases.json").write_text(json.dumps([_GOOD[name]]), encoding="utf-8")
+    fr.clear_hand_value_cache()
+    assert fr.certified(name)
+
+
+@pytest.mark.parametrize("name,tol,within", [
+    ("syn_ks1_area", 0.05, True),    # 10 vs hand 10.4: 3.8 % off, inside 5 %
+    ("syn_ks1_rate", 0.05, True),    # 150 vs hand 156: 3.8 % off, inside 5 %
+    ("syn_ks1_area", None, False),   # default 0.1 %: outside
+    ("syn_ks1_rate", -1, False),     # a non-positive tolerance falls back to the default
+    ("syn_ks1_area", True, False),   # a boolean is not a tolerance
+])
+def test_a_case_states_its_own_tolerance(name, tol, within, tmp_path, monkeypatch):
+    _register(name, standard=_STANDARD[name])
+    key = next(iter(_GOOD[name]["expect"]))
+    near = {"syn_ks1_area": 10.4, "syn_ks1_rate": 156.0}[name]
+    row = {**_GOOD[name], "expect": {key: near}}
+    if tol is not None:
+        row["rel_tol"] = tol
+    _hand_dir(tmp_path, monkeypatch, [row])
+    assert fr.certified(name) is within
+
+
+def _labelled(width_m: float, length_m: float):
+    return {"result": {"shape": "rectangle", "area_m2": width_m * length_m}}
+
+
+@pytest.mark.parametrize("expect,ok", [
+    ({"shape": "rectangle", "area_m2": 6.0}, True),   # 2 x 3 = 6; text compared exactly
+    ({"shape": "square", "area_m2": 6.0}, False),     # wrong text
+    ({"area_m2": "6"}, False),                         # text hand value against a number
+    ({"shape": 6.0}, False),                           # number hand value against text
+])
+def test_outputs_nested_under_result_and_text_values_are_compared(expect, ok, tmp_path, monkeypatch):
+    _labelled.__name__ = "syn_ks1_area"
+    fr._REGISTRY.pop("syn_ks1_area", None)
+    fr.formula(owner="base", description="Synthetic KS-1 probe.", display_name="Synthetic labelled",
+               inputs={}, outputs={}, standard="Synthetic Standard C")(_labelled)
+    _hand_dir(tmp_path, monkeypatch, [{"formula": "syn_ks1_area", "inputs": {"width_m": 2, "length_m": 3},
+                                       "expect": expect, "working": "2 x 3 = 6"}])
+    assert fr.certified("syn_ks1_area") is ok
+    assert (fr.hand_value_failures("syn_ks1_area") == []) is ok
+
+
+@pytest.mark.parametrize("name", _PROBES)
+def test_failures_for_an_unregistered_name_say_so(name, tmp_path, monkeypatch):
+    fr._REGISTRY.pop(name, None)
+    _hand_dir(tmp_path, monkeypatch, [_GOOD[name], _WRONG[name]])
+    failures = fr.hand_value_failures(name)
+    assert len(failures) == 2
+    assert all("no registered formula" in f for f in failures)
+
+
 # --- the real registry -------------------------------------------------------
 
 def _baseline() -> set:
     return set(json.loads(_BASELINE.read_text(encoding="utf-8")))
 
 
-def test_no_registered_formula_is_outside_the_certification_baseline():
-    new = sorted(set(fr.certification_gaps()) - _baseline())
+def _formula_of(gap: str) -> str:
+    return gap.split(":")[1] if gap.startswith("formula:") else ""
+
+
+def _partition(gaps: set, owner: str) -> set:
+    """The gaps of one owner's formulas; "unregistered" is every gap naming no
+    registered formula (so a stale baseline entry is still caught)."""
+    owners = {spec.name: spec.owner for spec in fr.all_specs()}
+    if owner == "unregistered":
+        return {g for g in gaps if _formula_of(g) not in owners}
+    return {g for g in gaps if owners.get(_formula_of(g)) == owner}
+
+
+_PARTS = list(fr.OWNERS) + ["unregistered"]
+
+
+@pytest.mark.parametrize("owner", _PARTS)
+def test_no_registered_formula_is_outside_the_certification_baseline(owner):
+    new = sorted(_partition(set(fr.certification_gaps()), owner) - _baseline())
     assert new == [], f"declare a standard or add a hand case under tests/hand_values: {new[:20]}"
 
 
-def test_the_certification_baseline_only_shrinks():
-    filled = sorted(_baseline() - set(fr.certification_gaps()))
+@pytest.mark.parametrize("owner", _PARTS)
+def test_the_certification_baseline_only_shrinks(owner):
+    filled = sorted(_partition(_baseline(), owner) - set(fr.certification_gaps()))
     assert filled == [], f"remove these from tests/fixtures/certification_gaps.json: {filled[:20]}"
 
 
