@@ -16,3 +16,6 @@ folder_roles:
   "LOA": award
   "Reporting": reporting
   "Design": design
+  "Shop Drawings": contractor_submittal
+  "Contractor Submittals": contractor_submittal
+  "Submittals": contractor_submittal

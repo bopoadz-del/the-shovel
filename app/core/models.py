@@ -370,7 +370,8 @@ class Document(Base):
         CheckConstraint(
             "doc_role IN ("
             "'baseline_schedule', 'daily_report', 'weekly_report', 'other', "
-            "'contract', 'draft', 'tender', 'award', 'reporting', 'design'"
+            "'contract', 'draft', 'tender', 'award', 'reporting', 'design', "
+            "'contractor_submittal'"
             ")",
             name="ck_documents_doc_role",
         ),
