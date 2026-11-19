@@ -239,3 +239,27 @@ def test_stream_route_withholds_a_different_total_or_a_foreign_number(case, toke
     assert "".join(tokens) not in end["content"]
     assert CASES[case][3] in end["content"]
     assert end["content"].endswith(answer_exit.FIGURE_WITHHELD)
+
+
+@pytest.mark.parametrize("turn", [None, answer_exit.Turn(question="how many?")])
+def test_no_turn_or_no_result_leads_nothing(turn):
+    assert answer_exit.computed_leads(turn) == []
+
+
+@pytest.mark.parametrize("language,question", [
+    ("en", "how many 2.4 x 2.4 m chambers and how much kerb in total?"),
+    ("ar", "كم عدد الغرف وما طول البلدور؟"),
+])
+def test_a_withheld_recovery_keeps_the_renderers_several_results_header(language, question):
+    from app.agents.core import computed_answer
+
+    turn = answer_exit.Turn(question=question)
+    answer_exit.note_tool_result("bill_rows_aggregate", _bill(CHAMBERS, "2.4"), turn)
+    answer_exit.note_tool_result("bill_rows_aggregate", _bill(KERBS, "kerb"), turn)
+    leads = answer_exit.computed_leads(turn)
+    header = computed_answer.LABELS[language]["several"].format(n=len(leads))
+    text = "\n\n".join([header, *leads, "That makes 999 No overall."])
+    out = answer_exit.hold_computed_answer(text, turn)
+    assert out.startswith(header)
+    assert "999" not in out
+    assert out.endswith(answer_exit.FIGURE_WITHHELD)

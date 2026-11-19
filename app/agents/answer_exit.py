@@ -420,8 +420,6 @@ def _restates_a_total(text: str, totals: list[tuple[float, str]]) -> bool:
     for value, unit in totals:
         if unit:
             by_unit.setdefault(unit.casefold(), set()).add(value)
-    if not by_unit:
-        return False
     for sentence in _SENTENCE_RE.split(text or ""):
         if not (_has_wording(sentence, _TOTAL_WORDING) or _has_wording(sentence, _CORRECTION_WORDING)):
             continue
