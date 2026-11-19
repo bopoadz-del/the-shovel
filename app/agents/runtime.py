@@ -10548,22 +10548,12 @@ def _apply_clarify_cases(
     awaiting-inputs turn state, so the client renders "the agent is asking"
     the way it already renders a calculator's missing input.
 
-    Kill-switch: ``CLARIFY_CASES=0``. Never raises: a failure passes the
-    answer through unchanged.
+    The detector owns every guard (kill-switch, empty question/draft, fewer
+    than two cases): this caller only turns a non-None question into the exit
+    answer. Never raises: a failure passes the answer through unchanged.
     """
-    from app.agents.clarify_cases import (
-        cases_from_passages,
-        clarifying_question,
-        enabled,
-    )
+    from app.agents.clarify_cases import cases_from_passages, clarifying_question
 
-    if not enabled():
-        return text or ""
-    if not (text or "").strip():
-        return text or ""
-    ask = _latest_operator_ask(messages) or ""
-    if not ask.strip():
-        return text or ""
     try:
         from app.agents.citation_provenance import build_evidence
 
@@ -10573,9 +10563,9 @@ def _apply_clarify_cases(
             for rec in evidence.records
             if rec.kind == "retrieval" and (rec.text or "").strip()
         ]
-        if not passages:
-            return text or ""
-        question = clarifying_question(ask, text, cases_from_passages(passages))
+        question = clarifying_question(
+            _latest_operator_ask(messages) or "", text or "", cases_from_passages(passages),
+        )
         if question is None:
             return text or ""
         _record_clarifying_question(question)

@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents import answer_exit
-from app.agents.runtime import _apply_clarify_cases
+from app.agents.runtime import _apply_clarify_cases, _record_clarifying_question
 
 
 @pytest.fixture
@@ -141,3 +141,18 @@ def test_draft_commits_to_both_no_ask(turn, text):
     rag = _rag(("a", "The concrete cover is 40 mm."), ("b", "The backfill depth is 300 mm."))
     assert _apply_clarify_cases(text, rag, _messages("what is the required value?")) == text
     assert turn.awaiting_inputs == []
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which one is meant?",
+        "Retrieved context supports more than one answer.",
+    ],
+)
+def test_record_clarifying_question_with_no_turn_is_silent(question):
+    """With no turn open, recording the question does nothing rather than
+    falling through to ``None.questions`` and raising."""
+    answer_exit._TURN.set(None)
+    _record_clarifying_question(question)
+    assert answer_exit.current_turn() is None
