@@ -33,7 +33,10 @@ def _row(page, description="Item", labels=()):
 @pytest.mark.parametrize("rows, printed", [
     ([_row(1, "BILL NO. 6 - ELECTRICAL NETWORK"), _row(1, "Bill Number 8 Street Lighting Network")],
      []),
-    ([], [_lab("BILL NO. 6 - ELECTRICAL NETWORK"), _lab("Bill # 8 STREET LIGHTING NETWORK")]),
+    ([], [_lab("General Summary of Quantities"),
+          _lab("BILL NO. 6 - ELECTRICAL NETWORK"),
+          _lab("Bill # 8 STREET LIGHTING NETWORK"),
+          _lab("BILL NO. 9 - 123")]),  # figure-only title and non-heading label map nothing
 ], ids=["summary-as-rows", "summary-as-labels"])
 def test_index_number_map_from_rows_and_labels(rows, printed):
     assert g.index_number_map(rows, printed) == {
