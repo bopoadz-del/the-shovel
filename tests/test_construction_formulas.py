@@ -234,6 +234,12 @@ _SMOKE_INPUTS = {
     "crew_sizing": dict(quantity=3000, duration_days=15, rate_per_crew_day=12),
     "floor_cycle_progress": dict(completed_units=[6, 4], total_units=[8, 8], weights=[1, 1]),
     "productivity_benchmark": dict(work_item="blockwork walls"),
+    # Procedure-rule checks (contracts / qaqc hats).
+    "generate_doc_number": dict(doc_type="IR", sequence=12),
+    "enforce_critical_rules": dict(document_text="Engineer approval of the design drawing."),
+    "next_ncr_status": dict(ncr_status="IMPLEMENTING"),
+    "validate_design_status": dict(design_status="BUY_OFF"),
+    "check_review_timeline": dict(distribution_date="2026-02-02", workshop_date="2026-02-12"),
 }
 
 
