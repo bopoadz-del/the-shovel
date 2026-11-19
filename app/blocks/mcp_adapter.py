@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class MCPAdapterBlock(UniversalBlock):
     name = "mcp_adapter"
     version = "1.0.0"
-    description = "Expose Cerebrum blocks to MCP-aware agents (Claude, Copilot, Kimi, ...)"
+    description = "Expose Cerebrum blocks to MCP-aware agents (Claude, Copilot, ...)"
     layer = 0
     tags = ["mcp", "agents", "infrastructure", "interop"]
 

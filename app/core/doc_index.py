@@ -4733,6 +4733,20 @@ def _row_document_fields(doc_id: str, kept: list[Any]) -> dict[str, Any]:
     return out
 
 
+def _hit_origin(layer: str | None, searched_corpus: str) -> str:
+    """The corpus one search hit came from: ``"own"``, ``"general_knowledge"``
+    or ``"master_corpus"``.
+
+    A layer the retriever set to something other than ``"own"`` (a merged
+    library chunk, a disclosed master-corpus fallback) is kept as it is.
+    ``"own"`` (or no layer) means "the project that was searched", which is
+    ``searched_corpus``: the user's own documents for a user project, the
+    general-knowledge library when the searched project is a library.
+    """
+    layer = str(layer or "own")
+    return searched_corpus if layer == "own" else layer
+
+
 async def search_project_documents(
     project_id: str,
     query: str,
@@ -4908,7 +4922,11 @@ def _search_project_documents_traced(
     # keep app.core.doc_index importable when the RAG stack isn't fully
     # wired (tests, minimal install).
     from app.core.rag import reranker as _reranker
-    from app.core.rag.retriever import _doc_name_for_id, retrieve_with_filter
+    from app.core.rag.retriever import (
+        _doc_name_for_id,
+        _general_knowledge_project_ids,
+        retrieve_with_filter,
+    )
 
     # Over-fetch chunks so we can still return ``top_k`` DISTINCT documents
     # after the "best chunk per document" collapse below. 4x is enough
@@ -4975,6 +4993,16 @@ def _search_project_documents_traced(
     # Result rows are still one per document, still ranked by that document's
     # best chunk: the diversity this collapse was written for is unchanged.
     per_doc = _search_chunks_per_doc()
+    # The retriever names a chunk "own" when it belongs to the project it was
+    # asked to search. When that project is itself a configured
+    # general-knowledge library (the general-knowledge search tool searches
+    # each library as the project), "own" would tell every reader of
+    # ``origin`` that a library passage is the user's own document. The
+    # corpus a hit came from is decided here, by the searched project's id
+    # against the configured library set -- not by which project was active.
+    searched_corpus = (
+        "general_knowledge" if project_id in set(_general_knowledge_project_ids()) else "own"
+    )
     grouped: dict[str, list[Any]] = {}
     for c in chunks:
         grouped.setdefault(c.doc_id, []).append(c)
@@ -5000,7 +5028,7 @@ def _search_project_documents_traced(
             # a STEP 0b Master-Corpus fallback hit. Verified live
             # 2026-08-02: a project owning ZERO documents returned five
             # Master-Corpus documents here with nothing marking them.
-            "origin": getattr(kept[0], "layer", "own") or "own",
+            "origin": _hit_origin(getattr(kept[0], "layer", None), searched_corpus),
         }
 
     ranked = sorted(best.values(), key=lambda x: x["score"], reverse=True)[:top_k]
