@@ -106,9 +106,10 @@ def test_every_allowed_action_in_every_manifest_resolves():
     assert not dead, f"allowed actions that resolve to nothing: {dead}"
 
 
-def test_no_manifest_declares_an_action_twice():
-    for name, acts in _manifests().items():
-        assert len(acts) == len(set(acts)), (name, acts)
+@pytest.mark.parametrize("manifest", sorted(p.name for p in MANIFEST_DIR.glob("fork.*.json")))
+def test_no_manifest_declares_an_action_twice(manifest):
+    acts = _manifests()[manifest]
+    assert len(acts) == len(set(acts)), (manifest, acts)
 
 
 # -- the resolver itself, on invented inputs --------------------------------
@@ -141,7 +142,13 @@ def test_a_name_nothing_answers_is_dead(action):
     assert unresolved([action], _CALCS, _ROUTES, _tool_get) == [action]
 
 
-def test_the_dead_are_reported_in_order_and_the_live_dropped():
-    acts = ["epsilon_tool", "omega_one", "construction_calc:beta_float",
-            "construction:omega_two", "construction:delta_route"]
-    assert unresolved(acts, _CALCS, _ROUTES, _tool_get) == ["omega_one", "construction:omega_two"]
+@pytest.mark.parametrize("acts, dead", [
+    (["epsilon_tool", "omega_one", "construction_calc:beta_float",
+      "construction:omega_two", "construction:delta_route"],
+     ["omega_one", "construction:omega_two"]),
+    (["construction_calc:omega_three", "zeta_tool", "construction:gamma_route",
+      "omega_four"],
+     ["construction_calc:omega_three", "omega_four"]),
+])
+def test_the_dead_are_reported_in_order_and_the_live_dropped(acts, dead):
+    assert unresolved(acts, _CALCS, _ROUTES, _tool_get) == dead
