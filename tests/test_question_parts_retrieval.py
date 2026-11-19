@@ -66,48 +66,76 @@ def test_a_question_that_does_not_split_gives_no_parts(question):
     assert rt.question_parts(question) == []
 
 
-def test_parts_are_capped_and_kept_in_the_question_order():
-    question = (
+@pytest.mark.parametrize("question, want", [
+    (
         "roof membrane laps, gutter outlet sizes, parapet coping joints, "
-        "facade sealant colours, louvre blade pitch and canopy fixing centres"
-    )
+        "facade sealant colours, louvre blade pitch and canopy fixing centres",
+        ["roof membrane laps", "gutter outlet sizes",
+         "parapet coping joints", "facade sealant colours"],
+    ),
+    (
+        "pump duty points versus motor ratings compared with the valve "
+        "schedule sizes; starter panel ratings and cable tray widths, "
+        "earthing conductor sizes",
+        ["pump duty points", "motor ratings", "the valve schedule sizes",
+         "starter panel ratings"],
+    ),
+])
+def test_parts_are_capped_and_kept_in_the_question_order(question, want):
     parts = rt.question_parts(question)
     assert len(parts) == vs.QUERY_PARTS_MAX == 4
-    assert parts == ["roof membrane laps", "gutter outlet sizes",
-                     "parapet coping joints", "facade sealant colours"]
-    other = "pump duty points versus motor ratings compared with the valve schedule sizes"
-    assert rt.question_parts(other) == [
-        "pump duty points", "motor ratings", "the valve schedule sizes",
-    ]
+    assert parts == want
 
 
-def test_a_repeated_part_is_searched_once():
-    q = "lintel bearing lengths, lintel bearing lengths and sill drip details"
-    assert rt.question_parts(q) == ["lintel bearing lengths", "sill drip details"]
+@pytest.mark.parametrize("question, want", [
+    ("lintel bearing lengths, lintel bearing lengths and sill drip details",
+     ["lintel bearing lengths", "sill drip details"]),
+    ("Kerb Joint Spacing; kerb joint spacing versus channel fall gradients",
+     ["Kerb Joint Spacing", "channel fall gradients"]),
+])
+def test_a_repeated_part_is_searched_once(question, want):
+    assert rt.question_parts(question) == want
 
 
 # ── merge_leg_lists ───────────────────────────────────────────────────────
 
-def test_merge_takes_each_chunks_best_rank_and_never_lowers_one():
-    whole = [_c("d:1"), _c("d:2"), _c("d:3"), _c("d:4")]
-    part_a = [_c("d:4"), _c("e:9")]
-    part_b = [_c("f:7"), _c("d:2"), _c("d:3")]
-    merged, rank = merge_leg_lists([whole, part_a, part_b])
-    assert rank == {"d:1": 1, "d:4": 1, "f:7": 1, "d:2": 2, "e:9": 2, "d:3": 3}
+@pytest.mark.parametrize("lists, want_rank, want_order, kept", [
+    (
+        [["d:1", "d:2", "d:3", "d:4"], ["d:4", "e:9"], ["f:7", "d:2", "d:3"]],
+        {"d:1": 1, "d:4": 1, "f:7": 1, "d:2": 2, "e:9": 2, "d:3": 3},
+        ["d:1", "d:4", "f:7", "d:2", "e:9", "d:3"],
+        ("d:4", 0),
+    ),
+    (
+        [["m:5", "m:6"], ["n:1", "n:2", "m:6"]],
+        {"m:5": 1, "n:1": 1, "m:6": 2, "n:2": 2},
+        ["m:5", "n:1", "m:6", "n:2"],
+        ("m:6", 0),
+    ),
+])
+def test_merge_takes_each_chunks_best_rank_and_never_lowers_one(
+    lists, want_rank, want_order, kept,
+):
+    built = [[_c(cid) for cid in lst] for lst in lists]
+    merged, rank = merge_leg_lists(built)
+    assert rank == want_rank
     # Every whole-question chunk keeps or improves its rank.
-    for r, c in enumerate(whole, 1):
+    for r, c in enumerate(built[0], 1):
         assert rank[c.chunk_id] <= r
     # Ties: the earlier list first (the whole question's before a part's).
-    assert [c.chunk_id for c in merged] == ["d:1", "d:4", "f:7", "d:2", "e:9", "d:3"]
-    # The instance kept is the whole question's when it found the chunk.
-    assert merged[1] is whole[3]
+    assert [c.chunk_id for c in merged] == want_order
+    # The instance kept is the earliest list's (the whole question's).
+    cid, li = kept
+    inst = next(c for c in merged if c.chunk_id == cid)
+    assert any(inst is c for c in built[li])
 
 
-def test_merge_of_one_list_is_that_list():
-    whole = [_c("x:3"), _c("x:1"), _c("x:2")]
+@pytest.mark.parametrize("ids", [["x:3", "x:1", "x:2"], ["y:9"]])
+def test_merge_of_one_list_is_that_list(ids):
+    whole = [_c(cid) for cid in ids]
     merged, rank = merge_leg_lists([whole])
     assert merged == whole
-    assert rank == {"x:3": 1, "x:1": 2, "x:2": 3}
+    assert rank == {cid: i for i, cid in enumerate(ids, 1)}
 
 
 # ── the retriever passes parts only for a question that splits ───────────
@@ -293,7 +321,11 @@ def test_a_failing_part_leaves_the_whole_question_standing(real_store, monkeypat
         assert row["vector"] == 0 and row["lexical"] == 0
 
 
-def test_part_legs_run_on_their_own_pool_not_the_callers_thread(real_store, monkeypatch):
+@pytest.mark.parametrize("parts", [
+    ["bolt schedule steel", "anchor torque manual"],
+    ["landscape planting palette", "canteen parking", "steel drawings grade"],
+])
+def test_part_legs_run_on_their_own_pool_not_the_callers_thread(real_store, monkeypatch, parts):
     store, emb = real_store
     seen = []
     real = VectorStore.bm25_search
@@ -305,7 +337,7 @@ def test_part_legs_run_on_their_own_pool_not_the_callers_thread(real_store, monk
     monkeypatch.setattr(VectorStore, "bm25_search", spy)
     qv = emb.encode_queries(["canteen opening"])[0]
     store.search(_PID, qv, k=4, query_text="canteen opening",
-                 query_parts=_parts(emb, ["bolt schedule steel", "anchor torque manual"]))
+                 query_parts=_parts(emb, parts))
     me = threading.current_thread().name
     assert seen.count(me) == 1, "the whole question's lexical leg runs in the caller"
-    assert sum(n.startswith("retrieval_parts-work") for n in seen) == 2
+    assert sum(n.startswith("retrieval_parts-work") for n in seen) == len(parts)
