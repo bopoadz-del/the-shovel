@@ -34,7 +34,6 @@ runs:
     - name: Install the packages
       id: install
       shell: bash
-      timeout-minutes: 10
       run: |
         set -euo pipefail
         PKGS='${{ inputs.packages }}'

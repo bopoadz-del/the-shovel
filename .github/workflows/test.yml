@@ -105,6 +105,7 @@ jobs:
 
       - name: Install system deps for OCR + PDF
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
+        timeout-minutes: 10
         uses: ./.github/actions/install-system-deps
         with:
           packages: tesseract-ocr poppler-utils antiword catdoc
@@ -326,6 +327,7 @@ jobs:
 
       - name: Install system deps for OCR + PDF
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
+        timeout-minutes: 10
         uses: ./.github/actions/install-system-deps
         with:
           packages: tesseract-ocr poppler-utils antiword catdoc
@@ -431,6 +433,7 @@ jobs:
           cache: pip
 
       - name: Install system deps for OCR + PDF
+        timeout-minutes: 10
         uses: ./.github/actions/install-system-deps
         with:
           packages: tesseract-ocr poppler-utils antiword catdoc
