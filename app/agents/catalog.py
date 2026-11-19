@@ -65,6 +65,19 @@ def get_agent_catalog() -> Dict[str, AgentManifest]:
     return _catalog
 
 
+def catalog_load_error() -> str | None:
+    """None when every hat manifest loads; else the error's type.
+
+    The catalog raises on a broken manifest, but only when first read, which
+    is the first chat that wears a hat. Start-up and readiness call this so a
+    broken hat setting is found before any user is served."""
+    try:
+        get_agent_catalog()
+    except Exception as e:  # noqa: BLE001 -- the error IS the answer here
+        return type(e).__name__
+    return None
+
+
 def get_base() -> AgentManifest:
     """Return the base manifest."""
     for m in get_agent_catalog().values():
