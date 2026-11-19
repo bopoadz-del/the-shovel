@@ -281,3 +281,77 @@ def test_derived_numbers_come_from_the_selected_rows_only(case, expected, absent
     derived = set(answer_exit._group_numbers(_bill(rows, terms)))
     assert expected <= derived
     assert not absent & derived
+
+
+# --- the helpers' own rules, asserted directly ----------------------------
+# Each rule below is asserted on inputs built here, with two inputs per
+# decision: one the rule must act on, one it must leave alone.
+
+def _cyclic_dict():
+    payload = {"rows": [{"section": "doors", "qty": 4}]}
+    payload["again"] = payload            # a payload that contains itself
+    return payload
+
+
+def _cyclic_list():
+    payload = [{"unit": "m", "section": "kerbs", "qty": 9}]
+    payload.append(payload)
+    return payload
+
+
+@pytest.mark.parametrize("make,rows", [(_cyclic_dict, 4), (_cyclic_list, 9)])
+def test_a_self_containing_payload_is_walked_to_a_bounded_depth(make, rows):
+    found = list(answer_exit._row_lists(make()))
+    assert found and len(found) <= 10      # bounded, not a RecursionError
+    assert all(rec.get("qty") == rows for recs in found for rec in recs)
+
+
+@pytest.mark.parametrize("make,unit", [(_cyclic_dict, set()), (_cyclic_list, {"m"})])
+def test_the_units_of_a_self_containing_payload_are_read_to_a_bounded_depth(make, unit):
+    assert answer_exit._payload_units(make()) == unit
+
+
+@pytest.mark.parametrize("value,keys", [
+    ("  Doors ", ["doors"]),               # a text field is one group, normalised
+    ("WINDOWS", ["windows"]),
+    (["Ext", "Doors"], [("ext",), ("ext", "doors")]),   # a path is every prefix
+    ("   ", []),                           # a blank text is no group
+    (7, []),                               # a number is no group
+])
+def test_the_groups_a_field_puts_a_record_in(value, keys):
+    assert answer_exit._group_keys(value) == keys
+
+
+@pytest.mark.parametrize("records,present,absent", [
+    ([{"section": "Doors", "qty": 2}, {"section": "doors", "qty": 3},
+      {"section": "Windows", "qty": 4}], {5.0, 2.0, 4.0, 1.0}, {9.0}),
+    ([{"trade": "Paint", "area": 11}, {"trade": "Tile", "area": 6},
+      {"trade": "Tile", "area": 8}], {11.0, 14.0, 2.0, 1.0}, {25.0}),
+])
+def test_a_text_field_breaks_the_records_down(records, present, absent):
+    derived = answer_exit._group_numbers({"rows": records})
+    assert present <= derived
+    assert not absent & derived
+
+
+@pytest.mark.parametrize("records,sums", [
+    ([{"section": "Doors", "qty": 2}, {"section": "Doors"},
+      {"section": "Doors", "qty": 5}], {7.0}),            # a record without the field
+    ([{"section": "Roof", "qty": 6}, {"section": "Roof", "qty": True},
+      {"section": "Roof", "qty": 1}], {7.0}),             # a flag is not a quantity
+])
+def test_a_group_sum_counts_only_numeric_values(records, sums):
+    derived = answer_exit._group_numbers({"rows": records})
+    assert sums <= derived
+    assert 8.0 not in derived
+
+
+@pytest.mark.parametrize("text,units,figures", [
+    ("See page 12 for 30 No.", {"no"}, {30.0}),            # a locator's number
+    ("Clause 4.2.1 sets 14 m.", {"m"}, {14.0}),            # a dotted reference
+    ("Billed in 2024 as 16 No.", {"no"}, {16.0}),          # a year
+    ("There are 2024 No.", {"no"}, {2024.0}),              # bound to a unit: a figure
+    ("Page 7 lists 27 No.", set(), {27.0}),
+])
+def test_the_figures_a_text_states(text, units, figures):
+    assert answer_exit._figure_numbers(text, units) == figures

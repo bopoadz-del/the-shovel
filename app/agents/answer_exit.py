@@ -373,8 +373,6 @@ def _group_numbers(payload: Any) -> set[float]:
             for rec in records:
                 for key in _group_keys(rec.get(name)):
                     groups.setdefault(key, []).append(rec)
-            if not groups:
-                continue
             by_depth: dict[int, int] = {}
             for key in groups:
                 depth = len(key) if isinstance(key, tuple) else 0
