@@ -364,3 +364,33 @@ def test_admin_route_refuses_non_admin(monkeypatch, tmp_path, role):
     _project(monkeypatch, tmp_path, "nproj")
     with pytest.raises(HTTPException):
         admin_corpus_doc_standing(project_id="nproj", auth={"user_id": "u", "role": role})
+
+
+@pytest.mark.parametrize(
+    "doc_types, maps",
+    [
+        ("boq", True),  # a single type given as a bare string is one type
+        (["boq"], True),
+        (7, False),  # neither a string nor a list names no type: entry dropped
+        ({"boq": 1}, False),
+    ],
+)
+def test_entry_types_as_string_or_list(monkeypatch, doc_types, maps):
+    monkeypatch.setenv("DOC_STANDING", json.dumps([{"kind": "priced_boq", "doc_types": doc_types}]))
+    assert ds.standing_for("boq", "other") == ("priced_boq" if maps else "other")
+
+
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({"standing": "priced_boq", "drive_path": "a/b.pdf"}, "priced_boq"),
+        ({"standing": "specification"}, "specification"),
+        ({"drive_path": "a/b.pdf"}, None),  # never set
+        ({"standing": ""}, None),  # empty is not a kind
+        ({"standing": 3}, None),  # not a string is not a kind
+        (None, None),
+        ("standing", None),  # not a mapping
+    ],
+)
+def test_stored_standing_reads_only_a_set_kind(metadata, expected):
+    assert ds.stored_standing(metadata) == expected
