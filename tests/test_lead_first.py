@@ -258,3 +258,16 @@ def test_stream_route_without_a_computed_result_is_untouched(tokens):
         return json.loads(frames[-1][len("data: "):])
     end = asyncio.run(run())
     assert end.get("content", "".join(tokens)) == "".join(tokens)
+
+
+@pytest.mark.parametrize("language,n", [("en", 2), ("ar", 3)])
+def test_the_renderers_several_results_header_is_recognised(language, n):
+    from app.agents.core import computed_answer
+
+    header = computed_answer.LABELS[language]["several"].format(n=n)
+    assert answer_exit._several_line(header) is True
+
+
+@pytest.mark.parametrize("line", ["2 manholes and 3 kerbs.", "There are 30 No in total."])
+def test_a_model_line_is_not_the_several_results_header(line):
+    assert answer_exit._several_line(line) is False
