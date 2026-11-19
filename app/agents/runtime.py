@@ -13228,20 +13228,33 @@ async def _auto_validate(envelope: dict[str, Any]) -> None:
 
 # ── Loader ────────────────────────────────────────────────────────────────
 AGENT_REGISTRY: dict[str, Agent] = {}
+# Agent configs the last load_agents() could not parse: file name -> the
+# error's type. Readiness reads it (app/routers/health.py), so a broken agent
+# setting fails /ready instead of leaving one stdout line and a missing agent.
+AGENT_LOAD_FAILURES: dict[str, str] = {}
 
 
 def load_agents(configs_dir: Path | None = None) -> dict[str, Agent]:
-    """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing)."""
+    """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing).
+
+    A config that does not parse is skipped, logged, and recorded in
+    AGENT_LOAD_FAILURES; the others still load. A missing directory is
+    recorded under its own name."""
     configs_dir = configs_dir or CONFIGS_DIR
     AGENT_REGISTRY.clear()
+    AGENT_LOAD_FAILURES.clear()
     if not configs_dir.exists():
+        # No configs directory means no agents at all: a broken setting too.
+        AGENT_LOAD_FAILURES[configs_dir.name] = "FileNotFoundError"
+        logging.getLogger(__name__).error("agent configs directory not found: %s", configs_dir)
         return AGENT_REGISTRY
     for md in sorted(configs_dir.glob("*.md")):
         try:
             agent = _parse_agent_file(md)
             AGENT_REGISTRY[agent.name] = agent
         except Exception as e:
-            print(f"failed to load agent {md.name}: {e}")
+            AGENT_LOAD_FAILURES[md.name] = type(e).__name__
+            logging.getLogger(__name__).error("failed to load agent %s: %s", md.name, e)
     return AGENT_REGISTRY
 
 

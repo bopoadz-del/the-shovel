@@ -39,10 +39,10 @@
     "construction_calc:cost_buildup_rebar",
     "construction_calc:cost_buildup_formwork",
     "construction_calc:calculate_payment",
-    "boq_cost_analyzer",
+    "construction:boq_process",
     "cash_flow_forecast",
-    "rate_card_lookup",
-    "interim_certificate_generator"
+    "construction:benchmark_lookup",
+    "payment_certificate"
   ],
   "available_tools": ["cash_flow_forecast", "evm_calculate", "payment_certificate"],
   "handoffs": [
