@@ -381,3 +381,52 @@ def test_repeating_title_band_line_is_a_title_not_furniture(title, misread):
         (title[0], "Basins"), (title[0], "Sinks"), (title[0], "Baths"),
         (title[1], "Doors"), (title[1], "Frames"),
     ]
+
+
+def _section_heading_words(prefix, pages=6):
+    """A constant running header, a page-number-only label, a two-state
+    title band, and body headings ``{prefix} N`` whose masked form appears
+    on most pages while no one heading repeats (a section heading per bill,
+    not a running header)."""
+    words: list[g.Word] = []
+    layout = [
+        (1, "GENERAL ITEMS", 1, "Item 1"),
+        (2, "GENERAL ITEMS", 1, "Item 2"),
+        (3, "GENERAL ITEMS", 2, "Item 3"),
+        (4, "SUPPLEMENTARY", 2, "Item 4"),
+        (5, "SUPPLEMENTARY", 3, "Item 5"),
+        (6, "SUPPLEMENTARY", 3, "Item 6"),
+    ]
+    for p, band, n, item in layout:
+        above = [("Contractor Limited", H), (f"Page {p}", H), (band, HEAVY)]
+        body = [(f"{prefix} {n}", HEAVY), [item, "m", "1", "2", "2"]]
+        words += _page(p, COLS_A, above, body)
+    return words
+
+
+@pytest.mark.parametrize("prefix", ["BILL NO.", "SECTION"], ids=["bill-no", "section"])
+def test_section_heading_is_not_a_running_line(prefix):
+    printed: list[g._Label] = []
+    for p, n in ((1, 1), (2, 1), (3, 2), (4, 2), (5, 3), (6, 3)):
+        printed += [
+            _lab("Contractor Limited", page=p),
+            _lab(f"Page {p}", page=p),
+            _lab(f"{prefix} {n}", page=p),
+        ]
+    running = g.running_lines(printed, 6)
+    assert g._masked(f"{prefix} 1") not in running.masks  # a section heading, not furniture
+    assert "page #" in running.masks                      # the page label stays furniture
+    assert running.page_label == "page #"
+
+
+@pytest.mark.parametrize("prefix", ["BILL NO.", "SECTION"], ids=["bill-no", "section"])
+def test_section_heading_survives_in_the_path(prefix):
+    words = _section_heading_words(prefix)
+    assert [r.path for r in g.extract_bill_rows(words)] == [
+        ("GENERAL ITEMS", f"{prefix} 1"),
+        ("GENERAL ITEMS", f"{prefix} 1"),
+        ("GENERAL ITEMS", f"{prefix} 2"),
+        ("SUPPLEMENTARY", f"{prefix} 2"),
+        ("SUPPLEMENTARY", f"{prefix} 3"),
+        ("SUPPLEMENTARY", f"{prefix} 3"),
+    ]

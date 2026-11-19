@@ -884,7 +884,12 @@ class Running:
 def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     """(a) A label line that repeats, digits masked, on most pages is a running
     header. (b) Of those, the one whose digits take the most distinct values
-    from page to page is the page label."""
+    from page to page is the page label.
+
+    A digit-varying line that is not the page label is a section heading
+    whose number changes only when the section changes: its masked form
+    appears on most pages while no one heading repeats. It is not a running
+    header, so it is not stripped from paths."""
     if pages < MIN_RUNNING_PAGES:
         return Running(set(), None)
     on: dict[str, set[int]] = defaultdict(set)
@@ -896,6 +901,7 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     masks = {m for m, ps in on.items() if len(ps) * 2 > pages}
     varying = [m for m in masks if "#" in m and len(raw[m]) > 1]
     label = max(varying, key=lambda m: (len(raw[m]), m)) if varying else None
+    masks.difference_update(m for m in varying if m != label)
     return Running(masks, label)
 
 
