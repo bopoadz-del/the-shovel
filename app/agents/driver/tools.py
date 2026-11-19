@@ -1,7 +1,8 @@
-"""The tools a driver turn offers: ``select_hat`` and the tools the base
-package and the chosen hat's package register. The schemas are the agent's
-own; which tools exist is the package registry's answer, never a choice
-made from the question's words."""
+"""The tools a driver turn offers: ``select_hat`` and every tool the base
+package and the hat packages register. A hat changes the order, never what
+is offered: the worn hat's tools come first, then the base package's, then
+the other hats'. The schemas are the agent's own; which tools exist is the
+package registry's answer, never a choice made from the question's words."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -14,8 +15,9 @@ def select_hat_schema(disciplines: List[str]) -> Dict[str, Any]:
         "type": "function",
         "function": {
             "name": SELECT_HAT,
-            "description": "Wear the hat whose description fits the question. Its tools and "
-                           "guidance are added for the rest of the turn.",
+            "description": "Wear the hat whose description fits the question. Its guidance is "
+                           "added for the rest of the turn and its tools are listed first; "
+                           "every tool stays offered whichever hat is worn.",
             "parameters": {
                 "type": "object",
                 "properties": {"hat": {"type": "string", "enum": sorted(disciplines)}},
@@ -30,9 +32,9 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
 
     from app.agents.core import tool_registry
 
-    names = set(tool_registry.tools_of("base"))
-    if hat:
-        names |= set(tool_registry.tools_of(hat))
+    # Every package's tools, whichever hat is worn (or none): a hat is focus,
+    # never access. A tool the turn needs is never out of reach.
+    names = {n for owner in tool_registry.OWNERS for n in tool_registry.tools_of(owner)}
     # The package tools' schemas are written next to the construction block's
     # in tool_definitions and emitted only when that block is allowed; in
     # driver mode the registry, not the agent's block list, decides.
@@ -59,7 +61,22 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
         # by a second door; with two doors the model's choice between them
         # varies. The workflow is offered once, through run_workflow.
         tools = [t for t in tools if (t.get("function") or {}).get("name") not in set(workflows)]
-    return [select_hat_schema(disciplines)] + tools + ([workflow] if workflow else [])
+    return [select_hat_schema(disciplines)] + lead_first(tools, hat) + ([workflow] if workflow else [])
+
+
+def lead_first(tools: List[Dict[str, Any]], hat: Optional[str]) -> List[Dict[str, Any]]:
+    """The worn hat's tools first, then the base package's, then the other
+    hats' -- each group in its existing order. Nothing is added or removed."""
+    from app.agents.core import tool_registry
+
+    def rank(t: Dict[str, Any]) -> int:
+        spec = tool_registry.get((t.get("function") or {}).get("name") or "")
+        owner = spec.owner if spec is not None else "base"
+        if hat and owner == hat:
+            return 0
+        return 1 if owner == "base" else 2
+
+    return sorted(tools, key=rank)
 
 
 #: Calculations listed in full (inputs with units and ranges) at most: base
