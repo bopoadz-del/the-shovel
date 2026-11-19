@@ -72,22 +72,32 @@ def test_optional_inputs_are_marked_on_the_default_path(two_formula_registry, ke
     assert expected in _default_path_description()
 
 
-def test_both_paths_offer_the_same_catalogue(two_formula_registry):
+@pytest.mark.parametrize("base,other", [(ALPHA, BETA), (BETA, ALPHA)])
+def test_both_paths_offer_the_same_catalogue(monkeypatch, two_formula_registry, base, other):
+    # Two registries: either formula as the base offer, the other in another hat.
+    monkeypatch.setattr(formula_registry, "specs_for", lambda hat: [base])
     driver_desc = driver_tools.calculator_schema(None)["function"]["description"]
     default_desc = _default_path_description()
     _specs, lines = driver_tools.calculator_catalogue(None)
-    assert [s.name for s in _specs] == ["zz_alpha_calc", "zz_beta_calc"]
+    assert [s.name for s in _specs] == [base.name, other.name]
+    assert f"- {base.name}: {base.display_name}. {base.description}" in default_desc
+    assert f"- {other.name}: {other.display_name} ({other.owner})" in default_desc
     for line in lines:
         assert line in driver_desc
         assert line in default_desc
 
 
-def test_a_formula_added_to_the_registry_is_offered_without_code(monkeypatch, two_formula_registry):
-    gamma = _spec("zz_gamma_calc", "Gamma rate", "thirdhat", "Rates gamma.", {
-        "rate_per_day": _param("output rate", "m2/day", 1.0, 500.0, True),
-    })
+@pytest.mark.parametrize("key,param,expected", [
+    ("rate_per_day", _param("output rate", "m2/day", 1.0, 500.0, True),
+     "rate_per_day = output rate (m2/day, 1 to 500)"),
+    ("thickness_mm", _param("slab thickness", "mm", 50.0, 1200.0, False),
+     "thickness_mm = slab thickness (mm, 50 to 1200, optional)"),
+])
+def test_a_formula_added_to_the_registry_is_offered_without_code(monkeypatch, two_formula_registry,
+                                                                  key, param, expected):
+    gamma = _spec("zz_gamma_calc", "Gamma rate", "thirdhat", "Rates gamma.", {key: param})
     monkeypatch.setattr(formula_registry, "all_specs", lambda: [ALPHA, BETA, gamma])
     desc = _default_path_description()
-    assert "rate_per_day = output rate (m2/day, 1 to 500)" in desc
+    assert expected in desc
     # and one that is not registered is not offered
     assert "zz_delta_calc" not in desc
