@@ -37,7 +37,9 @@ The last line is ``BILLPLANSUMMARY <json>``. That line reaches a GitHub job
 summary, which is world-readable, so it carries counts, codes and hashes
 only: the classifier verdict and its counts, the page range, pages cached
 before and after, rows, unreconciled rows, the number of section paths, the
-rows per path depth, pages by word source (text layer, OCR, work-dir cache),
+rows per path depth, the number of sections (distinct first path elements,
+the section title), the rows in each section as a list of counts and the
+rows whose path has no title, pages by word source (text layer, OCR, work-dir cache),
 wall time, peak RSS and the plan hash. It is built by
 :func:`public_summary` from a fixed key list, and every string in it must be
 a short code token (at most a hash long); anything else is replaced by
@@ -109,6 +111,7 @@ SUMMARY_KEYS = (
     "ok", "error", "error_class", "project_id", "document_id", "build_sha",
     "requested_pages", "pages_cached_before", "pages_cached_after", "wall_s",
     "peak_rss_mb", "verdict", *PLAN_FIELDS, *SOURCE_FIELDS, "section_paths", "rows_by_path_depth",
+    "section_count", "rows_per_section", "rows_empty_title",
     "private_plan_saved", "work_dir_durable", "geometry",
     "mode", "execute_hash", "gates", "refused", "derived_document_id", "superseded",
     "rows_written", "chunks_added", "chunks_over_window", "document_status", "index_status",
@@ -289,6 +292,29 @@ def depth_distribution(sections: list[dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(out.items()))
 
 
+def section_counts(sections: list[dict[str, Any]]) -> dict[str, Any]:
+    """Counts by section title (a path's first element): the number of
+    sections, the rows of each as a list of counts (largest first, no
+    title), and the rows whose path has no title (empty or blank first
+    element). A section is identified by its title only, so two sections
+    printed with the same title are counted as one."""
+    per: dict[str, int] = {}
+    empty = 0
+    for section in sections:
+        path = section.get("path") or ()
+        title = str(path[0]).strip() if path else ""
+        rows = int(section.get("rows") or 0)
+        if title:
+            per[title] = per.get(title, 0) + rows
+        else:
+            empty += rows
+    return {
+        "section_count": len(per),
+        "rows_per_section": sorted(per.values(), reverse=True),
+        "rows_empty_title": empty,
+    }
+
+
 def verdict_counts(classify: Callable[[Any], Any]) -> tuple[Callable[[Any], Any], dict[str, Any]]:
     """Wrap ``classify`` so the run can report the verdict's counts."""
     seen: dict[str, Any] = {}
@@ -401,6 +427,7 @@ def plan_one(
         return report
     report["section_paths"] = len(sections)
     report["rows_by_path_depth"] = depth_distribution(sections)
+    report.update(section_counts(sections))
     report["ok"] = True
     if deps.geometry is not None:
         first, stop = (plan.get("pages") or [0, 0])[:2]
