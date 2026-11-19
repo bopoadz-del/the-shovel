@@ -909,7 +909,7 @@ def _load_hand_values(directory: str) -> Tuple[Tuple[Dict[str, Any], ...], Tuple
     problems: List[str] = []
     root = _Path(directory)
     if not root.is_dir():
-        return (), ()
+        return (), ("hand_value_dir:missing",)
     for path in sorted(root.glob("*.json")):
         try:
             rows = _json.loads(path.read_text(encoding="utf-8"))

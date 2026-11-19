@@ -163,6 +163,7 @@ def test_no_hand_value_directory_certifies_nothing(missing, tmp_path, monkeypatc
     monkeypatch.setenv("FORMULA_HAND_VALUES_DIR", str(tmp_path / missing))
     fr.clear_hand_value_cache()
     assert not any(fr.certified(name) for name in _PROBES)
+    assert "hand_value_dir:missing" in fr.certification_gaps()
 
 
 @pytest.mark.parametrize("name", _PROBES)
