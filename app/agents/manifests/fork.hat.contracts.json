@@ -35,13 +35,12 @@
   ],
   "allowed_actions": [
     "construction_calc:score_risk",
-    "variation_order_generator",
-    "eot_claim_assessor",
-    "fidic_clause_lookup",
-    "dispute_timeline_builder",
-    "compliance_gate_checker",
-    "construction_calc:generate_doc_number",
+    "construction:variation_order_manager",
+    "construction:forensic_delay_analysis",
+    "search_project_documents",
+    "construction:claims_builder",
     "construction_calc:enforce_critical_rules",
+    "construction_calc:generate_doc_number",
     "construction_calc:next_ncr_status"
   ],
   "available_tools": ["rfi_generator"],

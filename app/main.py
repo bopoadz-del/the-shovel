@@ -248,6 +248,12 @@ async def lifespan(app: FastAPI):
                 type(app.state.project_store).__name__)
     loaded = load_agents()
     logger.info("Loaded %d runtime agents: %s", len(loaded), ", ".join(sorted(loaded.keys())))
+    # Read the hat catalog now, not at the first hat-wearing chat: a broken
+    # manifest is then logged at boot and fails /ready (KS-3).
+    from app.agents.catalog import catalog_load_error
+    _hat_error = catalog_load_error()
+    if _hat_error:
+        logger.error("hat manifest catalog failed to load: %s", _hat_error)
     from app.core import hydration_scheduler
     hydration_scheduler.start()
     from app.core.cde.poll import start_event_poller

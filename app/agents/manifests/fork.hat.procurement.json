@@ -158,12 +158,8 @@
   }
  ],
  "allowed_actions": [
-  "tender_evaluator",
-  "supplier_scoring",
-  "po_generator",
-  "crane_planner",
-  "construction_calc:crane_planning",
-  "construction_calc:evaluate_tender"
+  "construction_calc:evaluate_tender",
+  "construction_calc:crane_planning"
  ],
  "available_tools": ["procurement_list_generator"],
  "handoffs": [
