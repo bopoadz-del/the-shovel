@@ -14,6 +14,7 @@ from app.agents.clarify_cases import (
     _same_subject,
     _text_commits,
     _unit_of,
+    cases_from_passages,
     clarifying_question,
     enabled,
 )
@@ -298,3 +299,110 @@ def test_different_structures_never_collapse():
         ),
     )
     assert q is not None
+
+
+# --- the reader: value claims from handed passages (pure) ------------------
+
+
+@pytest.mark.parametrize(
+    "source,text,expected_value,expected_subject",
+    [
+        (
+            "a.pdf",
+            "The concrete cover to reinforcement shall be 40 mm.",
+            "40 mm",
+            "concrete cover",
+        ),
+        (
+            "b.pdf",
+            "Backfill shall be compacted to 98% of maximum dry density.",
+            "98%",
+            "backfill",
+        ),
+    ],
+)
+def test_cases_from_passages_reads_a_measure(
+    source, text, expected_value, expected_subject,
+):
+    cases = cases_from_passages([(source, text)])
+    assert len(cases) == 1
+    assert cases[0].value == expected_value
+    assert cases[0].source == source
+    assert expected_subject in cases[0].subject.lower()
+
+
+@pytest.mark.parametrize(
+    "source,text,expected_value",
+    [
+        ("a.pdf", "Clause 8.8.1 applies to the works.", "8.8.1"),
+        ("b.pdf", "The blinding grade is C35/45.", "C35/45"),
+    ],
+)
+def test_cases_from_passages_reads_a_reference(source, text, expected_value):
+    cases = cases_from_passages([(source, text)])
+    assert len(cases) == 1
+    assert cases[0].value == expected_value
+    assert cases[0].source == source
+
+
+@pytest.mark.parametrize(
+    "source,text",
+    [
+        ("a.pdf", "See page 12 for the detail."),
+        ("b.pdf", "Refer to clause 4.2 before proceeding."),
+    ],
+)
+def test_cases_from_passages_skips_bare_numbers(source, text):
+    assert cases_from_passages([(source, text)]) == []
+
+
+@pytest.mark.parametrize(
+    "text,first_hint,second_hint",
+    [
+        (
+            "The concrete cover shall be 40 mm. The backfill depth shall be 300 mm.",
+            "concrete cover",
+            "backfill depth",
+        ),
+        (
+            "The blinding is C35/45. The capping concrete is C25/30.",
+            "blinding",
+            "capping concrete",
+        ),
+    ],
+)
+def test_cases_from_passages_two_sentences_two_subjects(
+    text, first_hint, second_hint,
+):
+    cases = cases_from_passages([("a.pdf", text)])
+    assert len(cases) == 2
+    subjects = {c.subject.lower() for c in cases}
+    assert any(first_hint in s for s in subjects)
+    assert any(second_hint in s for s in subjects)
+
+
+# End-to-end: the reader feeds the detector (case 2 -- different subjects).
+@pytest.mark.parametrize(
+    "passages,draft",
+    [
+        (
+            [
+                ("a.pdf", "The concrete cover to reinforcement is 40 mm."),
+                ("b.pdf", "The backfill depth is 300 mm."),
+            ],
+            "The cover is 40 mm.",
+        ),
+        (
+            [
+                ("c.pdf", "The blinding grade is C35/45."),
+                ("d.pdf", "The capping concrete grade is C25/30."),
+            ],
+            "The blinding grade is C35/45.",
+        ),
+    ],
+)
+def test_reader_feeds_detector_asks(passages, draft):
+    cases = cases_from_passages(passages)
+    q = clarifying_question("what is the required value?", draft, cases)
+    assert q is not None
+    assert "Which one is meant?" in q

@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 FLAG_ENV = "CLARIFY_CASES"
@@ -226,3 +227,61 @@ def clarifying_question(question: str, draft: str, cases: list[Case]) -> str | N
         + "; ".join(options)
         + ". Which one is meant?"
     )
+
+
+# --- the reader: value claims read from the handed passages (pure) --------
+
+_SENTENCE_BREAK_RE = re.compile(r"[.!?]|\n")
+
+#: A clause / document reference the passage states, read by SHAPE only:
+#: numbers joined by dots (8.8.1) or a letter-number code (C35/45,
+#: AB-2001-101). Never an enumerated id -- the shape decides, so a new code
+#: is read the same way as an old one.
+_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?:[A-Za-z]{1,6}[-/]?\d[A-Za-z0-9./-]*\d|\d+(?:\.\d+){2,})"
+    r"(?![A-Za-z0-9])",
+)
+
+
+def _sentence_span(text: str, start: int) -> tuple[int, int]:
+    """The sentence boundaries around ``start`` (split on . ! ? and newlines)."""
+    t = text or ""
+    lo = 0
+    for m in _SENTENCE_BREAK_RE.finditer(t):
+        if m.start() < start:
+            lo = m.end()
+            continue
+        hi = m.end() if m.group() == "\n" else m.start() + 1
+        return lo, hi
+    return lo, len(t)
+
+
+def cases_from_passages(passages: Iterable[tuple[str, str]]) -> list[Case]:
+    """The value claims read from ``(source, text)`` passages.
+
+    One ``Case`` per value the passage states. A measure (a number with a
+    unit) reuses the product's figure reader; a reference is read by shape
+    (dotted clause ids and letter-number codes). The subject is the sentence
+    (or heading line) that states the value, so two passages about different
+    things are told apart by the passage's own words -- never by a known
+    list of subjects. Pure: no I/O, no model.
+    """
+    from app.agents.citation_provenance import _figure_mentions
+
+    cases: list[Case] = []
+    for source, text in passages:
+        t = text or ""
+        for m in _REFERENCE_RE.finditer(t):
+            value = m.group(0).strip()
+            lo, hi = _sentence_span(t, m.start())
+            cases.append(Case(
+                subject=t[lo:hi].strip(), value=value, source=source or "",
+            ))
+        for m, _figure in _figure_mentions(t):
+            value = m.group(0).strip()
+            lo, hi = _sentence_span(t, m.start())
+            cases.append(Case(
+                subject=t[lo:hi].strip(), value=value, source=source or "",
+            ))
+    return cases
