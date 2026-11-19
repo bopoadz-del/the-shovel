@@ -103,13 +103,6 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
-        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
-        run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -qq
-
       - name: Install system deps for OCR + PDF
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
@@ -344,13 +337,6 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
-        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
-        run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -qq
-
       - name: Install system deps for OCR + PDF
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
         # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
@@ -469,12 +455,6 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-
-      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
-        run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -qq
 
       - name: Install system deps for OCR + PDF
         # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
