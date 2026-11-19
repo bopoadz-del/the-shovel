@@ -296,12 +296,16 @@ def attach_chunk_text(rows: list[dict[str, Any]], texts: dict[str, str]) -> None
 
 def parse_sources_list(panel: str) -> list[str]:
     """Numbered source names from a Sources panel's text: a line holding only
-    an integer N followed by the name line. The panel's own count line is
-    the integer that comes before any blank line, so only integers that run
-    1, 2, 3 ... in order are taken."""
+    an integer N followed by the name line, integers running 1, 2, 3 ... in
+    order. The panel's head is its title line, then its count line when the
+    panel lists anything; that count is never an entry, even when the next
+    line is not blank (a one-source panel with no coverage line, whose
+    entries are headed by a confidence chip instead of a number)."""
     lines = [ln.strip() for ln in (panel or "").splitlines()]
+    start = 2 if len(lines) > 1 and lines[1].isdigit() else 0
     names: list[str] = []
-    for i, ln in enumerate(lines[:-1]):
+    for i in range(start, len(lines) - 1):
+        ln = lines[i]
         if ln.isdigit() and int(ln) == len(names) + 1 and lines[i + 1] and not lines[i + 1].isdigit():
             names.append(lines[i + 1])
     return names

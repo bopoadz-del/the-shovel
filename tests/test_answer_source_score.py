@@ -193,6 +193,35 @@ def test_parse_sources_list_skips_the_count_line(panel, expected):
     assert ass.parse_sources_list(panel) == expected
 
 
+@pytest.mark.parametrize("panel, expected", [
+    # one source, no coverage line, chip-headed entry: the count is not entry 1
+    ("SOURCES CITED\n1\nHIGH\nA.pdf\nProject document", []),
+    ("SOURCES CITED\n2\nLOW\nA.pdf\nMEDIUM\nB.pdf", []),
+    # one numbered citation, no coverage line: the entry still parses
+    ("SOURCES CITED\n1\n1\nA.pdf\nProject document", ["A.pdf"]),
+    ("SOURCES CITED\n2\n1\nA.pdf\n2\nB.pdf", ["A.pdf", "B.pdf"]),
+    # an empty panel has no count line
+    ("SOURCES CITED\n\nNo citations for the current answer.", []),
+])
+def test_parse_sources_list_count_line_is_never_an_entry(panel, expected):
+    assert ass.parse_sources_list(panel) == expected
+
+
+@pytest.mark.parametrize("panel, numbers, not_handed", [
+    # chip panel: a trailing "1" is a figure, not a marker naming the chip
+    ("SOURCES CITED\n1\nHIGH\nA.pdf", (0, 1), 0),
+    # numbered panel: the same "1" is a marker resolving to the handed doc
+    ("SOURCES CITED\n1\n1\nA.pdf", (0, 0), 0),
+])
+def test_one_source_panel_row_score(panel, numbers, not_handed):
+    row = {"id": "r", "answer": "The slab is cast in one pour 1.",
+           "handed": [{"chunk_id": "c1", "doc_id": "d1", "doc_name": "A.pdf"}],
+           "sources_list": ass.parse_sources_list(panel)}
+    s = ass.score_row(row)
+    assert (s.numbers_found, s.numbers_not_found) == numbers
+    assert s.citations_not_handed == not_handed
+
+
 # --- (c) overlap ----------------------------------------------------------------
 
 @pytest.mark.parametrize("chunk_text, expected", [
