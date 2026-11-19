@@ -30,9 +30,8 @@
   }
  ],
  "allowed_actions": [
-  "search_documents",
-  "construction_calc",
-  "standards_lookup"
+  "search_project_documents",
+  "construction_calc"
  ],
  "available_tools": ["bill_rows_aggregate", "construction_advisor", "construction_calc", "delegate_to_agent", "fetch_document", "list_project_documents", "remember_fact", "search_general_knowledge", "search_project_documents"],
  "memory": {
