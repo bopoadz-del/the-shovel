@@ -164,6 +164,37 @@ noun, not any content word. That is the remaining rework; it is not shipped
 rushed. #498 stays at the short-subject state (M68), which replays 0 ASK on
 all 53 rows.
 
+## Done: step 2 (relevance) + step 3 (collapse) -- general, replayed 0 ASK
+
+The rework landed as three general mechanisms, not per-case switches:
+
+1. **Head-noun relevance.** A case's subject is reduced to its head noun
+   (the last content word before the first preposition: "cover to
+   reinforcement" -> "cover", "fall of concrete" -> "fall", "temperature
+   limit" -> "limit"). The question's own ask is reduced the same way. A
+   case survives only when its kind (measure / clause / code) matches the
+   kind the question asks for AND its head noun matches the question's. A
+   generic ask ("what is the value?", "which clause applies?") narrows by
+   kind only; a party/action ask ("who", "what must happen") keeps nothing.
+
+2. **A document id is a source, not a value.** A letter-number code with two
+   or more dash-separated segments ("DD-2023-118",
+   "INF-053-0000-JCB-SPC-IF-000013") is skipped by the reader, so an answer
+   citing its source no longer reads as "committed to that value". Shape
+   only, never a known id.
+
+3. **Value collapse + a one-value silent-pick gate.** Distinct evidence
+   values are collapsed (one value = one case wherever it repeats), so
+   "committed to exactly one" is reachable; and the draft must state exactly
+   ONE relevant value overall (so a draft that already answers two structures
+   side by side is never a silent pick).
+
+Replay (fresh read-only run over RAGQ's two v5 handed-id sets, Neon
+SELECT-only, SHOW transaction_read_only=on): **0 ASK on all 53 rows**,
+detector total ~350 ms. Local: 85 passed in tests/test_clarify_cases.py;
+mutation gate 23 run / 23 killed / 0 red; two-input lint 0 new; ruff clean;
+scan_hardwiring 0 new. #498 stays a draft until A1 (the bill write) is live.
+
 ## Not in this PR
 
 - The instruction text: #495 (part a).

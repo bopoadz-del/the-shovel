@@ -10,8 +10,12 @@ import pytest
 
 from app.agents.clarify_cases import (
     Case,
+    _head_noun,
     _is_date_token,
+    _is_document_id,
+    _kind_of_value,
     _number_of,
+    _question_asks,
     _same_subject,
     _text_commits,
     _unit_of,
@@ -479,3 +483,180 @@ def test_reader_feeds_detector_asks(passages, draft):
     q = clarifying_question("what is the required value?", draft, cases)
     assert q is not None
     assert "Which one is meant?" in q
+
+
+# --- step 2 (question relevance) + step 3 (value collapse) -----------------
+
+
+@pytest.mark.parametrize(
+    "phrase,expected",
+    [
+        ("concrete cover to reinforcement", "cover"),
+        ("maximum free fall of concrete", "fall"),
+        ("temperature limit", "limit"),
+        ("temperature of cement", "temperature"),
+        ("yield strength", "strength"),
+    ],
+)
+def test_head_noun(phrase, expected):
+    # The head noun is the last content word before the first preposition, so
+    # a qualifier ("of concrete") is never mistaken for the ask noun.
+    assert _head_noun(phrase) == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("DD-2023-118", True),
+        ("INF-053-0000-JCB-SPC-IF-000013", True),
+        ("D400", False),
+        ("C35/45", False),
+    ],
+)
+def test_is_document_id(value, expected):
+    # A document/contract id is a source, not an answer value; only a code
+    # with two or more dash-separated segments is one.
+    assert _is_document_id(value) is expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("40 mm", "measure"),
+        ("8.8.1", "clause"),
+        ("D400", "code"),
+    ],
+)
+def test_kind_of_value(value, expected):
+    assert _kind_of_value(value) == expected
+
+
+@pytest.mark.parametrize(
+    "source,text,value,expected_kind",
+    [
+        ("a.pdf", "The cover shall be 40 mm.", "40 mm", "measure"),
+        ("b.pdf", "Clause 8.8.1 applies.", "8.8.1", "clause"),
+        ("c.pdf", "The blinding grade is C35/45.", "C35/45", "code"),
+    ],
+)
+def test_reader_tags_kind(source, text, value, expected_kind):
+    cases = cases_from_passages([(source, text)])
+    assert len(cases) == 1
+    assert cases[0].value == value
+    assert cases[0].kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    "source,text",
+    [
+        ("a.pdf", "Contract DD-2023-118 governs the works."),
+        ("b.pdf", "Specification INF-053-0000-JCB-SPC-IF-000013 applies."),
+    ],
+)
+def test_reader_skips_document_id(source, text):
+    # A document/contract id is a source, not an answer value.
+    assert cases_from_passages([(source, text)]) == []
+
+
+@pytest.mark.parametrize(
+    "question,kinds,head",
+    [
+        ("what is the maximum free fall of concrete?", {"measure"}, "fall"),
+        ("what class of cover and frame is required?", {"code", "measure"}, "frame"),
+        ("what concrete grades are required?", {"code"}, "concrete"),
+        ("what reinforcement grade is specified?", {"code"}, "reinforcement"),
+    ],
+)
+def test_question_asks_kind_and_subject(question, kinds, head):
+    asks = _question_asks(question)
+    assert asks is not None
+    assert asks[0] == kinds
+    assert head in asks[1]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "who commissions the system?",
+        "what must happen to the existing culverts?",
+    ],
+)
+def test_question_asks_non_value(question):
+    # A party or an action is not a value to compare.
+    assert _question_asks(question)[0] == "none"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what is the value?",
+        "which clause applies?",
+    ],
+)
+def test_question_asks_generic(question):
+    # A generic question does not narrow the cases by subject head.
+    asks = _question_asks(question)
+    assert asks is None or asks[1] == set()
+
+
+def test_question_asks_strips_leading_context():
+    # A leading context clause ("Depth:") must not set the ask kind: the real
+    # ask ("what is the value?") is generic.
+    assert _question_asks("Depth: what is the value?") is None
+
+
+def test_wrong_kind_with_matching_head_is_dropped():
+    # The question asks for a measure; a code with the same head noun is not
+    # an alternative answer, so the kind filter must drop it (and the turn
+    # stands, never asking).
+    q = clarifying_question(
+        "what is the depth?",
+        "The depth is 300 mm.",
+        _cases(
+            ("excavation depth", "300 mm", "a.pdf"),
+            ("cover depth", "D400", "b.pdf"),
+        ),
+    )
+    assert q is None
+
+
+def test_value_collapse_counts_a_repeated_value_once():
+    # The same value in two chunks is ONE committed value, so a silent pick
+    # of it still fires when the evidence also holds a different value.
+    q = clarifying_question(
+        "what is the required value?",
+        "The figure is 40 mm.",
+        _cases(
+            ("concrete cover", "40 mm", "a.pdf"),
+            ("concrete cover", "40 mm", "b.pdf"),
+            ("backfill depth", "300 mm", "c.pdf"),
+        ),
+    )
+    assert q is not None
+
+
+def test_draft_states_a_value_outside_evidence_no_ask():
+    # The draft answers several structures side by side (40 mm AND 25 mm);
+    # even though the reader only saw one of them, that is not a silent pick.
+    q = clarifying_question(
+        "what is the minimum cover?",
+        "The minimum cover is 40 mm for beams and 25 mm for slabs.",
+        _cases(
+            ("minimum clear cover", "40 mm", "a.pdf"),
+            ("nominal cover to buried surfaces", "50 mm", "b.pdf"),
+        ),
+    )
+    assert q is None
+
+
+def test_different_kind_is_not_an_alternative_answer():
+    # The question asks for a class (code); a measure is not an alternative.
+    q = clarifying_question(
+        "what class of cover is required?",
+        "The cover class is D400.",
+        _cases(
+            ("cover class", "D400", "a.pdf"),
+            ("backfill depth", "300 mm", "b.pdf"),
+        ),
+    )
+    assert q is None
