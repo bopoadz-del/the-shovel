@@ -127,14 +127,14 @@
       {
         "id": "validate_design_status",
         "description": "Validate design review status and timeline compliance",
-        "implemented_by": "app.core.construction_knowledge.validate_design_status",
+        "implemented_by": "app.agents.hats.qaqc.formulas.design_review_rules.validate_design_status",
         "domain": "qaqc",
         "tier": "strategic"
       },
       {
         "id": "check_review_timeline",
         "description": "Check if a review is within its allowed timeline",
-        "implemented_by": "app.core.construction_knowledge.check_review_timeline",
+        "implemented_by": "app.agents.hats.qaqc.formulas.design_review_rules.check_review_timeline",
         "domain": "qaqc",
         "tier": "operational"
       }
