@@ -1,0 +1,101 @@
+# Clarify-before-choosing: the exit mechanism (PR 2 part b)
+
+Design note, written before the code. Companion to #495, which carries the
+instruction text (PR 2 part a). This is the diag for the mechanism the owner
+ordered at 15:00Z / 15:03Z (19 Nov UTC): the clarifying question is a general
+behaviour, and its enforcement on the retrieval side lives at the answer exit.
+
+## What the mechanism does
+
+When the handed evidence supports more than one materially different answer to
+the question as asked, and the question does not say which case is meant, the
+exit turns the draft answer into ONE short clarifying question that names the
+cases it actually found, each with its source, and the next turn answers the
+case the user picks.
+
+It generalises what `app/agents/first_line_hard_rule.py` already does for two
+typed topics (compaction and concrete cover: "Retrieved context states more
+than one … figure … Which document's figure is meant?"). The owner's 15:03Z
+rule removes the topic boundary: it is one duty for every source the product
+answers from — the client's documents, the encoded knowledge, and the
+calculators. The calculators' "ask for the missing input by its label" is the
+same duty and stays as it is.
+
+## Where it lives
+
+- **Detection is pure.** Like `app/agents/missing_input.py`, the detector is a
+  function of (handed evidence, draft answer, question) with no I/O, so it can
+  be tested against recorded strings rather than a mock of the retriever.
+
+- **The exit hook** is the finalise step in `app/agents/runtime.py` where
+  `apply_first_line_hard_rule(text, rag_sys_msg, messages)` is already called.
+  The clarifying-question check runs beside it, after the draft has committed
+  to a figure, from the same handed evidence (`rag_sys_msg` retrieval markers
+  plus tool passages; the evidence records come from
+  `app.agents.citation_provenance.build_evidence`).
+
+- **The turn state is reused, not reinvented.** `app.agents.answer_exit.Turn`
+  already carries `awaiting_inputs` (the calculators' missing-input state) and
+  `questions`. `check_result` / `check_end_event` already emit
+  `{"missing": [...]}` from `turn.awaiting_inputs`; the route observer reads
+  that state (never a phrase match, S1c). The clarifying question rides out the
+  same carrier, so the client renders "the agent is asking" the way it already
+  renders a calculator's missing input.
+
+## The detector (general — no list of known structures)
+
+A **case** = one value claim in the handed passages:
+
+- a **value**: a number with its unit, or a clause / document-id / rate
+  reference, read by the typed readers already in the product; and
+- its **subject**: the noun phrase the passage's own sentence, heading, or
+  detail title names for that value; and
+- its **source**: document name (and page/chunk) from the evidence records.
+
+Two claims are *different cases* when their subjects differ and their values
+differ materially. The subject is read from the passage's own words — never
+from a list of known structures, elements, locations, depths, sizes, materials,
+or stages. (A hardwired subject list would be the exact per-case branch the
+standing order forbids.)
+
+The draft has *silently picked one* when the question names no case and the
+draft states exactly one of the values without acknowledging the others.
+
+## Bounds — each one a test, not prose
+
+1. One clarifying question per turn, never a chain.
+2. Only when the cases lead to **different** answers (same value in every case:
+   answer).
+3. Never when the question already names the case.
+4. Never to ask for something the documents state plainly (no invented
+   question).
+5. Options listed are only cases actually found, each with its source.
+6. If the user answers "all" or does not choose: every case side by side,
+   labelled.
+7. A question that is merely broad is answered, not bounced back.
+
+Case 2 vs case 3 (15:00Z): different values for *different* subjects, question
+names none → ask (this mechanism). Different values for the *same* subject →
+the both-values statement ("the documents differ", every value with origin),
+which is #453, already on main. When the passages do not let the product tell
+them apart, it behaves as case 2 (it asks).
+
+## What is still needed before the code freezes
+
+1. **Which reader extracts the general value+subject.** `first_line_hard_rule`
+   builds `_Hit` for two topics; the general reader is a value (number/unit or
+   clause id) plus the sentence/heading subject around it, using the existing
+   `citation_provenance` records for source/doc_id/chunk/page. Confirm the
+   shared reader rather than growing a third copy.
+2. **The replay data.** The acceptance is a replay on the tester's rows
+   (handed ids, RAGQ's v5 files, the read-only data path), counting which rows
+   would now get a clarifying question by label, and proving any row whose
+   question already names its case gets none. The detector is not frozen
+   before that replay exists.
+3. **Cost measurement**, as with the first-line rule: milliseconds per turn on
+   the replayed rows, and no change on a non-ambiguous turn (byte-for-byte).
+
+## Not in this PR
+
+- The instruction text: #495 (part a).
+- The same-subject both-values statement: #453 (merged).
