@@ -13,7 +13,7 @@
 #          (tool_call/tool_result) OR via predefined dispatch (mode:predefined
 #          with a non-empty plan_steps). Otherwise FAIL
 #          with a nonzero exit code. Each run prints the served model, so a
-#          silent fallback (e.g. Kimi K2 -> Ollama) is visible, not hidden.
+#          silent fallback (e.g. primary -> fallback provider) is visible, not hidden.
 #
 # Credentials come from the environment ONLY - never hardcode a key here:
 #   export FORK_API_KEY="<master key>"           # preferred

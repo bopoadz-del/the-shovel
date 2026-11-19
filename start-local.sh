@@ -19,7 +19,7 @@ export ENV="${ENV:-development}"
 export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
 mkdir -p "$DATA_DIR"
 
-# Load .env if present (so KIMI_API_KEY / GROQ_API_KEY etc. flow through)
+# Load .env if present (so DEEPSEEK_API_KEY / OPENROUTER_API_KEY etc. flow through)
 if [ -f .env ]; then
   set -a; . ./.env; set +a
 fi
