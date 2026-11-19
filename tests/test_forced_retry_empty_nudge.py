@@ -12,6 +12,7 @@ the draft's. Every input is invented by the test.
 from __future__ import annotations
 
 import asyncio
+import uuid
 import json
 from typing import Any, Dict, List
 from unittest.mock import patch
@@ -157,3 +158,123 @@ def test_the_statement_names_what_was_searched(question, queries):
 @pytest.mark.parametrize("question", QUESTIONS)
 def test_no_instructed_retry_no_statement(question):
     assert rt._unanswered_after_forced_retry(_turn(question, ["x y"], nudged=False)) == ""
+
+
+# ── The live shape: a delegated sub-turn, through POST /v1/chat/stream ──────
+# Live 19 Nov: the router redirected project-assistant to heavy-reasoning; the
+# delegated chat_stream ran one deliverable tool (iter 0), the tool-free
+# synthesis call (iter 1, force_synthesis) wrote a draft that sanitized to
+# nothing, and the retry was that request again. The fake provider below
+# answers per agent and, like temperature 0, gives a request it has seen the
+# same reply. Two tools, two drafts, two questions; all invented here.
+
+DELEGATED = [
+    ("commissioning_checklist", {"systems": ["chilled water"]}),
+    ("construction", {"action": "drawing_qto"}),
+]
+
+
+def _delegated_llm(name: str, tool: tuple, draft: str, answer: str | None, sent: List[str]):
+    replies: Dict[str, Dict[str, Any]] = {}
+
+    async def _llm(self, messages, *_a, **kw):
+        if self.name != name:  # the speculative stream the redirect cancels
+            return _ok("speculative")
+        k = _key(messages) + f"|tools={kw.get('with_tools', True)}"
+        sent.append(k)
+        if k in replies:  # temperature 0: the same request, the same reply
+            return replies[k]
+        if not any(m.get("role") == "tool" for m in messages):
+            replies[k] = {"status": "success", "choice": {"message": {
+                "role": "assistant", "content": "", "tool_calls": [{
+                    "id": "d1", "type": "function", "function": {
+                        "name": tool[0], "arguments": json.dumps(tool[1])}}]}}}
+        elif len(replies) == 1 or answer is None:
+            replies[k] = _ok(draft)
+        else:
+            replies[k] = _ok(answer)
+        return replies[k]
+
+    async def _tool(self, tool_call, **_kw):
+        return {"name": tool[0], "ok": True,
+                "result": {"status": "success", "items": [{"ref": "A-1", "qty": 3}]}}
+
+    return _llm, _tool
+
+
+def _route_turn(i: int, answer: str | None, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import app.agents as agents
+    import app.routers.chat as chat
+    from app.main import app
+    from tests._fixture_values import PW_06
+
+    for k, v in {"LLM_PROVIDER": "deepseek", "DEEPSEEK_API_KEY": STUB_TOKEN_01,
+                 "FORCED_RETRY_MIN_SECONDS": "1",
+                 "AGENT_COMMISSIONING_PREDISPATCH": "0"}.items():
+        monkeypatch.setenv(k, v)
+    first = Agent(name="project-assistant", description="pa", system_prompt="x",
+                  allowed_blocks=["construction"])
+    target = Agent(name="heavy-reasoning", description="hr", system_prompt="x",
+                   allowed_blocks=["construction"])
+
+    async def _select(_message, current):
+        return target, {"requested": current.name, "final": target.name,
+                        "action": DELEGATED[i][1].get("action"), "confidence": 0.6,
+                        "reason": "test"}
+
+    sent: List[str] = []
+    llm, tool = _delegated_llm(target.name, DELEGATED[i], EMPTY_DRAFTS[i], answer, sent)
+    monkeypatch.setattr(agents, "get_agent", lambda _n: first)
+    monkeypatch.setattr(rt, "select_agent_for_message", _select)
+    monkeypatch.setattr(chat, "_predefined_enabled", lambda: False)
+    with patch.object(Agent, "_call_llm", llm), patch.object(Agent, "_run_tool_call", tool):
+        with TestClient(app) as c:
+            email = f"d1-{i}-{uuid.uuid4().hex[:8]}@x.com"
+            c.post("/v1/users/register", json={"email": email, "password": PW_06})
+            token = c.post("/v1/users/login",
+                           json={"email": email, "password": PW_06}).json()["token"]
+            r = c.post("/v1/chat/stream", headers={"Authorization": f"Bearer {token}"},
+                       json={"message": QUESTIONS[i], "history": []})
+    events = []
+    for line in r.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                events.append(json.loads(line[5:]))
+            except ValueError:
+                pass
+    text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
+    return events, text, sent
+
+
+@pytest.mark.parametrize("i", [0, 1])
+def test_route_delegated_turn_gets_the_nudged_answer(i, monkeypatch):
+    events, text, sent = _route_turn(i, ANSWERS[i], monkeypatch)
+    assert any(e.get("type") == "route" and e.get("final") == "heavy-reasoning" for e in events)
+    # tools call, tool-free synthesis draft, instructed retry
+    assert len(sent) == 3, sent
+    assert sent[1] != sent[2], "the retry replayed the synthesis request"
+    assert rt._EMPTY_RETRY_NUDGE in sent[2]
+    assert ANSWERS[i].split(";")[0] in text
+    assert _EMPTY_RESPONSE_FALLBACK not in text
+
+
+@pytest.mark.parametrize("i", [0, 1])
+def test_route_delegated_turn_still_unusable_is_stated_plainly(i, monkeypatch):
+    _events, text, sent = _route_turn(i, None, monkeypatch)
+    assert len(sent) == 3 and sent[1] != sent[2]
+    assert _EMPTY_RESPONSE_FALLBACK not in text
+    assert "unable to generate" not in text.lower()
+    assert "did not yield an answer" in text
+
+
+@pytest.mark.parametrize("i", [0, 1])
+def test_route_delegated_usable_synthesis_sends_no_retry(i, monkeypatch):
+    # The synthesis draft is already an answer: no retry, the answer is shown.
+    import tests.test_forced_retry_empty_nudge as me
+    monkeypatch.setattr(me, "EMPTY_DRAFTS", [ANSWERS[0], ANSWERS[1]])
+    _events, text, sent = _route_turn(i, ANSWERS[1 - i], monkeypatch)
+    assert len(sent) == 2, sent
+    assert not any(rt._EMPTY_RETRY_NUDGE in s for s in sent)
+    assert ANSWERS[i].split(";")[0] in text
