@@ -122,7 +122,8 @@ def test_the_fallback_line_names_the_rule_and_not_the_text(mode, reason, monkeyp
     caplog.set_level(logging.INFO)
     text, n = _run(mode, [_ok(draft), _ok(retry)], monkeypatch)
     assert n == 2
-    assert _EMPTY_RESPONSE_FALLBACK in text
+    # D1: an instructed retry that still gave nothing is stated plainly.
+    assert _EMPTY_RESPONSE_FALLBACK not in text and "did not yield an answer" in text
     lines = [r.getMessage() for r in caplog.records]
     assert any(f"unusable final_text reason={reason}" in m for m in lines), lines
     assert any(f"forced retry unusable reason={reason}" in m for m in lines), lines
@@ -135,7 +136,7 @@ def test_a_provider_error_on_the_retry_is_named(mode, monkeypatch, caplog):
     text, n = _run(mode, [_ok(CASES["search_promise"][1]), {"status": "error", "error": "x"}],
                    monkeypatch)
     assert n == 2
-    assert _EMPTY_RESPONSE_FALLBACK in text
+    assert _EMPTY_RESPONSE_FALLBACK not in text and "did not yield an answer" in text
     lines = [r.getMessage() for r in caplog.records]
     assert any("forced retry failed reason=provider_error" in m for m in lines), lines
     assert not any("forced retry unusable reason=" in m for m in lines), lines
