@@ -3,6 +3,7 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 from app.lib.formula_registry import Param, formula
 import math
 from typing import Any, Dict
@@ -104,6 +105,16 @@ def electrical_installation_sequence(
     stages = {k: math.ceil(total / float(v)) for k, v in stage_output_rates.items() if float(v) > 0}
     return {"total_area_m2": total, "stages": stages, "total_days": sum(stages.values())}
 
+#: Declared constants of plumbing_flow_programme (D1 rule C): floor area one
+#: stage covers per working day.
+_PLUMBING_K = Constants(
+    first_fix_m2_per_day=Constant(40.0, "m2/d", "1st fix marking and piping output"),
+    second_fix_m2_per_day=Constant(60.0, "m2/d", "2nd fix sanitary fittings output"),
+    final_fix_m2_per_day=Constant(80.0, "m2/d", "final fix pumps and tanks output"),
+    testing_m2_per_day=Constant(50.0, "m2/d", "testing and commissioning output"),
+)
+
+
 @formula(
     owner='planning',
     display_name='Plumbing installation programme',
@@ -119,11 +130,11 @@ def plumbing_flow_programme(floor_area_m2: float, num_floors: int = 1) -> Dict[s
     total = floor_area_m2 * num_floors
     stages = [
         ("material_submittal", 7), ("procurement", 21),
-        ("1st_fix_marking_piping", max(1, math.ceil(total / 40))),
-        ("2nd_fix_sanitary_fittings", max(1, math.ceil(total / 60))),
-        ("final_fix_pumps_tanks", max(1, math.ceil(total / 80))),
+        ("1st_fix_marking_piping", max(1, math.ceil(total / _PLUMBING_K.first_fix_m2_per_day))),
+        ("2nd_fix_sanitary_fittings", max(1, math.ceil(total / _PLUMBING_K.second_fix_m2_per_day))),
+        ("final_fix_pumps_tanks", max(1, math.ceil(total / _PLUMBING_K.final_fix_m2_per_day))),
         ("water_connection", 7),
-        ("testing_commissioning", max(1, math.ceil(total / 50))),
+        ("testing_commissioning", max(1, math.ceil(total / _PLUMBING_K.testing_m2_per_day))),
         ("handover", 3),
     ]
     result = {"stages": {}, "total_days": 0}

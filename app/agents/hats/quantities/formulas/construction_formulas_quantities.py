@@ -167,7 +167,8 @@ def rebar_by_area(
     density_kg_m3: float = _STEEL_DENSITY,
 ) -> dict:
     """Reinforcement mass for a slab/wall area from a bar spacing. Bars per metre
-    = 1000/spacing; length per m2 ~= bars/m (one way) x area; both_ways doubles."""
+    = 1000/spacing; length per m2 ~= bars/m (one way) x area; both_ways doubles;
+    bar mass per metre = pi/4 x d^2 x density."""
     d = float(bar_diameter_mm)
     unit_mass = math.pi / 4.0 * (d / 1000.0) ** 2 * density_kg_m3  # kg/m
     bars_per_m = 1000.0 / float(spacing_mm)

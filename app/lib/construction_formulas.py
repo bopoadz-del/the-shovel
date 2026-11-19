@@ -3299,8 +3299,10 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             env["error"] = required_params_error(name, fn)
             env["calculation"] = name
         return env
+    constants_read = formula_registry.recording_constants()
     try:
-        result = fn(**params)
+        with constants_read:
+            result = fn(**params)
     except TypeError as exc:
         # Never a bare TypeError string alone — name the expected params
         # with units so the next call can bind (#639/#652 envelope + #649
@@ -3336,6 +3338,11 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         defaulted = _defaults_taken(fn, params, str(name))
         if defaulted:
             result = {**result, "defaults_used": defaulted}
+    if not _result_is_failure(result) and constants_read.rows:
+        # Every declared constant this run applied, with its unit and the
+        # source that states it -- or flagged as still needing one (D1 rule C).
+        result = {**result, "constants_used": list(result.get("constants_used") or [])
+                  + constants_read.rows}
     if not _result_is_failure(result) and isinstance(result.get("needs_input"), list) and result["needs_input"]:
         # A partial result: what the calculator could compute, and the inputs
         # it needed for the rest. Said in the input's own words; no value is

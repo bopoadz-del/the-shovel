@@ -168,6 +168,9 @@ def _operand_names(node: ast.AST, literals: list[float] | None = None) -> set[st
                 s = s.operand
             if isinstance(s, ast.Name):
                 out.add(s.id)
+            elif isinstance(s, ast.Attribute) and isinstance(s.value, ast.Name):
+                # A declared constant read off a module namespace (_K.name).
+                out.add(f"{s.value.id}.{s.attr}")
     return out
 
 
@@ -242,6 +245,15 @@ def named_constants(fn: Callable[..., Any], lines_run: set[int] | None = None) -
             values = assigned.get(name, [])
             if len(values) == 1 and values[0] is not None:
                 out[name] = values[0]
+            continue
+        if "." in name:
+            base, attr = name.split(".", 1)
+            space = getattr(fn, "__globals__", {}).get(base)
+            declared = getattr(space, "declared", None)
+            table = declared() if callable(declared) else {}
+            c = table.get(attr) if isinstance(table, dict) else None
+            if c is not None and _is_num(getattr(c, "value", None)):
+                out[attr] = float(c.value)
             continue
         g = getattr(fn, "__globals__", {}).get(name)
         if _is_num(g):

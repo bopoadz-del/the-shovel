@@ -43,6 +43,7 @@ phrase lists.
 """
 from __future__ import annotations
 
+import contextvars
 import inspect
 import json as _json
 import math
@@ -217,6 +218,88 @@ def calculators() -> Dict[str, Callable[..., Any]]:
 def get(name: str) -> Optional[FormulaSpec]:
     _load_all()
     return _REGISTRY.get(name)
+
+
+@dataclass(frozen=True)
+class Constant:
+    """A fixed number a calculator's body applies (a unit weight, a code
+    factor, a waste allowance): its value, unit, what it is, and the written
+    source that states it. ``source`` None means no source is recorded yet;
+    the result then says the constant still needs one (D2), never hides it."""
+
+    value: float
+    unit: str
+    meaning: str
+    source: Optional[str] = None
+
+
+_CONSTANT_READS: "contextvars.ContextVar[Optional[List[Tuple[str, Constant]]]]" = (
+    contextvars.ContextVar("formula_constant_reads", default=None)
+)
+
+
+class Constants:
+    """A calculator module's declared constants, read as attributes::
+
+        _K = Constants(soil_unit_weight=Constant(18.0, "kN/m3", "soil unit weight"))
+        net_q = q - depth_m * _K.soil_unit_weight
+
+    A read returns the plain value. While the door records (see
+    :func:`recording_constants`), each read is noted, so the result states
+    exactly the constants this run applied -- not every one declared.
+    """
+
+    def __init__(self, **declared: Constant) -> None:
+        for key, c in declared.items():
+            if not isinstance(c, Constant):
+                raise TypeError(f"constant {key} must be declared as a Constant")
+        object.__setattr__(self, "_declared", dict(declared))
+
+    def __getattr__(self, name: str) -> float:
+        declared = object.__getattribute__(self, "_declared")
+        if name not in declared:
+            raise AttributeError(name)
+        c = declared[name]
+        reads = _CONSTANT_READS.get()
+        if reads is not None:
+            reads.append((name, c))
+        return c.value
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("declared constants are read-only")
+
+    def declared(self) -> Dict[str, Constant]:
+        return dict(object.__getattribute__(self, "_declared"))
+
+
+class recording_constants:
+    """Context manager: the rows of every declared constant read inside it,
+    once each, in first-read order (``rows`` after exit)."""
+
+    def __init__(self) -> None:
+        self.rows: List[Dict[str, Any]] = []
+        self._token: Any = None
+        self._reads: List[Tuple[str, Constant]] = []
+
+    def __enter__(self) -> "recording_constants":
+        self._token = _CONSTANT_READS.set(self._reads)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _CONSTANT_READS.reset(self._token)
+        seen: set = set()
+        for name, c in self._reads:
+            if name in seen:
+                continue
+            seen.add(name)
+            row: Dict[str, Any] = {
+                "name": name, "value": c.value, "unit": c.unit, "meaning": c.meaning,
+            }
+            if c.source:
+                row["source"] = c.source
+            else:
+                row["needs_source"] = True
+            self.rows.append(row)
 
 
 def written_method(fn: Callable[..., Any]) -> str:
