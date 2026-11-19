@@ -68,6 +68,12 @@ def test_a_clean_reload_clears_the_record(tmp_path, restore_agents, count):
     assert rt.AGENT_LOAD_FAILURES == {}
 
 
+@pytest.mark.parametrize("missing", ["no_configs_here", "gone"])
+def test_a_missing_configs_directory_is_recorded(tmp_path, restore_agents, missing):
+    assert rt.load_agents(tmp_path / missing) == {}
+    assert rt.AGENT_LOAD_FAILURES == {missing: "FileNotFoundError"}
+
+
 # -- the hat catalog reports its own load error -----------------------------
 
 def _broken_manifest_dir(tmp_path: Path, how: str) -> Path:
@@ -108,10 +114,29 @@ def test_a_sound_catalog_has_no_load_error(tmp_path, monkeypatch, subset):
 
 # -- /ready ------------------------------------------------------------------
 
-def test_ready_reports_sound_agent_settings(client):
+@pytest.mark.parametrize("subset", [2, 9])
+def test_ready_reports_sound_agent_settings(client, tmp_path, monkeypatch, subset):
+    base = [p for p in MANIFESTS.glob("fork.*.json") if p.name == "fork.base.json"]
+    for p in base + sorted(MANIFESTS.glob("fork.hat.*.json"))[: subset - 1]:
+        shutil.copy(p, tmp_path / p.name)
+    monkeypatch.setenv("AGENT_MANIFEST_DIR", str(tmp_path))
+    monkeypatch.setattr(catalog, "_catalog", None)
     r = client.get("/ready")
     agents = r.json()["checks"]["agents"]
     assert agents == {"ok": True, "failed_configs": {}, "hat_catalog_error": None}
+
+
+@pytest.mark.parametrize("how, error", [
+    ("unparseable", "JSONDecodeError"),
+    ("unknown_base", "ValueError"),
+])
+def test_start_up_logs_a_broken_hat_catalog(tmp_path, monkeypatch, caplog, how, error):
+    monkeypatch.setenv("AGENT_MANIFEST_DIR", str(_broken_manifest_dir(tmp_path, how)))
+    monkeypatch.setattr(catalog, "_catalog", None)
+    with caplog.at_level("ERROR"), TestClient(app):
+        pass
+    assert any(f"hat manifest catalog failed to load: {error}" in r.getMessage()
+               for r in caplog.records), [r.getMessage() for r in caplog.records]
 
 
 @pytest.mark.parametrize("failures", [

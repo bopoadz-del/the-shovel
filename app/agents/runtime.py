@@ -13229,11 +13229,15 @@ def load_agents(configs_dir: Path | None = None) -> dict[str, Agent]:
     """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing).
 
     A config that does not parse is skipped, logged, and recorded in
-    AGENT_LOAD_FAILURES; the others still load."""
+    AGENT_LOAD_FAILURES; the others still load. A missing directory is
+    recorded under its own name."""
     configs_dir = configs_dir or CONFIGS_DIR
     AGENT_REGISTRY.clear()
     AGENT_LOAD_FAILURES.clear()
     if not configs_dir.exists():
+        # No configs directory means no agents at all: a broken setting too.
+        AGENT_LOAD_FAILURES[configs_dir.name] = "FileNotFoundError"
+        logging.getLogger(__name__).error("agent configs directory not found: %s", configs_dir)
         return AGENT_REGISTRY
     for md in sorted(configs_dir.glob("*.md")):
         try:
