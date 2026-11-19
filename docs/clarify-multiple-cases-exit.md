@@ -227,6 +227,15 @@ two-input lint 0 new; ruff clean; scan_hardwiring 0 new; scan_repo_hygiene
 clean. The full ``_postprocess_answer``-touching suite (40 files, 3093
 tests) passes with ``RAG_EMBEDDING_MODEL=fake``.
 
+## Mutation gate: the kill-switch guard is observable (M74)
+
+The exit hook's first guard (``CLARIFY_CASES=0``) short-circuits before the
+evidence build, which is not redundant with the detector's own check -- the
+detector returns None, but the guard also avoids ``build_evidence``. A wiring
+test now asserts both effects (the draft passes through unchanged and the
+evidence step is never reached), so the guard's ``drop_rule`` mutant is
+killed. Local: mutation gate 40 run / 40 killed / 0 red; two-input lint 0 new.
+
 ## Not in this PR
 
 - The instruction text: #495 (part a).

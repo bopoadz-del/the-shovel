@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import pytest
 
+import app.agents.citation_provenance as citation_provenance
+
 from app.agents import answer_exit
 from app.agents.runtime import _apply_clarify_cases, _record_clarifying_question
 
@@ -35,6 +37,16 @@ def _messages(question: str) -> list[dict]:
     return [{"role": "user", "content": question}]
 
 
+class _NoEvidence:
+    """A build_evidence stand-in with no records.
+
+    The disabled exit must never reach the evidence step, so this is only ever
+    consulted by a mutant that drops the kill-switch guard.
+    """
+
+    records: list = []
+
+
 @pytest.mark.parametrize(
     "doc_a,doc_b",
     [
@@ -43,14 +55,21 @@ def _messages(question: str) -> list[dict]:
     ],
 )
 def test_kill_switch_passes_through(monkeypatch, turn, doc_a, doc_b):
-    """OFF leaves the draft byte-for-byte and records no turn state, whatever
-    the evidence holds."""
+    """OFF leaves the draft byte-for-byte, records no turn state, and does not
+    build the evidence, whatever the evidence holds."""
     monkeypatch.setenv("CLARIFY_CASES", "0")
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        citation_provenance,
+        "build_evidence",
+        lambda *a, **k: calls.append((a, k)) or _NoEvidence(),
+    )
     rag = _rag(("a", doc_a), ("b", doc_b))
     text = "The value is 40 mm."
     assert _apply_clarify_cases(text, rag, _messages("what is the required value?")) == text
     assert turn.questions == []
     assert turn.awaiting_inputs == []
+    assert calls == []
 
 
 @pytest.mark.parametrize(

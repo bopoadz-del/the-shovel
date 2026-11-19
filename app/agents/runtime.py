@@ -10549,13 +10549,12 @@ def _apply_clarify_cases(
     the way it already renders a calculator's missing input.
 
     The guards here are defensive early returns (disabled, empty question,
-    empty draft, no passages) that mirror the detector's own checks
-    (``clarify_question`` returns None for each of them) and short-circuit
-    before building the evidence. Each one's drop_rule mutant is EQUIVALENT --
-    removing it still returns the same text because the detector returns None
-    -- so they are kept in place pending the advisor's equivalent-mutant
-    ruling (rule 3). Never raises: a failure passes the answer through
-    unchanged.
+    empty draft, no passages) that short-circuit before building the evidence.
+    The first (the ``CLARIFY_CASES=0`` kill switch) is observable -- it skips
+    the evidence build entirely, which the wiring test asserts -- so its
+    drop_rule mutant is killed. The rest mirror the detector's own checks
+    (``clarifying_question`` returns None for each of them) and only avoid the
+    work. Never raises: a failure passes the answer through unchanged.
     """
     from app.agents.clarify_cases import (
         cases_from_passages,
