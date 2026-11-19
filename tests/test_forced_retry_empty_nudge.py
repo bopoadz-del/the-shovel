@@ -49,9 +49,16 @@ def _key(messages: List[Dict[str, Any]]) -> str:
     return json.dumps([(m.get("role"), m.get("content")) for m in messages], sort_keys=True)
 
 
-def _run(mode: str, question: str, draft: str, answer: str | None, monkeypatch):
+# The provider call itself fails (not a reply): the retry's answer in tests
+# of the error path.
+PROVIDER_ERROR = {"status": "error", "error": "upstream 503"}
+
+
+def _run(mode: str, question: str, draft: str, answer: str | None, monkeypatch,
+         retry_error: bool = False):
     """Drive one turn. ``answer`` None: the model never answers (every
-    request gets the draft back)."""
+    request gets the draft back). ``retry_error``: the retry's provider call
+    fails."""
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_01)
     monkeypatch.setenv("CHAT_STREAM_TIMEOUT_SECONDS", "30")
@@ -64,6 +71,8 @@ def _run(mode: str, question: str, draft: str, answer: str | None, monkeypatch):
     async def _llm(messages, *_a, **_kw):
         k = _key(messages)
         sent.append(k)
+        if retry_error and len(replies) == 1 and k not in replies:
+            return PROVIDER_ERROR
         if k not in replies:  # temperature 0: a request seen before gets the same reply
             replies[k] = draft if (len(replies) == 0 or answer is None) else answer
         return _ok(replies[k])
@@ -117,7 +126,22 @@ def test_a_retry_still_unusable_gets_a_plain_statement(mode, i, monkeypatch):
     assert _EMPTY_RESPONSE_FALLBACK not in text
     assert "unable to generate" not in text.lower()
     assert "did not yield an answer" in text
-    assert "Searched" in text
+    # No search ran in this turn, so the statement claims none.
+    assert "Searched" not in text
+
+
+# A provider ERROR on the instructed retry is not a not-found: the user is
+# told the turn failed and to try again, never that the documents lack it.
+
+@pytest.mark.parametrize("mode", ["stream", "chat"])
+@pytest.mark.parametrize("i", [0, 1])
+def test_a_provider_error_on_the_instructed_retry_is_not_a_not_found(mode, i, monkeypatch):
+    text, sent = _run(mode, QUESTIONS[i], EMPTY_DRAFTS[i], ANSWERS[i], monkeypatch,
+                      retry_error=True)
+    assert len(sent) == 2 and rt._EMPTY_RETRY_NUDGE in sent[1]
+    assert _EMPTY_RESPONSE_FALLBACK in text
+    assert "did not yield an answer" not in text
+    assert ANSWERS[i].split(";")[0] not in text
 
 
 @pytest.mark.parametrize("mode", ["stream", "chat"])
@@ -149,7 +173,7 @@ def _turn(question: str, queries: List[str], nudged: bool) -> List[Dict[str, Any
     (QUESTIONS[1], ["Ostrand culvert headwall drawing"]),
 ])
 def test_the_statement_names_what_was_searched(question, queries):
-    out = rt._unanswered_after_forced_retry(_turn(question, queries, nudged=True))
+    out = _statement(_turn(question, queries, nudged=True), "unusable")
     for q in queries:
         assert f'"{q}"' in out
     assert "did not yield an answer" in out
@@ -157,7 +181,50 @@ def test_the_statement_names_what_was_searched(question, queries):
 
 @pytest.mark.parametrize("question", QUESTIONS)
 def test_no_instructed_retry_no_statement(question):
-    assert rt._unanswered_after_forced_retry(_turn(question, ["x y"], nudged=False)) == ""
+    assert _statement(_turn(question, ["x y"], nudged=False), "unusable") == ""
+
+
+@pytest.mark.parametrize("question,outcome", [
+    (QUESTIONS[0], "provider_error"), (QUESTIONS[1], "provider_error"),
+    (QUESTIONS[0], ""), (QUESTIONS[1], ""),
+])
+def test_only_a_returned_unusable_retry_is_stated(question, outcome):
+    # The same instructed turn: stated only when the retry RETURNED a reply.
+    msgs = _turn(question, ["a b"], nudged=True)
+    assert _statement(msgs, outcome) == ""
+    assert "did not yield an answer" in _statement(msgs, "unusable")
+
+
+@pytest.mark.parametrize("question", QUESTIONS)
+def test_no_recorded_search_no_searched_line(question):
+    out = _statement(_turn(question, [], nudged=True), "unusable")
+    assert "did not yield an answer" in out
+    assert "Searched" not in out
+
+
+@pytest.mark.parametrize("outcome", ["unusable", "provider_error"])
+def test_the_retry_outcome_is_recorded_on_the_turn(outcome):
+    from app.agents import answer_exit
+
+    turn, token = answer_exit.begin_turn("q")
+    try:
+        assert turn.forced_retry_outcome == ""
+        rt.record_forced_retry_outcome(outcome)
+        assert turn.forced_retry_outcome == outcome
+    finally:
+        answer_exit.reset_turn(token)
+    rt.record_forced_retry_outcome(outcome)  # no turn open: nothing to record, no raise
+
+
+def _statement(msgs: List[Dict[str, Any]], outcome: str) -> str:
+    from app.agents import answer_exit
+
+    turn, token = answer_exit.begin_turn(msgs[0]["content"])
+    try:
+        turn.forced_retry_outcome = outcome
+        return rt._unanswered_after_forced_retry(msgs)
+    finally:
+        answer_exit.reset_turn(token)
 
 
 # ── The live shape: a delegated sub-turn, through POST /v1/chat/stream ──────
@@ -174,7 +241,8 @@ DELEGATED = [
 ]
 
 
-def _delegated_llm(name: str, tool: tuple, draft: str, answer: str | None, sent: List[str]):
+def _delegated_llm(name: str, tool: tuple, draft: str, answer: str | dict | None,
+                   sent: List[str]):
     replies: Dict[str, Dict[str, Any]] = {}
 
     async def _llm(self, messages, *_a, **kw):
@@ -192,7 +260,7 @@ def _delegated_llm(name: str, tool: tuple, draft: str, answer: str | None, sent:
         elif len(replies) == 1 or answer is None:
             replies[k] = _ok(draft)
         else:
-            replies[k] = _ok(answer)
+            replies[k] = answer if isinstance(answer, dict) else _ok(answer)
         return replies[k]
 
     async def _tool(self, tool_call, **_kw):
@@ -202,7 +270,7 @@ def _delegated_llm(name: str, tool: tuple, draft: str, answer: str | None, sent:
     return _llm, _tool
 
 
-def _route_turn(i: int, answer: str | None, monkeypatch):
+def _route_turn(i: int, answer: str | dict | None, monkeypatch):
     from fastapi.testclient import TestClient
 
     import app.agents as agents
@@ -267,6 +335,14 @@ def test_route_delegated_turn_still_unusable_is_stated_plainly(i, monkeypatch):
     assert _EMPTY_RESPONSE_FALLBACK not in text
     assert "unable to generate" not in text.lower()
     assert "did not yield an answer" in text
+
+
+@pytest.mark.parametrize("i", [0, 1])
+def test_route_delegated_provider_error_is_not_a_not_found(i, monkeypatch):
+    _events, text, sent = _route_turn(i, PROVIDER_ERROR, monkeypatch)
+    assert len(sent) == 3 and rt._EMPTY_RETRY_NUDGE in sent[2]
+    assert _EMPTY_RESPONSE_FALLBACK in text
+    assert "did not yield an answer" not in text
 
 
 @pytest.mark.parametrize("i", [0, 1])

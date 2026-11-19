@@ -136,7 +136,7 @@ def test_a_provider_error_on_the_retry_is_named(mode, monkeypatch, caplog):
     text, n = _run(mode, [_ok(CASES["search_promise"][1]), {"status": "error", "error": "x"}],
                    monkeypatch)
     assert n == 2
-    assert _EMPTY_RESPONSE_FALLBACK not in text and "did not yield an answer" in text
+    assert _EMPTY_RESPONSE_FALLBACK in text
     lines = [r.getMessage() for r in caplog.records]
     assert any("forced retry failed reason=provider_error" in m for m in lines), lines
     assert not any("forced retry unusable reason=" in m for m in lines), lines

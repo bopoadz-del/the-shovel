@@ -782,9 +782,15 @@ def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str
     """A plain statement for a turn whose instructed retry still gave nothing.
 
     Says what happened (the documents this turn had did not yield an answer)
-    and what was searched, from this turn's own messages. Empty when the
-    turn did not run an instructed retry, so every other path keeps its
-    reply."""
+    and the searches and reads this turn's own messages record (nothing is
+    said about a search that was not recorded). Empty unless the turn ran an
+    instructed retry AND the provider returned a reply that was unusable
+    (``Turn.forced_retry_outcome``), so a provider error and every other
+    path keep their reply."""
+    if _forced_retry_outcome() != "unusable":
+        # No retry ran, or its provider call failed: a failure is not a
+        # not-found, so the caller keeps its own line.
+        return ""
     start = _turn_forced_retry_nudged(messages)
     if start is None:
         return ""
@@ -794,8 +800,6 @@ def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str
     lines = ["The documents available for this question did not yield an answer to it."]
     if queries:
         lines.append("Searched for: " + "; ".join(f'"{q}"' for q in queries[:5]) + ".")
-    else:
-        lines.append("Searched: the project documents, for the question as asked.")
     if read:
         lines.append("Documents read: " + ", ".join(read[:5]) + ".")
     lines.append(
@@ -803,6 +807,23 @@ def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str
         "rephrasing the question, gives the search more to go on."
     )
     return "\n".join(lines)
+
+
+def record_forced_retry_outcome(outcome: str) -> None:
+    """Record on the current turn how its forced retry ended (see
+    ``Turn.forced_retry_outcome``). No turn open: nothing to record."""
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    if turn is not None:
+        turn.forced_retry_outcome = outcome
+
+
+def _forced_retry_outcome() -> str:
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    return turn.forced_retry_outcome if turn is not None else ""
 
 
 def log_forced_retry_start(where: str, text: str) -> None:
@@ -820,6 +841,7 @@ def forced_retry_failed(where: str, resp: dict) -> bool:
     if resp.get("status") != "error":
         return False
     _LOG.warning("%s: forced retry failed reason=provider_error; fallback shown", where)
+    record_forced_retry_outcome("provider_error")
     return True
 
 
@@ -833,6 +855,7 @@ def forced_retry_still_unusable(where: str, text: str, *, raw_len: int | None = 
     if reason is not None and text != _EMPTY_RESPONSE_FALLBACK:
         raw = "" if raw_len is None else f" raw={raw_len}c"
         _LOG.warning("%s: forced retry unusable reason=%s%s; fallback shown", where, reason, raw)
+        record_forced_retry_outcome("unusable")
     return reason is not None
 
 # Keys that strongly indicate an internal search tool argument payload.

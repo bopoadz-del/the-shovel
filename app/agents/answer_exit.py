@@ -93,6 +93,12 @@ class Turn:
     #: Sources rows name only what the answer cited, without the passage;
     #: a check over what the turn was HANDED reads these.
     evidence: list[dict[str, Any]] = field(default_factory=list)
+    #: How this turn's forced no-tools retry ended: "" when none ran,
+    #: "unusable" when the provider RETURNED a reply that was still unusable,
+    #: "provider_error" when the provider call itself failed. Only a returned
+    #: reply may be stated as "the documents did not yield an answer"; an
+    #: error must never read as a not-found.
+    forced_retry_outcome: str = ""
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
