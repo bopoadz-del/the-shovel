@@ -1,0 +1,30 @@
+# Document type (+ folder role) -> KIND OF STANDING (owner ruling, 19 Nov).
+#
+# The kind is a LABEL for the reader of an answer ("contract drawing",
+# "contractor's method statement"). It is never a rule that picks a winner
+# between documents that disagree: the product states every value and the
+# user decides. The order below is the owner's standing order of document
+# kinds and is recorded for the reader only; no code ranks by it.
+#
+# A document's kind is the FIRST entry whose doc_types contains the row's
+# doc_type (from config/document_types.yaml) and, when the entry lists
+# doc_roles, whose doc_roles contains the row's doc_role (from
+# config/doc_role_folders.yaml). No entry matches -> "other".
+# Kinds must be in app/core/doc_standing.STANDING_KINDS; an entry naming an
+# unknown kind is ignored with a warning.
+#
+# Override without a redeploy: DOC_STANDING_FILE=<path to a yaml like this
+# one>, or DOC_STANDING='[{"kind": ..., "doc_types": [...]}, ...]' (JSON).
+
+standing:
+  - kind: contract_agreement
+    doc_types: [contract]
+    doc_roles: [contract]
+  - kind: specification
+    doc_types: [specification]
+  - kind: contract_drawing
+    doc_types: [drawing]
+  - kind: priced_boq
+    doc_types: [boq]
+  - kind: contractor_submittal
+    doc_types: [method_statement, material_submittal, itp]
