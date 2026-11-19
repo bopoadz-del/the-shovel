@@ -166,16 +166,21 @@ def test_size_same(a, b, same):
 
 # ---- where the size is printed, and what the result says --------------------
 
-def test_a_size_in_the_heading_path_selects_that_sections_rows(tmp_path):
+@pytest.mark.parametrize("terms, refs, total", [
+    ("pipe 0.15 m", ["P1"], 40.0),
+    ("pipe 225mm", ["P2"], 60.0),
+    ("pipe 300 mm", [], 0.0),
+], ids=["first-section", "second-section", "no-section"])
+def test_a_size_in_the_heading_path_selects_that_sections_rows(tmp_path, terms, refs, total):
     bill = [
         _row(("Pipes", "150 mm diameter"), 2, "P1", "Clay pipe in trench", "m", "40"),
         _row(("Pipes", "225 mm diameter"), 2, "P2", "Clay pipe in trench", "m", "60"),
     ]
     path = tmp_path / "pipes.xlsx"
     g.write_bill_workbook(bill, str(path))
-    rows = agg.read_sheet_rows(str(path))
-    assert _refs(agg.aggregate(rows, terms="pipe 0.15 m")) == ["P1"]
-    assert _refs(agg.aggregate(rows, terms="pipe 225mm")) == ["P2"]
+    result = agg.aggregate(agg.read_sheet_rows(str(path)), terms=terms)
+    assert _refs(result) == refs
+    assert result["sum"] == total
 
 
 @pytest.mark.parametrize("terms, words, sizes", [
