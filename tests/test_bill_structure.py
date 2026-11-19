@@ -98,13 +98,14 @@ def test_rows_before_any_readable_label_have_no_key(unread, unkeyed):
     assert found.rows[unkeyed].section_key == ("2",)
 
 
-def test_the_first_pages_label_carried_onto_every_row_is_not_a_rows_own():
-    carried, _ = _bill(TWO, unread=(5,))
+@pytest.mark.parametrize("row", [5, 7])
+def test_the_first_pages_label_carried_onto_every_row_is_not_a_rows_own(row):
+    carried, truth = _bill(TWO, unread=(row,))
     found = bs.structure(carried)
-    # Row 5 prints only the carried first-page label: it inherits, it is not "page 1 of 2".
-    assert found.rows[5].key_inherited
-    assert found.rows[5].page == ""
-    assert found.rows[4].page == "2"
+    # The row prints only the carried first-page label: it inherits, it is not "page 1".
+    assert found.rows[row].key_inherited
+    assert found.rows[row].page == ""
+    assert found.rows[row - 1].page == truth[row - 1][1] != "1"
 
 
 @pytest.mark.parametrize("misread, read", [("Tender 9 Sheet O/3/2", True), ("Item 3 of 2", False)])
@@ -133,13 +134,17 @@ def test_a_continued_title_is_its_original(pages):
     assert {r.section_title for r, t in zip(found.rows, truth) if t[0] == "2"} == {"EARTHWORKS"}
 
 
-def test_the_next_sections_title_on_a_boundary_page_stays_with_its_own_section():
-    # The boundary page prints the next title on 2 rows; its own section on 3.
+@pytest.mark.parametrize("boundary, own, following", [
+    # The boundary page prints the next title on 2 rows; the next section on 3.
+    ((2, 3), ("2", "EARTHWORKS"), ("3", "DRAINAGE WORKS")),
+    ((3, 2), ("3", "DRAINAGE WORKS"), ("4", "ROADWORKS")),
+])
+def test_the_next_sections_title_on_a_boundary_page_stays_with_its_own_section(boundary, own, following):
     sections = [(2, "EARTHWORKS", [3, 3, 2]), (3, "DRAINAGE WORKS", [3, 2]), (4, "ROADWORKS", [3, 3])]
-    paths, truth = _bill(sections, extra_above={(2, 3): "DRAINAGE WORKS"})
+    paths, truth = _bill(sections, extra_above={boundary: following[1]})
     found = bs.structure(paths)
-    assert {r.section_title for r, t in zip(found.rows, truth) if t[0] == "2"} == {"EARTHWORKS"}
-    assert {r.section_title for r, t in zip(found.rows, truth) if t[0] == "3"} == {"DRAINAGE WORKS"}
+    for key, title in (own, following):
+        assert {r.section_title for r, t in zip(found.rows, truth) if t[0] == key} == {title}
 
 
 def test_a_heading_printed_in_most_sections_names_none_of_them():
@@ -205,11 +210,12 @@ def test_a_section_word_counts_every_row_of_the_section_not_only_titled_pages(se
     assert [s["count"] for s in res["by_section"].values()] == [count]
 
 
-def test_the_raw_pile_would_have_kept_the_titled_page_only():
+@pytest.mark.parametrize("section, titled_page, whole", [("earthworks", 3, 8), ("drainage works", 2, 6)])
+def test_the_raw_pile_would_have_kept_the_titled_page_only(section, titled_page, whole):
     rows, _truth = _culvert_bill()
-    pile = [r for r in rows if "earthworks" in agg._words(" ".join(r.path))]
-    assert len(pile) == 3  # the first page of the section; the reader counts all 8
-    assert agg.aggregate(rows, terms="culvert", section="earthworks")["count"] == 8
+    pile = [r for r in rows if agg._words(section) <= agg._words(" ".join(r.path))]
+    assert len(pile) == titled_page  # the section's first page; the reader counts all of it
+    assert agg.aggregate(rows, terms="culvert", section=section)["count"] == whole
 
 
 @pytest.mark.parametrize("question, keys, count", [
@@ -224,20 +230,43 @@ def test_the_users_question_names_the_sections_whatever_the_model_passed(questio
     assert res["count"] == count
 
 
-def test_a_question_word_in_every_title_names_no_section():
+@pytest.mark.parametrize("question, named", [
+    ("valves in the water works", None),  # "water" is in every title
+    ("valves in the water tanks", {"3"}),
+    ("valves in the water mains", {"2"}),
+])
+def test_a_question_word_in_every_title_names_no_section(question, named):
     paths, _ = _bill([(2, "WATER MAINS", [2, 2]), (3, "WATER TANKS", [2, 2])])
     rows = _rows(paths, ["Valve"] * len(paths))
-    assert agg.question_sections(agg.with_sections(rows), "valves in the water works") is None
-    assert agg.question_sections(agg.with_sections(rows), "valves in the water tanks") == {"3"}
+    assert agg.question_sections(agg.with_sections(rows), question) == named
 
 
-def test_a_sheet_with_section_columns_is_read_as_written():
-    written = [agg.SheetRow(path=("x",), ref="", description="Culvert", unit="No", quantity="1",
-                            rate="", amount="", section_key="9", section_title="OUTFALLS",
-                            sub_heading="Pipes")]
+def _written(key, title):
+    return agg.SheetRow(path=("x",), ref="", description="Culvert", unit="No", quantity="1",
+                        rate="", amount="", section_key=key, section_title=title, sub_heading="Pipes")
+
+
+@pytest.mark.parametrize("key, title, has", [("9", "", True), ("", "OUTFALLS", True), ("", "", False)])
+def test_a_row_has_section_columns_when_the_sheet_wrote_a_key_or_a_title(key, title, has):
+    assert _written(key, title).has_section_columns is has
+
+
+@pytest.mark.parametrize("key, title", [("9", "OUTFALLS"), ("4.2", "")])
+def test_a_sheet_with_section_columns_is_read_as_written(key, title):
+    written = [_written(key, title)]
     assert agg.with_sections(written) == written
     derived = agg.with_sections(_culvert_bill()[0])
     assert {r.section_key for r in derived} == {"2", "3"}
+
+
+@pytest.mark.parametrize("line, title", [
+    ("EARTHWORKS", True),
+    ("ROADS", False),  # too few letters to be told from a code
+    ("Pipes in trench", False),
+    ("BILL NO 4 - Earthworks", False),
+])
+def test_a_title_line_is_capitalised_and_long_enough(line, title):
+    assert bs._is_title(line) is title
 
 
 @pytest.mark.parametrize("section, count", [("groundworks", 4), ("roofing", 0)])
