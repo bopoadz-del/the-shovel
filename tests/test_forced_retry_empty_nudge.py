@@ -120,14 +120,14 @@ def test_the_retry_is_never_the_first_request_again(mode, i, monkeypatch):
 
 @pytest.mark.parametrize("mode", ["stream", "chat"])
 @pytest.mark.parametrize("i", [0, 1])
-def test_a_retry_still_unusable_gets_a_plain_statement(mode, i, monkeypatch):
+def test_a_retry_still_unusable_with_nothing_looked_at_claims_no_documents(mode, i, monkeypatch):
+    # The instructed retry RETURNED nothing usable, but this turn holds no
+    # tool result: nothing was looked at, so "the documents did not yield an
+    # answer" is not a claim the turn records. The generic line stays.
     text, sent = _run(mode, QUESTIONS[i], EMPTY_DRAFTS[i], None, monkeypatch)
     assert len(sent) == 2 and sent[0] != sent[1]
-    assert _EMPTY_RESPONSE_FALLBACK not in text
-    assert "unable to generate" not in text.lower()
-    assert "did not yield an answer" in text
-    # No search ran in this turn, so the statement claims none.
-    assert "Searched" not in text
+    assert _EMPTY_RESPONSE_FALLBACK in text
+    assert "did not yield an answer" not in text
 
 
 # A provider ERROR on the instructed retry is not a not-found: the user is
@@ -197,9 +197,31 @@ def test_only_a_returned_unusable_retry_is_stated(question, outcome):
 
 @pytest.mark.parametrize("question", QUESTIONS)
 def test_no_recorded_search_no_searched_line(question):
-    out = _statement(_turn(question, [], nudged=True), "unusable")
+    # A tool result with no query argument: something was read, nothing was
+    # searched for, so the statement is given without a "Searched" line.
+    msgs = _turn(question, [], nudged=False)
+    msgs.append({"role": "assistant", "content": "", "tool_calls": [
+        {"id": "r0", "function": {"name": "fetch_document",
+                                  "arguments": json.dumps({"document_id": "d-1"})}}]})
+    msgs.append({"role": "tool", "tool_call_id": "r0", "content": "[]"})
+    msgs.append({"role": "user", "content": rt._EMPTY_RETRY_NUDGE})
+    out = _statement(msgs, "unusable")
     assert "did not yield an answer" in out
     assert "Searched" not in out
+
+
+@pytest.mark.parametrize("question,queries,stated", [
+    (QUESTIONS[0], [], False), (QUESTIONS[1], [], False),
+    (QUESTIONS[0], ["Velmor pump skid retention"], True),
+    (QUESTIONS[1], ["Ostrand culvert headwall drawing"], True),
+])
+def test_the_statement_needs_a_tool_result_in_the_turn(question, queries, stated):
+    # The same instructed, unusable retry: stated only when the turn holds a
+    # tool result, so a turn that looked at nothing never claims documents.
+    out = _statement(_turn(question, queries, nudged=True), "unusable")
+    assert ("did not yield an answer" in out) is stated
+    if not stated:
+        assert out == ""
 
 
 @pytest.mark.parametrize("outcome", ["unusable", "provider_error"])

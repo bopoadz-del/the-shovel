@@ -122,8 +122,7 @@ def test_the_fallback_line_names_the_rule_and_not_the_text(mode, reason, monkeyp
     caplog.set_level(logging.INFO)
     text, n = _run(mode, [_ok(draft), _ok(retry)], monkeypatch)
     assert n == 2
-    # D1: an instructed retry that still gave nothing is stated plainly.
-    assert _EMPTY_RESPONSE_FALLBACK not in text and "did not yield an answer" in text
+    assert _EMPTY_RESPONSE_FALLBACK in text
     lines = [r.getMessage() for r in caplog.records]
     assert any(f"unusable final_text reason={reason}" in m for m in lines), lines
     assert any(f"forced retry unusable reason={reason}" in m for m in lines), lines

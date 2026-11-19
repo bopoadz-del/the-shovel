@@ -800,6 +800,11 @@ def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str
     if start is None:
         return ""
     turn = list(messages or [])[start + 1:]
+    if not any((m or {}).get("role") == "tool" for m in turn):
+        # The turn holds no tool result: nothing was looked at, so "the
+        # documents did not yield an answer" would be a claim the turn does
+        # not record. The caller keeps its own line.
+        return ""
     queries = _turn_search_queries(turn)
     read = _documents_read_this_turn("", list(messages or [])[start:], None)
     lines = [_UNANSWERED_STATEMENT]
