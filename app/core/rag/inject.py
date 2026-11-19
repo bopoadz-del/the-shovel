@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.rag.vector_store import Chunk
@@ -1061,11 +1062,15 @@ def _leg_fields(c) -> Dict[str, Any]:
     return out
 
 
-def _public_fused(record, handed):
+def _public_fused(record, handed, *, read_names: bool = True):
     """The fused-candidate record in trace form. The stored names of the
     documents its ``leg_docs`` list are read in one batch, only so that an
     id equal to its document's name is printed as a digest (names are never
-    logged). A failed read treats every listed id as a name: fail closed."""
+    logged). A failed read treats every listed id as a name: fail closed.
+
+    ``read_names=False`` (the tool search path, which adds no database read):
+    no lookup is made and every listed id is treated as a name, the same
+    fail-closed form, so ``leg_docs`` prints digests only."""
     from app.core.rag.fusion_trace import public_view
 
     ids = sorted({
@@ -1074,7 +1079,9 @@ def _public_fused(record, handed):
         for e in entries if e.get("doc_id")
     })
     names: Dict[str, str] = {}
-    if ids:
+    if ids and not read_names:
+        names = {d: d for d in ids}
+    elif ids:
         try:
             from app.core import projects as _projects
             names = _projects.document_names(ids)
@@ -1226,14 +1233,21 @@ def emit_search_trace(
     project_id: Optional[str],
     requested_top_k: int,
     trace: Dict[str, Any],
+    conversation_id: Optional[str] = None,
 ) -> None:
     """One ``rag_retrieval_trace`` line for a document search outside
     pre-injection (``path="tool"`` for the agent's search tool).
 
     ``trace`` is what ``doc_index._search_trace`` built: ``retrieved_k``,
     ``chunks`` (handed, with ``result_rank``) and ``not_handed`` (dropped by
-    the per-document collapse, with the reason). The query is written as a
-    label, never its words. Best-effort, like the retriever's line."""
+    the per-document collapse, with the reason), and, where the search ran
+    in a turn, its own fused-candidate record (``fused``) and lexical-leg
+    states (``lexical``). Those are written as the pre_injection line writes
+    them (``fused_candidates`` through the same ``public_view``: ranks,
+    handed positions and ``leg_chunk_digests``, no chunk id; ``lexical``;
+    ``degraded``), with no database read: every ``leg_docs`` id is digested.
+    The query is written as a label, never its words. Best-effort, like the
+    retriever's line: a failure here never touches the search's results."""
     if not retrieval_trace_enabled():
         return
     try:
@@ -1242,15 +1256,22 @@ def emit_search_trace(
         rid = request_id_ctx.get()
         trace = trace or {}
         handed = list(trace.get("chunks") or [])
+        lexical = dict(trace.get("lexical") or {})
+        handed_refs = [SimpleNamespace(chunk_id=e.get("chunk_id")) for e in handed]
         payload = {
             "request_id": rid,
             "path": path,
             "query": "tool_query",
             "project_id": project_id,
+            "conversation_id": conversation_id,
             "requested_k": requested_top_k,
             "retrieved_k": int(trace.get("retrieved_k") or 0),
             "handed_k": len(handed),
             "handed_docs": len({e.get("doc_id") for e in handed}),
+            "lexical": lexical,
+            "degraded": any(v != "hit" for v in lexical.values()),
+            "fused_candidates": _public_fused(
+                trace.get("fused"), handed_refs, read_names=False),
             "top_score": max((e.get("score") or 0.0 for e in handed), default=0.0),
             "chunks": handed,
             "not_handed": list(trace.get("not_handed") or []),

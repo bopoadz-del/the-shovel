@@ -4740,6 +4740,7 @@ async def search_project_documents(
     *,
     trace_path: str | None = None,
     turn: Any = None,
+    conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
 
@@ -4789,6 +4790,7 @@ async def search_project_documents(
 
         emit_search_trace(
             path=trace_path, project_id=project_id, requested_top_k=top_k, trace=trace,
+            conversation_id=conversation_id,
         )
     return results
 
@@ -4807,6 +4809,33 @@ def _search_project_documents_sync(
 
 def _empty_search_trace() -> dict[str, Any]:
     return {"retrieved_k": 0, "chunks": [], "not_handed": []}
+
+
+def _search_leg_record(project_id: str) -> dict[str, Any]:
+    """This search's own fused-candidate record and lexical-leg states, read
+    from the turn memo right after its retrieval (the retriever writes both
+    there per retrieval, so the turn's earlier pre-injection record is
+    already overwritten). Outside a turn memo nothing is kept: ``fused`` is
+    None and ``lexical`` empty. Ids and ranks only; reading changes nothing.
+
+    Read inside a guard: a failure here gives a trace without the two
+    fields (the line then states no fusion) and never touches the search's
+    results. The trace fails open; the search never does. No database read:
+    both come from the in-process turn memo."""
+    try:
+        from app.core.rag.retriever import retrievable_project_ids
+        from app.core.rag.vector_store import _MISS, _memo_get, fused_candidates_record
+
+        lexical: dict[str, str] = {}
+        for pid in retrievable_project_ids(project_id):
+            state = _memo_get(("lexical_leg", pid))
+            if state is not _MISS:
+                lexical[pid] = state
+        return {"fused": fused_candidates_record(project_id), "lexical": lexical}
+    except Exception:  # noqa: BLE001 - instrumentation must not break a search
+        logger.debug("search leg record unreadable; trace written without it",
+                     exc_info=True)
+        return {}
 
 
 def _search_trace(chunks: list[Any], kept_by_doc: dict[str, list[Any]],
@@ -4929,6 +4958,7 @@ def _search_project_documents_traced(
         chunks = _query()
     if not chunks:
         return [], _empty_search_trace()
+    legs = _search_leg_record(project_id)
     retrieved = chunks
     skipped = [c for c in chunks if str(getattr(c, "chunk_id", "")) in exclude_chunk_ids]
     if skipped:
@@ -5013,6 +5043,7 @@ def _search_project_documents_traced(
     trace = _search_trace(
         retrieved, kept_by_doc, [item["document_id"] for item in ranked], skipped,
     )
+    trace.update(legs)
     return results, trace
 
 

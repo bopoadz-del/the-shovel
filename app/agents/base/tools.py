@@ -123,6 +123,7 @@ async def handle_search_project_documents(call: ToolCall) -> dict:
     turn = getattr(call, "search_turn", None)
     results = await search_project_documents(
         project_id, query, top_k, trace_path="tool", turn=turn,
+        conversation_id=getattr(call, "conversation_id", None),
     )
     from app.agents.runtime import _effective_tool_result_max_chars
 
