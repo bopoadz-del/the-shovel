@@ -14449,7 +14449,13 @@ def _parse_agent_file(path: Path) -> Agent:
         description=config.get("description", ""),
         system_prompt=body,
         allowed_blocks=list(config.get("allowed_blocks") or []),
-        model=config.get("model") or DEEPSEEK_DEFAULT_MODEL,
+        # An agent file with no ``model:`` line is UNPINNED (""), so each
+        # call uses the active provider's default from ``_llm_config`` --
+        # which honours ``DEEPSEEK_MODEL`` / ``OPENROUTER_MODEL``. Falling
+        # back to the ``deepseek-chat`` literal here would be a pin that
+        # ``_resolve_attempt_model`` keeps on DeepSeek, silently overriding
+        # an operator's ``DEEPSEEK_MODEL``.
+        model=str(config.get("model") or ""),
         temperature=float(config.get("temperature", 0.3)),
         max_tokens=int(config.get("max_tokens", 2048)),
         icon=config.get("icon", ""),

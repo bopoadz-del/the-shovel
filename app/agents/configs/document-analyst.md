@@ -3,7 +3,6 @@ name: document-analyst
 can_delegate_when_enabled: true  # W7: delegates only when FORK_AGENT_DELEGATION=on
 description: Generic document analyst — parses any uploaded file (PDF, Word, Excel, image) and answers questions about it.
 icon: 📄
-model: kimi-k2.6
 temperature: 0.7
 max_tokens: 2048
 allowed_blocks:

@@ -1,13 +1,12 @@
 """Default UI (project-assistant) gets hat kernels + SSE scores when live.
 
-FORK_HATS_ENABLED=1 is on the live service. Kernels bind at load (#585);
+The hat router is always on (its env flag is removed). Kernels bind at load (#585);
 the floor scorer reads ``hat_signals`` on the chat stream (event + end).
 """
 from __future__ import annotations
 
 import asyncio
 
-import pytest
 from typing import Any, AsyncIterator, Dict, List
 from unittest.mock import AsyncMock, patch
 from tests._fixture_values import STUB_TOKEN_01
@@ -56,7 +55,6 @@ def _hat_activation_recorded(events: List[Dict[str, Any]]) -> bool:
 
 
 def _stream_with_mock(monkeypatch, message: str):
-    monkeypatch.setenv("FORK_HATS_ENABLED", "1")
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", STUB_TOKEN_01)
     agent = _pa()
@@ -68,19 +66,13 @@ def _stream_with_mock(monkeypatch, message: str):
         return _collect(agent.chat_stream(user_message=message)), mock
 
 
-@pytest.mark.parametrize("value", [None, "0"])
-def test_hat_router_on_without_the_removed_flag(monkeypatch, value):
-    """K-T0a: FORK_HATS_ENABLED is removed; unset or 0 still routes."""
-    if value is None:
-        monkeypatch.delenv("FORK_HATS_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("FORK_HATS_ENABLED", value)
+def test_hat_router_on_with_no_flag():
+    """K-T0a: the router routes with no flag set at all."""
     assert hats_activation_enabled() is True
     assert hat_scores_sse(PLANNING_ASK) is not None
 
 
-def test_hat_scores_sse_when_flag_on(monkeypatch):
-    monkeypatch.setenv("FORK_HATS_ENABLED", "1")
+def test_hat_scores_sse_names_the_planning_hat():
     assert hats_activation_enabled() is True
     evt = hat_scores_sse(PLANNING_ASK)
     assert evt is not None
@@ -93,8 +85,7 @@ def test_hat_scores_sse_when_flag_on(monkeypatch):
     assert any(row["discipline"] == "planning" for row in evt["hat_signals"])
 
 
-def test_hat_turn_note_names_the_winning_hat(monkeypatch):
-    monkeypatch.setenv("FORK_HATS_ENABLED", "1")
+def test_hat_turn_note_names_the_winning_hat():
     note = hat_turn_system_note(PLANNING_ASK)
     assert note is not None
     assert note["role"] == "system"
@@ -103,8 +94,7 @@ def test_hat_turn_note_names_the_winning_hat(monkeypatch):
     assert "planning=" in note["content"]
 
 
-def test_apply_hat_activation_steers_project_assistant_only(monkeypatch):
-    monkeypatch.setenv("FORK_HATS_ENABLED", "1")
+def test_apply_hat_activation_steers_project_assistant_only():
     pa_msgs = [{"role": "user", "content": PLANNING_ASK}]
     evt = _apply_hat_activation(pa_msgs, PLANNING_ASK, "project-assistant")
     assert evt and evt["type"] == "hat_signals"
@@ -209,7 +199,6 @@ def test_multi_hat_selection_marks_both_parts_and_nothing_else(monkeypatch):
 
     from app.agents import runtime
 
-    monkeypatch.setenv("FORK_HATS_ENABLED", "1")
     merged = SimpleNamespace(
         id="fork.hat.planning__fork.hat.contracts", name="planning+contracts"
     )

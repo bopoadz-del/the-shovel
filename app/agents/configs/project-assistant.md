@@ -2,7 +2,6 @@
 name: project-assistant
 description: Project-aware construction assistant — answers questions about documents and produces real construction deliverables (WBS, BOQ analysis, cost variance, recommendations) using the platform's construction toolkit.
 can_delegate: true
-model: kimi-k2.6
 hats: all
 temperature: 0.0
 max_tokens: 8192

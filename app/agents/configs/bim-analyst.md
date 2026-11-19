@@ -2,7 +2,6 @@
 name: bim-analyst
 description: BIM analyst — IFC parsing, clash detection, element-by-element quantities.
 icon: 🏛️
-model: kimi-k2.6
 temperature: 0.2
 max_tokens: 2048
 allowed_blocks:

@@ -2,7 +2,6 @@
 name: contracts-manager
 description: Contracts — RFP analysis, contract clauses, change orders, payment certificates, claims.
 icon: 📜
-model: kimi-k2.6
 hats:
   - fork.hat.contracts
 temperature: 0.15

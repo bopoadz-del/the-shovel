@@ -2,7 +2,6 @@
 name: supervision-proposal
 description: Builds a supervision consultant's technical proposal for site supervision tenders — structure, staffing, methodology, compliance — from the enquiry documents and operator facts.
 icon: 🏗️
-model: kimi-k2.6
 hats:
   - fork.hat.contracts
   - fork.hat.qaqc
