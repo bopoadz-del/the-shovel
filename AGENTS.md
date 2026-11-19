@@ -51,7 +51,8 @@ detail see `README.md`, `.env.example`, and `.claude/skills/run-the-fork/SKILL.m
 - The production block profile is `CEREBRUM_VIRGIN=false` +
   `CEREBRUM_DOMAIN_KITS=construction` (loads 48 blocks). Unset/`true` loads a
   smaller generic set; some tests only run under the full profile.
-- First boot downloads the `model2vec` embedder (`minishlab/potion-base-8M`) from
+- First boot downloads the embedder (`BAAI/bge-small-en-v1.5`, the code default in
+  `app/core/rag/embeddings.py` and the model the Dockerfile bakes) from
   Hugging Face into `HF_HOME`; needs network once. For tests set
   `RAG_EMBEDDING_MODEL=fake` to skip the download.
 - Registration auto-verifies in dev (no `RESEND_API_KEY`), so you can

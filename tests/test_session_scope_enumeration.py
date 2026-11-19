@@ -62,6 +62,7 @@ EXEMPT = {
     "app/core/chunk_resplit.py::plan_resplit": "maintenance plan over every chunk",
     "app/core/doc_typing_backfill.py::content_samples": "maintenance: doc typing backfill",
     "app/core/doc_typing_backfill.py::plan_doc_typing": "maintenance: doc typing backfill",
+    "app/core/doc_standing_backfill.py::plan_doc_standing": "maintenance: doc standing backfill",
     "app/core/noise_chunk_purge.py::plan_noise_chunks": "maintenance plan over every chunk",
     "app/core/ingest_reconcile.py::office_extraction_census": "maintenance: ingest census",
     "app/core/ingest_reconcile.py::coverage_truth": "maintenance: ingest coverage ledger",

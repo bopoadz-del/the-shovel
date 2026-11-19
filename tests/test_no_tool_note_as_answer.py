@@ -23,6 +23,7 @@ from app.agents.base.tools import _search_payload
 from app.agents.runtime import (
     _EMPTY_RESPONSE_FALLBACK,
     _TOOL_RESULT_MAX_CHARS,
+    _UNANSWERED_STATEMENT,
     Agent,
     _recover_answer_from_tool_messages,
     _tool_result_content,
@@ -155,7 +156,9 @@ def test_empty_final_text_after_a_tool_result_shows_no_tool_note(answer, make_re
     for note in _model_notes(tool_result):
         assert note not in shown, (note, shown)
     assert "char_offset" not in shown
-    assert "unable to generate" in shown.lower(), shown
+    # D1: the retry RETURNED nothing usable, so the turn ends on the plain
+    # statement of what happened, a platform line, never a tool note.
+    assert _UNANSWERED_STATEMENT in shown, shown
 
 
 @pytest.mark.parametrize("answer", _LOOPS)

@@ -30,10 +30,12 @@ chunk per measured row.
 
 from __future__ import annotations
 
+import difflib
 import re
 import statistics
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from typing import Any
 
@@ -101,6 +103,10 @@ class _Label:
     text: str
     left: float
     height: float
+    page: int = 0
+    top: float = 0.0
+    bottom: float = 0.0
+    above_header: bool = False  # printed above the page's column-header line
 
 
 def _label_of(words: Sequence[Word]) -> _Label:
@@ -109,6 +115,9 @@ def _label_of(words: Sequence[Word]) -> _Label:
         text=" ".join(w.text for w in words),
         left=min(w.left for w in words),
         height=statistics.median(heights) if heights else 0.0,
+        page=words[0].page,
+        top=min(w.top for w in words),
+        bottom=max(w.top + w.height for w in words),
     )
 
 
@@ -146,6 +155,9 @@ class _HeadingPath:
     def texts(self) -> tuple[str, ...]:
         return tuple(lv.text for lv in self.levels)
 
+    def labels(self) -> tuple[_Label, ...]:
+        return tuple(self.levels)
+
 
 @dataclass
 class BillRow:
@@ -155,6 +167,8 @@ class BillRow:
     extra: dict[str, str] = field(default_factory=dict)   # unmapped header label -> text
     check: str = ""
     path: tuple[str, ...] = ()  # heading labels above the row, outer to inner
+    # The printed labels behind ``path`` (their geometry, for the section pass).
+    labels: tuple[_Label, ...] = field(default=(), repr=False, compare=False)
 
 
 def words_from_tesseract_data(data: dict, page: int) -> list[Word]:
@@ -677,6 +691,11 @@ def extract_bill_rows(
     inferred columns when they have more witness lines than the header in
     effect on the page reconciles; otherwise the header path above applies.
 
+    Last, :func:`section_paths` rewrites every row's path as section title,
+    sub-heading, preamble (running headers out, the page label's section,
+    the title on every row of its section); a read with no running header
+    keeps the paths above.
+
     ``on_label`` (optional) observes every label as a :class:`LabelEvent`;
     ``stats`` (optional) collects the column-source counts. Neither changes
     the rows.
@@ -693,7 +712,10 @@ def extract_bill_rows(
     indent = 1.0
     pending: list[_Line] = []
 
+    printed: list[_Label] = []
+
     def label(lab: _Label, page: int, reason: str, lines: int = 1, figure_number: bool = False) -> None:
+        printed.append(lab)
         path.push(lab, indent)
         if on_label is not None:
             on_label(LabelEvent(page, reason, lines, figure_number))
@@ -706,6 +728,7 @@ def extract_bill_rows(
             fields=fields,
             extra=extra,
             path=texts,
+            labels=path.labels(),
         )
         row.check = check_row(fields)
         rows.append(row)
@@ -714,7 +737,8 @@ def extract_bill_rows(
     def flush(page: int) -> None:
         if pending:
             first = pending[0].label
-            label(_Label(" ".join(ln.text for ln in pending), first.left, first.height),
+            label(replace(first, text=" ".join(ln.text for ln in pending),
+                          bottom=pending[-1].bottom),
                   page, LABEL_UNCLOSED_CHAIN, len(pending))
             pending.clear()
 
@@ -740,6 +764,7 @@ def extract_bill_rows(
         source = (SOURCE_INFERRED if use_inferred
                   else SOURCE_HEADER if page_header is not None else SOURCE_NONE)
         stats.pages[source] += 1
+        first_header = next((i for i, h in enumerate(headers) if h is not None), -1)
         for li, line in enumerate(page_lines):
             header = headers[li]
             if header is not None:
@@ -751,8 +776,11 @@ def extract_bill_rows(
                 cur = _bucket_inferred(li, line, inferred)
                 line_refs: set[int] = set()
             elif columns is None:
-                if has_letter(" ".join(w.text for w in line)):
-                    label(_label_of(line), page, LABEL_BEFORE_HEADER)
+                lab = replace(_label_of(line), above_header=li < first_header)
+                if has_letter(lab.text):
+                    label(lab, page, LABEL_BEFORE_HEADER)
+                else:
+                    printed.append(lab)  # page furniture only: never a path level
                 continue
             else:
                 cur = _bucket_line(line, columns, refs)
@@ -785,15 +813,240 @@ def extract_bill_rows(
             # section label, even one that prints a number such as "Bill 3")
             # is a heading label of the rows that follow.
             if not has_figure or not has_desc:
+                lab = replace(cur.label, above_header=li < first_header)
                 if has_letter(cur.text):
-                    label(cur.label, page,
+                    label(lab, page,
                           LABEL_NO_FIGURE if not has_figure else LABEL_NO_DESCRIPTION,
                           figure_number=_has_figure_number(cur.fields))
+                else:
+                    printed.append(lab)  # page furniture only: never a path level
                 continue
             if use_inferred and _header_label(line, columns, refs):
                 stats.labels_reread_as_rows += 1
             emit(page, cur.fields, cur.extra)
         flush(page)
+    return section_paths(rows, printed, len(by_page))
+
+
+# --- Section pass: running headers, page label, section title --------------
+#
+# A scanned bill prints page furniture on every page (a running header, a
+# page label whose numbers change from page to page) and prints its section
+# title only on some pages. The heading path built line by line above mixes
+# all of it into the levels of a row. This pass rewrites each row's path as:
+# section title, then the sub-heading(s), then the item preamble. Nothing
+# here names a word: running lines are found by repetition, the page label by
+# its varying numbers, titles by position (printed above the page's column
+# header), continuation marks by recurring after several headings.
+
+#: A running header needs this many pages to be seen repeating; a shorter
+#: read (one sampled page) has no running header and is left alone.
+MIN_RUNNING_PAGES = 3
+#: A label this similar (masked) to a running line is that line misread.
+RUNNING_SIMILARITY = 0.85
+#: A continuation mark is the same suffix after at least this many headings.
+MIN_MARK_HEADINGS = 2
+#: The longest suffix (characters) read as a continuation mark.
+MAX_MARK_CHARS = 12
+#: Joins the title lines of one section into the path's first element.
+TITLE_SEP = " / "
+
+_DIGITS_RE = re.compile(r"\d+")
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def _masked(text: str) -> str:
+    return _DIGITS_RE.sub("#", _norm(text))
+
+
+def _alnum(text: str) -> str:
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+@dataclass
+class Running:
+    """The document's running lines (masked) and its page-label line."""
+
+    masks: set[str]
+    page_label: str | None
+
+    def holds(self, text: str) -> bool:
+        m = _masked(text)
+        if m in self.masks:
+            return True
+        return any(difflib.SequenceMatcher(None, m, r).ratio() >= RUNNING_SIMILARITY
+                   for r in self.masks)
+
+
+def running_lines(printed: Sequence[_Label], pages: int) -> Running:
+    """(a) A label line that repeats, digits masked, on most pages is a running
+    header. (b) Of those, the one whose digits take the most distinct values
+    from page to page is the page label."""
+    if pages < MIN_RUNNING_PAGES:
+        return Running(set(), None)
+    on: dict[str, set[int]] = defaultdict(set)
+    raw: dict[str, set[str]] = defaultdict(set)
+    for lab in printed:
+        m = _masked(lab.text)
+        on[m].add(lab.page)
+        raw[m].add(_norm(lab.text))
+    masks = {m for m, ps in on.items() if len(ps) * 2 > pages}
+    varying = [m for m in masks if "#" in m and len(raw[m]) > 1]
+    label = max(varying, key=lambda m: (len(raw[m]), m)) if varying else None
+    return Running(masks, label)
+
+
+def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, float]:
+    """``{page: bottom of the page label line}``. The page furniture (running
+    lines and the label) sits from the page edge down to the label; a line
+    printed below it and above the column header is in the title band. A page
+    whose label is not read takes the median label bottom of the pages that
+    were read. Called only once :func:`page_sections` found sections, so at
+    least one label was read."""
+    read: dict[int, float] = {}
+    for lab in printed:
+        if running.page_label and _masked(lab.text) == running.page_label:
+            read.setdefault(lab.page, lab.bottom)
+    fallback = statistics.median(read.values())
+    return {page: read.get(page, fallback) for page in {lab.page for lab in printed}}
+
+
+def page_sections(printed: Sequence[_Label], running: Running) -> dict[int, tuple[str, ...] | None]:
+    """(b) Each page's section key: the page label's numeric fields other
+    than the page number. The page number is the fastest-moving field: the
+    one that changes most often between consecutive read pages (it steps on
+    nearly every page and restarts when another field steps); the last one
+    on a tie. A count of distinct values would not do: a bill with more
+    sections than pages per section has more distinct section numbers than
+    page numbers. A page whose label is not read
+    belongs to the section of the page before it. When no other field
+    varies from page to page (a label that is only a page number, or a page
+    number plus constants such as a page count), the label carries no
+    section information and the result is empty."""
+    read: dict[int, tuple[str, ...]] = {}
+    for lab in printed:
+        if running.page_label and _masked(lab.text) == running.page_label:
+            read.setdefault(lab.page, tuple(_DIGITS_RE.findall(lab.text)))
+    if not read:
+        return {}
+    width = min(len(f) for f in read.values())
+    seq = [read[p] for p in sorted(read)]
+    steps = [sum(a[i] != b[i] for a, b in pairwise(seq)) for i in range(width)]
+    distinct = [len({f[i] for f in seq}) for i in range(width)]
+    page_field = max(range(width), key=lambda i: (steps[i], i))
+    others = [i for i in range(width) if i != page_field]
+    if not any(distinct[i] > 1 for i in others):
+        return {}
+    out: dict[int, tuple[str, ...] | None] = {}
+    key: tuple[str, ...] | None = None
+    for page in sorted({lab.page for lab in printed}):
+        if page in read:
+            key = tuple(read[page][i] for i in others)
+        out[page] = key
+    return out
+
+
+def continuation_map(printed: Sequence[_Label]) -> dict[str, str]:
+    """(d) ``{normalised continued heading: original text}``. A heading X
+    printed again as X plus one short punctuated suffix token with no figure
+    is X continued when the same suffix (compared on its letters only, so OCR
+    variants of its punctuation agree) follows at least
+    :data:`MIN_MARK_HEADINGS` different headings."""
+    first: dict[str, str] = {}
+    for lab in printed:
+        first.setdefault(_norm(lab.text), lab.text)
+    texts = list(first)
+    candidates: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for i, n in enumerate(texts):
+        for x in texts[:i]:
+            if not n.startswith(x) or n == x:
+                continue
+            rest = n[len(x):].strip()
+            if " " in rest or len(rest) > MAX_MARK_CHARS:
+                continue
+            key = _alnum(rest)
+            # A mark is an annotation: punctuated, and no figure in it.
+            if key and key != rest and not any(ch.isdigit() for ch in key):
+                candidates[key].append((n, x))
+    out: dict[str, str] = {}
+    for pairs in candidates.values():
+        if len({x for _n, x in pairs}) >= MIN_MARK_HEADINGS:
+            for n, x in pairs:
+                out.setdefault(n, first[x])
+    return out
+
+
+def _wrapped(a: _Label, b: _Label) -> bool:
+    """(e) ``b`` is a wrapped line of ``a``: same page, below it, printed in
+    the same style (neither outer to the other), no blank line between."""
+    gap = max(a.height, b.height, 1.0)
+    return (a.page == b.page and b.top >= a.top
+            and b.top - a.bottom <= gap
+            and not _outer(a, b, gap) and not _outer(b, a, gap))
+
+
+def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) -> list[BillRow]:
+    """Rewrite every row's path as (section title, sub-heading..., preamble).
+
+    (a) running lines are never part of a path; (b) the page label gives each
+    page its section; (c) the title lines printed above the column header on
+    ANY page of a section are that section's title, on every row of it (a
+    section with none takes the outermost level of its first row); (d) a
+    continued heading is written as its original; (e) wrapped lines of one
+    label are one element. A line in the title band (below the page label,
+    above the column header) is a title even when it repeats on most pages.
+
+    A read with no running header, no varying page label, or a label whose
+    only varying field is the page number has no section information and is
+    left alone."""
+    running = running_lines(printed, pages)
+    if not running.masks:
+        return rows
+    sections = page_sections(printed, running)
+    if not sections:
+        return rows
+    cont = continuation_map(printed)
+    band = furniture_band(printed, running)
+
+    def text_of(lab: _Label) -> str:
+        return cont.get(_norm(lab.text), lab.text)
+
+    def furniture(lab: _Label) -> bool:
+        if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
+            return False  # title band: a title even when it repeats
+        return running.holds(lab.text)
+
+    titles: dict[tuple[str, ...] | None, list[str]] = defaultdict(list)
+    for lab in printed:
+        if lab.above_header and not furniture(lab):
+            t = text_of(lab)
+            sec = titles[sections.get(lab.page)]
+            if _norm(t) not in {_norm(x) for x in sec}:
+                sec.append(t)
+
+    for row in rows:
+        key = sections.get(row.source_page)
+        body: list[_Label] = []
+        for lab in row.labels:
+            if lab.above_header or furniture(lab):
+                continue
+            lab = replace(lab, text=text_of(lab))
+            if body and _wrapped(body[-1], lab):
+                body[-1] = replace(body[-1], text=f"{body[-1].text} {lab.text}", bottom=lab.bottom)
+                continue
+            if body and _norm(body[-1].text) == _norm(lab.text):
+                continue
+            body.append(lab)
+        if not titles[key] and body:
+            titles[key].append(body[0].text)
+        in_title = {_norm(t) for t in titles[key]}
+        levels = [lab.text for lab in body if _norm(lab.text) not in in_title]
+        title = TITLE_SEP.join(titles[key])
+        row.path = tuple(([title] if title else []) + levels)
+        row.section = row.path[-1] if row.path else ""
     return rows
 
 

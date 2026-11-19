@@ -18,8 +18,9 @@ class LLMEnhancerBlock(UniversalBlock):
     required_input_one_of = ["text", "input", "message"]
     skip_input_validation_actions = ["health_check"]
 
+    # No model or provider default here: with no caller ``model`` the chat
+    # block uses the active provider's own default model.
     default_config = {
-        "default_provider": "kimi",
         "max_tokens": 2048,
         "temperature": 0.3
     }
@@ -116,14 +117,19 @@ class LLMEnhancerBlock(UniversalBlock):
                 return {"status": "error", "error": "Chat block not available for LLM enhancement"}
 
         try:
-            result = await chat.execute(prompt, {
-                "model": params.get("model", self.config.get("default_provider", "kimi-k2.6")),
+            chat_params = {
                 "max_tokens": params.get("max_tokens", self.config.get("max_tokens", 2048)),
                 "temperature": params.get("temperature", self.config.get("temperature", 0.3)),
                 "stream": False
-            })
-            raw_text = result.get("result", {}).get("text", "")
-            model_used = params.get("model", self.config.get("default_provider", "kimi-k2.6"))
+            }
+            if params.get("model"):
+                chat_params["model"] = params["model"]
+            result = await chat.execute(prompt, chat_params)
+            chat_result = result.get("result", {})
+            raw_text = chat_result.get("text", "")
+            # The model the chat block reports it used; the caller's own
+            # choice only when the chat block reports none.
+            model_used = chat_result.get("model") or params.get("model")
             # The extract prompt says "Return ONLY valid JSON". Try to parse it
             # so callers get a real dict/list, not a JSON-shaped string. Fall
             # back to raw text with a warning on parse failure.

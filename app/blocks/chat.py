@@ -38,7 +38,7 @@ def _shaped_cloud_payload(
 ) -> Dict[str, Any]:
     """OpenAI-shape body with per-provider temperature / max_tokens pins.
 
-    Moonshot's K2 reasoning models 400 on any temperature but 1. Agent runtime
+    Some providers reject any temperature but a pinned one. Agent runtime
     and ``llm_client.complete`` already honor ``cfg['fixed_temperature']``;
     ChatBlock used to send its default 0.7 and fall through to the offline
     template. Shape here so both the stream and non-stream branches agree.
@@ -239,7 +239,7 @@ class ChatBlock(TypedBlock):
             if a_cfg.get("env_key") and not a_key:
                 primary_error = f"{a_cfg['env_key']} not configured"
                 continue
-            # Remap leftover ChatRequest defaults (deepseek-chat / kimi-k2.6)
+            # Remap leftover ChatRequest defaults (deepseek-chat / retired pins)
             # the same way the agent path does, or the OpenRouter hop 404s.
             effective_model = _resolve_attempt_model(a_cfg, model)
             result = await self._call_cloud(
