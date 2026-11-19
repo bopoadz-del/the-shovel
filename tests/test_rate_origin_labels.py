@@ -80,3 +80,18 @@ def test_an_unpriced_item_states_no_origin(item):
     out = asyncio.run(HistoricalBenchmarkBlock().process({}, {"item": item}))
     assert out["status"] == "error"
     assert "origin" not in out
+
+
+@pytest.mark.parametrize("input_data,params", [
+    ({"action": "record", "item": "concrete"}, {}),
+    ({}, {"action": "record", "item": "structural steel"}),
+])
+def test_a_recorded_sample_is_not_a_priced_rate(input_data, params):
+    # Recording a sample prices nothing, so it states no rate and no origin,
+    # even when the payload names an item the table can price.
+    from app.blocks.historical_benchmark import HistoricalBenchmarkBlock
+
+    out = asyncio.run(HistoricalBenchmarkBlock().process(input_data, params))
+    assert out["status"] == "success"
+    assert out["action"] == "record"
+    assert "rates" not in out and "origin" not in out
