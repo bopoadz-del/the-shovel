@@ -117,12 +117,14 @@ def calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
     return copy.deepcopy(_SCHEMA_CACHE[key])
 
 
-def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
-    """The platform calculator as the model sees it in driver mode, built from
-    the formula registry: the formulas offered to this hat (base plus its own),
-    each with its display name, what it does, and every input's label, unit,
-    range and whether it is required. The model fills ``params`` from the
-    user's words by those labels and units -- no per-formula phrase lists."""
+def calculator_catalogue(hat: Optional[str]) -> "tuple[List[Any], List[str]]":
+    """Every registered calculator as the model is offered it, one line each:
+    name, display name and every input's label, unit, range and whether it is
+    required -- built from the formula registry, the one source both chat paths
+    (driver and default) read. The hat's own formulas come first with what they
+    do; every other calculator follows, still with its labelled inputs, units
+    and ranges, so the model fills ``params`` by label and unit whichever path
+    or hat the turn is on. Returns ``(specs, lines)`` in offer order."""
     from app.lib import formula_registry
 
     specs = formula_registry.specs_for(hat)[:_MAX_CALCULATIONS]
@@ -138,13 +140,22 @@ def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
     if others:
         lines.append("Other calculators (in another hat; call them the same way):")
         for spec in others:
-            # Optional inputs are marked here too: an input the model cannot
-            # see is optional reads as one it must find or ask for (LANE3:
-            # "using your standard rates" refused, or priced from a document).
-            inputs = "; ".join(f"{k} = {p.label or k.replace('_', ' ')}" + ("" if p.required else " (optional)")
-                               for k, p in formula_registry.parameters(spec).items())
+            # The same labelled line as above (label, unit, range, optional):
+            # an input the model cannot see is optional reads as one it must
+            # find or ask for, and an input without its unit is filled in the
+            # wrong one.
+            inputs = "; ".join(_input_line(k, p) for k, p in formula_registry.parameters(spec).items())
             lines.append(f"- {spec.name}: {spec.display_name} ({spec.owner}). Inputs: {inputs or 'none'}.")
-    specs = specs + others
+    return specs + others, lines
+
+
+def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
+    """The platform calculator as the model sees it in driver mode, built from
+    the formula registry: the formulas offered to this hat (base plus its own),
+    each with its display name, what it does, and every input's label, unit,
+    range and whether it is required. The model fills ``params`` from the
+    user's words by those labels and units -- no per-formula phrase lists."""
+    specs, lines = calculator_catalogue(hat)
     return {
         "type": "function",
         "function": {
