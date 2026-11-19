@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.agents.hats.qaqc.results import qaqc_calculator
 from app.core import construction_knowledge as _ck
 from app.lib.formula_registry import Param, formula
 
@@ -22,15 +23,19 @@ from app.lib.formula_registry import Param, formula
     display_name='Design status check',
     description='Whether a status may be written on a design document under the design review procedure.',
     inputs={'design_status': Param('-', label='design review status')},
-    outputs={'design_status': '-', 'valid': '-', 'message': '-'},
+    outputs={'design_status': '-', 'valid': '-', 'message': '-', 'primary_result': '-'},
     main_output='valid',
 )
+@qaqc_calculator
 def validate_design_status(design_status: str) -> dict:
     given = str(design_status or "").strip()
     if not given:
         return {"error": "The design review status to check is needed."}
     valid, message = _ck.validate_design_status(given)
-    return {"design_status": given, "valid": valid, "message": message}
+    # The verdict leads; a bare boolean is not read as a primary figure.
+    return {"design_status": given, "valid": valid, "message": message,
+            "primary_result": {"value": "valid" if valid else "not valid", "unit": "-",
+                               "label": "design status check"}}
 
 
 def _iso_date(value: str) -> date:
@@ -49,6 +54,7 @@ def _iso_date(value: str) -> date:
     outputs={'compliant': '-', 'distribution_period_days': 'd', 'message': '-'},
     main_output='compliant',
 )
+@qaqc_calculator
 def check_review_timeline(distribution_date: str, workshop_date: str) -> dict:
     try:
         days = (_iso_date(workshop_date) - _iso_date(distribution_date)).days
