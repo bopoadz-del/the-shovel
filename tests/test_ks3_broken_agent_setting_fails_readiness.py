@@ -131,6 +131,8 @@ def test_ready_reports_sound_agent_settings(client, tmp_path, monkeypatch, subse
     ("unknown_base", "ValueError"),
 ])
 def test_start_up_logs_a_broken_hat_catalog(tmp_path, monkeypatch, caplog, how, error):
+    # TestClient(app) drives the FastAPI lifespan, which is where the catalog
+    # is read at start-up; a broken manifest must be logged there (KS-3).
     monkeypatch.setenv("AGENT_MANIFEST_DIR", str(_broken_manifest_dir(tmp_path, how)))
     monkeypatch.setattr(catalog, "_catalog", None)
     with caplog.at_level("ERROR"), TestClient(app):
