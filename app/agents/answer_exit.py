@@ -93,6 +93,12 @@ class Turn:
     #: Sources rows name only what the answer cited, without the passage;
     #: a check over what the turn was HANDED reads these.
     evidence: list[dict[str, Any]] = field(default_factory=list)
+    #: Each computed result of the turn (a tool that declares a statement of
+    #: its result), in call order: ``tool``, ``figures`` (the numbers its
+    #: statements state) and ``result_numbers`` (every number its result
+    #: prints, the selected rows' own included). Read by the allowed-numbers
+    #: measurement and the computed lead (:func:`lead_computed_answer`).
+    computed_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -249,6 +255,469 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
                 turn.tool_errors.append((label, err))
     except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
         _LOG.warning("answer_exit: could not record a tool error", exc_info=True)
+    try:
+        computed = _computed_result(tool, payload)
+        if computed is not None:
+            turn.computed_results.append(computed)
+    except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
+        _LOG.warning("answer_exit: could not record a computed result", exc_info=True)
+
+
+def _computed_result(tool: str, payload: Any) -> dict[str, Any] | None:
+    """``tool``'s result as the allowed-numbers measurement reads it, when the
+    tool declares a statement of its result (``kind="computed"``); else None."""
+    from app.agents.core import tool_registry
+
+    spec = tool_registry.result_spec(str(tool or ""))
+    stater = getattr(spec, "statement", None)
+    if spec is None or getattr(spec, "kind", "") != "computed" or stater is None:
+        return None
+    statements = [st for st in (stater(payload) or [])
+                  if isinstance(getattr(st, "figure", None), (int, float))
+                  and not isinstance(st.figure, bool)]
+    return {"tool": str(tool), "payload": payload,
+            "figures": [float(st.figure) for st in statements],
+            # Each stated figure with its unit: a reply's differing "total"
+            # in that unit restates it (``_restates_a_total``).
+            "totals": [(float(st.figure), str(getattr(st, "unit", "") or "").strip())
+                       for st in statements],
+            "result_numbers": sorted(_payload_numbers(payload)),
+            # A breakdown of the tool's own rows by one of its own fields (the
+            # rows per section, the sum per section, how many sections).
+            "derived_numbers": sorted(_group_numbers(payload)),
+            "units": sorted(_payload_units(payload))}
+
+
+#: Arabic-Indic and Eastern Arabic-Indic digits and the Arabic decimal mark
+#: read as the Latin ones; every thousands separator (comma, the Arabic
+#: thousands mark, space, no-break and thin spaces) reads as one number.
+_NUMBER_FORMS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
+                               **{chr(0x06F0 + i): str(i) for i in range(10)},
+                               "\u066b": ".", "\u066c": ",", "\u00a0": " ",
+                               "\u202f": " ", "\u2009": " "})
+_ANSWER_NUMBER_RE = re.compile(
+    r"(?<![\w.])\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
+#: A list marker at the start of a line ("1." "2)" "-" "*") is layout, not a figure.
+_LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*\u2022])\s+")
+
+
+def _answer_numbers(text: str) -> set[float]:
+    """Every number written in ``text``; a number grouped by a thousands
+    separator (or written in Arabic digits) is ONE number. A list marker at
+    the start of a line is not a number."""
+    out: set[float] = set()
+    for line in (text or "").translate(_NUMBER_FORMS).split("\n"):
+        marker = _LIST_MARKER_RE.match(line)
+        body = line[len(marker.group(0)):] if marker else line
+        out.update(float(re.sub(r"[, ]", "", n)) for n in _ANSWER_NUMBER_RE.findall(body))
+    return out
+
+
+def _payload_numbers(payload: Any, depth: int = 0) -> set[float]:
+    """Every number a tool result prints: its numeric values and the numbers
+    written in its text (a row's description, reference and quantity)."""
+    if depth > 8:
+        return set()
+    if isinstance(payload, bool):
+        return set()
+    if isinstance(payload, (int, float)):
+        return {float(payload)}
+    if isinstance(payload, str):
+        return _answer_numbers(payload)
+    out: set[float] = set()
+    values = payload.values() if isinstance(payload, dict) else payload if isinstance(payload, list) else ()
+    for value in values:
+        out |= _payload_numbers(value, depth + 1)
+    return out
+
+
+def _row_lists(payload: Any, depth: int = 0) -> Iterable[list[dict[str, Any]]]:
+    """Every list of records (dicts) inside a tool result."""
+    if depth > 8:
+        return
+    if isinstance(payload, dict):
+        for value in payload.values():
+            yield from _row_lists(value, depth + 1)
+    elif isinstance(payload, list):
+        records = [item for item in payload if isinstance(item, dict)]
+        if records:
+            yield records
+        for item in payload:
+            yield from _row_lists(item, depth + 1)
+
+
+def _group_keys(value: Any) -> list[Any]:
+    """The groups a record's field puts it in: a text value is one group; a
+    path (a list of texts) is every prefix of it (a section and its parents)."""
+    if isinstance(value, str) and value.strip():
+        return [value.strip().casefold()]
+    if isinstance(value, (list, tuple)) and value and all(isinstance(v, str) for v in value):
+        path = tuple(v.strip().casefold() for v in value)
+        return [path[:i] for i in range(1, len(path) + 1)]
+    return []
+
+
+def _group_numbers(payload: Any) -> set[float]:
+    """The numbers a breakdown of the tool's OWN records states: for each
+    text or path field of a list of records, how many groups there are, how
+    many records each group holds, and each group's sum of every numeric
+    field (per unit when the records carry one). Derived only from the
+    records the tool returned; never from a record it did not select."""
+    out: set[float] = set()
+    for records in _row_lists(payload):
+        fields = {k for rec in records for k in rec}
+        numeric = {k for k in fields if any(isinstance(r.get(k), (int, float))
+                                            and not isinstance(r.get(k), bool) for r in records)}
+        for name in fields - numeric:
+            groups: dict[Any, list[dict[str, Any]]] = {}
+            for rec in records:
+                for key in _group_keys(rec.get(name)):
+                    groups.setdefault(key, []).append(rec)
+            by_depth: dict[int, int] = {}
+            for key in groups:
+                depth = len(key) if isinstance(key, tuple) else 0
+                by_depth[depth] = by_depth.get(depth, 0) + 1
+            out.update(float(n) for n in by_depth.values())
+            for members in groups.values():
+                out.add(float(len(members)))
+                for num in numeric:
+                    sums: dict[str, float] = {}
+                    for rec in members:
+                        v = rec.get(num)
+                        if isinstance(v, (int, float)) and not isinstance(v, bool):
+                            unit = str(rec.get("unit") or "")
+                            sums[unit] = sums.get(unit, 0.0) + float(v)
+                    out.update(sums.values())
+    return out
+
+
+def _payload_units(payload: Any, depth: int = 0) -> set[str]:
+    """Every unit a tool result's records print (the ``unit`` fields)."""
+    if depth > 8:
+        return set()
+    out: set[str] = set()
+    if isinstance(payload, dict):
+        unit = payload.get("unit")
+        if isinstance(unit, str) and unit.strip():
+            out.add(unit.strip().casefold())
+        for value in payload.values():
+            out |= _payload_units(value, depth + 1)
+    elif isinstance(payload, list):
+        for item in payload:
+            out |= _payload_units(item, depth + 1)
+    return out
+
+
+#: A word that makes the number after it a LOCATOR (where something is), not
+#: a figure: a page, an item or clause reference, a sheet. Vocabulary of the
+#: rule, not of a case.
+_LOCATOR_WORDS = ("page", "pages", "p", "pp", "item", "items", "ref", "reference", "clause",
+                  "section", "sheet", "drawing", "table", "figure", "appendix", "annex",
+                  "صفحة", "الصفحة", "بند", "البند")
+_LOCATOR_BEFORE_RE = re.compile(
+    rf"(?<!\w)(?:{'|'.join(re.escape(w) for w in _LOCATOR_WORDS)})\.?\s*(?:no\.?\s*|#\s*)?$",
+    re.IGNORECASE)
+_WORD_AFTER_RE = re.compile(r"\s*([^\W\d_]\w*)")
+_CODE_BEFORE_RE = re.compile(r"(?<![\w])[A-Z]{3}\s*$")
+
+
+def _figure_numbers(text: str, units: set[str]) -> set[float]:
+    """The numbers of ``text`` that state a FIGURE. Not figures, by rule: a
+    number a locator word names (``page 12``, ``item 4``, ``clause 7``); a
+    dotted reference (``4.2.1``); a year (a bare 19xx/20xx with no unit and
+    no currency code). A number followed by one of the tool's units is
+    always a figure."""
+    out: set[float] = set()
+    for line in (text or "").translate(_NUMBER_FORMS).split("\n"):
+        marker = _LIST_MARKER_RE.match(line)
+        body = line[len(marker.group(0)):] if marker else line
+        for m in _ANSWER_NUMBER_RE.finditer(body):
+            raw = m.group(0)
+            after = _WORD_AFTER_RE.match(body, m.end())
+            bound_unit = bool(after) and after.group(1).casefold() in units
+            if not bound_unit:
+                if re.match(r"\.\d", body[m.end():]):
+                    continue  # a dotted reference
+                if _LOCATOR_BEFORE_RE.search(body[:m.start()]):
+                    continue
+                if (re.fullmatch(r"(?:19|20)\d\d", raw)
+                        and not _CODE_BEFORE_RE.search(body[:m.start()])):
+                    continue  # a year
+            out.add(float(re.sub(r"[, ]", "", raw)))
+    return out
+
+
+def _same(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+
+
+def _outside(numbers: set[float], allowed: set[float]) -> list[float]:
+    return sorted(n for n in numbers if not any(_same(n, a) for a in allowed))
+
+
+def measure_allowed_numbers(text: str, turn: Turn | None = None) -> dict[str, Any] | None:
+    """MEASUREMENT ONLY: on a turn with a computed result, the numbers the
+    answer states outside two allowed sets, logged as numbers (never the
+    text). The answer is not changed.
+
+    * ``outside_figures``: outside the question's numbers and the figures the
+      tools' statements state (the rule of #411, which withheld a reply on
+      any such number).
+    * ``outside_result``: outside those and every number the computed results
+      print (the selected rows' own quantities, sizes and references).
+
+    A number in the first list but not the second is one the #411 rule would
+    have withheld although the tool's own rows print it. Returns the reading
+    (None when the turn has no computed result)."""
+    turn = turn if turn is not None else _TURN.get()
+    if turn is None or not turn.computed_results or not isinstance(text, str) or not text.strip():
+        return None
+    said = _answer_numbers(text)
+    allowed = _answer_numbers(turn.question or "")
+    for res in turn.computed_results:
+        allowed.update(res["figures"])
+    outside_figures = _outside(said, allowed)
+    for res in turn.computed_results:
+        allowed.update(res["result_numbers"])
+    outside_result = _outside(said, allowed)
+    reading = {"tools": [res["tool"] for res in turn.computed_results],
+               "stated": len(said), "outside_figures": outside_figures, "outside_result": outside_result}
+    _LOG.info("answer_exit: allowed_numbers tools=%s stated=%d outside_figures=%s outside_result=%s",
+              ",".join(reading["tools"]), reading["stated"],
+              json.dumps(outside_figures), json.dumps(outside_result))
+    return reading
+
+
+def _measure_quietly(text: Any, turn: Turn | None) -> None:
+    try:
+        measure_allowed_numbers(text, turn)
+    except Exception:  # noqa: BLE001 -- a measurement must never break an answer
+        _LOG.warning("answer_exit: allowed-numbers measurement failed", exc_info=True)
+
+
+#: The words with which a clause states a TOTAL, and the words of a
+#: self-correction, per language. Narrow on purpose: a word a correct answer
+#: uses for something else ('should be', 'rather', 'actually', 'overall',
+#: 'combined') is not here. Vocabulary of the rule, not of a case.
+_TOTAL_WORDING: dict[str, tuple[str, ...]] = {
+    "en": ("total", "totals", "totalling", "totaling", "sum", "sums", "summed",
+           "altogether", "in all", "grand"),
+    "ar": ("مجموع", "إجمالي",
+           "الإجمالي", "المجموع"),
+}
+_CORRECTION_WORDING: dict[str, tuple[str, ...]] = {
+    "en": ("correction", "corrected", "correcting", "i mean", "should read", "sorry"),
+    "ar": ("تصحيح", "عفوا", "أقصد"),
+}
+_SENTENCE_RE = re.compile(r"(?<=[.!?؟;])\s+|\n+")
+#: A clause ends at a colon (not a clock's) and at an opening bracket: what
+#: follows a total's colon or bracket is its breakdown, not the total.
+_CLAUSE_RE = re.compile(r"(?<!\d):|:(?!\d)|[(\[]")
+#: A number with the word printed right before it and right after it
+#: (``30 No``, ``SAR 130,000``): the unit a claim is stated in.
+_CLAIM_RE = re.compile(
+    r"(?:([^\W\d_]+)\s*)?(?<![\w.])(\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|\d+(?:\.\d+)?)"
+    r"(?:\s*([^\W\d_]\w*))?")
+_WORDING_TABLES = (_TOTAL_WORDING, _CORRECTION_WORDING)
+
+
+def _wording_span(clause: str) -> tuple[int, int] | None:
+    """Where ``clause`` first uses total or self-correction wording."""
+    low = clause.casefold()
+    found = [m.span() for table in _WORDING_TABLES for words in table.values() for w in words
+             for m in [re.search(rf"(?<!\w){re.escape(w)}(?!\w)", low)] if m]
+    return min(found) if found else None
+
+
+def _unit_claims(clause: str, units: set[str]) -> list[tuple[int, int, float, set[str]]]:
+    """Each number of ``clause`` stated in one of ``units``: its span, value
+    and units."""
+    out = []
+    for m in _CLAIM_RE.finditer(clause):
+        words = {w.casefold() for w in (m.group(1), m.group(3)) if w} & units
+        if words:
+            out.append((m.start(2), m.end(), float(re.sub(r"[, ]", "", m.group(2))), words))
+    return out
+
+
+def _a_term(clause: str, start: int, end: int) -> bool:
+    """The claim at ``clause[start:end]`` is a term of a sum (a plus sign
+    right before or right after it)."""
+    return bool(re.search(r"\+\s*(?:[^\W\d_]+\s*)?$", clause[:start]) or re.match(r"\s*\+", clause[end:]))
+
+
+def _restates_a_total(text: str, totals: list[tuple[float, str]],
+                      row_numbers: Iterable[float] = ()) -> bool:
+    """Whether ``text`` states, as a total, a figure the tool stated
+    differently.
+
+    Only the claim BOUND to the total or correction wording is judged: in the
+    same clause, the first number in a unit the tool stated a figure in after
+    the wording (else the last one before it). A clause ends at a sentence
+    end, a semicolon, a colon and an opening bracket, so the breakdown a total
+    introduces ('88 No: 72 No in one section and 16 No in the other') is not
+    the total. A wording clause with no such number at all is a label
+    ('Total: N No', 'Correction: N No'): the first claim after its colon is
+    bound. A number the tool's selected rows print is never the bound total
+    when a plus sign joins it (a term of a sum) or when it follows a colon
+    after an already stated claim. A figure stated without a unit is not
+    read as a total (which total it would mean is not the reader's to guess)."""
+    by_unit: dict[str, set[float]] = {}
+    for value, unit in totals:
+        if unit:
+            by_unit.setdefault(unit.casefold(), set()).add(value)
+    units = set(by_unit)
+    rows = list(row_numbers)
+
+    def restated(value: float, words: set[str]) -> bool:
+        return any(not any(_same(value, v) for v in by_unit[u]) for u in words)
+
+    for sentence in _SENTENCE_RE.split((text or "").translate(_NUMBER_FORMS)):
+        clauses, seps, pos = [], [], 0
+        for m in _CLAUSE_RE.finditer(sentence):
+            clauses.append(sentence[pos:m.start()])
+            seps.append(m.group(0))
+            pos = m.end()
+        clauses.append(sentence[pos:])
+        for i, clause in enumerate(clauses):
+            span = _wording_span(clause)
+            if span is None:
+                continue
+            claims = [c for c in _unit_claims(clause, units)
+                      if not (_a_term(clause, c[0], c[1]) and any(_same(c[2], r) for r in rows))]
+            if not _unit_claims(clause, units):
+                # A label: its claim follows the colon or bracket, if one does.
+                if i + 1 < len(clauses):
+                    nxt = clauses[i + 1]
+                    label = [c for c in _unit_claims(nxt, units) if not _a_term(nxt, c[0], c[1])]
+                    if label and restated(label[0][2], label[0][3]):
+                        return True
+                continue
+            after = [c for c in claims if c[0] >= span[1]]
+            before = [c for c in claims if c[1] <= span[0]]
+            bound = after[0] if after else (before[-1] if before else None)
+            if bound is not None and restated(bound[2], bound[3]):
+                return True
+    return False
+
+
+def _lines(text: str) -> list[str]:
+    return [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+
+
+def _several_line(line: str) -> bool:
+    """``line`` is the computed renderer's own 'N computed results' header."""
+    from app.agents.core import computed_answer
+
+    for lab in computed_answer.LABELS.values():
+        pattern = re.escape(lab.get("several", "")).replace(re.escape("{n}"), r"\d+")
+        if pattern and re.fullmatch(pattern, line):
+            return True
+    return False
+
+
+def _computed_lead(res: dict[str, Any], question: str) -> str:
+    """The tool's own statement of ``res``, worded by the computed-answer
+    renderer from the tool's declared statement."""
+    from app.agents.core import computed_answer, tool_registry
+
+    spec = tool_registry.result_spec(str(res.get("tool") or ""))
+    statements = list(spec.statement(res["payload"]) or [])
+    language = computed_answer.question_language(question)
+    return computed_answer.render_call(
+        computed_answer.heading_for(getattr(spec, "display_name", "") or spec.name, language),
+        statements, asked={}, error="", language=language,
+        declared=tuple(getattr(spec, "reason_codes", ()) or ()), question=question)
+
+
+def computed_leads(turn: Turn | None) -> list[str]:
+    """The tool statements a computed answer leads with: one per computed
+    result of the turn that stated a figure, in call order, an identical
+    statement once."""
+    if turn is None:
+        return []
+    leads: list[str] = []
+    for res in turn.computed_results:
+        if res["figures"]:
+            lead = _computed_lead(res, turn.question or "")
+            if lead and lead not in leads:
+                leads.append(lead)
+    return leads
+
+
+def would_withhold(text: str, turn: Turn | None = None) -> dict[str, Any] | None:
+    """MEASUREMENT ONLY: what the allowed-numbers hold WOULD withhold in
+    ``text`` on a turn whose computed result stated a figure; nothing is
+    withheld (advisor, 19 Nov 04:34Z: the hold returns only when this reading,
+    over live turns, shows no correct answer withheld).
+
+    The lines of the tools' leads (:func:`computed_leads`) are not judged. A
+    number is ALLOWED when it is in the question, is a tool's stated figure,
+    is in a lead, is printed by the tool's result (a selected row's quantity,
+    size, depth band) or breaks the selected rows down by their own fields.
+    ``foreign``: the figures (:func:`_figure_numbers`) outside that set.
+    ``restated_total``: the text states a DIFFERENT figure as a total in a
+    unit the tool stated a figure in (:func:`_restates_a_total`). Returns None
+    when the turn has no computed figure or the text is empty."""
+    turn = turn if turn is not None else _TURN.get()
+    if not isinstance(text, str) or not text.strip() or turn is None:
+        return None
+    leads = computed_leads(turn)
+    if not leads:
+        return None
+    allowed = _answer_numbers(turn.question or "")
+    totals: list[tuple[float, str]] = []
+    units: set[str] = set()
+    row_numbers: set[float] = set()
+    for res in turn.computed_results:
+        allowed.update(res["figures"])
+        allowed.update(res["result_numbers"])
+        allowed.update(res.get("derived_numbers") or ())
+        row_numbers.update(res["result_numbers"])
+        totals.extend(res["totals"])
+        units.update(res.get("units") or ())
+        units.update(u.casefold() for _, u in res["totals"] if u)
+    lead_lines: set[str] = set()
+    for lead in leads:
+        allowed |= _answer_numbers(lead)
+        lead_lines.update(_lines(lead))
+    rest = "\n".join(ln for ln in text.split("\n")
+                     if ln.strip() not in lead_lines and not _several_line(ln.strip()))
+    foreign = _outside(_figure_numbers(rest, units), allowed)
+    restated = _restates_a_total(rest, totals, row_numbers)
+    reading = {"foreign": foreign, "restated_total": restated,
+               "would_withhold": bool(foreign) or restated}
+    _LOG.info("answer_exit: computed hold_measure would_withhold=%s foreign=%s restated_total=%s",
+              reading["would_withhold"], json.dumps(foreign), restated)
+    return reading
+
+
+def lead_computed_answer(text: str, turn: Turn | None = None) -> str:
+    """On a turn whose computed result stated a figure, the tools' own
+    statements (:func:`computed_leads`) come FIRST, in call order, each once;
+    a lead whose every line the text already carries (the computed recovery
+    rendered it) is not stated again. The model's text follows UNCHANGED:
+    nothing is withheld (:func:`would_withhold` only measures). A turn with no
+    computed figure, and an empty text, are returned unchanged."""
+    turn = turn if turn is not None else _TURN.get()
+    if not isinstance(text, str) or not text.strip() or turn is None:
+        return text
+    leads = computed_leads(turn)
+    present = set(_lines(text))
+    missing = [lead for lead in leads if not set(_lines(lead)) <= present]
+    return "\n\n".join([*missing, text]) if missing else text
+
+
+def _lead_quietly(text: str, turn: Turn | None) -> str:
+    try:
+        would_withhold(text, turn)
+    except Exception:  # noqa: BLE001 -- a measurement must never break an answer
+        _LOG.warning("answer_exit: computed hold measurement failed", exc_info=True)
+    try:
+        return lead_computed_answer(text, turn)
+    except Exception:  # noqa: BLE001 -- the lead must never break an answer
+        _LOG.warning("answer_exit: computed lead failed; text passed unchanged", exc_info=True)
+        return text
 
 
 def note_tool_message(tool_call: dict[str, Any] | None, message: dict[str, Any],
@@ -1842,6 +2311,9 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
         fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
+        held_turn = turn if turn is not None else _TURN.get()
+        _measure_quietly(fixed["answer"], held_turn)
+        fixed["answer"] = _lead_quietly(fixed["answer"], held_turn)
         fixed = _apply_contract(fixed, "answer", rows, turn)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
@@ -1871,6 +2343,8 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
         content = streamed
     if isinstance(content, str) and content.strip():
         checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
+        _measure_quietly(checked, turn)
+        checked = _lead_quietly(checked, turn)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
             fixed = _apply_contract(fixed, "content", rows, turn)
