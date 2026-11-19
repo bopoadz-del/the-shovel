@@ -116,6 +116,29 @@ subject (keep only value claims whose subject relates to the question, with a
 cleaner subject phrase) before the collapse lands. That rework is not shipped
 rushed; it is the next step.
 
+## Done: the sentence break no longer cuts a value in half (M67)
+
+A prerequisite for the subject rework: the reader split a sentence at every
+period, so a decimal measure or a dotted code read as a truncated subject
+("Depth to invert is 4.", "Clause 2.", "Grade is D999."). A sentence now ends
+only at . ! ? followed by whitespace or end of string, or at a newline; a
+period between digits is part of the value. Replay re-run: still 0 ASK on the
+53 handed rows. This corrects the subject text but does NOT yet shorten it to
+its noun phrase -- that and the question-relevance filter + value collapse are
+the rework that remains.
+
+## The rework that remains (diagnosed on the A6/A12 rows, not shipped)
+
+Collapsing by value alone regresses A6 (draft commits to the one class code
+D400 while the reader also read mortar/pipe/membrane measures and drawing,
+clause and coordinate references) and A12 (a schedule id read as a value).
+The general fix is to make a case carry a SHORT subject (the noun phrase the
+value modifies, not the whole sentence), then keep only cases relevant to the
+question before collapsing: relevance = the value's kind matches the kind the
+question asks for (nominal class/grade/type vs a measure) AND the subject
+shares a word with the question's own subject. One step at a time, each with a
+two-input test, replayed on the real rows before anything lands.
+
 ## Not in this PR
 
 - The instruction text: #495 (part a).
