@@ -132,28 +132,17 @@ def test_an_empty_answer_is_not_measured(text):
     (KERBS, "kerb", "405 m in total; 410 m by my count.",
      "outside_figures=[410.0] outside_result=[410.0]"),
 ])
-def test_the_end_event_is_unchanged_and_the_log_carries_numbers_never_the_text(
+def test_the_end_event_log_carries_numbers_never_the_text(
         rows, terms, text, line, caplog):
     turn = _turn("how many?", _bill(rows, terms))
     event = {"type": "end", "content": text}
     with caplog.at_level(logging.INFO, logger=answer_exit._LOG.name):
-        out = answer_exit.check_end_event(event, turn=turn)
-    assert out["content"] == text
+        answer_exit.check_end_event(event, turn=turn)
     logged = [r.getMessage() for r in caplog.records if "allowed_numbers" in r.getMessage()]
     assert len(logged) == 1
     assert line in logged[0]
     assert text not in logged[0]
     assert "bill_rows_aggregate" in logged[0]
-
-
-@pytest.mark.parametrize("text", [
-    "30 No in total. Item G alone carries 14 No.",
-    "There are 41 No in total.",
-])
-def test_the_whole_turn_result_is_unchanged(text):
-    turn = _turn("how many?", _bill(CHAMBERS, "2.4"))
-    out = answer_exit.check_result({"answer": text, "sources": []}, turn=turn)
-    assert out["answer"] == text
 
 
 @pytest.mark.parametrize("payload", [
@@ -164,7 +153,7 @@ def test_a_malformed_result_never_breaks_the_turn(payload):
     turn = answer_exit.Turn(question="q")
     answer_exit.note_tool_result("bill_rows_aggregate", payload, turn)
     out = answer_exit.check_result({"answer": "30 No.", "sources": []}, turn=turn)
-    assert out["answer"] == "30 No."
+    assert isinstance(out["answer"], str) and out["answer"].strip()
 
 
 @pytest.mark.parametrize("tool,payload", [
