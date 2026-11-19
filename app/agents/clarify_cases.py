@@ -279,15 +279,65 @@ def _sentence_span(text: str, start: int) -> tuple[int, int]:
     return lo, len(t)
 
 
+#: Copula / auxiliary words that link a value to its subject. They sit at
+#: the end of the text before the value ("X is / shall be <value>") and are
+#: dropped so the subject is the noun phrase, not the whole sentence.
+_COPULA_WORDS = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "shall", "will", "should", "would", "must", "may", "can", "could",
+    "might", "has", "have", "had", "does", "do", "did", "to",
+})
+
+#: Leading words that are not part of a noun phrase (determiners, and the
+#: prepositions a value-initial sentence leaves before its noun).
+_LEAD_WORDS = frozenset({
+    "the", "a", "an", "this", "that", "these", "those",
+    "of", "to", "for", "at", "in", "on",
+})
+
+
+def _noun_phrase(fragment: str) -> str:
+    """The noun phrase inside a pre/post-value fragment.
+
+    Drops trailing copula/auxiliary words, then leading determiners and
+    prepositions. Returns "" when nothing is left, so the caller falls back
+    to the words on the other side of the value.
+    """
+    words = (fragment or "").split()
+    while words and words[-1].strip(".,;:()'\"") in _COPULA_WORDS:
+        words.pop()
+    while words and words[0].lower() in _LEAD_WORDS:
+        words.pop(0)
+    return " ".join(words).strip(" .,;:()\"'")
+
+
+def _subject_phrase(text: str, start: int, end: int) -> str:
+    """The short noun phrase a value modifies, read from the passage's own
+    words.
+
+    In the handed sentences the value sits in predicate position ("X is /
+    shall be <value>"), so the subject is the phrase immediately before it
+    with the copula dropped -- not the whole sentence. When the value has no
+    leading text ("<value> of the cover"), the words after it are the phrase
+    instead. Never a known list of subjects.
+    """
+    t = text or ""
+    lo, hi = _sentence_span(t, start)
+    phrase = _noun_phrase(t[lo:start])
+    if phrase:
+        return phrase
+    return _noun_phrase(t[end:hi])
+
+
 def cases_from_passages(passages: Iterable[tuple[str, str]]) -> list[Case]:
     """The value claims read from ``(source, text)`` passages.
 
     One ``Case`` per value the passage states. A measure (a number with a
     unit) reuses the product's figure reader; a reference is read by shape
-    (dotted clause ids and letter-number codes). The subject is the sentence
-    (or heading line) that states the value, so two passages about different
-    things are told apart by the passage's own words -- never by a known
-    list of subjects. Pure: no I/O, no model.
+    (dotted clause ids and letter-number codes). The subject is the short
+    noun phrase the value modifies (its own sentence words, never a known
+    list of subjects), so two passages about different things are told apart
+    by the passage's own words. Pure: no I/O, no model.
     """
     from app.agents.citation_provenance import _figure_mentions
 
@@ -298,14 +348,14 @@ def cases_from_passages(passages: Iterable[tuple[str, str]]) -> list[Case]:
             value = m.group(0).strip()
             if _is_date_token(value):
                 continue
-            lo, hi = _sentence_span(t, m.start())
             cases.append(Case(
-                subject=t[lo:hi].strip(), value=value, source=source or "",
+                subject=_subject_phrase(t, m.start(), m.end()),
+                value=value, source=source or "",
             ))
         for m, _figure in _figure_mentions(t):
             value = m.group(0).strip()
-            lo, hi = _sentence_span(t, m.start())
             cases.append(Case(
-                subject=t[lo:hi].strip(), value=value, source=source or "",
+                subject=_subject_phrase(t, m.start(), m.end()),
+                value=value, source=source or "",
             ))
     return cases

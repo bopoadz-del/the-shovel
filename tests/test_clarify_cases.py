@@ -395,14 +395,16 @@ def test_cases_from_passages_skips_bare_numbers(source, text):
 
 
 @pytest.mark.parametrize(
-    "text,expected_value",
+    "text,expected_value,expected_subject",
     [
-        ("Depth to invert is 4.5m.", "4.5m"),
-        ("The grade is D999.43.", "D999.43"),
-        ("Clause 2.14.1 applies.", "2.14.1"),
+        ("Depth to invert is 4.5m.", "4.5m", "depth to invert"),
+        ("The grade is D999.43.", "D999.43", "grade"),
+        ("Clause 2.14.1 applies.", "2.14.1", "clause"),
     ],
 )
-def test_cases_from_passages_keeps_a_decimal_value_whole(text, expected_value):
+def test_cases_from_passages_keeps_a_decimal_value_whole(
+    text, expected_value, expected_subject,
+):
     # A period inside a number or dotted code is part of the value, not a
     # sentence boundary: the subject must not be cut at the decimal point.
     cases = cases_from_passages([("a.pdf", text)])
@@ -410,7 +412,7 @@ def test_cases_from_passages_keeps_a_decimal_value_whole(text, expected_value):
     assert expected_value in values
     for c in cases:
         if c.value == expected_value:
-            assert c.subject.lower().strip() == text.lower().strip()
+            assert c.subject.lower().strip() == expected_subject
 
 
 @pytest.mark.parametrize(
@@ -436,6 +438,24 @@ def test_cases_from_passages_two_sentences_two_subjects(
     subjects = {c.subject.lower() for c in cases}
     assert any(first_hint in s for s in subjects)
     assert any(second_hint in s for s in subjects)
+
+
+# A measure and a reference are the two inputs: each subject must be the
+# short noun phrase the value modifies, not the whole sentence.
+@pytest.mark.parametrize(
+    "text,expected_subject",
+    [
+        ("The concrete cover to reinforcement shall be 40 mm.",
+         "concrete cover to reinforcement"),
+        ("The blinding grade is C35/45.", "blinding grade"),
+    ],
+)
+def test_cases_from_passages_subject_is_the_noun_phrase(
+    text, expected_subject,
+):
+    cases = cases_from_passages([("a.pdf", text)])
+    assert len(cases) == 1
+    assert cases[0].subject.lower().strip() == expected_subject
 
 
 # End-to-end: the reader feeds the detector (case 2 -- different subjects).
