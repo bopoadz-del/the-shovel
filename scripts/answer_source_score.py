@@ -17,6 +17,7 @@ Input (one JSON object per row, or a list of them)::
 
     {
       "id": "<row id>",
+      "rep": <repeat number, optional>,
       "answer": "<answer text>",
       "handed": [{"chunk_id": "...", "doc_id": "...", "doc_name": "...",
                   "text": "<chunk text, optional>"}],
@@ -156,7 +157,19 @@ def cited_chunks(cite: Citation, handed: list[dict[str, Any]]) -> list[dict[str,
     if cite.kind == "key":
         return [c for c in handed
                 if cite.target in (str(c.get("chunk_id")), str(c.get("doc_id")))]
-    return [c for c in handed if name_matches(cite.target, str(c.get("doc_name") or ""))]
+    return [c for c in handed if _cite_names(cite, str(c.get("doc_name") or ""))]
+
+
+def _cite_names(cite: Citation, doc_name: str) -> bool:
+    """A citation names a document. A Sources-panel line reads
+    ``<document name>, <section>``: a marker resolved through the panel names
+    the document when the line is the name followed by a comma."""
+    if name_matches(cite.target, doc_name):
+        return True
+    if cite.kind != "marker" or not doc_name.strip():
+        return False
+    head, sep, _ = _fold(cite.target).partition(_fold(doc_name) + ",")
+    return bool(sep) and not head
 
 
 # --- numbers -----------------------------------------------------------------
@@ -215,6 +228,7 @@ def overlap(sentence: str, chunk_text: str) -> float | None:
 @dataclass
 class RowScore:
     id: str
+    rep: int | None = None
     numbers_found: int = 0
     numbers_not_found: int = 0
     citations_handed: int = 0
@@ -226,8 +240,13 @@ class RowScore:
     reasons: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
+        # ``row`` and ``rep`` are the key the trace page joins scores on
+        # (scripts/trace_page.py load_scores); ``id`` is kept for readers
+        # of the first output.
         return {
             "id": self.id,
+            "row": self.id,
+            "rep": self.rep,
             "numbers_found": self.numbers_found,
             "numbers_not_found": self.numbers_not_found,
             "citations_handed": self.citations_handed,
@@ -245,7 +264,9 @@ def score_row(row: dict[str, Any], *, overlap_floor: float = 0.2) -> RowScore:
     handed = list(row.get("handed") or [])
     tools = [str(t) for t in (row.get("tool_results") or [])]
     listed = [str(s) for s in (row.get("sources_list") or [])]
-    out = RowScore(id=str(row.get("id") or ""))
+    rep = row.get("rep")
+    out = RowScore(id=str(row.get("id") or ""),
+                   rep=rep if isinstance(rep, int) and not isinstance(rep, bool) else None)
 
     cites = find_citations(answer, listed)
     cited_text: list[str] = []
