@@ -133,7 +133,7 @@ def test_a_rows_number_stated_as_the_total_is_withheld(case, text):
 
 @pytest.mark.parametrize("case,text", [
     ("chambers", "There are 30 No. Correction: 14 No."),
-    ("kerbs", "That is 405 m. Actually 85 m."),
+    ("kerbs", "That is 405 m. It should read 85 m."),
 ])
 def test_a_self_correction_to_another_allowed_number_is_withheld(case, text):
     assert _held(case, text).endswith(answer_exit.FIGURE_WITHHELD)
