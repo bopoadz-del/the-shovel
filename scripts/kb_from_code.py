@@ -113,8 +113,10 @@ lines.append("")
 (OUT / "aci_318_metric_design_values.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 # BOQ rate card
-d = json.load(open("app/lib/data/boq_rate_card.json", encoding="utf-8"))
+RATE_CARD = "app/lib/data/boq_rate_card.json"
+d = json.load(open(RATE_CARD, encoding="utf-8"))
 rl = ["# BOQ rate card — observed unit rates by asset type (median and interquartile range)", "",
+      f"Generated from `{RATE_CARD}` by scripts/kb_from_code.py; edit the source, not this copy.", "",
       "The platform's rate card: observed unit rates by trade category, asset type and currency. ",
       f"Source: {d['_meta'].get('source', '')}.", "",
       "n = number of observed BOQ lines; p25/p75 = interquartile range. Rates are indicative ",
