@@ -778,6 +778,11 @@ def _turn_search_queries(turn: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+#: First line of the statement shown when an instructed retry RETURNED a
+#: reply that was still unusable (never after a provider error).
+_UNANSWERED_STATEMENT = "The documents available for this question did not yield an answer to it."
+
+
 def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str:
     """A plain statement for a turn whose instructed retry still gave nothing.
 
@@ -797,7 +802,7 @@ def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str
     turn = list(messages or [])[start + 1:]
     queries = _turn_search_queries(turn)
     read = _documents_read_this_turn("", list(messages or [])[start:], None)
-    lines = ["The documents available for this question did not yield an answer to it."]
+    lines = [_UNANSWERED_STATEMENT]
     if queries:
         lines.append("Searched for: " + "; ".join(f'"{q}"' for q in queries[:5]) + ".")
     if read:

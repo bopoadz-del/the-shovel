@@ -376,3 +376,37 @@ def test_a_retry_instruction_is_never_the_operators_question(i, rule):
 def test_an_operator_question_is_not_a_retry_instruction(q):
     assert not rt._is_retry_instruction(q)
     assert not rt._cg_is_platform_bubble(q)
+
+
+# A usable reply is never rewritten by the empty-turn path: it is returned
+# exactly as written, even on a turn whose retry outcome says "unusable".
+
+@pytest.mark.parametrize("i,reply", [
+    (0, ANSWERS[0] + "\n"),
+    (1, "  " + ANSWERS[1] + "  "),
+])
+def test_a_usable_reply_is_returned_as_written(i, reply):
+    from app.agents import answer_exit
+
+    msgs = _turn(QUESTIONS[i], ["c d"], nudged=True)
+    turn, token = answer_exit.begin_turn(QUESTIONS[i])
+    try:
+        turn.forced_retry_outcome = "unusable"
+        assert rt._nonblank_after_empty_synthesis(reply, msgs) == reply
+    finally:
+        answer_exit.reset_turn(token)
+
+
+# The handoff hat is read from the operator's words, never from the
+# platform's retry instruction appended after them.
+
+@pytest.mark.parametrize("question,hat", [
+    ("Ingest the survey model north_block_survey.ifc please", "bim-analyst"),
+    ("Load the baseline programme tower_baseline.xer", "construction-pm"),
+])
+def test_the_handoff_hat_skips_the_retry_instruction(question, hat):
+    msgs = [{"role": "user", "content": question},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": rt._EMPTY_RETRY_NUDGE}]
+    assert rt._next_agent_from_turn(msgs) == hat
+    assert rt._next_agent_from_turn(msgs[:1]) == hat
