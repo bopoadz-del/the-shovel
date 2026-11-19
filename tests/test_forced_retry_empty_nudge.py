@@ -410,3 +410,13 @@ def test_the_handoff_hat_skips_the_retry_instruction(question, hat):
             {"role": "user", "content": rt._EMPTY_RETRY_NUDGE}]
     assert rt._next_agent_from_turn(msgs) == hat
     assert rt._next_agent_from_turn(msgs[:1]) == hat
+
+
+@pytest.mark.parametrize("question", [
+    "Open the BIM model for the podium levels",
+    "Check the IFC export of the east stair core",
+])
+def test_a_named_model_without_a_file_goes_to_the_bim_hat(question):
+    msgs = [{"role": "user", "content": question},
+            {"role": "user", "content": rt._EMPTY_RETRY_NUDGE}]
+    assert rt._next_agent_from_turn(msgs) == "bim-analyst"
