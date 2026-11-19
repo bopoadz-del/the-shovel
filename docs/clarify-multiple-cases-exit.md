@@ -106,7 +106,7 @@ to end on real rows.
 Collapsing claims by value (one value = one case) is the general fix, but
 landing it alone regresses the replay: A6 and A12 then ask, because the reader
 reads a class code ("D400") and a document id
-("INF-053-0000-JCB-SPC-IF-000013") as value claims and the draft's citation of
+("ABC-0000-XYZ-000001") as value claims and the draft's citation of
 one of them reads as "committed to one value". The question names the case in
 both, but the extracted subject (a full sentence or page heading) shares no
 word with the question, so the "question names its case" bound does not fire.
@@ -178,8 +178,8 @@ The rework landed as three general mechanisms, not per-case switches:
    kind only; a party/action ask ("who", "what must happen") keeps nothing.
 
 2. **A document id is a source, not a value.** A letter-number code with two
-   or more dash-separated segments ("DD-2023-118",
-   "INF-053-0000-JCB-SPC-IF-000013") is skipped by the reader, so an answer
+   or more dash-separated segments ("DOC-2024-001",
+   "ABC-0000-XYZ-000001") is skipped by the reader, so an answer
    citing its source no longer reads as "committed to that value". Shape
    only, never a known id.
 
@@ -191,9 +191,10 @@ The rework landed as three general mechanisms, not per-case switches:
 
 Replay (fresh read-only run over RAGQ's two v5 handed-id sets, Neon
 SELECT-only, SHOW transaction_read_only=on): **0 ASK on all 53 rows**,
-detector total ~350 ms. Local: 85 passed in tests/test_clarify_cases.py;
-mutation gate 23 run / 23 killed / 0 red; two-input lint 0 new; ruff clean;
-scan_hardwiring 0 new. #498 stays a draft until A1 (the bill write) is live.
+detector total ~350 ms. Local: 87 passed in tests/test_clarify_cases.py;
+mutation gate 34 run / 34 killed / 0 red; two-input lint 0 new; ruff clean;
+scan_repo_hygiene 0 live names. #498 stays a draft until A1 (the bill
+write) is live.
 
 ## Not in this PR
 

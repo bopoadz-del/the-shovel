@@ -243,7 +243,7 @@ _CLAUSE_VALUE_RE = re.compile(r"^\d+(?:\.\d+){2,}$")
 
 
 def _is_document_id(value: str) -> bool:
-    """True for a document / contract / drawing id ("DOC-2023-118",
+    """True for a document / contract / drawing id ("DOC-2024-001",
     "ABC-0000-XYZ-000001"): a letter-number code with two or more
     dash-separated segments. A document id is a SOURCE (already carried by
     ``Case.source``), not an answer value, so the reader skips it. Shape

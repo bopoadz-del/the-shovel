@@ -507,8 +507,8 @@ def test_head_noun(phrase, expected):
 @pytest.mark.parametrize(
     "value,expected",
     [
-        ("DD-2023-118", True),
-        ("INF-053-0000-JCB-SPC-IF-000013", True),
+        ("DOC-2024-001", True),
+        ("ABC-0000-XYZ-000001", True),
         ("D400", False),
         ("C35/45", False),
     ],
@@ -549,8 +549,8 @@ def test_reader_tags_kind(source, text, value, expected_kind):
 @pytest.mark.parametrize(
     "source,text",
     [
-        ("a.pdf", "Contract DD-2023-118 governs the works."),
-        ("b.pdf", "Specification INF-053-0000-JCB-SPC-IF-000013 applies."),
+        ("a.pdf", "Contract DOC-2024-001 governs the works."),
+        ("b.pdf", "Specification ABC-0000-XYZ-000001 applies."),
     ],
 )
 def test_reader_skips_document_id(source, text):
@@ -660,3 +660,26 @@ def test_different_kind_is_not_an_alternative_answer():
         ),
     )
     assert q is None
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        "The depth is 300 mm, and clause 8.8.1 also applies.",
+        "The depth is 300 mm, and the grade is C35/45.",
+    ],
+)
+def test_draft_citing_another_kind_still_commits_one_value(draft):
+    # The question asks for a measure; a clause / code the draft also cites
+    # is NOT an answer value of that kind. The draft's kind filter must drop
+    # it, so the draft is still a silent pick of exactly ONE measure -> ASK.
+    q = clarifying_question(
+        "what is the depth?",
+        draft,
+        _cases(
+            ("excavation depth", "300 mm", "a.pdf"),
+            ("cover depth", "500 mm", "b.pdf"),
+        ),
+    )
+    assert q is not None
+    assert "Which one is meant?" in q
