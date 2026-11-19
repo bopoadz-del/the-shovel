@@ -899,18 +899,46 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     return Running(masks, label)
 
 
+def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, float]:
+    """``{page: bottom of the page label line}``. The page furniture (running
+    lines and the label) sits from the page edge down to the label; a line
+    printed below it and above the column header is in the title band. A page
+    whose label is not read takes the median label bottom of the pages that
+    were read. Called only once :func:`page_sections` found sections, so at
+    least one label was read."""
+    read: dict[int, float] = {}
+    for lab in printed:
+        if running.page_label and _masked(lab.text) == running.page_label:
+            read.setdefault(lab.page, lab.bottom)
+    fallback = statistics.median(read.values())
+    return {page: read.get(page, fallback) for page in {lab.page for lab in printed}}
+
+
 def page_sections(printed: Sequence[_Label], running: Running) -> dict[int, tuple[str, ...] | None]:
-    """(b) Each page's section key: the page label's numeric fields before the
-    last one (the last is the page number). A page whose label is not read
-    belongs to the section of the page before it."""
+    """(b) Each page's section key: the page label's numeric fields other
+    than the page number. The page number is the field that takes the most
+    distinct values (the last one on a tie). A page whose label is not read
+    belongs to the section of the page before it. When no other field
+    varies from page to page (a label that is only a page number, or a page
+    number plus constants such as a page count), the label carries no
+    section information and the result is empty."""
     read: dict[int, tuple[str, ...]] = {}
     for lab in printed:
         if running.page_label and _masked(lab.text) == running.page_label:
-            read.setdefault(lab.page, tuple(_DIGITS_RE.findall(lab.text))[:-1])
+            read.setdefault(lab.page, tuple(_DIGITS_RE.findall(lab.text)))
+    if not read:
+        return {}
+    width = min(len(f) for f in read.values())
+    distinct = [len({f[i] for f in read.values()}) for i in range(width)]
+    page_field = max(range(width), key=lambda i: (distinct[i], i))
+    others = [i for i in range(width) if i != page_field]
+    if not any(distinct[i] > 1 for i in others):
+        return {}
     out: dict[int, tuple[str, ...] | None] = {}
     key: tuple[str, ...] | None = None
     for page in sorted({lab.page for lab in printed}):
-        key = read.get(page, key)
+        if page in read:
+            key = tuple(read[page][i] for i in others)
         out[page] = key
     return out
 
@@ -962,19 +990,32 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     ANY page of a section are that section's title, on every row of it (a
     section with none takes the outermost level of its first row); (d) a
     continued heading is written as its original; (e) wrapped lines of one
-    label are one element. A read with no running header is left alone."""
+    label are one element. A line in the title band (below the page label,
+    above the column header) is a title even when it repeats on most pages.
+
+    A read with no running header, no varying page label, or a label whose
+    only varying field is the page number has no section information and is
+    left alone."""
     running = running_lines(printed, pages)
     if not running.masks:
         return rows
     sections = page_sections(printed, running)
+    if not sections:
+        return rows
     cont = continuation_map(printed)
+    band = furniture_band(printed, running)
 
     def text_of(lab: _Label) -> str:
         return cont.get(_norm(lab.text), lab.text)
 
+    def furniture(lab: _Label) -> bool:
+        if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
+            return False  # title band: a title even when it repeats
+        return running.holds(lab.text)
+
     titles: dict[tuple[str, ...] | None, list[str]] = defaultdict(list)
     for lab in printed:
-        if lab.above_header and not running.holds(lab.text):
+        if lab.above_header and not furniture(lab):
             t = text_of(lab)
             sec = titles[sections.get(lab.page)]
             if _norm(t) not in {_norm(x) for x in sec}:
@@ -984,7 +1025,7 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         key = sections.get(row.source_page)
         body: list[_Label] = []
         for lab in row.labels:
-            if lab.above_header or running.holds(lab.text):
+            if lab.above_header or furniture(lab):
                 continue
             lab = replace(lab, text=text_of(lab))
             if body and _wrapped(body[-1], lab):

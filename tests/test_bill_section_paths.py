@@ -196,3 +196,84 @@ def test_document_without_running_header_is_left_alone(words):
     assert not g.running_lines(_printed(words), pages).masks
     rows = g.extract_bill_rows(words)
     assert [r.path for r in rows] == [tuple(lab.text for lab in r.labels) for r in rows]
+
+
+def _unchanged(words):
+    rows = g.extract_bill_rows(words)
+    return [r.path for r in rows] == [tuple(lab.text for lab in r.labels) for r in rows]
+
+
+def _no_section_info(labels):
+    """Four pages with a constant running line, a per-page label line from
+    ``labels`` (None = no label line) and a different title on each page."""
+    titles = ["CONCRETE", "FORMWORK", "MASONRY", "METALWORK"]
+    words: list[g.Word] = []
+    for p in range(1, 5):
+        above = [("Eastgate Pumping Station", H)]
+        if labels[p - 1] is not None:
+            above.append((labels[p - 1], H))
+        above.append((titles[p - 1], HEAVY))
+        words += _page(p, COLS_A, above, [("Walls", HEAVY), [f"Item {p}", "m", "1", "2", "2"]])
+    return words
+
+
+@pytest.mark.parametrize("labels", [
+    [None] * 4,                                            # a constant header, no label
+    ["Contract 12 Volume 3"] * 4,                          # constant figures, nothing varies
+    [f"Page {p}" for p in range(1, 5)],                    # a page number only
+    [f"Sheet {p} of 9" for p in range(1, 5)],              # page number plus a constant count
+], ids=["no-label", "constant-figures", "page-number-only", "page-of-count"])
+def test_label_without_section_information_leaves_rows_unchanged(labels):
+    words = _no_section_info(labels)
+    printed = _printed(words)
+    running = g.running_lines(printed, 4)
+    assert running.masks  # the running header IS found ...
+    assert g.page_sections(printed, running) == {}  # ... but gives no sections
+    assert _unchanged(words)
+
+
+@pytest.mark.parametrize("labels, expected", [
+    ([f"Bill {b} Sheet {p} of 9" for b, p in ((1, 1), (1, 2), (2, 3), (2, 4))],
+     {1: ("1", "9"), 2: ("1", "9"), 3: ("2", "9"), 4: ("2", "9")}),
+    # every page its own section: the fields tie, the LAST is the page number
+    ([f"Part {s} Leaf {p}" for s, p in ((3, 7), (4, 8), (5, 9), (6, 10))],
+     {1: ("3",), 2: ("4",), 3: ("5",), 4: ("6",)}),
+], ids=["section-beside-page-count", "tie-last-is-page"])
+def test_section_field_beside_page_number_is_section_information(labels, expected):
+    words = _no_section_info(labels)
+    printed = _printed(words)
+    assert g.page_sections(printed, g.running_lines(printed, 4)) == expected
+
+
+def _repeating_title(title, label_misread_on=None):
+    """A real section title printed in the title band on every page of its
+    section; the first section spans most of the document's pages, so its
+    title repeats like a running line. Optionally one page's label is
+    misread into a near-identical line."""
+    words: list[g.Word] = []
+    pages = [(1, "1", title[0], "Basins"), (2, "1", title[0], "Sinks"), (3, "1", title[0], "Baths"),
+             (4, "2", title[1], "Doors"), (5, "2", title[1], "Frames")]
+    for p, b, t, sub in pages:
+        label = f"Part {b} Leaf {b}-{p}"
+        if p == label_misread_on:
+            label = f"Part {b} Leaf {b}-I"
+        words += _page(p, COLS_B, [("Riverside Clinic Phase Two", H), (label, H), (t, HEAVY)],
+                       [(sub, HEAVY), [f"Item {p}", "1", "nr", "2", "2"]])
+    return words
+
+
+@pytest.mark.parametrize("title, misread", [
+    (("SANITARY INSTALLATIONS", "ELECTRICAL INSTALLATIONS"), None),
+    (("JOINERY", "IRONMONGERY"), 2),  # near-identical misread label stays furniture
+], ids=["repeating-title", "repeating-title-misread-label"])
+def test_repeating_title_band_line_is_a_title_not_furniture(title, misread):
+    words = _repeating_title(title, misread)
+    printed = _printed(words)
+    running = g.running_lines(printed, 5)
+    assert g._masked(title[0]) in running.masks  # it repeats on most pages ...
+    assert running.page_label == "part # leaf #-#"
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [  # ... and is still the section title
+        (title[0], "Basins"), (title[0], "Sinks"), (title[0], "Baths"),
+        (title[1], "Doors"), (title[1], "Frames"),
+    ]
