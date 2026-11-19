@@ -77,3 +77,33 @@ def test_lead_first_adds_and_removes_nothing(hat):
     given = [{"function": {"name": n}} for n in sorted(_package_tools())]
     out = tools.lead_first(given, hat)
     assert sorted(t["function"]["name"] for t in out) == sorted(_package_tools())
+
+
+@pytest.mark.parametrize("pick", [0, -1])
+def test_lead_rank_puts_the_worn_hat_first_then_base_then_the_rest(pick):
+    hat = _hats_with_tools()[pick]
+    other = next(h for h in _hats_with_tools() if h != hat)
+    own_tool = tool_registry.tools_of(hat)[0]
+    base_tool = tool_registry.tools_of("base")[0]
+    other_tool = tool_registry.tools_of(other)[0]
+    assert tools.lead_rank(own_tool, hat) == 0
+    assert tools.lead_rank(base_tool, hat) == 1
+    assert tools.lead_rank(other_tool, hat) == 2
+    assert tools.lead_rank(own_tool, None) == 2  # no hat worn: no lead
+
+
+@pytest.mark.parametrize("pick", [0, -1])
+def test_a_hat_tool_that_is_a_workflow_has_one_door(monkeypatch, pick):
+    """Every hat tool is now offered directly; one that is also a catalogue
+    workflow is offered through run_workflow only, never both."""
+    hat = _hats_with_tools()[pick]
+    shared = tool_registry.tools_of(hat)[0]
+    monkeypatch.setattr(routes, "catalogue", lambda: [shared, "widget_register"])
+    monkeypatch.setattr(routes, "cards", lambda: {})
+    disciplines = [o for o in tool_registry.OWNERS if o != "base"]
+    names = [t["function"]["name"]
+             for t in tools.offered(_agent(), "synthetic-proj", None, disciplines)]
+    assert routes.RUN_WORKFLOW in names
+    assert shared not in names
+    others = _hat_tools() - {shared}
+    assert others <= set(names)

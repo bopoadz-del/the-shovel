@@ -64,19 +64,22 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
     return [select_hat_schema(disciplines)] + lead_first(tools, hat) + ([workflow] if workflow else [])
 
 
+def lead_rank(name: str, hat: Optional[str]) -> int:
+    """0 for a tool the worn hat owns, 1 for a base tool, 2 for another
+    hat's tool. A name the registry does not know ranks as base."""
+    from app.agents.core import tool_registry
+
+    spec = tool_registry.get(name or "")
+    owner = spec.owner if spec is not None else "base"
+    if hat and owner == hat:
+        return 0
+    return 1 if owner == "base" else 2
+
+
 def lead_first(tools: List[Dict[str, Any]], hat: Optional[str]) -> List[Dict[str, Any]]:
     """The worn hat's tools first, then the base package's, then the other
     hats' -- each group in its existing order. Nothing is added or removed."""
-    from app.agents.core import tool_registry
-
-    def rank(t: Dict[str, Any]) -> int:
-        spec = tool_registry.get((t.get("function") or {}).get("name") or "")
-        owner = spec.owner if spec is not None else "base"
-        if hat and owner == hat:
-            return 0
-        return 1 if owner == "base" else 2
-
-    return sorted(tools, key=rank)
+    return sorted(tools, key=lambda t: lead_rank((t.get("function") or {}).get("name") or "", hat))
 
 
 #: Calculations listed in full (inputs with units and ranges) at most: base
