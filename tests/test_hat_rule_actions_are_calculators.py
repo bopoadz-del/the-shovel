@@ -190,11 +190,17 @@ def test_ncr_tracker_alias(given, following):
 
 # -- the rule functions themselves are unchanged -------------------------
 
-def test_the_knowledge_functions_keep_their_own_contract():
+@pytest.mark.parametrize("doc, seq, number, status, valid, ncr, following", [
+    ("VO", 15, "VO-015", "APPROVED", False, "CLOSED", None),
+    ("JR", 3, "JR-0003", "ACCEPTANCE", True, "RAISED", "ACKNOWLEDGED"),
+])
+def test_the_knowledge_functions_keep_their_own_contract(doc, seq, number, status, valid,
+                                                          ncr, following):
     from app.core import construction_knowledge as ck
-    assert ck.generate_doc_number("VO", 15) == "VO-015"
-    assert ck.validate_design_status("APPROVED")[0] is False
-    assert ck.next_ncr_status("CLOSED") is None
+    assert ck.generate_doc_number(doc, seq) == number
+    ok, message = ck.validate_design_status(status)
+    assert ok is valid and isinstance(message, str)
+    assert ck.next_ncr_status(ncr) == following
     assert isinstance(ck.enforce_critical_rules("approved design drawing"), list)
 
 

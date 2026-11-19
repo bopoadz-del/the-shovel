@@ -63,6 +63,9 @@ def _fill(spec, names) -> dict:
             seen += 1
         elif p.kind == "flag":
             values[name] = False
+        elif "YYYY-MM-DD" in (p.label or ""):
+            # A text input whose declared label states the ISO date format.
+            values[name] = f"2026-01-{1 + 10 * len(values) % 28:02d}"
         else:
             values[name] = p.default if p.default not in (None, "") else "x"
     return values

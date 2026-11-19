@@ -40,6 +40,7 @@ _AUDIT_A_TO_F = [
     "calculate_payment",
     "carbon_footprint_concrete",
     "cash_flow",
+    "check_review_timeline",
     "column_axial_capacity",
     "compaction_control",
     "composite_column_design",
@@ -68,6 +69,7 @@ _AUDIT_A_TO_F = [
     "dewatering_well_point_spacing",
     "diaphragm_wall_panel_volume",
     "electrical_installation_sequence",
+    "enforce_critical_rules",
     "evaluate_tender",
     "excavation_volume",
     "fall_arrest_force",
@@ -1115,3 +1117,26 @@ def test_audit_crew_sizing(qty, days, rate, hours, want_crews, want_up, want_cd,
     assert r["man_hours"] == pytest.approx(want_mh)
 
     _err("crew_sizing", {"quantity": 0, "duration_days": 15, "rate_per_crew_day": 12})
+
+
+# ── procedure-rule checks in the A-F range ──────────────────────────────────
+
+@pytest.mark.parametrize("dist, workshop, days, compliant", [
+    ("2026-04-01", "2026-04-06", 5, False),
+    ("2026-04-01", "2026-04-13", 12, True),
+])
+def test_audit_check_review_timeline(dist, workshop, days, compliant):
+    r = _ok("check_review_timeline", {"distribution_date": dist, "workshop_date": workshop})
+    assert r["distribution_period_days"] == days
+    assert r["compliant"] is compliant
+    _err("check_review_timeline", {"distribution_date": "1st April", "workshop_date": workshop})
+
+
+@pytest.mark.parametrize("body, count", [
+    ("The architect approved the drawing package.", 1),
+    ("Blockwork to grid C is complete.", 0),
+])
+def test_audit_enforce_critical_rules(body, count):
+    r = _ok("enforce_critical_rules", {"document_text": body})
+    assert r["violation_count"] == count
+    assert r["compliant"] is (count == 0)
