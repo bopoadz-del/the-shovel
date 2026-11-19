@@ -6040,39 +6040,76 @@ def _looks_like_tool_truncation_notice(text: str) -> bool:
 
 def _text_needs_tool_recovery(text: str) -> bool:
     """True when the LLM hop died and a tool/predispatch draft should speak."""
+    return tool_recovery_reason(text) is not None
+
+
+def tool_recovery_reason(text: str) -> str | None:
+    """The name of the rule that hands ``text`` to tool recovery, else None.
+
+    One implementation for the recovery decision and its trace, so the log
+    names the rule that fired (never the text). The order is the decision
+    order.
+    """
     from app.agents.core.computed_answer import has_words
 
     t = (text or "").strip()
-    if not t or not has_words(t):
-        # Nothing, or markdown alone (rules, bullets, emphasis marks): it
-        # says nothing.
-        return True
+    if not t:
+        return "empty"
+    if not has_words(t):
+        # Markdown alone (rules, bullets, emphasis marks): it says nothing.
+        return "no_words"
     if t == _EMPTY_RESPONSE_FALLBACK:
-        return True
+        return "fallback_line"
     if "unable to generate" in t.lower():
-        return True
+        return "unable_to_generate"
     if re.search(r"HTTP 413|tokens per minute|\bTPM\b", t):
-        return True
+        return "provider_limit"
     # Leftover E4: "Let me validate…" is not an answer. Recover the
     # construction_calc volume (or any other deliverable already in the
     # thread) instead of shipping the promise.
     if _looks_like_search_preamble(t):
-        return True
+        return "search_promise"
     if _looks_like_tool_error_json(t):
-        return True
+        return "tool_error_json"
     if _looks_like_formula_template(t):
-        return True
+        return "formula_template"
     if _looks_like_tool_truncation_notice(t):
-        return True
+        return "truncation_notice"
     try:
         from app.lib.construction_formulas_commercial import (
             answer_is_unbound_delay_damages,
         )
         if answer_is_unbound_delay_damages(t):
-            return True
+            return "unbound_delay_damages"
     except Exception:  # noqa: BLE001 — recovery probe must never break a turn
         _LOG.debug("unbound delay-damages probe failed", exc_info=True)
-    return False
+    return None
+
+
+def recover_answer_traced(
+    text: str,
+    messages: list[dict[str, Any]] | None,
+    *,
+    reason: str | None = None,
+    raw_len: int | None = None,
+) -> str:
+    """``_recover_answer_from_tool_messages``, traced when it replaces the text.
+
+    The line names the rule that handed the text to recovery (or the
+    caller's ``reason``, ``gate_emptied`` when a gate removed every clause)
+    and lengths only: ``raw`` is the text it replaced (``raw_len`` when the
+    caller's text was already emptied), ``recovered`` what stands in for it.
+    Never the text. The answer is exactly the untraced call's.
+    """
+    out = _recover_answer_from_tool_messages(text, messages)
+    if out != text:
+        _LOG.info(
+            "postprocess: recovery replaced final_text reason=%s raw=%dc recovered=%dc",
+            reason or tool_recovery_reason(text),
+            len(text or "") if raw_len is None else raw_len,
+            len(out or ""),
+        )
+    return out
 
 
 def _format_variation_order(payload: dict[str, Any]) -> str:
@@ -10373,7 +10410,7 @@ def _postprocess_answer(
     from app.agents import answer_exit
 
     answer_exit.note_evidence(rag_sys_msg, messages)
-    text = _recover_answer_from_tool_messages(text, messages)
+    text = recover_answer_traced(text, messages)
     # The fetch-window truncation notice is not an
     # answer. Blank it so later grafts can compose, and so we never
     # ship "Tool result exceeded … char_offset=" to the operator.
@@ -10400,7 +10437,7 @@ def _postprocess_answer(
     # A gate that removes every clause of an answer leaves the turn's own
     # tool result, never an empty answer for the footers to dress.
     if gated.strip() and not text.strip():
-        text = _recover_answer_from_tool_messages("", messages)
+        text = recover_answer_traced("", messages, reason="gate_emptied", raw_len=len(gated))
     # Figure provenance (same evidence objects): every figure credited to user
     # input, calculator, project document or general knowledge; a figure with
     # no source is not stated. Enforced on turns that ran a need plan.
