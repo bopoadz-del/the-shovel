@@ -321,3 +321,58 @@ def test_repeating_title_band_line_is_a_title_not_furniture(title, misread):
         (title[0], "Basins"), (title[0], "Sinks"), (title[0], "Baths"),
         (title[1], "Doors"), (title[1], "Frames"),
     ]
+
+
+def _page_number_only_bill(sections):
+    """A page label that is only a page number; the section title prints in the
+    title band on the FIRST page of each section and nowhere else. ``sections``
+    lists ``(title, page_count)`` pairs, so a section spans several pages and
+    its title must be carried onto its continuation pages."""
+    run = ("Bridgeport Viaduct", H)
+    words: list[g.Word] = []
+    page = 1
+    for title, count in sections:
+        for i in range(count):
+            above = [run, (f"Page {page}", H)]
+            if i == 0:
+                above.append((title, HEAVY))
+            words += _page(page, COLS_A, above,
+                           [("Bulk", HEAVY), [f"Item {page}", "m3", "1", "2", "2"]])
+            page += 1
+    return words
+
+
+@pytest.mark.parametrize("sections", [
+    [("EARTHWORKS", 3), ("CONCRETE", 2)],
+    [("DEMOLITION", 2), ("DRAINAGE", 3), ("PAVING", 1)],
+], ids=["two-sections", "three-sections"])
+def test_page_number_only_label_keys_sections_by_title_band(sections):
+    words = _page_number_only_bill(sections)
+    printed = _printed(words)
+    running = g.running_lines(printed, len({w.page for w in words}))
+    assert running.page_label == "page #"
+    assert g.page_sections(printed, running) == {}  # the label carries no section field
+    rows = g.extract_bill_rows(words)
+    want = [(title, "Bulk") for title, count in sections for _ in range(count)]
+    assert [r.path for r in rows] == want
+
+
+def _page_number_only_no_title(pages):
+    """A page label that is only a page number and NO title band: the heading
+    above the header is the running line and the label, nothing else."""
+    run = ("Bridgeport Viaduct", H)
+    words: list[g.Word] = []
+    for p in range(1, pages + 1):
+        words += _page(p, COLS_A, [run, (f"Page {p}", H)],
+                       [("Bulk", HEAVY), [f"Item {p}", "m3", "1", "2", "2"]])
+    return words
+
+
+@pytest.mark.parametrize("pages", [4, 5], ids=["four-pages", "five-pages"])
+def test_page_number_only_label_without_title_band_is_left_alone(pages):
+    words = _page_number_only_no_title(pages)
+    printed = _printed(words)
+    running = g.running_lines(printed, pages)
+    assert running.page_label == "page #"
+    assert g.page_sections(printed, running) == {}
+    assert _unchanged(words)  # no title band: no section information at all

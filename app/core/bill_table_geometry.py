@@ -882,14 +882,18 @@ class Running:
 
 
 def running_lines(printed: Sequence[_Label], pages: int) -> Running:
-    """(a) A label line that repeats, digits masked, on most pages is a running
-    header. (b) Of those, the one whose digits take the most distinct values
-    from page to page is the page label."""
+    """(a) A label line printed above the column header that repeats, digits
+    masked, on most pages is a running header. (b) Of those, the one whose
+    digits take the most distinct values from page to page is the page label.
+    A body label (printed below the header) is never page furniture, even
+    when it repeats."""
     if pages < MIN_RUNNING_PAGES:
         return Running(set(), None)
     on: dict[str, set[int]] = defaultdict(set)
     raw: dict[str, set[str]] = defaultdict(set)
     for lab in printed:
+        if not lab.above_header:
+            continue
         m = _masked(lab.text)
         on[m].add(lab.page)
         raw[m].add(_norm(lab.text))
@@ -988,6 +992,33 @@ def _wrapped(a: _Label, b: _Label) -> bool:
             and not _outer(a, b, gap) and not _outer(b, a, gap))
 
 
+def _title_band_sections(
+    printed: Sequence[_Label],
+    band: dict[int, float],
+    cont: dict[str, str],
+) -> dict[int, tuple[str, ...]]:
+    """Key each page's section by its title-band heading when the page label
+    carries no section field. The title band is the run of lines printed below
+    the page label and above the column header; a continuation page prints
+    none, so the heading propagates forward from the last page that printed
+    one. No title-band heading anywhere means no section information."""
+    per_page: dict[int, list[str]] = defaultdict(list)
+    for lab in printed:
+        if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
+            t = cont.get(_norm(lab.text), lab.text)
+            if _norm(t) not in {_norm(x) for x in per_page[lab.page]}:
+                per_page[lab.page].append(t)
+    if not any(per_page.values()):
+        return {}
+    key: tuple[str, ...] = ()
+    out: dict[int, tuple[str, ...]] = {}
+    for page in sorted({lab.page for lab in printed}):
+        if per_page[page]:
+            key = tuple(per_page[page])
+        out[page] = key
+    return out
+
+
 def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) -> list[BillRow]:
     """Rewrite every row's path as (section title, sub-heading..., preamble).
 
@@ -999,17 +1030,23 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     label are one element. A line in the title band (below the page label,
     above the column header) is a title even when it repeats on most pages.
 
-    A read with no running header, no varying page label, or a label whose
-    only varying field is the page number has no section information and is
-    left alone."""
+    A read with no running header is left alone. When the page label names
+    each page but carries no section field (a page number alone, or a page
+    number plus constants), each page's section is its title-band heading
+    instead, propagated over the pages that print none; a read with neither a
+    running header nor a title band is left alone."""
     running = running_lines(printed, pages)
     if not running.masks:
         return rows
-    sections = page_sections(printed, running)
-    if not sections:
-        return rows
     cont = continuation_map(printed)
+    sections = page_sections(printed, running)
+    if not sections and running.page_label is None:
+        return rows
     band = furniture_band(printed, running)
+    if not sections:
+        sections = _title_band_sections(printed, band, cont)
+        if not sections:
+            return rows
 
     def text_of(lab: _Label) -> str:
         return cont.get(_norm(lab.text), lab.text)
