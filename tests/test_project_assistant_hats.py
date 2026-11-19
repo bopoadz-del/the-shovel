@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from typing import Any, AsyncIterator, Dict, List
 from unittest.mock import AsyncMock, patch
 from tests._fixture_values import STUB_TOKEN_01
@@ -72,17 +73,20 @@ def test_hat_router_on_with_no_flag():
     assert hat_scores_sse(PLANNING_ASK) is not None
 
 
-def test_hat_scores_sse_names_the_planning_hat():
+@pytest.mark.parametrize("ask, discipline", [
+    (PLANNING_ASK, "planning"),
+    (CONTRACTS_ASK, "contracts"),
+])
+def test_hat_scores_sse_names_the_hat_of_the_ask(ask, discipline):
     assert hats_activation_enabled() is True
-    evt = hat_scores_sse(PLANNING_ASK)
+    evt = hat_scores_sse(ask)
     assert evt is not None
     assert evt["type"] == "hat_signals"
     assert evt["hat_signals"]
     assert evt["scores"]
-    assert "planning" in evt["scores"]
-    assert evt["selected"]
-    assert evt["selected"].startswith("fork.hat.")
-    assert any(row["discipline"] == "planning" for row in evt["hat_signals"])
+    assert discipline in evt["scores"]
+    assert evt["selected"] == f"fork.hat.{discipline}"
+    assert any(row["discipline"] == discipline for row in evt["hat_signals"])
 
 
 def test_hat_turn_note_names_the_winning_hat():

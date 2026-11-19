@@ -58,8 +58,9 @@ class TestHatsAlwaysOn:
         )
         assert not readers, f"the removed flag is read again in: {readers}"
 
-    def test_catalog_loads(self):
-        """The catalog, the base and the eight hats load."""
+    @pytest.mark.parametrize("discipline", ["planning", "safety"])
+    def test_catalog_loads(self, discipline):
+        """The catalog loads the base and the eight hats, this one among them."""
         from app.agents.catalog import get_agent_catalog, get_base, list_hats
 
         catalog = get_agent_catalog()
@@ -70,11 +71,14 @@ class TestHatsAlwaysOn:
 
         hats = list_hats()
         assert len(hats) == 8, f"Expected 8 hats, found {len(hats)}"
+        assert discipline in {h.discipline.value for h in hats}
 
-    def test_manifests_validate(self):
-        """Every manifest validates under its own id."""
+    @pytest.mark.parametrize("manifest_id", ["fork.base", "fork.hat.contracts"])
+    def test_manifests_validate(self, manifest_id):
+        """Every manifest validates under its own id, this one among them."""
         from app.agents.catalog import get_agent_catalog
         catalog = get_agent_catalog()
+        assert manifest_id in catalog
         for mid, manifest in catalog.items():
             assert manifest.id == mid
             assert manifest.name
