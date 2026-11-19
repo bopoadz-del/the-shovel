@@ -416,28 +416,24 @@ def test_cases_from_passages_keeps_a_decimal_value_whole(
 
 
 @pytest.mark.parametrize(
-    "text,first_hint,second_hint",
+    "text,expected_subjects",
     [
         (
             "The concrete cover shall be 40 mm. The backfill depth shall be 300 mm.",
-            "concrete cover",
-            "backfill depth",
+            {"concrete cover", "backfill depth"},
         ),
         (
             "The blinding is C35/45. The capping concrete is C25/30.",
-            "blinding",
-            "capping concrete",
+            {"blinding", "capping concrete"},
         ),
     ],
 )
 def test_cases_from_passages_two_sentences_two_subjects(
-    text, first_hint, second_hint,
+    text, expected_subjects,
 ):
     cases = cases_from_passages([("a.pdf", text)])
     assert len(cases) == 2
-    subjects = {c.subject.lower() for c in cases}
-    assert any(first_hint in s for s in subjects)
-    assert any(second_hint in s for s in subjects)
+    assert {c.subject.lower().strip() for c in cases} == expected_subjects
 
 
 # A measure and a reference are the two inputs: each subject must be the
