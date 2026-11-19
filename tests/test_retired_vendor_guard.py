@@ -127,3 +127,29 @@ def test_enhancer_reports_the_served_model_over_the_callers(asked, served):
     )
     assert chat.sent[0]["model"] == asked
     assert out["model_used"] == served
+
+
+# ── no chat wired: the enhancer falls back to the registry's chat block ────
+
+
+@pytest.mark.parametrize("served", ["registry-model-one", "registry-model-two"])
+def test_enhancer_unwired_uses_the_registry_chat(monkeypatch, served):
+    import app.blocks as blocks
+    from app.blocks.llm_enhancer import LLMEnhancerBlock
+
+    fake = _FakeChat(served)
+    monkeypatch.setitem(blocks.BLOCK_REGISTRY, "chat", lambda: fake)
+    out = asyncio.run(LLMEnhancerBlock().process("Beam B4 span 6 m", {"action": "extract"}))
+    assert out["status"] == "success"
+    assert out["model_used"] == served
+    assert "model" not in fake.sent[0]
+
+
+@pytest.mark.parametrize("action", ["extract", "summarize"])
+def test_enhancer_unwired_without_registry_chat_says_so(monkeypatch, action):
+    import app.blocks as blocks
+    from app.blocks.llm_enhancer import LLMEnhancerBlock
+
+    monkeypatch.delitem(blocks.BLOCK_REGISTRY, "chat", raising=False)
+    out = asyncio.run(LLMEnhancerBlock().process("Slab S1 250 mm", {"action": action}))
+    assert out == {"status": "error", "error": "Chat block not available for LLM enhancement"}
