@@ -36,6 +36,27 @@ FOLDER_ROLES = frozenset({"contract", "draft", "tender", "award", "reporting", "
 _PATH_KEYS = ("drive_path", "local_drive_path", "source_path")
 
 
+#: A generated knowledge copy declares, on a line of its own, the encoded
+#: table it was written from (``scripts/kb_from_code.py`` writes it). The
+#: copy's values are that table's values, not a separate document's: a
+#: conflict line must be able to say so.
+_GENERATED_FROM = re.compile(r"^\s*Generated from `([^`\n]+)`", re.MULTILINE)
+
+
+def declared_origin(content_sample: str | None) -> dict[str, str | None]:
+    """The origin a document declares for its own values.
+
+    ``{"kind": "encoded_table", "source": <path>}`` when the text declares
+    the encoded table it was generated from; otherwise
+    ``{"kind": "document", "source": None}`` (a document speaks for itself).
+    Read from the document's own text, never from its name.
+    """
+    m = _GENERATED_FROM.search(content_sample or "")
+    if m:
+        return {"kind": "encoded_table", "source": m.group(1).strip()}
+    return {"kind": "document", "source": None}
+
+
 def type_for(filename: str, content_sample: str = "") -> str:
     """The registry's type for this name (and content, when given)."""
     verdict = doc_types.classify(filename or "", content_sample or "")
