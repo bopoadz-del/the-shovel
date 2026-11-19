@@ -119,18 +119,6 @@ def _unit_of(value: str) -> str:
     return _norm(value)
 
 
-def _values_differ(a: str, b: str) -> bool:
-    na, nb = _number_of(a), _number_of(b)
-    if na is not None and nb is not None:
-        tol = 1e-3 * max(1.0, abs(na), abs(nb))
-        if abs(na - nb) > tol:
-            return True
-        return _unit_of(a) != _unit_of(b)
-    if na is not None or nb is not None:
-        return True
-    return _norm(a) != _norm(b)
-
-
 def _subject_tokens(subject: str) -> set[str]:
     return {
         w for w in re.findall(r"[a-z]{3,}", (subject or "").lower())

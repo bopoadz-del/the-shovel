@@ -6,8 +6,14 @@ pure, so these run against recorded strings, not a retriever mock.
 
 from __future__ import annotations
 
+import pytest
+
 from app.agents.clarify_cases import (
     Case,
+    _number_of,
+    _same_subject,
+    _text_commits,
+    _unit_of,
     clarifying_question,
     enabled,
 )
@@ -25,12 +31,73 @@ def test_enabled_by_default(monkeypatch):
 def test_kill_switch_off(monkeypatch):
     monkeypatch.setenv("CLARIFY_CASES", "0")
     assert enabled() is False
+    # Two differing cases: only the kill switch (not the case count, not the
+    # subject, not the draft) stops this turn from asking -- so the OFF flag
+    # is actually what is under test.
     q = clarifying_question(
-        "what is the cover?",
-        "The cover is 40 mm.",
-        _cases(("concrete cover", "40 mm", "spec.pdf")),
+        "what is the figure?",
+        "The figure is 40 mm.",
+        _cases(
+            ("concrete cover", "40 mm", "a.pdf"),
+            ("backfill depth", "300 mm", "b.pdf"),
+        ),
     )
     assert q is None
+
+
+# --- the value/subject readers (direct: they decide case 2 vs case 3) ------
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("40 mm", 40.0),
+        ("40", 40.0),
+        ("1,200 mm", 1200.0),
+        ("8.8.1", None),  # a clause id is more than one number: a string
+    ],
+)
+def test_number_of(value, expected):
+    assert _number_of(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("40 mm", "mm"),
+        ("98%", "%"),
+        ("40", ""),
+    ],
+)
+def test_unit_of(value, expected):
+    assert _unit_of(value) == expected
+
+
+@pytest.mark.parametrize(
+    "a,b,expected",
+    [
+        ("concrete cover", "concrete cover", True),
+        ("concrete cover", "backfill depth", False),
+        ("", "", True),  # empty subject: the empty-token early return
+        ("the", "the", True),  # stopword-only subject -> empty tokens too
+    ],
+)
+def test_same_subject(a, b, expected):
+    assert _same_subject(a, b) == expected
+
+
+@pytest.mark.parametrize(
+    "text,value,expected",
+    [
+        ("The figure is 40 mm.", "40 mm", True),
+        # The number matches even though the value string is not spelled out:
+        # the numeric branch (not the string-containment branch) commits it.
+        ("The figure is 40 millimeters.", "40 mm", True),
+        ("The figure is 300 mm.", "40 mm", False),
+    ],
+)
+def test_text_commits(text, value, expected):
+    assert _text_commits(text, value) == expected
 
 
 # Bound 2 -- same value in every case: answer, never ask.
@@ -99,15 +166,29 @@ def test_bound5_lists_only_found_cases():
 
 
 # Bound 6 -- one question, never a chain; "all" is the caller's next turn.
-def test_bound6_one_question_not_a_chain():
-    q = clarifying_question(
-        "what is the figure?",
-        "The figure is 40 mm.",
-        _cases(
-            ("concrete cover", "40 mm", "a.pdf"),
-            ("backfill depth", "300 mm", "b.pdf"),
+@pytest.mark.parametrize(
+    "question,draft,cases",
+    [
+        (
+            "what is the figure?",
+            "The figure is 40 mm.",
+            _cases(
+                ("concrete cover", "40 mm", "a.pdf"),
+                ("backfill depth", "300 mm", "b.pdf"),
+            ),
         ),
-    )
+        (
+            "which clause applies?",
+            "Clause 8.8.1 applies.",
+            _cases(
+                ("design", "8.8.1", "a.pdf"),
+                ("construction", "8.8.2", "b.pdf"),
+            ),
+        ),
+    ],
+)
+def test_bound6_one_question_not_a_chain(question, draft, cases):
+    q = clarifying_question(question, draft, cases)
     assert q is not None
     assert q.count("Which one is meant?") == 1
     assert q.count("?") == 1
