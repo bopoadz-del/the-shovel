@@ -1,0 +1,118 @@
+name: install-system-deps
+description: >-
+  Install the apt packages a job needs without depending on any single Ubuntu
+  archive host. A warm package cache installs offline (the archive is never
+  touched); a miss walks several mirrors with bounded retry and names the
+  mirrors that failed. A package that cannot be obtained still fails the job —
+  there is no silent pass.
+
+inputs:
+  packages:
+    description: Space-separated apt package names to install
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cache key from the package list
+      id: key
+      shell: bash
+      run: |
+        codename=$(lsb_release -cs 2>/dev/null || echo unknown)
+        pkgs=$(printf '%s\n' "${{ inputs.packages }}" | tr ' ' '\n' | LC_ALL=C sort -u | paste -sd- -)
+        echo "key=system-deps-${codename}-${{ runner.arch }}-${pkgs}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the package archive
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: /tmp/apt-archives
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.key }}
+
+    - name: Install the packages
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+        PKGS='${{ inputs.packages }}'
+
+        # A single-host mirror list is a single point of failure: the 11 Nov
+        # Azure DNS outage and the 19 Nov archive outage each took the pinned
+        # host down while another mirror stayed up. Keep a multi-host list so
+        # apt walks the mirrors in turn instead of dying on the first one.
+        sudo tee /etc/apt/apt-mirrors.txt >/dev/null <<'EOF'
+        http://azure.archive.ubuntu.com/ubuntu/
+        http://archive.ubuntu.com/ubuntu/
+        http://us.archive.ubuntu.com/ubuntu/
+        http://gb.archive.ubuntu.com/ubuntu/
+        EOF
+
+        # If a previous run already fetched these packages, install them from
+        # the restored archives without touching the archive at all.
+        if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ] && compgen -G "/tmp/apt-archives/*.deb" >/dev/null; then
+          echo "::group::installing from the package cache (offline)"
+          offline_ok=1
+          if ! (sudo dpkg -i /tmp/apt-archives/*.deb >/dev/null 2>&1 && sudo dpkg --configure -a >/dev/null 2>&1); then
+            offline_ok=0
+          fi
+          for p in $PKGS; do
+            dpkg -s "$p" >/dev/null 2>&1 || offline_ok=0
+          done
+          if [ "$offline_ok" = "1" ]; then
+            echo "offline install complete for: $PKGS"
+            echo "::endgroup::"
+            exit 0
+          fi
+          echo "::warning::offline install incomplete; falling back to the mirrors"
+          echo "::endgroup::"
+        fi
+
+        APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
+        # Some GitHub-hosted images ship a Microsoft prod repo that 403s and is
+        # unsigned; it aborts apt-get update. Drop that list up front.
+        sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
+        # Settle any partial state left by an incomplete offline attempt.
+        sudo dpkg --configure -a >/dev/null 2>&1 || true
+
+        ok=1
+        for attempt in 1 2 3; do
+          if sudo timeout 180 apt-get $APT_OPTS update -qq \
+             && sudo timeout 180 apt-get $APT_OPTS install -y -qq $PKGS; then
+            ok=0
+            break
+          fi
+          echo "::warning::apt attempt $attempt failed; retrying"
+          sleep 10
+        done
+
+        if [ "$ok" -ne 0 ]; then
+          mirrors=$(tr '\n' ' ' < /etc/apt/apt-mirrors.txt)
+          echo "::error::could not install '$PKGS' from any mirror after 3 attempts; mirrors tried: $mirrors"
+          exit 1
+        fi
+
+        # Never a silent pass: confirm every requested package is present.
+        for p in $PKGS; do
+          if ! dpkg -s "$p" >/dev/null 2>&1; then
+            echo "::error::'$p' was not installed even though apt reported success"
+            exit 1
+          fi
+        done
+
+        # Stage the downloaded archives so the next run can install offline.
+        mkdir -p /tmp/apt-archives
+        sudo cp -n /var/cache/apt/archives/*.deb /tmp/apt-archives/ 2>/dev/null || true
+        if compgen -G "/tmp/apt-archives/*.deb" >/dev/null; then
+          echo "has_archives=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_archives=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Save the package archive
+      if: steps.cache.outputs.cache-hit != 'true' && steps.install.outputs.has_archives == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /tmp/apt-archives
+        key: ${{ steps.key.outputs.key }}

@@ -119,6 +119,14 @@ _PROJECT_TYPE_FACTORS: Dict[str, float] = {
 }
 
 
+def _module_source_path() -> str:
+    """This module's path relative to the repository (``app/...``)."""
+    import os
+    here = os.path.abspath(__file__)
+    root = os.path.abspath(os.path.join(os.path.dirname(here), "..", ".."))
+    return os.path.relpath(here, root).replace(os.sep, "/")
+
+
 def _normalize(text: str) -> str:
     return (
         (text or "")
@@ -246,4 +254,12 @@ class HistoricalBenchmarkBlock(UniversalBlock):
                    f"the US-national-average base (factor 1.0).")
             ),
             "confidence": self.config.get("confidence"),
+            # The rate is this block's encoded table, not a document: a line
+            # stating differing rates names it as such.
+            "origin": self.origin(),
         }
+
+    def origin(self) -> Dict[str, str]:
+        """Where this block's rates come from, in words a reader can name."""
+        return {"kind": "encoded_table", "label": self.description,
+                "source": _module_source_path()}
