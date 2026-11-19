@@ -80,20 +80,41 @@ the both-values statement ("the documents differ", every value with origin),
 which is #453, already on main. When the passages do not let the product tell
 them apart, it behaves as case 2 (it asks).
 
-## What is still needed before the code freezes
+## What was still needed before the code freezes
 
-1. **Which reader extracts the general value+subject.** `first_line_hard_rule`
-   builds `_Hit` for two topics; the general reader is a value (number/unit or
-   clause id) plus the sentence/heading subject around it, using the existing
-   `citation_provenance` records for source/doc_id/chunk/page. Confirm the
-   shared reader rather than growing a third copy.
-2. **The replay data.** The acceptance is a replay on the tester's rows
-   (handed ids, RAGQ's v5 files, the read-only data path), counting which rows
-   would now get a clarifying question by label, and proving any row whose
-   question already names its case gets none. The detector is not frozen
-   before that replay exists.
-3. **Cost measurement**, as with the first-line rule: milliseconds per turn on
-   the replayed rows, and no change on a non-ambiguous turn (byte-for-byte).
+1. **Which reader extracts the general value+subject.** Done (M64):
+   `cases_from_passages` reads a measure with the product's figure reader and
+   a reference by shape; the subject is the sentence/heading that states the
+   value.
+2. **The replay data.** Done (M65): 0 of 53 rows on RAGQ's two newest full
+   sets get a clarifying question, and every current row names its case, so 0
+   is correct.
+3. **Cost measurement.** Done (M65): detector 2-55 ms/turn, ~11 ms avg; a
+   non-ambiguous turn is byte-for-byte unchanged.
+4. **Dates are not references.** Done: the reader skips a letter-number token
+   whose leading word is a month name ("Jan-25", "30-Jan-25"). General, no
+   per-case list.
+
+## Not yet frozen -- the reader over-extracts
+
+The reader reads every figure and reference in every handed chunk (16-155
+claims per row). The committed gate counts (subject, value, source) claims, so
+a value repeated across chunks is committed-to once per chunk and the positive
+path ("the draft silently picked one of several values") is unsatisfiable end
+to end on real rows.
+
+Collapsing claims by value (one value = one case) is the general fix, but
+landing it alone regresses the replay: A6 and A12 then ask, because the reader
+reads a class code ("D400") and a document id
+("INF-053-0000-JCB-SPC-IF-000013") as value claims and the draft's citation of
+one of them reads as "committed to one value". The question names the case in
+both, but the extracted subject (a full sentence or page heading) shares no
+word with the question, so the "question names its case" bound does not fire.
+
+The remaining general fix is to constrain the reader to the question's own
+subject (keep only value claims whose subject relates to the question, with a
+cleaner subject phrase) before the collapse lands. That rework is not shipped
+rushed; it is the next step.
 
 ## Not in this PR
 

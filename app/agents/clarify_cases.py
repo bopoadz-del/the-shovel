@@ -75,6 +75,23 @@ _STOPWORDS = {
     "then", "there", "here", "each", "any", "some", "all", "every", "one",
 }
 
+#: Month names and abbreviations. A calendar date ("Jan-25", "30-Jan-25")
+#: matches the letter-number reference SHAPE but is not a clause or document
+#: reference; these mark the letter-number codes that are dates so the reader
+#: skips them. A month is a language category, not a project or test case.
+_MONTH_WORDS = frozenset({
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "sept",
+    "oct", "nov", "dec",
+    "january", "february", "march", "april", "june", "july", "august",
+    "september", "october", "november", "december",
+})
+
+
+def _is_date_token(value: str) -> bool:
+    """True when a letter-number token is a calendar date, not a reference."""
+    lead = re.match(r"[A-Za-z]+", (value or "").strip())
+    return bool(lead) and lead.group(0).lower() in _MONTH_WORDS
+
 
 def enabled() -> bool:
     """ON by default; ``CLARIFY_CASES=0`` is the kill switch."""
@@ -274,6 +291,8 @@ def cases_from_passages(passages: Iterable[tuple[str, str]]) -> list[Case]:
         t = text or ""
         for m in _REFERENCE_RE.finditer(t):
             value = m.group(0).strip()
+            if _is_date_token(value):
+                continue
             lo, hi = _sentence_span(t, m.start())
             cases.append(Case(
                 subject=t[lo:hi].strip(), value=value, source=source or "",

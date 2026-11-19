@@ -10,6 +10,7 @@ import pytest
 
 from app.agents.clarify_cases import (
     Case,
+    _is_date_token,
     _number_of,
     _same_subject,
     _text_commits,
@@ -302,6 +303,43 @@ def test_different_structures_never_collapse():
 
 
 # --- the reader: value claims from handed passages (pure) ------------------
+
+
+@pytest.mark.parametrize(
+    "source,text",
+    [
+        ("a.pdf", "The programme runs from Jan-25 to Feb-25."),
+        ("b.pdf", "The certificate is dated 30-Jan-25."),
+        ("c.pdf", "Revised Feb-2025."),
+    ],
+)
+def test_cases_from_passages_skips_dates(source, text):
+    # A calendar date matches the letter-number reference SHAPE but is not a
+    # clause or document reference; it must not become a case.
+    assert cases_from_passages([(source, text)]) == []
+
+
+def test_cases_from_passages_keeps_references_after_date_skip():
+    cases = cases_from_passages([
+        ("a.pdf", "Clause 8.8.1 applies. Dated Jan-25."),
+    ])
+    values = {c.value for c in cases}
+    assert "8.8.1" in values
+    assert not any("Jan-25" in c.value for c in cases)
+
+
+@pytest.mark.parametrize(
+    "token,expected",
+    [
+        ("Jan-25", True),
+        ("Feb-2025", True),
+        ("8.8.1", False),
+        ("C35/45", False),
+        ("AB-2001-101", False),
+    ],
+)
+def test_is_date_token(token, expected):
+    assert _is_date_token(token) is expected
 
 
 @pytest.mark.parametrize(
