@@ -22,8 +22,17 @@ of the same heading path, where one of the two rows carries no figure, is the
 rest of that item.
 
 Matching is by words, not by a phrase: every term must appear as a word in
-the row's description (and every section term in its heading path). Nothing
-here names a bill, a section, a row or a question.
+the row's description, and every section term in the row's SECTION (its
+section title plus its sub-heading, plus the running header every row
+prints), never in the raw heading pile: a scanned bill prints a section's
+title on some of its pages only, so the pile would keep the rows of those
+pages and drop the rest. The section columns come from ``bill_structure``:
+read from the sheet when the converter wrote them, derived from the stored
+heading paths for a sheet stored before it did. When words of the user's
+question occur in the titles of some of the matching rows' sections and not
+others, only the sections whose titles hold the most of them are kept,
+whatever section words the model passed. Nothing here names a bill, a
+section, a row or a question.
 """
 
 from __future__ import annotations
@@ -36,6 +45,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core import bill_structure as bst
 from app.core import bill_table_geometry as g
 
 _LOG = logging.getLogger(__name__)
@@ -47,7 +57,11 @@ MEASURES = (MEASURE_QUANTITY, MEASURE_AMOUNT)
 _CANONICAL = {label: name for name, label in g._FIELD_LABELS}
 _CHECK_LABEL = "Check"
 _PAGE_LABEL = "Source Page"
-_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+#: A word: a number with its decimal or thousands parts and any unit glued to
+#: it ("1.5", "1.5m", "28,496.00") is ONE word, else a run of letters and
+#: digits. Read apart, "1.5 x 1.5m" would be {1, 5, 5m, x} and match
+#: "1.8 x 1.8m, depth 5.0-5.5m".
+_WORD_RE = re.compile(r"\d+(?:[.,]\d+)*(?:[^\W\d_][^\W_]*)?|[^\W_]+", re.UNICODE)
 
 
 @dataclass
@@ -62,6 +76,19 @@ class SheetRow:
     rate: str
     amount: str
     pages: list[int] = field(default_factory=list)
+    section_key: str = ""
+    section_title: str = ""
+    sub_heading: str = ""
+    preamble: str = ""
+    #: The running header every row of the bill prints (see ``bill_structure``).
+    running: str = ""
+
+    @property
+    def has_section_columns(self) -> bool:
+        return bool(self.section_key or self.section_title)
+
+    def section_text(self) -> str:
+        return " ".join(t for t in (self.section_title, self.sub_heading, self.running) if t)
 
     def figure(self, measure: str) -> float | None:
         text = self.quantity if measure == MEASURE_QUANTITY else self.amount
@@ -133,6 +160,7 @@ def _read_workbook_rows(xlsx_path: str) -> list[SheetRow]:
                 extras = [h for h in header if h and h not in _CANONICAL
                           and h not in (_CHECK_LABEL, _PAGE_LABEL)]
                 page = _page(named.get(_PAGE_LABEL))
+                columns = {attr: named.get(label, "") for attr, label in bst.COLUMNS}
                 out.append(SheetRow(
                     path=path,
                     ref=named.get(extras[0], "") if extras else "",
@@ -142,9 +170,36 @@ def _read_workbook_rows(xlsx_path: str) -> list[SheetRow]:
                     rate=named.get("Rate", ""),
                     amount=named.get("Amount", ""),
                     pages=[page] if page is not None else [],
+                    **columns,
                 ))
     finally:
         wb.close()
+    return out
+
+
+def with_sections(rows: Sequence[SheetRow]) -> list[SheetRow]:
+    """``rows`` with their section columns.
+
+    A sheet the converter wrote with the columns is read as it is. A sheet
+    stored before that has none: its columns are derived from the rows'
+    heading paths, in stored order, by the same ``bill_structure`` rules
+    the converter uses.
+    """
+    if not rows or all(r.has_section_columns for r in rows):
+        return list(rows)
+    found = bst.structure([r.path for r in rows])
+    _LOG.info("%s", bst.log_line(found))
+    out = []
+    for row, cols in zip(rows, found.rows):
+        out.append(SheetRow(**{
+            **row.__dict__,
+            "pages": list(row.pages),
+            "section_key": bst.key_text(cols.section_key),
+            "section_title": cols.section_title,
+            "sub_heading": cols.sub_heading,
+            "preamble": cols.preamble,
+            "running": found.running_words,
+        }))
     return out
 
 
@@ -184,7 +239,36 @@ def _terms(terms: Iterable[str] | str | None) -> set[str]:
 def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
     if terms and not terms <= _words(row.description):
         return False
-    return not section_terms or section_terms <= _words(" ".join(row.path))
+    if not section_terms:
+        return True
+    if row.has_section_columns:
+        return section_terms <= _words(row.section_text())
+    return section_terms <= _words(" ".join(row.path))
+
+
+def question_sections(rows: Sequence[SheetRow], question: str | None) -> set[str] | None:
+    """The section keys the user's question names among ``rows``' sections.
+
+    A question word that occurs in the titles of some of these sections and
+    not others names those sections; the sections whose titles hold the
+    most such words are kept. ``None`` when the question tells them apart
+    not at all (no word, one section, or every section holds as many).
+    """
+    from app.core.rag import bill_sections
+
+    asked = bill_sections.words(question or "")
+    titles: dict[str, set[str]] = {}
+    for row in rows:
+        if row.has_section_columns:
+            titles.setdefault(row.section_key, set()).update(bill_sections.words(row.section_title))
+    if len(titles) < 2 or not asked:
+        return None
+    every = set.intersection(*titles.values())
+    score = {key: len((ws - every) & asked) for key, ws in titles.items()}
+    best = max(score.values())
+    if best == 0 or min(score.values()) == best:
+        return None
+    return {key for key, s in score.items() if s == best}
 
 
 def aggregate(
@@ -193,8 +277,14 @@ def aggregate(
     terms: Iterable[str] | str | None,
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
+    question: str | None = None,
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
+
+    ``question`` is the user's own ask: when its words tell the matching
+    rows' sections apart (:func:`question_sections`), only the sections it
+    names are kept. ``by_section`` gives, per section key counted, its title,
+    its row count and its sum.
 
     Quantities are summed per unit: adding cubic metres to metres is not a
     total, so a mixed-unit match returns one sum per unit and no single sum.
@@ -206,22 +296,34 @@ def aggregate(
     want, where = _terms(terms), _terms(section)
     if not want and not where:
         raise ValueError("give description terms or a section to match")
-    items = join_page_continuations(rows)
+    items = join_page_continuations(with_sections(rows))
+    matched = [row for row in items if matches(row, want, where)]
+    named = question_sections(matched, question)
+    if named is not None:
+        matched = [row for row in matched if row.section_key in named]
     used, without = [], []
     sums: dict[str, float] = {}
-    for row in items:
-        if not matches(row, want, where):
-            continue
+    by_section: dict[str, dict[str, Any]] = {}
+    for row in matched:
         value = row.figure(measure)
         entry = {
             "ref": row.ref,
             "pages": row.pages,
             "section": list(row.path),
+            "section_key": row.section_key,
+            "sub_heading": row.sub_heading,
+            "preamble": row.preamble,
             "description": row.description,
             "unit": row.unit,
             measure: value,
         }
         used.append(entry)
+        part = by_section.setdefault(row.section_key, {
+            "section_title": row.section_title, "count": 0, "sum_by_unit": {}})
+        part["count"] += 1
+        if value is not None:
+            unit_key = row.unit if measure == MEASURE_QUANTITY else ""
+            part["sum_by_unit"][unit_key] = part["sum_by_unit"].get(unit_key, 0.0) + value
         if value is None:
             without.append({"ref": row.ref, "pages": row.pages, "description": row.description})
             continue
@@ -239,6 +341,8 @@ def aggregate(
         "sum_by_unit": ({u: s for u, s in sums.items()} if measure == MEASURE_QUANTITY else None),
         "without_figure": without,
         "rows": used,
+        "sections_named_by_question": sorted(named) if named is not None else None,
+        "by_section": by_section,
     }
 
 
@@ -288,6 +392,7 @@ def aggregate_project_bills(
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
     document_id: str | None = None,
+    question: str | None = None,
 ) -> dict[str, Any]:
     """:func:`aggregate` over every row of each derived bill sheet in scope,
     one result per bill (two bills are never added together)."""
@@ -313,7 +418,7 @@ def aggregate_project_bills(
             _LOG.warning("derived bill sheet %s is not readable: %s", doc.get("id"), type(exc).__name__)
             bills.append({**head, "status": "error", "reason": UNREADABLE_SHEET})
             continue
-        result = aggregate(rows, terms=terms, section=section, measure=measure)
+        result = aggregate(rows, terms=terms, section=section, measure=measure, question=question)
         bills.append({**head, "status": "success", **result})
     out = {"status": "success", "bills": bills}
     _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))

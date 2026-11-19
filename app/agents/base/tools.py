@@ -386,6 +386,7 @@ async def handle_bill_rows_aggregate(call: ToolCall) -> dict:
             section=str(args.get("section") or ""),
             measure=measure,
             document_id=(str(args.get("document_id") or "").strip() or None),
+            question=call.user_message,
         )
     except ValueError as exc:
         return {"name": name, "ok": False, "result": {"status": "error", "error": str(exc)}}
