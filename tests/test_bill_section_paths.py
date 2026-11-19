@@ -198,11 +198,6 @@ def test_document_without_running_header_is_left_alone(words):
     assert [r.path for r in rows] == [tuple(lab.text for lab in r.labels) for r in rows]
 
 
-def _unchanged(words):
-    rows = g.extract_bill_rows(words)
-    return [r.path for r in rows] == [tuple(lab.text for lab in r.labels) for r in rows]
-
-
 def _no_section_info(labels):
     """Four pages with a constant running line, a per-page label line from
     ``labels`` (None = no label line) and a different title on each page."""
@@ -223,13 +218,17 @@ def _no_section_info(labels):
     [f"Page {p}" for p in range(1, 5)],                    # a page number only
     [f"Sheet {p} of 9" for p in range(1, 5)],              # page number plus a constant count
 ], ids=["no-label", "constant-figures", "page-number-only", "page-of-count"])
-def test_label_without_section_information_leaves_rows_unchanged(labels):
+def test_label_without_section_information_uses_title_band(labels):
     words = _no_section_info(labels)
     printed = _printed(words)
     running = g.running_lines(printed, 4)
     assert running.masks  # the running header IS found ...
     assert g.page_sections(printed, running) == {}  # ... but gives no sections
-    assert _unchanged(words)
+    # ... so the title band becomes the section: each page's title is its
+    # section, and the constant "Walls" line on every page is furniture.
+    assert [r.path for r in g.extract_bill_rows(words)] == [
+        ("CONCRETE",), ("FORMWORK",), ("MASONRY",), ("METALWORK",),
+    ]
 
 
 @pytest.mark.parametrize("labels, expected", [
@@ -279,14 +278,75 @@ def test_page_number_is_the_fastest_moving_field(fmt, sections, per_section):
 
 @pytest.mark.parametrize("fmt", ["Volume 2 Page {p}", "Page {p} Volume 2"],
                          ids=["constant-then-page", "page-then-constant"])
-def test_restarting_page_number_alone_is_not_section_information(fmt):
+def test_restarting_page_number_alone_falls_back_to_title_band(fmt):
     # the page number restarts (as if per section) but nothing else in the
-    # label varies: there is no section field to key the rows by
+    # label varies: there is no section field to key the rows by, so the
+    # title band carries the sections.
     labels = [fmt.format(p=p) for _ in range(6) for p in range(1, 4)]
     words = _labelled_pages(labels)
     printed = _printed(words)
     assert g.page_sections(printed, g.running_lines(printed, len(labels))) == {}
-    assert _unchanged(words)
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [  # one section per page, from the title
+        (f"Heading {chr(64 + p) * 3}",) for p in range(1, len(labels) + 1)
+    ]
+
+
+def _titled_first_pages(pages):
+    """Pages given as (page, label, title-or-None): a constant running line,
+    a page-number-only label, and a title band printed only where a title is
+    given (no body heading, so each row's path is its section title)."""
+    words: list[g.Word] = []
+    for p, label, title in pages:
+        above = [("Riverside Depot", H), (label, H)]
+        if title:
+            above.append((title, HEAVY))
+        words += _page(p, COLS_A, above, [[f"Item {p}", "m", "1", "2", "2"]])
+    return words
+
+
+@pytest.mark.parametrize("pages, expected", [
+    ([
+        (1, "Page 1", "SUBSTRUCTURE"), (2, "Page 2", None), (3, "Page 3", None),
+        (4, "Page 4", "SUPERSTRUCTURE"), (5, "Page 5", None),
+    ], [
+        ("SUBSTRUCTURE",), ("SUBSTRUCTURE",), ("SUBSTRUCTURE",),
+        ("SUPERSTRUCTURE",), ("SUPERSTRUCTURE",),
+    ]),
+    ([
+        (1, "Page 1", "SUBSTRUCTURE"), (2, "Page 2", "SUBSTRUCTURE"), (3, "Page 3", None),
+        (4, "Page 4", "SUPERSTRUCTURE"), (5, "Page 5", None),
+    ], [
+        ("SUBSTRUCTURE",), ("SUBSTRUCTURE",), ("SUBSTRUCTURE",),
+        ("SUPERSTRUCTURE",), ("SUPERSTRUCTURE",),
+    ]),
+], ids=["title-first-page-only", "title-repeats-on-a-continuation-page"])
+def test_title_band_sections_inherit_and_repeat_without_new_section(pages, expected):
+    words = _titled_first_pages(pages)
+    printed = _printed(words)
+    running = g.running_lines(printed, 5)
+    assert running.page_label == "page #"
+    assert g.page_sections(printed, running) == {}  # the label is a page number only
+    assert [r.path for r in g.extract_bill_rows(words)] == expected
+
+
+@pytest.mark.parametrize("labels", [
+    [f"Page {p}" for p in range(1, 5)],       # a page number only
+    ["Contract 12 Volume 3"] * 4,             # constant figures, nothing varies
+], ids=["page-number-only", "constant-figures"])
+def test_running_header_without_title_band_is_left_alone(labels):
+    # a running header and a page label, but no title printed above the
+    # header: there is no section to read, so the paths stay as built
+    words: list[g.Word] = []
+    for p in range(1, 5):
+        above = [("Eastgate Pumping Station", H), (labels[p - 1], H)]
+        words += _page(p, COLS_A, above, [[f"Item {p}", "m", "1", "2", "2"]])
+    printed = _printed(words)
+    running = g.running_lines(printed, 4)
+    assert running.masks
+    assert g.page_sections(printed, running) == {}
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [tuple(lab.text for lab in r.labels) for r in rows]
 
 
 def _repeating_title(title, label_misread_on=None):
@@ -320,4 +380,53 @@ def test_repeating_title_band_line_is_a_title_not_furniture(title, misread):
     assert [r.path for r in rows] == [  # ... and is still the section title
         (title[0], "Basins"), (title[0], "Sinks"), (title[0], "Baths"),
         (title[1], "Doors"), (title[1], "Frames"),
+    ]
+
+
+def _section_heading_words(prefix, pages=6):
+    """A constant running header, a page-number-only label, a two-state
+    title band, and body headings ``{prefix} N`` whose masked form appears
+    on most pages while no one heading repeats (a section heading per bill,
+    not a running header)."""
+    words: list[g.Word] = []
+    layout = [
+        (1, "GENERAL ITEMS", 1, "Item 1"),
+        (2, "GENERAL ITEMS", 1, "Item 2"),
+        (3, "GENERAL ITEMS", 2, "Item 3"),
+        (4, "SUPPLEMENTARY", 2, "Item 4"),
+        (5, "SUPPLEMENTARY", 3, "Item 5"),
+        (6, "SUPPLEMENTARY", 3, "Item 6"),
+    ]
+    for p, band, n, item in layout:
+        above = [("Contractor Limited", H), (f"Page {p}", H), (band, HEAVY)]
+        body = [(f"{prefix} {n}", HEAVY), [item, "m", "1", "2", "2"]]
+        words += _page(p, COLS_A, above, body)
+    return words
+
+
+@pytest.mark.parametrize("prefix", ["BILL NO.", "SECTION"], ids=["bill-no", "section"])
+def test_section_heading_is_not_a_running_line(prefix):
+    printed: list[g._Label] = []
+    for p, n in ((1, 1), (2, 1), (3, 2), (4, 2), (5, 3), (6, 3)):
+        printed += [
+            _lab("Contractor Limited", page=p),
+            _lab(f"Page {p}", page=p),
+            _lab(f"{prefix} {n}", page=p),
+        ]
+    running = g.running_lines(printed, 6)
+    assert g._masked(f"{prefix} 1") not in running.masks  # a section heading, not furniture
+    assert "page #" in running.masks                      # the page label stays furniture
+    assert running.page_label == "page #"
+
+
+@pytest.mark.parametrize("prefix", ["BILL NO.", "SECTION"], ids=["bill-no", "section"])
+def test_section_heading_survives_in_the_path(prefix):
+    words = _section_heading_words(prefix)
+    assert [r.path for r in g.extract_bill_rows(words)] == [
+        ("GENERAL ITEMS", f"{prefix} 1"),
+        ("GENERAL ITEMS", f"{prefix} 1"),
+        ("GENERAL ITEMS", f"{prefix} 2"),
+        ("SUPPLEMENTARY", f"{prefix} 2"),
+        ("SUPPLEMENTARY", f"{prefix} 3"),
+        ("SUPPLEMENTARY", f"{prefix} 3"),
     ]

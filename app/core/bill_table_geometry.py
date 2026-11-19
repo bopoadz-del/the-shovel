@@ -884,7 +884,12 @@ class Running:
 def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     """(a) A label line that repeats, digits masked, on most pages is a running
     header. (b) Of those, the one whose digits take the most distinct values
-    from page to page is the page label."""
+    from page to page is the page label.
+
+    A digit-varying line that is not the page label is a section heading
+    whose number changes only when the section changes: its masked form
+    appears on most pages while no one heading repeats. It is not a running
+    header, so it is not stripped from paths."""
     if pages < MIN_RUNNING_PAGES:
         return Running(set(), None)
     on: dict[str, set[int]] = defaultdict(set)
@@ -896,6 +901,7 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     masks = {m for m, ps in on.items() if len(ps) * 2 > pages}
     varying = [m for m in masks if "#" in m and len(raw[m]) > 1]
     label = max(varying, key=lambda m: (len(raw[m]), m)) if varying else None
+    masks.difference_update(m for m in varying if m != label)
     return Running(masks, label)
 
 
@@ -904,12 +910,15 @@ def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, flo
     lines and the label) sits from the page edge down to the label; a line
     printed below it and above the column header is in the title band. A page
     whose label is not read takes the median label bottom of the pages that
-    were read. Called only once :func:`page_sections` found sections, so at
-    least one label was read."""
+    were read. When no page label was read at all (no varying digit) the band
+    is empty: a title is then any line above the header that is not a running
+    line."""
     read: dict[int, float] = {}
     for lab in printed:
         if running.page_label and _masked(lab.text) == running.page_label:
             read.setdefault(lab.page, lab.bottom)
+    if not read:
+        return {}
     fallback = statistics.median(read.values())
     return {page: read.get(page, fallback) for page in {lab.page for lab in printed}}
 
@@ -946,6 +955,34 @@ def page_sections(printed: Sequence[_Label], running: Running) -> dict[int, tupl
         if page in read:
             key = tuple(read[page][i] for i in others)
         out[page] = key
+    return out
+
+
+def title_sections(
+    printed: Sequence[_Label],
+    cont: dict[str, str],
+    is_title: Callable[[_Label], bool],
+) -> dict[int, tuple[str, ...] | None]:
+    """(b-fallback) The section key when the page label carries no section
+    digit: the title-band lines in effect on each page, propagated forward
+    from the nearest page above that prints a title. A page whose title lines
+    differ from those in effect starts a new section; a page with no title
+    lines inherits the section above it. A read whose title band never changes
+    keeps every page under that one title."""
+    per_page: dict[int, list[str]] = {}
+    for lab in printed:
+        if is_title(lab):
+            t = cont.get(_norm(lab.text), lab.text)
+            lst = per_page.setdefault(lab.page, [])
+            if _norm(t) not in {_norm(x) for x in lst}:
+                lst.append(t)
+    out: dict[int, tuple[str, ...] | None] = {}
+    current: tuple[str, ...] | None = None
+    for page in sorted({lab.page for lab in printed}):
+        titles = tuple(per_page.get(page, ()))
+        if titles and titles != current:
+            current = titles
+        out[page] = current
     return out
 
 
@@ -999,14 +1036,13 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     label are one element. A line in the title band (below the page label,
     above the column header) is a title even when it repeats on most pages.
 
-    A read with no running header, no varying page label, or a label whose
-    only varying field is the page number has no section information and is
-    left alone."""
+    A read with no running header is left alone. When the page label carries
+    no section digit (it is only a page number, or a page number plus
+    constants), the section is read from the title band itself: the title
+    lines printed above the column header, with each change of title starting
+    a new section and a titleless page inheriting the section above it."""
     running = running_lines(printed, pages)
     if not running.masks:
-        return rows
-    sections = page_sections(printed, running)
-    if not sections:
         return rows
     cont = continuation_map(printed)
     band = furniture_band(printed, running)
@@ -1018,6 +1054,12 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
             return False  # title band: a title even when it repeats
         return running.holds(lab.text)
+
+    sections = page_sections(printed, running)
+    if not sections:
+        sections = title_sections(printed, cont, lambda lab: lab.above_header and not furniture(lab))
+        if not any(sections.values()):
+            return rows
 
     titles: dict[tuple[str, ...] | None, list[str]] = defaultdict(list)
     for lab in printed:
