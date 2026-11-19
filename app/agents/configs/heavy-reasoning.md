@@ -2,7 +2,6 @@
 name: heavy-reasoning
 description: Merges BOQ + drawing + spec results, detects inconsistencies, calculates cost/time impact, generates recommendations.
 can_delegate: true
-model: kimi-k2.6
 temperature: 0.1
 # 8192 = provider output cap. Even at 8192 a row-by-row 300-activity render
 # overflows; see the summary-first contract below.

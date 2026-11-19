@@ -234,3 +234,14 @@ def test_a_blank_rule_input_is_an_error_never_a_verdict(blank):
     for out in (dr.generate_doc_number(blank, 3), dr.enforce_critical_rules(blank),
                 dr.next_ncr_status(blank), qr.validate_design_status(blank)):
         assert isinstance(out.get("error"), str) and out["error"], out
+
+
+# -- a truly unknown name still answers 'unknown calculation' -------------
+
+@pytest.mark.parametrize("name", ["zz_no_such_formula", "flux_capacitor_rating"])
+def test_a_truly_unknown_calculation_is_still_unknown_through_dispatch(name):
+    assert name not in formula_registry.calculators()
+    out = _calc(name, {})
+    assert out.get("status") == "error", out
+    assert "Unknown calculation" in str(out.get("error")), out
+    assert name in str(out.get("error")), out

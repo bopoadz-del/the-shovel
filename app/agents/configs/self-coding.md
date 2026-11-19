@@ -2,7 +2,6 @@
 name: self-coding
 description: When no block exists for a request, generates Python on-the-fly and runs it in the sandbox. The Lego-expansion agent.
 icon: 🧬
-model: kimi-k2.6
 temperature: 0.2
 max_tokens: 2048
 allowed_blocks:
