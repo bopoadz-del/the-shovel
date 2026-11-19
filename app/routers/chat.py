@@ -1219,7 +1219,7 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
     return StreamingResponse(
         turn_gate.hold_until_done(close_on_escape(turn_progress.opened(redact_frames(
         guarantee_terminal(
-            with_hat_signals(with_answer_exit(event_stream()), request.message),
+            with_hat_signals(with_answer_exit(event_stream(), request.message), request.message),
             request_id=get_request_id(),
         ), _identity)), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",
@@ -1347,6 +1347,11 @@ async def chat_stream_v1(
     # caller cannot stream into a victim's ws-{pid} conversation.
     if conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, conversation_id, auth))
+    # The turn's chat session: only its files (and the project's own) are
+    # listed or searched while it runs, the attachment lookup below included
+    # (projects.document_in_scope). Set in the request's context, which the
+    # stream inherits.
+    projects_store.bind_session_scope(conversation_id, user_id)
 
     # ── S4: resolve the composer's `[attached: X]` marker(s) server-side.
     # Gated on project OWNERSHIP first — marker resolution lists the project's
@@ -1421,7 +1426,7 @@ async def chat_stream_v1(
     return StreamingResponse(
         turn_gate.hold_until_done(close_on_escape(turn_progress.opened(_with_stage_timings(redact_frames(
         guarantee_terminal(
-            with_hat_signals(with_answer_exit(event_stream()), prompt),
+            with_hat_signals(with_answer_exit(event_stream(), prompt), prompt),
             request_id=get_request_id(),
         ), _identity))), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",

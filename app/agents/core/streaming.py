@@ -116,7 +116,7 @@ async def _chat_stream_impl(
 ) -> AsyncIterator[dict[str, Any]]:
     """Internal implementation. ``chat_stream`` wraps this with an emit
     guarantee so silent / crashing exits become structured error events."""
-    from app.agents.answer_exit import end_on_a_sentence
+    from app.agents.answer_exit import end_on_a_sentence, note_tool_message
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         MAX_TOOL_ITERATIONS, _CONTEXT_LEAK_RETRY_NUDGE, _EMPTY_RESPONSE_FALLBACK,
         _EMPTY_ROUTER_NUDGE, _LOG, _SEARCH_PREAMBLE_RETRY_NUDGE, _approx_prompt_tokens,
@@ -130,7 +130,7 @@ async def _chat_stream_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _cost_grounding_enabled, _empty_router_verdict,
         _file_tool_hint, _final_text_needs_forced_retry, _forced_retry_min_seconds, _forced_retry_nudge,
-        _fulfill_answer_report, _has_unread_windows,
+        _fulfill_answer_report, _has_unread_windows, forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
         _is_capability_request, _is_cost_shaped_query, _llm_config,
         _log_dataset_turn,
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
@@ -151,7 +151,7 @@ async def _chat_stream_impl(
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
         _strip_answer_routing_preamble, _summarize_result, _text_needs_tool_recovery,
-        _timing_log, _tool_result_content, _tool_result_errored, _turn_progress,
+        _timing_log, _tool_message_extra, _tool_result_content, _tool_result_errored, _turn_progress,
         _vo_draft_ready_for_synthesis,
         _withhold_names_in_streamed_segment, answer_report_export_enabled, fulfill_wbs_export,
         json, message_wants_answer_report, message_wants_wbs_export, os, time,
@@ -1280,7 +1280,7 @@ async def _chat_stream_impl(
                                 )
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
-                            _LOG.info("chat_stream: unusable final_text, forcing no-tools retry")
+                            await _off_loop(log_forced_retry_start, "chat_stream", final_text)
                             if _timing:
                                 _timing_log("TIMING chat_stream EMPTY-FINAL raw=%dc -> forced retry, cum=%.1fs",
                                              len(raw_content), time.monotonic() - _turn_t0)
@@ -1297,7 +1297,7 @@ async def _chat_stream_impl(
                             if _timing:
                                 _timing_log("TIMING chat_stream forced-retry call=%.1fs status=%s cum=%.1fs",
                                              time.monotonic() - _fr_t0, forced_resp.get("status"), time.monotonic() - _turn_t0)
-                            if forced_resp.get("status") == "error":
+                            if forced_retry_failed("chat_stream", forced_resp):
                                 final_text = _EMPTY_RESPONSE_FALLBACK
                             else:
                                 served_model = (forced_resp.get("raw") or {}).get("model") or served_model
@@ -1306,7 +1306,7 @@ async def _chat_stream_impl(
                                     forced_msg.get("content") or "",
                                     messages=messages, tool_results=stream_tool_results,
                                 )
-                                if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                                if (await _off_loop(forced_retry_still_unusable, "chat_stream", final_text, raw_len=len(forced_msg.get("content") or ""))):
                                     final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
@@ -1396,11 +1396,10 @@ async def _chat_stream_impl(
                 # the model has searched enough; force it to answer.
                 excluded_tools.add("search_project_documents")
             stream_tool_results.append(tool_result)
-            _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
-                offset=_requested_char_offset(tc),
-            )
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
+            _tool_content = _tool_result_content(_tool_payload, offset=_requested_char_offset(tc))
             # A successful deliverable tool (anything but search) means the
             # model now has authoritative data to synthesize from — stop
             # offering tools so the next call is a clean, tool-free answer.
@@ -1426,12 +1425,13 @@ async def _chat_stream_impl(
                 "ok": tool_result.get("ok", True),
                 "summary": _summarize_result(tool_result["result"])[:400],
             }
-            messages.append({
+            messages.append(note_tool_message(tc, {
                 "role": "tool",
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
-            })
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
+            }))
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(

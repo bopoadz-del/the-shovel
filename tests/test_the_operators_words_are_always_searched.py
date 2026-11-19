@@ -101,6 +101,16 @@ async def test_both_retrievals_stay_inside_the_one_thread_hop(two_sided_corpus, 
 
     monkeypatch.setattr(doc_index.asyncio, "to_thread", counting)
 
+    # The hop may also go through the bounded offload pool; it counts the same.
+    import app.core.offload as offload
+    real_to_thread_in = offload.to_thread_in
+
+    async def counting_in(name, fn, /, *args, **kwargs):
+        hops.append(threading.get_ident())
+        return await real_to_thread_in(name, fn, *args, **kwargs)
+
+    monkeypatch.setattr(offload, "to_thread_in", counting_in)
+
     import app.core.rag.retriever as retr
     current = retr.retrieve_with_filter
 

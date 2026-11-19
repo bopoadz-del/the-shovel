@@ -18,6 +18,9 @@ router = APIRouter()
 # SOURCE_VERSION is an accepted alias. Never invent a hash.
 _BUILD_SHA_ENV_KEYS = ("GIT_SHA", "SOURCE_VERSION")
 
+# Response header naming the build that served it (stamped in app.main).
+BUILD_ID_HEADER = "X-Build-Id"
+
 
 def _deployed_build_sha() -> str | None:
     """SHA from the already-deployed environment, or None if unset.

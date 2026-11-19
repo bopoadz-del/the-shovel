@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.rag.vector_store import Chunk
@@ -129,15 +130,68 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+#: One word in any script: a run of Unicode letters and digits (``\w``
+#: without the underscore). An Arabic question has words too; a Latin-only
+#: pattern gave it none, and every tie it split fell to the chunk id.
+_TERM_RE = re.compile(r"[^\W_]+")
+
+
+def _terms(text: str) -> set[str]:
+    """Distinct words of ``text`` in any script, case-folded and with the
+    document-typing rule's Arabic folding (short vowels and tatweel dropped,
+    hamza alefs to alef, alef maqsura to ya, ta marbuta to ha) on BOTH the
+    question and the passage, so one word spelt two ways is one term."""
+    from app.core.doc_types import _norm as _fold
+    return set(_TERM_RE.findall(_fold((text or "").casefold())))
+
+
+def tie_break_key(chunk: Chunk, query_terms: set[str]) -> Tuple[int, str]:
+    """Neutral order inside an EXACT score tie: more of the question's own
+    words in the passage text first, then the chunk id (a stable key).
+
+    Reads only the question and the passage; no document kind, name or
+    type is consulted, so no kind of document outranks another."""
+    return (-len(query_terms & _terms(chunk.text)), str(chunk.chunk_id or ""))
+
+
+def _walk_band(band: List[Chunk], room: int) -> Tuple[List[Chunk], List[Chunk]]:
+    """Greedy walk of one tie band through ``room`` tokens: (kept, skipped)."""
+    kept: List[Chunk] = []
+    skipped: List[Chunk] = []
+    for c in band:
+        t = _estimate_tokens(c.text)
+        if t > room:
+            skipped.append(c)
+            continue
+        kept.append(c)
+        room -= t
+    return kept, skipped
+
+
 def apply_token_cap(
     chunks: List[Chunk],
     query: str = "",
+    reasons: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Chunk], int]:
     """Drop whole chunks from the bottom (lowest score) until total
     estimated tokens are <= MAX_RAG_TOKENS.
 
     Never truncates mid-chunk; a chunk is included or excluded whole.
-    Returns ``(kept_chunks, total_estimated_tokens)``.
+    Returns ``(kept_chunks, total_estimated_tokens)``. When ``reasons`` is
+    a dict, each chunk left out gets the rule that dropped it (chunk_id ->
+    code) for the retrieval trace, written where the decision is made:
+
+    * ``noise_filter``      the daily-damages noise filter removed it
+    * ``token_budget``      it does not fit what was left of MAX_RAG_TOKENS
+                            even ahead of every chunk it ties with (its size)
+    * ``score_tie_overlap`` it would have fit ahead of the chunks it ties
+                            with, and the tie-break put them first
+
+    An exact score tie keeps its retrieval order unless the walk in that
+    order keeps one member of the tie and leaves another out. Only then is
+    that tie (and only that tie) reordered by ``tie_break_key``: overlap
+    with the question's words, then chunk id. When everything fits, or no
+    tie is split by the cut, the order handed to the model is unchanged.
 
     When ``query`` is a daily delay-damages ask, keep the
     Contract Data 0.1% and standalone excl-VAT operands even if Cosine
@@ -187,11 +241,19 @@ def apply_token_cap(
             daily_damages_ask = False
     protected = [c for c in chunks if c.chunk_id in protect_ids]
     rest = [c for c in chunks if c.chunk_id not in protect_ids]
+    why: Dict[str, str] = {}
     if daily_damages_ask and protect_ids:
         try:
             from app.core.rag.retriever import _is_daily_damages_cap_noise
-            rest = [c for c in rest if not _is_daily_damages_cap_noise(c.text or "")]
+            clean: List[Chunk] = []
+            for c in rest:
+                if _is_daily_damages_cap_noise(c.text or ""):
+                    why[c.chunk_id] = "noise_filter"
+                else:
+                    clean.append(c)
+            rest = clean
         except Exception:  # noqa: BLE001 — keep rest if noise class fails
+            why.clear()
             _LOG.debug(
                 "e1 token-cap noise filter failed; keeping rest",
                 exc_info=True,
@@ -208,12 +270,30 @@ def apply_token_cap(
         t = _estimate_tokens(c.text)
         kept.append(c)
         total += t
-    for c in rest:
-        t = _estimate_tokens(c.text)
-        if total + t > cap:
-            continue
-        kept.append(c)
-        total += t
+    query_terms = _terms(query)
+    # ``rest`` is in score order (stable), so each run of one score is one
+    # exact tie. Each tie is walked whole against the room left when it
+    # starts, so every skip is decided, and named, right here.
+    i = 0
+    while i < len(rest):
+        j = i + 1
+        while j < len(rest) and (rest[j].score or 0) == (rest[i].score or 0):
+            j += 1
+        band = rest[i:j]
+        room = cap - total
+        band_kept, band_skipped = _walk_band(band, room)
+        split = bool(band_kept) and bool(band_skipped)
+        if split:
+            band = sorted(band, key=lambda c: tie_break_key(c, query_terms))
+            band_kept, band_skipped = _walk_band(band, room)
+        for c in band_skipped:
+            fits_alone = _estimate_tokens(c.text) <= room
+            why[c.chunk_id] = "score_tie_overlap" if fits_alone else "token_budget"
+        kept += band_kept
+        total += sum(_estimate_tokens(c.text) for c in band_kept)
+        i = j
+    if reasons is not None:
+        reasons.update(why)
     return kept, total
 
 
@@ -982,23 +1062,65 @@ def _leg_fields(c) -> Dict[str, Any]:
     return out
 
 
-def _trace_chunk(rank: int, c) -> Dict[str, Any]:
-    """Identity and rank of one chunk. Never its text."""
-    name = getattr(c, "source_name", "") or ""
-    if not name:
-        from app.core.rag.retriever import _doc_name_for_id
+def _public_fused(record, handed, *, read_names: bool = True):
+    """The fused-candidate record in trace form. The stored names of the
+    documents its ``leg_docs`` list are read in one batch, only so that an
+    id equal to its document's name is printed as a digest (names are never
+    logged). A failed read treats every listed id as a name: fail closed.
 
-        name = _doc_name_for_id(getattr(c, "doc_id", "") or "")
+    ``read_names=False`` (the tool search path, which adds no database read):
+    no lookup is made and every listed id is treated as a name, the same
+    fail-closed form, so ``leg_docs`` prints digests only."""
+    from app.core.rag.fusion_trace import public_view
+
+    ids = sorted({
+        e.get("doc_id")
+        for entries in ((record or {}).get("leg_docs") or {}).values()
+        for e in entries if e.get("doc_id")
+    })
+    names: Dict[str, str] = {}
+    if ids and not read_names:
+        names = {d: d for d in ids}
+    elif ids:
+        try:
+            from app.core import projects as _projects
+            names = _projects.document_names(ids)
+        except Exception:  # noqa: BLE001 -- digest every id rather than risk a name
+            _LOG.debug("leg_docs name lookup failed", exc_info=True)
+            names = {d: d for d in ids}
+    return public_view(record, handed, names)
+
+
+def _trace_chunk(rank: int, c) -> Dict[str, Any]:
+    """Identity and rank of one chunk. Never its text, never its document's
+    name: the document is named by ``doc_id`` alone (names never in logs;
+    an operator maps an id to a document in the app)."""
     score = getattr(c, "score", None)
     return {
         "rank": rank,
         "chunk_id": getattr(c, "chunk_id", None),
         "doc_id": getattr(c, "doc_id", None),
-        "doc_name": name,
         "score": round(float(score), 6) if score is not None else None,
         **_leg_fields(c),
+        # Its length, so a replay can refit the handed set's token budget
+        # (``_estimate_tokens``: characters // 4) exactly. Never the text.
+        "chars": len(getattr(c, "text", "") or ""),
         "layer": getattr(c, "layer", "own"),
+        # What kind of document the chunk came from (doc_typing / S-R11),
+        # so a trace shows which document kinds held the handed slots.
+        # Empty when the kind is unknown; never guessed from the name here.
+        "doc_type": (getattr(c, "doc_type", "") or "").strip(),
+        "doc_role": (getattr(c, "doc_role", "") or "").strip(),
     }
+
+
+def _dropped_by(c, drop_reasons: Optional[Dict[str, str]],
+                threshold_fired: bool) -> str:
+    """The trace's ``dropped_by`` code for one chunk that was not handed."""
+    code = (drop_reasons or {}).get(getattr(c, "chunk_id", None) or "", "")
+    if code:
+        return code
+    return "below_threshold" if threshold_fired else "unexplained"
 
 
 def _emit_retrieval_trace(
@@ -1013,8 +1135,19 @@ def _emit_retrieval_trace(
     identifier_miss: bool,
     top_score: float,
     k_info: Optional[Dict[str, Any]] = None,
+    drop_reasons: Optional[Dict[str, str]] = None,
+    query_chars: Optional[int] = None,
 ) -> None:
     """Write the trace line. Best-effort: a logging failure never costs a turn.
+
+    The query is written as its source code (``query``: ``user_message`` or
+    ``followup_context``) and its length in characters (``query_chars``),
+    never its words. Chunks carry document ids, never document names.
+
+    Every ``not_handed`` entry carries ``dropped_by``: the rule that left it
+    out (``drop_reasons``, written by ``select_handed`` and
+    ``apply_token_cap`` where each one leaves a chunk out), ``below_threshold``
+    when the threshold fired and nothing was handed, else ``unexplained``.
 
     ``k_info`` carries requested_k, effective_k, the pool depth, whether the
     day's token budget was spent, and the handed set's allotment (character
@@ -1026,7 +1159,11 @@ def _emit_retrieval_trace(
 
         rid = request_id_ctx.get()
         handed_ids = {getattr(c, "chunk_id", None) for c in handed}
-        from app.core.rag.fusion_trace import public_view
+        # The handed chunks were annotated when their excerpts were built;
+        # the ones left out were not. One batch read gives them their kind
+        # too (a chunk that already has one is skipped, so nothing is read
+        # twice); a failed read leaves the fields empty.
+        annotate_document_kinds(retrieved)
         from app.core.rag.retriever import retrievable_project_ids
         from app.core.rag.vector_store import (
             _MISS, _memo_get, fused_candidates_record,
@@ -1040,6 +1177,7 @@ def _emit_retrieval_trace(
             "request_id": rid,
             "path": "pre_injection",
             "query": query_label,
+            "query_chars": query_chars,
             "project_id": project_id,
             "conversation_id": conversation_id,
             "agent": agent_name,
@@ -1051,13 +1189,15 @@ def _emit_retrieval_trace(
             "lexical": lexical,
             "degraded": any(v != "hit" for v in lexical.values()),
             "fused_candidates": (
-                public_view(fused_candidates_record(project_id), handed)
+                _public_fused(fused_candidates_record(project_id), handed)
                 if project_id else None
             ),
             "top_score": round(float(top_score or 0.0), 6),
             "chunks": [_trace_chunk(i + 1, c) for i, c in enumerate(handed)],
             "not_handed": [
-                _trace_chunk(i + 1, c) for i, c in enumerate(retrieved)
+                {**_trace_chunk(i + 1, c),
+                 "dropped_by": _dropped_by(c, drop_reasons, threshold_fired)}
+                for i, c in enumerate(retrieved)
                 if getattr(c, "chunk_id", None) not in handed_ids
             ],
         }
@@ -1093,14 +1233,21 @@ def emit_search_trace(
     project_id: Optional[str],
     requested_top_k: int,
     trace: Dict[str, Any],
+    conversation_id: Optional[str] = None,
 ) -> None:
     """One ``rag_retrieval_trace`` line for a document search outside
     pre-injection (``path="tool"`` for the agent's search tool).
 
     ``trace`` is what ``doc_index._search_trace`` built: ``retrieved_k``,
     ``chunks`` (handed, with ``result_rank``) and ``not_handed`` (dropped by
-    the per-document collapse, with the reason). The query is written as a
-    label, never its words. Best-effort, like the retriever's line."""
+    the per-document collapse, with the reason), and, where the search ran
+    in a turn, its own fused-candidate record (``fused``) and lexical-leg
+    states (``lexical``). Those are written as the pre_injection line writes
+    them (``fused_candidates`` through the same ``public_view``: ranks,
+    handed positions and ``leg_chunk_digests``, no chunk id; ``lexical``;
+    ``degraded``), with no database read: every ``leg_docs`` id is digested.
+    The query is written as a label, never its words. Best-effort, like the
+    retriever's line: a failure here never touches the search's results."""
     if not retrieval_trace_enabled():
         return
     try:
@@ -1109,15 +1256,22 @@ def emit_search_trace(
         rid = request_id_ctx.get()
         trace = trace or {}
         handed = list(trace.get("chunks") or [])
+        lexical = dict(trace.get("lexical") or {})
+        handed_refs = [SimpleNamespace(chunk_id=e.get("chunk_id")) for e in handed]
         payload = {
             "request_id": rid,
             "path": path,
             "query": "tool_query",
             "project_id": project_id,
+            "conversation_id": conversation_id,
             "requested_k": requested_top_k,
             "retrieved_k": int(trace.get("retrieved_k") or 0),
             "handed_k": len(handed),
             "handed_docs": len({e.get("doc_id") for e in handed}),
+            "lexical": lexical,
+            "degraded": any(v != "hit" for v in lexical.values()),
+            "fused_candidates": _public_fused(
+                trace.get("fused"), handed_refs, read_names=False),
             "top_score": max((e.get("score") or 0.0 for e in handed), default=0.0),
             "chunks": handed,
             "not_handed": list(trace.get("not_handed") or []),
@@ -1340,7 +1494,8 @@ def rag_inject(
         })
         _audit.write(audit_rec)
         _emit_retrieval_trace(
-            query_label=_query_label, project_id=project_id,
+            query_label=_query_label, query_chars=len(retrieval_query or ""),
+            project_id=project_id,
             conversation_id=conversation_id, agent_name=agent_name,
             retrieved=chunks, handed=[], threshold_fired=True,
             identifier_miss=identifier_miss, top_score=top_score,
@@ -1351,8 +1506,13 @@ def rag_inject(
         )
         return None, audit_rec
 
-    handed_pool, allotment = _handed_set.select_handed(chunks, k=effective_k)
-    kept, total_tokens = apply_token_cap(handed_pool, query=user_message or "")
+    drop_reasons: Dict[str, str] = {}
+    _tie_terms = _terms(user_message or "")
+    handed_pool, allotment = _handed_set.select_handed(
+        chunks, k=effective_k, reasons=drop_reasons,
+        tie_key=lambda c: tie_break_key(c, _tie_terms))
+    kept, total_tokens = apply_token_cap(
+        handed_pool, query=user_message or "", reasons=drop_reasons)
     sys_msg = format_chunks_as_system_message(
         kept, total_candidates=len(chunks), query=user_message or "",
     )
@@ -1373,10 +1533,12 @@ def rag_inject(
     })
     _audit.write(audit_rec)
     _emit_retrieval_trace(
-        query_label=_query_label, project_id=project_id,
+        query_label=_query_label, query_chars=len(retrieval_query or ""),
+        project_id=project_id,
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,
+        drop_reasons=drop_reasons,
         k_info={"requested_k": requested_k, "effective_k": effective_k,
                 "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
                 "budget_consumed": budget_consumed,

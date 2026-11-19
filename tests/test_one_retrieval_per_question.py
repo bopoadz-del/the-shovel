@@ -8,6 +8,8 @@ for the hidden-document filter. Synthetic corpus.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import os
 
 import numpy as np
@@ -29,6 +31,7 @@ def store(tmp_path, monkeypatch):
     vs.reset_store_cache()
     e = emb.Embedder(model_name="fake")
     st = vs.get_store(dim=e.dim)
+    give_documents_table(st)
     texts = [f"Clause {i}: the contractor shall give notice of suspension {i} days before work stops."
              for i in range(30)]
     st.upsert_chunks(PID, "doc-memo", texts, e.encode(texts))

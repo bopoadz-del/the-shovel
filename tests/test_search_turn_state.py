@@ -200,7 +200,7 @@ def _batch_then_answer(n_calls: int, answer: str, seen: list):
 
 
 def _counting_search(monkeypatch, ran: list, turns: list):
-    async def fake(project_id, query, top_k=5, *, trace_path=None, turn=None):
+    async def fake(project_id, query, top_k=5, *, trace_path=None, turn=None, conversation_id=None):
         ran.append(query)
         turns.append(turn)
         return [{"document_id": f"doc_{len(ran)}", "filename": f"Row{len(ran)}.pdf",
@@ -352,7 +352,7 @@ async def test_run_tool_call_hands_the_turn_to_the_search_tool(monkeypatch, name
 
     seen: list = []
 
-    async def fake(project_id, query, top_k=5, *, trace_path=None, turn=None):
+    async def fake(project_id, query, top_k=5, *, trace_path=None, turn=None, conversation_id=None):
         seen.append((query, turn))
         return [{"document_id": "dq", "filename": "Q.pdf", "snippet": query, "score": 0.5}]
 

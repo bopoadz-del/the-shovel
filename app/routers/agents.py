@@ -256,6 +256,9 @@ async def agent_chat(name: str, req: AgentChatRequest, auth: dict = Depends(requ
     # create/write a victim's private ws-{pid} conversation.
     if req.conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, req.conversation_id, auth))
+    from app.core import projects as _scope_store
+    # Only this session's files (and the project's own) are in scope.
+    _scope_store.bind_session_scope(req.conversation_id, auth.get("user_id"))
 
     # Pilot: resolve the master-corpus alias to its backing source corpus so
     # retrieval and storage use the existing full-drive index without
@@ -369,6 +372,9 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
     # attacker cannot create/write a victim's private ws-{pid} conversation.
     if conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, conversation_id, auth))
+    from app.core import projects as _scope_store
+    # Only this session's files (and the project's own) are in scope.
+    _scope_store.bind_session_scope(conversation_id, auth.get("user_id"))
     from app.core.privileges import raise_if_inaccessible_document_ids
     raise_if_inaccessible_document_ids(auth, {"document_ids": body.get("document_ids") or []})
 
@@ -497,7 +503,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
         _release_turn = await turn_gate.acquire()
     return StreamingResponse(
         turn_gate.hold_until_done(turn_progress.opened(
-        with_hat_signals(with_answer_exit(event_stream()), message)), _release_turn),
+        with_hat_signals(with_answer_exit(event_stream(), message), message)), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

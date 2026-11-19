@@ -33,6 +33,7 @@ _MAX_PAGES = 20
 async def detect_document_redlines(
     project_id: str,
     document_id: str,
+    session_id: Optional[str] = None,
     auth: dict = Depends(require_user),
 ) -> Dict[str, Any]:
     """Detect coloured markup / redlines on a project document.
@@ -68,8 +69,14 @@ async def detect_document_redlines(
         raise HTTPException(404, f"Project '{project_id}' not found")
 
     # ── document lookup ──────────────────────────────────────────────────────
+    # A file attached to a chat: only from that chat (``session_id``), by the
+    # user who attached it; from anywhere else it is not found, the same rule
+    # as every other by-id document route (``store.document_in_scope``).
+    from app.routers.projects import _chat_scope
+
     doc = store.get_document(document_id)
-    if not doc or doc["project_id"] != project_id:
+    if not doc or doc["project_id"] != project_id or not store.document_in_scope(
+            doc.get("metadata"), _chat_scope(session_id, auth["user_id"])):
         raise HTTPException(404, f"Document '{document_id}' not found")
 
     original_name: str = doc.get("original_name") or ""

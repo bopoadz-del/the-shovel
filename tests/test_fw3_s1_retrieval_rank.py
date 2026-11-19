@@ -23,6 +23,8 @@ mirror of the quoted sentences only. No live ids in the assertions.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 PID = "FIXTURE-e-20260926-project"
@@ -172,6 +174,7 @@ def rank_corpus(tmp_path, monkeypatch):
 
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     for doc_id, text in texts.items():
         store.upsert_chunks(PID, doc_id, [text], embedder.encode([text]))
     monkeypatch.setattr(ret, "_doc_name_for_id", lambda doc_id: names.get(doc_id, ""))
@@ -218,6 +221,7 @@ def keep_corpus(tmp_path, monkeypatch):
         )
     embedder = Embedder(model_name="fake")
     store = get_store(dim=embedder.dim)
+    give_documents_table(store)
     for doc_id, text in texts.items():
         store.upsert_chunks(PID, doc_id, [text], embedder.encode([text]))
     monkeypatch.setattr(ret, "_doc_name_for_id", lambda doc_id: names.get(doc_id, ""))

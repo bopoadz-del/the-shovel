@@ -28,6 +28,8 @@ here names a bill, a section, a row or a question.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from collections.abc import Iterable, Sequence
@@ -243,6 +245,9 @@ def aggregate(
 NO_DERIVED_SHEET = "no_derived_bill_sheet"
 NO_READABLE_BYTES = "derived_sheet_has_no_readable_bytes"
 UNREADABLE_SHEET = "derived_sheet_is_not_a_readable_workbook"
+#: Every reason a bill (or the whole call) did not return; the tool declares
+#: these, and they are the only error words of it a user is shown.
+REASON_CODES = (NO_DERIVED_SHEET, NO_READABLE_BYTES, UNREADABLE_SHEET)
 
 
 def _unreadable_sheet_errors() -> tuple[type[BaseException], ...]:
@@ -290,7 +295,9 @@ def aggregate_project_bills(
 
     docs = derived_bill_documents(project_id, document_id)
     if not docs:
-        return {"status": "error", "reason": NO_DERIVED_SHEET}
+        out = {"status": "error", "reason": NO_DERIVED_SHEET}
+        _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))
+        return out
     bills = []
     for doc in docs:
         path = projects.materialize_document_path(doc)
@@ -308,4 +315,59 @@ def aggregate_project_bills(
             continue
         result = aggregate(rows, terms=terms, section=section, measure=measure)
         bills.append({**head, "status": "success", **result})
-    return {"status": "success", "bills": bills}
+    out = {"status": "success", "bills": bills}
+    _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))
+    return out
+
+
+def _digest(items: Any) -> str:
+    """A short, stable fingerprint of ``items``: equal inputs give equal
+    digests, so two calls can be compared from the log without the log
+    holding any of the words or rows themselves."""
+    blob = json.dumps(items, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def _set_field(words: set[str]) -> str:
+    return f"{len(words)}:{_digest(sorted(words)) if words else '-'}"
+
+
+def selection_log_line(
+    result: dict[str, Any],
+    *,
+    terms: Iterable[str] | str | None,
+    section: Iterable[str] | str | None,
+    measure: str,
+) -> str:
+    """One line naming which term set and which rows a call selected.
+
+    The term sets are logged as size and digest of the casefolded word set
+    (the matcher's own view of them, so word order and case do not change
+    it); each bill as its status, rows scanned, rows counted and a digest of
+    the selected rows (reference, pages and heading path). Two asks that
+    selected different rows show different row digests; whether they also
+    show different term digests says whether the term choice was the cause.
+    No description text and no figure is written.
+    """
+    parts = [
+        "bill_rows_aggregate",
+        f"measure={measure}",
+        f"terms={_set_field(_terms(terms))}",
+        f"section={_set_field(_terms(section))}",
+        f"status={result.get('status')}",
+    ]
+    if result.get("reason"):
+        parts.append(f"reason={result['reason']}")
+    bills = result.get("bills") or []
+    parts.append(f"bills={len(bills)}")
+    for bill in bills:
+        if bill.get("status") != "success":
+            parts.append(f"[{bill.get('document_id')} {bill.get('status')} reason={bill.get('reason')}]")
+            continue
+        selected = [[r.get("ref"), r.get("pages"), r.get("section")] for r in bill.get("rows") or []]
+        parts.append(
+            f"[{bill.get('document_id')} success scanned={bill.get('rows_scanned')} "
+            f"count={bill.get('count')} without_figure={len(bill.get('without_figure') or [])} "
+            f"rows={_digest(selected) if selected else '-'}]"
+        )
+    return " ".join(parts)

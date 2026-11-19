@@ -1,0 +1,122 @@
+"""LOCK HOLDER (advisor 13:32Z 18 Nov): a full garbage collection holds the
+interpreter lock for its whole pass, so the loop and the watchdog thread stop
+together. ``GcRecord`` names every pass (generation, duration, start) and the
+gated load test PRINTS the worst full pass on its result line. Record only:
+nothing here changes what the gated test measures (#455 split, advisor 18:31Z)."""
+from __future__ import annotations
+
+import gc
+import time
+
+import pytest
+from app.core.loop_watchdog import GcRecord, gc_summary
+
+
+class _Node:
+    """A cycle only the collector can free (refcounting cannot)."""
+
+    def __init__(self) -> None:
+        self.me = self
+
+
+@pytest.fixture
+def gc_quiet():
+    """No automatic pass may land inside a measured window."""
+    was = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was:
+            gc.enable()
+
+
+@pytest.mark.parametrize("generation", [0, 1, 2])
+def test_a_forced_pass_is_recorded_under_its_own_generation(gc_quiet, generation):
+    rec = GcRecord().install()
+    try:
+        t0 = time.monotonic()
+        gc.collect(generation)
+        t1 = time.monotonic()
+    finally:
+        rec.remove()
+    assert rec.passes == 1
+    assert set(rec.worst) == {generation}
+    took_ms, began = rec.worst[generation]
+    assert 0 <= took_ms <= (t1 - t0) * 1000 + 1
+    assert t0 <= began <= t1
+
+
+@pytest.mark.parametrize("passes", [0, 3])
+def test_the_record_counts_exactly_the_passes_run(gc_quiet, passes):
+    rec = GcRecord().install()
+    try:
+        for _ in range(passes):
+            gc.collect(2)
+    finally:
+        rec.remove()
+    assert rec.passes == passes
+    assert (2 in rec.worst) is (passes > 0)
+
+
+def test_a_removed_record_sees_no_later_pass(gc_quiet):
+    rec = GcRecord().install()
+    gc.collect(0)
+    rec.remove()
+    gc.collect(2)
+    assert rec.passes == 1 and set(rec.worst) == {0}
+    assert rec._callback not in gc.callbacks
+
+
+@pytest.mark.parametrize("installs", [1, 2, 3])
+def test_installing_again_registers_one_callback(gc_quiet, installs):
+    rec = GcRecord()
+    for _ in range(installs):
+        rec.install()
+    try:
+        assert gc.callbacks.count(rec._callback) == 1
+        gc.collect(1)
+    finally:
+        rec.remove()
+    assert rec.passes == 1
+
+
+@pytest.mark.parametrize("worst, start, expected", [
+    ({}, 10.0, "gc_passes=0 gc2_max=none"),
+    ({0: (3.0, 11.0)}, 10.0, "gc_passes=0 gc2_max=none"),
+    ({2: (612.4, 13.25), 0: (900.0, 11.0)}, 10.0, "gc_passes=0 gc2_max=612ms@+3.25s"),
+    ({2: (45.6, 10.5)}, 10.0, "gc_passes=0 gc2_max=46ms@+0.50s"),
+])
+def test_the_summary_names_the_worst_full_pass_and_when(worst, start, expected):
+    rec = GcRecord()
+    rec.worst = dict(worst)
+    assert gc_summary(rec, start) == expected
+
+
+@pytest.mark.parametrize("passes", [0, 7])
+def test_the_summary_counts_passes(passes):
+    rec = GcRecord()
+    rec.passes = passes
+    assert gc_summary(rec, 0.0) == f"gc_passes={passes} gc2_max=none"
+
+
+@pytest.mark.parametrize("phases, expected_passes", [
+    (["stop"], 0),            # installed mid-pass: a stop with no start
+    (["start", "stop"], 1),
+])
+def test_a_stop_without_its_start_is_not_counted(phases, expected_passes):
+    rec = GcRecord()
+    for phase in phases:
+        rec._callback(phase, {"generation": 2, "collected": 0, "uncollectable": 0})
+    assert rec.passes == expected_passes
+    assert (2 in rec.worst) is (expected_passes > 0)
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_remove_is_safe_whether_or_not_installed(installed):
+    rec = GcRecord()
+    if installed:
+        rec.install()
+    rec.remove()
+    rec.remove()
+    assert rec._callback not in gc.callbacks

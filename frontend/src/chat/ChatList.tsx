@@ -22,6 +22,8 @@ interface Props {
   suggestionsDisabled: boolean
   onDownloadMessage?: (assistantIndex: number, format: 'docx' | 'xlsx') => void
   onExport?: (descriptor: ExportDescriptor) => void
+  /** Open a marker's entry in the Sources panel. */
+  onCitation?: (marker: number) => void
   /** When set with both ids, each settled answer gets a feedback control. */
   feedback?: {
     projectId: string
@@ -57,6 +59,7 @@ export default function ChatList({
   suggestionsDisabled,
   onDownloadMessage,
   onExport,
+  onCitation,
   feedback,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -116,7 +119,7 @@ export default function ChatList({
           const idx = assistantIndexById.get(msg.id) ?? 0
           downloadHandler = (format) => onDownloadMessage(idx, format)
         }
-        const bubble = <ChatBubble key={msg.id} message={msg} onDownload={downloadHandler} onExport={onExport} />
+        const bubble = <ChatBubble key={msg.id} message={msg} onDownload={downloadHandler} onExport={onExport} onCitation={onCitation} />
         if (!isDownloadable || !feedback?.projectId || !feedback.conversationId) return bubble
         return (
           <Fragment key={msg.id}>

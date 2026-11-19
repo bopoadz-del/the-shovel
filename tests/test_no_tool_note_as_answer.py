@@ -24,7 +24,6 @@ from app.agents.runtime import (
     _EMPTY_RESPONSE_FALLBACK,
     _TOOL_RESULT_MAX_CHARS,
     Agent,
-    _format_tool_error_plain,
     _recover_answer_from_tool_messages,
     _tool_result_content,
 )
@@ -251,15 +250,29 @@ def test_the_tool_name_alone_decides_a_note_without_a_calculation_key(name, expe
 _PLAIN_ERROR = {"status": "error", "error": "Missing input: trench length"}
 
 
-@pytest.mark.parametrize("name,recovered", [
-    pytest.param("construction_calc", True, id="calculator-name"),
-    pytest.param("formula_executor", True, id="formula-name"),
-    pytest.param("search_project_documents", False, id="search-name"),
+@pytest.mark.parametrize("name,heading", [
+    pytest.param("construction_calc", "Platform calculator", id="calculator-name"),
+    pytest.param("formula_executor", "Formula code runner", id="formula-name"),
+    pytest.param("formula_executor_v2", "Formula code runner", id="formula-v2-name"),
+    pytest.param("search_project_documents", None, id="search-name"),
 ])
-def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, recovered):
-    """A failed calculator still yields its one honest sentence; a failed
+def test_the_tool_name_alone_decides_an_error_without_a_calculation_key(name, heading):
+    """A failed calculator -- a tool DECLARED computed in the registry, not a
+    name on a list -- states its error in plain words under its declared
+    name -- the plain sentence, never the tool's own error text; a failed
     search's error text is never shown as the answer."""
+    from app.agents.core import tool_registry
+    from app.agents.core.computed_answer import LABELS
+
     msgs = [{"role": "tool", "name": name, "content": json.dumps(_PLAIN_ERROR)}]
-    expected = _format_tool_error_plain(_PLAIN_ERROR) if recovered else ""
+    spec = tool_registry.result_spec(name)
+    if heading is not None:
+        assert spec is not None and spec.kind == "computed"
+        assert (spec.display_name or spec.name) == heading
+        expected = f"{heading}:\n- did not return: {LABELS['en']['tool_error']}"
+    else:
+        expected = ""
     assert expected != json.dumps(_PLAIN_ERROR)
-    assert _recover_answer_from_tool_messages("", msgs) == expected
+    out = _recover_answer_from_tool_messages("", msgs)
+    assert out == expected
+    assert _PLAIN_ERROR["error"] not in out

@@ -180,3 +180,9 @@ def raise_if_inaccessible_document_ids(auth: Optional[dict], *blobs: Any) -> Non
             pid = doc.get("project_id")
             if projects_store.get_project_accessible(pid, uid) is None:
                 raise HTTPException(404, "document not found")
+            # A chat session's file is reachable by id only from that chat
+            # (the session scope the chat route bound), by the user who
+            # attached it: another user's, or another chat's, is as foreign
+            # as another project's. A route that binds no chat reaches none.
+            if not projects_store.document_in_scope(doc.get("metadata")):
+                raise HTTPException(404, "document not found")

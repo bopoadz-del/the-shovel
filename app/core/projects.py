@@ -11,6 +11,7 @@ SQLAlchemy-backed via app.core.db — unified The Fork schema.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, delete, func, or_, select, text as sqla_text
+from sqlalchemy import String, and_, cast, delete, func, or_, select, text as sqla_text
 from sqlalchemy.exc import IntegrityError
 
 from app.core import byte_store
@@ -1292,8 +1293,13 @@ def add_document(
     metadata: Optional[Dict[str, Any]] = None,
     reingest_of: Optional[str] = None,
     drive_md5: Optional[str] = None,
+    document_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Register a document under a project. Storing only — runs no analysis.
+
+    ``document_id`` lets a caller that derives a stable id insert under it:
+    a second insert of the same id raises ``IntegrityError`` from the
+    primary key, in every worker process, so "keep once" is atomic.
 
     A non-empty ``content_sha256`` that already exists in this project is
     refused unless ``reingest_of`` names the old row. That path creates a
@@ -1322,7 +1328,7 @@ def add_document(
                 "reingest sha differs old_id=%s old_sha=%s new_sha=%s",
                 reingest_of, old_sha, content_sha256,
             )
-    did = str(uuid.uuid4())[:8]
+    did = document_id or str(uuid.uuid4())[:8]
     doc_type = classify_doc_type(original_name)
     doc_role = resolve_doc_role(original_name, metadata, role)
     with _lock:
@@ -2049,21 +2055,29 @@ def find_document_by_sha(
     """Return the FIRST existing document in this project with this content
     hash, or None. Used by the Drive walker to skip unchanged files on
     re-walk. Returns None for empty/None hashes so a missing sha cannot
-    accidentally match other null-sha rows."""
+    accidentally match other null-sha rows.
+
+    Only a row in the current session scope counts (``document_in_scope``):
+    the project's own documents, plus the current chat session's files. A
+    session upload of the same bytes is not the project's copy, so it does
+    not make a project walk skip the project file."""
     if not content_sha256:
         return None
     _ensure_db()
     project_id = storage_project_id(project_id)
+    scope = current_session_scope()
     with SessionLocal() as session:
-        document = session.scalars(
+        rows = session.scalars(
             select(Document)
             .where(
                 Document.project_id == project_id,
                 Document.content_sha256 == content_sha256,
+                _in_scope_clause(scope),
             )
             .order_by(Document.uploaded_at)
-            .limit(1)
-        ).first()
+        ).all()
+        document = next(
+            (d for d in rows if document_in_scope(d.metadata_, scope)), None)
     return _document_as_dict(document) if document else None
 
 
@@ -2265,7 +2279,8 @@ def backfill_chunk_counts_from_table(
         by_project.setdefault(doc.project_id, []).append(doc)
 
     for pid, group in by_project.items():
-        counts = store.count_by_doc(pid)
+        # Maintenance: every row's ledger, session files included.
+        counts = store.count_by_doc(pid, all_sessions=True)
         for doc in group:
             real = int(counts.get(doc.id, 0) or 0)
             if real > 0 and int(doc.chunk_count or 0) != real:
@@ -2398,11 +2413,16 @@ def documents_matching_filename_terms(
         or_(name_l.like(f"%{tok}%"), path_l.like(f"%{tok}%"))
         for tok in cleaned
     ]
+    scope = current_session_scope()
     stmt = (
-        select(Document.id, Document.original_name, Document.file_path)
+        select(Document.id, Document.original_name, Document.file_path,
+               Document.metadata_)
         .where(Document.project_id == source_id)
         .where(and_(*term_clauses) if require_all else or_(*term_clauses))
         .where(Document.retrieval_visible.is_(True))
+        # A chat session's file is that session's, not the project's
+        # (``document_in_scope``): the same clause as ``list_documents``.
+        .where(_in_scope_clause(scope))
     )
     if require_all:
         min_terms = len(cleaned)
@@ -2423,6 +2443,8 @@ def documents_matching_filename_terms(
 
     scored: List[Tuple[int, Dict[str, str]]] = []
     for row in rows:
+        if not document_in_scope(row.metadata_, scope):
+            continue
         blob = f"{row.original_name or ''} {row.file_path or ''}".lower()
         hits = sum(1 for tok in cleaned if tok in blob)
         if hits < min_terms:
@@ -2474,14 +2496,19 @@ def documents_matching_title_phrase(
     # expression is the one the trigram index (Alembic 0022) is on.
     path_l = func.lower(Document.file_path)
     needle = f"%{cleaned}%"
+    scope = current_session_scope()
     stmt = (
-        select(Document.id, Document.original_name, Document.file_path)
+        select(Document.id, Document.original_name, Document.file_path,
+               Document.metadata_)
         .where(Document.project_id == source_id)
         .where(or_(name_l.like(needle), path_l.like(needle)))
         # Its sibling documents_matching_filename_terms has always skipped
         # retired files. This one did not, and at limit=8 a retired copy can
         # also crowd the live file out of the list.
         .where(Document.retrieval_visible.is_(True))
+        # A chat session's file is that session's, not the project's
+        # (``document_in_scope``): the same clause as ``list_documents``.
+        .where(_in_scope_clause(scope))
         .limit(max(1, int(limit or 8)))
     )
     try:
@@ -2501,7 +2528,123 @@ def documents_matching_title_phrase(
             "file_path": row.file_path or "",
         }
         for row in rows
+        if document_in_scope(row.metadata_, scope)
     ]
+
+
+# ── Chat-session files ───────────────────────────────────────────────────────
+# A file uploaded in or produced by a chat session records that session (and
+# the user who made it) in its metadata. It is that session's file, not the
+# project's: the project's document list, its count and project-wide retrieval
+# leave it out, everywhere, by default. Inside a chat turn the turn's own
+# session is in scope (``bind_session_scope``), so the files the user attached
+# or produced in THIS session stay readable to the turn; another session's
+# files, and another user's, never are. Maintenance that must see every row
+# (reindex, ingest de-duplication) asks for ``all_sessions=True``.
+
+_SESSION_SCOPE: "contextvars.ContextVar[Optional[Tuple[str, str]]]" = (
+    contextvars.ContextVar("document_session_scope", default=None)
+)
+
+
+def bind_session_scope(
+    session_id: Optional[str], user_id: Optional[str],
+) -> "contextvars.Token":
+    """Make (session, user) the current turn's session scope.
+
+    Set at the chat route, before anything reads documents; tasks and
+    worker threads started afterwards inherit it. With no session or no user
+    the scope is empty: no session's files are in it."""
+    scope = (str(session_id), str(user_id)) if session_id and user_id else None
+    return _SESSION_SCOPE.set(scope)
+
+
+def reset_session_scope(token: "contextvars.Token") -> None:
+    _SESSION_SCOPE.reset(token)
+
+
+def current_session_scope() -> Optional[Tuple[str, str]]:
+    return _SESSION_SCOPE.get()
+
+
+def _names_a_session(meta: Dict[str, Any]) -> bool:
+    return bool(meta.get("session_id"))
+
+
+def is_session_document(meta: Any) -> bool:
+    """True when this metadata belongs to a file attached inside one chat
+    session. Such a file is never part of the project's search index."""
+    return _names_a_session(coerce_document_metadata(meta))
+
+
+def document_in_scope(meta: Any, scope: Optional[Tuple[str, str]] = None) -> bool:
+    """True when a document with this metadata may be listed or retrieved now.
+
+    The project's own document (no session in its metadata): always. A chat
+    session's file: only inside that session, for the user who made it."""
+    meta = coerce_document_metadata(meta)
+    if not _names_a_session(meta):
+        return True
+    scope = current_session_scope() if scope is None else scope
+    if not scope:
+        return False
+    return (str(meta.get("session_id")), str(meta.get("uploader_id") or "")) == scope
+
+
+def _outside_any_session():
+    """SQL clause: the row is not a chat session's file.
+
+    A row whose metadata the store holds as an encoded JSON string (see
+    ``coerce_document_metadata``) has no keys the query can read; it is
+    left out when its text names a session at all. A row with no metadata
+    (SQL NULL, as a bulk insert leaves it) is the project's.
+    """
+    meta_text = cast(Document.metadata_, String)
+    return and_(
+        Document.metadata_["session_id"].as_string().is_(None),
+        or_(Document.metadata_.is_(None),
+            ~meta_text.startswith('"'),
+            ~meta_text.contains("session_id", autoescape=True)),
+    )
+
+
+def _in_scope_clause(scope: Optional[Tuple[str, str]]):
+    """SQL clause: the row may be listed under ``scope`` (see ``document_in_scope``).
+
+    Rows the clause lets through are checked again in Python by
+    ``document_in_scope`` (an encoded-string row is matched on its text)."""
+    if not scope:
+        return _outside_any_session()
+    session_id, user_id = scope
+    meta_text = cast(Document.metadata_, String)
+    return or_(
+        _outside_any_session(),
+        and_(Document.metadata_["session_id"].as_string() == session_id,
+             Document.metadata_["uploader_id"].as_string() == user_id),
+        and_(meta_text.startswith('"'),
+             meta_text.contains(session_id, autoescape=True),
+             meta_text.contains(user_id, autoescape=True)),
+    )
+
+
+def session_hidden_document_ids(project_id: str, db_session: Any = None) -> set:
+    """Ids of the project's documents that are chat-session files out of scope.
+
+    Retrieval subtracts these from every project-wide candidate set: the same
+    rule as the document list (``document_in_scope``), applied to search."""
+    _ensure_db()
+    source_id = _master_corpus_source(project_id) or project_id
+    stmt = (
+        select(Document.id, Document.metadata_)
+        .where(Document.project_id == source_id, ~_outside_any_session())
+    )
+    scope = current_session_scope()
+    if db_session is not None:
+        rows = db_session.execute(stmt).all()
+    else:
+        with SessionLocal() as session:
+            rows = session.execute(stmt).all()
+    return {str(r.id) for r in rows if not document_in_scope(r.metadata_, scope)}
 
 
 def list_documents(
@@ -2510,6 +2653,7 @@ def list_documents(
     limit: Optional[int] = None,
     offset: int = 0,
     newest_first: bool = False,
+    all_sessions: bool = False,
 ) -> List[Dict[str, Any]]:
     """List a project's documents.
 
@@ -2518,6 +2662,12 @@ def list_documents(
     ``newest_first`` orders by upload time descending — the natural order for a
     paginated sidebar. Defaults preserve the legacy "all docs, oldest-first"
     behaviour so existing callers are untouched.
+
+    A chat session's file is that session's, not the project's: it is left
+    out unless the current turn's session scope is its session and user
+    (``document_in_scope``). Otherwise every session's files of every user
+    would show in every session (TESTER, 16 Nov 04:20Z). ``all_sessions``
+    is for maintenance that must see every row (reindex, de-duplication).
     """
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
@@ -2528,10 +2678,15 @@ def list_documents(
             .where(Document.project_id == source_id)
             .order_by(order)
         )
+        scope = current_session_scope()
+        if not all_sessions:
+            stmt = stmt.where(_in_scope_clause(scope))
         if limit is not None:
             stmt = stmt.limit(limit).offset(offset)
         rows = session.scalars(stmt).all()
     docs = [_document_as_dict(document) for document in rows]
+    if not all_sessions:
+        docs = [d for d in docs if document_in_scope(d.get("metadata"), scope)]
     # An owner-excluded document is never listed (ingest_status.is_excluded).
     return [d for d in docs if not is_excluded(d)]
 
@@ -2541,20 +2696,24 @@ def list_document_names(project_id: str) -> List[Dict[str, Any]]:
 
     For callers that match names (which file did the user mean?): one narrow
     query, no per-document file check -- unlike ``list_documents``, which
-    stats every stored file.
+    stats every stored file. A chat session's file out of the current scope
+    is not a name the user can mean here (``document_in_scope``).
     """
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
+    scope = current_session_scope()
     with SessionLocal() as session:
         rows = session.execute(
             select(Document.id, Document.original_name, Document.doc_type,
                    Document.file_path, Document.metadata_)
             .where(Document.project_id == source_id)
+            .where(_in_scope_clause(scope))
             .order_by(Document.uploaded_at)
         ).all()
     return [{"id": r.id, "original_name": r.original_name, "doc_type": r.doc_type,
              "file_path": r.file_path} for r in rows
-            if not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
+            if document_in_scope(r.metadata_, scope)
+            and not is_excluded({"metadata": coerce_document_metadata(r.metadata_)})]
 
 
 def list_session_documents(
@@ -2566,18 +2725,34 @@ def list_session_documents(
     and the caller uploaded or produced it there. Each row carries ``origin``
     ("uploaded" or "produced") for the sidebar's tag. One narrow query: the
     columns the session list and the chat pin need, no per-file stat.
+
+    The session and uploader are matched in the query, so the rows read are
+    the session's own, not every document of the project (this runs on
+    every chat turn and every export; grader G-3). A row whose metadata
+    the store holds as an encoded JSON string (see
+    ``coerce_document_metadata``) has no keys the query can read; such a
+    row is read only when its text names both the session and the uploader,
+    and the check below decides it like any other.
     """
     if not project_id or not session_id or not uploader_id:
         return []
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
+    meta_text = cast(Document.metadata_, String)
+    in_session = or_(
+        and_(Document.metadata_["session_id"].as_string() == session_id,
+             Document.metadata_["uploader_id"].as_string() == uploader_id),
+        and_(meta_text.startswith('"'),
+             meta_text.contains(session_id, autoescape=True),
+             meta_text.contains(uploader_id, autoescape=True)),
+    )
     with SessionLocal() as session:
         rows = session.execute(
             select(Document.id, Document.original_name, Document.doc_type,
                    Document.size, Document.uploaded_at, Document.metadata_,
                    Document.ingest_status, Document.ingest_status_reason,
                    Document.chunk_count)
-            .where(Document.project_id == source_id)
+            .where(Document.project_id == source_id, in_session)
             .order_by(Document.uploaded_at.desc())
         ).all()
     out: List[Dict[str, Any]] = []
@@ -2597,13 +2772,17 @@ def list_session_documents(
     return out
 
 
-def count_documents(project_id: str, visible_only: bool = False) -> int:
+def count_documents(
+    project_id: str, visible_only: bool = False, *, all_sessions: bool = False,
+) -> int:
     """Total document count for a project — a cheap indexed COUNT, so a
     paginated listing can report the total without serializing every row.
 
     ``visible_only`` leaves out the rows retrieval hides
     (``retrieval_visible`` false: an owner-excluded file, a retired copy of
-    a re-ingested one), so the count is the documents the project holds."""
+    a re-ingested one), so the count is the documents the project holds.
+    Chat sessions' files out of the current scope are not counted, as
+    ``list_documents`` does not list them; ``all_sessions`` counts every row."""
     _ensure_db()
     source_id = _master_corpus_source(project_id) or project_id
     stmt = (
@@ -2613,6 +2792,8 @@ def count_documents(project_id: str, visible_only: bool = False) -> int:
     )
     if visible_only:
         stmt = stmt.where(Document.retrieval_visible.is_(True))
+    if not all_sessions:
+        stmt = stmt.where(_in_scope_clause(current_session_scope()))
     with SessionLocal() as session:
         return int(session.scalar(stmt) or 0)
 
@@ -2837,13 +3018,16 @@ def compute_readiness(project_id: str) -> Dict[str, Any]:
     # Readiness only needs each doc's role — NOT the full serialized rows.
     # Loading all documents here (via list_documents) meant get_project paid the
     # full doc-load TWICE (~8s on the 2713-doc master corpus). Select just the
-    # doc_role column instead.
+    # doc_role column instead. A chat session's file out of the current scope
+    # is not the project's baseline or report (``document_in_scope``).
+    scope = current_session_scope()
     with SessionLocal() as session:
-        roles = list(
-            session.scalars(
-                select(Document.doc_role).where(Document.project_id == source_id)
-            ).all()
-        )
+        rows = session.execute(
+            select(Document.doc_role, Document.metadata_)
+            .where(Document.project_id == source_id)
+            .where(_in_scope_clause(scope))
+        ).all()
+        roles = [r.doc_role for r in rows if document_in_scope(r.metadata_, scope)]
         project = session.get(Project, source_id)
     aconex = bool(project.aconex_connected) if project else False
 

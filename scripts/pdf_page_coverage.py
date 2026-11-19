@@ -17,9 +17,25 @@ the way ingest does (``file_crypto.open_plaintext`` + PyMuPDF) and prints:
 Nothing here OCRs a page, re-extracts a document or writes to the database:
 the SQL is parameterised SELECTs and each page is read with
 ``page.get_text()`` only. Documents are chosen by ``COVERAGE_DOC_IDS`` (comma
-or space separated ids or prefixes) and/or ``COVERAGE_DRIVE_PATH`` (a
-case-insensitive substring of ``metadata->>'drive_path'``, wildcards escaped);
-no document identifier or path lives in this repository.
+or space separated ids or prefixes, at most ``_MAX_DOCS``); no document
+identifier or path lives in this repository.
+
+The report is written to a workflow log on a public repository, so it prints
+document ids, counts, page numbers and product-written codes ONLY: never a
+file name, a path, a Drive path, a project id or any free text read from the
+row, the metadata, the file or an exception message (an exception is named
+by its class). ``withhold`` is the last step before printing: it replaces any
+remaining occurrence of the row's own name, stem, path or project id.
+
+Per document it also prints the index's own page coverage (stored chunks by
+their ``page`` locator: which pages carry a chunk and how much text), read
+from the chunk table, so it answers even when the source file is gone.
+
+With ``COVERAGE_PAGELESS_SUMMARY`` set, each id is an anchor instead: the
+run prints, for the anchor document's own project, how many chunks carry no
+``page`` locator, by document id (counts and ids only, at most ``_MAX_DOCS``
+documents listed). The project is read from the anchor's row, never taken
+from an input, and never printed.
 
 Per document it also prints the stored failure evidence (the ledger reason,
 the parsed ``attempts_exhausted`` mark and the failure keys of the metadata)
@@ -41,7 +57,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
 
-# Read-only. The pattern is a bind parameter in both selectors.
+# Read-only. The id prefix is a bind parameter. The name and path columns are
+# read to open the file and to withhold them from the output, never printed.
 _COLS = (
     "SELECT id, project_id, original_name, size, file_path, ingest_status, "
     "chunk_count, pages_in_file, pages_ocrd, ingest_status_reason, metadata "
@@ -49,20 +66,23 @@ _COLS = (
 )
 # ``LIKE`` on the string id (prefix; the id is validated by parse_ids).
 _DOC_SQL = _COLS + "WHERE id LIKE :p ORDER BY id"
-# Case-insensitive substring of the Drive path; ``like_contains`` escapes
-# ``%``, ``_`` and the escape character ``!``. ``->>`` reads JSON text on
-# Postgres (JSON/JSONB) and SQLite alike.
-_PATH_SQL = (
-    _COLS + "WHERE lower(metadata->>'drive_path') LIKE :p ESCAPE '!' "
-    "ORDER BY original_name, id"
-)
 # Metadata keys that carry failure evidence (matched on the key name).
 _FAIL_KEY_RE = re.compile(r"error|fail|skip|reason|attempt|truncat|timeout|oom|limit", re.IGNORECASE)
-_MAX_VALUE_CHARS = 300
+# A product-written code (a reason segment, a metadata value): lower snake
+# case. Anything else read from the row is free text, printed as its length.
+_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+# Documents per run: the report is a public log, keep it short.
+_MAX_DOCS = 20
+_WITHHELD = "<withheld>"
+_MIN_WITHHOLD_CHARS = 4
 
 # Bounded output: at most this many chars-by-range rows per document.
 _MAX_RANGE_ROWS = 25
 _MIN_RANGE_PAGES = 10
+# Bounded output: at most this many no-chunk page runs printed per range row,
+# so a page past the document-wide run list is still named by its own range.
+_MAX_RUNS_PER_RANGE = 12
 _ID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 
 
@@ -79,18 +99,6 @@ def parse_ids(raw: str) -> list[str]:
         if tok not in out:
             out.append(tok)
     return out
-
-
-def like_contains(raw: str) -> str:
-    """A LIKE pattern matching ``raw`` as a case-insensitive substring, with
-    the pattern characters escaped (escape char ``!``) so the input is always
-    literal. Raises ValueError on a blank input, which would select every
-    document."""
-    sub = (raw or "").strip()
-    if not sub:
-        raise ValueError("drive path substring is blank")
-    esc = sub.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_")
-    return f"%{esc}%"
 
 
 def _metadata(raw: Any) -> dict[str, Any]:
@@ -117,17 +125,76 @@ def terminal_meaning(reason: str | None) -> str | None:
             f"INGEST_MAX_ATTEMPTS now {st.max_attempts()}; {after}")
 
 
+def safe_reason(reason: str | None) -> str:
+    """The ``|``-separated reason with each product code kept and any other
+    segment (free text that may quote a name or a path) printed as its length.
+    The attempts mark is read by ``terminal_meaning``, not echoed."""
+    from app.core import ingest_status as st
+
+    if not reason:
+        return "-"
+    out = []
+    for seg in str(reason).split("|"):
+        if seg.startswith(st.ATTEMPTS_MARK):
+            out.append("attempts_mark")
+        elif _CODE_RE.match(seg):
+            out.append(seg)
+        else:
+            out.append(f"<text len={len(seg)}>")
+    return "|".join(out)
+
+
+def safe_value(value: Any) -> str:
+    """A metadata value as a count or a shape: numbers and booleans print,
+    a product code prints, other text prints as its length, a mapping prints
+    its numeric members under their keys, a list its length."""
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    if value is None:
+        return "-"
+    if isinstance(value, str):
+        return value if _CODE_RE.match(value) else f"<text len={len(value)}>"
+    if isinstance(value, dict):
+        parts = [f"{k}={v}" for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+                 if _KEY_RE.match(str(k)) and isinstance(v, (bool, int, float))]
+        return "{" + ", ".join(parts[:10]) + f"}} keys={len(value)}"
+    if isinstance(value, (list, tuple)):
+        return f"<list len={len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
 def failure_evidence(reason: str | None, meta: dict[str, Any]) -> list[str]:
-    """The stored evidence of why a row holds what it holds."""
-    lines = [f"   reason: {reason or '-'}"]
+    """The stored evidence of why a row holds what it holds, as codes and
+    counts only (see the module docstring)."""
+    lines = [f"   reason: {safe_reason(reason)}"]
     meaning = terminal_meaning(reason)
     if meaning:
         lines.append(f"   terminal: {meaning}")
-    if meta.get("drive_path"):
-        lines.append(f"   drive_path: {str(meta['drive_path'])[:_MAX_VALUE_CHARS]}")
-    for key in sorted(k for k in meta if _FAIL_KEY_RE.search(str(k))):
-        lines.append(f"   meta.{key}: {str(meta[key])[:_MAX_VALUE_CHARS]}")
+    for key in sorted(k for k in meta if _KEY_RE.match(str(k)) and _FAIL_KEY_RE.search(str(k))):
+        lines.append(f"   meta.{key}: {safe_value(meta[key])}")
     return lines
+
+
+def withhold(lines: list[str], doc_row: tuple) -> list[str]:
+    """Last step before printing: replace any occurrence of this row's file
+    name, its stem, its stored path (and that path's file name and stem), its
+    Drive path and its project id. Values shorter than ``_MIN_WITHHOLD_CHARS``
+    are skipped so a one-letter stem cannot garble the counts."""
+    pid, name, fpath = doc_row[1], doc_row[2], doc_row[4]
+    meta = _metadata(doc_row[10]) if len(doc_row) > 10 else {}
+    found: set[str] = set()
+    for v in (name, fpath, pid, meta.get("drive_path")):
+        if not v:
+            continue
+        v = str(v)
+        base = v.replace("\\", "/").rsplit("/", 1)[-1]
+        found.update({v, base, os.path.splitext(base)[0]})
+    found = {f for f in found if len(f) >= _MIN_WITHHOLD_CHARS}
+    if not found:
+        return lines
+    pat = re.compile("|".join(re.escape(f) for f in sorted(found, key=len, reverse=True)),
+                     re.IGNORECASE)
+    return [pat.sub(_WITHHELD, ln) for ln in lines]
 
 
 def budgets() -> dict[str, Any]:
@@ -253,19 +320,285 @@ def read_page_chars(file_path: str) -> tuple[list[int], float, str | None]:
                     page = doc.load_page(i)
                     max_side = max(max_side, page.rect.width, page.rect.height)
                     chars.append(len((page.get_text() or "").strip()))
-                except Exception as exc:  # report it, do not hide it
-                    error = f"page {i + 1}: {type(exc).__name__}: {str(exc)[:200]}"
+                except Exception as exc:  # report it (by class), do not hide it
+                    error = f"page {i + 1}: {type(exc).__name__}"
                     break
         finally:
             doc.close()
     return chars, max_side, error
 
 
+# Stored chunks of one document by page (read-only). The table name comes from
+# the product's single chokepoint for the namespaced chunk table, which
+# validates the identifier; project and document id are bind parameters, so
+# the read uses the (project_id, doc_id) index.
+def _stored_pages_sql(table: str) -> str:
+    return (
+        f"SELECT page, COUNT(*), COALESCE(SUM(LENGTH(text)), 0) FROM {table} "
+        "WHERE project_id = :pr AND doc_id = :d GROUP BY page"
+    )
+
+
+def stored_chunk_table() -> str:
+    from app.core.models import rag_chunk_table_name
+
+    return rag_chunk_table_name(os.getenv("RAG_VECTOR_NAMESPACE", "v2").strip())
+
+
+def stored_page_coverage(rows: Iterable[tuple], pages_in_file: int | None) -> dict[str, Any]:
+    """Pure summary of the index's own page locators for one document.
+
+    ``rows`` is ``(page, chunks, chars)`` per stored page (page None = chunks
+    with no locator). The span is the file's page count when the row records
+    it, else the highest page that carries a chunk; ``pages_without_chunk``
+    are the pages of that span no chunk points at. This answers "is page N
+    indexed, and with how much text" from the index alone, so it still
+    answers when the source bytes are gone."""
+    per_page: dict[int, tuple[int, int]] = {}
+    no_page = (0, 0)
+    for page, n, chars in rows:
+        n, chars = int(n or 0), int(chars or 0)
+        if page is None or int(page) < 1:
+            no_page = (no_page[0] + n, no_page[1] + chars)
+            continue
+        a, b = per_page.get(int(page), (0, 0))
+        per_page[int(page)] = (a + n, b + chars)
+    top = max(per_page) if per_page else 0
+    span = max(int(pages_in_file or 0), top)
+    missing = [p for p in range(1, span + 1) if p not in per_page]
+    step = range_size(span)
+    by_range = []
+    for start in range(1, span + 1, step):
+        end = min(span, start + step - 1)
+        hits = [per_page[p] for p in range(start, end + 1) if p in per_page]
+        by_range.append({
+            "pages": (start, end),
+            "pages_with_chunk": len(hits),
+            "pages_without_chunk_runs": _runs(
+                p for p in range(start, end + 1) if p not in per_page),
+            "chunks": sum(h[0] for h in hits),
+            "chars": sum(h[1] for h in hits),
+        })
+    return {
+        "chunks": sum(v[0] for v in per_page.values()) + no_page[0],
+        "chunks_without_page": no_page[0],
+        "chars_without_page": no_page[1],
+        "pages_with_chunk": len(per_page),
+        "span": span,
+        "span_from": "pages_in_file" if pages_in_file and int(pages_in_file) >= top else "highest_chunk_page",
+        "pages_without_chunk": len(missing),
+        "pages_without_chunk_runs": _runs(missing),
+        "by_range": by_range,
+    }
+
+
+def render_stored(cov: dict[str, Any]) -> list[str]:
+    runs = cov["pages_without_chunk_runs"]
+    shown = ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in runs[:40])
+    more = f" (+{len(runs) - 40} more runs)" if len(runs) > 40 else ""
+    lines = [
+        (f"   stored: chunks={cov['chunks']} pages_with_chunk={cov['pages_with_chunk']} "
+         f"span={cov['span']} ({cov['span_from']}) pages_without_chunk={cov['pages_without_chunk']} "
+         f"chunks_without_page={cov['chunks_without_page']} "
+         f"chars_without_page={cov['chars_without_page']}"),
+        f"   stored pages_without_chunk_runs: {shown or '-'}{more}",
+        "   stored pages | pages_with_chunk | chunks | chars | pages_without_chunk",
+    ]
+    for r in cov["by_range"]:
+        a, b = r["pages"]
+        lines.append(f"   {a}-{b} | {r['pages_with_chunk']} | {r['chunks']} | {r['chars']} | "
+                     f"{_render_runs(r['pages_without_chunk_runs'], _MAX_RUNS_PER_RANGE)}")
+    return lines
+
+
+def _render_runs(runs: list[tuple[int, int]], cap: int) -> str:
+    """Page runs as text, at most ``cap`` runs then a ``+N more runs`` count."""
+    shown = ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in runs[:cap])
+    more = f" (+{len(runs) - cap} more runs)" if len(runs) > cap else ""
+    return (shown or "-") + more
+
+
+def stored_lines(doc_row: tuple) -> list[str]:
+    """The index's own page coverage for one document; a failed read is
+    printed, never raised, so the file-side diagnosis still prints."""
+    did, pid, pif = doc_row[0], doc_row[1], doc_row[7]
+    from app.core.db import SessionLocal
+
+    try:
+        sql = _stored_pages_sql(stored_chunk_table())
+        with SessionLocal() as s:
+            rows = s.execute(text(sql), {"pr": pid, "d": did}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return [f"   stored: READ FAILED: {type(exc).__name__}"]
+    return render_stored(stored_page_coverage([tuple(r) for r in rows], pif))
+
+
+# Chunks with no page locator, by document, across ONE project (read-only).
+# The project is the anchor document's own (read from its row, never from an
+# input), and it is a bind parameter, so the read uses the project index.
+def _pageless_sql(table: str) -> str:
+    return (
+        "SELECT doc_id, "
+        "SUM(CASE WHEN page IS NULL OR page < 1 THEN 1 ELSE 0 END), COUNT(*) "
+        f"FROM {table} WHERE project_id = :pr GROUP BY doc_id"
+    )
+
+
+def pageless_summary(rows: Iterable[tuple], cap: int = _MAX_DOCS) -> dict[str, Any]:
+    """Pure count of chunks without a page locator, by document id.
+
+    ``rows`` is ``(doc_id, chunks_without_page, chunks)`` per document of one
+    project. A chunk with no page cannot be cited by page, so this is the
+    size of that defect in the working set: how many documents carry one,
+    how many chunks, and the ``cap`` documents with the most (ties by id)."""
+    docs = [(str(d), int(n or 0), int(t or 0)) for d, n, t in rows]
+    hit = sorted((r for r in docs if r[1] > 0), key=lambda r: (-r[1], r[0]))
+    return {
+        "documents": len(docs),
+        "documents_with_pageless": len(hit),
+        "chunks": sum(r[2] for r in docs),
+        "pageless_chunks": sum(r[1] for r in hit),
+        "top": hit[:cap],
+    }
+
+
+def render_pageless(anchor: str, summ: dict[str, Any]) -> list[str]:
+    lines = [
+        (f"== pageless in the project of id {anchor}: documents={summ['documents']} "
+         f"documents_with_pageless={summ['documents_with_pageless']} "
+         f"chunks={summ['chunks']} pageless_chunks={summ['pageless_chunks']}"),
+        "   doc_id | pageless_chunks | chunks",
+    ]
+    for did, n, t in summ["top"]:
+        lines.append(f"   {did} | {n} | {t}")
+    more = summ["documents_with_pageless"] - len(summ["top"])
+    if more > 0:
+        lines.append(f"   (+{more} more documents with pageless chunks)")
+    return lines
+
+
+# The same project's documents, for the by-kind table: the stored document
+# type and the file kind (the extension of the stored name). The name is
+# read only to take its extension and is never printed.
+_KIND_SQL = "SELECT id, original_name, doc_type FROM documents WHERE project_id = :pr"
+_NO_DOC_ROW = "(no document row)"
+
+
+def _accepted_kinds() -> frozenset:
+    """Every file kind the product accepts: its own upload/ingest constant
+    (``app.core.upload_limits.ALLOWED_UPLOAD_EXTENSIONS``), not a list here."""
+    from app.core.upload_limits import ALLOWED_UPLOAD_EXTENSIONS
+    return frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS)
+
+
+def _declared_types() -> tuple[frozenset, frozenset]:
+    """``(built-in, custom)`` document type names from the product's own type
+    registry (``app.core.doc_types.list_types``), not a list here. Built-in
+    names come from ``config/document_types.yaml`` plus the classifier's
+    default; a custom name was typed by a user, so it is user text and is
+    only ever counted, never printed."""
+    from app.core.doc_types import list_types
+    from app.core.doc_typing import DEFAULT_DOC_TYPE
+    builtin, custom = {DEFAULT_DOC_TYPE}, set()
+    for t in list_types():
+        name = t.get("name")
+        if name:
+            (builtin if t.get("source") == "builtin" else custom).add(str(name))
+    return frozenset(builtin), frozenset(custom - builtin)
+
+
+def file_kind(name: Any) -> str:
+    """The lower-case extension of a stored file name when it is a kind the
+    product accepts, else ``(other)``; ``(none)`` when there is no
+    extension. Only a fixed product list can print, so no part of a name
+    (a ``Firstname.Surname`` suffix) can leak through it."""
+    if not isinstance(name, str) or not name.strip():
+        return "(none)"
+    ext = os.path.splitext(name.strip())[1].lower()
+    if not ext:
+        return "(none)"
+    return ext if ext in _accepted_kinds() else "(other)"
+
+
+def stored_type(value: Any) -> str:
+    """The stored type when it is a built-in declared type, ``(custom)`` when
+    it is a user-declared custom type (its name is user text), else
+    ``(other)``."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "(none)"
+    if not isinstance(value, str):
+        return "(other)"
+    builtin, custom = _declared_types()
+    if value in builtin:
+        return value
+    return "(custom)" if value in custom else "(other)"
+
+
+def pageless_by_kind(chunk_rows: Iterable[tuple], doc_rows: Iterable[tuple],
+                     cap: int = _MAX_DOCS) -> list[tuple]:
+    """Pure: the pageless counts grouped by (file kind, stored type).
+
+    ``chunk_rows`` is ``(doc_id, chunks_without_page, chunks)`` per document;
+    ``doc_rows`` is ``(id, original_name, doc_type)``. A chunk whose doc_id
+    has no document row is grouped as ``(no document row)``, never guessed.
+    Returns ``(kind, type, documents, documents_with_pageless, chunks,
+    pageless_chunks)`` rows, most pageless chunks first (ties by kind, type),
+    at most ``cap`` of them."""
+    kinds = {str(i): (file_kind(n), stored_type(t)) for i, n, t in doc_rows}
+    groups: dict[tuple[str, str], list[int]] = {}
+    for d, n, t in chunk_rows:
+        key = kinds.get(str(d), (_NO_DOC_ROW, _NO_DOC_ROW))
+        g = groups.setdefault(key, [0, 0, 0, 0])
+        n, t = int(n or 0), int(t or 0)
+        g[0] += 1
+        g[1] += 1 if n > 0 else 0
+        g[2] += t
+        g[3] += n
+    out = [(k[0], k[1], *v) for k, v in groups.items()]
+    out.sort(key=lambda r: (-r[5], r[0], r[1]))
+    return out[:cap]
+
+
+def render_by_kind(groups: list[tuple]) -> list[str]:
+    lines = ["   by kind: file_kind | doc_type | documents | documents_with_pageless "
+             "| chunks | pageless_chunks | chunks_with_page"]
+    for kind, typ, docs, dwp, chunks, pl in groups:
+        lines.append(f"   {kind} | {typ} | {docs} | {dwp} | {chunks} | {pl} | {chunks - pl}")
+    pdf = [g for g in groups if g[0] == ".pdf"]
+    if pdf:
+        chunks, pl = sum(g[4] for g in pdf), sum(g[5] for g in pdf)
+        lines.append(f"   pdf-born (.pdf, every type listed above): chunks={chunks} "
+                     f"with_page={chunks - pl} without_page={pl}")
+    return lines
+
+
+def pageless_lines(anchor: str, doc_row: tuple) -> list[str]:
+    """The pageless count for the anchor document's project; a failed read
+    is printed by class, never raised. The project id is never printed."""
+    from app.core.db import SessionLocal
+
+    try:
+        sql = _pageless_sql(stored_chunk_table())
+        with SessionLocal() as s:
+            rows = s.execute(text(sql), {"pr": doc_row[1]}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return [f"== pageless in the project of id {anchor}: READ FAILED: {type(exc).__name__}"]
+    rows = [tuple(r) for r in rows]
+    lines = render_pageless(anchor, pageless_summary(rows))
+    try:
+        with SessionLocal() as s:
+            docs = s.execute(text(_KIND_SQL), {"pr": doc_row[1]}).all()
+    except Exception as exc:  # report it (by class), do not hide it
+        return lines + [f"   by kind: READ FAILED: {type(exc).__name__}"]
+    # Every group is printed: the cap is the number of (kind, type) pairs.
+    return lines + render_by_kind(pageless_by_kind(rows, [tuple(d) for d in docs], cap=10_000))
+
+
 def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | None,
            max_side: float, error: str | None) -> list[str]:
-    did, pid, name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
+    did, _pid, _name, size, _fpath, status, nchunks, pif, pocr, reason, meta = doc_row
     lines = [
-        f"== doc {did} | project {pid} | {name}",
+        f"== doc {did}",
         (f"   db: size={size} ingest_status={status} chunks={nchunks} "
          f"pages_in_file={pif} pages_ocrd={pocr}"),
     ]
@@ -310,52 +643,91 @@ def render(doc_row: tuple, cov: dict[str, Any] | None, gates: dict[str, Any] | N
 
 def diagnose(doc_row: tuple) -> list[str]:
     _did, _pid, name, _size, fpath, *_ = doc_row
-    if not fpath or not os.path.exists(fpath):
-        return render(doc_row, None, None, 0.0, f"file not on this filesystem: {fpath!r}")
+    if not fpath:
+        return render(doc_row, None, None, 0.0, "no stored file path on the row")
+    if not os.path.exists(fpath):
+        return render(doc_row, None, None, 0.0, "file not on this filesystem")
     if os.path.splitext(name or fpath)[1].lower() != ".pdf":
         return render(doc_row, None, None, 0.0, "not a PDF: page read skipped")
     try:
         gates = ingest_gates(fpath, name or "")
         chars, max_side, error = read_page_chars(fpath)
     except Exception as exc:
-        return render(doc_row, None, None, 0.0, f"open failed: {type(exc).__name__}: {str(exc)[:200]}")
+        return render(doc_row, None, None, 0.0, f"open failed: {type(exc).__name__}")
     cov = coverage(chars, gates["ocr_threshold"], gates["ocr_page_cap"])
     return render(doc_row, cov, gates, max_side, error)
 
 
-def main() -> int:
-    raw_path = os.environ.get("COVERAGE_DRIVE_PATH", "")
-    try:
-        ids = parse_ids(os.environ.get("COVERAGE_DOC_IDS", ""))
-        path_pattern = like_contains(raw_path) if raw_path.strip() else None
-    except ValueError as exc:
-        sys.stderr.write(f"{exc}\n")
-        return 2
-    if not ids and path_pattern is None:
-        sys.stderr.write("COVERAGE_DOC_IDS or COVERAGE_DRIVE_PATH is required\n")
-        return 2
+def report(doc_row: tuple) -> list[str]:
+    """Every printed line for one document, already withheld."""
+    return withhold(diagnose(doc_row) + stored_lines(doc_row), doc_row)
+
+
+# Every line the script prints carries this mark; the workflow publishes the
+# marked lines only, never the rest of the container stream (entrypoint and
+# library output it does not control).
+MARK = "PPC| "
+
+
+def emit(line: str, *, err: bool = False) -> None:
+    stream = sys.stderr if err else sys.stdout
+    stream.write(f"{MARK}{line}" + chr(10))
+    stream.flush()
+
+
+def _one(prefix: str) -> bool:
+    """Report one id; True when it printed exactly one document."""
     from app.core.db import SessionLocal
 
-    print("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()), flush=True)
+    with SessionLocal() as s:
+        rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
+    if len(rows) != 1:
+        emit(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
+        return False
+    row = tuple(rows[0])
+    lines = (withhold(pageless_lines(prefix, row), row) if pageless_mode()
+             else report(row))
+    for line in lines:
+        emit(line)
+    return True
+
+
+def pageless_mode() -> bool:
+    """``COVERAGE_PAGELESS_SUMMARY``: each id is an anchor; print the
+    pageless-chunk count of its project instead of the per-page report."""
+    return os.environ.get("COVERAGE_PAGELESS_SUMMARY", "").strip().lower() in ("1", "true", "yes")
+
+
+def main() -> int:
+    if os.environ.get("COVERAGE_DRIVE_PATH", "").strip():
+        # Withdrawn: a path selector puts a client folder name into a public
+        # run log. The value is not echoed.
+        emit("COVERAGE_DRIVE_PATH is withdrawn: select by document id", err=True)
+        return 2
+    try:
+        ids = parse_ids(os.environ.get("COVERAGE_DOC_IDS", ""))
+    except ValueError:
+        emit("COVERAGE_DOC_IDS holds a token that is not a document id", err=True)
+        return 2
+    if not ids:
+        emit("COVERAGE_DOC_IDS is required", err=True)
+        return 2
+    if len(ids) > _MAX_DOCS:
+        emit(f"{len(ids)} ids given, at most {_MAX_DOCS} per run", err=True)
+        return 2
+    try:
+        emit("budgets: " + " ".join(f"{k}={v}" for k, v in budgets().items()))
+    except Exception as exc:  # by class only: a message can quote a path
+        emit(f"budgets: unreadable ({type(exc).__name__})")
     failed = 0
-    if path_pattern is not None:
-        with SessionLocal() as s:
-            rows = s.execute(text(_PATH_SQL), {"p": path_pattern}).all()
-        print(f"== drive path selector: {len(rows)} documents", flush=True)
-        if not rows:
-            failed += 1
-        for row in rows:
-            for line in diagnose(tuple(row)):
-                print(line, flush=True)
     for prefix in ids:
-        with SessionLocal() as s:
-            rows = s.execute(text(_DOC_SQL), {"p": prefix + "%"}).all()
-        if len(rows) != 1:
-            print(f"== id {prefix}: {len(rows)} matching documents, need exactly 1 -- skipped")
-            failed += 1
-            continue
-        for line in diagnose(tuple(rows[0])):
-            print(line, flush=True)
+        try:
+            ok = _one(prefix)
+        except Exception as exc:  # by class only: a message can quote a path or a name
+            emit(f"== id {prefix}: failed ({type(exc).__name__})")
+            ok = False
+        failed += 0 if ok else 1
+    emit(f"done: ids={len(ids)} failed={failed}")
     return 1 if failed else 0
 
 

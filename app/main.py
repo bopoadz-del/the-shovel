@@ -253,6 +253,13 @@ async def lifespan(app: FastAPI):
     from app.core.cde.poll import start_event_poller
     start_event_poller()
 
+    # Readiness waits for the result declarations (about a second: they import
+    # the formula registry). In a worker thread, so the loop is never held by
+    # that import; before serving, so no request's first read has to declare.
+    # A declarer that fails is logged and backed off (it never raises out of
+    # here); the warm-up below runs the step again.
+    await asyncio.to_thread(_declare_deferred_results)
+
     # Model warm-up runs AFTER the port is listening — see _warm_models.
     warm_task = None
     if os.getenv("WARM_MODELS_BLOCKING", "").strip().lower() in ("1", "true", "yes"):
@@ -301,6 +308,8 @@ async def lifespan(app: FastAPI):
         await hydration_scheduler.stop()
         from app.core.cde.poll import stop_event_poller
         await stop_event_poller()
+        from app.core.llm_client import aclose_shared_clients
+        await aclose_shared_clients()
         await _redis_client.close_redis_client()
 
 
@@ -428,6 +437,15 @@ def _configure_ml_loop() -> None:
                 settings.enabled, settings.build_sha)
 
 
+def _declare_deferred_results() -> None:
+    """Run the deferred result declarations (they import the formula
+    registry, sympy among it) in the warm-up thread, so the first tool call
+    under load does not pay that import holding the interpreter lock on the
+    event loop. Not at import: the boot check forbids those libraries there."""
+    from app.agents.core.tool_registry import declare_deferred_results
+    declare_deferred_results()
+
+
 async def _warm_models() -> None:
     """Warm the heavy models — and seed the knowledge base — WITHOUT blocking startup.
 
@@ -450,7 +468,8 @@ async def _warm_models() -> None:
     """
     # Embedder first: the knowledge seed reuses the same cached instance, so
     # ordering it last means the seed never pays a second model load.
-    for label, fn in (("safety detector", _warm_safety_detector),
+    for label, fn in (("result declarations", _declare_deferred_results),
+                      ("safety detector", _warm_safety_detector),
                       ("RAG embedder", _warm_embedder),
                       ("embedder identity check", _check_embedder_identity),
                       ("knowledge seed", _seed_knowledge),
@@ -733,6 +752,9 @@ _CSP_REPORT_ONLY = "; ".join((
 ))
 
 
+from app.routers.health import BUILD_ID_HEADER, _deployed_build_sha  # noqa: E402
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Stamp baseline security headers on every response.
 
@@ -750,6 +772,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
         )
         h.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
+        # A tab keeps the script it loaded until reloaded. Name the server's
+        # build on every response so the page can tell when it is running a
+        # different build than the server it talks to (frontend
+        # lib/buildCheck.js). Unset build -> no header: never invent one.
+        build = _deployed_build_sha()
+        if build:
+            h.setdefault(BUILD_ID_HEADER, build)
+        # Every HTML page shell is revalidated, whichever route or mount
+        # served it, so a reload always fetches the current bundle names.
+        if (h.get("content-type") or "").lower().startswith("text/html"):
+            h.setdefault("Cache-Control", "no-cache")
         # HSTS only where the origin really is https. Sent from a plain-HTTP
         # dev box it pins that browser to https for a year.
         if (os.getenv("ENV") or "").strip().lower() in {"production", "prod"}:
@@ -787,6 +820,8 @@ app.add_middleware(
     # should not reflect arbitrary methods/headers back to the browser.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
+    # A cross-origin page (vite dev on another port) may read the build id.
+    expose_headers=[BUILD_ID_HEADER],
 )
 
 

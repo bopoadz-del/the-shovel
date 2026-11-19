@@ -105,7 +105,7 @@ def _install_fakes(monkeypatch, *, files, walk=None, list_documents=None):
     monkeypatch.setattr(
         projects,
         "list_documents",
-        list_documents if list_documents is not None else (lambda _pid: []),
+        list_documents if list_documents is not None else (lambda _pid, **_kw: []),
     )
     monkeypatch.setattr(embeddings, "reset_embedder_cache", lambda: None)
     monkeypatch.setattr(vector_store, "reset_store_cache", lambda: None)
@@ -354,7 +354,7 @@ def _driver(tmp_path: Path, *, body: str, files: int = 40, folders=None,
         "gdrive_service.is_configured = lambda: True\n"
         "gdrive_service.walk_folder = lambda fid, **k: (list(FILES), [])\n"
         "projects.get_or_create_project = lambda name, **k: ({'id': 'proj', 'name': name}, False)\n"
-        "projects.list_documents = lambda pid: []\n"
+        "projects.list_documents = lambda pid, **_kw: []\n"
         "embeddings.reset_embedder_cache = lambda: None\n"
         "vector_store.reset_store_cache = lambda: None\n"
         "vector_store.get_store = lambda: Store()\n"

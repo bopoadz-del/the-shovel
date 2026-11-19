@@ -54,11 +54,12 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
     from app.core.rag.vector_store import end_turn_memo, start_turn_memo
 
     token = start_turn_memo()
-    turn, turn_token = answer_exit.begin_turn()
+    asked = _user_message_of(self, args, kwargs)
+    turn, turn_token = answer_exit.begin_turn(asked)
     from app.lib import construction_formulas as _calc_words
 
     # The user's own words reach every calculator run this turn makes.
-    ask_token = _calc_words.set_current_ask(_user_message_of(self, args, kwargs))
+    ask_token = _calc_words.set_current_ask(asked)
     try:
         result = await self._chat_impl(*args, **kwargs)
         # M4: the tier + confidence cap are applied on the SERVER envelope by
@@ -125,6 +126,7 @@ async def _chat_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
         _final_text_needs_forced_retry, _forced_retry_nudge, _fulfill_answer_report, _has_unread_windows,
+        forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
         _is_capability_request, _llm_config,
         _log_dataset_turn,
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
@@ -142,7 +144,7 @@ async def _chat_impl(
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
-        _text_needs_tool_recovery, _tool_result_content, _tool_result_errored,
+        _text_needs_tool_recovery, _tool_message_extra, _tool_result_content, _tool_result_errored,
         _vo_draft_ready_for_synthesis, answer_report_export_enabled,
         fulfill_wbs_export, inspect, json, message_wants_answer_report,
         message_wants_wbs_export, os, time,
@@ -616,11 +618,12 @@ async def _chat_impl(
                     if priced:
                         final_text = priced
                     else:
+                        await _off_loop(log_forced_retry_start, "chat", final_text)
                         _nudge = await _off_loop(_forced_retry_nudge, final_text)
                         if _nudge:
                             messages.append({"role": "user", "content": _nudge})
                         forced_resp = await self._call_llm(messages, api_key, project_id=project_id, with_tools=False, user_id=user_id)
-                        if forced_resp.get("status") == "error":
+                        if forced_retry_failed("chat", forced_resp):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
                             forced_msg = forced_resp["choice"].get("message") or {}
@@ -628,7 +631,7 @@ async def _chat_impl(
                                 forced_msg.get("content") or "",
                                 messages=messages, tool_results=tool_calls_made,
                             )
-                        if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                        if (await _off_loop(forced_retry_still_unusable, "chat", final_text)):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 # An answer that names its own missing input gets ONE
@@ -700,9 +703,11 @@ async def _chat_impl(
             if isinstance(_inner, dict) and _inner.get("status") == "error":
                 ok = False
                 err = str(_inner.get("error") or "")[:200]
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
             _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
+                _tool_payload,
                 offset=_requested_char_offset(tc),
             )
             # Half a document is not a deliverable: locking synthesis here
@@ -727,7 +732,10 @@ async def _chat_impl(
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
             })
+            from app.agents import answer_exit as _answer_exit
+            _answer_exit.note_tool_message(tc, messages[-1])
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(
@@ -945,7 +953,10 @@ async def chat_stream(
                         timeout_s, _stalled, _stalled_for,
                     )
                     if not token_emitted:
-                        yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
+                        # A tool that already answered this turn answers
+                        # before the generic reply (same recovery as the end).
+                        _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+                        yield {"type": "token", "content": _recovered or _EMPTY_RESPONSE_FALLBACK}
                         token_emitted = True
                     yield {
                         "type": "error",
@@ -1005,6 +1016,7 @@ async def chat_stream(
     # Opened before the producer task exists, so the task (and the threads it
     # offloads to) record this turn's evidence into the same record.
     _exit_turn = answer_exit.open_turn()
+    _exit_turn.question = user_message or ""
     # The user's own words reach every calculator run this turn makes.
     from app.lib import construction_formulas as _calc_words
 
@@ -1055,8 +1067,10 @@ async def chat_stream(
         if not token_emitted:
             # Make sure the UI does NOT render an empty bubble. A token
             # event populates the bubble with the friendly fallback; the
-            # error event then triggers the styled error banner.
-            yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
+            # error event then triggers the styled error banner. A tool that
+            # already answered this turn answers before the generic reply.
+            _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+            yield {"type": "token", "content": _recovered or _EMPTY_RESPONSE_FALLBACK}
             token_emitted = True
         yield {"type": "error", "message": f"chat_stream crashed: {exc}"}
         terminal_emitted = True
@@ -1073,8 +1087,10 @@ async def chat_stream(
             token_emitted,
         )
         if not token_emitted:
-            yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
-            _streamed.append(_EMPTY_RESPONSE_FALLBACK)
+            _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+            _first = _recovered or _EMPTY_RESPONSE_FALLBACK
+            yield {"type": "token", "content": _first}
+            _streamed.append(_first)
         yield _with_hat_signals(
             await off_loop(
                 answer_exit.check_end_event,

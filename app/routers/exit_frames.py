@@ -24,11 +24,18 @@ from app.routers.hat_frames import _decode, _encode
 _LOG = logging.getLogger(__name__)
 
 
-async def with_answer_exit(frames: AsyncIterator[str]) -> AsyncIterator[str]:
+async def with_answer_exit(frames: AsyncIterator[str], question: str = "") -> AsyncIterator[str]:
+    """``question`` is the user's turn as asked; the answer contract reads it
+    to tell which evidence values answer the asked thing. The checked answer's
+    structured citations are stored on the assistant message this turn stored
+    (W2-a), so a document produced from that answer lists its sources from them."""
     from app.agents import answer_exit
+    from app.core import agent_memory
     from app.core.offload import off_loop
 
-    own = answer_exit.open_turn()
+    own = answer_exit.open_turn(question)
+    # The holder lives for this request's task; the next turn gets its own.
+    stored, _ = agent_memory.watch_stored_answer()
     streamed: list[str] = []
     async for frame in frames:
         try:
@@ -39,8 +46,26 @@ async def with_answer_exit(frames: AsyncIterator[str]) -> AsyncIterator[str]:
             elif kind == "end" and event is not None:
                 # The agent opens its own record in this same context; read
                 # whichever is current so its evidence resolves citations.
+                # The router knows the asked text even when the agent's own
+                # record was opened without it.
                 turn = answer_exit.current_turn() or own
-                frame = _encode(await off_loop(answer_exit.check_end_event, event, "".join(streamed), turn))
+                turn.question = turn.question or own.question
+                checked = await off_loop(answer_exit.check_end_event, event, "".join(streamed), turn)
+                frame = _encode(checked)
+                if stored.get("message_id"):
+                    await off_loop(_store_citations, stored["message_id"], checked)
         except Exception:  # noqa: BLE001 - the exit check must never eat a frame
             _LOG.exception("exit_frames: frame passed through unmodified")
         yield frame
+
+
+def _store_citations(message_id: str, event: dict) -> bool:
+    """Never raises: storing the citations must not break the answer."""
+    try:
+        from app.agents import answer_exit
+        from app.core import agent_memory
+
+        return agent_memory.attach_citations(message_id, answer_exit.citations_to_store(event))
+    except Exception:  # noqa: BLE001 -- bookkeeping only
+        _LOG.exception("exit_frames: citations not stored")
+        return False

@@ -25,7 +25,8 @@ SCHEMA = {
 }
 
 
-@tool("search_general_knowledge", owner="base", display_name='Knowledge base search', schema=SCHEMA, params={
+@tool("search_general_knowledge", owner="base", display_name='Knowledge base search', schema=SCHEMA,
+      kind="search", params={
     "query": Param(label="what to look for", kind="text", required=True),
     "top_k": Param("nr", 1, 20, label="number of passages", kind="integer", required=False),
 })

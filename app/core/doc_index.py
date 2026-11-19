@@ -2635,10 +2635,13 @@ def index_project(
     rather than wiped by the zero-chunk stamp (``EXTRACT_FAILED`` deletes
     chunks), and it is counted ``skipped_not_stored`` in the summary.
 
+    A chat session's file is skipped before extraction: it gets no chunks
+    and no entry, and is counted ``skipped_session_only``.
+
     Persists the result as JSON and returns a summary dict.
     """
     _checked_profile(profile)
-    docs = _projects.list_documents(project_id)
+    docs = _projects.list_documents(project_id, all_sessions=True)
     # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
     prior = _entries_of(_load_index(project_id))
 
@@ -2652,6 +2655,11 @@ def index_project(
     missing_files: list[dict[str, Any]] = []
     not_stored: list[dict[str, Any]] = []
     unavailable: list[dict[str, Any]] = []
+    # A chat session's file never enters the project's index (the same rule
+    # ``_index_document`` keeps): it is listed here because maintenance must
+    # see every row, then skipped before any extraction or chunk write, and
+    # no prior entry is carried into the rebuilt index.
+    session_only: list[dict[str, Any]] = []
     total_chunks = 0
     ocr_chunks = 0
     zero_chunk = 0
@@ -2659,6 +2667,13 @@ def index_project(
 
     for doc in docs:
         filename = doc.get("original_name", "")
+        if _projects.is_session_document(doc.get("metadata")):
+            session_only.append({
+                "document_id": doc["id"],
+                "filename": filename,
+                "reason": "session_only",
+            })
+            continue
         ext = _ext_of(filename)
 
         if ext not in _SUPPORTED_EXTS:
@@ -2824,6 +2839,8 @@ def index_project(
             "skipped_not_stored": skipped_not_stored,
             "unavailable": unavailable,
             "unavailable_count": len(unavailable),
+            "session_only": session_only,
+            "skipped_session_only": len(session_only),
         }
 
     return {
@@ -2841,6 +2858,8 @@ def index_project(
         "skipped_not_stored": skipped_not_stored,
         "unavailable": unavailable,
         "unavailable_count": len(unavailable),
+        "session_only": session_only,
+        "skipped_session_only": len(session_only),
     }
 
 
@@ -4175,6 +4194,21 @@ def _index_document(
             "total_chunks": 0,
         }
 
+    # A chat session's file is pinned to that session and never enters the
+    # project's search, whichever entry point (upload, replace-bytes, Drive,
+    # worker, reindex) asked. Nothing is written: the row keeps the policy
+    # status its upload stamped.
+    if _projects.is_session_document(doc.get("metadata")):
+        return {
+            "status": "skipped",
+            "session_only": True,
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": doc.get("original_name", ""),
+            "indexed": 0,
+            "total_chunks": 0,
+        }
+
     filename = doc.get("original_name", "")
     ext = _ext_of(filename)
     fingerprint = f"{doc.get('uploaded_at', '')}:{doc.get('size', 0)}"
@@ -4706,6 +4740,7 @@ async def search_project_documents(
     *,
     trace_path: str | None = None,
     turn: Any = None,
+    conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
 
@@ -4738,8 +4773,10 @@ async def search_project_documents(
             exclude,
         )
     else:
-        results, trace = await asyncio.to_thread(
-            _search_project_documents_traced, project_id, query, top_k, exclude,
+        from app.core.offload import to_thread_in
+
+        results, trace = await to_thread_in(
+            "retrieval", _search_project_documents_traced, project_id, query, top_k, exclude,
         )
     if turn is not None:
         turn.record_search(
@@ -4753,6 +4790,7 @@ async def search_project_documents(
 
         emit_search_trace(
             path=trace_path, project_id=project_id, requested_top_k=top_k, trace=trace,
+            conversation_id=conversation_id,
         )
     return results
 
@@ -4771,6 +4809,33 @@ def _search_project_documents_sync(
 
 def _empty_search_trace() -> dict[str, Any]:
     return {"retrieved_k": 0, "chunks": [], "not_handed": []}
+
+
+def _search_leg_record(project_id: str) -> dict[str, Any]:
+    """This search's own fused-candidate record and lexical-leg states, read
+    from the turn memo right after its retrieval (the retriever writes both
+    there per retrieval, so the turn's earlier pre-injection record is
+    already overwritten). Outside a turn memo nothing is kept: ``fused`` is
+    None and ``lexical`` empty. Ids and ranks only; reading changes nothing.
+
+    Read inside a guard: a failure here gives a trace without the two
+    fields (the line then states no fusion) and never touches the search's
+    results. The trace fails open; the search never does. No database read:
+    both come from the in-process turn memo."""
+    try:
+        from app.core.rag.retriever import retrievable_project_ids
+        from app.core.rag.vector_store import _MISS, _memo_get, fused_candidates_record
+
+        lexical: dict[str, str] = {}
+        for pid in retrievable_project_ids(project_id):
+            state = _memo_get(("lexical_leg", pid))
+            if state is not _MISS:
+                lexical[pid] = state
+        return {"fused": fused_candidates_record(project_id), "lexical": lexical}
+    except Exception:  # noqa: BLE001 - instrumentation must not break a search
+        logger.debug("search leg record unreadable; trace written without it",
+                     exc_info=True)
+        return {}
 
 
 def _search_trace(chunks: list[Any], kept_by_doc: dict[str, list[Any]],
@@ -4878,7 +4943,7 @@ def _search_project_documents_traced(
     # which populates the ``chunks`` table the hybrid retriever queries.
     if not chunks and _load_index(project_id) is None:
         try:
-            for doc in _projects.list_documents(project_id):
+            for doc in _projects.list_documents(project_id, all_sessions=True):
                 try:
                     index_document(project_id, doc["id"])
                 except Exception:
@@ -4893,6 +4958,7 @@ def _search_project_documents_traced(
         chunks = _query()
     if not chunks:
         return [], _empty_search_trace()
+    legs = _search_leg_record(project_id)
     retrieved = chunks
     skipped = [c for c in chunks if str(getattr(c, "chunk_id", "")) in exclude_chunk_ids]
     if skipped:
@@ -4977,6 +5043,7 @@ def _search_project_documents_traced(
     trace = _search_trace(
         retrieved, kept_by_doc, [item["document_id"] for item in ranked], skipped,
     )
+    trace.update(legs)
     return results, trace
 
 

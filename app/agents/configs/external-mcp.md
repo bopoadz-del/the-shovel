@@ -2,7 +2,6 @@
 name: external-mcp
 description: Calls outside services (GitHub, Slack, Stripe, weather, geocode, currency, etc.) through the MCP protocol — one agent for all external APIs.
 icon: 🔌
-model: kimi-k2.6
 temperature: 0.15
 max_tokens: 2048
 allowed_blocks:

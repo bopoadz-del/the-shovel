@@ -324,19 +324,54 @@ def item_rows(
     :data:`UNKNOWN_SECTION` when the bill prints no heading. With
     ``numbers`` only the rows of those sections are kept.
     """
+    index = row_index(chunks, sections, row_segments=row_segments, numbers=numbers)
+    return rows_for_item(index, item)
+
+
+@dataclass(frozen=True)
+class RowIndex:
+    """One bill's labelled priced rows and their words, read once.
+
+    Segmenting a bill into rows and reading each row's words does not depend
+    on the item asked, so a caller that asks several items of the same bill
+    builds this once (:func:`row_index`) and scores each item against it
+    (:func:`rows_for_item`). ``vocabulary`` is every word any row prints.
+    """
+
+    rows: tuple[tuple[str, str], ...]
+    row_words: tuple[frozenset[str], ...]
+    vocabulary: frozenset[str]
+
+
+def row_index(
+    chunks: Iterable[tuple[int, str]],
+    sections: Sequence[BillSection],
+    *,
+    row_segments,
+    numbers: Iterable[str] = (),
+) -> RowIndex:
+    """The item-independent part of :func:`item_rows`, for one bill."""
     wanted = {str(n) for n in numbers}
-    rows = _labelled_rows(list(chunks), sections, wanted, row_segments)
-    row_words = [words(text) for _label, text in rows]
+    rows = tuple(_labelled_rows(list(chunks), sections, wanted, row_segments))
+    row_words = tuple(frozenset(words(text)) for _label, text in rows)
+    return RowIndex(rows, row_words, frozenset().union(*row_words))
+
+
+def rows_for_item(index: RowIndex, item: str) -> list[str]:
+    """:func:`item_rows` over a bill already read into ``index``."""
+    # A word covers some row exactly when it covers the union of all rows'
+    # words (``_covers`` is an any() over the set), so the asked words are
+    # read against the vocabulary once instead of against every row.
     asked = {
         w for w in words(item) - _COLUMN_WORDS
-        if any(_covers(w, ws) for ws in row_words)
+        if _covers(w, index.vocabulary)
     }
     if not asked:
         return []
     need = (len(asked) + 1) // 2
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
-    for (label, text), ws in zip(rows, row_words):
+    for (label, text), ws in zip(index.rows, index.row_words):
         if sum(_covers(w, ws) for w in asked) < need:
             continue
         # Overlapping chunks print the same row with a different lead-in:

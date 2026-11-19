@@ -7,7 +7,58 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.core.tool_registry import ToolCall, block_args
+from app.agents.core.tool_registry import (
+    Statement,
+    ToolCall,
+    block_args,
+    declare_result,
+    declare_results_when_read,
+)
+
+
+def improvised_statement(result: dict) -> list[Statement]:
+    """What a ``formula_executor_v2`` result states: the figure(s) its
+    sandboxed code returned, for the task it was given (the user's words).
+    Not certified, and said so by its own provenance; a non-numeric or
+    failed result states nothing."""
+    body = result if isinstance(result, dict) else {}
+    while "task" not in body and isinstance(body.get("result"), dict):
+        body = body["result"]
+    if body.get("status") != "success":
+        return []
+    value, task = body.get("result"), str(body.get("task") or "").strip()
+    figures = value.items() if isinstance(value, dict) else [(task, value)]
+    return [Statement(figure=float(v), what=str(k or task))
+            for k, v in figures
+            if isinstance(v, (int, float)) and not isinstance(v, bool)]
+
+
+# The runner's earlier name still heads tool messages in recorded turns and in
+# the tool lists that exclude it; a message under that name is the same
+# runner's result, so it is declared the same.
+for _runner in ("formula_executor_v2", "formula_executor"):
+    declare_result(_runner, owner="base", display_name="Formula code runner",
+                   kind="computed", statement=improvised_statement)
+
+
+def _declare_calculator_aliases() -> None:
+    """A manifest action aliased to a registry calculator returns that
+    calculator's result, so it states what the calculator states."""
+    from app.agents.base.tools import calculation_statement
+    from app.agents.runtime import _HAT_CALC_ALIASES
+    from app.lib import formula_registry
+
+    for action, calculation in _HAT_CALC_ALIASES.items():
+        spec = formula_registry.get(calculation)
+        declare_result(action, owner="base",
+                       display_name=(spec.display_name if spec and spec.display_name else action),
+                       kind="computed", statement=calculation_statement)
+
+
+# Deferred to the first read: the display names come from the formula
+# registry, and loading it imports every formula module (sympy among them),
+# which must not happen at app start (tests/test_boot_does_not_import_heavy_libraries.py).
+declare_results_when_read(_declare_calculator_aliases)
 
 
 @block_args("construction", owner="base")

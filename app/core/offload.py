@@ -21,6 +21,7 @@ import asyncio
 import contextvars
 import functools
 import logging
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +40,17 @@ _last_queue_log = 0.0
 #: settings; the turn pool keeps the database pool's size.
 _NAMED_POOLS: Dict[str, ThreadPoolExecutor] = {}
 _NAMED_SIZES = {"calc": ("CALC_WORKERS", 4), "background": ("BACKGROUND_WORKERS", 2)}
+#: Document retrieval (vector + keyword search, database reads, ranking) ran
+#: in the loop's default executor: min(32, CPUs + 4) threads. CI capture, 15
+#: users: 8 such threads were inside psycopg/ranking at once, the process used
+#: 370 ms of CPU across a 591 ms stall spread over 13 threads (no thread over
+#: 60 ms, steal 0%) -- the loop waited its turn for the GIL behind them. The
+#: retrieval pool holds one thread per vCPU this task may use (never fewer
+#: than 2), so Python retrieval work never outnumbers the CPUs it runs on;
+#: further searches wait in the queue with the GIL released.
+#: ``RETRIEVAL_THREADS`` overrides the size.
+_SIZED_FROM_VCPUS = {"retrieval": "RETRIEVAL_THREADS"}
+_MIN_VCPU_POOL = 2
 
 
 def _workers() -> int:
@@ -59,8 +71,25 @@ def pool() -> ThreadPoolExecutor:
     return _POOL
 
 
+def _vcpu_pool_size(env: str) -> int:
+    """``env`` when it is a positive number, else one thread per vCPU this
+    task may use, never fewer than ``_MIN_VCPU_POOL``."""
+    raw = (os.getenv(env) or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            _LOG.warning("%s=%r is not a number; sizing from vCPUs", env, raw)
+    from app.core.rag.retrieval_worker import available_vcpus
+
+    return max(_MIN_VCPU_POOL, math.ceil(available_vcpus()))
+
+
 def named_pool(name: str) -> ThreadPoolExecutor:
-    """The dedicated pool for ``name`` ("calc", "background")."""
+    """The dedicated pool for ``name`` ("calc", "background", "retrieval")."""
+    if name in _SIZED_FROM_VCPUS and name not in _NAMED_POOLS:
+        _NAMED_POOLS[name] = ThreadPoolExecutor(max_workers=_vcpu_pool_size(_SIZED_FROM_VCPUS[name]),
+                                                thread_name_prefix=f"{name}-work")
     if name not in _NAMED_POOLS:
         env, default = _NAMED_SIZES[name]
         try:
@@ -86,11 +115,14 @@ def _timed(fn: Callable[..., T], label: str, executor: ThreadPoolExecutor) -> Ca
     return run
 
 
-async def _run_in(executor: ThreadPoolExecutor, label: str, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def _run_in(executor: ThreadPoolExecutor, label: str, fn: Callable[..., T], *args: Any,
+                  _write_back: bool = True, **kwargs: Any) -> T:
     ctx = contextvars.copy_context()
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         executor, functools.partial(ctx.run, _timed(fn, label, executor), *args, **kwargs))
+    if not _write_back:
+        return result
     for var, value in ctx.items():
         if var.get(_MISSING) is not value:
             var.set(value)
@@ -106,3 +138,10 @@ async def off_loop_in(name: str, fn: Callable[..., T], *args: Any, **kwargs: Any
     """``fn`` in the dedicated ``name`` pool ("calc", "background"): CPU work
     and background jobs never queue ahead of a turn's database reads."""
     return await _run_in(named_pool(name), name, fn, *args, **kwargs)
+
+
+async def to_thread_in(name: str, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """``asyncio.to_thread`` semantics (``fn`` sees a copy of the caller's
+    context; nothing it sets comes back) on the bounded ``name`` pool instead
+    of the loop's default executor."""
+    return await _run_in(named_pool(name), name, fn, *args, _write_back=False, **kwargs)

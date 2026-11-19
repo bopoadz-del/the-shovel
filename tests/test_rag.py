@@ -13,6 +13,8 @@ Strategy:
 
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import os
 import time
 
@@ -44,6 +46,9 @@ def isolated_data_dir(tmp_path, monkeypatch):
         _am._initialized = False
     if hasattr(_proj, "_initialized"):
         _proj._initialized = False
+    # The fresh database has no documents table until one is made; without
+    # it the store cannot compute the session scope and reads nothing.
+    give_documents_table(_vs.get_store())
     yield tmp_path
     _emb.reset_embedder_cache()
     _vs.reset_store_cache()
@@ -161,6 +166,7 @@ def test_vector_store_upsert_and_search(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     chunks = ["concrete pour schedule", "rebar inventory", "drawing revisions"]
     vecs = e.encode(chunks)
     n = s.upsert_chunks("proj_a", "doc_x", chunks, vecs)
@@ -183,6 +189,7 @@ def test_vector_store_project_isolation(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     s.upsert_chunks("proj_a", "doc_x", ["shared text"], e.encode(["shared text"]))
     s.upsert_chunks("proj_b", "doc_y", ["shared text"], e.encode(["shared text"]))
 
@@ -199,6 +206,7 @@ def test_vector_store_upsert_is_idempotent(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     chunks = ["a", "b", "c"]
     s.upsert_chunks("proj_a", "doc_x", chunks, e.encode(chunks))
     s.upsert_chunks("proj_a", "doc_x", chunks, e.encode(chunks))
@@ -212,6 +220,7 @@ def test_vector_store_delete_doc(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     s.upsert_chunks("proj_a", "doc_x", ["foo", "bar"], e.encode(["foo", "bar"]))
     s.upsert_chunks("proj_a", "doc_y", ["baz"], e.encode(["baz"]))
     deleted = s.delete_doc("proj_a", "doc_x")
@@ -227,6 +236,7 @@ def test_vector_store_empty_chunks_deletes_doc(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     s.upsert_chunks("proj_a", "doc_x", ["text"], e.encode(["text"]))
     n = s.upsert_chunks("proj_a", "doc_x", [], np.zeros((0, e.dim), dtype=np.float32))
     assert n == 0
@@ -239,6 +249,7 @@ def test_vector_store_dim_mismatch_raises(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     wrong_dim_vecs = np.zeros((1, e.dim - 1), dtype=np.float32)
     with pytest.raises(ValueError, match="embedding dim"):
         s.upsert_chunks("proj_a", "doc_x", ["text"], wrong_dim_vecs)
@@ -257,12 +268,14 @@ def test_vector_store_namespace_uses_separate_table(isolated_data_dir):
         namespace="ns1",
         model_name="fake",
     )
+    give_documents_table(s1)
     s2 = VectorStore(
         db_path=str(isolated_data_dir / "vec.db"),
         dim=e.dim,
         namespace="ns2",
         model_name="fake",
     )
+    give_documents_table(s2)
     s1.upsert_chunks("proj_a", "doc_x", ["alpha"], e.encode(["alpha"]))
     s2.upsert_chunks("proj_a", "doc_x", ["beta"], e.encode(["beta"]))
 
@@ -285,6 +298,7 @@ def test_vector_store_stores_embedding_identity(isolated_data_dir):
         namespace="id_test",
         model_name="fake",
     )
+    give_documents_table(s)
     s.upsert_chunks("proj_a", "doc_x", ["text"], e.encode(["text"]))
 
     # Read back the identity columns directly
@@ -310,6 +324,7 @@ def test_vector_store_rejects_mismatched_model_identity(isolated_data_dir):
     e = Embedder(model_name="fake")
     db = str(isolated_data_dir / "vec.db")
     s_a = VectorStore(db_path=db, dim=e.dim, namespace="mix", model_name="model-a")
+    give_documents_table(s_a)
     s_a.upsert_chunks("proj_a", "doc_x", ["text"], e.encode(["text"]))
 
     with pytest.raises(RuntimeError, match="Embedding identity mismatch"):
@@ -322,6 +337,7 @@ def test_search_empty_project_returns_empty(isolated_data_dir):
 
     e = Embedder(model_name="fake")
     s = VectorStore(db_path=str(isolated_data_dir / "vec.db"), dim=e.dim)
+    give_documents_table(s)
     results = s.search("never_indexed", e.encode(["q"])[0], k=5)
     assert results == []
 

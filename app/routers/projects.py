@@ -509,8 +509,17 @@ def _preview_citeable_owner_ids(workspace_project_id: str) -> set[str]:
     return {pid for pid in owners if pid}
 
 
+def _chat_scope(session_id: Optional[str], user_id: str) -> Tuple[str, ...]:
+    """The (session, user) a by-id request is made from: the caller's open
+    chat. Empty when the request names no chat -- then no session's file is
+    reachable (``store.document_in_scope``)."""
+    sid = (session_id or "").strip()
+    return (sid, str(user_id)) if sid and user_id else ()
+
+
 def _resolve_document_file(
     project_id: str, document_id: str, user_id: str, *, role: str = "user",
+    session_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str, Optional[str], Optional[HTTPException]]:
     """Access-check and resolve a document and its stored file.
 
@@ -541,7 +550,10 @@ def _resolve_document_file(
     doc = store.get_document(document_id)
     owner = (doc or {}).get("project_id")
     allowed = _preview_citeable_owner_ids(project_id)
-    if not doc or owner not in allowed:
+    # A file attached to a chat is reachable by id only from that chat, by
+    # the user who attached it; from anywhere else it is not found.
+    if not doc or owner not in allowed or not store.document_in_scope(
+            doc.get("metadata"), _chat_scope(session_id, user_id)):
         raise HTTPException(
             404, f"Document '{document_id}' not found in project '{project_id}'"
         )
@@ -567,11 +579,12 @@ def _resolve_document_file(
 
 def _resolve_preview_document(
     project_id: str, document_id: str, user_id: str, *, role: str = "user",
+    session_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str, str]:
     """``_resolve_document_file`` for callers that need the original: a
     document with no stored file is its clear 404, never a 500."""
     doc, ext, fp, missing = _resolve_document_file(
-        project_id, document_id, user_id, role=role,
+        project_id, document_id, user_id, role=role, session_id=session_id,
     )
     if missing is not None:
         raise missing
@@ -698,7 +711,8 @@ def _content_disposition(filename: str) -> str:
 
 @router.get("/v1/projects/{project_id}/documents/{document_id}/preview")
 async def preview_document(
-    project_id: str, document_id: str, auth: dict = Depends(require_user)
+    project_id: str, document_id: str, session_id: Optional[str] = None,
+    auth: dict = Depends(require_user),
 ):
     """Render-friendly JSON preview of a stored document, by extension.
 
@@ -711,7 +725,7 @@ async def preview_document(
     """
     doc, ext, fp, missing = _resolve_document_file(
         project_id, document_id, auth["user_id"],
-        role=auth.get("role") or "user",
+        role=auth.get("role") or "user", session_id=session_id,
     )
     if fp is None:
         text = _indexed_text(str(doc.get("project_id") or project_id), document_id)
@@ -748,7 +762,8 @@ async def preview_document(
 
 @router.get("/v1/projects/{project_id}/documents/{document_id}/preview/raw")
 async def preview_document_raw(
-    project_id: str, document_id: str, auth: dict = Depends(require_user)
+    project_id: str, document_id: str, session_id: Optional[str] = None,
+    auth: dict = Depends(require_user),
 ):
     """Raw decrypted PDF bytes so the frontend can embed the document.
 
@@ -759,7 +774,7 @@ async def preview_document_raw(
     """
     _doc, ext, fp = _resolve_preview_document(
         project_id, document_id, auth["user_id"],
-        role=auth.get("role") or "user",
+        role=auth.get("role") or "user", session_id=session_id,
     )
     if ext != ".pdf":
         raise HTTPException(400, "Raw preview is available only for PDF documents")
@@ -772,7 +787,8 @@ async def preview_document_raw(
 
 @router.get("/v1/projects/{project_id}/documents/{document_id}/download")
 async def download_document(
-    project_id: str, document_id: str, auth: dict = Depends(require_user)
+    project_id: str, document_id: str, session_id: Optional[str] = None,
+    auth: dict = Depends(require_user),
 ):
     """The document as a file: its original bytes, or -- when no original is
     stored -- the text the platform indexed, as ``<name> (indexed text).txt``.
@@ -782,7 +798,7 @@ async def download_document(
     scrubbed, exactly as the Sources panel shows it."""
     doc, _ext, fp, missing = _resolve_document_file(
         project_id, document_id, auth["user_id"],
-        role=auth.get("role") or "user",
+        role=auth.get("role") or "user", session_id=session_id,
     )
     filename = _display_filename(project_id, doc)
     if fp is None:
@@ -1264,11 +1280,15 @@ async def restore_document_bytes(
     document_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    session_id: Optional[str] = None,
     auth: dict = Depends(require_user),
 ):
     """Replace the stored bytes of an existing document. The row id stays.
 
     Same access as adding a document: anyone who can open the project.
+    A file attached to a chat: only from that chat (``session_id``), by the
+    user who attached it; from anywhere else it is not found (404), the same
+    rule as delete, fetch and ask by id (``store.document_in_scope``).
     Drive-sourced rows are refused — those originals stay in Drive and this
     route does not start archiving them. Chunks already indexed are kept.
     """
@@ -1279,7 +1299,8 @@ async def restore_document_bytes(
     doc = store.get_document(document_id)
     owner = (doc or {}).get("project_id")
     resolved = store.storage_project_id(project_id)
-    if not doc or owner not in {project_id, resolved}:
+    if not doc or owner not in {project_id, resolved} or not store.document_in_scope(
+            doc.get("metadata"), _chat_scope(session_id, auth["user_id"])):
         raise HTTPException(404, f"Document '{document_id}' not found")
 
     inspection = store.document_byte_inspection(doc)
@@ -1347,7 +1368,10 @@ async def restore_document_bytes(
     )
     from app.core import privileges
 
-    if privileges.caller_may_add_to_project_rag(auth.get("role")):
+    # A chat session's file never enters the project's search (W2, as the
+    # upload route stamps it), whoever replaces its bytes.
+    if privileges.caller_may_add_to_project_rag(auth.get("role")) and not store.is_session_document(
+            doc.get("metadata")):
         background_tasks.add_task(
             doc_index.maybe_eager_index, store.storage_project_id(project_id), document_id,
         )
@@ -1461,33 +1485,43 @@ async def update_document(
     project_id: str,
     document_id: str,
     req: UpdateDocumentRequest,
+    session_id: Optional[str] = None,
     auth: dict = Depends(require_user),
 ):
-    """Set ``drive_file_id`` on an existing document. Owner or admin only.
+    """Set ``drive_file_id`` on an existing document. A project document:
+    owner or admin only, as before. A file attached to a chat: only from
+    that chat (``session_id``), by the user who attached it; from anywhere
+    else, and for anyone else, it is not found (404) -- the same rule as
+    delete, fetch and ask by id (``store.document_in_scope``).
 
     Does not re-upload or re-index. Preview hydrate uses the id on the
     next cite-click (SA ``files.get`` + media, then public download).
     """
     from app.core.gdrive_service import is_valid_drive_file_id
 
-    is_admin = auth.get("role") == "admin"
-    proj = store.get_project(
-        project_id,
-        user_id=None if is_admin else auth["user_id"],
-        include_admin_approved=True,
-    )
-    if not proj:
-        raise HTTPException(404, f"Project '{project_id}' not found")
-    if proj.get("user_id") != auth["user_id"] and not is_admin:
-        raise HTTPException(403, "Admin or project owner required")
+    doc = store.get_document(document_id)
+    meta = store.coerce_document_metadata((doc or {}).get("metadata"))
+    if meta.get("session_id"):
+        _session_scope(project_id, auth["user_id"])  # can open the project, else 404
+    else:
+        is_admin = auth.get("role") == "admin"
+        proj = store.get_project(
+            project_id,
+            user_id=None if is_admin else auth["user_id"],
+            include_admin_approved=True,
+        )
+        if not proj:
+            raise HTTPException(404, f"Project '{project_id}' not found")
+        if proj.get("user_id") != auth["user_id"] and not is_admin:
+            raise HTTPException(403, "Admin or project owner required")
 
     drive_file_id = (req.drive_file_id or "").strip()
     if not is_valid_drive_file_id(drive_file_id):
         raise HTTPException(422, "drive_file_id is not a valid Drive file id")
 
     resolved_id = store.storage_project_id(project_id)
-    doc = store.get_document(document_id)
-    if not doc or doc.get("project_id") not in {project_id, resolved_id}:
+    if not doc or doc.get("project_id") not in {project_id, resolved_id} or not store.document_in_scope(
+            meta, _chat_scope(session_id, auth["user_id"])):
         raise HTTPException(
             404, f"Document '{document_id}' not found in project '{project_id}'"
         )
@@ -1511,12 +1545,22 @@ async def update_document(
 
 @router.delete("/v1/projects/{project_id}/documents/{document_id}")
 async def delete_document(
-    project_id: str, document_id: str, auth: dict = Depends(require_user)
+    project_id: str, document_id: str, session_id: Optional[str] = None,
+    auth: dict = Depends(require_user),
 ):
-    """Delete a single document — its record and its file on disk."""
-    _owned_or_404(project_id, auth["user_id"])
+    """Delete a single document — its record and its file on disk.
+
+    A project document: by the project's owner, as before. A file attached to
+    a chat: only from that chat (``session_id``), by the user who attached
+    it; from anywhere else, and for anyone else, it is not found (404)."""
     doc = store.get_document(document_id)
-    if not doc or doc.get("project_id") != project_id:
+    meta = store.coerce_document_metadata((doc or {}).get("metadata"))
+    if meta.get("session_id"):
+        _session_scope(project_id, auth["user_id"])  # can open the project, else 404
+    else:
+        _owned_or_404(project_id, auth["user_id"])
+    if not doc or doc.get("project_id") != project_id or not store.document_in_scope(
+            meta, _chat_scope(session_id, auth["user_id"])):
         raise HTTPException(
             404, f"Document '{document_id}' not found in project '{project_id}'"
         )
