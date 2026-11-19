@@ -77,7 +77,9 @@ def invented_calculators(monkeypatch):
     from app.lib import construction_formulas as cf
 
     names = {"zz_invented_panel_load": _with_equation_later,
-             "zz_invented_no_doc": _without_doc}
+             "zz_invented_strip": _with_equation_first,
+             "zz_invented_no_doc": _without_doc,
+             "zz_invented_blank_doc": _blank_doc}
     for name, fn in names.items():
         _register(name, fn)
         monkeypatch.setitem(cf.CALCULATORS, name, fn)
@@ -86,20 +88,37 @@ def invented_calculators(monkeypatch):
         formula_registry._REGISTRY.pop(name, None)
 
 
-def test_door_states_the_written_method_with_its_factor(invented_calculators):
+@pytest.mark.parametrize(
+    ("name", "params", "value", "factor", "dropped"),
+    [
+        ("zz_invented_panel_load", {"a": 2, "b": 4}, 58.0, "7.25",
+         "Notes for the maintainer"),
+        ("zz_invented_strip", {"a": 7}, 2.0, "3.5", "History paragraph"),
+    ],
+)
+def test_door_states_the_written_method_with_its_factor(
+        invented_calculators, name, params, value, factor, dropped):
     from app.lib.construction_formulas import run_calculation
 
-    env = run_calculation("zz_invented_panel_load", {"a": 2, "b": 4})
+    env = run_calculation(name, params)
     assert env["status"] == "success", env
-    assert env["result"]["value"] == pytest.approx(58.0)
-    assert "7.25" in env["method"]
-    assert "Notes for the maintainer" not in env["method"]
+    assert env["result"]["value"] == pytest.approx(value)
+    assert factor in env["method"]
+    assert dropped not in env["method"]
 
 
-def test_door_adds_no_method_when_the_calculator_writes_none(invented_calculators):
+@pytest.mark.parametrize(
+    ("name", "a", "value"),
+    [
+        ("zz_invented_no_doc", 2, 5.5),
+        ("zz_invented_blank_doc", 3, 13.5),
+    ],
+)
+def test_door_adds_no_method_when_the_calculator_writes_none(
+        invented_calculators, name, a, value):
     from app.lib.construction_formulas import run_calculation
 
-    env = run_calculation("zz_invented_no_doc", {"a": 2})
+    env = run_calculation(name, {"a": a})
     assert env["status"] == "success", env
-    assert env["result"]["value"] == pytest.approx(5.5)
+    assert env["result"]["value"] == pytest.approx(value)
     assert "method" not in env
