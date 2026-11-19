@@ -1331,6 +1331,10 @@ def add_document(
     did = document_id or str(uuid.uuid4())[:8]
     doc_type = classify_doc_type(original_name)
     doc_role = resolve_doc_role(original_name, metadata, role)
+    # The kind of standing is decided here, at indexing, from the type and
+    # role just decided, and stored with the row (app.core.doc_standing).
+    from app.core.doc_standing import with_standing
+    metadata = with_standing(metadata, doc_type, doc_role)
     with _lock:
         with SessionLocal() as session:
             session.add(

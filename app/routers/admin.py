@@ -1786,6 +1786,37 @@ def admin_corpus_doc_typing(
     return out
 
 
+@router.post("/v1/admin/corpus/doc-standing")
+def admin_corpus_doc_standing(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = store the planned kinds"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) store each document's kind of standing.
+
+    Writes ONE field, ``metadata.standing`` of the document row; touches no
+    chunk. The plan (always computed, never writes) gives the count per kind
+    after the write, how many stay ``other``, and every change with a
+    ``plan_hash``. ``execute=true`` writes only when ``plan_hash`` equals the
+    live plan's, and skips a row whose stored kind moved since the plan.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.doc_standing_backfill import doc_standing_backfill
+
+    out = doc_standing_backfill(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.doc_standing_backfilled",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            updated=out["updated"],
+            after=out["plan"]["after"],
+        )
+    return out
+
+
 class _DeleteDocsRequest(BaseModel):
     doc_ids: List[str]
     # Safety scope: every doc must belong to this project_id or it is skipped.
