@@ -1,5 +1,7 @@
 # BOQ rate card — observed unit rates by asset type (median and interquartile range)
 
+Generated from `app/lib/data/boq_rate_card.json` by scripts/kb_from_code.py; edit the source, not this copy.
+
 The platform's rate card: observed unit rates by trade category, asset type and currency. 
 Source: session 2026-07-01; incl medieval_modern GCC building rate book; + 2012 dubai clinic fit-out BOQ (observed AED MEP lump sums); + published SAR MEP reference cells (AECOM 2024 / T&T KSAMI 2025), cell-level source field.
 
