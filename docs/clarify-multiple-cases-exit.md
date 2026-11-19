@@ -139,6 +139,31 @@ question asks for (nominal class/grade/type vs a measure) AND the subject
 shares a word with the question's own subject. One step at a time, each with a
 two-input test, replayed on the real rows before anything lands.
 
+## Step 2 attempted and reverted -- the naive filter regresses (M69)
+
+The relevance filter was implemented twice this tick and reverted both times
+because it makes the negative side regress on the real rows (it turns a
+named-case row into an ASK):
+
+- "subject shares a word" is too weak. B2 ("maximum free fall of concrete")
+  keeps a "2 hour" trail-run case whose subject shares only the generic word
+  "maximum"; B3 keeps a cement-temperature case that shares "temperature"
+  with the ask.
+- marker-based ask-kind detection conflates a SOURCE with the ASK. B10 ("what
+  reinforcement yield strength ... what do the contract drawing and the
+  contractor's method statement each say?") is a both-values (#453) ask, but
+  "drawing"/"method statement" are read as a nominal ask, so the filter
+  keeps only the cited drawing ids and the draft commits to one -- a false
+  ASK.
+
+So the two conditions in the plan are right in shape but need real head-noun
+extraction before they can land: the question's ASK noun must be told apart
+from its qualifier ("free fall" vs "of concrete") and from its source
+("drawing" / "method statement"), and "shares a word" must match that ask
+noun, not any content word. That is the remaining rework; it is not shipped
+rushed. #498 stays at the short-subject state (M68), which replays 0 ASK on
+all 53 rows.
+
 ## Not in this PR
 
 - The instruction text: #495 (part a).
