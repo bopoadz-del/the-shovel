@@ -248,7 +248,12 @@ def clarifying_question(question: str, draft: str, cases: list[Case]) -> str | N
 
 # --- the reader: value claims read from the handed passages (pure) --------
 
-_SENTENCE_BREAK_RE = re.compile(r"[.!?]|\n")
+#: A sentence ends at . ! ? followed by whitespace or the end of the
+#: string, or at a newline. A period BETWEEN digits (a decimal "4.5", a
+#: dotted clause "2.14.1", a coded id "D999.43") is part of the value,
+#: not a sentence boundary -- splitting there turns the subject into a
+#: fragment ("Depth to invert is 4.").
+_SENTENCE_BREAK_RE = re.compile(r"[.!?](?=\s|$)|\n")
 
 #: A clause / document reference the passage states, read by SHAPE only:
 #: numbers joined by dots (8.8.1) or a letter-number code (C35/45,

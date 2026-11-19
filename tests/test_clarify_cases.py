@@ -395,6 +395,25 @@ def test_cases_from_passages_skips_bare_numbers(source, text):
 
 
 @pytest.mark.parametrize(
+    "text,expected_value",
+    [
+        ("Depth to invert is 4.5m.", "4.5m"),
+        ("The grade is D999.43.", "D999.43"),
+        ("Clause 2.14.1 applies.", "2.14.1"),
+    ],
+)
+def test_cases_from_passages_keeps_a_decimal_value_whole(text, expected_value):
+    # A period inside a number or dotted code is part of the value, not a
+    # sentence boundary: the subject must not be cut at the decimal point.
+    cases = cases_from_passages([("a.pdf", text)])
+    values = {c.value for c in cases}
+    assert expected_value in values
+    for c in cases:
+        if c.value == expected_value:
+            assert c.subject.lower().strip() == text.lower().strip()
+
+
+@pytest.mark.parametrize(
     "text,first_hint,second_hint",
     [
         (
