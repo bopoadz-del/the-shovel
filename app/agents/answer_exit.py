@@ -93,6 +93,12 @@ class Turn:
     #: Sources rows name only what the answer cited, without the passage;
     #: a check over what the turn was HANDED reads these.
     evidence: list[dict[str, Any]] = field(default_factory=list)
+    #: Each computed result of the turn (a tool that declares a statement of
+    #: its result), in call order: ``tool``, ``figures`` (the numbers its
+    #: statements state) and ``result_numbers`` (every number its result
+    #: prints, the selected rows' own included). Read by the allowed-numbers
+    #: measurement; nothing here changes an answer.
+    computed_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -249,6 +255,118 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
                 turn.tool_errors.append((label, err))
     except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
         _LOG.warning("answer_exit: could not record a tool error", exc_info=True)
+    try:
+        computed = _computed_result(tool, payload)
+        if computed is not None:
+            turn.computed_results.append(computed)
+    except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
+        _LOG.warning("answer_exit: could not record a computed result", exc_info=True)
+
+
+def _computed_result(tool: str, payload: Any) -> dict[str, Any] | None:
+    """``tool``'s result as the allowed-numbers measurement reads it, when the
+    tool declares a statement of its result (``kind="computed"``); else None."""
+    from app.agents.core import tool_registry
+
+    spec = tool_registry.result_spec(str(tool or ""))
+    stater = getattr(spec, "statement", None)
+    if spec is None or getattr(spec, "kind", "") != "computed" or stater is None:
+        return None
+    figures = [float(st.figure) for st in (stater(payload) or [])
+               if isinstance(getattr(st, "figure", None), (int, float))
+               and not isinstance(st.figure, bool)]
+    return {"tool": str(tool), "figures": figures, "result_numbers": sorted(_payload_numbers(payload))}
+
+
+#: Arabic-Indic and Eastern Arabic-Indic digits and the Arabic decimal mark
+#: read as the Latin ones; every thousands separator (comma, the Arabic
+#: thousands mark, space, no-break and thin spaces) reads as one number.
+_NUMBER_FORMS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
+                               **{chr(0x06F0 + i): str(i) for i in range(10)},
+                               "\u066b": ".", "\u066c": ",", "\u00a0": " ",
+                               "\u202f": " ", "\u2009": " "})
+_ANSWER_NUMBER_RE = re.compile(
+    r"(?<![\w.])\d{1,3}(?:(?:,| )\d{3})+(?![\d,])(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
+#: A list marker at the start of a line ("1." "2)" "-" "*") is layout, not a figure.
+_LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-*\u2022])\s+")
+
+
+def _answer_numbers(text: str) -> set[float]:
+    """Every number written in ``text``; a number grouped by a thousands
+    separator (or written in Arabic digits) is ONE number. A list marker at
+    the start of a line is not a number."""
+    out: set[float] = set()
+    for line in (text or "").translate(_NUMBER_FORMS).split("\n"):
+        marker = _LIST_MARKER_RE.match(line)
+        body = line[len(marker.group(0)):] if marker else line
+        out.update(float(re.sub(r"[, ]", "", n)) for n in _ANSWER_NUMBER_RE.findall(body))
+    return out
+
+
+def _payload_numbers(payload: Any, depth: int = 0) -> set[float]:
+    """Every number a tool result prints: its numeric values and the numbers
+    written in its text (a row's description, reference and quantity)."""
+    if depth > 8:
+        return set()
+    if isinstance(payload, bool):
+        return set()
+    if isinstance(payload, (int, float)):
+        return {float(payload)}
+    if isinstance(payload, str):
+        return _answer_numbers(payload)
+    out: set[float] = set()
+    values = payload.values() if isinstance(payload, dict) else payload if isinstance(payload, list) else ()
+    for value in values:
+        out |= _payload_numbers(value, depth + 1)
+    return out
+
+
+def _same(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+
+
+def _outside(numbers: set[float], allowed: set[float]) -> list[float]:
+    return sorted(n for n in numbers if not any(_same(n, a) for a in allowed))
+
+
+def measure_allowed_numbers(text: str, turn: Turn | None = None) -> dict[str, Any] | None:
+    """MEASUREMENT ONLY: on a turn with a computed result, the numbers the
+    answer states outside two allowed sets, logged as numbers (never the
+    text). The answer is not changed.
+
+    * ``outside_figures``: outside the question's numbers and the figures the
+      tools' statements state (the rule of #411, which withheld a reply on
+      any such number).
+    * ``outside_result``: outside those and every number the computed results
+      print (the selected rows' own quantities, sizes and references).
+
+    A number in the first list but not the second is one the #411 rule would
+    have withheld although the tool's own rows print it. Returns the reading
+    (None when the turn has no computed result)."""
+    turn = turn if turn is not None else _TURN.get()
+    if turn is None or not turn.computed_results or not isinstance(text, str) or not text.strip():
+        return None
+    said = _answer_numbers(text)
+    allowed = _answer_numbers(turn.question or "")
+    for res in turn.computed_results:
+        allowed.update(res["figures"])
+    outside_figures = _outside(said, allowed)
+    for res in turn.computed_results:
+        allowed.update(res["result_numbers"])
+    outside_result = _outside(said, allowed)
+    reading = {"tools": [res["tool"] for res in turn.computed_results],
+               "stated": len(said), "outside_figures": outside_figures, "outside_result": outside_result}
+    _LOG.info("answer_exit: allowed_numbers tools=%s stated=%d outside_figures=%s outside_result=%s",
+              ",".join(reading["tools"]), reading["stated"],
+              json.dumps(outside_figures), json.dumps(outside_result))
+    return reading
+
+
+def _measure_quietly(text: Any, turn: Turn | None) -> None:
+    try:
+        measure_allowed_numbers(text, turn)
+    except Exception:  # noqa: BLE001 -- a measurement must never break an answer
+        _LOG.warning("answer_exit: allowed-numbers measurement failed", exc_info=True)
 
 
 def note_tool_message(tool_call: dict[str, Any] | None, message: dict[str, Any],
@@ -1842,6 +1960,7 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
         fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
+        _measure_quietly(fixed["answer"], turn if turn is not None else _TURN.get())
         fixed = _apply_contract(fixed, "answer", rows, turn)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
@@ -1871,6 +1990,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
         content = streamed
     if isinstance(content, str) and content.strip():
         checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
+        _measure_quietly(checked, turn)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
             fixed = _apply_contract(fixed, "content", rows, turn)
