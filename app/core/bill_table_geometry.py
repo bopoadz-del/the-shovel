@@ -916,8 +916,12 @@ def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, flo
 
 def page_sections(printed: Sequence[_Label], running: Running) -> dict[int, tuple[str, ...] | None]:
     """(b) Each page's section key: the page label's numeric fields other
-    than the page number. The page number is the field that takes the most
-    distinct values (the last one on a tie). A page whose label is not read
+    than the page number. The page number is the fastest-moving field: the
+    one that changes most often between consecutive read pages (it steps on
+    nearly every page and restarts when another field steps); the last one
+    on a tie. A count of distinct values would not do: a bill with more
+    sections than pages per section has more distinct section numbers than
+    page numbers. A page whose label is not read
     belongs to the section of the page before it. When no other field
     varies from page to page (a label that is only a page number, or a page
     number plus constants such as a page count), the label carries no
@@ -929,8 +933,10 @@ def page_sections(printed: Sequence[_Label], running: Running) -> dict[int, tupl
     if not read:
         return {}
     width = min(len(f) for f in read.values())
-    distinct = [len({f[i] for f in read.values()}) for i in range(width)]
-    page_field = max(range(width), key=lambda i: (distinct[i], i))
+    seq = [read[p] for p in sorted(read)]
+    steps = [sum(a[i] != b[i] for a, b in pairwise(seq)) for i in range(width)]
+    distinct = [len({f[i] for f in seq}) for i in range(width)]
+    page_field = max(range(width), key=lambda i: (steps[i], i))
     others = [i for i in range(width) if i != page_field]
     if not any(distinct[i] > 1 for i in others):
         return {}

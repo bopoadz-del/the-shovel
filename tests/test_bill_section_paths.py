@@ -245,6 +245,50 @@ def test_section_field_beside_page_number_is_section_information(labels, expecte
     assert g.page_sections(printed, g.running_lines(printed, 4)) == expected
 
 
+def _labelled_pages(labels):
+    """One page per entry of ``labels``: a constant running line, the label
+    line and a different title on each page."""
+    words: list[g.Word] = []
+    for p, label in enumerate(labels, start=1):
+        above = [("Eastgate Pumping Station", H), (label, H),
+                 (f"Heading {chr(64 + p) * 3}", HEAVY)]
+        words += _page(p, COLS_A, above, [("Walls", HEAVY), [f"Item {p}", "m", "1", "2", "2"]])
+    return words
+
+
+def _many_sections(fmt, sections, per_section):
+    """More sections than pages per section; the page number restarts at 1
+    in every section, so the SECTION field has the most distinct values."""
+    return [fmt.format(b=b, p=p) for b in range(1, sections + 1)
+            for p in range(1, per_section + 1)]
+
+
+@pytest.mark.parametrize("fmt, sections, per_section", [
+    ("Bill {b} Page {p}", 6, 3),
+    ("Page {p} Bill {b}", 7, 2),   # the page field first: no tie-break helps
+], ids=["bill-then-page", "page-then-bill"])
+def test_page_number_is_the_fastest_moving_field(fmt, sections, per_section):
+    labels = _many_sections(fmt, sections, per_section)
+    words = _labelled_pages(labels)
+    printed = _printed(words)
+    found = g.page_sections(printed, g.running_lines(printed, len(labels)))
+    # one section key per bill, every page of a bill in it
+    assert found == {i + 1: (str(i // per_section + 1),) for i in range(len(labels))}
+    assert len(set(found.values())) == sections
+
+
+@pytest.mark.parametrize("fmt", ["Volume 2 Page {p}", "Page {p} Volume 2"],
+                         ids=["constant-then-page", "page-then-constant"])
+def test_restarting_page_number_alone_is_not_section_information(fmt):
+    # the page number restarts (as if per section) but nothing else in the
+    # label varies: there is no section field to key the rows by
+    labels = [fmt.format(p=p) for _ in range(6) for p in range(1, 4)]
+    words = _labelled_pages(labels)
+    printed = _printed(words)
+    assert g.page_sections(printed, g.running_lines(printed, len(labels))) == {}
+    assert _unchanged(words)
+
+
 def _repeating_title(title, label_misread_on=None):
     """A real section title printed in the title band on every page of its
     section; the first section spans most of the document's pages, so its
