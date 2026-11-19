@@ -74,8 +74,8 @@ def test_platform_only_is_named(text, monkeypatch):
     (CASES["greeting_only"][0], "_GREETING_RETRY_NUDGE"),
     (CASES["greeting_only"][1], "_GREETING_RETRY_NUDGE"),
     (rt._TOOL_FORMAT_FALLBACK, "_TOOL_FORMAT_RETRY_NUDGE"),
-    ("", None),
-    ("  ", None),
+    ("", "_EMPTY_RETRY_NUDGE"),
+    ("  ", "_EMPTY_RETRY_NUDGE"),
 ])
 def test_nudge_follows_the_named_rule(text, nudge):
     expected = getattr(rt, nudge) if nudge else None

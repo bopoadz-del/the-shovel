@@ -693,17 +693,107 @@ _USER_TERMS_RETRY_NUDGE = (
 )
 
 
+#: Retry instruction when sanitization left nothing of the reply: it was
+#: empty, or only markup the user is never shown (most often a tool call made
+#: after tools were withdrawn). Without it the retry was the first request
+#: again, and at temperature 0 the model wrote the same draft again (D1).
+_EMPTY_RETRY_NUDGE = (
+    "Your previous reply had no text that can be shown to the user: it was "
+    "empty, or only tool-call markup or internal steps. Tools cannot run now. "
+    "Answer the user's question now in plain text from the documents and "
+    "results already in this thread. If they do not contain the answer, say "
+    "so plainly: name what was looked for and what is missing, in the user's "
+    "own terms."
+)
+
+
 def _forced_retry_nudge(text: str) -> str | None:
-    """The instruction that goes with the forced no-tools retry for ``text``."""
-    return _FORCED_RETRY_NUDGES.get(forced_retry_reason(text) or "")
+    """The instruction that goes with the forced no-tools retry for ``text``.
+
+    Every rule that forces a retry gets an instruction, so the retry never
+    sends the first request again unchanged (the same request at temperature
+    0 returns the same draft). A rule without its own wording gets the
+    empty-reply one."""
+    reason = forced_retry_reason(text)
+    if reason is None:
+        return None
+    return _FORCED_RETRY_NUDGES.get(reason, _EMPTY_RETRY_NUDGE)
 
 
 _FORCED_RETRY_NUDGES = {
+    "empty": _EMPTY_RETRY_NUDGE,
     "tool_format": _TOOL_FORMAT_RETRY_NUDGE,
     "search_promise": _SEARCH_PREAMBLE_RETRY_NUDGE,
     "greeting_only": _GREETING_RETRY_NUDGE,
     "platform_only": _USER_TERMS_RETRY_NUDGE,
 }
+
+
+def _turn_forced_retry_nudged(messages: list[dict[str, Any]] | None) -> int | None:
+    """Index of the operator's question when this turn's forced retry was
+    sent with an instruction, else None.
+
+    The instruction is the last user message of the turn; the operator's
+    question is the user message before it that is neither an instruction
+    nor a platform pre-dispatch."""
+    nudges = set(_FORCED_RETRY_NUDGES.values())
+    msgs = list(messages or [])
+    nudged = False
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i] or {}
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content") or "")
+        if content in nudges:
+            nudged = True
+            continue
+        if content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            continue
+        return i if nudged else None
+    return None
+
+
+def _turn_search_queries(turn: list[dict[str, Any]]) -> list[str]:
+    """The ``query`` argument of every tool call made in ``turn``, in order."""
+    out: list[str] = []
+    for m in turn:
+        for call in (m or {}).get("tool_calls") or []:
+            raw = ((call or {}).get("function") or {}).get("arguments")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (TypeError, ValueError):
+                continue
+            q = args.get("query") if isinstance(args, dict) else None
+            if isinstance(q, str) and q.strip():
+                out.append(" ".join(q.split()))
+    return list(dict.fromkeys(out))
+
+
+def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str:
+    """A plain statement for a turn whose instructed retry still gave nothing.
+
+    Says what happened (the documents this turn had did not yield an answer)
+    and what was searched, from this turn's own messages. Empty when the
+    turn did not run an instructed retry, so every other path keeps its
+    reply."""
+    start = _turn_forced_retry_nudged(messages)
+    if start is None:
+        return ""
+    turn = list(messages or [])[start + 1:]
+    queries = _turn_search_queries(turn)
+    read = _documents_read_this_turn("", list(messages or [])[start:], None)
+    lines = ["The documents available for this question did not yield an answer to it."]
+    if queries:
+        lines.append("Searched for: " + "; ".join(f'"{q}"' for q in queries[:5]) + ".")
+    else:
+        lines.append("Searched: the project documents, for the question as asked.")
+    if read:
+        lines.append("Documents read: " + ", ".join(read[:5]) + ".")
+    lines.append(
+        "Naming the document or section that should hold the answer, or "
+        "rephrasing the question, gives the search more to go on."
+    )
+    return "\n".join(lines)
 
 
 def log_forced_retry_start(where: str, text: str) -> None:
@@ -6997,7 +7087,9 @@ def _nonblank_after_empty_synthesis(
         messages,
     ):
         return _with_footer(_SYNTH_CUTOFF_NOTICE)
-    return _with_footer(body or _EMPTY_RESPONSE_FALLBACK)
+    # An instructed retry that still gave nothing: say plainly what happened
+    # and what was searched, never the bare generic line.
+    return _with_footer(_unanswered_after_forced_retry(messages) or _EMPTY_RESPONSE_FALLBACK)
 
 
 def _construction_calc_tool_schema() -> dict[str, Any]:
