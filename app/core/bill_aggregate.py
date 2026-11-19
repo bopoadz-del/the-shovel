@@ -22,8 +22,12 @@ of the same heading path, where one of the two rows carries no figure, is the
 rest of that item.
 
 Matching is by words, not by a phrase: every term must appear as a word in
-the row's description (and every section term in its heading path). Nothing
-here names a bill, a section, a row or a question.
+the row's description (and every section term in its heading path). A number
+in the terms is a SIZE (:func:`sizes_in`), matched against the sizes the row
+prints: a size with a unit is read to metres on both sides, so every spelling
+of it with a unit selects the same rows; a bare number is itself, never read
+at another magnitude (``1.8`` does not select ``18``, ``180`` or ``1800``).
+Nothing here names a bill, a section, a row or a question.
 """
 
 from __future__ import annotations
@@ -171,6 +175,85 @@ def join_page_continuations(rows: Sequence[SheetRow]) -> list[SheetRow]:
     return out
 
 
+#: Length units a size is printed in, and their factor to metres (the base
+#: unit). Units, not sizes: no size of any bill is listed here.
+_LENGTH_UNITS = {"mm": 0.001, "cm": 0.01, "m": 1.0, "km": 1000.0,
+                 "مم": 0.001, "ملم": 0.001, "سم": 0.01, "م": 1.0, "كم": 1000.0}
+#: Arabic-Indic and Eastern Arabic-Indic digits, and the Arabic decimal and
+#: thousands separators, read as the Latin ones.
+_DIGITS = str.maketrans({**{chr(0x0660 + i): str(i) for i in range(10)},
+                         **{chr(0x06F0 + i): str(i) for i in range(10)},
+                         "٫": ".", "٬": ","})
+_NUM = r"\d+(?:[.,]\d+)*"
+_UNIT = "(?:" + "|".join(sorted(map(re.escape, _LENGTH_UNITS), key=len, reverse=True)) + r")(?![^\W_])"
+_MEMBER = rf"{_NUM}(?:\s*{_UNIT})?"
+_SIZE_SEP = r"\s*(?:x|×|\*|by|في)\s*"
+#: A size: one number, or numbers joined by ``x`` (a dimension), each with
+#: its unit when printed. Not a number glued to a letter (a code: ``DN150``).
+_SIZE_RE = re.compile(rf"(?<![^\W_])(?<!\.){_MEMBER}(?:{_SIZE_SEP}{_MEMBER})*", re.IGNORECASE)
+_MEMBER_RE = re.compile(rf"({_NUM})\s*({_UNIT})?", re.IGNORECASE)
+
+
+def _number(text: str) -> float:
+    """``1.8`` and ``1,8`` -> 1.8; ``1,800`` and ``1,800.5`` -> thousands."""
+    seps = re.findall(r"[.,]", text)
+    if not seps:
+        return float(text)
+    last = seps[-1]
+    head, _, tail = text.rpartition(last)
+    if all(s == last for s in seps) and (len(seps) > 1 or (last == "," and len(tail) == 3)):
+        # One mark repeated, or a lone comma before three digits: thousands.
+        return float(text.replace(last, ""))
+    # The last mark is the decimal point; any other mark groups thousands.
+    return float(re.sub(r"[.,]", "", head) + "." + tail)
+
+
+@dataclass(frozen=True)
+class Size:
+    """A size as printed (``text``), its members as the plain numbers printed
+    (``printed``) and, when a unit is printed on any member, each member's
+    length in metres (``metres``; ``None`` for a size with no unit)."""
+
+    text: str
+    printed: tuple[float, ...]
+    metres: tuple[float, ...] | None
+
+    def same(self, other: Size) -> bool:
+        """Two sizes with a unit are one size when their lengths in metres
+        are equal (``1.8 x 1.8 m`` is ``1800 x 1800 mm``). A size with no
+        unit is the plain number it prints: it is the same as another size
+        only when the printed numbers are equal, never at another magnitude
+        (a bare ``1.8`` is not ``18``, ``180`` or ``1800``)."""
+        if self.metres is not None and other.metres is not None:
+            return self.metres == other.metres
+        return self.printed == other.printed
+
+
+def sizes_in(text: str) -> list[Size]:
+    """Every size printed in ``text``.
+
+    A member with no unit takes the unit printed on the next member, else on
+    the one before (``1.8 x 1.8 m`` is metres throughout); a size with no unit
+    on any member borrows none: it keeps only its printed numbers."""
+    out: list[Size] = []
+    for m in _SIZE_RE.finditer((text or "").translate(_DIGITS)):
+        members = [(_number(n), (u or "").casefold()) for n, u in _MEMBER_RE.findall(m.group(0))]
+        units = [u for _, u in members]
+        metres: tuple[float, ...] | None = None
+        if any(units):
+            filled = []
+            for i, u in enumerate(units):
+                after = next((x for x in units[i:] if x), "")
+                filled.append(_LENGTH_UNITS[u or after or next(x for x in reversed(units[:i]) if x)])
+            metres = tuple(round(v * f, 9) for (v, _), f in zip(members, filled))
+        out.append(Size(" ".join(m.group(0).split()), tuple(v for v, _ in members), metres))
+    return out
+
+
+def _without_sizes(text: str) -> str:
+    return _SIZE_RE.sub(" ", (text or "").translate(_DIGITS))
+
+
 def _words(text: str) -> set[str]:
     return {w.casefold() for w in _WORD_RE.findall(text or "")}
 
@@ -181,9 +264,17 @@ def _terms(terms: Iterable[str] | str | None) -> set[str]:
     return set().union(*(_words(t) for t in terms)) if terms else set()
 
 
-def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
+def matches(row: SheetRow, terms: set[str], section_terms: set[str], *,
+            sizes: Sequence[Size] = ()) -> bool:
+    """Every term is a word of the description, every section term a word of
+    the heading path, and every size is printed (as a size, in any spelling
+    of it, :meth:`Size.same`) in the heading path or the description."""
     if terms and not terms <= _words(row.description):
         return False
+    if sizes:
+        printed = sizes_in(" ".join(row.path)) + sizes_in(row.description)
+        if not all(any(want.same(s) for s in printed) for want in sizes):
+            return False
     return not section_terms or section_terms <= _words(" ".join(row.path))
 
 
@@ -203,14 +294,20 @@ def aggregate(
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
-    want, where = _terms(terms), _terms(section)
-    if not want and not where:
+    # A size in the call's terms (a number, with its unit when printed, or a
+    # dimension ``a x b``) is matched as a size, never as loose digit words:
+    # ``1.8`` read as words is ``1`` and ``8`` and selects any row printing
+    # both anywhere. A bare number is itself (:meth:`Size.same`).
+    texts = [terms] if isinstance(terms, str) else list(terms or [])
+    want, where = _terms([_without_sizes(t) for t in texts]), _terms(section)
+    asked = [s for text in texts for s in sizes_in(text)]
+    if not want and not where and not asked:
         raise ValueError("give description terms or a section to match")
     items = join_page_continuations(rows)
     used, without = [], []
     sums: dict[str, float] = {}
     for row in items:
-        if not matches(row, want, where):
+        if not matches(row, want, where, sizes=asked):
             continue
         value = row.figure(measure)
         entry = {
@@ -230,8 +327,11 @@ def aggregate(
     single = len(sums) <= 1
     return {
         "measure": measure,
-        "terms": sorted(want),
+        # The sizes are named with the words: the statement says what the
+        # rows were selected by, and a size is part of that.
+        "terms": sorted(want) + [s.text for s in asked],
         "section_terms": sorted(where),
+        "sizes": [s.text for s in asked],
         "rows_scanned": len(items),
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
