@@ -165,3 +165,49 @@ def test_a_malformed_result_never_breaks_the_turn(payload):
     answer_exit.note_tool_result("bill_rows_aggregate", payload, turn)
     out = answer_exit.check_result({"answer": "30 No.", "sources": []}, turn=turn)
     assert out["answer"] == "30 No."
+
+
+@pytest.mark.parametrize("tool,payload", [
+    ("search_documents", {"ok": True, "result": {"hits": [{"text": "item 14 of 30"}]}}),
+    ("no_such_tool_in_the_registry", {"ok": True, "result": {"value": 41}}),
+])
+def test_a_tool_that_declares_no_statement_is_skipped_without_a_warning(tool, payload, caplog):
+    turn = answer_exit.Turn(question="q")
+    with caplog.at_level(logging.WARNING, logger=answer_exit._LOG.name):
+        answer_exit.note_tool_result(tool, payload, turn)
+    assert turn.computed_results == []
+    assert not [r for r in caplog.records if "computed result" in r.getMessage()]
+
+
+@pytest.mark.parametrize("rows,terms,text", [
+    # The payload's "ok": true is a flag, not the number 1.
+    (CHAMBERS, "2.4", "Item G is 1 of the rows."),
+    (KERBS, "kerb", "1 of them is type 4."),
+])
+def test_a_true_flag_in_the_result_is_not_the_number_one(rows, terms, text):
+    reading = answer_exit.measure_allowed_numbers(text, _turn("q", _bill(rows, terms)))
+    assert 1.0 in reading["outside_result"]
+
+
+def _nested_dict(depth, leaf):
+    out = leaf
+    for _ in range(depth):
+        out = {"k": out}
+    return out
+
+
+def _nested_list(depth, leaf):
+    out = leaf
+    for _ in range(depth):
+        out = [out]
+    return out
+
+
+@pytest.mark.parametrize("payload,inside", [
+    (_nested_dict(12, 777), False),
+    (_nested_list(12, "item 777"), False),
+    (_nested_dict(3, 777), True),
+    (_nested_list(3, "item 777"), True),
+])
+def test_a_number_nested_past_the_walk_bound_is_not_read(payload, inside):
+    assert (777.0 in answer_exit._payload_numbers(payload)) is inside
