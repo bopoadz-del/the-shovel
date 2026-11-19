@@ -12,7 +12,7 @@
 #          AND >= ceil-ish(N*0.3) runs contain a tool_call/tool_result pair
 #          (1 for N=3, 3 for N=10). Otherwise FAIL with a nonzero exit code.
 #          Each run also prints the served model, so a silent fallback (e.g.
-#          Kimi K2 -> Ollama) is visible instead of hidden behind a PASS.
+#          primary -> fallback provider) is visible instead of hidden behind a PASS.
 #
 # Credentials come from the environment ONLY - never hardcode a key here:
 #   $env:FORK_API_KEY = "<master key>"          # preferred
