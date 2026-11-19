@@ -39,7 +39,15 @@ _last_queue_log = 0.0
 #: calculator runs (CPU) and background jobs (hydration). Sized by their own
 #: settings; the turn pool keeps the database pool's size.
 _NAMED_POOLS: Dict[str, ThreadPoolExecutor] = {}
-_NAMED_SIZES = {"calc": ("CALC_WORKERS", 4), "background": ("BACKGROUND_WORKERS", 2)}
+_NAMED_SIZES = {
+    "calc": ("CALC_WORKERS", 4),
+    "background": ("BACKGROUND_WORKERS", 2),
+    # A question's parts are searched beside the whole question, both legs of
+    # each part at once (``VectorStore.search``). These run from inside a
+    # retrieval thread, so they must not queue on the retrieval pool itself:
+    # a retrieval thread waiting on its own pool can wait forever.
+    "retrieval_parts": ("RETRIEVAL_PART_WORKERS", 8),
+}
 #: Document retrieval (vector + keyword search, database reads, ranking) ran
 #: in the loop's default executor: min(32, CPUs + 4) threads. CI capture, 15
 #: users: 8 such threads were inside psycopg/ranking at once, the process used

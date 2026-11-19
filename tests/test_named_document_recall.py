@@ -87,7 +87,7 @@ def _install(monkeypatch, *, semantic, by_doc, names, title_docs=()):
         return [Chunk(**{**c.__dict__}) for d in doc_ids for c in by_doc.get(d, [])]
 
     patches = {
-        "search": lambda self, project_id, qvec, k, query_text=None: [
+        "search": lambda self, project_id, qvec, k, query_text=None, query_parts=None: [
             Chunk(**{**c.__dict__}) for c in semantic][:k],
         "identifier_search": lambda self, project_id, identifiers, k=20: [],
         "chunks_for_docs": for_docs,

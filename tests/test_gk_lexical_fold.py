@@ -59,7 +59,7 @@ def _install(monkeypatch, active_chunks, gk_chunks):
     with the fake embedder and a benign doc-name resolver."""
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if project_id == ACTIVE:
             return list(active_chunks)
         if project_id == GK:

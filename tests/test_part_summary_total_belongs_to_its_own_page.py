@@ -253,7 +253,7 @@ def test_a_several_page_question_still_gets_every_named_pages_total(monkeypatch)
                 if all(w in c.text.lower() for w in want)]
 
     vs = "app.core.rag.vector_store.VectorStore."
-    monkeypatch.setattr(vs + "search", lambda self, pid, qvec, k, query_text=None: noise[:k])
+    monkeypatch.setattr(vs + "search", lambda self, pid, qvec, k, query_text=None, query_parts=None: noise[:k])
     monkeypatch.setattr(vs + "identifier_search", lambda self, pid, identifiers, k=20: [])
     monkeypatch.setattr(vs + "chunks_for_docs", lambda self, pid, doc_ids, k_per_doc=12, **_kw: [])
     monkeypatch.setattr(vs + "chunks_containing_all", containing_all)
@@ -311,7 +311,7 @@ def test_retrieval_returns_the_asked_page_and_not_the_other_footers(monkeypatch)
     vs = "app.core.rag.vector_store.VectorStore."
     monkeypatch.setattr(
         vs + "search",
-        lambda self, pid, qvec, k, query_text=None: semantic[:k],
+        lambda self, pid, qvec, k, query_text=None, query_parts=None: semantic[:k],
     )
     monkeypatch.setattr(vs + "identifier_search",
                         lambda self, pid, identifiers, k=20: [])

@@ -48,7 +48,7 @@ def _install(monkeypatch, per_project, *, gk=GK, master=None, record=None):
     """
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if record is not None:
             record.append(project_id)
         return list(per_project.get(project_id, []))

@@ -197,7 +197,7 @@ def test_a6_ask_shape_and_duration_gates():
 def _install_a6_corpus(monkeypatch, *, semantic, rescue_hits, names, seeded=None):
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

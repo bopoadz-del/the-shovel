@@ -74,7 +74,7 @@ def test_pairs_are_deduplicated_by_stem():
 
 def _install(monkeypatch, semantic, lexical_corpus):
     monkeypatch.setattr("app.core.rag.vector_store.VectorStore.search",
-                        lambda self, project_id, qvec, k, query_text=None:
+                        lambda self, project_id, qvec, k, query_text=None, query_parts=None:
                         [c for c in semantic if c.project_id == project_id][:k])
 
     def fake_identifier_search(self, project_id, identifiers, k=20):

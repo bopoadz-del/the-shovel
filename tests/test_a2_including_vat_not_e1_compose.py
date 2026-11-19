@@ -209,7 +209,7 @@ def _install_chunk0_misses_incl(monkeypatch, *, delay, late, names, seeded):
     """identifier_search + first-N stay on chunk #0; all_rows sees late incl."""
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in [delay] if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

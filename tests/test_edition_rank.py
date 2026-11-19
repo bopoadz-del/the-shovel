@@ -80,7 +80,7 @@ def _chunk(cid, score, text):
 def _install(monkeypatch, chunks, names):
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in chunks if c.project_id == project_id]
 
     monkeypatch.setattr("app.core.rag.vector_store.VectorStore.search", fake_search)

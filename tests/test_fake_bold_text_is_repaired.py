@@ -176,7 +176,7 @@ def test_a9_the_engineer_chunk_survives_and_leads(monkeypatch):
     )
     pool = [chunk("hdr", header_only, 0.80, 6), chunk("eng", LIVE_GARBLED_CHUNK, 0.40, 4)]
     vs = "app.core.rag.vector_store.VectorStore."
-    monkeypatch.setattr(vs + "search", lambda self, pid, qvec, k, query_text=None: pool[:k])
+    monkeypatch.setattr(vs + "search", lambda self, pid, qvec, k, query_text=None, query_parts=None: pool[:k])
     monkeypatch.setattr(vs + "identifier_search", lambda self, pid, identifiers, k=20: [])
     monkeypatch.setattr(vs + "chunks_for_docs", lambda self, pid, doc_ids, k_per_doc=12, **_kw: [])
     monkeypatch.setattr(vs + "chunks_containing_all", lambda self, pid, needles, k=20, **_kw: [])

@@ -231,7 +231,7 @@ def test_reservation_swaps_a_cap_row_for_the_rate():
 def _install_corpus(monkeypatch, *, semantic, rescue_hits, names):
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

@@ -123,7 +123,7 @@ def test_ab2023_query_does_not_return_ab2022_chunks(isolated_store, monkeypatch)
     # so the fence, not ranking, is what excludes AB-2022.
     real_search = store.search
 
-    def both_hot(project_id, query_vec, k=20, query_text=None):
+    def both_hot(project_id, query_vec, k=20, query_text=None, query_parts=None):
         out = real_search(project_id, query_vec, k=k, query_text=query_text)
         for c in out:
             c.score = 0.82
@@ -168,7 +168,7 @@ def test_unnamed_query_does_not_mix_contract_years(isolated_store, monkeypatch):
 
     real_search = store.search
 
-    def both_hot(project_id, query_vec, k=20, query_text=None):
+    def both_hot(project_id, query_vec, k=20, query_text=None, query_parts=None):
         out = real_search(project_id, query_vec, k=k, query_text=query_text)
         for c in out:
             c.score = 0.9 if c.doc_id == "doc_dd23" else 0.89

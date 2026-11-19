@@ -258,7 +258,7 @@ def two_year_corpus(tmp_path, monkeypatch):
     # wrong-year chunk at rank 1 and handed it the whole pool.
     real_search = store.search
 
-    def wrong_year_leads(project_id, query_vec, k=20, query_text=None):
+    def wrong_year_leads(project_id, query_vec, k=20, query_text=None, query_parts=None):
         hits = real_search(project_id, query_vec, k=k, query_text=query_text)
         for chunk in hits:
             if chunk.doc_id in DD22_DOCS:
@@ -988,7 +988,7 @@ def wave2_corpus(tmp_path, monkeypatch):
     real_search = store.search
     active = {"ask": F1}
 
-    def live_shaped(project_id, query_vec, k=20, query_text=None):
+    def live_shaped(project_id, query_vec, k=20, query_text=None, query_parts=None):
         hits = real_search(project_id, query_vec, k=k, query_text=query_text)
         table = _W2_SCORES[active["ask"]]
         for chunk in hits:
@@ -1497,7 +1497,7 @@ def a3_schedule_steal_corpus(tmp_path, monkeypatch):
 
     real_search = store.search
 
-    def schedule_leads(project_id, query_vec, k=20, query_text=None):
+    def schedule_leads(project_id, query_vec, k=20, query_text=None, query_parts=None):
         hits = real_search(project_id, query_vec, k=k, query_text=query_text)
         for chunk in hits:
             if chunk.doc_id == "dd22_sched":
@@ -1783,7 +1783,7 @@ def live_two_filled_years_corpus(tmp_path, monkeypatch):
 
     real_search = store.search
 
-    def older_year_leads(project_id, query_vec, k=20, query_text=None):
+    def older_year_leads(project_id, query_vec, k=20, query_text=None, query_parts=None):
         hits = real_search(project_id, query_vec, k=k, query_text=query_text)
         for chunk in hits:
             if chunk.doc_id.startswith("dd22_"):

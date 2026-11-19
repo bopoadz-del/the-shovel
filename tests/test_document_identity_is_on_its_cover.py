@@ -108,7 +108,7 @@ def ret(monkeypatch):
 
     vs = "app.core.rag.vector_store.VectorStore."
     monkeypatch.setattr(
-        vs + "search", lambda self, pid, qvec, k, query_text=None: semantic[:k])
+        vs + "search", lambda self, pid, qvec, k, query_text=None, query_parts=None: semantic[:k])
     monkeypatch.setattr(vs + "identifier_search",
                         lambda self, pid, identifiers, k=20: [])
     monkeypatch.setattr(vs + "chunks_for_docs", fake_chunks_for_docs)

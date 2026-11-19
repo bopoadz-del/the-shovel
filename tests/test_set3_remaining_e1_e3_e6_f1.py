@@ -323,7 +323,7 @@ def _f1_sheet(monkeypatch):
     )
     monkeypatch.setattr(
         "app.core.rag.vector_store.VectorStore.search",
-        lambda self, pid, qvec, k, query_text=None: [],
+        lambda self, pid, qvec, k, query_text=None, query_parts=None: [],
     )
     monkeypatch.setattr(
         "app.core.rag.vector_store.VectorStore.identifier_search",

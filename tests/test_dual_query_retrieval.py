@@ -63,7 +63,7 @@ def _install(monkeypatch, results_by_query_text, calls=None):
     with -- the exact discriminator dual-query retrieval introduces."""
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if calls is not None:
             calls.append(query_text)
         return [
@@ -170,7 +170,7 @@ def test_terse_queries_cost_no_second_search(monkeypatch):
 def test_alt_leg_failure_never_breaks_the_primary(monkeypatch):
     from app.core.rag import retriever as ret
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if query_text == STRIPPED:
             raise RuntimeError("alt leg store error")
         return [_chunk("boiler1", project_id, 0.55, BOILER_TEXT)]

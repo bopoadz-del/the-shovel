@@ -323,7 +323,7 @@ def _install_b3_corpus(monkeypatch, *, extra_summary: bool):
     if extra_summary:
         semantic.append(summary)
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

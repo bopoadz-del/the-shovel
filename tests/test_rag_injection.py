@@ -161,7 +161,7 @@ def test_retrieve_drops_noise_before_top_k(monkeypatch):
     from app.core.rag import retriever as ret
     from app.core.rag.vector_store import Chunk
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [
             Chunk(chunk_id="c1", project_id=project_id, doc_id="d-noise",
                   chunk_index=0, text="noise content", score=0.95),
@@ -208,7 +208,7 @@ def test_retrieve_merges_general_knowledge(monkeypatch):
     from app.core.rag import retriever as ret
     from app.core.rag.vector_store import Chunk
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         # Distinct chunks per project so we can prove the merge happened.
         if project_id == "p_active":
             return [
@@ -259,7 +259,7 @@ def test_retrieve_skips_gk_when_active_is_gk(monkeypatch):
 
     call_log: List[str] = []
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         call_log.append(project_id)
         return [Chunk(chunk_id="c1", project_id=project_id, doc_id="d",
                       chunk_index=0, text="content", score=0.7)]
@@ -283,7 +283,7 @@ def test_retrieve_gk_failure_does_not_break_primary(monkeypatch):
     from app.core.rag import retriever as ret
     from app.core.rag.vector_store import Chunk
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if project_id == "p_active":
             return [Chunk(chunk_id="ap1", project_id=project_id, doc_id="ap",
                           chunk_index=0, text="real", score=0.8)]

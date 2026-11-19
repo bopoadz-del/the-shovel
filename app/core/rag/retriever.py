@@ -4649,6 +4649,69 @@ def _strip_question_wrapper(query: str) -> Optional[str]:
     return s
 
 
+# A question that names several things ("the drawing's figure against the
+# method statement's") is one search today, and each wanted passage holds
+# only one named thing's words: the whole question's score is diluted across
+# them. The question is ALSO searched once per part. The joiners are generic
+# English (list and comparison words), the same for every corpus; a part
+# counts only with two or more content terms. Measured on the real corpus
+# (RAGQ 19 Nov 02:58Z): additive at leg level, a rank can only stay or rise.
+_QUESTION_PART_JOINER_RE = re.compile(
+    r"\s*(?:,|;|\?|\band\b|\bvs\.?\s|\bversus\b|\bagainst\b|"
+    r"\bcompared\s+(?:to|with)\b)\s*",
+    re.IGNORECASE,
+)
+_QUESTION_PART_MIN_TERMS = 2
+
+
+def _question_part_content_terms(part: str) -> List[str]:
+    """The lexical leg's terms of ``part`` that carry content: not a stop
+    word of the retriever's own lists, not a single character."""
+    from app.core.rag.vector_store import lexical_query_terms
+
+    return [
+        t for t in lexical_query_terms(part)
+        if len(t) > 1
+        and t.lower() not in _GK_STOPWORDS
+        and t.lower() not in _STOPWORDS
+    ]
+
+
+def question_parts(query: str) -> List[str]:
+    """The parts of a question that names several things, each searched in
+    addition to the whole question; ``[]`` when it does not split.
+
+    Split at the generic joiners above; a part is kept only with
+    ``_QUESTION_PART_MIN_TERMS`` content terms; equal parts are kept once.
+    Fewer than two kept parts is no split (the whole question already is
+    that search). At most ``vector_store.QUERY_PARTS_MAX`` parts, in the
+    question's order.
+    """
+    from app.core.rag.vector_store import QUERY_PARTS_MAX
+
+    seen: Set[str] = set()
+    parts: List[str] = []
+    for raw in _QUESTION_PART_JOINER_RE.split(query or ""):
+        part = re.sub(r"\s+", " ", raw or "").strip(" .:")
+        key = part.lower()
+        if not part or key in seen:
+            continue
+        if len(_question_part_content_terms(part)) < _QUESTION_PART_MIN_TERMS:
+            continue
+        seen.add(key)
+        parts.append(part)
+    if len(parts) < 2:
+        return []
+    return parts[:QUERY_PARTS_MAX]
+
+
+def _question_parts_enabled() -> bool:
+    """ON by default -- RAG_QUESTION_PARTS=0/false/no/off turns it off."""
+    return (os.getenv("RAG_QUESTION_PARTS") or "").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
 def _dual_query_enabled() -> bool:
     """ON by default -- RAG_DUAL_QUERY=0/false/no/off is the kill-switch."""
     return (os.getenv("RAG_DUAL_QUERY") or "").strip().lower() not in (
@@ -9331,11 +9394,17 @@ def _apply_contract_data_particulars_boost(query: str, scored: List[Tuple[float,
 def _dual_search(
     store, project_id: str, query_vec, query: str,
     alt_vec, alt_query: Optional[str], *, k: int,
+    parts: Optional[List[Tuple[Any, str]]] = None,
 ) -> List[Chunk]:
     """Search with the raw query and (when present) the wrapper-stripped
     variant; merge by chunk_id keeping each chunk's BEST score. The alt
-    leg failing can never break the primary results."""
-    hits = store.search(project_id, query_vec, k=k, query_text=query)
+    leg failing can never break the primary results. ``parts`` (a
+    question's parts, ``question_parts``) go with the raw query's search,
+    fused leg by leg by best rank; none, and the call is as it always was."""
+    if parts:
+        hits = store.search(project_id, query_vec, k=k, query_text=query, query_parts=parts)
+    else:
+        hits = store.search(project_id, query_vec, k=k, query_text=query)
     if alt_vec is None:
         return hits
     try:
@@ -9665,6 +9734,13 @@ def retrieve_with_filter(
     # of a natural question (None for terse queries -- no extra cost).
     alt_query = _strip_question_wrapper(query) if _dual_query_enabled() else None
     alt_vec = embedder.encode_queries([alt_query])[0] if alt_query else None
+    # A question naming several things is also searched once per part, in
+    # both legs (none for a question that does not split: no extra cost).
+    part_texts = question_parts(query) if _question_parts_enabled() else []
+    part_queries = (
+        list(zip(embedder.encode_queries(part_texts), part_texts))
+        if part_texts else None
+    )
     store = get_store(dim=embedder.dim)
     over_fetch = candidate_overfetch(k)
     # The GK corpus is small and curated (units / CESMM / FIDIC / procedures), so
@@ -9679,7 +9755,7 @@ def retrieve_with_filter(
     fusion_mark = len(fusion_records(project_id))
     raw_active = _dual_search(
         store, project_id, query_vec, retrieval_lexical_query(query),
-        alt_vec, alt_query, k=over_fetch,
+        alt_vec, alt_query, k=over_fetch, parts=part_queries,
     )
     _new_fusions = fusion_records(project_id)[fusion_mark:]
     follow = _fusion_trace.Follow(_new_fusions[0] if _new_fusions else None)

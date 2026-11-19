@@ -104,7 +104,7 @@ def _install_empty_fixture_with_master(monkeypatch, *, record=None):
         GK_PID: [],
     }
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if record is not None:
             record.append(project_id)
         return list(per_project.get(project_id, []))

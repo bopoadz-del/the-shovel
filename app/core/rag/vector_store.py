@@ -2220,6 +2220,7 @@ class VectorStore:
         query_vec: np.ndarray,
         k: int = 5,
         query_text: Optional[str] = None,
+        query_parts: Optional[List[Tuple[Any, str]]] = None,
     ) -> List[Chunk]:
         """Top-``k`` chunks for ``project_id``.
 
@@ -2243,6 +2244,15 @@ class VectorStore:
         k=...)`` is preserved — ``query_text`` is a keyword-only-style
         opt-in. ``retriever.py`` does NOT pass it today, so the chat
         path stays on semantic-only until the operator wires it.
+
+        ``query_parts`` (hybrid only): ``(vector, text)`` for each part of a
+        question that names several things (``retriever.question_parts``).
+        Both legs of every part run at once, beside the whole question's
+        legs, and each leg takes every chunk at its best rank over the whole
+        question and the parts (``merge_leg_lists``) before ONE fusion; the
+        result size ``k`` is unchanged. A part whose search fails is logged
+        and left out; the whole question's results stand. Without parts
+        this is the search it always was.
         """
         q = np.asarray(query_vec, dtype=np.float32)
         if q.ndim != 1 or q.shape[0] != self.dim:
@@ -2259,8 +2269,26 @@ class VectorStore:
         if not hybrid:
             return self._semantic_search(project_id, q, k)
 
+        parts = [
+            (np.asarray(v, dtype=np.float32), t)
+            for v, t in (query_parts or [])
+            if t and t.strip()
+        ][:QUERY_PARTS_MAX]
+        pending = self._start_part_legs(project_id, parts) if parts else None
         sem_results = self._semantic_search(project_id, q, HYBRID_FETCH_PER_LEG)
         bm25_results = self.bm25_search(project_id, query_text, HYBRID_FETCH_PER_LEG)
+        merge: Dict[str, Any] = {}
+        if pending is not None:
+            sem_whole = sem_results
+            sem_lists, bm_lists, trace = self._finish_part_legs(project_id, parts, pending)
+            sem_results, sem_rank = merge_leg_lists([sem_results] + sem_lists)
+            bm25_results, bm_rank = merge_leg_lists([bm25_results] + bm_lists)
+            merge = {
+                "sem_rank": sem_rank,
+                "bm_rank": bm_rank,
+                "cosine_scale": [c.score for c in sem_whole if c.score is not None],
+                "trace_extra": {"query_parts": trace},
+            }
 
         if not bm25_results:
             # Graceful degrade to semantic-only; respect caller's k.
@@ -2290,7 +2318,53 @@ class VectorStore:
             return sem_results[:k]
 
         _memo_put(("lexical_leg", project_id), "hit")
-        return _rrf_combine(sem_results, bm25_results, k, project_id=project_id)
+        return _rrf_combine(sem_results, bm25_results, k, project_id=project_id, **merge)
+
+    def _start_part_legs(self, project_id: str, parts: List[Tuple[Any, str]]) -> list:
+        """Submit both legs of every part to the ``retrieval_parts`` pool; the
+        caller's thread runs the whole question's legs meanwhile. Each task
+        runs in a copy of the caller's context, so the turn memo (one dict
+        shared by reference) and the session scope reach it."""
+        from app.core.offload import named_pool
+
+        pool = named_pool("retrieval_parts")
+        out = []
+        for vec, text_ in parts:
+            out.append((
+                pool.submit(contextvars.copy_context().run,
+                            self._semantic_search, project_id, vec, HYBRID_FETCH_PER_LEG),
+                pool.submit(contextvars.copy_context().run,
+                            self.bm25_search, project_id, text_, HYBRID_FETCH_PER_LEG),
+            ))
+        return out
+
+    def _finish_part_legs(
+        self, project_id: str, parts: List[Tuple[Any, str]], pending: list,
+    ) -> Tuple[List[List[Chunk]], List[List[Chunk]], Dict[str, Any]]:
+        """Each part's two legs, and the trace record of the parts: how many,
+        and per part its query digest and each leg's size. A leg that failed
+        is an empty list and is marked; it never breaks the whole question."""
+        sem_lists: List[List[Chunk]] = []
+        bm_lists: List[List[Chunk]] = []
+        rows: List[Dict[str, Any]] = []
+        for (_vec, text_), futures in zip(parts, pending):
+            row: Dict[str, Any] = {"query": _query_ref(text_)}
+            for leg, fut, dest in (("vector", futures[0], sem_lists),
+                                   ("lexical", futures[1], bm_lists)):
+                try:
+                    hits = list(fut.result() or [])
+                except Exception as exc:  # noqa: BLE001 -- a part never breaks the turn
+                    logger.warning(
+                        "question part %s leg failed for project=%s: %s; "
+                        "the whole question's results stand",
+                        leg, project_id, _error_ref(exc),
+                    )
+                    hits = []
+                    row[f"{leg}_failed"] = True
+                row[leg] = len(hits)
+                dest.append(hits)
+            rows.append(row)
+        return sem_lists, bm_lists, {"count": len(parts), "parts": rows}
 
     def identifier_search(
         self,
@@ -3091,12 +3165,46 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: The most parts of one question searched besides the whole question
+#: (``retriever.question_parts`` keeps at most this many).
+QUERY_PARTS_MAX = 4
+
+
+def merge_leg_lists(lists: List[List[Chunk]]) -> Tuple[List[Chunk], Dict[str, int]]:
+    """One leg's ranked lists -- the whole question's first, then one per
+    part of the question -- as ONE ranked list.
+
+    Each chunk takes its BEST rank in any of the lists, so a chunk's rank
+    can only stay where the whole question put it or move up: the part
+    searches are additive. The instance kept is the one from the earliest
+    list holding the chunk (the whole question's when it found it). Order:
+    best rank, then the earlier list, then that list's own order. Returns
+    the list and the rank map ``_rrf_combine`` takes.
+    """
+    best: Dict[str, Tuple[int, int]] = {}
+    keep: Dict[str, Chunk] = {}
+    for li, lst in enumerate(lists):
+        for r, c in enumerate(lst, 1):
+            cid = c.chunk_id
+            if cid not in keep:
+                keep[cid] = c
+            prev = best.get(cid)
+            if prev is None or r < prev[0]:
+                best[cid] = (r, li)
+    order = sorted(best, key=lambda cid: best[cid])
+    return [keep[cid] for cid in order], {cid: best[cid][0] for cid in order}
+
+
 def _rrf_combine(
     semantic: List[Chunk],
     bm25: List[Chunk],
     top_k: int,
     *,
     project_id: Optional[str] = None,
+    sem_rank: Optional[Dict[str, int]] = None,
+    bm_rank: Optional[Dict[str, int]] = None,
+    cosine_scale: Optional[List[float]] = None,
+    trace_extra: Optional[Dict[str, Any]] = None,
 ) -> List[Chunk]:
     """Reciprocal Rank Fusion (Cormack et al. 2009).
 
@@ -3129,9 +3237,18 @@ def _rrf_combine(
     retrieval trace. Counts and ranks only; the trace changes no ranking.
     With the trace off (``RAG_RETRIEVAL_TRACE=0``) the summary is not
     computed at all: nothing would read it.
+
+    A question searched in parts (``merge_leg_lists``) passes each leg's
+    BEST rank over the whole question and its parts as ``sem_rank`` /
+    ``bm_rank`` (several chunks may then share a rank), the whole
+    question's own cosines as ``cosine_scale`` (so ``.score`` stays on the
+    whole question's scale), and ``trace_extra`` for the trace summary.
+    Left out, each is what it always was.
     """
-    sem_rank = {c.chunk_id: r for r, c in enumerate(semantic, 1)}
-    bm_rank = {c.chunk_id: r for r, c in enumerate(bm25, 1)}
+    if sem_rank is None:
+        sem_rank = {c.chunk_id: r for r, c in enumerate(semantic, 1)}
+    if bm_rank is None:
+        bm_rank = {c.chunk_id: r for r, c in enumerate(bm25, 1)}
     sem_score = {c.chunk_id: c.score for c in semantic}
     bm_score = {c.chunk_id: c.score for c in bm25}
     # Semantic instances take precedence on tie.
@@ -3165,11 +3282,17 @@ def _rrf_combine(
     if project_id is not None and _retrieval_trace_on():
         from app.core.rag.fusion_trace import leg_summary
 
-        record_fusion(project_id, leg_summary(order, sem_rank, bm_rank, top_k))
+        summary = leg_summary(order, sem_rank, bm_rank, top_k)
+        if trace_extra:
+            summary.update(trace_extra)
+        record_fusion(project_id, summary)
     fused = order[:top_k]
-    cosines = sorted(
-        (float(v) for v in sem_score.values() if v is not None), reverse=True,
-    )
+    if cosine_scale is not None:
+        cosines = sorted((float(v) for v in cosine_scale), reverse=True)
+    else:
+        cosines = sorted(
+            (float(v) for v in sem_score.values() if v is not None), reverse=True,
+        )
     for i, c in enumerate(fused):
         c.fused_rank = i + 1
         if cosines:

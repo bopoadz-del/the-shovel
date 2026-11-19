@@ -139,7 +139,7 @@ def _install_d1_corpus(monkeypatch, *, letter_in_semantic: bool, rescue_docs=Non
     letter = _chunk("letter", LETTER_DOC, 0.31, LETTER_TEXT)
     semantic = [vol5, letter] if letter_in_semantic else [vol5]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

@@ -80,7 +80,7 @@ def _install(monkeypatch, tmp_path, semantic, lexical):
     monkeypatch.delenv("MASTER_CORPUS_SOURCE_PROJECT_ID", raising=False)
     corpus = list({c.chunk_id: c for c in list(semantic) + list(lexical)}.values())
 
-    def search(self, project_id, qvec, k, query_text=None):
+    def search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [
             Chunk(**{**c.__dict__}) for c in semantic if c.project_id == project_id
         ][:k]

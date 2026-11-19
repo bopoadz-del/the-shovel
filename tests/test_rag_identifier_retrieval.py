@@ -253,7 +253,7 @@ def test_semantic_chunk_with_identifier_outranks_identifier_only_soup(
     # real-corpus shape (0.75 spec vs ~0 drawing tables).
     real_search = store.search
 
-    def scored_search(project_id, query_vec, k=20, query_text=None):
+    def scored_search(project_id, query_vec, k=20, query_text=None, query_parts=None):
         out = real_search(project_id, query_vec, k=k, query_text=query_text)
         for c in out:
             c.score = 0.75 if "total flow rate" in c.text else 0.05
@@ -361,7 +361,7 @@ def test_d5995_carriageway_outranks_excluded_culvert(isolated_store, monkeypatch
 
     real_search = store.search
 
-    def scored_search(project_id, query_vec, k=20, query_text=None):
+    def scored_search(project_id, query_vec, k=20, query_text=None, query_parts=None):
         out = real_search(project_id, query_vec, k=k, query_text=query_text)
         for c in out:
             # Live shape: the Excluded mention outranked on cosine.

@@ -25,7 +25,7 @@ def test_retrieve_with_filter_asks_the_store_for_sixty_at_k5(monkeypatch):
 
     seen_k: list[int] = []
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         seen_k.append(k)
         return [
             Chunk(

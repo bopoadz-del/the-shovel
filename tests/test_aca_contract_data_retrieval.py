@@ -105,7 +105,7 @@ def _install_a2_corpus(monkeypatch, *, cd_in_semantic: bool):
     cd = _chunk("cd", CD_DOC, 0.29, CD_TEXT)
     semantic = [psa, cpm, cd] if cd_in_semantic else [psa, cpm]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

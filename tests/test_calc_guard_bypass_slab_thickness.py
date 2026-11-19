@@ -133,7 +133,7 @@ def _install_project_schedule(monkeypatch):
         source_name="project-structural-schedule.txt",
     )
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         if project_id == FIXTURE_PID:
             return [schedule]
         return []

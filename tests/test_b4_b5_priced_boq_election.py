@@ -225,7 +225,7 @@ def _install_soup_corpus(monkeypatch, *, extra_priced: bool):
     if extra_priced:
         semantic.extend([priced_cway, priced_fence])
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -367,7 +367,7 @@ def _install_b5_sibling_corpus(monkeypatch):
     excluded = _chunk("ex", "ex", 0.88, EXCLUDED_D549_SIBLING)
     semantic = [rate_only, excluded, priced]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

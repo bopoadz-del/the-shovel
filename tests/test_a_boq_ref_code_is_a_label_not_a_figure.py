@@ -91,7 +91,7 @@ def test_retrieval_labels_the_codes_without_touching_the_text(monkeypatch):
         Chunk(chunk_id="c2", project_id="p1", doc_id="d1", chunk_index=1, text=plain, score=0.80),
     ]
     monkeypatch.setattr("app.core.rag.vector_store.VectorStore.search",
-                        lambda self, project_id, qvec, k, query_text=None:
+                        lambda self, project_id, qvec, k, query_text=None, query_parts=None:
                         [c for c in seeded if c.project_id == project_id][:k])
     monkeypatch.setattr(retriever, "_doc_name_for_id", lambda did: "synthetic bill.pdf", raising=False)
     monkeypatch.setenv("RAG_EMBEDDING_MODEL", "fake")

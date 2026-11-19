@@ -167,7 +167,7 @@ def ret(monkeypatch):
              GC_DOC: "general_conditions.pdf", DRAWING_DOC: "GA-001.pdf",
              "spec": "033000 Concrete.pdf"}
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_chunks_for_docs(self, project_id, doc_ids, k_per_doc=12, **_kw):
@@ -276,7 +276,7 @@ def _crowd_the_pool_with_copies_of_the_rate_row(monkeypatch):
     ]
     monkeypatch.setattr(
         "app.core.rag.vector_store.VectorStore.search",
-        lambda self, pid, qvec, k, query_text=None: copies[:k],
+        lambda self, pid, qvec, k, query_text=None, query_parts=None: copies[:k],
     )
 
 

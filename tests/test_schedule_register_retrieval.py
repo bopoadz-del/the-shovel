@@ -148,7 +148,7 @@ def _install_g1_corpus(monkeypatch, *, register_in_semantic: bool):
     if register_in_semantic:
         semantic.append(reg)
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):

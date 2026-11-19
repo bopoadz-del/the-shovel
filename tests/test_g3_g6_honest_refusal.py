@@ -206,7 +206,7 @@ def _install_g3_corpus(monkeypatch, *, cd_in_semantic: bool):
     if cd_in_semantic:
         semantic.append(cd)
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -263,7 +263,7 @@ def _install_g6_corpus(monkeypatch, *, cd_in_semantic: bool):
     if cd_in_semantic:
         semantic.append(cd)
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -398,7 +398,7 @@ def _install_filled_cd(monkeypatch, *, pcg: bool):
     body = PCG_FILLED if pcg else COMMENCEMENT_FILLED
     semantic = [lookalike]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -632,7 +632,7 @@ def _install_g6_pack_only_no_cd(monkeypatch):
 
     pack = _chunk("pack", PACK_DOC, 0.93, COMMENCEMENT_PACK)
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [pack][:k] if project_id == ACTIVE else []
 
     def fake_empty(self, *args, **kwargs):

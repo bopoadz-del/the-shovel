@@ -226,7 +226,7 @@ def _install_e1_corpus(monkeypatch, *, semantic, rescue_hits, names, seeded=None
 
     seeded = list(seeded or [])
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in semantic if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -726,7 +726,7 @@ def _install_live_e1_late_aca_corpus(monkeypatch):
         {"id": GC_DOC, "original_name": CD_SCANNED_NAME, "file_path": CD_SCANNED_NAME},
     ]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in toys if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -1199,7 +1199,7 @@ def test_e1_retrieve_middle_excl_vat_when_top_k_is_only_chunks_9_11(monkeypatch)
         {"id": GC_DOC, "original_name": CD_SCANNED_NAME, "file_path": CD_SCANNED_NAME},
     ]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in toys if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -1416,7 +1416,7 @@ def test_e1_retrieve_015_top_k_still_composes_point_one(monkeypatch):
         {"id": GC_DOC, "original_name": CD_SCANNED_NAME, "file_path": CD_SCANNED_NAME},
     ]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in lookalikes if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -1677,7 +1677,7 @@ def test_e1_retrieve_refuse_prone_9_11_still_composes_point_one(monkeypatch):
         {"id": GC_DOC, "original_name": CD_SCANNED_NAME, "file_path": CD_SCANNED_NAME},
     ]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in windows if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
@@ -1884,7 +1884,7 @@ def test_e1_retrieve_ignore_all_rows_refuse_window_still_composes(monkeypatch):
         {"id": GC_DOC, "original_name": CD_SCANNED_NAME, "file_path": CD_SCANNED_NAME},
     ]
 
-    def fake_search(self, project_id, qvec, k, query_text=None):
+    def fake_search(self, project_id, qvec, k, query_text=None, query_parts=None):
         return [c for c in windows if c.project_id == project_id][:k]
 
     def fake_id_search(self, project_id, identifiers, k=20):
