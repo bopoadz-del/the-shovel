@@ -278,3 +278,25 @@ def test_route_delegated_usable_synthesis_sends_no_retry(i, monkeypatch):
     assert len(sent) == 2, sent
     assert not any(rt._EMPTY_RETRY_NUDGE in s for s in sent)
     assert ANSWERS[i].split(";")[0] in text
+
+
+# ── The instruction is the platform's, not the operator's question ──────────
+# It is appended after the turn's tool results. A reader that took it for the
+# question cut those results out of the turn: CI on this PR, a computed bill
+# total recovered from the tool result was lost and the bare line shown.
+
+@pytest.mark.parametrize("i,rule", [(0, "empty"), (1, "search_promise")])
+def test_a_retry_instruction_is_never_the_operators_question(i, rule):
+    msgs = _turn(QUESTIONS[i], ["query one", "query two"], nudged=False)
+    before = (rt._operator_turn_start(msgs), rt._latest_user_text(msgs))
+    msgs.append({"role": "user", "content": rt._FORCED_RETRY_NUDGES[rule]})
+    assert rt._is_retry_instruction(msgs[-1]["content"])
+    assert (rt._operator_turn_start(msgs), rt._latest_user_text(msgs)) == before
+    assert rt._latest_user_text(msgs) == QUESTIONS[i]
+    assert rt._cg_is_platform_bubble(rt._FORCED_RETRY_NUDGES[rule])
+
+
+@pytest.mark.parametrize("q", QUESTIONS)
+def test_an_operator_question_is_not_a_retry_instruction(q):
+    assert not rt._is_retry_instruction(q)
+    assert not rt._cg_is_platform_bubble(q)

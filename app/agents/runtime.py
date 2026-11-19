@@ -729,6 +729,15 @@ _FORCED_RETRY_NUDGES = {
 }
 
 
+def _is_retry_instruction(content: Any) -> bool:
+    """True for a user-role message that is the platform's forced-retry
+    instruction, not the operator's words. Readers of "the operator's
+    question" skip it, exactly as they skip a PRE-DISPATCH bubble: the
+    instruction is appended after the turn's tool results, so taking it for
+    the question would cut those results out of the turn."""
+    return str(content or "").strip() in _FORCED_RETRY_NUDGES.values()
+
+
 def _turn_forced_retry_nudged(messages: list[dict[str, Any]] | None) -> int | None:
     """Index of the operator's question when this turn's forced retry was
     sent with an instruction, else None.
@@ -5927,7 +5936,7 @@ def _latest_user_text(messages: list[dict[str, Any]] | None) -> str:
         if m.get("role") != "user":
             continue
         content = str(m.get("content") or "")
-        if content.lstrip().startswith(_PREDISPATCH_PREFIX):
+        if content.lstrip().startswith(_PREDISPATCH_PREFIX) or _is_retry_instruction(content):
             continue
         return content
     return ""
@@ -6847,7 +6856,8 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
     for i in range(len(msgs) - 1, -1, -1):
         m = msgs[i]
         content = str(m.get("content") or "")
-        if m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]:
+        if (m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]
+                and not _is_retry_instruction(content)):
             start, question = i + 1, content
             break
     language = computed_answer.question_language(question)
@@ -7454,7 +7464,8 @@ def _cg_is_platform_bubble(content: str) -> bool:
     operator's, and must never seed the user-arithmetic closure.
     """
     head = content.lstrip()
-    return head.startswith(_PREDISPATCH_PREFIX) or head.startswith(_TOOL_RESULT_PREFIX)
+    return (head.startswith(_PREDISPATCH_PREFIX) or head.startswith(_TOOL_RESULT_PREFIX)
+            or _is_retry_instruction(head))
 
 
 def _cg_pair_grounds(value: float, base: tuple, tol: float) -> bool:
@@ -10320,7 +10331,8 @@ def _operator_turn_start(msgs: list[dict[str, Any]]) -> int:
     for i in range(len(msgs) - 1, -1, -1):
         m = msgs[i] or {}
         content = str(m.get("content") or "")
-        if m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX):
+        if (m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX)
+                and not _is_retry_instruction(content)):
             return i
     return 0
 
@@ -10587,7 +10599,7 @@ def _next_agent_from_turn(messages: list[dict[str, Any]] | None) -> str:
     """Pick the leftover L5 handoff hat from the user's named file/intent."""
     text = ""
     for m in reversed(messages or []):
-        if m.get("role") == "user":
+        if m.get("role") == "user" and not _is_retry_instruction(m.get("content")):
             text = str(m.get("content") or "")
             break
     low = text.lower()
