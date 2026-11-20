@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail the build if secret material is in the working tree.
 
-Six hardcoded credential-shape rules, in descending order of certainty:
+Seven hardcoded credential-shape rules, in descending order of certainty:
 
   1. AWS access key ids   -- `AKIA` + 16 uppercase alphanumerics. Unambiguous.
   2. Private key blocks   -- `-----BEGIN ... PRIVATE KEY`. Unambiguous.
@@ -18,7 +18,7 @@ Six hardcoded credential-shape rules, in descending order of certainty:
      neither. The password decides -- an interpolation, a redaction mask,
      a short stand-in or a well-known placeholder word is not credential
      material; a literal of eight or more characters is. See
-     `URL_CREDENTIAL_RULES`.
+     `PREDICATE_RULES`.
   6. Personal mailbox addresses -- an address at a consumer webmail
      provider (`@gmail.com`, `@outlook.com`, ...). Every rule above keys on
      a credential, and a credential can be rotated; an address cannot. It is
@@ -27,6 +27,13 @@ Six hardcoded credential-shape rules, in descending order of certainty:
      CLASS, never on a person: consumer webmail exists to serve individuals,
      so an address there is personal by construction, while a product or
      support contact uses the product's own domain and does not fire.
+  7. Session identifiers committed as literals -- a session-ish field
+     (`session_id` and its spellings) assigned an opaque value: a UUID, a
+     32+ hex run, or a long token whose digit density only randomness
+     produces. A session id is a bearer credential -- whoever holds it
+     resumes the conversation -- and rule 3 walks past it, because the field
+     is named `session`, not `token`. A human-readable scope label is a
+     name, not a credential, and does not fire. See `PREDICATE_RULES`.
 
 Plus an env-fed client-pattern denylist (``SECRET_SCAN_PATTERNS``): one
 regex per line, from a repository secret. Those patterns are themselves
@@ -228,14 +235,64 @@ def _accepts_password(match: re.Match[str]) -> bool:
     return password.lower() not in PLACEHOLDER_PASSWORDS
 
 
+# Rule 6 -- a session identifier committed as a literal. A session id is a
+# bearer credential: whoever holds it resumes the conversation. Nothing above
+# fires on one -- the assigned-name rule keys on names like token/secret and
+# the field here is called session, and a session id carries no provider
+# prefix -- so a tree could carry a live one and still scan clean. The value
+# test is what keeps the rule honest. A UUID or a 32+ hex run is an identifier
+# by construction. Anything else has to look like randomness rather than a
+# label: 24+ characters, letters and digits, at a digit density the usual
+# encodings produce (~1 in 3 to 1 in 6) and a readable scope name does not
+# reach. A label long enough to look like a token can still be marked on its
+# own line with the allowlist marker, which is visible and greppable.
+SESSION_FIELD = r"(?i)session[_-]?id\b"
+SESSION_ID = re.compile(
+    SESSION_FIELD + r"\s*[\"']?\s*[:=]\s*[\"']?(?P<value>[A-Za-z0-9_\-+/=]{16,})"
+)
+_UUID_LITERAL = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_HEX_LITERAL = re.compile(r"[0-9a-fA-F]{32,}")
+MIN_OPAQUE_SESSION = 24
+MIN_OPAQUE_DISTINCT = 12
+#: A random alphanumeric token carries a digit roughly one character in six to
+#: one in three. A readable scope label that happens to end in a number carries
+#: one in twelve or fewer. The ratio, not the presence of a digit, is what
+#: separates an opaque identifier from a name.
+MAX_LABEL_DIGIT_DENSITY = 1 / 12
+
+
+def _accepts_session_id(match: re.Match[str]) -> bool:
+    """True when the captured session value is an opaque identifier."""
+    value = match.group("value")
+    if _UUID_LITERAL.fullmatch(value) or _HEX_LITERAL.fullmatch(value):
+        return True
+    if len(value) < MIN_OPAQUE_SESSION:
+        return False
+    if not any(character.isalpha() for character in value):
+        return False
+    digits = sum(character.isdigit() for character in value)
+    if digits / len(value) <= MAX_LABEL_DIGIT_DENSITY:
+        return False
+    return len(set(value)) >= MIN_OPAQUE_DISTINCT
+
+
 #: Rules whose regex alone cannot decide an answer: the match must also pass
 #: the rule's predicate on the captured value.
-URL_CREDENTIAL_RULES = [
+PREDICATE_RULES = [
     (
         "url-credential",
         URL_CREDENTIAL,
         "literal password inside a connection string",
         _accepts_password,
+    ),
+    (
+        "session-identifier",
+        SESSION_ID,
+        "session id committed as a literal",
+        _accepts_session_id,
     ),
 ]
 
@@ -395,7 +452,7 @@ def scan(rel_paths: list[str] | None = None) -> list[str]:
                     break
             if reported:
                 continue
-            for name, pattern, description, accepts in URL_CREDENTIAL_RULES:
+            for name, pattern, description, accepts in PREDICATE_RULES:
                 match = pattern.search(line)
                 if match is not None and accepts(match):
                     findings.append(f"{rel}:{lineno}  [{name}] {description}")
