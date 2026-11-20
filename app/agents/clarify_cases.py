@@ -415,9 +415,13 @@ def _relevant(
 ) -> bool:
     """True when the case could answer the question.
 
-    Its kind must match; when the question names a subject, the case's head
-    noun must match; and when the question's subject names a qualifier too
-    ("fresh concrete temperature", not just "temperature"), the case must
+    Its kind must match; when the question names a subject, the case must
+    answer it -- either its head noun is the asked head, or it names any word
+    of the asked subject. The second half is what keeps a passage whose own
+    phrase ends in the value's label ("BLINDING CONCRETE: Grade" for the
+    "concrete" asked): its head is the label, not the thing, and the thing is
+    still named by its own words. When the question's subject names a qualifier
+    too ("fresh concrete temperature", not just "temperature"), the case must
     share at least one of those qualifier words -- so a same-measure but
     different-thing case ("ambient temperature") is not kept. A case with no
     qualifier of its own stays (conservative: the head alone still matches).
@@ -426,7 +430,8 @@ def _relevant(
         return False
     if heads:
         c_head = _head_noun(case.subject)
-        if c_head not in heads:
+        c_tokens = _subject_tokens(case.subject)
+        if c_head not in heads and not (c_tokens & (heads | qualifiers)):
             return False
         if qualifiers:
             c_quals = _subject_tokens(case.subject) - {c_head}
