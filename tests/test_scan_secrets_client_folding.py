@@ -372,6 +372,94 @@ def test_one_location_is_reported_once(text):
     assert hits == [(1, 0)], "the same line was reported twice"
 
 
+# -- a name written with another script's lookalike letters ---------------------
+
+
+@pytest.mark.parametrize(
+    "source, latin", sorted(scan_secrets._LOOKALIKE_LETTERS.items())
+)
+def test_a_name_with_one_substituted_lookalike_letter_is_caught(source, latin):
+    """Every letter in the fold table closes its own hole.
+
+    The parametrisation is over the table itself, so dropping an entry or
+    changing its value cannot pass: the case that entry existed for goes red.
+    The entry is written in Latin and the text carries the lookalike, which is
+    the direction the substitution is actually used in.
+    """
+    phrase = f"Qa{latin} Qb{latin}"
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: phrase})
+    text = f"attribution: Qa{source} Qb{source} wrote this\n"
+    assert scan_secrets.scan_client_document(text, patterns) == [(1, 0)]
+
+
+def test_a_denylist_entry_written_with_a_lookalike_letter_still_matches():
+    """The fold is applied to the pattern too, so either side may carry one."""
+    source, latin = next(
+        (pair for pair in sorted(scan_secrets._LOOKALIKE_LETTERS.items())
+         if pair[1] in FIRST.casefold())
+    )
+    index = FIRST.casefold().index(latin)
+    written = FIRST[:index] + source + FIRST[index + 1:]
+    patterns = scan_secrets.load_client_patterns(
+        {scan_secrets.ENV_VAR: f"{written} {LAST}"}
+    )
+    assert scan_secrets.scan_client_document(f"{FULL} reviewed this\n", patterns)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\u041a\u043b\u0438\u0435\u043d\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b \u043e\u0431\u044a\u0451\u043c \u0440\u0430\u0431\u043e\u0442\n",
+        "\u0397 \u03ad\u03ba\u03b8\u03b5\u03c3\u03b7 \u03b5\u03b3\u03ba\u03c1\u03af\u03b8\u03b7\u03ba\u03b5 \u03c7\u03b8\u03b5\u03c2\n",
+    ],
+)
+def test_unrelated_prose_in_another_script_is_not_a_hit(text):
+    """Folding lookalike letters must not make any foreign text a hit."""
+    assert _hits(text) == []
+
+
+def _substitute(word: str, source: str, latin: str) -> str:
+    """``word`` with its first lower-case ``latin`` letter written as ``source``.
+
+    Only a lower-case position is a lookalike of the same letter: a capital
+    ``V`` replaced by a lower-case Greek nu is a different word, not a hidden
+    one, and testing that would prove nothing.
+    """
+    for position, char in enumerate(word):
+        if char.islower() and char.casefold() == latin:
+            return word[:position] + source + word[position + 1:]
+    raise AssertionError(f"{word!r} has no lower-case {latin!r} to substitute")
+
+
+def _lookalike_pairs(word: str) -> list[tuple[str, str]]:
+    """The table's entries that can be substituted into ``word``.
+
+    Built from the table so a case is written against whatever letters the
+    invented words happen to contain, without naming a character by hand.
+    """
+    pairs = []
+    for source, latin in sorted(scan_secrets._LOOKALIKE_LETTERS.items()):
+        if any(char.islower() and char.casefold() == latin for char in word):
+            pairs.append((source, latin))
+    assert len(pairs) >= 2, "the invented word carries too few lookalike letters"
+    return pairs
+
+
+@pytest.mark.parametrize("source, latin", _lookalike_pairs(LAST))
+def test_a_lookalike_name_written_surname_first_is_caught(source, latin):
+    """The two holes are not stacked: a homoglyph name in reverse order fires."""
+    written = _substitute(LAST, source, latin)
+    assert _hits(f"{written} {FIRST} confirmed the minutes\n") == [(1, 0)]
+
+
+@pytest.mark.parametrize("source, latin", _lookalike_pairs(FIRST))
+def test_a_lookalike_inside_an_identifier_is_still_not_a_hit(source, latin):
+    """The identifier guard keeps its contract after the lookalike fold."""
+    written = _substitute(FIRST, source, latin)
+    text = f"see build_{written.casefold()}_{LAST.casefold()}.py for the totals\n"
+    assert _hits(text) == []
+
+
 # -- the interface that mattered: the file walk, the exit code, the silence ----
 
 

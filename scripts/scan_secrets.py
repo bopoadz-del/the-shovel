@@ -430,6 +430,62 @@ _UNICODE_SEPARATORS = dict.fromkeys(
     " ",
 )
 
+# Letters in another script that are drawn the same as a Latin letter in
+# ordinary type. Writing one of them inside a denylisted name is the cheapest
+# way to keep the name while defeating a literal comparison -- and it does
+# defeat it, in every word order, exact spelling included. The property this
+# encodes is shape, not vocabulary: a Latin name written in any of these
+# letters is the same name to a reader, so the gate reads it the same way.
+# The table is the high-frequency confusables of common UI fonts, not the
+# exhaustive Unicode set; case needs no entries because the fold case-folds
+# before this table is applied, and Cyrillic and Greek capitals fold onto
+# these lower-case forms.
+_LOOKALIKE_LETTERS = {
+    # Cyrillic
+    "\u0430": "a",
+    "\u0435": "e",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0441": "c",
+    "\u0443": "y",
+    "\u0445": "x",
+    "\u0456": "i",
+    "\u0458": "j",
+    "\u0455": "s",
+    "\u0501": "d",
+    "\u051b": "q",
+    "\u051d": "w",
+    "\u04bb": "h",
+    "\u04cf": "l",
+    "\u043a": "k",
+    "\u043c": "m",
+    "\u043d": "h",
+    "\u043f": "n",
+    "\u0438": "u",
+    "\u0448": "w",
+    "\u044c": "b",
+    "\u0442": "t",
+    # Greek
+    "\u03b1": "a",
+    "\u03bf": "o",
+    "\u03bd": "v",
+    "\u03c1": "p",
+    "\u03b9": "i",
+    "\u03ba": "k",
+    "\u03c5": "u",
+    "\u03c7": "x",
+    "\u03b5": "e",
+    "\u03b7": "n",
+    "\u03c9": "w",
+    "\u03b3": "y",
+    "\u03c3": "o",
+    "\u03c4": "t",
+    "\u03bc": "u",
+    # A Latin letter that is not the one it looks like
+    "\u0261": "g",
+}
+_CONFUSABLE = {ord(source): latin for source, latin in _LOOKALIKE_LETTERS.items()}
+
 # Any of the invisible characters, so the second folding is only built for a
 # line that actually has one. Most lines do not, and most of the tree is
 # ASCII: the fast paths keep the added cost of the folded comparison small
@@ -447,6 +503,11 @@ def fold_for_match(line: str, *, join_invisible: bool = False) -> str:
     single space, and case-fold. What survives is the word sequence, which is
     what makes a name a name; what is dropped is presentation.
 
+    Finally, each letter from another script that is drawn as a Latin letter
+    is replaced by that letter: a name protected by a Cyrillic ``a`` or a
+    Greek ``o`` is the same name, and a comparison that lets one substituted
+    letter hide it protects nothing.
+
     ``join_invisible`` decides what an invisible character becomes. Removed
     (the default) it splits two words a hidden character was standing
     between; joined it fuses the halves of one word a hidden character was
@@ -463,7 +524,8 @@ def fold_for_match(line: str, *, join_invisible: bool = False) -> str:
     folded = unicodedata.normalize("NFKD", folded)
     folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
     folded = folded.translate(_UNICODE_SEPARATORS)
-    return " ".join(folded.split()).casefold()
+    folded = " ".join(folded.split()).casefold()
+    return folded.translate(_CONFUSABLE)
 
 
 def fold_views(line: str) -> tuple[str, ...]:
@@ -659,7 +721,7 @@ def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
         return None
     if not all(_TITLECASE_WORD.match(word) for word in words):
         return None
-    return tuple(word.casefold() for word in words)
+    return tuple(word.casefold().translate(_CONFUSABLE) for word in words)
 
 
 def name_runs(text: str) -> list[tuple[int, list[str]]]:
@@ -714,6 +776,12 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
                 )
                 if not unicodedata.combining(ch)
             )
+            # A letter borrowed from another script is the letter it is drawn
+            # as, so the word is judged -- and later compared -- in Latin.
+            # Without this a name protected by one lookalike letter would be
+            # name-shaped in no script at all, and would be missed in every
+            # word order but the literal one.
+            shape = shape.translate(_CONFUSABLE)
         core = shape.strip(_EDGE_PUNCTUATION)
         # The dot of an initial belongs to the initial; the dot of a full stop
         # closes the sentence and so closes the run.
