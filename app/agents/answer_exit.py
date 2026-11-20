@@ -1226,7 +1226,7 @@ _PARAM_PHRASE_RE = re.compile(
 #: uses that have no user-facing meaning. Removed whole-word, case-insensitive.
 _MACHINERY_TERM_RE = re.compile(
     r"\b(?:embed(?:ding|dings)|vector(?:s)?|top-?k|rag|"
-    r"context[ \t]+window|knowledge[ \t]+base|llm|token(?:s)?|pipeline|"
+    r"context[ \t]+window|llm|token(?:s)?|pipeline|"
     r"rerank(?:er)?|semantic[ \t]+search)\b",
     re.IGNORECASE,
 )

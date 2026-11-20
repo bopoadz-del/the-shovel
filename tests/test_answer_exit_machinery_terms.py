@@ -37,7 +37,6 @@ def test_machinery_term_is_removed(term, variant):
     "phrase",
     [
         "context window",
-        "knowledge base",
         "semantic search",
     ],
 )
