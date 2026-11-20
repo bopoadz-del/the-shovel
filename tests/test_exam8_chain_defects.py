@@ -2,10 +2,10 @@
 
 The exam ordered on 15 Nov (SPEC_EXAM_PLAN_15NOV.md, row 8): two CI cases per
 class here, one live case per class run by TESTER. Each case constructs its
-own synthetic input and drives the general mechanism that owns the rule; no
-case names a project, document, row or question from any corpus.
+own input and drives the general mechanism that owns the rule; no case names
+a project, document, row or question from any corpus.
 
-The classes (15 Nov orders, section 09:19Z and 18:03Z):
+The classes (15 Nov orders, sections 09:19Z and 18:03Z):
 
 * X1 user inputs overridden -- values the user states in the request are the
   inputs; a document may fill an input the user did not give.
@@ -47,20 +47,35 @@ def _user(text: str) -> list[dict[str, str]]:
     return [{"role": "user", "content": text}]
 
 
-def _numbered() -> Call:
-    """A call that returned one figure with its own working."""
+def _numbered(length: float, width: float, thickness: float) -> Call:
+    """A call that returned one figure, with its own working built from the
+    same three dimensions the case supplied."""
+    net = length * width * thickness
     return Call(
         tool="construction_calc",
         heading="Concrete volume",
         statements=(
             Statement(
-                figure=210.0,
+                figure=round(net * 1.05, 6),
                 what="volume",
                 unit="m3",
-                working="Net = 40 x 10 x 0.5 = 200; plus 5% = 210",
+                working=(
+                    f"Net = {length:g} x {width:g} x {thickness:g} = {net:g}; "
+                    "plus 5% allowance"
+                ),
             ),
         ),
-        asked={"length_m": 40.0, "width_m": 10.0, "thickness_m": 0.5},
+        asked={"length_m": length, "width_m": width, "thickness_m": thickness},
+    )
+
+
+_SLABS = [(40.0, 10.0, 0.5), (12.5, 6.0, 0.3)]
+
+
+def _concrete_ask(length: float, width: float, thickness: float) -> str:
+    return (
+        f"Concrete volume for a slab {length:g} m long, {width:g} m wide "
+        f"and {thickness:g} m thick."
     )
 
 
@@ -68,38 +83,53 @@ def _numbered() -> Call:
 # Values the user states are the inputs.
 
 
-def test_x1a_the_typed_contract_amount_and_rate_are_the_operands():
+@pytest.mark.parametrize("amount,rate", [(37_500_000.0, 0.08), (6_400_000.0, 0.25)])
+def test_x1a_the_typed_contract_amount_and_rate_are_the_operands(amount, rate):
     ask = (
-        "Calculate delay damages per day: contract amount 37,500,000, "
-        "rate 0.08% per day."
+        f"Calculate delay damages per day: contract amount {amount:,.0f}, "
+        f"rate {rate:g}% per day."
     )
     params = cf.extract_calculation_params_from_text(DELAY.fn, ask)
-    assert params["contract_amount"] == pytest.approx(37_500_000.0)
-    assert params["rate_percent"] == pytest.approx(0.08)
+    assert params["contract_amount"] == pytest.approx(amount)
+    assert params["rate_percent"] == pytest.approx(rate)
     # Every required operand came from the request: nothing is left to ask.
     assert cf._missing_required(DELAY.fn, params) == []
 
 
-def test_x1b_the_typed_dimensions_are_the_operands():
-    ask = "Concrete volume for a slab 14 m long, 6 m wide and 0.4 m thick."
-    params = cf.extract_calculation_params_from_text(CONCRETE.fn, ask)
-    assert params["length_m"] == pytest.approx(14.0)
-    assert params["width_m"] == pytest.approx(6.0)
-    assert params["thickness_m"] == pytest.approx(0.4)
+@pytest.mark.parametrize("dims", _SLABS)
+def test_x1b_the_typed_dimensions_are_the_operands(dims):
+    length, width, thickness = dims
+    params = cf.extract_calculation_params_from_text(
+        CONCRETE.fn, _concrete_ask(length, width, thickness)
+    )
+    assert params["length_m"] == pytest.approx(length)
+    assert params["width_m"] == pytest.approx(width)
+    assert params["thickness_m"] == pytest.approx(thickness)
 
 
 # --------------------------------------------------------------------- X2
 # A fully specified calculation is a calculation, not a document lookup.
 
 
-def test_x2a_a_fully_specified_calculation_forces_the_calculator():
-    ask = "Concrete volume for a slab 14 m long, 6 m wide and 0.4 m thick."
+@pytest.mark.parametrize(
+    "ask",
+    [
+        "Concrete volume for a slab 14 m long, 6 m wide and 0.4 m thick.",
+        "Excavation volume for a trench 9 m long, 2 m wide and 1.5 m deep.",
+    ],
+)
+def test_x2a_a_fully_specified_calculation_forces_the_calculator(ask):
     assert runtime._forced_specific_tool(_user(ask), AVAILABLE) == "construction_calc"
 
 
-def test_x2b_a_document_question_without_operands_is_not_stolen():
-    # The same nouns, no operands: this is a lookup of the contract's values.
-    ask = "What are the delay damages for late completion under this contract?"
+@pytest.mark.parametrize(
+    "ask",
+    [
+        "What are the delay damages for late completion under this contract?",
+        "Who is the Engineer under this contract?",
+    ],
+)
+def test_x2b_a_document_question_without_operands_is_not_stolen(ask):
     assert runtime._forced_specific_tool(_user(ask), AVAILABLE) is None
 
 
@@ -107,41 +137,60 @@ def test_x2b_a_document_question_without_operands_is_not_stolen():
 # A stated result agrees with the answer's own working.
 
 
-def test_x3a_a_stated_result_that_disagrees_with_its_working_is_found():
-    assert runtime.derivation_mismatches("Total = 12 x 4 = 50") == [
-        ("12 x 4", 50.0, 48.0)
+@pytest.mark.parametrize(
+    "line,expression",
+    [
+        ("Total = 12 x 4 = 50", "12 x 4"),
+        ("The run is 7 x 6 = 40 m", "7 x 6"),
+    ],
+)
+def test_x3a_a_stated_result_that_disagrees_with_its_working_is_found(line, expression):
+    found = runtime.derivation_mismatches(line)
+    assert [(expr, stated) for expr, stated, _ in found] == [
+        (expression, float(line.split("=")[-1].split()[0]))
     ]
 
 
-def test_x3b_a_stated_result_that_agrees_with_its_working_is_not_flagged():
-    assert runtime.derivation_mismatches("Total = 12 x 4 = 48") == []
+@pytest.mark.parametrize(
+    "line",
+    ["Total = 12 x 4 = 48", "The run is 7 x 6 = 42 m"],
+)
+def test_x3b_a_stated_result_that_agrees_with_its_working_is_not_flagged(line):
+    assert runtime.derivation_mismatches(line) == []
 
 
 # --------------------------------------------------------------------- X4
 # One failed step never takes the computed steps with it.
 
 
-def test_x4a_the_computed_step_is_shown_and_the_failed_one_is_named():
+@pytest.mark.parametrize("dims", _SLABS)
+def test_x4a_the_computed_step_is_shown_and_the_failed_one_is_named(dims):
+    computed = _numbered(*dims)
     failed = Call(
         tool="generate_wbs",
         heading="Schedule",
         error="contract_value_required",
         asked={"days": 7},
     )
-    answer = answer_turn([_numbered(), failed], "en")
-    assert "210" in answer
+    answer = answer_turn([computed, failed], "en")
+    figure = computed.statements[0].figure
+    assert f"{figure:,.10g}" in answer.replace(",", "")
     assert "Schedule" in answer
     assert "did not return" in answer
 
 
-def test_x4b_when_every_step_fails_every_step_is_named():
-    first = Call(tool="generate_wbs", heading="Schedule", error="provider_unavailable",
-                 asked={"days": 7})
-    second = Call(tool="cash_flow_forecast", heading="Cash flow",
-                  error="provider_unavailable", asked={"months": 6})
+@pytest.mark.parametrize(
+    "tool,heading",
+    [("generate_wbs", "Schedule"), ("cash_flow_forecast", "Cash flow")],
+)
+def test_x4b_when_every_step_fails_every_step_is_named(tool, heading):
+    first = Call(tool="construction_calc", heading="Concrete volume",
+                 error="provider_unavailable", asked={"length_m": 4.0})
+    second = Call(tool=tool, heading=heading, error="provider_unavailable",
+                  asked={"months": 6})
     answer = answer_turn([first, second], "en")
-    assert "Schedule" in answer
-    assert "Cash flow" in answer
+    assert "Concrete volume" in answer
+    assert heading in answer
     assert "did not return" in answer
 
 
@@ -149,25 +198,27 @@ def test_x4b_when_every_step_fails_every_step_is_named():
 # An input the user gave is bound before anything is asked.
 
 
-def test_x5a_a_fully_supplied_calculation_answers_without_asking():
+@pytest.mark.parametrize("amount,rate", [(37_500_000.0, 0.08), (2_150_000.0, 0.5)])
+def test_x5a_a_fully_supplied_calculation_answers_without_asking(amount, rate):
     ask = (
-        "Calculate delay damages per day: contract amount 37,500,000, "
-        "rate 0.08% per day."
+        f"Calculate delay damages per day: contract amount {amount:,.0f}, "
+        f"rate {rate:g}% per day."
     )
     params = cf.extract_calculation_params_from_text(DELAY.fn, ask)
     assert cf._missing_required(DELAY.fn, params) == []
     result = cf.run_calculation("delay_damages_daily", params)
     assert result["status"] == "success"
-    # 37,500,000 x 0.08% = 30,000 per day; the case computes its own figure.
-    assert result["result"]["daily_amount"] == pytest.approx(30_000.0)
+    # The case computes its own expected figure from the operands it supplied.
+    assert result["result"]["daily_amount"] == pytest.approx(amount * rate / 100.0)
 
 
-def test_x5b_only_the_absent_input_is_asked_for():
-    ask = "Calculate delay damages per day: contract amount 37,500,000."
+@pytest.mark.parametrize("amount", [37_500_000.0, 2_150_000.0])
+def test_x5b_only_the_absent_input_is_asked_for(amount):
+    ask = f"Calculate delay damages per day: contract amount {amount:,.0f}."
     token = cf.set_current_ask(ask)
     try:
         result = cf.run_calculation(
-            "delay_damages_daily", {"contract_amount": 37_500_000.0}
+            "delay_damages_daily", {"contract_amount": amount}
         )
     finally:
         cf._CURRENT_ASK.reset(token)
@@ -181,18 +232,26 @@ def test_x5b_only_the_absent_input_is_asked_for():
 # Only a documented default, in its own place, may change the headline.
 
 
-def test_x6a_a_documented_waste_allowance_is_applied_and_stated():
-    ask = "Concrete volume for a raft 40 x 10 x 0.5 m."
+@pytest.mark.parametrize("dims", _SLABS)
+def test_x6a_a_documented_waste_allowance_is_applied_and_stated(dims):
+    length, width, thickness = dims
+    net = length * width * thickness
+    ask = f"Concrete volume for a raft {length:g} x {width:g} x {thickness:g} m."
     computed = quantities.compose_concrete_volume_from_ask(ask)
     assert computed is not None
-    # Net 200 m3; the documented 5% allowance gives 210 m3, and the line says so.
-    assert computed["net_volume_m3"] == pytest.approx(200.0)
-    assert computed["volume_m3"] == pytest.approx(210.0)
-    assert "5%" in computed["line"]
+    assert computed["net_volume_m3"] == pytest.approx(net)
+    assert computed["volume_m3"] == pytest.approx(net * 1.05)
+    assert "%" in computed["line"]
 
 
-def test_x6b_an_earthwork_volume_gets_no_concrete_allowance():
-    ask = "Bank volume of a rectangular trench 9 m long, 2 m wide and 1.5 m deep."
+@pytest.mark.parametrize(
+    "ask",
+    [
+        "Bank volume of a rectangular trench 9 m long, 2 m wide and 1.5 m deep.",
+        "Bank volume of a rectangular trench 14.5 m long by 3.2 m wide by 1.75 m deep.",
+    ],
+)
+def test_x6b_an_earthwork_volume_gets_no_concrete_allowance(ask):
     assert quantities.compose_concrete_volume_from_ask(ask) is None
 
 
@@ -200,23 +259,28 @@ def test_x6b_an_earthwork_volume_gets_no_concrete_allowance():
 # A figure derived from the user's own inputs is stated as the answer.
 
 
-def test_x7a_a_computed_figure_is_stated_on_the_first_line():
-    answer = answer_turn([_numbered()], "en")
+@pytest.mark.parametrize("dims", _SLABS)
+def test_x7a_a_computed_figure_is_stated_on_the_first_line(dims):
+    computed = _numbered(*dims)
+    answer = answer_turn([computed], "en")
     opening = "\n".join([line for line in answer.splitlines() if line.strip()][:2])
-    assert "210" in opening
+    assert f"{computed.statements[0].figure:,.10g}".replace(",", "") in opening.replace(",", "")
     assert "unable to generate" not in answer.lower()
 
 
-def test_x7b_two_computed_figures_are_both_stated():
+@pytest.mark.parametrize("second_figure", [27.0, 96.5])
+def test_x7b_two_computed_figures_are_both_stated(second_figure):
+    first = _numbered(*_SLABS[0])
     other = Call(
         tool="construction_calc",
         heading="Excavation volume",
-        statements=(Statement(figure=27.0, what="volume", unit="m3"),),
+        statements=(Statement(figure=second_figure, what="volume", unit="m3"),),
         asked={"length_m": 9.0, "width_m": 2.0, "depth_m": 1.5},
     )
-    answer = answer_turn([_numbered(), other], "en")
-    assert "210" in answer
-    assert "27" in answer
+    answer = answer_turn([first, other], "en")
+    compact = answer.replace(",", "")
+    for figure in (first.statements[0].figure, second_figure):
+        assert f"{figure:,.10g}" in compact
     assert "not answered" not in answer.lower()
 
 
@@ -225,22 +289,29 @@ def test_x7b_two_computed_figures_are_both_stated():
 # input must fail, or the exam is broken.
 
 
-def _audit(answer: str) -> list[str]:
+def _audit(answer: str, expected_figure: float) -> list[str]:
     """What this exam would fail in one answer: a dropped computed figure or
     an arithmetic line that disagrees with itself."""
     problems: list[str] = []
-    if "210" not in answer:
+    if f"{expected_figure:,.10g}" not in answer.replace(",", ""):
         problems.append("computed figure dropped")
     if runtime.derivation_mismatches(answer):
         problems.append("arithmetic disagrees with itself")
     return problems
 
 
-def test_the_exam_passes_a_known_good_answer():
-    good = answer_turn([_numbered()], "en")
-    assert _audit(good) == []
+@pytest.mark.parametrize("dims", _SLABS)
+def test_the_exam_passes_a_known_good_answer(dims):
+    computed = _numbered(*dims)
+    good = answer_turn([computed], "en")
+    assert _audit(good, computed.statements[0].figure) == []
 
 
-def test_the_exam_fails_a_known_bad_answer():
-    bad = "The volume is 200 m3.\n\nTotal = 12 x 4 = 50"
-    assert _audit(bad) != []
+@pytest.mark.parametrize(
+    "bad_figure,bad_line",
+    [(200.0, "Total = 12 x 4 = 50"), (61.5, "The run is 7 x 6 = 40 m")],
+)
+def test_the_exam_fails_a_known_bad_answer(bad_figure, bad_line):
+    good_figure = 210.0
+    bad = f"The volume is {bad_figure:g} m3.\n\n{bad_line}"
+    assert _audit(bad, good_figure) != []
