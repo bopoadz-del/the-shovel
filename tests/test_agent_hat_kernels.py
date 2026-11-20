@@ -100,6 +100,21 @@ def test_an_unknown_scalar_hat_id_fails_loudly(tmp_path):
         _apply_hat_kernels("body", "fork.hat.nonexistent", tmp_path / "a.md")
 
 
+def test_a_hat_with_broken_formula_bindings_fails_loudly(tmp_path, monkeypatch):
+    """_apply_hat_kernels must refuse a hat whose formula bindings do not
+    resolve, not silently continue with a half-validated agent."""
+    import app.agents.formulas as formulas
+    from app.agents.runtime import _apply_hat_kernels
+
+    monkeypatch.setattr(
+        formulas,
+        "validate_manifest_bindings",
+        lambda m: ["Formula 'f' -> 'not_resolvable' not resolvable"],
+    )
+    with pytest.raises(ValueError, match="broken formula bindings"):
+        _apply_hat_kernels("body", ["fork.hat.contracts"], tmp_path / "a.md")
+
+
 def test_the_orchestrator_contract_routes_novel_computations_to_self_coding(agents):
     """'The orchestrator should have it all' includes the code path for
     computations no calculator covers: delegate to the self-coding agent,
