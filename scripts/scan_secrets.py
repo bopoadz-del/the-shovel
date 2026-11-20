@@ -47,9 +47,10 @@ escape-decoded line, and a folded line in which case, accents, invisibles,
 and the choice of separator are normalised away. A phrase wrapped across a
 line break is the same phrase. A denylist entry that is a written proper
 name -- every word capitalised -- is additionally matched as a name is
-written: surname first, or with one middle name or initial between the two
-words, in mixed case or in capitals. See ``fold_for_match``,
-``name_pattern_words`` and ``scan_client_document``.
+written: surname first, in mixed case or in capitals, in any script that
+marks case, with up to two words -- a middle name and an initial -- between
+the name's own. See ``fold_for_match``, ``name_pattern_words`` and
+``scan_client_document``.
 
 FAIL-CLOSED: if ``SECRET_SCAN_PATTERNS`` is unset, empty, or comments-only,
 this exits non-zero and never prints or concludes "clean". A scan that
@@ -696,9 +697,42 @@ _NAME_SEPARATORS = frozenset(
 # An interior apostrophe is NOT here: it makes the token not a name word at
 # all, which breaks the run instead of guessing at the apostrophe's meaning.
 _EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’"
-_TITLECASE_WORD = re.compile(r"[A-Z][a-z]+\Z")
-_CAPITALISED_WORD = re.compile(r"[A-Z]+\Z")
-_INITIAL = re.compile(r"[A-Z]\Z")
+# The shape of a name word is a property of the alphabet, not of ASCII: a
+# name written in Cyrillic, Greek or Armenian is spelled with a capital at
+# every word exactly as a Latin one is, and a rule that only recognises the
+# Latin range gives such an entry no order-independent match at all -- only
+# the spelling the list happened to be typed in. So the shape is asked of the
+# characters themselves. A script without case (Han, Kana, Hangul syllables)
+# has no capital to read as a name word, which is stated as a limit of the
+# rule rather than papered over; the literal comparison still covers it.
+
+
+def _is_titlecase_word(word: str) -> bool:
+    """True for a leading capital and lower-case letters, in any script.
+
+    Letters only: a word carrying a digit is an identifier, and an identifier
+    is never a written name however it is capitalised.
+    """
+    return (
+        len(word) >= 2
+        and word[0].isupper()
+        and word[1:].isalpha()
+        and word[1:].islower()
+    )
+
+
+def _is_capitalised_word(word: str) -> bool:
+    """True for a word spelled entirely in capitals, in any script.
+
+    A single capital letter is the one-letter case of it, so this predicate
+    answers for an initial too.
+    """
+    return bool(word) and word.isalpha() and word.isupper()
+
+
+def _is_initial(word: str) -> bool:
+    """True for one capital letter, in any script: the ``A.`` of a middle name."""
+    return len(word) == 1 and word.isalpha() and word.isupper()
 
 
 def _is_name_word(word: str) -> bool:
@@ -711,7 +745,7 @@ def _is_name_word(word: str) -> bool:
     identifier is never split into words, so neither joins a run: the case a
     document happens to use cannot decide whether a name is hidden.
     """
-    return bool(_TITLECASE_WORD.match(word) or _CAPITALISED_WORD.match(word))
+    return _is_titlecase_word(word) or _is_capitalised_word(word)
 
 
 def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
@@ -734,9 +768,9 @@ def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
     ]
     if not 2 <= len(words) <= 4:
         return None
-    if not all(_TITLECASE_WORD.match(word) for word in words):
+    if not all(_is_titlecase_word(word) for word in words):
         return None
-    return tuple(word.casefold().translate(_CONFUSABLE) for word in words)
+    return tuple(fold_for_match(word) for word in words)
 
 
 def name_runs(text: str) -> list[tuple[int, list[str]]]:
@@ -800,7 +834,7 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
         core = shape.strip(_EDGE_PUNCTUATION)
         # The dot of an initial belongs to the initial; the dot of a full stop
         # closes the sentence and so closes the run.
-        bare = core == shape or (shape == core + "." and _INITIAL.match(core))
+        bare = core == shape or (shape == core + "." and _is_initial(core))
         words.append((origin[index], core, bool(bare)))
         index = end
     runs: list[tuple[int, list[str]]] = []
@@ -810,7 +844,7 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
         if _is_name_word(core):
             if not current:
                 start = offset
-            current.append(core.casefold())
+            current.append(fold_for_match(core))
             if bare:
                 continue
         if len(current) >= 2:
@@ -821,29 +855,51 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
     return runs
 
 
+# How many capitalised words may sit between the denylisted words of a name
+# and still be that name. One carries a middle name or an initial; two carry
+# both -- ``Given Alaric B. Surname`` and ``Given Alaric Bramwell Surname``
+# are the same person written out in full. Beyond that the run is a list of
+# people, a column header or a heading, not one name, and matching it would be
+# matching vocabulary rather than an identity.
+_MAX_INTERIOR_INSERTIONS = 2
+
+
+def _reads_as(run: list[str], start: int, form: tuple[str, ...]) -> bool:
+    """True when the run reads as ``form`` from ``start``, with a bounded gap.
+
+    The first word is anchored by the caller. Each further word is taken at
+    its earliest place at or after the previous one, and the words skipped
+    over on the way are counted: taking the earliest place is what minimises
+    that count, so the total is the smallest number of words a reader of this
+    run has to pass over to read the name, and one comparison against the
+    bound decides. Skipped words are already name words -- the caller only
+    passes runs of them -- so a gap is made of capitalised text, not prose.
+    """
+    position = start + 1
+    for needle in form[1:]:
+        while position < len(run) and run[position] != needle:
+            position += 1
+        if position >= len(run):
+            return False
+        position += 1
+    return position - start - len(form) <= _MAX_INTERIOR_INSERTIONS
+
+
 def name_run_matches(run: list[str], words: tuple[str, ...]) -> bool:
     """True when the run reads as the denylisted name, however it is written.
 
-    Three written forms and no more: the exact sequence, the sequence
-    reversed (a surname-first attribution), and the sequence with one interior
-    word inserted -- a middle name or an initial. An insertion at either end
-    is not a form of the same name, it is a different run of words, and the
-    test is exact so a sentence's worth of text between the words can never
-    satisfy it.
+    The exact sequence and the sequence reversed (a surname-first
+    attribution), and either of those with up to two words inserted between
+    the name's words -- a middle name, a middle initial, or both at once.
+    What is written after the surname is not part of the match, and neither
+    is what is written before the first word: the match is anchored at the
+    first word and ends where the last one is read, exactly as a reader reads
+    a name.
     """
     size = len(words)
-    reversed_words = words[::-1]
-    for start in range(len(run) - size + 1):
-        window = tuple(run[start:start + size])
-        if window == words or window == reversed_words:
-            return True
-    if len(run) <= size:
-        return False
-    for start in range(len(run) - size):
-        window = run[start:start + size + 1]
-        for skip in range(1, size):
-            without = tuple(window[:skip] + window[skip + 1:])
-            if without == words or without == reversed_words:
+    for form in (words, words[::-1]):
+        for start in range(len(run) - size + 1):
+            if run[start] == form[0] and _reads_as(run, start, form):
                 return True
     return False
 
