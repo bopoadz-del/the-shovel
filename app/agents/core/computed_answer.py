@@ -55,6 +55,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "code": "code",
         "unanswered": "Not answered in this turn: {parts}.",
         "zero_line": "No matching rows: {parts}.",
+        "incomplete": "The reply to this question was incomplete. Please ask again.",
     },
     "ar": {
         "heading": "نتيجة محسوبة",
@@ -80,6 +81,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "code": "الرمز",
         "unanswered": "لم تتم الإجابة عنه في هذا الدور: {parts}.",
         "zero_line": "لا توجد بنود مطابقة: {parts}.",
+        "incomplete": "كان الرد على هذا السؤال غير مكتمل. يُرجى طرح السؤال مرة أخرى.",
     },
 }
 
@@ -122,6 +124,65 @@ def has_words(text: str) -> bool:
     """True when ``text`` carries a letter or digit in any script; markdown
     alone (rules, bullets, emphasis marks, blank lines) says nothing."""
     return bool(re.sub(r"[\W_]+", "", text or ""))
+
+
+#: The finish reason of a completion the model ended itself.
+NORMAL_FINISH = "stop"
+#: What a stream reports when its provider never said why it ended. Many
+#: providers omit the reason on the last chunk, so it reads as a normal stop
+#: unless nothing was written (GRADER 1420Z on #449).
+UNREPORTED_FINISH = "unreported"
+#: The exit stage that removes citations the turn cannot back. What it
+#: removes is a citation, not the answer: it never counts towards a cut, or
+#: "Grade B (source: ...)" stripped to "Grade B" would be withheld as cut.
+CITATION_STAGE = "citation_gate"
+#: The share of a reply's characters the platform's stages (readable names,
+#: the shared exit, the citation gate, figure provenance) may remove before
+#: what is left is no longer taken as the reply: above it, a stage cut it.
+CUT_SHARE = 0.5
+#: A reply that did not end normally (a length limit, a tool call left
+#: pending, a provider error, a stream cut without a reason) is withheld
+#: only below this many characters; a longer one is shown as written.
+SHORT_REPLY_CHARS = 40
+
+
+def not_the_answer(written: int, kept: int, finish: str) -> str:
+    """Why a model reply is positive evidence of NOT being the answer, or "".
+
+    ``written`` is how many characters the model wrote, ``kept`` how many the
+    stages left, ``finish`` the provider's finish reason. Never the reply's
+    words, its length alone, or its punctuation: a whole short reply that
+    ended normally ("Yes", "Grade B", one word) is the answer.
+
+    * ``"stage_cut"`` -- the stages removed more than CUT_SHARE of it;
+    * ``"unfinished"`` -- it did not end normally and is under
+      SHORT_REPLY_CHARS characters, or no reason was given and nothing was
+      written.
+
+    ``kept`` comes from kept_after_stages: citations removed are not a cut.
+    """
+    if written > 0 and kept < written * (1 - CUT_SHARE):
+        return "stage_cut"
+    if finish in ("", UNREPORTED_FINISH):  # no reason given: normal, unless nothing was written
+        return "" if written > 0 else "unfinished"
+    if finish != NORMAL_FINISH and written < SHORT_REPLY_CHARS:
+        return "unfinished"
+    return ""
+
+
+def kept_after_stages(stages: Sequence[Tuple[str, int]]) -> int:
+    """How many of a text's characters the exit stages kept, counting only
+    what a stage other than CITATION_STAGE removed.
+
+    ``stages`` is (stage name, length after it) in order, the first entry the
+    text as written. A stage that lengthens the text (an identifier read out
+    as its name) adds nothing to what is kept."""
+    if not stages:
+        return 0
+    removed = sum(max(0, before - after)
+                  for (_, before), (name, after) in zip(stages, stages[1:])
+                  if name != CITATION_STAGE)
+    return max(0, stages[0][1] - removed)
 
 
 def question_language(question: str) -> str:

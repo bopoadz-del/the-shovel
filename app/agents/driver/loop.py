@@ -10,6 +10,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.agents import driver
+from app.agents.core import computed_answer
 from app.agents.core.computed_answer import has_words
 from app.agents.driver import context, llm, render, routes, sources, tools
 from app.core import turn_progress
@@ -67,8 +68,12 @@ def exit_check(answer: str, msgs: List[Dict[str, Any]], shared: bool = False,
     figures removed and counts the passages read, for the end event."""
     from app.agents import citation_provenance as cp
 
+    # The text's length after each stage, for the turn's trace: a stage
+    # that cuts an answer to a stub is named by the numbers (lengths only).
+    stages: List[tuple] = [("model", len(answer.strip()))]
     # No registry identifier leaves: each becomes the name a user reads.
     answer, identifiers = render.readable(answer)
+    stages.append(("readable", len(answer.strip())))
     if shared:
         # The model's words also pass the platform's shared exit
         # (answer_exit) here, so the stream shows what the final answer
@@ -76,7 +81,9 @@ def exit_check(answer: str, msgs: List[Dict[str, Any]], shared: bool = False,
         from app.agents import answer_exit
 
         answer = answer_exit.check_text(answer)
+        stages.append(("answer_exit", len(answer.strip())))
     checked = cp.gate(answer, None, msgs, tool_passages=True, annotate=False)
+    stages.append((computed_answer.CITATION_STAGE, len(checked.strip())))
     _, every = cp.figure_provenance(checked, None, msgs, enforce=False, tool_passages=True)
     if not platform:
         out, trail = cp.figure_provenance(checked, None, msgs, enforce=True, tool_passages=True)
@@ -88,7 +95,9 @@ def exit_check(answer: str, msgs: List[Dict[str, Any]], shared: bool = False,
         # question with it.
         out, trail = checked, []
         every = []
+    stages.append(("figure_provenance", len(out.strip())))
     out = _tidy(out)
+    stages.append(("tidy", len(out.strip())))
     if shared:
         # A library file the turn read is named by its title, never by its
         # stored file name -- after the gate, which matches citations
@@ -98,6 +107,7 @@ def exit_check(answer: str, msgs: List[Dict[str, Any]], shared: bool = False,
     report = {
         "identifiers_replaced": identifiers,
         "figures_removed": [e["figure"] for e in every if not e.get("source")],
+        "stages": stages,
         "passages_read": sum(1 for r in cp.build_evidence(None, msgs, tool_passages=True).records
                              if r.kind == "retrieval"),
     }
@@ -285,17 +295,50 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         return [next(whole) if m.get("role") == "tool" else m for m in msgs]
 
     sent: List[str] = []
+    # The opening of the model's current reply, held until it is known to be
+    # the answer: SHORT_REPLY_CHARS written with no more than CUT_SHARE cut
+    # by the stages, or the reply ended (computed_answer.not_the_answer).
+    # Withheld only on that positive evidence -- never on its words, length
+    # or punctuation alone (GRADER 1250Z: "Yes", "Grade B" are answers).
+    opening: List[str] = []
+    written = [0, 0]  # characters of the current reply: the model wrote / the stages kept
+    streamed = [0]  # characters of the current reply the provider has sent so far
+    withheld: Dict[str, Any] = {}  # why, and how many characters (never the text)
+    #: Per stage, the characters that went in and came out over the turn.
+    stage_chars: Dict[str, int] = {}
+
+    def _flush() -> Optional[Dict[str, Any]]:
+        text = "".join(opening)
+        opening.clear()
+        if text:  # what is shown is what the turn records as said
+            sent.append(text)
+        return {"type": "token", "content": text} if text.strip() else None
+
+    def _settle(finish: str) -> Optional[Dict[str, Any]]:
+        """The model's reply ended: its held opening is shown, or withheld
+        when it is positive evidence of not being the answer."""
+        why = computed_answer.not_the_answer(written[0], written[1], finish) if opening else ""
+        if why:
+            withheld.update(reason=why, finish=finish, written=written[0], kept=written[1])
+            opening.clear()
+            return None
+        return _flush()
 
     def _release(piece: str, model_text: bool = True) -> Optional[Dict[str, Any]]:
         """Exit-check one finished piece of the answer and hand it out.
         ``model_text`` False: the platform's own words (a calculator's
         question, a computed result), which no failed run makes unbacked."""
         if not piece.strip():  # layout only (a blank line): nothing to check
+            if opening:  # it belongs after the held opening, not before it
+                opening.append(piece)
+                return None
             sent.append(piece)
             return {"type": "token", "content": piece}
         if model_text and failed and not succeeded and set(_NUMBER.findall(piece)) - user_numbers:
             # Every tool this turn failed: nothing backs a number the user
             # did not write, bare counts included ("0 items were found").
+            if opening or not has_words("".join(sent)):
+                written[0] += len(piece.strip())  # removed whole: counted as cut
             return None
         checked, trail, report = exit_check(piece, _trail(), shared=model_text, platform=not model_text)
         # The checks tidy whitespace; the piece's own ending (a line break
@@ -303,11 +346,24 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         ending = piece[len(piece.rstrip()):]
         if checked.strip():
             checked = checked.rstrip() + ending
-        sent.append(checked)
+        for name, length in report.get("stages") or ():
+            stage_chars[name] = stage_chars.get(name, 0) + length
         provenance.extend(trail)
         check["figures_removed"].extend(report["figures_removed"])
         check["identifiers_replaced"] = check.get("identifiers_replaced", 0) + report["identifiers_replaced"]
         check["passages_read"] = report["passages_read"]
+        if model_text and (opening or not has_words("".join(sent))):
+            written[0] += len(piece.strip())
+            # Kept: what the stages left, citations removed not counted as cut.
+            written[1] += computed_answer.kept_after_stages(report.get("stages") or ())
+            opening.append(checked)
+            # The reply is at least as long as what has streamed: a sentence
+            # held back for the next one is not held for its length as well.
+            if max(written[0], streamed[0]) < computed_answer.SHORT_REPLY_CHARS or computed_answer.not_the_answer(
+                    written[0], written[1], computed_answer.NORMAL_FINISH):
+                return None
+            return _flush()
+        sent.append(checked)
         return {"type": "token", "content": checked} if checked.strip() else None
 
     # One trace line per turn: what the model was offered and chose, and how
@@ -330,12 +386,15 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         # ("Let me look that up.") is dropped when the reply turns out to be
         # tool calls.
         buffer, held, result = "", None, None
+        opening.clear()
+        written[:], streamed[0] = [0, 0], 0
         hold_reply = bool(refused)
         async for kind, value in llm.stream(agent, msgs, offered, model=driver.model()):
             if kind == "done":
                 result = value
                 break
             buffer += value
+            streamed[0] += len(value)
             while not hold_reply:
                 cut = _SENTENCE_END.search(buffer)
                 if cut is None:
@@ -351,6 +410,12 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             return
         message = result["message"]
         calls = message.get("tool_calls") or []
+        finish = str(result.get("finish_reason") or computed_answer.NORMAL_FINISH)
+        # The completion as the provider returned it: its length and why it
+        # ended (a length and a reason only, never the text).
+        trace[-1].update(finish=finish, reply_chars=len(message.get("content") or ""))
+        if calls or refused:
+            opening.clear()  # a preamble beside tool calls, or a held reply: never shown
         if not calls and refused and not reminded:
             # The model answered while a refused workflow is still open. Its
             # reply is not shown; it is told once to call the workflow again
@@ -376,6 +441,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                     event = await off_loop(_release, piece)
                     if event:
                         yield event
+            event = _settle(finish)
+            if event:
+                yield event
             answer_done = model_answered = True
             break
         msgs.append({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
@@ -492,11 +560,16 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         msgs.append({"role": "system", "content": _FINISH})
         finished = False
         buffer = ""
+        opening.clear()
+        written[:], streamed[0] = [0, 0], 0
+        finish = computed_answer.NORMAL_FINISH
         async for kind, value in llm.stream(agent, msgs, [], model=driver.model()):
             if kind == "done":
                 finished = bool(value and value.get("status") == "success")
+                finish = str((value or {}).get("finish_reason") or finish)
                 break
             buffer += value
+            streamed[0] += len(value)
             while True:
                 cut = _SENTENCE_END.search(buffer)
                 if cut is None:
@@ -511,9 +584,14 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             if event:
                 finished = True
                 yield event
+        event = _settle(finish)
+        if event:
+            finished = True
+            yield event
+        trace.append({"step": "finish", "finish": finish, "withheld": withheld.get("reason")})
         model_answered = finished
         if not finished or not "".join(sent).strip():
-            event = await off_loop(_release, _STOP)
+            event = await off_loop(_release, _STOP, model_text=False)
             if event:
                 yield event
     if model_answered and failed and not succeeded:
@@ -581,6 +659,14 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             event = await off_loop(_release, recovered.rstrip() + "\n", model_text=False)
             if event:
                 yield event
+    if model_answered and not has_words("".join(sent)):
+        # Nothing above stood in for a reply that was withheld or carried no
+        # words: say the reply was incomplete, in the question's language --
+        # never "not found", which only a search that found nothing may say.
+        lab = computed_answer.labels_for(computed_answer.question_language(user_message))
+        event = await off_loop(_release, lab["incomplete"] + "\n", model_text=False)
+        if event:
+            yield event
     from app.agents import citation_provenance as cp
 
     # Once, at the end: the calculator credit the answer does not carry, and
@@ -596,6 +682,10 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         "conversation": str(conversation_id or ""),  # an id, never the user's words
         "steps": trace, "ended": ("answer" if model_answered else "question" if answer_done else "step_limit"),
         "figures_removed": check["figures_removed"], "identifiers_replaced": check.get("identifiers_replaced", 0),
+        # Lengths only: the answer's characters after each stage, what was
+        # shown, and why a reply was withheld with its lengths (never text).
+        "stage_chars": stage_chars, "shown_chars": len("".join(sent)),
+        "withheld": withheld,
         "elapsed_s": round(time.monotonic() - t0, 2)}, default=str))
     yield {"type": "end", "complete": True, "mode": "driver", "hat": hat, "tools": used, "exports": exports,
            "provenance": provenance, "exit_check": check,
