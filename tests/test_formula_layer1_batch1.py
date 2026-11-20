@@ -124,7 +124,6 @@ def test_f2_u_interim_payment_written_figures(gross, pct, retention, net):
     assert r["net_payment"] == pytest.approx(net, abs=0.01)
 
 
-@pytest.mark.xfail(strict=True, reason="suspected defect: retention_percent silently defaults to 10 (plan F2-M, ask-not-guess)")
 @pytest.mark.parametrize("gross", [1_250_000, 800_000])
 def test_f2_m_interim_payment_missing_retention_asks(gross):
     # A silent 10 % would give 1,250,000 - 125,000 = 1,125,000: must ask instead.
