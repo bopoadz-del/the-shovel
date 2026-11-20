@@ -247,6 +247,26 @@ _PERIOD_LENGTH = {"week": 5, "month": 21}
 _HOURS_PER_DAY = 8
 
 
+def _peak_person_day(
+    day_persons: Dict[int, float],
+    length_days: int,
+    period_labels: List[str],
+) -> Tuple[float, str]:
+    """The busiest day's headcount and the period that day falls in.
+
+    ``day_persons`` maps a working-day offset to the number of persons on site
+    that day. Both branches of :func:`resource_histogram` load that mapping —
+    the synthetic one from ``Activity.resources``, the TASKRSRC one by turning
+    exported man-hours into persons — and both take their peak from here, so
+    ``peak_total`` means the same thing for every input shape.
+    """
+    if not day_persons:
+        return 0.0, ""
+    peak_day = max(day_persons, key=lambda d: day_persons[d])
+    label = period_labels[min(peak_day // length_days, len(period_labels) - 1)]
+    return round(day_persons[peak_day], 2), label
+
+
 def resource_histogram(
     results: List[CPMResult],
     activities: List[Activity],
@@ -267,7 +287,10 @@ def resource_histogram(
     synthetic ``Activity.resources`` distribution. The TASKRSRC path is the
     *only* one that reflects what P6 actually exported; the synthetic path is
     a best-effort substitute for activities authored in code/tests without a
-    resource model.
+    resource model. Units differ by branch there: TASKRSRC period totals and
+    ``by_trade_totals`` are man-hours (what P6 exports), while ``peak_total``
+    is persons — the exported quantity spread over its span and divided by the
+    module's ``_HOURS_PER_DAY``.
     """
     if task_resources:
         return histogram_from_taskrsrc(
@@ -316,7 +339,7 @@ def resource_histogram(
             total_manhours += res.count * span * _HOURS_PER_DAY
 
     # Day-level concurrency: day d is covered by a span when es <= d < ef.
-    day_totals: Dict[int, float] = {}
+    day_persons: Dict[int, float] = {}
     for rid, (es, ef) in es_ef.items():
         persons = sum(res.count for res in res_by_id.get(rid, []))
         if persons <= 0:
@@ -324,14 +347,11 @@ def resource_histogram(
         first = int(es)
         stop = int(ef) + (1 if ef > int(ef) else 0)  # a part-day still has people on site
         for day in range(first, stop):
-            day_totals[day] = day_totals.get(day, 0.0) + persons
+            day_persons[day] = day_persons.get(day, 0.0) + persons
 
-    if day_totals:
-        peak_day = max(day_totals, key=lambda d: day_totals[d])
-        peak_total = round(day_totals[peak_day], 2)
-        peak_period = periods[min(peak_day // length, len(periods) - 1)].label
-    else:
-        peak_total, peak_period = 0.0, ""
+    peak_total, peak_period = _peak_person_day(
+        day_persons, length, [p.label for p in periods],
+    )
     return ResourceHistogram(
         period_unit=period_unit,
         periods=periods,
@@ -603,7 +623,10 @@ def histogram_from_taskrsrc(
     """Time-phase real P6 ``TASKRSRC`` rows into a :class:`ResourceHistogram`.
 
     Each row contributes ``target_qty`` man-hours spread uniformly across its
-    [start_date, end_date] span, bucketed into periods. When a row has no
+    [start_date, end_date] span, bucketed into periods; ``peak_total`` is the
+    busiest day's headcount on the same day-level rule the synthetic branch
+    uses, so the peak is in persons even though the period totals are in
+    man-hours. When a row has no
     dates (P6 sometimes omits them for unstarted activities), the helper
     falls back to the matching CPM ``early_start_day..early_finish_day`` span
     from ``results`` — this is the only reason ``results``/``activities`` are
@@ -645,6 +668,7 @@ def histogram_from_taskrsrc(
     period_loading: List[Dict[str, float]] = [
         {} for _ in range(n_periods)
     ]
+    day_persons: Dict[int, float] = {}
     for tr in task_resources:
         code = tr.get("task_code") or code_by_tid.get(tr.get("task_id"))
         qty = float(tr.get("target_qty") or 0.0)
@@ -668,6 +692,13 @@ def histogram_from_taskrsrc(
             period_loading[p][rsrc] = (
                 period_loading[p].get(rsrc, 0.0) + per_day * overlap
             )
+        # Man-hours -> persons on site: the same quantity over the same span,
+        # divided by the working day the quantity's hours are counted in.
+        persons_per_day = per_day / _HOURS_PER_DAY
+        first = int(es)
+        stop = int(ef) + (1 if ef > int(ef) else 0)
+        for day in range(first, stop):
+            day_persons[day] = day_persons.get(day, 0.0) + persons_per_day
 
     for p in range(n_periods):
         by_trade = period_loading[p]
@@ -677,12 +708,14 @@ def histogram_from_taskrsrc(
             by_trade={k: round(v, 2) for k, v in by_trade.items()},
         ))
 
-    peak = max(periods, key=lambda hp: hp.total, default=None)
+    peak_total, peak_period = _peak_person_day(
+        day_persons, length_days, [p.label for p in periods],
+    )
     return ResourceHistogram(
         period_unit=period_unit,
         periods=periods,
-        peak_total=peak.total if peak else 0.0,
-        peak_period=peak.label if peak else "",
+        peak_total=peak_total,
+        peak_period=peak_period,
         by_trade_totals={k: round(v, 2) for k, v in by_trade_totals.items()},
         total_manhours=round(total_manhours, 2),
     )

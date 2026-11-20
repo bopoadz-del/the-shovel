@@ -118,7 +118,50 @@ def test_resource_histogram_rejects_an_unknown_period_unit(bad_unit):
     acts = [_act("A", 5, resources=[ResourceAssignment(trade="civil", count=2)])]
     out = compute_cpm(CPMInput(activities=acts))
     with pytest.raises(ValueError, match="period_unit"):
-        resource_histogram(out.results, acts, period_unit=bad_unit)
+        resource_histogram(out.results, acts, period_unit=bad_unit,
+                           task_resources=[{"task_code": "A", "target_qty": 40, "rsrc_id": "lab"}])
+
+
+@pytest.mark.parametrize("parallel, period_totals, peak, peak_period", [
+    # A alone days 0-9: 160 man-hours over 10 days = 16 mh/day = 2 persons;
+    # B alone days 10-19: 240 man-hours = 24 mh/day = 3 persons. Week 3 sums
+    # 120 man-hours and week 4 sums 120 too, but no day holds more than B's 3
+    # persons - a bucket total is man-hours, not a headcount.
+    (False, [80.0, 80.0, 120.0, 120.0], 3.0, "W3"),
+    # A and B both run days 0-9: 2 + 3 persons every day, so the busiest day
+    # holds 5 while week 1 sums 200 man-hours.
+    (True, [200.0, 200.0], 5.0, "W1"),
+])
+def test_taskrsrc_peak_is_the_busiest_day_in_persons(parallel, period_totals, peak, peak_period):
+    """The stored P6 form takes the same day-level peak as a synthetic network.
+
+    TASKRSRC carries man-hours, so the peak needs the module's 8-hour day to
+    become persons; the period totals stay man-hours.
+    """
+    acts = [_act("A", 10), _act("B", 10)]
+    if not parallel:
+        acts[1] = _act("B", 10, preds=["A"])
+    out = compute_cpm(CPMInput(activities=acts))
+    hist = resource_histogram(
+        out.results, acts, period_unit="week",
+        task_resources=[
+            {"task_code": "A", "target_qty": 160, "rsrc_id": "lab"},
+            {"task_code": "B", "target_qty": 240, "rsrc_id": "lab"},
+        ],
+    )
+    assert [p.total for p in hist.periods] == period_totals
+    assert hist.peak_total == peak
+    assert hist.peak_period == peak_period
+
+
+@pytest.mark.parametrize("with_export", [False, True])
+def test_histogram_with_no_placeable_work_has_no_peak(with_export):
+    rows = ([{"task_code": "A", "target_qty": 40, "rsrc_id": "lab"}]
+            if with_export else None)
+    hist = resource_histogram([], [], period_unit="week", task_resources=rows)
+    assert hist.peak_total == 0.0
+    assert hist.peak_period == ""
+    assert hist.total_manhours == 0.0
 
 
 def test_resource_histogram_total_manhours():
