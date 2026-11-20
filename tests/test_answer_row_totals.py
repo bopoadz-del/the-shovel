@@ -635,3 +635,23 @@ def test_a_bucket_that_writes_its_figure_into_its_wording_reconciles_the_total(a
     # The bucket states the figure for the rows it stands for, and the total is
     # the printed rows plus that figure, so the total is the answer's own sum.
     assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 40 in this section.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m 12.\n",
+        id="preposition-after-the-figure",
+    ),
+    pytest.param(
+        "The rows sum to 1,400 of the priced rows.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm 120.\n",
+        id="partitive-after-the-figure",
+    ),
+])
+def test_a_claim_figure_followed_by_an_ordinary_word_states_no_unit(answer):
+    # "40 in this section", "1,400 of the priced rows": the word after the
+    # figure is the sentence's own, not a unit the answer gives that figure. A
+    # figure with no unit cannot be matched to a column, so nothing is
+    # rewritten - the same silence the check keeps for a table with no unit.
+    assert reconcile(answer) == answer
