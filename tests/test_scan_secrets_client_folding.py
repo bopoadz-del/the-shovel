@@ -124,7 +124,16 @@ def test_a_name_written_surname_first_or_with_a_middle_name_is_caught(label, tex
     assert _hits(text) == [(1, 0)], label
 
 
-def test_an_entry_that_is_not_a_written_name_is_never_reordered():
+@pytest.mark.parametrize(
+    "phrase, reversed_text",
+    [
+        (f"{FIRST.lower()} {LAST.lower()}", f"{LAST.lower()} {FIRST.lower()} signed\n"),
+        (f"{LAST.lower()} drafted", f"drafted {LAST.lower()} signed\n"),
+    ],
+)
+def test_an_entry_that_is_not_a_written_name_is_never_reordered(
+    phrase, reversed_text
+):
     """Only a name-shaped entry gets the name rule.
 
     A lower-case entry is a phrase, not a person: the folded phrase match
@@ -132,13 +141,11 @@ def test_an_entry_that_is_not_a_written_name_is_never_reordered():
     of ordinary vocabulary -- which is the false positive the withdrawn
     word-set match produced.
     """
-    phrase = f"{FIRST.lower()} {LAST.lower()}"
     patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: phrase})
-    assert scan_secrets.scan_client_document(phrase + " signed\n", patterns) == [
-        (1, 0)
-    ]
-    reversed_phrase = f"{LAST.lower()} {FIRST.lower()} signed\n"
-    assert scan_secrets.scan_client_document(reversed_phrase, patterns) == []
+    assert scan_secrets.scan_client_document(
+        phrase + " signed\n", patterns
+    ) == [(1, 0)]
+    assert scan_secrets.scan_client_document(reversed_text, patterns) == []
 
 
 @pytest.mark.parametrize(
