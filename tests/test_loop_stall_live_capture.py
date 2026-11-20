@@ -524,7 +524,12 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
     round the hold made late is read and names the holder."""
     n = _size_for(0.6) if hold else 0
     events: list = []
-    real_take, real_cancel = loop_watchdog.LiveDump.take, loop_watchdog.LiveDump.cancel
+    armed = threading.Event()
+    real_take, real_cancel, real_arm = (
+        loop_watchdog.LiveDump.take,
+        loop_watchdog.LiveDump.cancel,
+        loop_watchdog.LiveDump.arm,
+    )
 
     def take(self):
         if threading.current_thread().name == "loop-watchdog":
@@ -536,8 +541,14 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
         if threading.current_thread().name == "loop-watchdog":
             events.append(("cancel", time.monotonic()))
 
+    def arm(self, after_s=None):
+        if threading.current_thread().name == "loop-watchdog":
+            armed.set()
+        real_arm(self, after_s)
+
     monkeypatch.setattr(loop_watchdog.LiveDump, "take", take)
     monkeypatch.setattr(loop_watchdog.LiveDump, "cancel", cancel)
+    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
 
     async def run():
         events.append(("cancel", time.monotonic()))
@@ -547,11 +558,17 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
         done, release = threading.Event(), threading.Event()
 
         def work():
+            # Start the hold only after the monitor has armed its timer, so
+            # the hold overlaps the timer's fire window instead of racing it
+            # (a hold begun in the unarmed gap between two heartbeats is
+            # invisible: no heartbeat is in flight and no timer is armed).
+            assert armed.wait(5), "the monitor never armed its timer"
             _gil_holding_call(n)
             done.set()
             release.wait(5)
 
         if hold:
+            armed.clear()
             worker = threading.Thread(target=work, name="gil-holder")
             worker.start()
             while not done.is_set():
