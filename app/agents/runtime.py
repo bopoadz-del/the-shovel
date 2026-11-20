@@ -10533,6 +10533,83 @@ def _run_answer_composers(
     return text
 
 
+def _apply_clarify_cases(
+    text: str,
+    rag_sys_msg: dict[str, Any] | None,
+    messages: list[dict[str, Any]] | None,
+) -> str:
+    """The 15:03Z general behaviour (all sources), enforced at the answer exit.
+
+    When the handed evidence carries more than one materially different value
+    for what was asked, the question names none of them, and the draft has
+    silently committed to exactly one, the exit replaces the draft with ONE
+    short clarifying question that names the cases it found, each with its
+    source (``app/agents/clarify_cases.py``). It rides the existing
+    awaiting-inputs turn state, so the client renders "the agent is asking"
+    the way it already renders a calculator's missing input.
+
+    The guards here are defensive early returns (disabled, empty question,
+    empty draft, no passages) that short-circuit before building the evidence.
+    The first (the ``CLARIFY_CASES=0`` kill switch) is observable -- it skips
+    the evidence build entirely, which the wiring test asserts -- so its
+    drop_rule mutant is killed. The rest mirror the detector's own checks
+    (``clarifying_question`` returns None for each of them) and only avoid the
+    work. Never raises: a failure passes the answer through unchanged.
+    """
+    from app.agents.clarify_cases import (
+        cases_from_passages,
+        clarifying_question,
+        enabled,
+    )
+
+    if not enabled():
+        return text or ""
+    if not (text or "").strip():
+        return text or ""
+    ask = _latest_operator_ask(messages) or ""
+    if not ask.strip():
+        return text or ""
+    try:
+        from app.agents.citation_provenance import build_evidence
+
+        evidence = build_evidence(rag_sys_msg, messages, tool_passages=True)
+        passages = [
+            (rec.source_name or rec.doc_id or "", rec.text)
+            for rec in evidence.records
+            if rec.kind == "retrieval" and (rec.text or "").strip()
+        ]
+        if not passages:
+            return text or ""
+        question = clarifying_question(ask, text, cases_from_passages(passages))
+        if question is None:
+            return text or ""
+        _record_clarifying_question(question)
+        return question
+    except Exception:  # noqa: BLE001 -- an exit check must never break an answer
+        _LOG.warning("clarify-cases exit failed; answer passed through", exc_info=True)
+        return text or ""
+
+
+def _record_clarifying_question(question: str) -> None:
+    """Record the clarifying question on the turn so the exit reads "asking".
+
+    The question wording goes on ``Turn.questions`` (preserved verbatim by the
+    answer contract), and a general marker goes on ``Turn.awaiting_inputs`` so
+    the ``{"missing": [...]}`` carrier the route observer already trusts (S1c)
+    reads non-empty.
+    """
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    if turn is None:
+        return
+    if question not in turn.questions:
+        turn.questions.append(question)
+    marker = "which_case"
+    if marker not in turn.awaiting_inputs:
+        turn.awaiting_inputs.append(marker)
+
+
 @_turn_timing_stage("postprocess")
 def _postprocess_answer(
     text: str,
@@ -10658,6 +10735,12 @@ def _postprocess_answer(
     # Last: the answer's own working must agree with its own result. Checked
     # after every graft, so a grafted figure is checked too.
     text = _annotate_derivation_mismatches(text)
+    # 15:03Z general behaviour (all sources): when the handed evidence carries
+    # more than one case and the draft silently picked one, the exit replaces
+    # the draft with ONE clarifying question (app/agents/clarify_cases.py).
+    # Runs last so the question lists the final, scrubbed values and is never
+    # itself scrubbed or annotated.
+    text = _apply_clarify_cases(text, rag_sys_msg, messages)
     # 0-token force_synthesis must never persist an empty bubble.
     return _nonblank_after_empty_synthesis(text, messages)
 
