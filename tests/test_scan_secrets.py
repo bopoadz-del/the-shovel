@@ -191,10 +191,11 @@ def test_a_connection_string_without_credential_material_does_not_fire(password)
     )
 
 
-def test_the_walk_reports_a_connection_string_credential(tmp_path, monkeypatch):
+@pytest.mark.parametrize("password", [_fake("", 24), _fake("pw-", 12)])
+def test_the_walk_reports_a_connection_string_credential(tmp_path, monkeypatch, password):
     """The rule is wired into scan(), not merely defined beside it."""
     (tmp_path / "compose.yml").write_text(
-        "DATABASE_URL=postgresql://svc:" + _URL_PW + "@db.internal:5432/app\n",
+        "DATABASE_URL=postgresql://svc:" + password + "@db.internal:5432/app\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -203,7 +204,7 @@ def test_the_walk_reports_a_connection_string_credential(tmp_path, monkeypatch):
     findings = scan_secrets.scan()
     assert len(findings) == 1
     assert "[url-credential]" in findings[0]
-    assert _URL_PW not in findings[0]
+    assert password not in findings[0]
 
 
 # ── the allowlist has to work, or people will delete the check ────────────
