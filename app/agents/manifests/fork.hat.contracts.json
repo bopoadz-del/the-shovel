@@ -109,6 +109,133 @@
         "description": "Assess an EOT claim for entitlement and quantum",
         "steps": ["receive_claim", "verify_notice_compliance", "assess_entitlement", "quantify_delay", "recommend_decision", "handoff_if_cost_impact"]
       }
+    ],
+    "rules": "every figure, date, clause number and name comes from a document the user supplied or the project index returned, with a citation; anything else is written as UNKNOWN and listed under \"to confirm\"; the hat never states entitlement, never admits liability, never waives a right, never sends anything; a draft ends with a hold-point line and is reviewed by a person with commercial authority before issue.",
+    "procedures": [
+      {
+        "id": "c1",
+        "title": "Variation or extension-of-time notice (four lanes)",
+        "purpose": "draft a notice of a variation, a delay event or an extension-of-time claim without mixing fact, entitlement, time and money.",
+        "inputs": "the contract form if known; the triggering instruction or event and the date and channel it arrived; the changed work or delay in the user's words; drawings or specification before and after; programme activity ids if any; any cost build-up supplied; notices already sent; diary, photo and RFI references.",
+        "refusals": "inventing clause numbers, notice periods, time bars, days, hours or money; calling a notice a claim when the contract says notice; mixing delay cost into the days line.",
+        "steps": [
+          "Classify the event: directed variation, constructive variation, delay only, delay with cost, late instruction, unforeseen condition, or UNKNOWN.",
+          "Write the fact chronology as dated bullets, each with its source document.",
+          "State the entitlement pathway in plain words and the clause as supplied or UNKNOWN. Use the contract clause lookup only when the contract is in the index.",
+          "Time lane: activities affected, float status only if the programme supplied it, days claimed only when calculated from supplied dates by the formula executor.",
+          "Money lane: a table of supplied rates and quantities, subtotal only what was supplied, exclusions flagged, otherwise QUANTUM NOT PRICED.",
+          "Records list: diary dates, photos, RFIs, instructions, by reference.",
+          "Questions for the project manager before anything is issued."
+        ],
+        "output": "the four lanes as headed sections, the records list, the questions, then the hold-point line \"HOLD POINT, not issued, not a payment claim, not legal advice\".",
+        "done_when": "the four lanes do not leak into each other, every number has a source or is UNKNOWN, the issue block is explicit.",
+        "lineage": "the four-lane separation follows a public site-office practice (dgcruzing, MIT); text is ours."
+      },
+      {
+        "id": "c2",
+        "title": "Contract notice letter",
+        "purpose": "a factual, timely notice under a named clause that reserves the position without arguing the case.",
+        "inputs": "the clause requiring notice; its time limit; the event; the date of awareness; the effect to date on cost and programme; what is being reserved or claimed; attachments.",
+        "refusals": "adjectives about fairness or conduct; accusations; any statement of entitlement a lawyer has not confirmed; invented dates.",
+        "steps": [
+          "identify the clause and time limit from the contract text in the index or from the user",
+          "chronology of facts with dates and only what can be evidenced",
+          "effect so far with \"to be updated\"",
+          "what is reserved",
+          "what the recipient is asked to do",
+          "keep under 400 words, neutral"
+        ],
+        "output": "the letter body; a separate list \"statements in the brief with no evidence supplied\" for the user to check before sending; the hold-point line.",
+        "done_when": "the clause and time limit are stated, the unevidenced list is present, no entitlement is asserted.",
+        "lineage": "structure follows a CC BY 4.0 construction prompt library (Constructelligence, credited with licence link in the manifest); text is ours.",
+        "attribution": {"licence": "CC BY 4.0", "credit": "Constructelligence", "link": "https://creativecommons.org/licenses/by/4.0/"}
+      },
+      {
+        "id": "c3",
+        "title": "Request for information",
+        "purpose": "one clear question to the designer or engineer with the proposed interpretation and the dated consequence of a late answer.",
+        "inputs": "the drawing or specification reference and revision; the conflict or gap in the user's words; the activity affected and its planned start; prior RFIs on the same point.",
+        "refusals": "more than one question per RFI; proposing a design solution as if agreed; inventing a required-by date not derived from the programme supplied.",
+        "steps": [
+          "cite the documents and revisions",
+          "state the gap or conflict in one paragraph",
+          "propose an interpretation and its basis",
+          "state the required-by date from the programme or UNKNOWN",
+          "note cost or time consequence only if supplied",
+          "log the RFI id and status"
+        ],
+        "output": "subject line, references, question, proposed interpretation, required-by, consequence, attachments list.",
+        "done_when": "one question, cited references, a date or UNKNOWN, status recorded.",
+        "lineage": "common RFI practice in the public MIT project-engineer and office sets; text is ours."
+      },
+      {
+        "id": "c4",
+        "title": "Change-event timeline",
+        "purpose": "a dated chronology of a change or delay event distinguishing triggering events from background facts.",
+        "inputs": "every dated document the user names: instructions, letters, emails, minutes, diary entries, drawing issues, programme updates.",
+        "refusals": "inventing or inferring dates; filling gaps with assumption; ordering by narrative instead of date.",
+        "steps": [
+          "extract each dated event with source",
+          "mark each as trigger, response, background or consequence",
+          "flag gaps longer than the notice period if the period was supplied, otherwise flag gaps as \"period UNKNOWN\"",
+          "list documents referred to but not supplied"
+        ],
+        "output": "a date-ordered table (date, event, class, source), a gap list, a missing-documents list.",
+        "done_when": "every row has a source, no undated row exists, gaps are visible.",
+        "lineage": "evidence-chronology method common to consulting and claims practice (Apache-2.0 library credited in NOTICE); text is ours.",
+        "attribution": {"licence": "Apache-2.0", "credit": "see NOTICE", "notice": "Apache-2.0 NOTICE retained"}
+      },
+      {
+        "id": "c5",
+        "title": "Evidence ledger",
+        "purpose": "separate fact, document, inference, assumption, hearsay and missing evidence before any conclusion is drawn.",
+        "inputs": "the question to be decided; every statement, note or document offered; the current proposed conclusion.",
+        "refusals": "grading a compound statement as a whole; treating seniority, repetition or confidence as evidence; concluding when the ledger says do not conclude yet.",
+        "steps": [
+          "split statements into atomic items",
+          "type each item",
+          "rate strength (strong, medium, weak, missing) and relevance (high, medium, low) with a reason",
+          "name the three to five gaps most likely to change the conclusion",
+          "convert each gap into the fastest check with an owner"
+        ],
+        "output": "ledger table, gap table, a four-line confidence read-out (strongly supported, plausible not proven, risky assumption, do not conclude yet).",
+        "done_when": "contradictions are highlighted not smoothed, every row has a source or is marked missing.",
+        "lineage": "evidence-map method (Apache-2.0 library credited in NOTICE); text is ours.",
+        "attribution": {"licence": "Apache-2.0", "credit": "see NOTICE", "notice": "Apache-2.0 NOTICE retained"}
+      },
+      {
+        "id": "c6",
+        "title": "Risk register with controls",
+        "purpose": "a register where each risk is an event with a cause and a consequence, rated on supplied scales, with owner, trigger and monitoring signal.",
+        "inputs": "the plan or decision; the likelihood and impact scales the project uses (or UNKNOWN); candidate risks from the user and the project documents; owners.",
+        "refusals": "numeric scores when the project has not defined the scales; mixing legal, safety or regulatory stop conditions into a relative ranking.",
+        "steps": [
+          "write each risk as event, cause, consequence",
+          "rate with the supplied scales or mark UNRATED",
+          "assign prevent, reduce, transfer or accept with owner and due date",
+          "define a leading signal and threshold per priority risk",
+          "keep stop conditions in a separate list"
+        ],
+        "output": "register table, response table, monitoring table, stop-condition list.",
+        "done_when": "no rating exists without a scale, every priority risk has an owner and a signal.",
+        "lineage": "risk matrix method (Apache-2.0 library credited in NOTICE); text is ours.",
+        "attribution": {"licence": "Apache-2.0", "credit": "see NOTICE", "notice": "Apache-2.0 NOTICE retained"}
+      },
+      {
+        "id": "c7",
+        "title": "Contract clause map",
+        "purpose": "locate and classify the clauses of the project's contract that govern payment, variations, time, notices, disputes, insurance, warranty and indemnity.",
+        "inputs": "the contract documents in the index (conditions, particular conditions, appendices).",
+        "refusals": "quoting a clause number not found in the index; summarising a clause as a legal conclusion.",
+        "steps": [
+          "run the clause lookup per category using FIDIC-style and common vocabulary (payment certificate, retention, variation, extension of time, notice, dispute board, insurance, defects, indemnity, liquidated damages, taking over)",
+          "list each hit with document, page and the clause's own heading",
+          "mark categories with no hit as NOT FOUND"
+        ],
+        "output": "a category table with citations, a NOT FOUND list.",
+        "done_when": "every category is either cited or NOT FOUND.",
+        "lineage": "keyword clause extraction common to public MIT sets; vocabulary extended for FIDIC; text is ours."
+      }
     ]
   }
 }
