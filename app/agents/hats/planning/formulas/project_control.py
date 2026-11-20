@@ -53,22 +53,28 @@ def crew_sizing(
 ) -> dict:
     """Productivity / crew sizing.
 
-    crews_required = Q / (D * R); crew_days = Q / R; man_hours = crew_days * h.
+    crews_required = Q / (D * R); crew_days = Q / R;
+    man_hours = crew_days * h * N, where N is the number of persons in one
+    crew (1 when ``crew_size`` is absent). A crew-day is one crew of N persons
+    working h hours, so h alone is one person's hours, not the crew's.
     Fractional crews are reported rounded UP with the rounding shown, and the
-    identity crews * D * R = Q is checked. ``crew_size`` (N) gives
+    identity crews * D * R = Q is checked. ``crew_size`` (N) also gives
     duration_for_crews = Q / (R * N). R, D and h are inputs with no rate
     baked in; the template's 10-hour day is only a suggested default.
     """
     q, d, r, h = float(quantity), float(duration_days), float(rate_per_crew_day), float(hours_per_day)
     if min(q, d, r, h) <= 0:
         return {"error": "quantity, duration_days, rate_per_crew_day and hours_per_day must all be > 0."}
+    persons = float(crew_size) if crew_size is not None and float(crew_size) > 0 else 1.0
     crews = q / (d * r)
     crews_up = math.ceil(crews)
     crew_days = q / r
-    man_hours = crew_days * h
+    man_hours = crew_days * persons * h
+    crew_term = f" x {persons:g} persons" if persons != 1.0 else ""
     note = (
         f"crews = {q} / ({d} x {r}) = {crews:.3f}; rounded UP to {crews_up}. "
-        f"crew-days = {q} / {r} = {crew_days:.2f}; man-hours = crew-days x {h} = {man_hours:.1f}. "
+        f"crew-days = {q} / {r} = {crew_days:.2f}; "
+        f"man-hours = crew-days{crew_term} x {h} h = {man_hours:.1f}. "
         f"Identity check: {crews_up} x {d} x {r} = {crews_up * d * r:.2f} (stated Q = {q})."
     )
     result: dict = {
