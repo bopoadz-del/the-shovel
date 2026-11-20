@@ -172,6 +172,51 @@ def test_a_later_line_that_cannot_place_the_chunk_gives_no_page(
     ) == expected
 
 
+# A chunk may start inside the previous chunk's second half (overlap), so the
+# first search position sits past its start: the locator retries from the
+# previous chunk's own start -- never from anywhere earlier.
+@pytest.mark.parametrize("offset", [400, 600])
+def test_a_chunk_starting_inside_the_previous_one_keeps_its_page(offset):
+    pages = [_page_body(n) for n in (1, 2)]
+    text = "\n".join(pages)
+    body = pages[1]
+    chunks = [body, body[offset:offset + 800]]
+
+    got = doc_index.chunk_start_pages(text, _starts_of(pages), chunks)
+
+    assert got == [2, 2]
+
+
+# The same retry has to reach the later-line fallback: a labelled chunk that
+# starts inside the previous chunk's second half is placed from the previous
+# chunk's start, not from the further-forward search position.
+@pytest.mark.parametrize("offset", [400, 600])
+def test_a_labelled_chunk_inside_the_previous_one_keeps_its_page(offset):
+    pages = [_page_body(n) for n in (1, 2)]
+    text = "\n".join(pages)
+    body = pages[1]
+    chunks = [body, f"{_LABEL}\n{body[offset:offset + 800]}"]
+
+    got = doc_index.chunk_start_pages(text, _starts_of(pages), chunks)
+
+    assert got == [2, 2]
+
+
+# An occurrence before the previous chunk cannot place this chunk: the page
+# would move backwards, so the chunk keeps no page instead.
+@pytest.mark.parametrize("previous_page", [2, 3])
+def test_a_chunk_that_only_occurs_before_the_previous_chunk_keeps_no_page(
+    previous_page,
+):
+    pages = [_page_body(n) for n in (1, 2, 3)]
+    text = "\n".join(pages)
+    chunks = [pages[previous_page - 1], pages[0]]
+
+    got = doc_index.chunk_start_pages(text, _starts_of(pages), chunks)
+
+    assert got == [previous_page, None]
+
+
 # ── extraction → chunks ──────────────────────────────────────────────────────
 
 
