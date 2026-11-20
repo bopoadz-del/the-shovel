@@ -1139,29 +1139,43 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     def text_of(lab: _Label) -> str:
         return cont.get(_norm(lab.text), lab.text)
 
-    def furniture(lab: _Label) -> bool:
-        # A bill heading ("BILL NO. 15", "Bill Number 12A") is a section
-        # title wherever it is printed, even when it repeats like a running
-        # line or carries the page label's varying digit: it is never page
-        # furniture. Its title line is part of the heading too. The closing
+    def is_heading(lab: _Label) -> bool:
+        # A bill heading number line ("BILL NO. 15", "Bill Number 12A"):
+        # the one grammar in :mod:`app.core.rag.bill_sections`. The closing
         # total row is not a heading.
-        if id(lab) in titled:
-            return False
-        if _HEADING_RE.match(lab.text) and not _CARRIED_RE.search(lab.text):
+        return bool(_HEADING_RE.match(lab.text) and not _CARRIED_RE.search(lab.text))
+
+    def heading_or_title(lab: _Label) -> bool:
+        # A bill heading number line, or its title line (the line printed
+        # directly below it on the same page).
+        return is_heading(lab) or id(lab) in titled
+
+    def furniture(lab: _Label) -> bool:
+        # A bill heading and its title line are section titles wherever they
+        # are printed, even when they repeat like a running line or carry the
+        # page label's varying digit: never page furniture. The closing total
+        # row is not a heading.
+        if heading_or_title(lab):
             return False
         if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
             return False  # title band: a title even when it repeats
         return running.holds(lab.text)
 
+    def is_title(lab: _Label) -> bool:
+        # A section title: a title-band line above the column header, or a
+        # bill heading with its title line printed anywhere (below the header
+        # or on a page with no detected header line).
+        return not furniture(lab) and (lab.above_header or heading_or_title(lab))
+
     sections = page_sections(printed, running)
     if not sections:
-        sections = title_sections(printed, cont, lambda lab: lab.above_header and not furniture(lab))
+        sections = title_sections(printed, cont, is_title)
         if not any(sections.values()):
             return rows
 
     titles: dict[tuple[str, ...] | None, list[str]] = defaultdict(list)
     for lab in printed:
-        if lab.above_header and not furniture(lab):
+        if is_title(lab):
             t = text_of(lab)
             sec = titles[sections.get(lab.page)]
             if _norm(t) not in {_norm(x) for x in sec}:
@@ -1173,7 +1187,7 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         key = sections.get(row.source_page)
         body: list[_Label] = []
         for lab in row.labels:
-            if lab.above_header or furniture(lab):
+            if lab.above_header or furniture(lab) or heading_or_title(lab):
                 continue
             lab = replace(lab, text=text_of(lab))
             if body and _wrapped(body[-1], lab):
