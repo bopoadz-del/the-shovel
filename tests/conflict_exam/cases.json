@@ -298,6 +298,30 @@
       ],
       "model_answer": "Delay damages are 0.1% of the Final Contract Price per day.",
       "expected": {"conflict": false}
+    },
+    {
+      "id": "differ-yield-strength",
+      "kind": "differ",
+      "question": "What reinforcement yield strength applies to the pump station: what do the contract drawing and the contractor's method statement each say?",
+      "rows": [
+        {"doc_name": "Vol 3 - Drawings (6 of 7).pdf", "page_or_section": "Reinforcement notes", "snippet": "Reinforcement: high yield strength of 500N/mm2 to BS4449, type 2 deformed bars."},
+        {"doc_name": "Cast In-Situ Concretes Method Statement.pdf", "page_or_section": "Materials", "snippet": "All reinforcement shall be type 2 high yield deformed bars grade 420N/mm2 to BS4449."}
+      ],
+      "model_answer": "The pump station reinforcement yield strength is 500N/mm2 to BS4449.",
+      "expected": {"conflict": true, "values": [
+        {"value": "500N/mm2", "document": "Vol 3 - Drawings (6 of 7).pdf"},
+        {"value": "420N/mm2", "document": "Cast In-Situ Concretes Method Statement.pdf"}], "governs": null}
+    },
+    {
+      "id": "other-thing-yield-different-structure",
+      "kind": "other_thing",
+      "question": "What reinforcement yield strength is required for the pump station?",
+      "rows": [
+        {"doc_name": "Pump Station Reinforcement Drawing.pdf", "page_or_section": "Notes", "snippet": "Pump station reinforcement: high yield strength 500N/mm2."},
+        {"doc_name": "Footing Reinforcement Drawing.pdf", "page_or_section": "Notes", "snippet": "Footing reinforcement: high yield strength 420N/mm2."}
+      ],
+      "model_answer": "The pump station reinforcement yield strength is 500N/mm2.",
+      "expected": {"conflict": false}
     }
   ]
 }
