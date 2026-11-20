@@ -112,15 +112,13 @@ def test_m05_man_hours_count_every_person_in_the_crew(q, days, rate, hours, size
     assert crew["man_hours"] == pytest.approx(man_hours, rel=_REL)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect (input meaning): crew_sizing labels crew_size 'crew size' (persons) but "
-    "computes duration_for_crews = Q / (R x crew_size), i.e. reads it as a NUMBER of crews; "
-    "with a crew of 6 persons and 2 crews the raft takes 10 d, the formula returns 3.33"))
 @pytest.mark.parametrize("q, days, rate, size, duration", [
-    (640, 10, 32, 6, 10.0),  # 2 crews (rounded) -> 640 / (32 x 2) = 10 d
-    (300, 6, 25, 5, 6.0),    # 2 crews -> 300 / (25 x 2) = 6 d
+    (640, 10, 32, 6, 10.0),  # 20 crew-days / the 2 whole crews needed = 10 d; 6 is the headcount
+    (300, 6, 25, 5, 6.0),    # 12 crew-days / the 2 whole crews needed = 6 d
 ])
 def test_m05_duration_for_crews_does_not_read_persons_as_crews(q, days, rate, size, duration):
+    # crew_size is the headcount in one crew, never a number of crews; the
+    # duration comes from the whole crew count the stated duration needs.
     crew = _ok("crew_sizing", {"quantity": q, "duration_days": days, "rate_per_crew_day": rate,
                                "hours_per_day": 10, "crew_size": size})
     assert crew["duration_for_crews"] == pytest.approx(duration, rel=_REL)
