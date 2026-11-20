@@ -419,6 +419,38 @@ def test_a_cancelled_timer_writes_nothing(cancelled, fired):
         live.close()
 
 
+# Every dump the C timer writes opens with this line.
+_DUMP_START = "Timeout ("
+
+
+@pytest.mark.parametrize("live_ms,after_s", [(40.0, None), (30_000.0, 0.03)])
+def test_the_timer_armed_in_this_process_repeats_until_cancel(live_ms, after_s):
+    """``arm`` runs in THIS process, not only inside a forked monitor: armed
+    here directly, the timer writes one dump per delay -- so a stall longer
+    than one delay is captured and a fire lost to signal jitter costs nothing
+    -- and ``cancel`` stops it for good.
+
+    Two inputs: the default delay (40 ms), and an explicit override that beats
+    a 30 s default. A single dump (a one-shot timer), or any dump written
+    after the cancel, fails."""
+    live = loop_watchdog.LiveDump(live_ms)
+    assert live.active, "another LiveDump still owns the process-wide timer"
+    try:
+        live.arm(after_s)
+        text, deadline = "", time.monotonic() + 10.0
+        while text.count(_DUMP_START) < 2 and time.monotonic() < deadline:
+            text += live.take()
+            time.sleep(0.01)
+        assert text.count(_DUMP_START) >= 2, f"the timer did not repeat: {text[:200]!r}"
+        live.cancel()
+        time.sleep(0.2)  # far past a 30-40 ms delay: a live timer would fire again
+        live.take()  # drain what was written up to (or during) the cancel
+        time.sleep(0.2)
+        assert live.take() == ""
+    finally:
+        live.close()
+
+
 @pytest.mark.parametrize("who_cancels,fired", [("refused", True), ("owner", False)])
 @own_process
 def test_a_refused_owner_cannot_cancel_the_owners_timer(who_cancels, fired):
@@ -524,7 +556,12 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
     round the hold made late is read and names the holder."""
     n = _size_for(0.6) if hold else 0
     events: list = []
-    real_take, real_cancel = loop_watchdog.LiveDump.take, loop_watchdog.LiveDump.cancel
+    armed = threading.Event()
+    real_take, real_cancel, real_arm = (
+        loop_watchdog.LiveDump.take,
+        loop_watchdog.LiveDump.cancel,
+        loop_watchdog.LiveDump.arm,
+    )
 
     def take(self):
         if threading.current_thread().name == "loop-watchdog":
@@ -536,8 +573,14 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
         if threading.current_thread().name == "loop-watchdog":
             events.append(("cancel", time.monotonic()))
 
+    def arm(self, after_s=None):
+        if threading.current_thread().name == "loop-watchdog":
+            armed.set()
+        real_arm(self, after_s)
+
     monkeypatch.setattr(loop_watchdog.LiveDump, "take", take)
     monkeypatch.setattr(loop_watchdog.LiveDump, "cancel", cancel)
+    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
 
     async def run():
         events.append(("cancel", time.monotonic()))
@@ -547,11 +590,17 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
         done, release = threading.Event(), threading.Event()
 
         def work():
+            # Start the hold only after the monitor has armed its timer, so
+            # the hold overlaps the timer's fire window instead of racing it
+            # (a hold begun in the unarmed gap between two heartbeats is
+            # invisible: no heartbeat is in flight and no timer is armed).
+            assert armed.wait(5), "the monitor never armed its timer"
             _gil_holding_call(n)
             done.set()
             release.wait(5)
 
         if hold:
+            armed.clear()
             worker = threading.Thread(target=work, name="gil-holder")
             worker.start()
             while not done.is_set():
