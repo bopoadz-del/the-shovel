@@ -227,6 +227,47 @@ def test_case2_different_subjects_asks():
     assert "Which one is meant?" in q
 
 
+# A summary / reporting ask is answered, not bounced: describing the
+# documents can legitimately state several different values for different
+# subjects, so those are never alternatives to disambiguate (Bound 7).
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what do the documents say about the headwalls?",
+        "summarise the boundary fencing requirements",
+        "describe the access provisions",
+        "what does the specification state about the foundations?",
+    ],
+)
+def test_summary_ask_is_answered_not_bounced(question):
+    q = clarifying_question(
+        question,
+        "The headwalls are cast in C32/40 concrete.",
+        _cases(
+            ("headwalls", "C32/40", "a.pdf"),
+            ("apron", "300 mm", "b.pdf"),
+        ),
+    )
+    assert q is None
+
+
+# A generic value ask (no reporting verb, no measure/clause/code kind) is
+# still a value ask: "what is the requirement?" names no case, so two
+# different-subject values with a silent pick ask which one -- the same as
+# "what is the required value?", never treated as a summary.
+def test_requirement_ask_is_a_value_ask():
+    q = clarifying_question(
+        "what is the requirement?",
+        "The requirement is 40 mm.",
+        _cases(
+            ("concrete cover", "40 mm", "a.pdf"),
+            ("backfill depth", "300 mm", "b.pdf"),
+        ),
+    )
+    assert q is not None
+    assert "Which one is meant?" in q
+
+
 @pytest.mark.parametrize(
     "question,case_a,case_b",
     [

@@ -264,6 +264,45 @@ def _head_noun(phrase: str) -> str:
     return ""
 
 
+#: Reporting verbs that make an ask a request to summarise / describe /
+#: report the documents rather than to name one value. Such an ask is
+#: answered by describing several different subjects, so its values are
+#: never alternatives the detector is asked to disambiguate. A language
+#: category (reporting verbs), never a list of structures, documents or
+#: test cases.
+_SUMMARY_VERBS = frozenset({
+    "say", "says", "said", "state", "states", "stated",
+    "describe", "describes", "described",
+    "summarise", "summarize", "summarises", "summarizes",
+    "explain", "explains", "explained",
+    "list", "lists", "listed", "outline", "outlines", "outlined",
+    "detail", "details", "detailed", "mention", "mentions", "mentioned",
+    "discuss", "discusses", "discussed", "report", "reports", "reported",
+})
+
+#: Generic value words: naming one keeps an ask a value ask even when a
+#: reporting verb also appears ("what value does the spec state?").
+_GENERIC_VALUE_WORDS = frozenset({
+    "value", "values", "figure", "figures", "number", "numbers",
+    "amount", "amounts", "quantity", "quantities", "answer", "answers",
+})
+
+
+def _is_summary_ask(question: str) -> bool:
+    """True when the ask is to report/summarise/describe, not to name a value.
+
+    An imperative ("summarise the boundary fencing requirements") or a
+    "what does X say about Y" ask is answered by describing the documents,
+    never by one value, so the clarify-cases detector must stand down.
+    Naming a value (a kind word is handled by the caller, a generic value
+    word here) keeps it a value ask.
+    """
+    words = re.findall(r"[a-z]+", (question or "").lower())
+    if not any(w in _SUMMARY_VERBS for w in words):
+        return False
+    return not any(w in _GENERIC_VALUE_WORDS for w in words)
+
+
 def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
     """What the question asks for, as ``(kinds, heads, qualifiers)``.
 
@@ -272,8 +311,10 @@ def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
     non-head content words the question's subject names (the words that tell
     one case of the same measure apart from another: "fresh concrete" vs
     "ambient"). Returns ``("none", set(), set())`` for a non-value ask (a
-    party or an action: "who", "what must happen"), and ``None`` for a
-    generic question that does not narrow the cases ("what is the value?").
+    party, an action, or a request to summarise/describe the documents:
+    "who", "what must happen", "summarise the requirements"), and ``None``
+    for a generic question that does not narrow the cases ("what is the
+    value?").
     """
     q = (question or "").lower().strip().rstrip("?.!")
     if ":" in q:
@@ -297,6 +338,12 @@ def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
     for w in _MEASURE_NOUNS:
         if re.search(r"\b" + re.escape(w) + r"\b", q):
             kinds.add("measure")
+
+    # A summary / description ask names no single value the evidence can
+    # disagree on; it is answered by describing several subjects, so the
+    # clarify-cases detector must not turn its values into alternatives.
+    if not kinds and _is_summary_ask(q):
+        return ("none", set(), set())
 
     # The subject phrase, from the question's own words.
     subj = None
