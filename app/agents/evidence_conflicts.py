@@ -400,6 +400,7 @@ class _Cand:
     sent_terms: set[str]
     local_terms: set[str]
     sent_key: tuple[int, int]
+    clause: str = ""
 
 
 def _row_doc(row: dict[str, Any]) -> str:
@@ -452,7 +453,7 @@ def _candidates(rows: list[dict[str, Any]]) -> list[_Cand]:
                     near = _terms(masked)
                 else:
                     near = _terms(_window(masked, v.start, v.end))
-                out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si)))
+                out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si), masked))
     return out
 
 
@@ -588,7 +589,69 @@ def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, ask
     need = min(len(set(asked) - _KIND_TERMS), 2) if from_question else 1
     if len(thing) < need:
         return []
-    return [c for c in kept if thing <= c.sent_terms]
+    anchors = [c for c in kept if thing <= c.sent_terms]
+    if _each_names_its_own_qualifier(anchors, thing):
+        return []
+    return anchors
+
+
+def _modifier_pairs(clause: str) -> set[tuple[str, str]]:
+    """(modifier, head) relations the clause's OWN words state.
+
+    Two shapes only: two content words written next to each other (a compound
+    noun, "blinding concrete"), and a content word a preposition links to the
+    noun before it ("cover to pile cap"). Nothing else is read, so a verb far
+    from the value never counts as a modifier of it."""
+    toks = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'-]*", clause or "")]
+    pairs: set[tuple[str, str]] = set()
+    for i, w in enumerate(toks):
+        if w in _STOP:
+            continue
+        if i and toks[i - 1] not in _STOP:
+            pairs.add((_stem(w), _stem(toks[i - 1])))
+    for i, w in enumerate(toks):
+        if w not in _LINK_STOP:
+            continue
+        head = next((t for t in reversed(toks[:i]) if t not in _STOP), None)
+        mod = next((t for t in toks[i + 1:] if t not in _STOP), None)
+        if head and mod:
+            pairs.add((_stem(mod), _stem(head)))
+    return pairs
+
+
+#: A word that links a noun to its qualifier ("cover TO pile cap", "cover FOR
+#: the slab"): a language category, never a list of structures.
+_LINK_STOP = frozenset({"of", "for", "to", "in", "on", "at", "within", "under", "above", "below", "per", "onto", "over"})
+
+
+def _each_names_its_own_qualifier(anchors: list[_Cand], thing: set[str]) -> bool:
+    """True when two anchors qualify the SAME asked word by different words.
+
+    Two passages that both state a value for \"cover to ... concrete\", one for
+    blinding concrete and one for structural concrete, state the value of two
+    DIFFERENT things: they are never a conflict (the owner's ruling), and the
+    turn asks which case is meant instead. The qualifiers are read as the
+    passage's OWN modifier-of-a-head pairs, so no list of structures, elements,
+    faces or stages appears here, and a passage that merely words its sentence
+    differently (a different verb, an extra clause) is still one thing. The
+    test is symmetric: only a pair where each side names a modifier of the same
+    asked head that the other does not counts."""
+    pairs = [_modifier_pairs(c.clause) for c in anchors]
+    for i in range(len(pairs)):
+        for j in range(i + 1, len(pairs)):
+            heads_i: dict[str, set[str]] = {}
+            heads_j: dict[str, set[str]] = {}
+            for mod, head in pairs[i]:
+                if head in thing and mod not in thing:
+                    heads_i.setdefault(head, set()).add(mod)
+            for mod, head in pairs[j]:
+                if head in thing and mod not in thing:
+                    heads_j.setdefault(head, set()).add(mod)
+            for head, mods_i in heads_i.items():
+                mods_j = heads_j.get(head, set())
+                if (mods_i - mods_j) and (mods_j - mods_i):
+                    return True
+    return False
 
 
 def _thing(kept: list[_Cand], asked: set[str]) -> list[str]:
