@@ -399,6 +399,7 @@ def test_a_consumer_mailbox_address_is_caught(address):
         "service@example-project.iam.gserviceaccount.com",
         "a@notgmail.com",
         "x@sub.example.com",
+        "a@gmail.com.evil",
     ],
 )
 def test_documentation_and_product_addresses_do_not_fire(line):
