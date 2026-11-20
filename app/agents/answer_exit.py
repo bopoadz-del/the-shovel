@@ -1225,7 +1225,7 @@ _PARAM_PHRASE_RE = re.compile(
 #: rewriter above does not already take: single technical words the platform
 #: uses that have no user-facing meaning. Removed whole-word, case-insensitive.
 _MACHINERY_TERM_RE = re.compile(
-    r"\b(?:embed(?:ding|dings)|vector(?:s)?|indexed|index(?:es)?|top-?k|rag|"
+    r"\b(?:embed(?:ding|dings)|vector(?:s)?|top-?k|rag|"
     r"context[ \t]+window|knowledge[ \t]+base|llm|token(?:s)?|pipeline|"
     r"rerank(?:er)?|semantic[ \t]+search)\b",
     re.IGNORECASE,
