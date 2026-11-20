@@ -574,9 +574,16 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
             events.append(("cancel", time.monotonic()))
 
     def arm(self, after_s=None):
+        real_arm(self, after_s)
+        # Signalled AFTER the arm, never before: ``dump_traceback_later`` can be
+        # delayed past the next GIL handoff, so a barrier raised before the call
+        # released the worker into its hold while NO timer was in force. The
+        # hold then ran in an unarmed gap, the monitor correctly had no dump to
+        # read, and the test failed with a real stall (max_lag 656-860) and no
+        # dump -- measured: one ``arm_enter`` at the hold's start, its return
+        # 780-860 ms later, after the hold. The barrier now means what it says.
         if threading.current_thread().name == "loop-watchdog":
             armed.set()
-        real_arm(self, after_s)
 
     monkeypatch.setattr(loop_watchdog.LiveDump, "take", take)
     monkeypatch.setattr(loop_watchdog.LiveDump, "cancel", cancel)
