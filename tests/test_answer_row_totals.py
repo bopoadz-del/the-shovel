@@ -85,27 +85,87 @@ def test_a_figure_without_the_column_unit_is_never_rewritten(answer, stated, com
 
 @pytest.mark.parametrize("answer,computed,bucket", [
     pytest.param(
+        _table(("Item", "Ref", "Qty (No)"),
+               (("A", "K 132", "18"), ("B", "K 133", "26"),
+                ("C", "K 134", "64"),
+                ("\u2014", "remaining rows (K 134)", "9")),
+               "Total", "117"),
+        "108", "remaining rows (K 134)", id="bucket-repeats-a-counted-reference",
+    ),
+    pytest.param(
+        _table(("Item", "Ref", "Qty (No)"),
+               (("A", "K 7", "7"), ("B", "K 8", "5"),
+                ("plus the others (K 8)", "", "8")),
+               "Total", "20"),
+        "12", "the others (K 8)", id="others-bucket-repeats-a-reference",
+    ),
+])
+def test_a_remainder_bucket_that_restates_a_counted_row_is_not_added_twice(
+    answer, computed, bucket,
+):
+    out = reconcile(answer)
+    assert f"Total\t\t{computed}" in out
+    assert f"{bucket} restates rows the answer has already counted" in out
+    assert "not added a second time" in out
+
+
+@pytest.mark.parametrize("answer,printed", [
+    pytest.param(
         _table(("Item", "Depth", "Qty (No)"),
                (("A", "1.5-2.0 m", "18"), ("B", "2.0-2.5 m", "26"),
                 ("C", "2.5-3.0 m", "64"),
                 ("\u2014", "remaining depth bands", "9")),
                "Total", "117"),
-        "108", "remaining depth bands", id="remaining-bucket",
+        "108", id="bucket-prints-its-figure",
     ),
     pytest.param(
         _table(("Item", "Qty (No)"),
                (("A", "7"), ("B", "5"), ("plus the others in the section", "8")),
                "Total", "20"),
-        "12", "the others in the section", id="others-bucket",
+        "12", id="others-bucket-prints-its-figure",
+    ),
+    pytest.param(
+        _table(("Item", "Depth", "Qty (No)"),
+               (("A", "1.5-2.0 m", "18"), ("B", "2.0-2.5 m", "26"),
+                ("\u2014", "remaining rows (13 in total)", "\u2014")),
+               "Total", "44"),
+        "44", id="bucket-prints-no-figure",
     ),
 ])
-def test_a_remainder_bucket_is_not_a_row_and_never_enters_the_total(
-    answer, computed, bucket,
+def test_a_bucket_the_answer_does_not_tie_to_a_counted_row_never_rewrites_its_total(
+    answer, printed,
 ):
-    out = reconcile(answer)
-    assert f"Total\t\t{computed}" in out
-    assert f"{bucket} stands for rows this answer does not itemise" in out
-    assert "the total is therefore incomplete" in out
+    # The answer says in its own words that rows it did not itemise exist and
+    # that its total is larger than the rows it printed. That is a disclosure,
+    # not a disagreement: the printed evidence cannot settle the total, so the
+    # check leaves the answer alone rather than inventing a smaller figure.
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer,computed", [
+    pytest.param(
+        _table(("Item", "Ref", "Qty (No)"),
+               (("A", "K 1", "18"), ("B", "K 2", "\u2014"),
+                ("\u2014", "remaining rows (K 2)", "9")),
+               "Total", "27"),
+        "18", id="reference-printed-without-a-figure",
+    ),
+    pytest.param(
+        _table(("Item", "Ref", "Qty (No)"),
+               (("A", "K 4", "6"), ("B", "K 5", "not read"),
+                ("plus the others (K 5)", "", "3")),
+               "Total", "11"),
+        "6", id="words-instead-of-a-figure",
+    ),
+])
+def test_a_bucket_naming_a_row_the_answer_could_not_count_stays_a_disclosure(
+    answer, computed,
+):
+    # The named row printed no figure, so it was never counted: the bucket is
+    # not a restatement of it, and the total above the printed rows is left to
+    # the answer's own disclosure.
+    assert reconcile(answer) == answer
+    assert computed in answer
 
 
 @pytest.mark.parametrize("answer,computed,label", [
@@ -231,7 +291,7 @@ def test_a_table_whose_every_row_is_a_remainder_states_no_total_of_its_own(answe
 @pytest.mark.parametrize("answer,stated,computed", [
     pytest.param(
         "The sum of the priced rows is 400 No.\n"
-        "Item\tQty (No)\nA\t120\nB\t180\nremaining rows\t60\n",
+        "Item\tRef\tQty (No)\nA\tK 9\t120\nB\tK 10\t180\nremaining rows (K 10)\t\t60\n",
         "400", "300", id="no-total-row-counts",
     ),
     pytest.param(
