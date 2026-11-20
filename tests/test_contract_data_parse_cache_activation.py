@@ -132,3 +132,32 @@ def test_search_parses_each_chunk_once(monkeypatch, query, corpus):
     assert off_count > on_count, (
         f"scoping should save parses; on={on_count} off={off_count}"
     )
+
+
+@pytest.mark.parametrize("result,args", [
+    ("result", ("a",)),
+    (42, (1, 2)),
+])
+def test_scoped_per_search_parse_cache_opens_scope_and_returns(
+    monkeypatch, result, args,
+):
+    """The decorator opens one scope per call and returns the wrapped call's
+    result; ``constant_return`` must fail it."""
+    entered = []
+
+    @contextlib.contextmanager
+    def spy_scope():
+        entered.append(True)
+        yield
+
+    monkeypatch.setattr(ret, "per_search_parse_cache", spy_scope)
+    calls = []
+
+    @ret._scoped_per_search_parse_cache
+    def target(*a, **k):
+        calls.append((a, k))
+        return result
+
+    assert target(*args) == result
+    assert calls == [(args, {})]
+    assert entered == [True]

@@ -24,6 +24,17 @@ CHUNK_B = (
 
 CHUNKS = [CHUNK_A, CHUNK_B]
 
+BLANK_CHUNKS = ["", "\n", "\n\n", "   ", "\t"]
+
+
+@pytest.mark.parametrize("chunk", BLANK_CHUNKS)
+def test_filled_particulars_rows_blank_chunk_is_empty(chunk: str) -> None:
+    """A chunk with no rows parses to nothing; the empty guard holds inside
+    and outside a parse-cache scope."""
+    assert filled_particulars_rows(chunk) == []
+    with per_search_parse_cache():
+        assert filled_particulars_rows(chunk) == []
+
 
 @pytest.mark.parametrize("chunk", CHUNKS)
 def test_filled_particulars_rows_identical_inside_and_outside_cache(chunk: str) -> None:
