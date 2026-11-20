@@ -109,31 +109,31 @@ def test_a_remainder_bucket_that_restates_a_counted_row_is_not_added_twice(
     assert "not added a second time" in out
 
 
-@pytest.mark.parametrize("answer,printed", [
+@pytest.mark.parametrize("answer", [
     pytest.param(
         _table(("Item", "Depth", "Qty (No)"),
                (("A", "1.5-2.0 m", "18"), ("B", "2.0-2.5 m", "26"),
                 ("C", "2.5-3.0 m", "64"),
                 ("\u2014", "remaining depth bands", "9")),
                "Total", "117"),
-        "108", id="bucket-prints-its-figure",
+        id="bucket-prints-its-figure",
     ),
     pytest.param(
         _table(("Item", "Qty (No)"),
                (("A", "7"), ("B", "5"), ("plus the others in the section", "8")),
                "Total", "20"),
-        "12", id="others-bucket-prints-its-figure",
+        id="others-bucket-prints-its-figure",
     ),
     pytest.param(
         _table(("Item", "Depth", "Qty (No)"),
                (("A", "1.5-2.0 m", "18"), ("B", "2.0-2.5 m", "26"),
                 ("\u2014", "remaining rows (13 in total)", "\u2014")),
                "Total", "44"),
-        "44", id="bucket-prints-no-figure",
+        id="bucket-prints-no-figure",
     ),
 ])
 def test_a_bucket_the_answer_does_not_tie_to_a_counted_row_never_rewrites_its_total(
-    answer, printed,
+    answer,
 ):
     # The answer says in its own words that rows it did not itemise exist and
     # that its total is larger than the rows it printed. That is a disclosure,
