@@ -419,17 +419,31 @@ def test_section_heading_is_not_a_running_line(prefix):
     assert running.page_label == "page #"
 
 
-@pytest.mark.parametrize("prefix", ["BILL NO.", "SECTION"], ids=["bill-no", "section"])
-def test_section_heading_survives_in_the_path(prefix):
+@pytest.mark.parametrize("prefix, expected", [
+    ("BILL NO.", [
+        ("GENERAL ITEMS / BILL NO. 1",),
+        ("GENERAL ITEMS / BILL NO. 1",),
+        ("GENERAL ITEMS / BILL NO. 2",),
+        ("SUPPLEMENTARY / BILL NO. 2",),
+        ("SUPPLEMENTARY / BILL NO. 3",),
+        ("SUPPLEMENTARY / BILL NO. 3",),
+    ]),
+    ("SECTION", [
+        ("GENERAL ITEMS", "SECTION 1"),
+        ("GENERAL ITEMS", "SECTION 1"),
+        ("GENERAL ITEMS", "SECTION 2"),
+        ("SUPPLEMENTARY", "SECTION 2"),
+        ("SUPPLEMENTARY", "SECTION 3"),
+        ("SUPPLEMENTARY", "SECTION 3"),
+    ]),
+], ids=["bill-no", "section"])
+def test_section_heading_survives_in_the_path(prefix, expected):
+    """A repeated per-bill heading is not a running line and survives in the
+    path: a bill heading (the ``_HEADING_RE`` grammar) joins the title band
+    as the section title wherever it is printed; a generic section heading is
+    a body sub-level."""
     words = _section_heading_words(prefix)
-    assert [r.path for r in g.extract_bill_rows(words)] == [
-        ("GENERAL ITEMS", f"{prefix} 1"),
-        ("GENERAL ITEMS", f"{prefix} 1"),
-        ("GENERAL ITEMS", f"{prefix} 2"),
-        ("SUPPLEMENTARY", f"{prefix} 2"),
-        ("SUPPLEMENTARY", f"{prefix} 3"),
-        ("SUPPLEMENTARY", f"{prefix} 3"),
-    ]
+    assert [r.path for r in g.extract_bill_rows(words)] == expected
 
 def _heading_is_page_label_words(heading_fn, title, pages=6):
     """A constant running header, a constant title line, and a per-bill
@@ -499,6 +513,49 @@ def test_heading_title_line_survives_a_footer_page_label(heading_fn, title):
     assert g._masked(title) in running.masks  # it repeats on most pages ...
     rows = g.extract_bill_rows(words)
     assert [r.path for r in rows] == [  # ... yet it is still the heading title
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+    ]
+
+
+def _below_header_heading_words(heading_fn, title):
+    """A constant running header, the column header, then a bill heading and
+    its constant title printed BELOW the column header (above_header=False),
+    and the page label as a footer. The heading is the section wherever it
+    is printed."""
+    words: list[g.Word] = []
+    layout = [(1, 1, "Item 1"), (2, 1, "Item 2"), (3, 15, "Item 3"),
+              (4, 15, "Item 4"), (5, 16, "Item 5"), (6, 16, "Item 6")]
+    for p, n, item in layout:
+        above = [("Contractor Limited", H)]
+        body = [(heading_fn(n), HEAVY), (title, HEAVY),
+                [item, "m", "1", "2", "2"], (f"Page {p}", H)]
+        words += _page(p, COLS_A, above, body)
+    return words
+
+
+@pytest.mark.parametrize("heading_fn, title", [
+    (lambda n: f"BILL NO. {n}", "GENERAL SUMMARY"),
+    (lambda n: f"Bill Number {n}", "BILL OF QUANTITIES"),
+], ids=["bill-no", "bill-number"])
+def test_heading_below_the_header_is_still_a_path_level(heading_fn, title):
+    """A bill heading printed below the column header (above_header=False) is
+    still a section title: the title-band fallback collects it regardless of
+    above/below-header placement, so it gives the same path as the same
+    heading printed above the header."""
+    words = _below_header_heading_words(heading_fn, title)
+    printed = _printed(words)
+    running = g.running_lines(printed, 6)
+    assert g.page_sections(printed, running) == {}
+    heading = next(lab for lab in printed
+                   if g._HEADING_RE.match(lab.text) and not g._CARRIED_RE.search(lab.text))
+    assert heading.above_header is False  # printed below the column header
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [
         (f"{heading_fn(1)} / {title}",),
         (f"{heading_fn(1)} / {title}",),
         (f"{heading_fn(15)} / {title}",),
