@@ -224,6 +224,12 @@ UNKNOWN_SECTION = "[section unknown]"
 #: four lines plus its figures line, so the head of a wrapped description
 #: (where a bill names the item) is matched and listed with its figures.
 _ROW_MAX = 360
+#: How much of a long row's head to keep alongside the tail. The head is
+#: where a bill names the item ("reinforced concrete pipe 400 mm bore"); a
+#: long wrapped description, or one split by a page break, puts those words
+#: past the tail window, so they must be kept explicitly or the row cannot
+#: be matched to its item.
+_ROW_HEAD_MAX = 180
 #: A row's identity for deduplication: its last tokens (unit, qty, rate,
 #: amount and the description words printed just before them).
 _ROW_KEY_TOKENS = 8
@@ -286,6 +292,25 @@ def _chunk_row_segments(row_segments, text: str, previous: str | None) -> list[s
     return list(row_segments(previous + "\n" + text))[own:]
 
 
+def _compact_row(text: str) -> str:
+    """A row's text for the model: whole when it fits, else head + tail.
+
+    The tail carries the figures and the description lines just above them;
+    the head carries the item name. A long wrapped description (or one split
+    across a page break) is longer than :data:`_ROW_MAX`, and keeping only
+    the tail loses the item name, so the row cannot be matched to its item
+    in :func:`rows_for_item`. Keep both ends and elide the middle.
+    """
+    if len(text) <= _ROW_MAX:
+        return text
+    head = text[:_ROW_HEAD_MAX].rstrip()
+    tail = text[-_ROW_MAX:]
+    if len(head) + len(tail) >= len(text):
+        # The two windows already cover the whole row; no middle to elide.
+        return text
+    return f"{head} ... {tail}"
+
+
 def _labelled_rows(chunks, sections, numbers, row_segments):
     """``[(label, compact row text)]`` of every priced row, in bill order."""
     rows: list[tuple[str, str]] = []
@@ -301,7 +326,7 @@ def _labelled_rows(chunks, sections, numbers, row_segments):
             if numbers and (current is None or current.number not in numbers):
                 continue
             label = f"[{current.label}]" if current is not None else UNKNOWN_SECTION
-            rows.append((label, " ".join(segment.split())[-_ROW_MAX:]))
+            rows.append((label, _compact_row(" ".join(segment.split()))))
     return rows
 
 

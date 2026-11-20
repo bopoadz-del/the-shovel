@@ -147,6 +147,57 @@ def test_a_weight_column_unit_is_a_priced_row(unit):
     assert priced_row_count(text) == 1 == len(priced_row_segments(text))
 
 
+# --- (c) a long row keeps its item-naming head ------------------------------
+
+_LONG_DESCRIPTION = (
+    "laid in trench at the stated depth, including excavation in all "
+    "materials, bedding and surround in selected granular material, "
+    "compaction, trimming of the trench sides and bottom, disposal of "
+    "surplus excavated material off site, provision of all temporary "
+    "supports, strutting, shoring and planking, pumping and dewatering, "
+    "jointing with the approved coupling, testing of the completed "
+    "main, and all restoration of the surface, complete in every "
+    "respect in accordance with the specification and the engineer's "
+    "drawings"
+)
+
+
+def _long_row(ref, head, qty, rate):
+    # The head names the item; the long description pushes it past the
+    # tail-only compaction window, so only a head+tail compaction keeps it.
+    return f"{ref}. |{head} {_LONG_DESCRIPTION} | m {_figures(qty, rate)}"
+
+
+def test_a_long_row_keeps_the_item_name_in_its_head():
+    """A wrapped row longer than the tail window must not lose the head
+    that names the item, else it cannot be matched and is dropped."""
+    texts = [
+        "BILL NO. 13\nSTORM WATER NETWORK\n"
+        + _long_row("A", "Reinforced concrete pipe 400 mm nominal bore", 633, 1.0),
+    ]
+    rows = _rows(texts, "reinforced concrete pipe")
+    assert len(rows) == 1
+    assert "concrete pipe" in rows[0] and "633.00" in rows[0]
+
+
+def test_a_long_row_does_not_match_an_absent_item():
+    """Keeping the head must not make a long row match an item it does not
+    print: each long row matches only its own item, the other stays out."""
+    texts = [
+        "BILL NO. 13\nSTORM WATER NETWORK\n"
+        + _long_row("A", "Reinforced concrete pipe 400 mm nominal bore", 633, 1.0)
+        + "\n"
+        + _long_row("B", "Precast manhole 1200 mm internal", 12, 90.0),
+    ]
+    pipe_rows = _rows(texts, "reinforced concrete pipe")
+    manhole_rows = _rows(texts, "precast manhole")
+    assert len(pipe_rows) == 1
+    assert "pipe" in pipe_rows[0] and "manhole" not in pipe_rows[0]
+    assert len(manhole_rows) == 1
+    assert "manhole" in manhole_rows[0] and "pipe" not in manhole_rows[0]
+
+
+
 @pytest.mark.parametrize("unit", ["nos", "Nos"])
 def test_a_count_column_unit_is_a_priced_row(unit):
     text = f"Gully grating\n{unit} 6 150.00 900.00"
