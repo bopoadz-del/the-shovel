@@ -408,11 +408,17 @@ def test_documentation_and_product_addresses_do_not_fire(line):
     assert "consumer-mailbox-address" not in _hits(line)
 
 
-def test_the_walk_reports_a_personal_address(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "address",
+    [
+        "slm.lane.probe@gmail.com",   # pragma: allowlist secret
+        "slm.probe.two@outlook.com",  # pragma: allowlist secret
+    ],
+)
+def test_the_walk_reports_a_personal_address(tmp_path, monkeypatch, address):
     """The rule is wired into scan(), not merely defined beside it."""
     (tmp_path / "notes.md").write_text(
-        "reach the team at slm.lane.probe@gmail.com\n",  # pragma: allowlist secret
-        encoding="utf-8",
+        f"reach the team at {address}\n", encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["notes.md"])
@@ -423,9 +429,16 @@ def test_the_walk_reports_a_personal_address(tmp_path, monkeypatch):
     assert "[consumer-mailbox-address]" in findings[0]
 
 
-def test_a_deliberate_fixture_address_can_be_allowlisted(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "address",
+    [
+        "slm.probe.three@proton.me",   # pragma: allowlist secret
+        "slm.probe.four@yahoo.co.uk",  # pragma: allowlist secret
+    ],
+)
+def test_a_deliberate_fixture_address_can_be_allowlisted(tmp_path, monkeypatch, address):
     (tmp_path / "fixture.md").write_text(
-        "example fixture: slm.probe.three@proton.me  # pragma: allowlist secret\n",
+        f"example fixture: {address}  # {scan_secrets.ALLOW_MARKER}\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
