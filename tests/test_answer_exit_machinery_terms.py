@@ -53,9 +53,11 @@ def test_machinery_phrase_is_removed(phrase):
     [
         "3 of 5 project documents indexed",
         "12 of 12 documents indexed",
+        "This project has no indexed documents yet",
+        "the indexed files are listed",
     ],
 )
-def test_source_count_indexed_is_preserved(line):
+def test_document_status_indexed_is_preserved(line):
     out = _machine_wording(line)
     assert "indexed" in out.lower()
 

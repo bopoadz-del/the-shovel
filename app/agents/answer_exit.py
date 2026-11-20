@@ -1226,7 +1226,7 @@ _PARAM_PHRASE_RE = re.compile(
 #: uses that have no user-facing meaning. Removed whole-word, case-insensitive.
 _MACHINERY_TERM_RE = re.compile(
     r"(?<![A-Za-z0-9_-])(?:"
-    r"(?<!document )(?<!documents )indexed|"
+    r"(?<!document )(?<!documents )indexed(?![ \t]+(?:documents?|files?|chunks?))|"
     r"index(?:es)?|embed(?:ding|dings)|vector(?:s)?|top-?k|rag|"
     r"context[ \t]+window|llm|token(?:s)?|pipeline|rerank(?:er)?|semantic[ \t]+search"
     r")(?![A-Za-z0-9_-])",
