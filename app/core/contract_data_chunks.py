@@ -14,7 +14,10 @@ embed live client names or live contract figures.
 """
 from __future__ import annotations
 
+import contextvars
 import re
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
 _CONTRACT_DATA_LABEL = (
     "CONTRACT DATA particulars — filled-in amount / duration / percentage"
@@ -435,6 +438,27 @@ def particulars_chunk_states_a_value(chunk: str) -> bool:
     return False
 
 
+_PARSE_CACHE: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "contract_data_parse_cache", default=None,
+)
+
+
+@contextmanager
+def per_search_parse_cache() -> Iterator[None]:
+    """Scope a parse cache to one retrieval search.
+
+    Expensive pure per-chunk parsers (``filled_particulars_rows``) memoise
+    their result per chunk inside this scope, so one search parses each
+    candidate once instead of once per predicate. The cache is cleared on
+    exit; nothing is kept across searches.
+    """
+    token = _PARSE_CACHE.set({})
+    try:
+        yield
+    finally:
+        _PARSE_CACHE.reset(token)
+
+
 def filled_particulars_rows(chunk: str) -> list[tuple[str, str]]:
     """Filled ``(key, value)`` rows visible in a particulars chunk.
 
@@ -447,7 +471,22 @@ def filled_particulars_rows(chunk: str) -> list[tuple[str, str]]:
 
     Colon rows (named parties, ``Schedule N: Not Used``) are included —
     those values are not figures and the peel regex cannot see them.
+
+    Inside a :func:`per_search_parse_cache` scope the parse is memoised
+    per chunk text; the result is otherwise identical.
     """
+    cache = _PARSE_CACHE.get()
+    if cache is not None:
+        hit = cache.get(chunk)
+        if hit is not None:
+            return hit
+    rows = _filled_particulars_rows_uncached(chunk)
+    if cache is not None:
+        cache[chunk] = rows
+    return rows
+
+
+def _filled_particulars_rows_uncached(chunk: str) -> list[tuple[str, str]]:
     lines = (chunk or "").splitlines()
     if not lines:
         return []
