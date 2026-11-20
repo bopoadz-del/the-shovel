@@ -41,6 +41,15 @@ secret — a committed list of the client names you must not commit *is a
 list of client names*. A match is reported as ``file:line (pattern #N)``
 only; the matched text and the regex are never echoed.
 
+A denylisted pattern is compared against three views of every line, because
+the pattern is a written form and a person has many: the literal line, the
+escape-decoded line, and a folded line in which case, accents, invisibles,
+and the choice of separator are normalised away. A plain phrase additionally
+matches when its words appear near each other in any order, so surname-first
+attribution, a middle initial, and a phrase wrapped across a line break are
+the same person as the one on the list. See ``fold_for_match`` and
+``scan_client_document``.
+
 FAIL-CLOSED: if ``SECRET_SCAN_PATTERNS`` is unset, empty, or comments-only,
 this exits non-zero and never prints or concludes "clean". A scan that
 inspected nothing because it was given nothing to look for has not found
@@ -71,6 +80,8 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
+from collections import Counter
 from pathlib import Path
 
 import scan_text
@@ -365,14 +376,191 @@ def scan_client_text(
     Deliberately returns no matched text. Echoing a hit would write the
     client's content into a CI log, which is the leak this scan exists to
     prevent.
+
+    Three views of each line are matched, because a denylisted word can be
+    written in three ways and each defeats the other two:
+
+    * the raw line -- the literal spelling;
+    * the escape-decoded line -- ``\\u0627`` spells the word without its
+      letters ever appearing (see ``decode_escapes``);
+    * the folded line -- case, accents, zero-width joiners and the choice of
+      separator (space, tab, hyphen, NBSP, ideographic space, line break)
+      normalised away (see ``fold_for_match``). A name is not made less of a
+      name by being hyphenated, and a gate that only recognises one spacing
+      of it recognises the spelling the author happened to pick.
     """
     hits: list[tuple[int, int]] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
-        forms = (line, decode_escapes(line))
+        forms = (line, decode_escapes(line), *fold_views(line))
         for index, pattern in enumerate(patterns):
             if any(pattern.search(form) for form in forms):
                 hits.append((line_number, index))
     return hits
+
+
+# Characters that carry no sound and no space of their own: a zero-width
+# space, joiner, non-joiner, word joiner, byte-order mark, or soft hyphen.
+# They are invisible in an editor, so a word split by one reads normally to a
+# human and as a different string to a regex.
+_INVISIBLE = dict.fromkeys(
+    map(ord, "\u00ad\u180e\u200b\u200c\u200d\u2060\ufeff"), None
+)
+
+# Every kind of whitespace that is not the ASCII space, folded to one space:
+# tab, newline, vertical tab, form feed, carriage return, NEL, NBSP, and the
+# whole Unicode space-separator run (en/em/thin/hair space, ideographic
+# space). Plus the punctuation a writer reaches for when joining two words:
+# hyphen, en/em dash, underscore, period, middle dot, slash, backslash.
+_ASCII_SEPARATORS = dict.fromkeys(
+    map(ord, "\t\n\x0b\x0c\r-_./\\"), " "
+)
+_UNICODE_SEPARATORS = dict.fromkeys(
+    map(
+        ord,
+        "\t\n\x0b\x0c\r\x85\u00a0\u1680\u2000\u2001\u2002\u2003\u2004"
+        "\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"
+        "-_\u2010\u2011\u2012\u2013\u2014\u00b7./\\",
+    ),
+    " ",
+)
+
+# Any of the invisible characters, so the second folding is only built for a
+# line that actually has one. Most lines do not, and most of the tree is
+# ASCII: the fast paths keep the added cost of the folded comparison small
+# enough that the scan stays a lint step rather than a coffee break.
+_INVISIBLE_RE = re.compile("[\u00ad\u180e\u200b\u200c\u200d\u2060\ufeff]")
+
+
+def fold_for_match(line: str, *, join_invisible: bool = False) -> str:
+    """Fold one line to the form a denylist pattern is compared against.
+
+    Compatibility-normalise (so full-width letters and digits become their
+    ASCII forms), remove invisible characters, decompose and strip combining
+    marks (so ``\u00e9`` and ``e`` + accent compare equal), turn every
+    non-ASCII-space whitespace and every joining punctuation mark into a
+    single space, and case-fold. What survives is the word sequence, which is
+    what makes a name a name; what is dropped is presentation.
+
+    ``join_invisible`` decides what an invisible character becomes. Removed
+    (the default) it splits two words a hidden character was standing
+    between; joined it fuses the halves of one word a hidden character was
+    pushed into. Both are real spellings of the same name, so
+    ``fold_views`` produces both and a match on either is a match.
+    """
+    if line.isascii():
+        # No compatibility variants, no combining marks and no invisible
+        # characters exist below U+0080: the fold is separators and case.
+        return " ".join(line.translate(_ASCII_SEPARATORS).split()).casefold()
+    folded = unicodedata.normalize("NFKC", line).translate(
+        dict.fromkeys(_INVISIBLE, "" if join_invisible else " ")
+    )
+    folded = unicodedata.normalize("NFKD", folded)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = folded.translate(_UNICODE_SEPARATORS)
+    return " ".join(folded.split()).casefold()
+
+
+def fold_views(line: str) -> tuple[str, ...]:
+    """Every folding of one line worth comparing a pattern against."""
+    split_view = fold_for_match(line)
+    if not _INVISIBLE_RE.search(line):
+        return (split_view,)      # the two foldings would be identical
+    joined_view = fold_for_match(line, join_invisible=True)
+    if joined_view == split_view:
+        return (split_view,)
+    return (split_view, joined_view)
+
+
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+# Shortest word that may drive the word-order-independent match. Below this,
+# a word is a function word ("the", "and", "of", "for"): requiring one of
+# those to sit near another word manufactures hits in ordinary prose, and a
+# gate that cries wolf on prose gets turned off. Identity words -- a name, a
+# handle stem, a product's distinctive word -- are longer than this, and the
+# literal and folded-line matches above already cover their exact spelling.
+_MIN_WINDOW_WORD = 4
+
+# How many extra words may sit between two words of one pattern and still
+# count as the same phrase: room for a middle initial and a stray word.
+_WINDOW_SLACK = 2
+
+
+def _tokens_with_lines(text: str) -> list[tuple[str, int]]:
+    """Fold, then split into ``(word, line_number)`` across the whole file.
+
+    Tokenising the whole document rather than each line keeps a phrase that a
+    word processor wrapped -- first name at the end of one line, surname at
+    the start of the next -- as one word sequence, which is how a reader sees
+    it. Line numbers are kept per token so a hit can still be reported as a
+    location instead of as content.
+    """
+    tokens: list[tuple[str, int]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for folded in fold_views(line):
+            tokens.extend(
+                (word, line_number) for word in _WORD.findall(folded)
+            )
+    return tokens
+
+
+def _pattern_words(pattern: re.Pattern[str]) -> list[str] | None:
+    """The words a pattern spells, or None when it is not a phrase.
+
+    Only a plain phrase qualifies: a pattern carrying regex syntax (``\\d``,
+    ``\\s``, a character class, a group) has no fixed word sequence to look
+    for, so it is judged by the literal matches and left alone.
+    """
+    source = pattern.pattern
+    if re.search(r"[\\\[\]()|?*+{}^$]", source):
+        return None
+    folded = fold_for_match(source)
+    words = _WORD.findall(folded)
+    if not words:
+        return None
+    if any(len(word) < _MIN_WINDOW_WORD for word in words):
+        return None
+    return words
+
+
+def scan_client_document(
+    text: str, patterns: list[re.Pattern[str]]
+) -> list[tuple[int, int]]:
+    """Every client-pattern hit in one document, each location reported once.
+
+    Adds to ``scan_client_text`` a word-sequence match that ignores the order
+    the words were written in and the words between them: an attribution that
+    reads surname-first, or carries a middle initial, or has been split by a
+    wrapped line, is the same person as the one on the denylist. The spelling
+    of the words themselves is not ignored -- every word of the pattern must
+    be present.
+    """
+    found: set[tuple[int, int]] = set(scan_client_text(text, patterns))
+    phrases = []
+    for index, pattern in enumerate(patterns):
+        words = _pattern_words(pattern)
+        if words is None:
+            continue
+        needed = Counter(words)
+        width = len(words) + _WINDOW_SLACK
+        phrases.append((index, needed, len(words), width))
+    if not phrases:
+        return sorted(found)
+
+    tokens = _tokens_with_lines(text)
+    for index, needed, size, width in phrases:
+        # Only a position whose word belongs to the pattern can begin a
+        # match, so the slack before the phrase is never walked from a word
+        # that has nothing to do with it.
+        for start, (word, line_number) in enumerate(tokens):
+            if word not in needed:
+                continue
+            window = tokens[start:start + width]
+            if len(window) < size:
+                break
+            if needed <= Counter(w for w, _ in window):
+                found.add((line_number, index))
+    return sorted(found)
 
 
 _ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})")
@@ -416,7 +604,7 @@ def scan_client_paths(
             continue  # unreadable; no text a regex can judge
         findings.extend(
             (rel, line_number, index)
-            for line_number, index in scan_client_text(text, patterns)
+            for line_number, index in scan_client_document(text, patterns)
         )
     return findings
 
