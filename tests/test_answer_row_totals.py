@@ -318,9 +318,9 @@ def test_a_sum_of_two_terms_is_prose_not_a_row_chain(answer):
 
 @pytest.mark.parametrize("answer", [
     pytest.param(
-        "900 m \u2014 the sum of the 17 billed trench rows in this band.\n"
+        "1,000 m \u2014 the sum of the 17 billed trench rows in this band.\n"
         "Item\tQty (m)\nA\t633\nB\t267\n\n"
-        "The remaining rows continue on the next page and make up the balance to 900 m.\n",
+        "The remaining rows continue on the next page and make up the balance to 1,000 m.\n",
         id="remaining-named",
     ),
     pytest.param(
@@ -333,4 +333,65 @@ def test_a_sum_of_two_terms_is_prose_not_a_row_chain(answer):
 def test_a_claim_the_answer_itself_discloses_as_partial_is_left_alone(answer):
     # The answer has named the rows it did not print, so its figure is the
     # band's total and is not rewritten.
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer,prose,computed", [
+    pytest.param(
+        _table(("Item", "Qty (m)"), (("A", "633"), ("B", "488")), "Total", "1,400")
+        + "\n\nThe rows were read once; the survey ran over two days.\n",
+        "The rows were read once; the survey ran over two days.",
+        "1,121", id="prose-with-no-figure",
+    ),
+    pytest.param(
+        _table(("Item", "Qty (No)"), (("A", "18"), ("B", "26")), "Total", "44")
+        + "\n\nThe bill prints 44 against this band on page 300.\n",
+        "The bill prints 44 against this band on page 300.",
+        "44", id="prose-with-a-bare-figure",
+    ),
+])
+def test_a_wrong_total_is_corrected_by_its_cell_and_the_prose_is_untouched(
+    answer, prose, computed,
+):
+    # Only a figure stated with the column's own unit is rewritten; a bare
+    # figure or a sentence with no figure is left as the answer wrote it.
+    out = reconcile(answer)
+    assert prose in out
+    assert f"Total\t\t{computed}" in out
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 9,000 in this band.\n"
+        "Item\tQty\nA\t633\nB\t488\n",
+        id="header-with-no-unit",
+    ),
+    pytest.param(
+        "The rows sum to 400 here.\n"
+        "Item\tQuantity\nA\t120\nB\t180\n",
+        id="header-with-no-unit-counts",
+    ),
+])
+def test_a_prose_claim_against_a_header_with_no_unit_is_left_alone(answer):
+    # The unit a figure carries is read from the answer's own header; without
+    # one there is no way to tell the claimed figure from any other number, so
+    # the claim is not corrected.
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 9,000 m in this band.\n"
+        "Item\tQty (m)\tAmount (SAR)\nA\t633\t772,260\nB\t488\t732,000\n",
+        id="two-figure-columns-metres",
+    ),
+    pytest.param(
+        "The rows sum to 5,000 No in this section.\n"
+        "Item\tQty (No)\tRate (SAR)\nA\t18\t17,000\nB\t26\t19,200\n",
+        id="two-figure-columns-counts",
+    ),
+])
+def test_a_prose_claim_against_a_two_figure_table_states_nothing_of_its_own(answer):
+    # Two figure columns: which one the claim is about cannot be read from the
+    # answer, so the claim is not corrected against either.
     assert reconcile(answer) == answer

@@ -28,7 +28,9 @@ Three rules, all decided from the answer's own text and its own figures:
 A total that already equals its column is returned byte for byte: the check
 may only rewrite an answer that disagrees with itself. A total the answer
 credits to a document ("[source: ...]", "as printed", "carried to") is that
-document's figure, not a sum of the rows above it, and is left alone.
+document's figure, not a sum of the rows above it, and is left alone - as is
+a prose total the answer itself discloses as partial ("the remaining rows
+make up the balance to N").
 
 Nothing here names a project, a document, a bill, an item, a bore size, a
 band label or a figure. A column's unit is read from the answer's own header
@@ -150,6 +152,17 @@ def _cells(line: str) -> list[str] | None:
     return None
 
 
+def _table_blocks(cells: list[list[str] | None]) -> list[list[int]]:
+    """The runs of consecutive table lines: one block is one table."""
+    blocks: list[list[int]] = []
+    previous = -2
+    for index in [i for i, row in enumerate(cells) if row is not None]:
+        joined = index == previous + 1 and bool(blocks)
+        blocks.append([*blocks.pop(), index] if joined else [index])
+        previous = index
+    return blocks
+
+
 def _number(cell: str) -> float | None:
     """The figure a cell states, or None.
 
@@ -157,10 +170,11 @@ def _number(cell: str) -> float | None:
     four). A cell holding words, a dimension or a range states no figure.
     """
     text = (cell or "").strip()
-    if not _FIGURE_CELL_RE.match(text):
+    parts = text.split("+") if _FIGURE_CELL_RE.match(text) else []
+    if not parts:
         return None
     total = 0.0
-    for part in text.split("+"):
+    for part in parts:
         try:
             total += float(part.strip().replace(",", ""))
         except ValueError:  # pragma: no cover - _FIGURE_CELL_RE accepted it
@@ -192,18 +206,16 @@ def _row_label(row: list[str], figure_col: int) -> str:
 
     A reference cell alone ("A", "-") names nothing a reader can act on, so
     the row is named by the longest cell that states no figure - the
-    description the bill prints for it.
+    description the answer prints for it.
     """
     words = [
         (cell or "").strip() for index, cell in enumerate(row)
         if index != figure_col and _number(cell) is None and (cell or "").strip()
     ]
-    if not words:
-        return (row[0] if row else "").strip() or "row with no reference"
-    label = max(words, key=len)
+    label = max(words, key=len) if words else ((row[0] if row else "") or "").strip()
     # "plus the remaining rows", "and further rows": the connective is the
     # sentence's, not the row's name.
-    return re.sub(r"(?i)^(?:plus|and|with|\+)\s+", "", label)
+    return re.sub(r"(?i)^(?:plus|and|with|\+)\s+", "", label or "row with no reference")
 
 
 def _header_unit(cell: str) -> str:
@@ -340,12 +352,11 @@ def _prose_correction(
     that disagrees with the cells above it is a defect either way and is not
     excused here.
     """
-    if any(cells[i] is None and _REMAINDER_RE.search(lines[i]) for i in range(len(lines))
-           if i not in block):
+    outside = [i for i in range(len(lines)) if i not in block]
+    disclosed = any(cells[i] is None and _REMAINDER_RE.search(lines[i]) for i in outside)
+    if disclosed:
         return None
     rows = [cells[i] or [] for i in block]
-    if not rows:
-        return None
     data = [row for row in rows if any((c or "").strip() for c in row)]
     if not data or any(any(_TOTAL_CELL_RE.match(c or "") for c in row) for row in data):
         return None
@@ -358,14 +369,9 @@ def _prose_correction(
         return None
     col = figure_cols[0]
     unit = _header_unit(header[col] if col < len(header) else "")
-    if not unit:
-        return None
-    for index, line in enumerate(lines):
-        if index in block:
-            continue
-        if not _TOTAL_CLAIM_RE.search(line):
-            continue
-        stated = _claim_figure(line, unit)
+    for index in outside:
+        line = lines[index]
+        stated = _claim_figure(line, unit) if _TOTAL_CLAIM_RE.search(line) else None
         if stated is None:
             continue
         stated_text, stated_value = stated
@@ -393,8 +399,8 @@ def _prose_correction(
     return None
 
 
-def _chain_findings(lines: list[str], cells: list[list[str] | None]) -> list[ChainFinding]:
-    """Every sum chain the answer prints, checked against its own result.
+def _chain_findings(cells: list[list[str] | None], lines: list[str]) -> list[ChainFinding]:
+    """Every sum chain the answer prints in prose, checked against its result.
 
     A line stating ``a + b + c = N`` makes the same arithmetic claim a Total
     cell makes, so it is checked the same way. A chain that prints an
@@ -402,13 +408,8 @@ def _chain_findings(lines: list[str], cells: list[list[str] | None]) -> list[Cha
     complete total, and the answer says so without a figure being guessed.
     """
     out: list[ChainFinding] = []
-    for index, line in enumerate(lines):
-        if cells[index] is not None:
-            continue
-        for match in _CHAIN_RE.finditer(line):
-            total = _number(match.group("total"))
-            if total is None:
-                continue
+    for index in [i for i, row in enumerate(cells) if row is None]:
+        for match in _CHAIN_RE.finditer(lines[index]):
             raw_terms = match.group("terms")
             if _ELLIPSIS_RE.search(raw_terms):
                 printed = [
@@ -416,7 +417,8 @@ def _chain_findings(lines: list[str], cells: list[list[str] | None]) -> list[Cha
                     if value is not None
                 ]
                 out.append(ChainFinding(
-                    line_index=index, stated_text=match.group("total"), stated=total,
+                    line_index=index, stated_text=match.group("total"),
+                    stated=_number(match.group("total")) or 0.0,
                     computed=None, unit=(match.group("unit") or "").strip(),
                     terms=len(printed),
                 ))
@@ -425,7 +427,8 @@ def _chain_findings(lines: list[str], cells: list[list[str] | None]) -> list[Cha
                 value for value in (_number(part) for part in raw_terms.split("+"))
                 if value is not None
             ]
-            if len(terms) < 3:
+            total = _number(match.group("total"))
+            if total is None or len(terms) < 3:
                 continue
             computed = sum(terms)
             if _agrees(total, computed):
@@ -438,53 +441,52 @@ def _chain_findings(lines: list[str], cells: list[list[str] | None]) -> list[Cha
     return out
 
 
+def _pipe_row(line: str, row: list[str]) -> str:
+    """A rewritten pipe-delimited row, keeping the pipes the line printed."""
+    stripped = line.strip()
+    lead = "|" if stripped.startswith("|") else ""
+    tail = "|" if stripped.endswith("|") else ""
+    return lead + "|".join(row) + tail
+
+
 def _apply_cell(
     lines: list[str], cells: list[list[str] | None], line_index: int, col: int, text: str,
 ) -> None:
-    """Write a rewritten figure back into its cell, keeping every separator."""
+    """Write a rewritten figure back into its cell, keeping every separator.
+
+    The cell keeps its own padding, so a pipe table keeps its shape and a tab
+    table keeps its columns.
+    """
     row = cells[line_index]
-    if row is None:  # pragma: no cover - only a table line is ever rewritten
-        return
     while len(row) <= col:
         row.append("")
-    # Keep the cell's own padding so a pipe table keeps its shape.
     original = row[col] or ""
     lead = original[: len(original) - len(original.lstrip())]
     tail = original[len(original.rstrip()):]
     row[col] = f"{lead}{text}{tail}"
-    if _TAB in lines[line_index]:
-        lines[line_index] = _TAB.join(row)
-        return
-    lead = "|" if lines[line_index].strip().startswith("|") else ""
-    tail = "|" if lines[line_index].strip().endswith("|") else ""
-    lines[line_index] = lead + "|".join(row) + tail
+    tabbed = _TAB in lines[line_index]
+    lines[line_index] = _TAB.join(row) if tabbed else _pipe_row(lines[line_index], row)
 
 
-def _replace_stated(
+def _replaced_stated(
     lines: list[str], skip_line: int, stated: str, computed: str, unit: str,
-) -> int:
-    """Replace this answer's prose statements of a wrong figure, in place.
+) -> list[str]:
+    """``lines`` with every statement of a wrong figure replaced.
 
     Only a figure stated WITH the column's own unit is replaced ("168 No",
     "2,468 m"), so a page number, an item code or a rate that repeats the
     digits is left alone. ``skip_line`` is the total's own line, whose cell or
     chain has already been rewritten.
     """
-    if not unit:
-        return 0
     pattern = re.compile(
         rf"(?<![\d,.]){re.escape(stated)}\s*{re.escape(unit)}(?![A-Za-z0-9])",
         re.IGNORECASE,
-    )
-    replaced = 0
-    for offset, line in enumerate(lines):
-        if offset == skip_line:
-            continue
-        new_line, count = pattern.subn(f"{computed} {unit}", line, count=_MAX_REPLACEMENTS)
-        if count:
-            lines[offset] = new_line
-            replaced += count
-    return replaced
+    ) if unit else None
+    return [
+        line if pattern is None or offset == skip_line
+        else pattern.subn(f"{computed} {unit}", line, count=_MAX_REPLACEMENTS)[0]
+        for offset, line in enumerate(lines)
+    ]
 
 
 def _summary(correction: Correction, computed_text: str) -> str:
@@ -534,35 +536,25 @@ def _chain_summary(finding: ChainFinding, computed_text: str) -> str:
 def _reconcile(raw: str) -> str:
     lines = raw.split("\n")
     cells: list[list[str] | None] = [_cells(line) for line in lines]
-    corrections: list[Correction] = []
-    block_start: int | None = None
-    for index in range(len(lines) + 1):
-        row = cells[index] if index < len(lines) else None
-        if row is not None:
-            if block_start is None:
-                block_start = index
-            continue
-        if block_start is None:
-            continue
-        block = list(range(block_start, index))
-        corrections.extend(_block_corrections(block, cells))
-        prose = _prose_correction(block, cells, lines)
-        if prose is not None:
-            corrections.append(prose)
-        block_start = None
-    chains = _chain_findings(lines, cells)
+    blocks = _table_blocks(cells)
+    corrections = [c for block in blocks for c in _block_corrections(block, cells)]
+    corrections.extend(
+        prose for prose in (_prose_correction(b, cells, lines) for b in blocks)
+        if prose is not None
+    )
+    chains = _chain_findings(cells, lines)
     if not corrections and not chains:
         return raw
     summaries: list[str] = []
     for correction in corrections:
         computed_text = _format_like(correction.computed, correction.stated_text)
         stated_text = _format_like(correction.stated, correction.stated_text)
-        skip_line = correction.line_index
         if correction.in_cell:
             _apply_cell(lines, cells, correction.line_index, correction.col, computed_text)
-        else:
-            skip_line = -1
-        _replace_stated(lines, skip_line, stated_text, computed_text, correction.unit)
+        skip_line = correction.line_index if correction.in_cell else -1
+        lines[:] = _replaced_stated(
+            lines, skip_line, stated_text, computed_text, correction.unit,
+        )
         summaries.append(_summary(correction, computed_text))
     for chain in chains:
         stated = _format_like(chain.stated, chain.stated_text)
@@ -571,15 +563,15 @@ def _reconcile(raw: str) -> str:
             continue
         computed_text = _format_like(chain.computed, chain.stated_text)
         line = lines[chain.line_index]
-        replaced = False
+        swapped = False
         for match in _CHAIN_RE.finditer(line):
-            if match.group("total") != chain.stated_text or replaced:
+            if match.group("total") != chain.stated_text or swapped:
                 continue
             start, end = match.span("total")
             line = line[:start] + computed_text + line[end:]
-            replaced = True
+            swapped = True
         lines[chain.line_index] = line
-        _replace_stated(lines, chain.line_index, stated, computed_text, chain.unit)
+        lines[:] = _replaced_stated(lines, chain.line_index, stated, computed_text, chain.unit)
         summaries.append(_chain_summary(chain, computed_text))
     _LOG.info(
         "row_total_reconciled columns=%d chains=%d", len(corrections), len(chains),
@@ -597,10 +589,9 @@ def reconcile(text: str) -> str:
     equal their rows, is returned byte for byte. Never raises: a check that
     can break an answer is a check that gets switched off.
     """
-    if not (text or "").strip():
-        return text
+    raw = text or ""
     try:
-        return _reconcile(text)
+        return _reconcile(raw)
     except Exception:  # noqa: BLE001 - a check must never break a turn
         _LOG.warning("row-total reconciliation failed; answer passed through", exc_info=True)
-        return text
+        return raw
