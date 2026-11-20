@@ -186,38 +186,84 @@ def structured_logging_enabled() -> bool:
 
 
 # ── Error-report scrubbing ────────────────────────────────────────────────
-# One rule, applied to every event before it leaves the process: a value is
-# judged by the KIND of field that holds it and by the SHAPE of the text, never
-# by a particular name or value. send_default_pii=False alone still lets
-# exception messages, log breadcrumbs, extra context and frame locals through.
+# DEFAULT-DENY. The free-form parts of an event -- ``extra``, the fields of a
+# context, breadcrumb ``data``, request fields and header values -- are dropped
+# unless their field is on a short allowed list of structural/diagnostic names.
+# Values are also judged by shape (credential spellings, e-mail addresses,
+# over-long passages), never by a particular name or secret value.
+# ``send_default_pii=False`` alone still lets exception messages, log
+# breadcrumbs and extra context through; this hook closes that gap.
 
 _FILTERED = "[Filtered]"
 
-#: Field kinds whose value is a credential, a session, an identity or a
-#: connection (headers, query keys, context keys, user fields alike).
-_CREDENTIAL_FIELD = (
-    r"auth|cookie|token|secret|passw|pwd|credential|session|signature|"
-    r"api[-_]?key|private[-_]?key|access[-_]?key|(?:^|[-_])keys?$|"
+#: A credential, session, identity or connection token, by spelling. Matched
+#: with a letter boundary so a short spelling (``pin``, ``pw``, ``otp``) is a
+#: credential while an ordinary word that merely contains it (``spinner``) is
+#: not.
+_CREDENTIAL_NAMES = (
+    r"auth(?:orization|entic\w*)?|"
+    r"cookie|token|secret|credential(?:s)?|session|signature|"
+    r"pass(?:word|wd|code|phrase)?|pwd|pw|pin|otp|sid|"
+    r"api[-_]?key|private[-_]?key|access[-_]?key|keys?|"
     r"dsn|conn(?:ection)?[-_]?str|(?:database|db)[-_]?ur[il]|e-?mail"
 )
-_CREDENTIAL_FIELD_RE = re.compile(_CREDENTIAL_FIELD, re.I)
+_CREDENTIAL_RE = re.compile(r"(?<![a-z])(" + _CREDENTIAL_NAMES + r")(?![a-z])", re.I)
 
-#: Field kinds that carry payload rather than diagnosis: request bodies,
-#: document text, prompts, and frame local variables.
-_PAYLOAD_FIELD_RE = re.compile(
-    r"(?:^|[-_])(?:vars|locals|data|body|text|content|chunks?|excerpts?|"
-    r"snippets?|prompts?|documents?|cookies)$",
-    re.I,
-)
+#: Field names that never carry a diagnostic value and are dropped wherever
+#: they appear (frame local variables -- ``include_local_variables`` is off,
+#: but never trust that alone).
+_DROP_FIELDS = frozenset({"vars", "locals"})
+
+#: Free text longer than this is payload (a pasted page, document text), not a
+#: diagnostic message, and is not carried.
+_MAX_TEXT_CHARS = 200
+
+#: Standard, safe HTTP header names (lowercase). Any other header keeps its
+#: name (diagnostic) but loses its value.
+_ALLOWED_HEADERS = frozenset({
+    "accept", "accept-encoding", "accept-language", "allow", "cache-control",
+    "connection", "content-encoding", "content-language", "content-length",
+    "content-type", "date", "host", "location", "origin", "referer", "server",
+    "user-agent", "vary",
+})
+
+#: Context names that are pure diagnostics and safe to carry; any other
+#: context is dropped whole.
+_ALLOWED_CONTEXTS = frozenset({
+    "app", "browser", "device", "gpu", "os", "otel", "runtime", "trace",
+})
+
+#: Fields inside an allowed context that are safe to carry.
+_ALLOWED_CONTEXT_FIELDS = frozenset({
+    "build", "description", "name", "op", "parent_span_id", "span_id",
+    "status", "trace_id", "version",
+})
+
+#: Request keys that are diagnosis, not payload. The request's other fields
+#: (query string, body, env, cookies, data) are dropped.
+_ALLOWED_REQUEST_FIELDS = frozenset({
+    "api_target", "body_size", "finished", "fragment",
+    "inferred_content_type", "method", "started", "url",
+})
+
+#: Breadcrumb keys that are diagnosis; ``data`` (free-form) and anything else
+#: are dropped.
+_ALLOWED_BREADCRUMB_FIELDS = frozenset({
+    "category", "event_id", "level", "message", "timestamp", "type",
+})
+
+#: User identity fields that are safe to carry.
+_ALLOWED_USER_FIELDS = frozenset({"id", "ip_address", "segment", "username"})
 
 #: Shapes of secret material inside free text (messages, URLs, log lines).
 _TEXT_SCRUBS = (
     # scheme://user:password@host -> scheme://[Filtered]@host
     (re.compile(r"(\b[a-z][a-z0-9+.\-]*://)[^\s/@]+@", re.I), r"\1" + _FILTERED + "@"),
-    # name=value / name: value where the name is a credential kind
+    # name=value / name: value where the name is a credential spelling
     (re.compile(
-        r"(\b[\w-]*(?:" + _CREDENTIAL_FIELD.replace("(?:^|[-_])keys?$", r"(?<![a-z])keys?\b") + r")[\w-]*)"
-        r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s&,;]+)",
+        r"(?<![a-z])(" + _CREDENTIAL_NAMES + r")(?![a-z])"
+        r"(\s*[=:]\s*)"
+        r"(\"[^\"]*\"|'[^']*'|[^\s&,;]+)",
         re.I,
     ), r"\1\2" + _FILTERED),
     # Authorization schemes inside text
@@ -235,9 +281,10 @@ _TEXT_SCRUBS = (
     ), _FILTERED),
 )
 
-#: Free text longer than this is treated as payload (document text, a pasted
-#: page) rather than a diagnostic message, and is not carried.
-_MAX_TEXT_CHARS = 1024
+
+def _is_credential_field(name: str) -> bool:
+    """Whether ``name`` is (or ends in) a credential, session or token kind."""
+    return bool(_CREDENTIAL_RE.search(name))
 
 
 def _scrub_text(text: str) -> str:
@@ -248,24 +295,137 @@ def _scrub_text(text: str) -> str:
     return text
 
 
-def _scrub_field(key: Any, value: Any) -> Any:
-    if isinstance(key, str):
-        if _PAYLOAD_FIELD_RE.search(key) or _CREDENTIAL_FIELD_RE.search(key):
-            return _FILTERED if value not in (None, "", {}, []) else value
-    return _scrub_value(value)
-
-
 def _scrub_value(value: Any) -> Any:
+    """Scrub a scalar or a structural container (text, credential kinds)."""
     if isinstance(value, str):
         return _scrub_text(value)
     if isinstance(value, dict):
         return {k: _scrub_field(k, v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        # Header lists arrive as [[name, value], ...]: the name is the field kind.
-        if value and all(isinstance(p, (list, tuple)) and len(p) == 2 and isinstance(p[0], str) for p in value):
-            return [[p[0], _scrub_field(p[0], p[1])] for p in value]
         return [_scrub_value(v) for v in value]
     return value
+
+
+def _scrub_field(key: Any, value: Any) -> Any:
+    """Scrub one structural field: drop local variables, mask credentials."""
+    name = str(key)
+    if name in _DROP_FIELDS or _is_credential_field(name):
+        return _FILTERED if value not in (None, "", {}, []) else value
+    return _scrub_value(value)
+
+
+def _scrub_extra(value: Any) -> Any:
+    """``extra`` is app-defined free-form: default-deny drops every field."""
+    return {} if isinstance(value, dict) else _scrub_value(value)
+
+
+def _scrub_contexts(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for name, fields in value.items():
+        if str(name) not in _ALLOWED_CONTEXTS:
+            continue  # unknown context: dropped whole
+        if isinstance(fields, dict):
+            out[name] = {
+                k: _scrub_value(v)
+                for k, v in fields.items()
+                if str(k) in _ALLOWED_CONTEXT_FIELDS
+            }
+        else:
+            out[name] = _scrub_value(fields)
+    return out
+
+
+def _scrub_headers(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            name: _scrub_value(v) if str(name).lower() in _ALLOWED_HEADERS
+            else (_FILTERED if v not in (None, "", {}, []) else v)
+            for name, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str):
+                name, v = item
+                if name.lower() in _ALLOWED_HEADERS:
+                    out.append([name, _scrub_value(v)])
+                else:
+                    out.append([name, _FILTERED if v not in (None, "", {}, []) else v])
+            else:
+                out.append(_scrub_value(item))
+        return out
+    return _scrub_value(value)
+
+
+def _scrub_request(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for key, v in value.items():
+        name = str(key)
+        if name in _ALLOWED_REQUEST_FIELDS:
+            out[key] = _scrub_value(v)
+        elif name == "headers":
+            out[key] = _scrub_headers(v)
+        # query string, body, data, env, cookies and unknown keys: dropped
+    return out
+
+
+def _scrub_breadcrumb(crumb: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, v in crumb.items():
+        if str(key) in _ALLOWED_BREADCRUMB_FIELDS:
+            out[key] = _scrub_value(v)
+        # ``data`` and any other key are free-form: dropped
+    return out
+
+
+def _scrub_breadcrumbs(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for key, v in value.items():
+        if key == "values" and isinstance(v, list):
+            out[key] = [_scrub_breadcrumb(c) for c in v if isinstance(c, dict)]
+        else:
+            out[key] = _scrub_field(key, v)
+    return out
+
+
+def _scrub_user(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for key, v in value.items():
+        name = str(key)
+        if _is_credential_field(name):
+            out[key] = _FILTERED if v not in (None, "", {}, []) else v
+        elif name in _ALLOWED_USER_FIELDS:
+            out[key] = _scrub_value(v)
+        # anything else is free-form: dropped
+    return out
+
+
+_CONTAINER_HANDLERS = {
+    "extra": _scrub_extra,
+    "contexts": _scrub_contexts,
+    "request": _scrub_request,
+    "breadcrumbs": _scrub_breadcrumbs,
+    "user": _scrub_user,
+}
+
+
+def _scrub_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in event.items():
+        handler = _CONTAINER_HANDLERS.get(str(key))
+        if handler is not None:
+            out[key] = handler(value)
+        else:
+            out[key] = _scrub_field(key, value)
+    return out
 
 
 def scrub_error_event(event: Dict[str, Any], hint: Any = None) -> Optional[Dict[str, Any]]:
@@ -276,7 +436,7 @@ def scrub_error_event(event: Dict[str, Any], hint: Any = None) -> Optional[Dict[
     never leave.
     """
     try:
-        return _scrub_value(event)
+        return _scrub_event(event)
     except Exception as exc:  # noqa: BLE001 -- fail closed, never send unscrubbed
         logger.warning("error report dropped: scrub failed (%s)", type(exc).__name__)
         return None

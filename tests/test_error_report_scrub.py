@@ -124,7 +124,9 @@ def test_sensitive_field_kinds_are_filtered_anywhere(key, value):
     out = scrub_error_event(event, {})
     blob = _blob(out)
     assert "inv3nted" not in blob.lower()
-    assert out["extra"]["ctx"]["deeper"][0]["count"] == 3
+    # default-deny: the free-form ``extra`` container is dropped whole, so the
+    # invented nested structure does not survive either.
+    assert out["extra"] == {}
 
 
 # ── the same kinds inside free text ───────────────────────────────────────
