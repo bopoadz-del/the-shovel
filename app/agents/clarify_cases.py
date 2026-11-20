@@ -264,6 +264,22 @@ def _head_noun(phrase: str) -> str:
     return ""
 
 
+def _thing_of(subject: str) -> tuple[str, set[str]]:
+    """The thing a case's own phrase names: ``(head noun, words before it)``.
+
+    A phrase the reader cut at the value's own kind word ("BLINDING CONCRETE:
+    Grade" for a grade, "SLAB: Thickness" for a thickness) names its thing in
+    the words before that word, so a trailing kind word is dropped and the
+    head is read from what is left. The kind words are the module's existing
+    language category, never a list of subjects.
+    """
+    words = [w for w in (subject or "").lower().split() if w.strip(".,;:()") not in _STOPWORDS]
+    while words and words[-1].strip(".,;:()") in _KIND_WORDS:
+        words.pop()
+    rest = " ".join(words)
+    return _head_noun(rest), _subject_tokens(rest)
+
+
 #: Reporting verbs that make an ask a request to summarise / describe /
 #: report the documents rather than to name one value. Such an ask is
 #: answered by describing several different subjects, so its values are
@@ -415,26 +431,30 @@ def _relevant(
 ) -> bool:
     """True when the case could answer the question.
 
-    Its kind must match; when the question names a subject, the case must
-    answer it -- either its head noun is the asked head, or it names any word
-    of the asked subject. The second half is what keeps a passage whose own
-    phrase ends in the value's label ("BLINDING CONCRETE: Grade" for the
-    "concrete" asked): its head is the label, not the thing, and the thing is
-    still named by its own words. When the question's subject names a qualifier
-    too ("fresh concrete temperature", not just "temperature"), the case must
-    share at least one of those qualifier words -- so a same-measure but
-    different-thing case ("ambient temperature") is not kept. A case with no
-    qualifier of its own stays (conservative: the head alone still matches).
+    Its kind must match; when the question names a subject, the case's head
+    noun must match it -- read from the case's own phrase with a trailing kind
+    word dropped, so a passage cut at the value's own label ("BLINDING
+    CONCRETE: Grade") still names its thing; and when the question's subject
+    names a qualifier too ("fresh concrete temperature", not just
+    "temperature"), the case must share at least one of those qualifier words --
+    so a same-measure but different-thing case ("ambient temperature") is not
+    kept. A case with no qualifier of its own stays (conservative: the head
+    alone still matches).
     """
     if kinds and _case_kind(case) not in kinds:
         return False
     if heads:
         c_head = _head_noun(case.subject)
         c_tokens = _subject_tokens(case.subject)
-        if c_head not in heads and not (c_tokens & (heads | qualifiers)):
-            return False
+        if c_head not in heads:
+            # A phrase the reader cut at the value's own kind word ("BLINDING
+            # CONCRETE: Grade") names its thing in the words before it: read
+            # the head from there before giving the case up.
+            c_head, c_tokens = _thing_of(case.subject)
+            if c_head not in heads:
+                return False
         if qualifiers:
-            c_quals = _subject_tokens(case.subject) - {c_head}
+            c_quals = c_tokens - {c_head}
             if c_quals and not (c_quals & qualifiers):
                 return False
     return True
