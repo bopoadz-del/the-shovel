@@ -94,6 +94,35 @@ def stub_answer(arm: str, row_id: str, rep: int) -> str:
     return _PASS[row_id] if rep < passes else _FAIL
 
 
+QUESTIONS: Dict[str, str] = {row: f"{row} question (loaded from questions_19nov.json at run time)" for row in ROWS}
+
+
+def assemble_prompt(row_id: str) -> str:
+    """One turn's prompt: the row's question, assembled once per turn."""
+    return f"Answer from the project documents: {QUESTIONS[row_id]}"
+
+
+def run_turns(turn_limit: int = CRITERIA["hard_stop"]) -> Tuple[Dict[str, Dict[str, List[str]]], int, List[Dict[str, Any]]]:
+    """Simulate the full run: rows x reps x arms, counting every turn up to the
+    hard stop. Returns (answers, turn_count, turn_log)."""
+    answers: Dict[str, Dict[str, List[str]]] = {"A": {r: [] for r in ROWS}, "B": {r: [] for r in ROWS}}
+    turns: List[Dict[str, Any]] = []
+    count = 0
+    for row in ROWS:
+        for rep in range(REPS):
+            for arm in ARMS:
+                if count >= turn_limit:
+                    return answers, count, turns
+                count += 1
+                turns.append({
+                    "turn": count, "row": row, "arm": arm, "rep": rep,
+                    "prompt": assemble_prompt(row),
+                    "answer": stub_answer(arm, row, rep),
+                })
+                answers[arm][row].append(stub_answer(arm, row, rep))
+    return answers, count, turns
+
+
 def run_table(answers: Dict[str, Dict[str, List[str]]]) -> Tuple[Dict[str, Dict[str, int]], bool, str]:
     """Score every cell and compute the verdict from CRITERIA as data."""
     passes: Dict[str, Dict[str, int]] = {"A": {}, "B": {}}
@@ -123,10 +152,9 @@ def print_table(passes: Dict[str, Dict[str, int]], verdict: bool, why: str) -> N
 
 
 def main() -> int:
-    answers = {
-        arm: {row: [stub_answer(arm, row, rep) for rep in range(REPS)] for row in ROWS}
-        for arm in ARMS
-    }
+    answers, turn_count, _turns = run_turns()
+    print(f"turns run: {turn_count} (hard stop {CRITERIA['hard_stop']}; arms A/B, reps {REPS}, rows {len(ROWS)})")
+    print(f"turn 1 prompt (assembly proof): {_turns[0]['prompt']!r}")
     passes, verdict, why = run_table(answers)
     print_table(passes, verdict, why)
     return 0 if verdict else 1
