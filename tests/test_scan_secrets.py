@@ -612,15 +612,21 @@ def test_a_utf16_head_is_text_and_a_binary_head_is_not():
     assert not scan_text.looks_like_text(b"SQLite format 3\x00" + b"\x00" * 64)
 
 
-def test_the_wrong_endianness_is_not_accepted():
+@pytest.mark.parametrize("line", ["alpha beta\ngamma\n", "note: see docs/runbook.md\n"])
+def test_a_markless_utf16_file_is_read_in_the_right_endianness(line):
     """The wrong endianness does not fail to decode -- it decodes into
-    block-drawing code points -- so a reading is accepted only when it is
-    overwhelmingly ASCII, which is what source text is."""
+    block-drawing code points -- so "it decoded" cannot be the test. Both
+    readings are tried and the overwhelmingly ASCII one wins, which is the
+    shape of source text in either endianness."""
     for endian in ("utf-16-le", "utf-16-be"):
-        text = scan_text.decode_bytes("alpha beta\ngamma\n".encode(endian))
-        assert text == "alpha beta\ngamma\n"
-    # Text with no ASCII at all is not guessed at: latin-1 keeps every byte.
-    cjk = "中文文本\n"
-    raw = cjk.encode("utf-16-le")
-    assert scan_text.decode_bytes(raw) != cjk
-    assert scan_text.decode_bytes(raw).encode("latin-1") == raw
+        assert scan_text.decode_bytes(line.encode(endian)) == line
+
+
+@pytest.mark.parametrize("line", ["\u4e2d\u6587\u6587\u672c\n", "\u043f\u0440\u0438\u0432\u0435\u0442\n"])
+def test_text_with_no_ascii_at_all_is_not_guessed_at(line):
+    """A file with nothing ASCII in it cannot be told apart by share, so it is
+    not guessed at: latin-1 keeps every byte, so nothing is dropped either."""
+    raw = line.encode("utf-16-le")
+    decoded = scan_text.decode_bytes(raw)
+    assert decoded != line
+    assert decoded.encode("latin-1") == raw
