@@ -455,3 +455,183 @@ def test_a_prose_claim_against_a_two_figure_table_states_nothing_of_its_own(answ
     # Two figure columns: which one the claim is about cannot be read from the
     # answer, so the claim is not corrected against either.
     assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer,stated,computed", [
+    pytest.param(
+        "40 No - the sum of the priced bands in this section.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m 12; "
+        "plus the two further bands on the next sheet [source: the bill].\n",
+        "40 No", "28 No", id="a-bucket-names-rows-and-no-figure",
+    ),
+    pytest.param(
+        "The rows sum to 1,400 m across the band.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm 120; 700 mm 60 "
+        "- plus the remaining bores in the same section.\n",
+        "1,400 m", "1,301 m", id="a-dash-bucket-names-rows-and-no-figure",
+    ),
+])
+def test_a_prose_row_list_total_is_the_sum_of_the_rows_it_prints(
+    answer, stated, computed,
+):
+    # Some answers print their rows as a sentence rather than a table. The same
+    # rule reads them: the total is the sum of the figures the rows state, and
+    # a bucket that only names further rows accounts for no part of it.
+    out = reconcile(answer)
+    assert stated not in out
+    assert computed in out
+    assert "Row total checked against the rows printed above" in out
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 28 No.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m 12.\n",
+        id="counts",
+    ),
+    pytest.param(
+        "The rows sum to 1,241 m.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm 120.\n",
+        id="lengths",
+    ),
+])
+def test_a_prose_row_list_that_agrees_with_its_total_is_returned_byte_for_byte(answer):
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 36 No.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m 12 "
+        "- plus the remaining rows, which make up the balance to 36 No.\n",
+        id="balance-in-the-listing-line",
+    ),
+    pytest.param(
+        "The rows sum to 1,301 m.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm 120.\n\n"
+        "The remaining bores continue on the next sheet and make up the balance to 1,301 m.\n",
+        id="balance-in-its-own-sentence",
+    ),
+])
+def test_a_prose_row_list_the_answer_ties_to_the_balance_is_left_alone(answer):
+    # The bucket says it is the rest of the stated total, so the total is
+    # printed rows plus that bucket by the answer's own definition.
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 36 No.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m 12; "
+        "plus the remaining rows 8 No.\n",
+        id="bucket-figure-in-the-listing-line",
+    ),
+    pytest.param(
+        "The rows sum to 1,301 m.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm 120.\n\n"
+        "The remaining bores add 60 m.\n",
+        id="bucket-figure-in-its-own-sentence",
+    ),
+])
+def test_a_prose_row_list_bucket_that_states_its_figure_reconciles_the_total(answer):
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer,computed,label", [
+    pytest.param(
+        "The rows sum to 40 No.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m not read.\n",
+        "16 No", "2.5-3.0 m not read", id="words-instead-of-a-quantity",
+    ),
+    pytest.param(
+        "The rows sum to 1,400 m.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm (not measured).\n",
+        "1,121 m", "600 mm", id="parenthetical-instead-of-a-quantity",
+    ),
+])
+def test_a_prose_row_without_a_quantity_is_named_and_not_summed(
+    answer, computed, label,
+):
+    out = reconcile(answer)
+    assert computed in out
+    assert "Printed without a readable figure, so not in the total:" in out
+    assert label in out.split("**Row total checked")[1]
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 40 No.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m not read; "
+        "plus the remaining rows on the next sheet.\n",
+        id="counts-with-a-bucket",
+    ),
+    pytest.param(
+        "The rows sum to 1,400 m.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm (not measured) "
+        "- plus the remaining bores in this band.\n",
+        id="lengths-with-a-bucket",
+    ),
+])
+def test_a_prose_row_without_a_quantity_plus_a_bucket_leaves_the_total_alone(answer):
+    # One row's figure is unknown and the answer says further rows exist, so
+    # the printed evidence cannot settle the total: nothing is rewritten.
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 300 No.\n\nThe rows read: K 137; K 138; K 139.\n",
+        id="reference-shaped-segments",
+    ),
+    pytest.param(
+        "The rows sum to 40 No.\n\nThe rows read: 1.5-2.0 m; 2.0-2.5 m; 2.5-3.0 m.\n",
+        id="dimension-shaped-segments",
+    ),
+])
+def test_a_prose_segment_that_states_no_quantity_is_not_read_as_a_row(answer):
+    # A reference ("K 137") and a depth range ("1.5-2.0 m") end in figures that
+    # are not quantities, so the line is not a row list and states no sum.
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer,stated,computed", [
+    pytest.param(
+        _table(("Item", "Qty (No)"),
+               (("A", "18"), ("B", "26"), ("remaining rows (not itemised)", "\u2014")),
+               "Total", "50"),
+        "50", "44", id="tab-table",
+    ),
+    pytest.param(
+        "| Item | Qty (No) |\n| A | 7 |\n| B | 5 |\n| remaining rows (not itemised) | \u2014 |\n"
+        "| Total | 20 |",
+        "20", "12", id="pipe-table",
+    ),
+])
+def test_a_bucket_that_states_no_figure_does_not_excuse_a_larger_total(
+    answer, stated, computed,
+):
+    # The bucket names further rows but states none of their figures and makes
+    # no claim to the balance, so nothing the answer prints accounts for the
+    # difference: the total is the sum of the rows that do.
+    out = reconcile(answer)
+    assert computed in out
+    assert "Row total checked against the rows printed above" in out
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        _table(("Item", "Qty (No)"),
+               (("A", "18"), ("B", "26"), ("\u2014", "remaining rows 6 No", "\u2014")),
+               "Total", "50"),
+        id="figure-written-into-the-wording",
+    ),
+    pytest.param(
+        "| Item | Qty (m) |\n| A | 633 |\n| B | 488 |\n"
+        "| the rest of the band, 120 m | \u2014 |\n| Total | 1,241 |",
+        id="figure-written-into-the-wording-pipe",
+    ),
+])
+def test_a_bucket_that_writes_its_figure_into_its_wording_reconciles_the_total(answer):
+    # The bucket states the figure for the rows it stands for, and the total is
+    # the printed rows plus that figure, so the total is the answer's own sum.
+    assert reconcile(answer) == answer
