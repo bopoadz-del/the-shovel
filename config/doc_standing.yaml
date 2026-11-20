@@ -10,6 +10,11 @@
 # doc_type (from config/document_types.yaml) and, when the entry lists
 # doc_roles, whose doc_roles contains the row's doc_role (from
 # config/doc_role_folders.yaml). No entry matches -> "other".
+#
+# Where a type is shared by more than one kind, an entry that also names a
+# doc_role is placed BEFORE the entry that names only the type, so the folder
+# role decides first where one is known: a drawing in a contractor-submittal
+# folder reads as a contractor's submittal, not a contract drawing.
 # Kinds must be in app/core/doc_standing.STANDING_KINDS; an entry naming an
 # unknown kind is ignored with a warning.
 #
@@ -22,9 +27,12 @@ standing:
     doc_roles: [contract]
   - kind: specification
     doc_types: [specification]
+  - kind: contractor_submittal
+    doc_types: [method_statement, material_submittal, itp]
+  - kind: contractor_submittal
+    doc_types: [drawing]
+    doc_roles: [contractor_submittal]
   - kind: contract_drawing
     doc_types: [drawing]
   - kind: priced_boq
     doc_types: [boq]
-  - kind: contractor_submittal
-    doc_types: [method_statement, material_submittal, itp]
