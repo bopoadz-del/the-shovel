@@ -100,6 +100,7 @@
       "type": "object",
       "required": ["formulas"],
       "properties": {
+        "rules": { "type": "string", "description": "Binding rules governing every imported procedure of this hat" },
         "formulas": {
           "type": "array",
           "items": {
@@ -122,6 +123,33 @@
               "id": { "type": "string" },
               "description": { "type": "string" },
               "steps": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "procedures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "purpose", "inputs", "refusals", "steps", "output", "done_when", "lineage"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "purpose": { "type": "string" },
+              "inputs": { "type": "string" },
+              "refusals": { "type": "string" },
+              "steps": { "type": "array", "items": { "type": "string" } },
+              "output": { "type": "string" },
+              "done_when": { "type": "string" },
+              "lineage": { "type": "string" },
+              "attribution": {
+                "type": "object",
+                "properties": {
+                  "licence": { "type": "string" },
+                  "credit": { "type": "string" },
+                  "link": { "type": "string" },
+                  "notice": { "type": "string" }
+                }
+              }
             }
           }
         }

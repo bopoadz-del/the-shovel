@@ -79,6 +79,24 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-timeout
 
+      - name: Install the OCR engine (same packages as the test.yml jobs)
+        # A test that reads a rendered page through real tesseract is selected
+        # here whenever the module it covers changes; without the engine it
+        # fails with TesseractNotFoundError. Same retry/timeout pattern as
+        # test.yml; the step fails if apt cannot install it.
+        timeout-minutes: 10
+        run: |
+          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
+          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 10
+          done
+          exit 1
+
       - name: Targeted tests for changed files (tests_for selection)
         env:
           BASE: ${{ github.event.pull_request.base.sha }}

@@ -86,14 +86,14 @@ def test_calculate_interim_payment_canonical_and_aliases():
 
 def test_calculate_payment_canonical_and_aliases():
     canonical = _ok("calculate_payment", {
-        "claimed_amount": 1000, "certified_amount": 800,
+        "claimed_amount": 1000, "certified_amount": 800, "retention_rate": 0.05,
     })
     assert canonical["net_payment_due"] == pytest.approx(760.0)
 
     aliased = _ok("calculate_payment", {
-        "claimed": 1000, "CERTIFIED_AMOUNT": 800,
+        "claimed": 1000, "CERTIFIED_AMOUNT": 800, "retention_rate": 0.10,
     })
-    assert aliased["net_payment_due"] == pytest.approx(760.0)
+    assert aliased["net_payment_due"] == pytest.approx(720.0)
 
 
 def test_carbon_footprint_concrete_canonical_and_aliases():

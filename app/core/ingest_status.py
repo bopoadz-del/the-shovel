@@ -60,6 +60,13 @@ PARTIAL_OCR = "PARTIAL_OCR"
 # ceiling must be visible on the ledger; adding a new ingest_status value
 # would require an ALTER CONSTRAINT. Recoverable: force_ocr / raise ceiling.
 OCR_DEGRADED = "OCR_DEGRADED"
+# Stored but deliberately not indexed: owner policy keeps the uploader's file
+# out of the project RAG (``privileges.caller_may_add_to_project_rag``). A
+# settled outcome, not open work, so an inventory can tell "not indexed by
+# policy" from "lost" (UNVERIFIED forever). It holds no chunks, like every
+# other non-indexed status; its reason says which policy (see
+# ``ADMIN_ONLY_POLICY_REASON``).
+NOT_INDEXED_POLICY = "NOT_INDEXED_POLICY"
 
 # Statuses whose document holds chunks and is retrieved.
 INDEXED_STATUSES = frozenset({INDEXED, TEXT_SPARSE})
@@ -75,6 +82,7 @@ ALL_STATUSES = frozenset(
         TOMBSTONED,
         QUARANTINED,
         PARTIAL_OCR,
+        NOT_INDEXED_POLICY,
     }
 )
 
@@ -86,6 +94,26 @@ ALL_STATUSES = frozenset(
 # PARTIAL_OCR is deliberately excluded too: its chunks are real, readable
 # pages -- the document is partially read, not chunk-less.
 NO_CHUNK_STATUSES = ALL_STATUSES - INDEXED_STATUSES - {UNVERIFIED, PARTIAL_OCR}
+
+# OWNER EXCLUSION. A document whose metadata carries ``excluded`` (written
+# by ``projects.exclude_document``: ``{"by", "at", "reason"}``) is never
+# ingested, indexed, retrieved or listed again. The row is KEPT as the record
+# of the decision; its chunks are deleted. One rule, read from the attribute
+# by every entry point -- never a document id in code.
+EXCLUDED_KEY = "excluded"
+OWNER_EXCLUDED_REASON = "owner_excluded"
+# The reverse (``projects.include_document``) pops ``excluded`` and keeps it
+# under this key with who brought the document back, when and why.
+INCLUDED_BACK_KEY = "included_back"
+
+
+def is_excluded(doc: Any) -> bool:
+    """True when ``doc`` (a document dict) carries an owner exclusion."""
+    if not isinstance(doc, dict):
+        return False
+    meta = doc.get("metadata")
+    return isinstance(meta, dict) and bool(meta.get(EXCLUDED_KEY))
+
 
 # Extractor family stamped on INDEXED rows after the content-control fix.
 # #550 / 8535199: Word SDT + deduped text boxes. Bump the suffix when the
@@ -107,6 +135,13 @@ OPEN_STATUSES = frozenset({UNVERIFIED, ZERO_CHUNK, EXTRACT_FAILED})
 # Reason suffixes that qualify TEXT_SPARSE and UNSUPPORTED_TYPE.
 TERMINAL = "terminal"        # nothing left to recover, anywhere
 RECOVERABLE = "recoverable"  # a richer source for this document exists
+
+# The NOT_INDEXED_POLICY reason for an upload by a caller who may not add to
+# the project RAG. ``<reason>:terminal``: no retry can change a policy.
+ADMIN_ONLY_POLICY_REASON = f"rag_admin_only:{TERMINAL}"
+# The NOT_INDEXED_POLICY reason for a file attached inside one chat session: it
+# is pinned to that session's questions and kept out of the project's search.
+SESSION_ONLY_POLICY_REASON = f"session_only:{TERMINAL}"
 
 # BOUNDED RETRIES. Every open outcome -- UNVERIFIED, ZERO_CHUNK,
 # EXTRACT_FAILED, and the RECOVERABLE qualifiers -- is retried only while the

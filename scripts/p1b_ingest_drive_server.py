@@ -409,6 +409,10 @@ def _ingest_file(
             "mimeType": mime,
         }
 
+    # An owner-excluded row is never downloaded or indexed again.
+    if _ist_gate.is_excluded(existing_doc):
+        return rel, {"status": "error", "error": "SKIPPED_EXCLUDED"}
+
     # Size guard before download. Default OFF (0) — Tier-1 the client project contract
     # volumes (signed PSA, drawing packs) exceed 500 MB and were still
     # SKIPPED_TOO_LARGE after the 100→500 bump. Set P1B_MAX_FILE_SIZE_MB
@@ -578,6 +582,7 @@ def _ingest_file(
             projects_mod.set_document_drive_md5(existing_doc["id"], drive_token)
         result = doc_index.index_document(
             project_id, existing_doc["id"],
+            profile=doc_index.PROFILE_CORPUS_BUILD,
         )
         result["reindexed_existing_doc"] = True
         if existing_doc.get("_stale_extractor_retry"):
@@ -619,6 +624,7 @@ def _ingest_file(
         }
     result = doc_index.index_document(
         project_id, doc["id"], stamp_as_indexed=bool(reingest_of),
+        profile=doc_index.PROFILE_CORPUS_BUILD,
     )
     if reingest_of:
         result["reingest_of"] = reingest_of
@@ -973,6 +979,18 @@ def run_knowledge_phase(*, dry_run: bool, shard_index: int = 0) -> Dict[str, int
 def main() -> int:
     from app.core import ingest_lifecycle as lifecycle
     from app.core import ingest_sharding as sharding
+
+    # doc-reindex-once.yml runs this worker for ONE existing document; its
+    # selectors arrive as environment because WORKER_COMMAND is a secret.
+    if (os.getenv("DOC_REINDEX_DOCUMENT_ID") or "").strip():
+        from scripts import doc_reindex_once
+
+        return doc_reindex_once.main_from_env()
+    # bill-plan-once.yml: PLAN (never write) one document's bill sheet.
+    if (os.getenv("BILL_PLAN_DOCUMENT_ID") or "").strip():
+        from scripts import bill_plan_once
+
+        return bill_plan_once.main_from_env()
 
     args = build_parser().parse_args()
     args = apply_env_fallbacks(args)
@@ -1489,7 +1507,7 @@ def main() -> int:
             drive_by_id = {str(fm.get("id") or ""): fm for fm in files if fm.get("id")}
 
             folder_stale_open = 0
-            for doc in projects_mod.list_documents(project_id):
+            for doc in projects_mod.list_documents(project_id, all_sessions=True):
                 # Duplicate-content source files recorded against this row:
                 # done while their content token is unchanged.
                 for alias_fid, alias_token in ((doc.get("metadata") or {}).get("source_aliases") or {}).items():

@@ -40,19 +40,14 @@
     {"kind": "learning_profiles", "weight": 0.6, "filters": {"profile_type": "DefectPattern"}, "max_items": 3}
   ],
   "allowed_actions": [
-    "itp_generator",
-    "ncr_tracker",
-    "mix_design_validator",
-    "thermal_crack_assessor",
-    "concrete_maturity_calculator",
-    "grout_pressure_calculator",
+    "construction_calc:next_ncr_status",
     "construction_calc:concrete_mix_design_sg",
+    "construction_calc:concrete_thermal_cracking_check",
+    "construction_calc:concrete_maturity_strength",
+    "construction_calc:grout_pressure_calc",
     "construction_calc:concrete_mix_slip_form",
     "construction_calc:formwork_striking_time",
-    "construction_calc:concrete_maturity_strength",
-    "construction_calc:concrete_thermal_cracking_check",
     "construction_calc:modulus_of_rupture",
-    "construction_calc:grout_pressure_calc",
     "construction_calc:fineness_modulus",
     "construction_calc:shear_stress_check"
   ],
@@ -127,14 +122,14 @@
       {
         "id": "validate_design_status",
         "description": "Validate design review status and timeline compliance",
-        "implemented_by": "app.core.construction_knowledge.validate_design_status",
+        "implemented_by": "app.agents.hats.qaqc.formulas.design_review_rules.validate_design_status",
         "domain": "qaqc",
         "tier": "strategic"
       },
       {
         "id": "check_review_timeline",
         "description": "Check if a review is within its allowed timeline",
-        "implemented_by": "app.core.construction_knowledge.check_review_timeline",
+        "implemented_by": "app.agents.hats.qaqc.formulas.design_review_rules.check_review_timeline",
         "domain": "qaqc",
         "tier": "operational"
       }

@@ -70,6 +70,18 @@ def _predefined_may_intercept(requested_agent_name: str) -> bool:
     return requested_agent_name in _PREDEFINED_GENERALISTS
 
 
+def _shared_grant_applies(project_id: str) -> bool:
+    """Whether a conversation on ``project_id`` may use the shared-platform grant.
+
+    The physical master-corpus SOURCE id is owner-only whatever origin its
+    project row carries: only the alias is shared, and the alias reaches the
+    source through ``get_project_accessible``'s remap. A source row stamped
+    ``system_seed`` (a boot seed, a restore, a test wipe) must not open the
+    whole corpus's conversations to every signed-in user.
+    """
+    return project_id != store.MASTER_CORPUS_SOURCE_PROJECT_ID
+
+
 def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
     """Authoritative access check for a conversation, on both read and write.
 
@@ -82,8 +94,9 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
       platform-shared row (``admin_drive_approved``, boot-seeded
       ``system_seed``, or an id in ``RAG_GENERAL_KNOWLEDGE_PROJECTS``).
       Covers both "project doesn't exist" and "private project belongs to
-      someone else". The physical master-corpus source id stays owner-only;
-      only the alias is shared. A row that does not exist yet may be
+      someone else". The physical master-corpus source id stays owner-only
+      whatever its row's origin (``_shared_grant_applies``); only the alias
+      is shared. A row that does not exist yet may be
       created. A row that exists is served only to its writer; a NULL
       owner (written before owner tracking) is served only to the project
       row owner.
@@ -104,6 +117,10 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
             # rag search (PR #586). Master-corpus-only was the leftover that
             # 404'd New chat on a shared general-knowledge project for every non-owner.
             # Row-only check: listing documents here walked the whole corpus.
+            if not _shared_grant_applies(project_id) and not store.can_access_project(
+                project_id, user_id=auth["user_id"]
+            ):
+                continue  # master-corpus source: owner-only, whatever its origin
             if store.can_access_project(
                 project_id, user_id=auth["user_id"], include_admin_approved=True
             ):
@@ -126,6 +143,10 @@ def _enforce_conversation_access(conversation_id: str, auth: dict) -> None:
     stored_pid = conv.get("project_id")
     if stored_pid is None:
         # No ownership binding at all — do not serve it.
+        raise HTTPException(404, "Conversation not found")
+    if not _shared_grant_applies(stored_pid) and not store.can_access_project(
+        stored_pid, user_id=user_id
+    ):
         raise HTTPException(404, "Conversation not found")
     if not store.can_access_project(
         stored_pid, user_id=user_id, include_admin_approved=True
@@ -171,7 +192,9 @@ def _reopened_messages(conversation_id: str) -> list[dict]:
     answer stored before the exit check existed passes it on the way out."""
     from app.agents import answer_exit
 
-    msgs = agent_memory.get_messages(conversation_id)
+    # A reopened session shows its whole thread, not only the recent window
+    # the model is given as context.
+    msgs = agent_memory.get_messages(conversation_id, limit=None)
     for m in msgs:
         if m.get("role") == "assistant" and isinstance(m.get("content"), str):
             m["content"] = answer_exit.check_text_or_fallback(m["content"])
@@ -233,6 +256,9 @@ async def agent_chat(name: str, req: AgentChatRequest, auth: dict = Depends(requ
     # create/write a victim's private ws-{pid} conversation.
     if req.conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, req.conversation_id, auth))
+    from app.core import projects as _scope_store
+    # Only this session's files (and the project's own) are in scope.
+    _scope_store.bind_session_scope(req.conversation_id, auth.get("user_id"))
 
     # Pilot: resolve the master-corpus alias to its backing source corpus so
     # retrieval and storage use the existing full-drive index without
@@ -346,6 +372,9 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
     # attacker cannot create/write a victim's private ws-{pid} conversation.
     if conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, conversation_id, auth))
+    from app.core import projects as _scope_store
+    # Only this session's files (and the project's own) are in scope.
+    _scope_store.bind_session_scope(conversation_id, auth.get("user_id"))
     from app.core.privileges import raise_if_inaccessible_document_ids
     raise_if_inaccessible_document_ids(auth, {"document_ids": body.get("document_ids") or []})
 
@@ -474,7 +503,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
         _release_turn = await turn_gate.acquire()
     return StreamingResponse(
         turn_gate.hold_until_done(turn_progress.opened(
-        with_hat_signals(with_answer_exit(event_stream()), message)), _release_turn),
+        with_hat_signals(with_answer_exit(event_stream(), message), message)), _release_turn),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

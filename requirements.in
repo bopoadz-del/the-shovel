@@ -36,6 +36,10 @@ ddgs>=1.0.0
 pillow>=12.3.0
 
 numpy>=1.24.0
+# Numeric methods for generated formulas (root finding, optimisation,
+# interpolation, integration, ODE solvers): formula_executor_v2's sandbox
+# imports it. Already present via scikit-learn; named here as a direct need.
+scipy>=1.11
 
 # OCR
 pytesseract>=0.3.10
@@ -118,5 +122,5 @@ python-magic>=0.4.27
 # container builds (Render, Docker) skip it instead of failing with
 # "No matching distribution found for pywin32".
 pywin32==312; platform_system == "Windows"
-dnspython>=2.9
+dnspython>=2.9.2
 

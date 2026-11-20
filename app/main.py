@@ -204,6 +204,8 @@ def _warn_when_the_llm_has_no_fallback() -> None:
 async def lifespan(app: FastAPI):
     """Initialize all blocks + load runtime agents at startup."""
     _validate_startup_env()
+    from app.core.deployment_profile import enforce_deployment_profile
+    enforce_deployment_profile()
     _warn_when_the_llm_has_no_fallback()
     from app.routers import support as _support_router
     _support_router.log_support_mx()
@@ -235,6 +237,7 @@ async def lifespan(app: FastAPI):
     # instance before the app ever served a request.
     from app.core.hydration_store import init_db as init_hydration_db
     init_hydration_db()
+    _configure_ml_loop()
     from app.core import rate_limit as _rate_limit_startup
     logger.info("Rate limiter backend: %s", _rate_limit_startup.init_rate_limiter())
     from app.core.session_store import get_session_store
@@ -245,10 +248,23 @@ async def lifespan(app: FastAPI):
                 type(app.state.project_store).__name__)
     loaded = load_agents()
     logger.info("Loaded %d runtime agents: %s", len(loaded), ", ".join(sorted(loaded.keys())))
+    # Read the hat catalog now, not at the first hat-wearing chat: a broken
+    # manifest is then logged at boot and fails /ready (KS-3).
+    from app.agents.catalog import catalog_load_error
+    _hat_error = catalog_load_error()
+    if _hat_error:
+        logger.error("hat manifest catalog failed to load: %s", _hat_error)
     from app.core import hydration_scheduler
     hydration_scheduler.start()
     from app.core.cde.poll import start_event_poller
     start_event_poller()
+
+    # Readiness waits for the result declarations (about a second: they import
+    # the formula registry). In a worker thread, so the loop is never held by
+    # that import; before serving, so no request's first read has to declare.
+    # A declarer that fails is logged and backed off (it never raises out of
+    # here); the warm-up below runs the step again.
+    await asyncio.to_thread(_declare_deferred_results)
 
     # Model warm-up runs AFTER the port is listening — see _warm_models.
     warm_task = None
@@ -295,9 +311,14 @@ async def lifespan(app: FastAPI):
                 # something escaping that, and must not abort the remaining
                 # shutdown steps (scheduler stop, redis close) below.
                 logger.exception("model warm-up task failed during shutdown")
+        # After the warm-up task is finished or cancelled, so its freeze
+        # can never land after this release.
+        loop_watchdog.release_startup_heap()
         await hydration_scheduler.stop()
         from app.core.cde.poll import stop_event_poller
         await stop_event_poller()
+        from app.core.llm_client import aclose_shared_clients
+        await aclose_shared_clients()
         await _redis_client.close_redis_client()
 
 
@@ -400,6 +421,40 @@ def _check_embedder_identity() -> None:
     vector_store.run_boot_identity_check()
 
 
+def _configure_ml_loop() -> None:
+    """Give the ML loop block its ONE session factory (ML-1).
+
+    Its tables come from the Alembic series (0034) under Postgres and from
+    ``create_tables`` on a database without migrations (local SQLite). If
+    that fails the block stays ``not_configured``: it stores nothing and
+    the app boots.
+    """
+    from app.blocks.ml_loop import MLLoopBlock
+    from app.core.db import SessionLocal, get_engine
+    from app.core.ml_loop.settings import MLLoopSettings
+    from app.core.ml_loop.store import create_tables
+
+    try:
+        create_tables(get_engine())
+    except Exception:  # noqa: BLE001 -- a failed learning store must not stop boot
+        logger.exception("ml_loop_tables_unavailable; block stays not_configured")
+        MLLoopBlock.configure(MLLoopSettings.from_env(session_factory=None))
+        return
+    settings = MLLoopSettings.from_env(session_factory=SessionLocal)
+    MLLoopBlock.configure(settings)
+    logger.info("ml_loop_configured enabled=%s build_sha=%s",
+                settings.enabled, settings.build_sha)
+
+
+def _declare_deferred_results() -> None:
+    """Run the deferred result declarations (they import the formula
+    registry, sympy among it) in the warm-up thread, so the first tool call
+    under load does not pay that import holding the interpreter lock on the
+    event loop. Not at import: the boot check forbids those libraries there."""
+    from app.agents.core.tool_registry import declare_deferred_results
+    declare_deferred_results()
+
+
 async def _warm_models() -> None:
     """Warm the heavy models — and seed the knowledge base — WITHOUT blocking startup.
 
@@ -422,7 +477,8 @@ async def _warm_models() -> None:
     """
     # Embedder first: the knowledge seed reuses the same cached instance, so
     # ordering it last means the seed never pays a second model load.
-    for label, fn in (("safety detector", _warm_safety_detector),
+    for label, fn in (("result declarations", _declare_deferred_results),
+                      ("safety detector", _warm_safety_detector),
                       ("RAG embedder", _warm_embedder),
                       ("embedder identity check", _check_embedder_identity),
                       ("knowledge seed", _seed_knowledge),
@@ -433,6 +489,13 @@ async def _warm_models() -> None:
             raise
         except Exception:
             logger.exception("%s warm-load failed; it will lazy-load on first use", label)
+    # Start-up is done: what is alive now lives as long as the process.
+    # Freeze it so a full collection (which holds the interpreter lock, the
+    # loop included, for its whole pass) no longer re-scans it.
+    from app.core import loop_watchdog
+    frozen = loop_watchdog.freeze_startup_heap()
+    if frozen is not None:
+        logger.info("startup heap frozen: %d objects out of the collector's reach", frozen)
 
 
 # Interactive docs + the raw OpenAPI schema disclose the entire API surface
@@ -705,6 +768,9 @@ _CSP_REPORT_ONLY = "; ".join((
 ))
 
 
+from app.routers.health import BUILD_ID_HEADER, _deployed_build_sha  # noqa: E402
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Stamp baseline security headers on every response.
 
@@ -722,6 +788,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
         )
         h.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
+        # A tab keeps the script it loaded until reloaded. Name the server's
+        # build on every response so the page can tell when it is running a
+        # different build than the server it talks to (frontend
+        # lib/buildCheck.js). Unset build -> no header: never invent one.
+        build = _deployed_build_sha()
+        if build:
+            h.setdefault(BUILD_ID_HEADER, build)
+        # Every HTML page shell is revalidated, whichever route or mount
+        # served it, so a reload always fetches the current bundle names.
+        if (h.get("content-type") or "").lower().startswith("text/html"):
+            h.setdefault("Cache-Control", "no-cache")
         # HSTS only where the origin really is https. Sent from a plain-HTTP
         # dev box it pins that browser to https for a year.
         if (os.getenv("ENV") or "").strip().lower() in {"production", "prod"}:
@@ -759,6 +836,8 @@ app.add_middleware(
     # should not reflect arbitrary methods/headers back to the browser.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
+    # A cross-origin page (vite dev on another port) may read the build id.
+    expose_headers=[BUILD_ID_HEADER],
 )
 
 
@@ -832,7 +911,13 @@ async def _validation_exception_handler(_request: Request, exc: RequestValidatio
             422,
             "Request validation failed",
             "VALIDATION_ERROR",
-            {"errors": jsonable_encoder(exc.errors())},
+            # A rejected request never echoes what was submitted: pydantic's
+            # `input` is the submitted value itself (a short password, a
+            # token, a document body). `loc` and `msg` already say what to fix.
+            {"errors": [
+                {k: v for k, v in err.items() if k != "input"}
+                for err in jsonable_encoder(exc.errors())
+            ]},
         ),
     )
 

@@ -34,6 +34,7 @@ def test_audit_writer_writes_one_jsonl_row_per_call(monkeypatch, tmp_path):
         "budget_degraded": False,
         "chunks": [],
     })
+    assert audit.flush(5.0)
     log_path = tmp_path / "logs" / "rag_audit.jsonl"
     assert log_path.exists()
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
@@ -517,26 +518,37 @@ def test_rag_inject_returns_system_message_when_confident(monkeypatch, tmp_path)
     assert audit_rec["budget_remaining"] >= 0
 
 
-def test_rag_inject_degrades_to_k2_when_budget_exhausted(monkeypatch, tmp_path):
+@pytest.mark.parametrize("burn", [
+    100_000,  # far above the daily budget: still the full set
+    0,        # below it: the full set
+])
+def test_rag_inject_daily_budget_never_shortens_the_handed_set(
+    monkeypatch, tmp_path, burn,
+):
+    """Owner order (uncap, 13 Nov): the spent daily budget used to collapse
+    the depth to k=2, then (S-R5) a smaller character budget. Now the counter
+    is measure-only: the depth stays the turn's k (pooled wider for
+    diversity), the whole pool is handed either way, and the counter still
+    accumulates and reports degraded."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("RAG_DAILY_TOKEN_BUDGET", "100")
     monkeypatch.setenv("RAG_K", "5")
     monkeypatch.setenv("MAX_RAG_TOKENS", "10000")  # don't let cap interfere
     monkeypatch.setenv("RAG_CONFIDENCE_THRESHOLD", "0.0")
+    monkeypatch.setenv("RAG_DEGRADED_CHAR_BUDGET", "1200")  # removed setting: ignored
 
-    # Burn the budget first.
     from app.core.rag import budget
     import datetime as _dt
     today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
-    budget.consume(day=today, tokens=100)  # consumed == 100 == budget
+    budget.consume(day=today, tokens=burn)
 
     seen_k = {"value": None}
     def fake_retrieve(query, project_id, k, **kwargs):
         seen_k["value"] = k
         from app.core.rag.vector_store import Chunk
         return ([
-            Chunk(chunk_id=f"c{i}", project_id=project_id, doc_id="d1",
-                  chunk_index=i, text="x", score=0.9)
+            Chunk(chunk_id=f"c{i}", project_id=project_id, doc_id=f"d{i}",
+                  chunk_index=i, text=f"excerpt {i} " + "y" * 390, score=0.9 - i * 0.01)
             for i in range(k)
         ], 0)
 
@@ -550,8 +562,12 @@ def test_rag_inject_degrades_to_k2_when_budget_exhausted(monkeypatch, tmp_path):
         user_id="u1",
         agent_name="project-assistant",
     )
-    assert seen_k["value"] == 2  # K degraded to 2
-    assert audit_rec["budget_degraded"] is True
+    assert seen_k["value"] == 10  # depth is never collapsed to 2
+    assert audit_rec["budget_degraded"] is bool(burn)
+    assert audit_rec["budget_consumed"] == burn
+    assert audit_rec["injected_k"] == 10
+    after = budget.snapshot(day=today)
+    assert after["consumed"] > burn  # the counter still counts this turn
 
 
 def test_rag_inject_runs_for_any_agent_when_project_id_present(monkeypatch, tmp_path):

@@ -40,6 +40,7 @@ _AUDIT_A_TO_F = [
     "calculate_payment",
     "carbon_footprint_concrete",
     "cash_flow",
+    "check_review_timeline",
     "column_axial_capacity",
     "compaction_control",
     "composite_column_design",
@@ -56,6 +57,7 @@ _AUDIT_A_TO_F = [
     "cost_buildup_formwork",
     "cost_buildup_rebar",
     "cost_per_area",
+    "cpm_network",
     "crane_cost_estimate",
     "crane_lift_capacity",
     "crane_planning",
@@ -67,6 +69,7 @@ _AUDIT_A_TO_F = [
     "dewatering_well_point_spacing",
     "diaphragm_wall_panel_volume",
     "electrical_installation_sequence",
+    "enforce_critical_rules",
     "evaluate_tender",
     "excavation_volume",
     "fall_arrest_force",
@@ -336,18 +339,26 @@ def test_audit_calculate_interim_payment():
 
 def test_audit_calculate_payment():
     """Interim payment procedure / FIDIC 14.3 this-period: retention = certified × rate;
-    net = certified − retention. Default rate 5% (fraction).
+    net = certified − retention. The rate (fraction) has no default.
     Hand: certified 90,000 × 0.05 = 4,500 held; net = 85,500;
+          at 0.10: 9,000 held; net = 81,000;
           disputed = 100,000 − 90,000 = 10,000.
     Boundary: previous certified 50,000 → cumulative 140,000;
               contract 1,000,000 → 14.0% complete.
     """
     r = _ok("calculate_payment",
-            {"claimed_amount": 100_000, "certified_amount": 90_000})
+            {"claimed_amount": 100_000, "certified_amount": 90_000,
+             "retention_rate": 0.05})
     assert r["retention_held"] == pytest.approx(4_500.00, abs=0.01)
     assert r["net_payment_due"] == pytest.approx(85_500.00, abs=0.01)
     assert r["disputed_amount"] == pytest.approx(10_000.00, abs=0.01)
     assert r["retention_rate_pct"] == pytest.approx(5.0, abs=1e-9)
+
+    ten = _ok("calculate_payment",
+              {"claimed_amount": 100_000, "certified_amount": 90_000,
+               "retention_rate": 0.10})
+    assert ten["retention_held"] == pytest.approx(9_000.00, abs=0.01)
+    assert ten["net_payment_due"] == pytest.approx(81_000.00, abs=0.01)
 
     cum = _ok("calculate_payment", {
         "claimed_amount": 100_000, "certified_amount": 90_000,
@@ -818,6 +829,31 @@ def test_crane_planning_without_a_rate_gives_count_and_no_invented_cost(cap):
 
 # ── 33–35 planning / earthwork / FIDIC ─────────────────────────────────────
 
+@pytest.mark.parametrize("network, duration, critical", [
+    ([{"id": "S", "duration": 6},
+      {"id": "T", "duration": 2, "predecessors": ["S"]},
+      {"id": "U", "duration": 5, "predecessors": ["S"]},
+      {"id": "V", "duration": 1, "predecessors": ["T", "U"]}], 12, ["S", "U", "V"]),
+    ([{"id": "S", "duration": 6},
+      {"id": "T", "duration": 9, "predecessors": ["S"]},
+      {"id": "U", "duration": 5, "predecessors": ["S"]},
+      {"id": "V", "duration": 1, "predecessors": ["T", "U"]}], 16, ["S", "T", "V"]),
+])
+def test_audit_cpm_network(network, duration, critical):
+    """The network entry through the binding path: a table input reaches the
+    formula whole and the longest chain is the critical path."""
+    r = _ok("cpm_network", {"activities": network})
+    assert r["project_duration"] == duration
+    assert r["critical_path"] == critical
+
+
+def test_audit_cpm_network_loop_is_refused():
+    _err("cpm_network", {"activities": [
+        {"id": "S", "duration": 1, "predecessors": ["T"]},
+        {"id": "T", "duration": 1, "predecessors": ["S"]},
+    ]})
+
+
 def test_audit_critical_path_float():
     """CPM / PMBOK: TF = LS − ES (= LF − EF). TF ≤ 0 is critical,
     including negative float.
@@ -1089,3 +1125,26 @@ def test_audit_crew_sizing(qty, days, rate, hours, want_crews, want_up, want_cd,
     assert r["man_hours"] == pytest.approx(want_mh)
 
     _err("crew_sizing", {"quantity": 0, "duration_days": 15, "rate_per_crew_day": 12})
+
+
+# ── procedure-rule checks in the A-F range ──────────────────────────────────
+
+@pytest.mark.parametrize("dist, workshop, days, compliant", [
+    ("2026-04-01", "2026-04-06", 5, False),
+    ("2026-04-01", "2026-04-13", 12, True),
+])
+def test_audit_check_review_timeline(dist, workshop, days, compliant):
+    r = _ok("check_review_timeline", {"distribution_date": dist, "workshop_date": workshop})
+    assert r["distribution_period_days"] == days
+    assert r["compliant"] is compliant
+    _err("check_review_timeline", {"distribution_date": "1st April", "workshop_date": workshop})
+
+
+@pytest.mark.parametrize("body, count", [
+    ("The architect approved the drawing package.", 1),
+    ("Blockwork to grid C is complete.", 0),
+])
+def test_audit_enforce_critical_rules(body, count):
+    r = _ok("enforce_critical_rules", {"document_text": body})
+    assert r["violation_count"] == count
+    assert r["compliant"] is (count == 0)

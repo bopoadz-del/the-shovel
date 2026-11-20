@@ -239,6 +239,48 @@ def is_whole_document(doc: dict[str, Any] | None) -> bool:
     return meta.get("provenance") in WHOLE_DOCUMENT_PROVENANCES
 
 
+# Ingest profiles are chosen by how a document arrives, never by its name.
+# ``user_upload`` (a platform user's upload, the default) keeps today's size
+# gates. ``corpus_build`` (the Drive walk, the admin re-index) builds the RAG:
+# no whole-file size ceiling and no size-based OCR skip. Memory stays bounded
+# by the isolated page batches; OCR pages stay bounded by the page budget.
+PROFILE_USER_UPLOAD = "user_upload"
+PROFILE_CORPUS_BUILD = "corpus_build"
+INGEST_PROFILES = frozenset({PROFILE_USER_UPLOAD, PROFILE_CORPUS_BUILD})
+
+
+def _checked_profile(profile: str) -> str:
+    """``profile`` if it is a known ingest profile; raises ValueError otherwise."""
+    if profile not in INGEST_PROFILES:
+        raise ValueError(f"unknown ingest profile: {profile!r}")
+    return profile
+
+
+def _pdf_hits_size_gate(file_path: str, filename: str) -> bool:
+    """True when a size gate (batching, OCR skip, whole-file skip) applies."""
+    size_mb = _document_size_mb(file_path)
+    gates = [pdf_batch_min_mb(), pdf_ocr_max_size_mb(filename), pdf_max_size_mb()]
+    return any(gate > 0 and size_mb > gate for gate in gates)
+
+
+def _extract_for_profile(
+    file_path: str, filename: str, profile: str,
+) -> tuple[str, dict[str, Any]]:
+    """``_extract_with_meta`` under the gates of ``profile``.
+
+    Under ``corpus_build`` a PDF that any size gate touches is read in
+    isolated page batches with no whole-file ceiling and no size-based OCR
+    skip; every other document extracts exactly as a user upload does.
+    """
+    corpus_build = _checked_profile(profile) == PROFILE_CORPUS_BUILD
+    if corpus_build and _ext_of(filename) == ".pdf" and _pdf_hits_size_gate(file_path, filename):
+        return _extract_with_meta(
+            file_path, filename,
+            whole_document=True, max_size_mb=0.0, ocr_size_gate=False,
+        )
+    return _extract_with_meta(file_path, filename)
+
+
 # How many leading letters/digits of a chunk are matched against the extracted
 # text to find the page the chunk starts on (``chunk_start_pages``).
 _DEFAULT_CHUNK_PAGE_PROBE_CHARS = 48
@@ -1042,6 +1084,7 @@ def _extract_pdf_batched(
     *,
     force_ocr: bool = False,
     max_size_mb: float | None = None,
+    ocr_size_gate: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Extract a large PDF as isolated page batches, keeping prior text.
 
@@ -1052,6 +1095,9 @@ def _extract_pdf_batched(
 
     ``max_size_mb`` replaces the whole-PDF skip ceiling (``PDF_MAX_SIZE_MB``)
     for callers with their own, e.g. whole reference works.
+    ``ocr_size_gate=False`` (the ``corpus_build`` profile) never skips OCR
+    for size, and its OCR page budget is the document's own page count, so
+    a long image-only volume is not cut at ``pdf_ocr_page_cap``.
     """
     from app.core.extract_isolated import run_isolated
 
@@ -1079,11 +1125,14 @@ def _extract_pdf_batched(
     ocr_max = pdf_ocr_max_size_mb(filename)
     if force_ocr:
         ocr_max = max(ocr_max, max_mb if max_mb > 0 else ocr_max)
-    ocr_skipped = ocr_max > 0 and size_mb > ocr_max
+    ocr_skipped = ocr_size_gate and ocr_max > 0 and size_mb > ocr_max
     if ocr_skipped:
         budget = 0
     elif force_ocr:
         budget = max(pdf_ocr_page_cap(filename), pdf_ocr_force_page_cap(), n_pages)
+    elif not ocr_size_gate:
+        # corpus_build: the budget is the document's own page count.
+        budget = max(pdf_ocr_page_cap(filename), n_pages)
     else:
         budget = pdf_ocr_page_cap(filename)
     batch = pdf_ocr_batch_pages()
@@ -1093,6 +1142,10 @@ def _extract_pdf_batched(
     page_starts: list[list[int]] = []
     joined_len = 0
     ocr_used = 0
+    # Absolute 1-based page numbers (each batch reads the file's own page
+    # indices), carried so the chunk writer can stamp ``ocr`` per chunk: a
+    # count alone left every chunk of a force-OCR'd scan with ocr=false.
+    ocr_page_numbers: list[int] = []
     ocr_attempts = 0
     empty_text_pages = 0
     pages_read = 0
@@ -1115,6 +1168,9 @@ def _extract_pdf_batched(
             parts.append(text)
             joined_len = base + len(text)
         ocr_used += int((bmeta or {}).get("ocr_pages") or 0)
+        ocr_page_numbers.extend(
+            int(p) for p in (bmeta or {}).get("ocr_page_numbers") or []
+        )
         ocr_attempts += int((bmeta or {}).get("ocr_attempts") or 0)
         empty_text_pages += int((bmeta or {}).get("empty_text_pages") or 0)
         pages_read += int((bmeta or {}).get("pages_read") or 0)
@@ -1141,6 +1197,8 @@ def _extract_pdf_batched(
     if ocr_used:
         meta["ocr_pages"] = ocr_used
         meta["ocr_low_quality"] = True
+    if ocr_page_numbers:
+        meta["ocr_page_numbers"] = ocr_page_numbers
     if ocr_attempts:
         meta["ocr_attempts"] = ocr_attempts
     if empty_text_pages:
@@ -1399,6 +1457,7 @@ def _strip_nul(text: str, meta: dict[str, Any]) -> str:
 def _extract_with_meta(
     file_path: str, filename: str, force_ocr: bool = False,
     *, whole_document: bool = False, max_size_mb: float | None = None,
+    ocr_size_gate: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Extract plaintext from a document, plus a small metadata dict.
 
@@ -1434,7 +1493,7 @@ def _extract_with_meta(
         ceiling = admin_knowledge_pdf_max_mb() if max_size_mb is None else max_size_mb
         text, meta = _extract_pdf_batched(
             file_path, filename, force_ocr=force_ocr,
-            max_size_mb=ceiling,
+            max_size_mb=ceiling, ocr_size_gate=ocr_size_gate,
         )
         return _strip_nul(text, meta), meta
 
@@ -1910,14 +1969,25 @@ def _chunker_for_document(filename: str, requested: str = "default") -> str:
     return "default"
 
 
-def _chunk_prose_segment(text: str, chunker: str) -> list[str]:
+def _chunk_prose_segment(
+    text: str, chunker: str, split_parents: list[int | None] | None = None,
+) -> list[str]:
+    """Prose chunks, bounded by the chunk floor and ceiling (RQ-2).
+
+    ``split_parents`` (optional) gets one entry per chunk returned: the id
+    shared by the pieces of one split chunk, or None.
+    """
+    from app.core.chunk_bounds import bound_chunks
+
     if not text or not text.strip():
         return []
     if chunker == "markdown":
-        return chunk_markdown(text, target_chars=500, overlap=50)
-    if chunker == "finer":
-        return chunk_text_with_overlap(text, target_chars=500, overlap=50)
-    return chunk_text(text)
+        chunks = chunk_markdown(text, target_chars=500, overlap=50)
+    elif chunker == "finer":
+        chunks = chunk_text_with_overlap(text, target_chars=500, overlap=50)
+    else:
+        chunks = chunk_text(text)
+    return bound_chunks(chunks, split_parents=split_parents)
 
 
 def _normalize_cesmm_in_chunks(chunks: list[str]) -> list[str]:
@@ -1932,6 +2002,7 @@ def chunk_extracted_document(
     text: str,
     chunker: str = "default",
     filename: str = "",
+    split_parents: list[int | None] | None = None,
 ) -> list[str]:
     """Chunk extracted document text, keeping Contract Data rows intact.
 
@@ -1944,6 +2015,9 @@ def chunk_extracted_document(
 
     CESMM item codes are space-collapsed before chunking so ``D 549.2``
     and ``D549.2`` share a token and a row stays adjacent to its figures.
+
+    ``split_parents`` (optional) gets one entry per returned chunk: the id
+    shared by the pieces of one prose chunk the ceiling split, or None.
     """
     if not text or not text.strip():
         return []
@@ -1954,24 +2028,27 @@ def chunk_extracted_document(
         contract_data_spans,
     )
 
+    parents = split_parents
     spans = contract_data_spans(text, filename)
     if not spans:
-        return _chunk_prose_segment(text, chunker)
+        return _chunk_prose_segment(text, chunker, parents)
     chunks: list[str] = []
     prev = 0
     for start, end in spans:
         if start > prev:
-            chunks.extend(_chunk_prose_segment(text[prev:start], chunker))
+            chunks.extend(_chunk_prose_segment(text[prev:start], chunker, parents))
         cd_chunks = contract_data_particulars_chunks(text[start:end], filename)
         if cd_chunks:
             chunks.extend(cd_chunks)
+            if parents is not None:
+                parents.extend([None] * len(cd_chunks))
         else:
-            chunks.extend(_chunk_prose_segment(text[start:end], chunker))
+            chunks.extend(_chunk_prose_segment(text[start:end], chunker, parents))
         prev = end
     if prev < len(text):
-        chunks.extend(_chunk_prose_segment(text[prev:], chunker))
+        chunks.extend(_chunk_prose_segment(text[prev:], chunker, parents))
     if not chunks:
-        return _chunk_prose_segment(text, chunker)
+        return _chunk_prose_segment(text, chunker, parents)
     return chunks
 
 
@@ -2539,8 +2616,14 @@ def _unsupported_skip_reason(ext: str) -> str:
     return "unsupported_type"
 
 
-def index_project(project_id: str) -> dict[str, Any]:
+def index_project(
+    project_id: str, *, profile: str = PROFILE_USER_UPLOAD,
+) -> dict[str, Any]:
     """Build (or rebuild) the full text index for ``project_id``.
+
+    ``profile`` picks the extraction gates (see ``PROFILE_CORPUS_BUILD``); a
+    document whose text stage fell short is stamped TEXT_SPARSE with the
+    reason, so its table chunks alone never read as a fully indexed body.
 
     For each document:
     - unsupported extension → record under ``skipped`` with reason
@@ -2552,9 +2635,13 @@ def index_project(project_id: str) -> dict[str, Any]:
     rather than wiped by the zero-chunk stamp (``EXTRACT_FAILED`` deletes
     chunks), and it is counted ``skipped_not_stored`` in the summary.
 
+    A chat session's file is skipped before extraction: it gets no chunks
+    and no entry, and is counted ``skipped_session_only``.
+
     Persists the result as JSON and returns a summary dict.
     """
-    docs = _projects.list_documents(project_id)
+    _checked_profile(profile)
+    docs = _projects.list_documents(project_id, all_sessions=True)
     # ``_entries_of`` maps document_id -> (kind, entry) in the stored index.
     prior = _entries_of(_load_index(project_id))
 
@@ -2568,6 +2655,11 @@ def index_project(project_id: str) -> dict[str, Any]:
     missing_files: list[dict[str, Any]] = []
     not_stored: list[dict[str, Any]] = []
     unavailable: list[dict[str, Any]] = []
+    # A chat session's file never enters the project's index (the same rule
+    # ``_index_document`` keeps): it is listed here because maintenance must
+    # see every row, then skipped before any extraction or chunk write, and
+    # no prior entry is carried into the rebuilt index.
+    session_only: list[dict[str, Any]] = []
     total_chunks = 0
     ocr_chunks = 0
     zero_chunk = 0
@@ -2575,6 +2667,13 @@ def index_project(project_id: str) -> dict[str, Any]:
 
     for doc in docs:
         filename = doc.get("original_name", "")
+        if _projects.is_session_document(doc.get("metadata")):
+            session_only.append({
+                "document_id": doc["id"],
+                "filename": filename,
+                "reason": "session_only",
+            })
+            continue
         ext = _ext_of(filename)
 
         if ext not in _SUPPORTED_EXTS:
@@ -2611,30 +2710,40 @@ def index_project(project_id: str) -> dict[str, Any]:
             continue
 
         file_path = doc.get("file_path") or ""
-        text, meta = _extract_with_meta(file_path, filename)
+        text, meta = _extract_for_profile(file_path, filename, profile)
         meta = dict(meta or {})
         chunks, pages = _text_chunks_with_pages(
             text, meta, _chunker_for_document(filename), filename,
         )
+        text_chunk_count = len(chunks)
         # BOQ → RAG: mirror index_document so the package total + line items
         # are retrievable regardless of which indexing path ran.
         doc_attrs: dict[str, Any] = {}
         boq_chunks = _boq_chunks_for_document(
             file_path, filename, ext, project_id, doc_attrs,
         )
+        from app.core.chunk_bounds import bound_chunks, bound_units_with_pages
+
         if boq_chunks:
-            chunks = chunks + boq_chunks
+            chunks = chunks + bound_chunks(boq_chunks, merge=False)
         # Drawing → RAG: same mirroring rule as the BOQ hook. Both indexing
         # paths must append these or a schedule is retrievable after one kind
         # of ingest and invisible after the other.
+        drawing_pages: list[int | None] = []
         drawing_chunks = _drawing_chunks_for_document(
-            file_path, filename, ext, project_id, doc_attrs,
+            file_path, filename, ext, project_id, doc_attrs, drawing_pages,
         )
         _record_document_attributes(doc["id"], doc_attrs)
+        pages = pages + [None] * (len(chunks) - len(pages))
         if drawing_chunks:
-            chunks = chunks + drawing_chunks
-        meta["chunk_pages"] = pages + [None] * (len(chunks) - len(pages))
+            bounded, bounded_pages = bound_units_with_pages(
+                drawing_chunks, drawing_pages,
+            )
+            chunks = chunks + bounded
+            pages = pages + bounded_pages
+        meta["chunk_pages"] = pages
         chunks = _normalize_cesmm_in_chunks(chunks)
+        _record_stage_split(meta, text_chunk_count, len(chunks) - text_chunk_count)
 
         if not chunks:
             # A file that yields no text is never recorded as indexed: the
@@ -2667,6 +2776,12 @@ def index_project(project_id: str) -> dict[str, Any]:
         }
         if meta.get("ocr_low_quality"):
             entry["ocr_low_quality"] = True
+        shortfall = _text_stage_shortfall(meta)
+        if shortfall:
+            entry["text_stage_shortfall"] = shortfall
+            _stamp_index_ledger(
+                doc["id"], filename, len(chunks), text_stage_shortfall=shortfall,
+            )
         documents.append(entry)
         total_chunks += len(chunks)
         ocr_flags = _ocr_flags_for(chunks, meta)
@@ -2724,6 +2839,8 @@ def index_project(project_id: str) -> dict[str, Any]:
             "skipped_not_stored": skipped_not_stored,
             "unavailable": unavailable,
             "unavailable_count": len(unavailable),
+            "session_only": session_only,
+            "skipped_session_only": len(session_only),
         }
 
     return {
@@ -2741,6 +2858,8 @@ def index_project(project_id: str) -> dict[str, Any]:
         "skipped_not_stored": skipped_not_stored,
         "unavailable": unavailable,
         "unavailable_count": len(unavailable),
+        "session_only": session_only,
+        "skipped_session_only": len(session_only),
     }
 
 
@@ -3075,6 +3194,8 @@ def _spreadsheet_row_chunks(
     """One retrievable chunk per measured spreadsheet row, headers inherited."""
     if ext not in _SPREADSHEET_EXTS or not file_path:
         return []
+    from app.core import chunk_noise
+
     try:
         from app.blocks.boq_processor import BOQProcessorBlock
 
@@ -3108,6 +3229,10 @@ def _spreadsheet_row_chunks(
             # A repeated column-header row (each later bill in a sheet re-prints
             # it) is structure, not a measured row.
             if cells == header_cells:
+                continue
+            # A row whose every cell is blank or zero (a template's formula
+            # rows) measures nothing (RQ-1).
+            if chunk_noise.is_empty_row(" | ".join(cells)):
                 continue
             desc = cells[desc_idx].strip() if desc_idx is not None and desc_idx < len(cells) else ""
             has_figure = any(
@@ -3280,8 +3405,13 @@ def _drawing_chunks_for_document(
     ext: str,
     project_id: str,
     attrs: dict[str, Any] | None = None,
+    pages: list[int | None] | None = None,
 ) -> list[str]:
     """Return schedule + title-block chunks for a drawing, or [] otherwise.
+
+    When ``pages`` is given, it receives the 1-based page each returned chunk
+    was read from, one entry per chunk in the same order: the stage reads the
+    sheet page by page, so a table chunk's page is known, not inferred.
 
     When ``attrs`` is given, what the stage saw (pages read, pages with a
     text layer, schedule tables read) is written into it under
@@ -3302,6 +3432,7 @@ def _drawing_chunks_for_document(
 
         container = ConstructionContainer()
         out: list[str] = []
+        out_pages: list[int | None] = []
         source = ""
         pages_read = 0
         pages_with_text = 0
@@ -3332,12 +3463,14 @@ def _drawing_chunks_for_document(
                                 f"DRAWING TITLE BLOCK — {filename}. "
                                 f"Sheet identity: {named}."
                             )
+                            out_pages.append(page_num + 1)
                     table_chunks = _drawing_table_chunks(
                         container._extract_tables_advanced(page),
                         source or os.path.splitext(filename or "")[0],
                     )
                     tables_read += len(table_chunks)
                     out.extend(table_chunks)
+                    out_pages.extend([page_num + 1] * len(table_chunks))
         # Named like a drawing and opened: what was seen (pages, text layer,
         # schedule tables) is a document attribute. A sheet with no schedule
         # gets no chunk; the counts say what the stage observed.
@@ -3345,6 +3478,8 @@ def _drawing_chunks_for_document(
             attrs[DRAWING_SCHEDULE_META_KEY] = _drawing_schedule_attribute(
                 pages_read, pages_with_text, tables_read,
             )
+        if pages is not None:
+            pages.extend(out_pages)
         return out
     except Exception as exc:
         log.warning(
@@ -3449,6 +3584,34 @@ def _mostly_without_text(empty_text_pages: int, pages_read: int) -> bool:
     return empty_text_pages >= pdf_scanned_empty_page_share() * pages_read
 
 
+def _record_stage_split(meta: dict[str, Any], text_chunks: int, table_chunks: int) -> None:
+    """Record how many chunks the text stage and the table stages produced."""
+    meta["text_chunks"] = int(text_chunks)
+    meta["table_chunks"] = int(table_chunks)
+
+
+#: Reasons the text stage did not read the whole document, keyed by the
+#: extraction-meta flag that records it. In order: the first that applies wins.
+_TEXT_STAGE_SHORTFALLS = (
+    ("skipped_too_large", "text_stage_skipped_over_size_ceiling"),
+    ("extract_failed", "text_stage_failed"),
+    ("extract_partial", "text_stage_partial"),
+)
+
+
+def _text_stage_shortfall(meta: dict[str, Any]) -> str | None:
+    """Why the text stage did not read the whole document, or None.
+
+    The table stages run whether or not the text stage did, so chunk_count > 0
+    alone cannot tell a read document from one whose body never entered the
+    index. A document with a shortfall is never stamped INDEXED.
+    """
+    for flag, reason in _TEXT_STAGE_SHORTFALLS:
+        if meta.get(flag):
+            return reason
+    return None
+
+
 def _scanned_pdf_missing_ocr(ext: str, meta: dict[str, Any]) -> bool:
     """True when a PDF had empty body pages and OCR was never invoked.
 
@@ -3496,6 +3659,7 @@ def _stamp_index_ledger(
     pages_ocrd: int | None = None,
     ocr_skip_reason: str | None = None,
     ocr_unusable_pages: int = 0,
+    text_stage_shortfall: str | None = None,
 ) -> None:
     """Write documents.chunk_count / ingest_status / extractor_version.
 
@@ -3523,6 +3687,11 @@ def _stamp_index_ledger(
         # reindex flag says: the tail pages are missing and the user must be
         # told "partially read, pages 1-N of M", not shown a complete doc.
         status, reason = ist.PARTIAL_OCR, "ocr_truncated"
+    elif text_stage_shortfall and chunk_count > 0:
+        # The text stage was skipped, failed or stopped early: whatever the
+        # table stages produced, the body is not (wholly) in the index. Its
+        # chunks stay retrievable; the row never reads INDEXED.
+        status, reason = ist.TEXT_SPARSE, text_stage_shortfall
     elif stamp_as_indexed and chunk_count > 0:
         status, reason = ist.INDEXED, None
     else:
@@ -3604,8 +3773,11 @@ def _produce_chunks(
     text, meta = _extract_with_meta(file_path, filename, force_ocr=force_ocr)
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
-    structured, attrs = _structured_stage(file_path, filename, ext, project_id)
-    meta["chunk_pages"] = pages + [None] * len(structured)
+    structured, attrs, structured_pages = _structured_stage(
+        file_path, filename, ext, project_id,
+    )
+    _record_stage_split(meta, len(chunks), len(structured))
+    meta["chunk_pages"] = pages + _aligned_pages(structured_pages, len(structured))
     if attrs:
         meta["document_attributes"] = attrs
     return _normalize_cesmm_in_chunks(chunks + structured), meta
@@ -3615,9 +3787,53 @@ def _text_chunks_with_pages(
     text: str, meta: dict[str, Any], chunker: str, filename: str,
 ) -> tuple[list[str], list[int | None]]:
     """Chunk extracted text; give each chunk the page its text starts on."""
+    from app.core import chunk_noise
+
     page_starts = meta.pop("page_starts", None)
-    chunks = chunk_extracted_document(text, chunker=chunker, filename=filename)
-    return chunks, chunk_start_pages(text, page_starts, chunks)
+    refused: dict[str, int] = {}
+    if os.path.splitext(filename or "")[1].lower() in _SPREADSHEET_EXTS:
+        # Row-wise sheet text: an all-blank/zero row or a re-printed header
+        # row is structure, not content (RQ-1). Sheets carry no page starts,
+        # so editing the text cannot misplace a page.
+        text, refused = chunk_noise.clean_table_text(text)
+    split_parents: list[int | None] = []
+    chunks = chunk_extracted_document(
+        text, chunker=chunker, filename=filename, split_parents=split_parents,
+    )
+    pages = chunk_start_pages(text, page_starts, chunks)
+    if page_starts and any(p is not None for p in split_parents):
+        # Each piece of a split page or sheet starts with that page's own
+        # heading line (RQ-2). Pages are located first, on the bare pieces.
+        from app.core.chunk_bounds import attach_page_headings, page_heading_lines
+
+        headings = page_heading_lines(text, page_starts, _title_block_reader())
+        chunks, pages = attach_page_headings(chunks, pages, split_parents, headings)
+    chunks, pages, dropped = chunk_noise.refuse_chunks(chunks, pages)
+    _record_refused(meta, refused, dropped)
+    return chunks, pages
+
+
+def _title_block_reader() -> Any:
+    """The label-anchored title-block reader, or None when it cannot load."""
+    try:
+        from app.containers.construction import ConstructionContainer
+
+        container = ConstructionContainer()
+    except Exception as exc:  # noqa: BLE001 - a heading line is optional
+        logger.info("title-block reader unavailable for page headings: %s", exc)
+        return None
+    return lambda page_text: container._extract_title_block({"raw_text": page_text})
+
+
+def _record_refused(meta: dict[str, Any], *counts: dict[str, int]) -> None:
+    """Add per-reason noise refusals to ``meta["noise_refused"]``."""
+    total: dict[str, int] = dict(meta.get("noise_refused") or {})
+    for part in counts:
+        for reason, n in (part or {}).items():
+            if n:
+                total[reason] = total.get(reason, 0) + n
+    if total:
+        meta["noise_refused"] = total
 
 
 def _structured_chunks(
@@ -3627,13 +3843,27 @@ def _structured_chunks(
     return _structured_stage(file_path, filename, ext, project_id)[0]
 
 
+def _aligned_pages(pages: list[int | None], n: int) -> list[int | None]:
+    """``pages`` as exactly one entry per chunk; unknown when they disagree.
+
+    A stage that reports a page list of the wrong length gives no usable
+    attribution, so every one of its ``n`` chunks gets None, never a shifted page.
+    """
+    if len(pages) != n:
+        return [None] * n
+    return list(pages)
+
+
 def _structured_stage(
     file_path: str, filename: str, ext: str, project_id: str,
-) -> tuple[list[str], dict[str, Any]]:
-    """The table stages: ``(chunks, document_attributes)``.
+) -> tuple[list[str], dict[str, Any], list[int | None]]:
+    """The table stages: ``(chunks, document_attributes, chunk_pages)``.
 
     The attributes are document-level facts (the BOQ verified-total status)
     that belong on ``documents.metadata``, not in the chunk store.
+    ``chunk_pages`` holds one entry per chunk: the 1-based page a stage that
+    reads page by page took the chunk from, None for stages with no page
+    (BOQ totals and spreadsheet rows are sheets and summaries, not pages).
     """
     attrs: dict[str, Any] = {}
     # BOQ → RAG: append the computed total + line items so the package
@@ -3643,12 +3873,24 @@ def _structured_stage(
     # the bill/section heading inherited into it, so a billed-quantity or
     # unit-rate ask finds the row that states the figure.
     chunks += _spreadsheet_row_chunks(file_path, filename, ext)
+    pages: list[int | None] = [None] * len(chunks)
     # Drawing → RAG: mirrors index_project above. A drawing's schedules
     # live in its tables, and the raw text layer loses their structure.
-    chunks = chunks + _drawing_chunks_for_document(
-        file_path, filename, ext, project_id, attrs,
+    drawing_pages: list[int | None] = []
+    drawing = _drawing_chunks_for_document(
+        file_path, filename, ext, project_id, attrs, drawing_pages,
     )
-    return chunks, attrs
+    chunks = chunks + drawing
+    pages = pages + _aligned_pages(drawing_pages, len(drawing))
+    from app.core import chunk_noise
+    from app.core.chunk_bounds import bound_units_with_pages
+
+    # Bound, then refuse noise, with the pages in step: a split piece keeps
+    # its chunk's page, and a dropped chunk takes its own page with it and
+    # never shifts the pages of the chunks after it.
+    chunks, pages = bound_units_with_pages(chunks, pages)
+    chunks, pages, _ = chunk_noise.refuse_chunks(chunks, pages)
+    return chunks, attrs, pages
 
 
 def _produce_whole_document_chunks(
@@ -3660,6 +3902,7 @@ def _produce_whole_document_chunks(
     force_ocr: bool,
     *,
     max_size_mb: float | None = None,
+    ocr_size_gate: bool = True,
 ) -> tuple[list[str], dict[str, Any]]:
     """``_produce_chunks`` for a whole reference work.
 
@@ -3672,16 +3915,16 @@ def _produce_whole_document_chunks(
 
     text, meta = _extract_with_meta(
         file_path, filename, force_ocr=force_ocr, whole_document=True,
-        max_size_mb=max_size_mb,
+        max_size_mb=max_size_mb, ocr_size_gate=ocr_size_gate,
     )
     meta = dict(meta or {})
     chunks, pages = _text_chunks_with_pages(text, meta, chunker, filename)
     del text
     mem_mb, timeout_s = _file_budget()
-    (structured, attrs), diag = run_isolated(
+    (structured, attrs, structured_pages), diag = run_isolated(
         _structured_stage,
         (file_path, filename, ext, project_id),
-        fallback=([], {}),
+        fallback=([], {}, []),
         label=f"table stages of {filename}",
         mem_mb=mem_mb,
         timeout_s=timeout_s,
@@ -3692,7 +3935,10 @@ def _produce_whole_document_chunks(
             filename, diag.get("extract_failed_detail"),
         )
     structured = list(structured or [])
-    meta["chunk_pages"] = pages + [None] * len(structured)
+    _record_stage_split(meta, len(chunks), len(structured))
+    meta["chunk_pages"] = pages + _aligned_pages(
+        list(structured_pages or []), len(structured),
+    )
     if attrs:
         meta["document_attributes"] = dict(attrs)
     return _normalize_cesmm_in_chunks(chunks + structured), meta
@@ -3730,6 +3976,7 @@ def _produce_chunks_isolated(
     force_ocr: bool,
     *,
     whole_document: bool = False,
+    profile: str = PROFILE_USER_UPLOAD,
 ) -> tuple[list[str], dict[str, Any]]:
     """``_produce_chunks`` in its own memory-capped, time-limited child.
 
@@ -3743,6 +3990,15 @@ def _produce_chunks_isolated(
     """
     from app.core.extract_isolated import run_isolated, worth_isolating
 
+    corpus_build = _checked_profile(profile) == PROFILE_CORPUS_BUILD
+    if corpus_build and ext == ".pdf" and _pdf_hits_size_gate(file_path, filename):
+        # Building the corpus: a PDF any size gate would touch is read in
+        # isolated page batches with no whole-file ceiling and no size-based
+        # OCR skip. Memory is bounded per batch, OCR by the page budget.
+        return _produce_whole_document_chunks(
+            file_path, filename, ext, project_id, chunker, force_ocr,
+            max_size_mb=0.0, ocr_size_gate=False,
+        )
     if whole_document or (ext == ".pdf" and _pdf_should_batch(file_path)):
         # Whole reference works AND large ordinary PDFs isolate per page batch,
         # not per file. A child cannot fork again, so batching inside the
@@ -3838,12 +4094,18 @@ def index_document(
     *,
     force_ocr: bool = False,
     stamp_as_indexed: bool = False,
+    profile: str = PROFILE_USER_UPLOAD,
 ) -> dict[str, Any]:
     """Index one document (see ``_index_document``) and record on its row how
-    many PDF pages had no text layer."""
+    many PDF pages had no text layer.
+
+    ``profile`` is how the document arrived: ``user_upload`` (default) or
+    ``corpus_build`` (no whole-file size ceiling, no size-based OCR skip).
+    """
     result = _index_document(
         project_id, document_id, chunker,
         force_ocr=force_ocr, stamp_as_indexed=stamp_as_indexed,
+        profile=_checked_profile(profile),
     )
     _record_pages_without_text(document_id, result)
     return result
@@ -3891,6 +4153,7 @@ def _index_document(
     *,
     force_ocr: bool = False,
     stamp_as_indexed: bool = False,
+    profile: str = PROFILE_USER_UPLOAD,
 ) -> dict[str, Any]:
     """Incrementally index a single document into the project's index.
 
@@ -3915,6 +4178,36 @@ def _index_document(
     doc = _projects.get_document(document_id)
     if doc is None:
         return {"project_id": project_id, "indexed": 0, "error": "document not found"}
+
+    # An owner-excluded document is never indexed again, whichever entry
+    # point (Drive worker, doc-reindex-once, project rebuild) asked.
+    from app.core.ingest_status import is_excluded as _is_excluded
+
+    if _is_excluded(doc):
+        return {
+            "status": "skipped",
+            "excluded": True,
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": doc.get("original_name", ""),
+            "indexed": 0,
+            "total_chunks": 0,
+        }
+
+    # A chat session's file is pinned to that session and never enters the
+    # project's search, whichever entry point (upload, replace-bytes, Drive,
+    # worker, reindex) asked. Nothing is written: the row keeps the policy
+    # status its upload stamped.
+    if _projects.is_session_document(doc.get("metadata")):
+        return {
+            "status": "skipped",
+            "session_only": True,
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": doc.get("original_name", ""),
+            "indexed": 0,
+            "total_chunks": 0,
+        }
 
     filename = doc.get("original_name", "")
     ext = _ext_of(filename)
@@ -3969,6 +4262,7 @@ def _index_document(
             file_path, filename, ext, project_id,
             _chunker_for_document(filename, chunker), force_ocr,
             whole_document=is_whole_document(doc),
+            profile=profile,
         )
         quarantined = _quarantine_index_result(
             project_id, document_id, filename, meta,
@@ -4174,6 +4468,7 @@ def _index_document(
         pages_ocrd=meta.get("pages_ocrd"),
         ocr_skip_reason=meta.get("ocr_skip_reason"),
         ocr_unusable_pages=int(meta.get("ocr_unusable_pages") or 0),
+        text_stage_shortfall=_text_stage_shortfall(meta),
     )
     result = {
         "status": "ok",
@@ -4193,6 +4488,11 @@ def _index_document(
         "ocr_truncated": bool(meta.get("ocr_truncated")),
         "ocr_skip_reason": meta.get("ocr_skip_reason"),
         "ocr_unusable_pages": int(meta.get("ocr_unusable_pages") or 0),
+        "pages_read": meta.get("pages_read"),
+        "text_chunks": meta.get("text_chunks"),
+        "table_chunks": meta.get("table_chunks"),
+        "text_stage_shortfall": _text_stage_shortfall(meta),
+        "ingest_profile": profile,
     }
     if ext == ".pdf":
         result["pages_without_text"] = int(meta.get("empty_text_pages") or 0)
@@ -4329,22 +4629,132 @@ def _search_snippet_words() -> int:
     return _positive_int_env("SEARCH_SNIPPET_WORDS", _SEARCH_SNIPPET_WORDS_DEFAULT)
 
 
-def _join_chunk_texts(kept: list[Any]) -> str:
-    """The kept chunks as one snippet body, each bounded, in score order."""
+def _term(word: str) -> str:
+    """A word reduced to its letters and digits, lower-cased, for matching."""
+    return "".join(ch for ch in word.lower() if ch.isalnum())
+
+
+def _matching_window_start(words: list[str], query: str, width: int) -> int:
+    """Start of the ``width``-word window of ``words`` that best matches ``query``.
+
+    A window scores the query terms it contains, each weighted by how rare it
+    is in this chunk (1 / its count in the chunk), so a term the chunk repeats
+    on every line weighs little and the passage that holds the asked-for words
+    together wins. No word list: the weighting comes from the chunk itself.
+    Ties go to the earlier window; a chunk with no query term starts at 0, which
+    is the head cut this replaces.
+    """
+    terms = {t for t in (_term(w) for w in (query or "").split()) if t}
+    normed = [_term(w) for w in words]
+    hits = [t if t in terms else "" for t in normed]
+    total: dict[str, int] = {}
+    for t in hits:
+        if t:
+            total[t] = total.get(t, 0) + 1
+    if not total:
+        return 0
+    in_window: dict[str, int] = {}
+
+    def _add(t: str, step: int) -> None:
+        if t:
+            in_window[t] = in_window.get(t, 0) + step
+            if not in_window[t]:
+                del in_window[t]
+
+    for t in hits[:width]:
+        _add(t, 1)
+    best_start = 0
+    best = sum(1.0 / total[t] for t in in_window)
+    for start in range(1, len(words) - width + 1):
+        _add(hits[start - 1], -1)
+        _add(hits[start + width - 1], 1)
+        score = sum(1.0 / total[t] for t in in_window)
+        if score > best + 1e-12:
+            best, best_start = score, start
+    # Centre the window on the matched words it holds. The earliest window
+    # that reaches them ends right after them, and the value a passage is
+    # asked for usually FOLLOWS the words that name it.
+    matched = [i for i in range(best_start, best_start + width) if hits[i]]
+    lo, hi = matched[0], matched[-1]
+    start = lo - (width - (hi - lo + 1)) // 2
+    return max(0, min(start, len(words) - width))
+
+
+def _matching_passage(text: str, query: str, width: int) -> str:
+    """The ``width`` words of ``text`` that best match ``query``.
+
+    A chunk no longer than ``width`` comes back unchanged. A longer one is cut
+    around the query's matching terms, never from the start by position: the
+    indexer writes chunks of a few hundred words and the asked-for sentence is
+    usually past the first ``width`` of them. An ellipsis marks each cut end.
+    """
+    words = (text or "").split()
+    if len(words) <= width:
+        return " ".join(words)
+    start = _matching_window_start(words, query, width)
+    end = start + width
+    body = " ".join(words[start:end])
+    return ("... " if start else "") + body + (" ..." if end < len(words) else "")
+
+
+def _join_chunk_texts(kept: list[Any], query: str = "") -> str:
+    """The kept chunks as one snippet body, each bounded to its passage that
+    matches ``query``, in score order."""
     width = _search_snippet_words()
     parts = []
     for chunk in kept:
-        words = (chunk.text or "").split()
-        if not words:
-            continue
-        parts.append(" ".join(words[:width]))
+        passage = _matching_passage(chunk.text or "", query, width)
+        if passage:
+            parts.append(passage)
     return " ... ".join(parts)
+
+
+def _row_document_fields(doc_id: str, kept: list[Any]) -> dict[str, Any]:
+    """What a result row says about where its passages sit: the pages of the
+    kept chunks (in passage order, unknown pages left out) and the stored
+    document type and role. A field the store does not hold is left out."""
+    out: dict[str, Any] = {}
+    pages: list[int] = []
+    for c in kept:
+        page = getattr(c, "page", None)
+        if page and page not in pages:
+            pages.append(page)
+    if pages:
+        out["pages"] = pages
+    try:
+        doc = _projects.get_document(doc_id) or {}
+    except Exception:
+        logger.debug("document fields lookup failed for %s", doc_id, exc_info=True)
+        doc = {}
+    for key in ("doc_type", "doc_role"):
+        value = (doc.get(key) or "").strip() if isinstance(doc.get(key), str) else ""
+        if value:
+            out[key] = value
+    return out
+
+
+def _hit_origin(layer: str | None, searched_corpus: str) -> str:
+    """The corpus one search hit came from: ``"own"``, ``"general_knowledge"``
+    or ``"master_corpus"``.
+
+    A layer the retriever set to something other than ``"own"`` (a merged
+    library chunk, a disclosed master-corpus fallback) is kept as it is.
+    ``"own"`` (or no layer) means "the project that was searched", which is
+    ``searched_corpus``: the user's own documents for a user project, the
+    general-knowledge library when the searched project is a library.
+    """
+    layer = str(layer or "own")
+    return searched_corpus if layer == "own" else layer
 
 
 async def search_project_documents(
     project_id: str,
     query: str,
     top_k: int = 5,
+    *,
+    trace_path: str | None = None,
+    turn: Any = None,
+    conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
 
@@ -4354,19 +4764,49 @@ async def search_project_documents(
     21 Sep 2026 a search stalled /livez 4-6 s during chat turns, and one past
     5 s made the platform restart the instance (health check timed out). It runs in
     a thread, like the chat pre-retrieval already does.
+
+    ``trace_path`` set (the agent tool passes ``"tool"``): one
+    ``rag_retrieval_trace`` line is written for this call, results or none,
+    naming the chunks handed and the rows the per-document collapse dropped.
+    Ids, scores and ranks only; never chunk text, a file name or the query.
+
+    ``turn`` (a ``handed_set.SearchTurn``) set: chunks already handed to the
+    model this turn are not handed again, and the chunks this call hands are
+    added to the turn's handed set.
     """
     from app.core.rag import retrieval_worker
+
+    exclude = frozenset(turn.handed) if turn is not None else frozenset()
 
     if retrieval_worker.enabled():
         # Retrieval's CPU work runs in the worker process (its own GIL).
         from app.core.privileges import caller_role
 
-        return await retrieval_worker.call(
+        results, trace = await retrieval_worker.call(
             retrieval_worker.search_documents_job, project_id, query, top_k, caller_role(),
+            exclude,
         )
-    return await asyncio.to_thread(
-        _search_project_documents_sync, project_id, query, top_k,
-    )
+    else:
+        from app.core.offload import to_thread_in
+
+        results, trace = await to_thread_in(
+            "retrieval", _search_project_documents_traced, project_id, query, top_k, exclude,
+        )
+    if turn is not None:
+        turn.record_search(
+            [c.get("chunk_id") for c in trace.get("chunks") or []],
+            sum(1 for c in trace.get("not_handed") or [] if c.get("dropped") == "already_handed"),
+        )
+    if trace_path:
+        # Emitted here, in the request's own process, so the line carries the
+        # request id even when the search itself ran in the retrieval worker.
+        from app.core.rag.inject import emit_search_trace
+
+        emit_search_trace(
+            path=trace_path, project_id=project_id, requested_top_k=top_k, trace=trace,
+            conversation_id=conversation_id,
+        )
+    return results
 
 
 def _search_project_documents_sync(
@@ -4375,6 +4815,89 @@ def _search_project_documents_sync(
     top_k: int = 5,
 ) -> list[dict[str, Any]]:
     """Search indexed documents for ``query``, returning up to ``top_k`` results.
+
+    The result rows of ``_search_project_documents_traced``; see there.
+    """
+    return _search_project_documents_traced(project_id, query, top_k)[0]
+
+
+def _empty_search_trace() -> dict[str, Any]:
+    return {"retrieved_k": 0, "chunks": [], "not_handed": []}
+
+
+def _search_leg_record(project_id: str) -> dict[str, Any]:
+    """This search's own fused-candidate record and lexical-leg states, read
+    from the turn memo right after its retrieval (the retriever writes both
+    there per retrieval, so the turn's earlier pre-injection record is
+    already overwritten). Outside a turn memo nothing is kept: ``fused`` is
+    None and ``lexical`` empty. Ids and ranks only; reading changes nothing.
+
+    Read inside a guard: a failure here gives a trace without the two
+    fields (the line then states no fusion) and never touches the search's
+    results. The trace fails open; the search never does. No database read:
+    both come from the in-process turn memo."""
+    try:
+        from app.core.rag.retriever import retrievable_project_ids
+        from app.core.rag.vector_store import _MISS, _memo_get, fused_candidates_record
+
+        lexical: dict[str, str] = {}
+        for pid in retrievable_project_ids(project_id):
+            state = _memo_get(("lexical_leg", pid))
+            if state is not _MISS:
+                lexical[pid] = state
+        return {"fused": fused_candidates_record(project_id), "lexical": lexical}
+    except Exception:  # noqa: BLE001 - instrumentation must not break a search
+        logger.debug("search leg record unreadable; trace written without it",
+                     exc_info=True)
+        return {}
+
+
+def _search_trace(chunks: list[Any], kept_by_doc: dict[str, list[Any]],
+                  ranked_doc_ids: list[str],
+                  skipped: list[Any] = ()) -> dict[str, Any]:
+    """Which retrieved chunks the result rows carry, and which the collapse
+    dropped and why. ``rank`` is the retriever's order; ``result_rank`` is the
+    row a handed chunk rides in. ``skipped`` are the retrieved chunks left out
+    because the turn had already handed them (``dropped="already_handed"``).
+    Identity only (see ``trace_chunk_ids``)."""
+    skipped_ids = {id(c) for c in skipped}
+    from app.core.rag.inject import trace_chunk_ids
+
+    row_of = {doc_id: i + 1 for i, doc_id in enumerate(ranked_doc_ids)}
+    handed_ids = {
+        id(c) for doc_id in ranked_doc_ids for c in kept_by_doc.get(doc_id, [])
+    }
+    handed: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for rank, c in enumerate(chunks, start=1):
+        entry = trace_chunk_ids(rank, c)
+        if id(c) in skipped_ids:
+            entry["dropped"] = "already_handed"
+            dropped.append(entry)
+            continue
+        if id(c) in handed_ids:
+            entry["result_rank"] = row_of[c.doc_id]
+            handed.append(entry)
+        else:
+            entry["dropped"] = (
+                "beyond_top_k" if c.doc_id not in row_of else "per_doc_cap"
+            )
+            dropped.append(entry)
+    handed.sort(key=lambda e: (e["result_rank"], e["rank"]))
+    return {"retrieved_k": len(chunks), "chunks": handed, "not_handed": dropped}
+
+
+def _search_project_documents_traced(
+    project_id: str,
+    query: str,
+    top_k: int = 5,
+    exclude_chunk_ids: frozenset[str] | set[str] = frozenset(),
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Search indexed documents for ``query``: ``(result rows, trace)``.
+
+    ``exclude_chunk_ids``: chunks already handed to the model this turn. They
+    are left out of the rows (the trace names them ``already_handed``) and the
+    retrieval reaches that many candidates deeper so the rows can still fill.
 
     Each result is a dict: ``{document_id, filename, snippet, score}``.
 
@@ -4393,13 +4916,17 @@ def _search_project_documents_sync(
     itself uses).
     """
     if not query or not query.strip():
-        return []
+        return [], _empty_search_trace()
 
     # Hybrid retriever lives in app.core.rag.retriever; local import to
     # keep app.core.doc_index importable when the RAG stack isn't fully
     # wired (tests, minimal install).
     from app.core.rag import reranker as _reranker
-    from app.core.rag.retriever import _doc_name_for_id, retrieve_with_filter
+    from app.core.rag.retriever import (
+        _doc_name_for_id,
+        _general_knowledge_project_ids,
+        retrieve_with_filter,
+    )
 
     # Over-fetch chunks so we can still return ``top_k`` DISTINCT documents
     # after the "best chunk per document" collapse below. 4x is enough
@@ -4411,6 +4938,7 @@ def _search_project_documents_sync(
     over_fetch = max(top_k * 4, 20)
     if _reranker.enabled():
         over_fetch = max(over_fetch, _reranker.candidate_depth(top_k))
+    over_fetch += len(exclude_chunk_ids)
 
     def _query() -> list[Any]:
         try:
@@ -4433,7 +4961,7 @@ def _search_project_documents_sync(
     # which populates the ``chunks`` table the hybrid retriever queries.
     if not chunks and _load_index(project_id) is None:
         try:
-            for doc in _projects.list_documents(project_id):
+            for doc in _projects.list_documents(project_id, all_sessions=True):
                 try:
                     index_document(project_id, doc["id"])
                 except Exception:
@@ -4447,7 +4975,12 @@ def _search_project_documents_sync(
             )
         chunks = _query()
     if not chunks:
-        return []
+        return [], _empty_search_trace()
+    legs = _search_leg_record(project_id)
+    retrieved = chunks
+    skipped = [c for c in chunks if str(getattr(c, "chunk_id", "")) in exclude_chunk_ids]
+    if skipped:
+        chunks = [c for c in chunks if str(getattr(c, "chunk_id", "")) not in exclude_chunk_ids]
 
     # Keep the best FEW chunks per document, not just one. A live foundation
     # backfill compaction ask was 1/6: five runs said "I don't have that" about a clause the sixth quoted
@@ -4460,18 +4993,30 @@ def _search_project_documents_sync(
     # Result rows are still one per document, still ranked by that document's
     # best chunk: the diversity this collapse was written for is unchanged.
     per_doc = _search_chunks_per_doc()
+    # The retriever names a chunk "own" when it belongs to the project it was
+    # asked to search. When that project is itself a configured
+    # general-knowledge library (the general-knowledge search tool searches
+    # each library as the project), "own" would tell every reader of
+    # ``origin`` that a library passage is the user's own document. The
+    # corpus a hit came from is decided here, by the searched project's id
+    # against the configured library set -- not by which project was active.
+    searched_corpus = (
+        "general_knowledge" if project_id in set(_general_knowledge_project_ids()) else "own"
+    )
     grouped: dict[str, list[Any]] = {}
     for c in chunks:
         grouped.setdefault(c.doc_id, []).append(c)
 
     best: dict[str, dict[str, Any]] = {}
+    kept_by_doc: dict[str, list[Any]] = {}
     for doc_id, doc_chunks in grouped.items():
         doc_chunks.sort(key=lambda c: float(c.score or 0.0), reverse=True)
         kept = doc_chunks[:per_doc]
+        kept_by_doc[doc_id] = kept
         best[doc_id] = {
             "document_id": doc_id,
             "filename": _doc_name_for_id(doc_id),
-            "chunk": _join_chunk_texts(kept),
+            "chunk": _join_chunk_texts(kept, query),
             "score": float(kept[0].score or 0.0),
             # OCR provenance (item 7): true when any kept chunk was OCR-derived.
             "ocr": any(bool(getattr(c, "ocr", False)) for c in kept),
@@ -4483,7 +5028,7 @@ def _search_project_documents_sync(
             # a STEP 0b Master-Corpus fallback hit. Verified live
             # 2026-08-02: a project owning ZERO documents returned five
             # Master-Corpus documents here with nothing marking them.
-            "origin": getattr(kept[0], "layer", "own") or "own",
+            "origin": _hit_origin(getattr(kept[0], "layer", None), searched_corpus),
         }
 
     ranked = sorted(best.values(), key=lambda x: x["score"], reverse=True)[:top_k]
@@ -4519,8 +5064,15 @@ def _search_project_documents_sync(
         }
         if ocr_flag_by_doc.get(item["document_id"]):
             result_row["ocr_low_quality"] = True
+        result_row.update(_row_document_fields(
+            item["document_id"], kept_by_doc.get(item["document_id"], []),
+        ))
         results.append(result_row)
-    return results
+    trace = _search_trace(
+        retrieved, kept_by_doc, [item["document_id"] for item in ranked], skipped,
+    )
+    trace.update(legs)
+    return results, trace
 
 
 # ── eager (background) indexing ───────────────────────────────────────────────

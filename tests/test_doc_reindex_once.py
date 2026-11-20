@@ -1,0 +1,407 @@
+"""doc-reindex-once: one document, re-indexed from its Drive original.
+
+Every test builds its own document rows and fakes; no corpus, no network.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pytest
+
+from scripts import doc_reindex_once as dro
+
+
+class FakeWorld:
+    """A one-table document store plus a chunk store and a Drive."""
+
+    def __init__(self, docs: Dict[str, Dict[str, Any]], drive: Dict[str, bytes],
+                 index_result: Optional[Dict[str, Any]] = None,
+                 new_chunks: Optional[List[str]] = None,
+                 old_chunks: Optional[List[str]] = None,
+                 index_raises: Optional[Exception] = None):
+        self.docs = docs
+        self.drive = drive
+        self.index_result = index_result or {"status": "ok", "indexed": 1, "rag_indexed": 3}
+        self.new_chunks = new_chunks if new_chunks is not None else []
+        self.chunks: List[str] = list(old_chunks or [])
+        self.index_raises = index_raises
+        self.index_calls: List[tuple] = []
+        self.paths_written: List[Path] = []
+        self.paths_discarded: List[Path] = []
+        self.file_path_seen_by_index: Optional[str] = None
+        self.bytes_seen_by_index: Optional[bytes] = None
+        self.lines: List[str] = []
+        self.metadata_writes: List[tuple] = []
+
+    def deps(self, tmp_path: Path) -> dro.Deps:
+        def write(raw: bytes, name: str) -> Path:
+            p = tmp_path / f"t{len(self.paths_written)}_{name}"
+            p.write_bytes(raw)
+            self.paths_written.append(p)
+            return p
+
+        def discard(p: Path) -> None:
+            Path(p).unlink(missing_ok=True)
+            self.paths_discarded.append(Path(p))
+
+        def set_fp(doc_id: str, fp: str) -> None:
+            self.docs[doc_id]["file_path"] = fp
+
+        def index(pid: str, did: str, **kw: Any) -> Dict[str, Any]:
+            self.index_calls.append((pid, did, kw))
+            fp = self.docs[did].get("file_path")
+            self.file_path_seen_by_index = fp
+            self.bytes_seen_by_index = Path(fp).read_bytes()
+            if self.index_raises is not None:
+                raise self.index_raises
+            if self.index_result.get("status") != "error":
+                self.chunks = list(self.new_chunks)
+                self.docs[did]["chunk_count"] = len(self.new_chunks)
+                self.docs[did]["ingest_status"] = "INDEXED"
+                self.docs[did]["pages_ocrd"] = 7
+            return dict(self.index_result)
+
+        def update_metadata(doc_id: str, md: Dict[str, Any]) -> None:
+            self.metadata_writes.append((doc_id, md))
+            self.docs[doc_id].setdefault("metadata", {}).update(md)
+
+        def download(fid: str):
+            if fid in self.drive:
+                return self.drive[fid], None
+            return None, "404 not found"
+
+        return dro.Deps(
+            get_document=lambda d: dict(self.docs[d]) if d in self.docs else None,
+            drive_file_id_of=lambda d: d.get("drive_file_id") or "",
+            download=download,
+            write_transient=write,
+            discard_transient=discard,
+            set_file_path=set_fp,
+            index_document=index,
+            chunk_texts=lambda pid, did: list(self.chunks),
+            update_metadata=update_metadata,
+            log=self.lines.append,
+        )
+
+
+def _doc(project: str, drive: str = "drv1", **kw: Any) -> Dict[str, Any]:
+    row = {
+        "project_id": project, "original_name": "Vol 1 bill.pdf",
+        "drive_file_id": drive, "chunk_count": 2, "ingest_status": "TEXT_SPARSE",
+        "pages_in_file": 9, "pages_ocrd": 0, "file_path": "/gone/old.pdf",
+    }
+    row.update(kw)
+    return row
+
+
+# --- the happy path: download, point, index, report before/after ---------
+
+@pytest.mark.parametrize("force_ocr", [True, False])
+def test_reindex_reports_before_after_and_passes_force_flag(tmp_path, force_ocr):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"%PDF-bytes"},
+                  new_chunks=["HEAD A\nrow", "row", "HEAD B"], old_chunks=["x", "y"])
+    rep = dro.reindex_one("p1", "d1", force_ocr=force_ocr, heading_re=r"^HEAD ", deps=w.deps(tmp_path))
+    assert rep["ok"] is True
+    assert rep["before"] == {"chunk_count": 2, "ingest_status": "TEXT_SPARSE", "pages_in_file": 9, "pages_ocrd": 0}
+    assert rep["after"] == {"chunk_count": 3, "ingest_status": "INDEXED", "pages_in_file": 9, "pages_ocrd": 7}
+    assert w.index_calls == [("p1", "d1", {"force_ocr": force_ocr, "stamp_as_indexed": True})]
+    assert rep["headings"] == ["HEAD A", "HEAD B"]
+    assert rep["downloaded_bytes"] == len(b"%PDF-bytes")
+
+
+@pytest.mark.parametrize("payload", [b"first-bytes", b"second, longer bytes"])
+def test_index_reads_the_downloaded_bytes_and_the_copy_is_deleted(tmp_path, payload):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": payload}, new_chunks=["a"])
+    dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=w.deps(tmp_path))
+    assert w.file_path_seen_by_index == str(w.paths_written[0])
+    assert w.bytes_seen_by_index == payload
+    assert w.paths_discarded == w.paths_written
+    assert not w.paths_written[0].exists()
+
+
+# --- refusals before any download ----------------------------------------
+
+@pytest.mark.parametrize("docs,doc_id,err", [
+    ({}, "d1", "document not found"),
+    ({"d1": _doc("other")}, "d1", "document does not belong to project"),
+    ({"d1": _doc("p1", drive="")}, "d1", "document has no drive_file_id"),
+    ({"d1": _doc("p1", drive="   ")}, "d1", "document has no drive_file_id"),
+])
+def test_refuses_without_touching_drive_or_index(tmp_path, docs, doc_id, err):
+    w = FakeWorld(docs, {"drv1": b"bytes"})
+    rep = dro.reindex_one("p1", doc_id, force_ocr=True, heading_re=None, deps=w.deps(tmp_path))
+    assert rep["ok"] is False and rep["error"] == err
+    assert w.index_calls == [] and w.paths_written == []
+
+
+@pytest.mark.parametrize("drive", [{}, {"drv1": b""}])
+def test_download_failure_never_indexes(tmp_path, drive):
+    w = FakeWorld({"d1": _doc("p1")}, drive, old_chunks=["keep"])
+    rep = dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=w.deps(tmp_path))
+    assert rep["ok"] is False and rep["error"].startswith("DOWNLOAD_FAILED")
+    assert w.index_calls == []
+    assert w.docs["d1"]["file_path"] == "/gone/old.pdf"
+
+
+# --- a failed index keeps the old chunks and reports not-ok --------------
+
+@pytest.mark.parametrize("result,raises", [
+    ({"status": "error", "error": "OCR budget"}, None),
+    (None, RuntimeError("extractor died")),
+])
+def test_failed_index_is_not_ok_and_old_chunks_stay(tmp_path, result, raises):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, index_result=result,
+                  index_raises=raises, new_chunks=["new"], old_chunks=["old1", "old2"])
+    rep = dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=w.deps(tmp_path))
+    assert rep["ok"] is False and rep["error"]
+    assert w.chunks == ["old1", "old2"]
+    assert rep["after"]["chunk_count"] == 2
+    assert w.paths_discarded == w.paths_written and len(w.paths_written) == 1
+
+
+# --- headings -------------------------------------------------------------
+
+_HEADING_TEXTS = ["intro\n  SECTION   2  \nbody", "SECTION 1\nSECTION 2", "none"]
+
+
+@pytest.mark.parametrize("pattern,want", [
+    (r"^SECTION \d", ["SECTION 2", "SECTION 1"]),
+    (r"^PART", []),
+    (None, []),
+    ("", []),
+])
+def test_heading_lines_order_dedupe_and_whitespace(pattern, want):
+    assert dro.heading_lines(_HEADING_TEXTS, pattern) == want
+
+
+# --- env entry ------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,default,want", [
+    (None, True, True), ("", False, False), ("0", True, False), ("TRUE", False, True),
+    ("off", True, False), ("yes", False, True),
+])
+def test_parse_flag(raw, default, want):
+    assert dro.parse_flag(raw, default=default) is want
+
+
+@pytest.mark.parametrize("raw", ["maybe", "2"])
+def test_parse_flag_rejects_non_boolean(raw):
+    with pytest.raises(ValueError):
+        dro.parse_flag(raw, default=True)
+
+
+@pytest.mark.parametrize("env", [
+    {"DOC_REINDEX_PROJECT_ID": "p1"},
+    {"DOC_REINDEX_DOCUMENT_ID": "d1"},
+    {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1", "DOC_REINDEX_FORCE_OCR": "maybe"},
+    {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1", "DOC_REINDEX_HEADING_RE": "(unclosed"},
+])
+def test_main_rejects_bad_env_before_any_io(tmp_path, env):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"})
+    assert dro.main_from_env(env, deps=w.deps(tmp_path)) == 2
+    assert w.index_calls == [] and w.paths_written == []
+
+
+@pytest.mark.parametrize("index_result,code", [
+    ({"status": "ok", "indexed": 1}, 0),
+    ({"status": "error", "error": "boom"}, 1),
+])
+def test_main_prints_one_summary_line_and_exit_code(tmp_path, index_result, code):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, index_result=index_result, new_chunks=["H1"])
+    env = {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1",
+           "DOC_REINDEX_FORCE_OCR": "false", "DOC_REINDEX_HEADING_RE": "^H"}
+    assert dro.main_from_env(env, deps=w.deps(tmp_path)) == code
+    summaries = [ln for ln in w.lines if ln.startswith(dro.SUMMARY_PREFIX)]
+    assert len(summaries) == 1
+    rep = json.loads(summaries[0][len(dro.SUMMARY_PREFIX):])
+    assert rep["force_ocr"] is False and rep["ok"] is (code == 0)
+    assert w.index_calls[0][2]["force_ocr"] is False
+
+
+@pytest.mark.parametrize("value,hands_over", [("d1", True), ("  ", False)])
+def test_p1b_main_hands_over_only_when_document_id_is_set(monkeypatch, value, hands_over):
+    from scripts import p1b_ingest_drive_server as p1b
+
+    calls: List[str] = []
+    monkeypatch.setenv("DOC_REINDEX_DOCUMENT_ID", value)
+    monkeypatch.setattr(dro, "main_from_env", lambda: calls.append("reindex") or 7)
+
+    def parser_reached():
+        calls.append("walk")
+        raise SystemExit(0)
+
+    monkeypatch.setattr(p1b, "build_parser", parser_reached)
+    try:
+        rc = p1b.main()
+    except SystemExit:
+        rc = None
+    assert calls == (["reindex"] if hands_over else ["walk"])
+    assert (rc == 7) is hands_over
+
+
+# --- the transient write: production helper and failure reporting -------
+
+@pytest.mark.parametrize("name,payload", [
+    ("Vol 1 bill.pdf", b"%PDF-1.7 first"),
+    ("drawing sheet (rev B).dwg.pdf", b"second payload, longer"),
+])
+def test_production_transient_copy_holds_the_bytes_and_keeps_the_extension(name, payload):
+    from app.core import file_crypto
+
+    path = dro.write_transient_copy(payload, name)
+    try:
+        assert path.read_bytes() == payload
+        assert path.name.startswith(file_crypto.DECRYPTED_TEMP_PREFIX)
+        assert path.suffix == Path(name).suffix
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_production_deps_wire_only_callables_that_exist():
+    deps = dro.production_deps()
+    for field_name in dro.Deps.__dataclass_fields__:
+        assert callable(getattr(deps, field_name)), field_name
+    assert deps.write_transient is dro.write_transient_copy
+
+
+@pytest.mark.parametrize("exc", [OSError("disk full"), AttributeError("no helper")])
+def test_transient_write_failure_is_reported_not_raised(tmp_path, exc):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"bytes"}, old_chunks=["keep"])
+    deps = w.deps(tmp_path)
+
+    def broken(raw: bytes, name: str) -> Path:
+        raise exc
+
+    deps.write_transient = broken
+    rep = dro.reindex_one("p1", "d1", force_ocr=True, heading_re=None, deps=deps)
+    assert rep["ok"] is False
+    assert rep["error"].startswith("TRANSIENT_WRITE_FAILED: " + type(exc).__name__)
+    assert w.index_calls == [] and w.paths_discarded == []
+    assert w.docs["d1"]["file_path"] == "/gone/old.pdf"
+    assert w.chunks == ["keep"]
+
+
+@pytest.mark.parametrize("force_ocr", [True, False])
+def test_production_index_document_runs_on_corpus_build_profile(monkeypatch, force_ocr):
+    """The tool reads what the upload gates refuse: production wiring indexes
+    on ``corpus_build``, while ``index_document`` itself defaults to
+    ``user_upload``."""
+    import inspect
+
+    from app.core import doc_index
+
+    seen: List[tuple] = []
+
+    def fake_index(pid: str, did: str, **kw: Any) -> Dict[str, Any]:
+        seen.append((pid, did, kw))
+        return {"status": "ok"}
+
+    default = inspect.signature(doc_index.index_document).parameters["profile"].default
+    assert default == doc_index.PROFILE_USER_UPLOAD
+    monkeypatch.setattr(doc_index, "index_document", fake_index)
+    deps = dro.production_deps()
+    deps.index_document("p1", "d1", force_ocr=force_ocr, stamp_as_indexed=True)
+    assert seen == [("p1", "d1", {
+        "force_ocr": force_ocr, "stamp_as_indexed": True,
+        "profile": doc_index.PROFILE_CORPUS_BUILD,
+    })]
+
+
+# --- the summary line stays bounded and names what ran --------------------
+
+@pytest.mark.parametrize("n,limit,want_kept,want_trunc", [
+    (5, 2, 2, True),
+    (5, 10, 5, False),
+    (3, 3, 3, False),
+])
+def test_summary_headings_keeps_count_and_first_n(n, limit, want_kept, want_trunc):
+    lines = [f"SECTION {i}" for i in range(n)]
+    got = dro.summary_headings(lines, limit)
+    assert got["count"] == n
+    assert got["lines"] == lines[:want_kept]
+    assert got["truncated"] is want_trunc
+
+
+@pytest.mark.parametrize("length,clipped", [
+    (dro.SUMMARY_HEADING_CHARS, False),
+    (dro.SUMMARY_HEADING_CHARS + 1, True),
+])
+def test_summary_headings_clips_a_long_line(length, clipped):
+    line = "H" * length
+    (kept,) = dro.summary_headings([line], 5)["lines"]
+    assert len(kept) <= dro.SUMMARY_HEADING_CHARS
+    assert (kept == line) is (not clipped)
+    assert kept.endswith("...") is clipped
+
+
+@pytest.mark.parametrize("n,limit", [(7, 3), (2, 3)])
+def test_reindex_summary_is_bounded_but_the_row_keeps_every_heading(tmp_path, n, limit):
+    heads = [f"HEAD {i}" for i in range(n)]
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"%PDF"}, new_chunks=heads)
+    rep = dro.reindex_one("p1", "d1", force_ocr=False, heading_re=r"^HEAD ",
+                          deps=w.deps(tmp_path), max_summary_headings=limit)
+    assert rep["headings"] == heads[:limit]
+    assert rep["headings_count"] == n
+    assert rep["headings_truncated"] is (n > limit)
+    assert w.docs["d1"]["metadata"]["headings"]["lines"] == heads
+
+
+@pytest.mark.parametrize("raw,want", [("", dro.DEFAULT_SUMMARY_HEADINGS), ("0", 0), (" 12 ", 12)])
+def test_parse_count(raw, want):
+    assert dro.parse_count(raw, default=dro.DEFAULT_SUMMARY_HEADINGS) == want
+
+
+@pytest.mark.parametrize("raw", ["-1", "many"])
+def test_parse_count_rejects_non_counts(raw):
+    with pytest.raises(ValueError):
+        dro.parse_count(raw, default=1)
+
+
+@pytest.mark.parametrize("raw", ["-1", "many"])
+def test_main_rejects_bad_summary_heading_count_before_any_io(tmp_path, raw):
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"})
+    env = {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1",
+           "DOC_REINDEX_SUMMARY_HEADINGS": raw}
+    assert dro.main_from_env(env, deps=w.deps(tmp_path)) == 2
+    assert w.index_calls == [] and w.paths_written == []
+
+
+@pytest.mark.parametrize("limit", ["1", "4"])
+def test_main_summary_line_parses_with_thousands_of_long_headings(tmp_path, limit):
+    heads = [f"DRAWING SHEET {i:05d} " + "X" * 400 for i in range(3000)]
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, new_chunks=heads)
+    env = {"DOC_REINDEX_PROJECT_ID": "p1", "DOC_REINDEX_DOCUMENT_ID": "d1",
+           "DOC_REINDEX_HEADING_RE": "^DRAWING SHEET", "DOC_REINDEX_SUMMARY_HEADINGS": limit}
+    assert dro.main_from_env(env, deps=w.deps(tmp_path)) == 0
+    (line,) = [ln for ln in w.lines if ln.startswith(dro.SUMMARY_PREFIX)]
+    rep = json.loads(line[len(dro.SUMMARY_PREFIX):])
+    assert rep["headings_count"] == 3000 and rep["headings_truncated"] is True
+    assert len(rep["headings"]) == int(limit)
+    assert len(line) < 8 * 1024
+    assert len(w.docs["d1"]["metadata"]["headings"]["lines"]) == 3000
+
+
+@pytest.mark.parametrize("sha", ["ceba9719c91693bd7fa4b0dd27d2bc4feca12b62", None])
+def test_summary_names_the_build_that_ran(tmp_path, sha):
+    import dataclasses
+
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, new_chunks=["a"])
+    deps = dataclasses.replace(w.deps(tmp_path), build_sha=lambda: sha)
+    rep = dro.reindex_one("p1", "d1", force_ocr=False, heading_re=None, deps=deps)
+    assert rep["build_sha"] == sha
+
+
+@pytest.mark.parametrize("profile,skip", [
+    ("corpus_build", None),
+    ("user_upload", "ocr_skipped_over_size_ceiling"),
+])
+def test_summary_carries_the_profile_and_ocr_skip_the_index_reported(tmp_path, profile, skip):
+    result = {"status": "ok", "indexed": 1, "rag_indexed": 2,
+              "ingest_profile": profile, "ocr_skip_reason": skip, "chunks": ["big"] * 3}
+    w = FakeWorld({"d1": _doc("p1")}, {"drv1": b"b"}, index_result=result, new_chunks=["a"])
+    rep = dro.reindex_one("p1", "d1", force_ocr=False, heading_re=None, deps=w.deps(tmp_path))
+    assert rep["index_result"]["ingest_profile"] == profile
+    assert rep["index_result"]["ocr_skip_reason"] == skip
+    assert "chunks" not in rep["index_result"]

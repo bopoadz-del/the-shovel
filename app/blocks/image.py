@@ -144,6 +144,7 @@ def _tesseract_ocr(file_path: str) -> Tuple[str, float]:
     """Run Tesseract OCR locally. Returns (text, mean_confidence_0_to_1)."""
     import pytesseract
     from PIL import Image
+    from app.blocks.ocr import _ocr_lang
     from app.core.file_crypto import open_plaintext
 
     # Decrypt-on-read for encrypted-at-rest uploads; no-op for plaintext.
@@ -153,9 +154,14 @@ def _tesseract_ocr(file_path: str) -> Tuple[str, float]:
     confidence = 0.0
     with open_plaintext(file_path) as plain_path:
         img = Image.open(plain_path)
-        text = pytesseract.image_to_string(img).strip()
+        # Same language setting as the PDF OCR pass (RAG_OCR_LANG), so a
+        # two-language screenshot is read in both languages where installed.
+        lang = _ocr_lang()
+        text = pytesseract.image_to_string(img, lang=lang).strip()
         try:
-            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(
+                img, lang=lang, output_type=pytesseract.Output.DICT,
+            )
             confs = [int(c) for c in data.get("conf", []) if str(c).isdigit() and int(c) >= 0]
             if confs:
                 confidence = sum(confs) / len(confs) / 100.0
@@ -477,6 +483,7 @@ class ImageBlock(UniversalBlock):
                 result["detection_error"] = detection_error
             if params.get("mode") == "safety_qaqc":
                 result["safety_qaqc"] = safety_qaqc
+                result["safety_qaqc_ran"] = safety_qaqc_used
                 if safety_qaqc_error:
                     result["safety_qaqc_error"] = safety_qaqc_error
             return result

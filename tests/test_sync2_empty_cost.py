@@ -227,6 +227,17 @@ def test_a2_plain_helper_matches_sanitize():
     )
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the footing needs 12 m3 of concrete",  # not JSON: parser gives None
+        "{}",  # an empty JSON object: parser gives a falsy dict
+    ],
+)
+def test_a2_plain_helper_is_empty_for_text_that_is_not_a_tool_error(text):
+    assert _plain_sentence_for_tool_error_json(text) == ""
+
+
 # ── Live tip a8498b38: formula-only / 1 m demo after a green calc ───────────
 
 A2_PLASTER = (

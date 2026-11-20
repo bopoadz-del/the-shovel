@@ -15,6 +15,8 @@ it would be abandoned within a week of a pilot.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import pytest
 
 from app.core.rag import vector_store as vs
@@ -46,6 +48,7 @@ def corpus(monkeypatch, tmp_path):
     reset_embedder_cache()
     emb = get_embedder()
     store = vs.get_store(dim=emb.dim)
+    give_documents_table(store)
 
     def ingest(project_id, doc_id, text):
         store.upsert_chunks(project_id=project_id, doc_id=doc_id,

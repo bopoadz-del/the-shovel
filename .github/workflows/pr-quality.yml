@@ -100,3 +100,28 @@ jobs:
           fi
 
           echo "PR-quality checks passed."
+
+  test-removal-guard:
+    # A PR that deletes a file under a tests/ directory, or removes more test
+    # functions than it adds, fails unless its body carries the line
+    # "TEST REMOVAL APPROVED <head sha>" for the CURRENT head commit. Runs on
+    # `edited`, so adding the line re-runs this job with the new body.
+    #
+    # The change measured is merge-ref^1 -> merge-ref: what a squash merge
+    # would apply to the base branch. A branch cut from a stale base that
+    # drops tests added to the base since is therefore caught too (#354
+    # removed three test files that way and every check stayed green).
+    # Not exempted by the 'trivial' label: removing a test is never trivial.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the PR merge ref with its first parent
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Fail on test removal without an approval line for this head
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_test_removal.py --base HEAD^1 --head HEAD

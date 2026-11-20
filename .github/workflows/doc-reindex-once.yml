@@ -1,0 +1,215 @@
+# Re-index ONE existing document from its Drive original, as a one-off task.
+#
+# Runs inside the `the-fork-ingest` task definition (same image, env and
+# network as ingest-run-once.yml), which already holds the Drive service
+# account. That task's WORKER_COMMAND is a Secrets Manager secret that beats
+# argv and a same-name environment override, so the selectors travel as
+# distinct environment names (DOC_REINDEX_*); `p1b_ingest_drive_server.main`
+# hands over to `scripts/doc_reindex_once.py` when DOC_REINDEX_DOCUMENT_ID is
+# set. The script downloads the bytes by the row's drive_file_id to a
+# transient path, points the row at it, runs
+# index_document(force_ocr, stamp_as_indexed=True) and prints one
+# `REINDEXSUMMARY <json>` line: before/after chunk_count, ingest_status,
+# pages_in_file, pages_ocrd and the heading lines matching `heading_regex`.
+# index_document swaps chunks only on success (#229): a failed run leaves the
+# existing chunks. No project, document or pattern is committed here.
+name: doc-reindex-once
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project id the document belongs to"
+        required: true
+        type: string
+      document_id:
+        description: "Document id to re-index"
+        required: true
+        type: string
+      force_ocr:
+        description: "OCR empty-text pages under the force page budget"
+        type: boolean
+        default: true
+      heading_regex:
+        description: "Optional regex; matching lines of the new chunks are listed in chunk order"
+        required: false
+        type: string
+      index_timeout_s:
+        description: "Optional DOC_INDEX_FILE_TIMEOUT_S for this task only (seconds)"
+        required: false
+        type: string
+      wait:
+        description: "Wait for the task to stop and report"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  TASK_FAMILY: the-fork-ingest
+  SERVICE_FOR_NETWORK: the-fork-ingest
+
+jobs:
+  reindex-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate inputs
+        env:
+          TIMEOUT_S: ${{ inputs.index_timeout_s }}
+        run: |
+          if [ -n "$TIMEOUT_S" ] && ! printf '%s' "$TIMEOUT_S" | grep -Eq '^[1-9][0-9]{0,5}$'; then
+            echo "::error::index_timeout_s must be a positive integer of seconds"
+            exit 1
+          fi
+
+      - name: Refuse to run while the always-on service is still up
+        run: |
+          running=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_FOR_NETWORK" \
+            --query 'services[?status==`ACTIVE`].runningCount | [0]' --output text 2>/dev/null || echo 0)
+          echo "$SERVICE_FOR_NETWORK runningCount=$running"
+          if [ "$running" != "0" ] && [ "$running" != "None" ]; then
+            echo "::error::$SERVICE_FOR_NETWORK still has $running running task(s); set its desired count to 0 first"
+            exit 1
+          fi
+
+      - name: Start one task
+        id: start
+        env:
+          PROJECT_ID: ${{ inputs.project_id }}
+          DOCUMENT_ID: ${{ inputs.document_id }}
+          FORCE_OCR: ${{ inputs.force_ocr }}
+          HEADING_RE: ${{ inputs.heading_regex }}
+          TIMEOUT_S: ${{ inputs.index_timeout_s }}
+        run: |
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_FOR_NETWORK" \
+            --query 'services[0].networkConfiguration' --output json)
+          if [ "$netcfg" = "null" ] || [ -z "$netcfg" ]; then
+            echo "::error::no network configuration found on $SERVICE_FOR_NETWORK"
+            exit 1
+          fi
+          td=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --output json)
+          container=$(printf '%s' "$td" | jq -r '.taskDefinition.containerDefinitions[0].name')
+          log_group=$(printf '%s' "$td" | jq -r '.taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group" // empty')
+          if [ -z "$log_group" ]; then
+            echo "::error::no awslogs group on $TASK_FAMILY task definition"
+            exit 1
+          fi
+          # ECS lets a resolved secret win over a same-name environment
+          # override: a timeout override that cannot take effect is refused,
+          # never silently ignored.
+          if [ -n "$TIMEOUT_S" ]; then
+            is_secret=$(printf '%s' "$td" | jq -r '[.taskDefinition.containerDefinitions[0].secrets[]?.name] | index("DOC_INDEX_FILE_TIMEOUT_S") != null')
+            if [ "$is_secret" = "true" ]; then
+              echo "::error::DOC_INDEX_FILE_TIMEOUT_S is a secret on $TASK_FAMILY; an environment override would not apply"
+              exit 1
+            fi
+          fi
+          env_json=$(jq -cn \
+            --arg pid "$PROJECT_ID" --arg did "$DOCUMENT_ID" \
+            --arg force "$FORCE_OCR" --arg re "$HEADING_RE" --arg t "$TIMEOUT_S" \
+            '[{name:"P1B_KEEP_ALIVE",value:"0"},
+              {name:"DOC_REINDEX_PROJECT_ID",value:$pid},
+              {name:"DOC_REINDEX_DOCUMENT_ID",value:$did},
+              {name:"DOC_REINDEX_FORCE_OCR",value:$force}] +
+             (if ($re | length) > 0 then [{name:"DOC_REINDEX_HEADING_RE",value:$re}] else [] end) +
+             (if ($t | length) > 0 then [{name:"DOC_INDEX_FILE_TIMEOUT_S",value:$t}] else [] end)')
+          overrides=$(jq -cn --arg c "$container" --argjson env "$env_json" \
+            '{containerOverrides:[{name:$c, environment:$env}]}')
+          arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_FAMILY" \
+            --launch-type FARGATE --count 1 \
+            --network-configuration "$netcfg" \
+            --overrides "$overrides" \
+            --started-by "doc-reindex-once:${{ github.run_id }}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "task=$arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+          echo "task-id=${arn##*/}" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+          echo "log-group=$log_group" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for it to stop
+        if: ${{ inputs.wait }}
+        run: |
+          arn="${{ steps.start.outputs.arn }}"
+          for i in $(seq 1 30); do
+            if aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null; then
+              break
+            fi
+            echo "still running ($i)"
+          done
+          aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].{status:lastStatus,stoppedReason:stoppedReason,exit:containers[0].exitCode,started:startedAt,stopped:stoppedAt}' \
+            --output table
+
+      - name: Capture REINDEXSUMMARY and report
+        if: ${{ always() && inputs.wait }}
+        env:
+          CONTAINER: ${{ steps.start.outputs.container }}
+          TASK_ID: ${{ steps.start.outputs.task-id }}
+          LOG_GROUP: ${{ steps.start.outputs.log-group }}
+        run: |
+          set -euo pipefail
+          stream="ecs/$CONTAINER/$TASK_ID"
+          : > logs.txt
+          token=""
+          prev=""
+          for i in $(seq 1 50); do
+            if [ -z "$token" ]; then
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --start-from-head \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            else
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --next-token "$token" \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            fi
+            printf '%s' "$out" | jq -r '.events[]?.message // empty' >> logs.txt
+            token=$(printf '%s' "$out" | jq -r '.nextForwardToken // empty')
+            if [ -z "$token" ] || [ "$token" = "$prev" ]; then break; fi
+            prev="$token"
+          done
+          line=$(grep 'REINDEXSUMMARY ' logs.txt | tail -n 1 || true)
+          if [ -z "$line" ]; then
+            {
+              echo "## doc-reindex-once task log tail (no REINDEXSUMMARY captured)"
+              echo '```'
+              tail -c 6000 logs.txt
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::no REINDEXSUMMARY captured from the task"
+            exit 1
+          fi
+          printf '%s' "$line" | sed -n 's/.*REINDEXSUMMARY //p' > reindex-summary.json
+          {
+            echo "## doc-reindex-once"
+            echo "- ok: $(jq -r .ok reindex-summary.json)  error: $(jq -r '.error // "-"' reindex-summary.json)"
+            echo "- force_ocr: $(jq -r .force_ocr reindex-summary.json)  downloaded_bytes: $(jq -r '.downloaded_bytes // "-"' reindex-summary.json)"
+            echo "- before: $(jq -c '.before // {}' reindex-summary.json)"
+            echo "- after:  $(jq -c '.after // {}' reindex-summary.json)"
+            echo "- index_result: $(jq -c '.index_result // {}' reindex-summary.json)"
+            echo "- headings ($(jq '.headings // [] | length' reindex-summary.json), chunk order):"
+            jq -r '.headings // [] | .[] | "  - " + .' reindex-summary.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$(jq -r .ok reindex-summary.json)" = "true" ]
+
+      - name: Upload summary
+        if: ${{ always() && inputs.wait }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc-reindex-summary
+          path: reindex-summary.json
+          if-no-files-found: ignore
+          retention-days: 7

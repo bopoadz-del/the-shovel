@@ -11,7 +11,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Tuple
 
-from app.core.redis_client import get_redis_client
+from app.core.redis_client import get_redis_client, redis_timeout_kwargs
 from app.schemas.project_session import ProjectSession
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,7 @@ def get_session_store() -> SessionStore:
     if redis_url:
         try:
             import redis as _redis
-            _redis.from_url(redis_url).ping()
+            _redis.from_url(redis_url, **redis_timeout_kwargs()).ping()
             return RedisSessionStore()
         except Exception as exc:
             import warnings

@@ -500,6 +500,43 @@ def _resolve_attached_documents(
     return out
 
 
+def _session_document_ids(
+    project_id: Optional[str], conversation_id: Optional[str], user_id: Optional[str],
+) -> List[str]:
+    """Ids of the files this user attached or produced in this chat session.
+
+    ``project_id`` is the project the caller may attach to (None otherwise),
+    so a session of a project the caller cannot open pins nothing."""
+    if not project_id or not conversation_id or not user_id:
+        return []
+    from app.core import projects as projects_store
+
+    return [d["id"] for d in projects_store.list_session_documents(
+        project_id, conversation_id, user_id) if d.get("id")]
+
+
+def _attach_client_documents(
+    attached_docs: List[Dict[str, Any]], document_ids: List[Any]
+) -> List[Dict[str, Any]]:
+    """The turn's attached documents: the marker-resolved ones, then each
+    client-sent id the markers did not cover, looked up by id.
+
+    Call only after :func:`raise_if_inaccessible_document_ids` has passed
+    for ``document_ids``; this does no access check of its own."""
+    from app.core import projects as projects_store
+
+    out = list(attached_docs)
+    have = {d.get("id") for d in out}
+    for did in document_ids:
+        if not isinstance(did, str) or did in have:
+            continue
+        doc = projects_store.get_document(did)
+        if doc:
+            out.append(doc)
+            have.add(did)
+    return out
+
+
 async def _stream_from_pinned_agent(
     agent_name: str,
     prompt: str,
@@ -1182,7 +1219,7 @@ async def chat_stream(request: ChatRequest, auth: dict = Depends(require_user)):
     return StreamingResponse(
         turn_gate.hold_until_done(close_on_escape(turn_progress.opened(redact_frames(
         guarantee_terminal(
-            with_hat_signals(with_answer_exit(event_stream()), request.message),
+            with_hat_signals(with_answer_exit(event_stream(), request.message), request.message),
             request_id=get_request_id(),
         ), _identity)), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",
@@ -1310,6 +1347,11 @@ async def chat_stream_v1(
     # caller cannot stream into a victim's ws-{pid} conversation.
     if conversation_id is not None:
         (await _off_loop(_enforce_conversation_access, conversation_id, auth))
+    # The turn's chat session: only its files (and the project's own) are
+    # listed or searched while it runs, the attachment lookup below included
+    # (projects.document_in_scope). Set in the request's context, which the
+    # stream inherits.
+    projects_store.bind_session_scope(conversation_id, user_id)
 
     # ── S4: resolve the composer's `[attached: X]` marker(s) server-side.
     # Gated on project OWNERSHIP first — marker resolution lists the project's
@@ -1328,11 +1370,22 @@ async def chat_stream_v1(
     # Explicit client-sent document_ids win; marker resolution fills the gap
     # for clients (and history replays) that only carry the inline marker.
     document_ids: List[str] = list(body.get("document_ids") or [])
+    # W2: the files attached in this session are pinned to its questions by
+    # default, so "the attached drawing" still means them three turns later.
+    # Only this caller's files of this session: another session of the same
+    # project never reads them unless the user pins them there.
+    for _sid in _session_document_ids(owned_pid, conversation_id, user_id):
+        if _sid not in document_ids:
+            document_ids.append(_sid)
     for _d in attached_docs:
         if _d.get("id") and _d["id"] not in document_ids:
             document_ids.append(_d["id"])
     from app.core.privileges import raise_if_inaccessible_document_ids
     raise_if_inaccessible_document_ids(auth, {"document_ids": document_ids})
+    # A pinned id is an attachment too: the model is told which document
+    # "this document" means even when no marker names it. After the access
+    # check, so only ids this caller can read get here.
+    attached_docs = _attach_client_documents(attached_docs, document_ids)
 
     async def event_stream():
         rid = get_request_id()
@@ -1373,7 +1426,7 @@ async def chat_stream_v1(
     return StreamingResponse(
         turn_gate.hold_until_done(close_on_escape(turn_progress.opened(_with_stage_timings(redact_frames(
         guarantee_terminal(
-            with_hat_signals(with_answer_exit(event_stream()), prompt),
+            with_hat_signals(with_answer_exit(event_stream(), prompt), prompt),
             request_id=get_request_id(),
         ), _identity))), request_id=get_request_id()), _release_turn),
         media_type="text/event-stream",

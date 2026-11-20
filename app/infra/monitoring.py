@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import queue
+import re
 import sys
 import threading
 import uuid
@@ -21,6 +22,11 @@ from starlette.responses import Response
 logger = logging.getLogger(__name__)
 
 request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+#: True while an HTTP request is being served by this process (set by
+#: :func:`observability_middleware`, carried into threadpool and task copies of
+#: the context). ``request_id_ctx`` cannot answer this: ``get_request_id``
+#: sets it outside requests too.
+web_request_ctx: ContextVar[bool] = ContextVar("in_web_request", default=False)
 _sentry_enabled = False
 _structured_logging_enabled = False
 
@@ -179,6 +185,263 @@ def structured_logging_enabled() -> bool:
     return _structured_logging_enabled
 
 
+# ── Error-report scrubbing ────────────────────────────────────────────────
+# DEFAULT-DENY. The free-form parts of an event -- ``extra``, the fields of a
+# context, breadcrumb ``data``, request fields and header values -- are dropped
+# unless their field is on a short allowed list of structural/diagnostic names.
+# Values are also judged by shape (credential spellings, e-mail addresses,
+# over-long passages), never by a particular name or secret value.
+# ``send_default_pii=False`` alone still lets exception messages, log
+# breadcrumbs and extra context through; this hook closes that gap.
+
+_FILTERED = "[Filtered]"
+
+#: A credential, session, identity or connection token, by spelling. Matched
+#: with a letter boundary so a short spelling (``pin``, ``pw``, ``otp``) is a
+#: credential while an ordinary word that merely contains it (``spinner``) is
+#: not.
+_CREDENTIAL_NAMES = (
+    r"auth(?:orization|entic\w*)?|"
+    r"cookie|token|secret|credential(?:s)?|session|signature|"
+    r"pass(?:word|wd|code|phrase)?|pwd|pw|pin|otp|sid|"
+    r"api[-_]?key|private[-_]?key|access[-_]?key|keys?|"
+    r"dsn|conn(?:ection)?[-_]?str|(?:database|db)[-_]?ur[il]|e-?mail"
+)
+_CREDENTIAL_RE = re.compile(r"(?<![a-z])(" + _CREDENTIAL_NAMES + r")(?![a-z])", re.I)
+
+#: Field names that never carry a diagnostic value and are dropped wherever
+#: they appear (frame local variables -- ``include_local_variables`` is off,
+#: but never trust that alone).
+_DROP_FIELDS = frozenset({"vars", "locals"})
+
+#: Free text longer than this is payload (a pasted page, document text), not a
+#: diagnostic message, and is not carried.
+_MAX_TEXT_CHARS = 200
+
+#: Standard, safe HTTP header names (lowercase). Any other header keeps its
+#: name (diagnostic) but loses its value.
+_ALLOWED_HEADERS = frozenset({
+    "accept", "accept-encoding", "accept-language", "allow", "cache-control",
+    "connection", "content-encoding", "content-language", "content-length",
+    "content-type", "date", "host", "location", "origin", "referer", "server",
+    "user-agent", "vary",
+})
+
+#: Context names that are pure diagnostics and safe to carry; any other
+#: context is dropped whole.
+_ALLOWED_CONTEXTS = frozenset({
+    "app", "browser", "device", "gpu", "os", "otel", "runtime", "trace",
+})
+
+#: Fields inside an allowed context that are safe to carry.
+_ALLOWED_CONTEXT_FIELDS = frozenset({
+    "build", "description", "name", "op", "parent_span_id", "span_id",
+    "status", "trace_id", "version",
+})
+
+#: Request keys that are diagnosis, not payload. The request's other fields
+#: (query string, body, env, cookies, data) are dropped.
+_ALLOWED_REQUEST_FIELDS = frozenset({
+    "api_target", "body_size", "finished", "fragment",
+    "inferred_content_type", "method", "started", "url",
+})
+
+#: Breadcrumb keys that are diagnosis; ``data`` (free-form) and anything else
+#: are dropped.
+_ALLOWED_BREADCRUMB_FIELDS = frozenset({
+    "category", "event_id", "level", "message", "timestamp", "type",
+})
+
+#: User identity fields that are safe to carry.
+_ALLOWED_USER_FIELDS = frozenset({"id", "ip_address", "segment", "username"})
+
+#: Shapes of secret material inside free text (messages, URLs, log lines).
+_TEXT_SCRUBS = (
+    # scheme://user:password@host -> scheme://[Filtered]@host
+    (re.compile(r"(\b[a-z][a-z0-9+.\-]*://)[^\s/@]+@", re.I), r"\1" + _FILTERED + "@"),
+    # name=value / name: value where the name is a credential spelling
+    (re.compile(
+        r"(?<![a-z])(" + _CREDENTIAL_NAMES + r")(?![a-z])"
+        r"(\s*[=:]\s*)"
+        r"(\"[^\"]*\"|'[^']*'|[^\s&,;]+)",
+        re.I,
+    ), r"\1\2" + _FILTERED),
+    # Authorization schemes inside text
+    (re.compile(r"\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{6,}", re.I), r"\1 " + _FILTERED),
+    # JSON web tokens
+    (re.compile(r"\beyJ[\w-]+\.[\w-]+\.[\w-]*"), _FILTERED),
+    # e-mail addresses
+    (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "[email]"),
+    # long opaque strings that mix letters and digits (keys, tokens). Pure
+    # hexadecimal is left alone: event, trace and span ids and commit shas are
+    # the report's own identifiers (a hex secret is still caught by its field
+    # kind or by its name=value shape above).
+    (re.compile(
+        r"\b(?![0-9a-fA-F]{32,}\b)(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[A-Za-z])[A-Za-z0-9_\-]{32,}\b"
+    ), _FILTERED),
+)
+
+
+def _is_credential_field(name: str) -> bool:
+    """Whether ``name`` is (or ends in) a credential, session or token kind."""
+    return bool(_CREDENTIAL_RE.search(name))
+
+
+def _scrub_text(text: str) -> str:
+    if len(text) > _MAX_TEXT_CHARS:
+        return f"[Filtered: {len(text)} chars]"
+    for pattern, repl in _TEXT_SCRUBS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def _scrub_value(value: Any) -> Any:
+    """Scrub a scalar or a structural container (text, credential kinds)."""
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, dict):
+        return {k: _scrub_field(k, v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_value(v) for v in value]
+    return value
+
+
+def _scrub_field(key: Any, value: Any) -> Any:
+    """Scrub one structural field: drop local variables, mask credentials."""
+    name = str(key)
+    if name in _DROP_FIELDS or _is_credential_field(name):
+        return _FILTERED if value not in (None, "", {}, []) else value
+    return _scrub_value(value)
+
+
+def _scrub_extra(value: Any) -> Any:
+    """``extra`` is app-defined free-form: default-deny drops every field."""
+    return {} if isinstance(value, dict) else _scrub_value(value)
+
+
+def _scrub_contexts(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for name, fields in value.items():
+        if str(name) not in _ALLOWED_CONTEXTS:
+            continue  # unknown context: dropped whole
+        if isinstance(fields, dict):
+            out[name] = {
+                k: _scrub_value(v)
+                for k, v in fields.items()
+                if str(k) in _ALLOWED_CONTEXT_FIELDS
+            }
+        else:
+            out[name] = _scrub_value(fields)
+    return out
+
+
+def _scrub_headers(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            name: _scrub_value(v) if str(name).lower() in _ALLOWED_HEADERS
+            else (_FILTERED if v not in (None, "", {}, []) else v)
+            for name, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str):
+                name, v = item
+                if name.lower() in _ALLOWED_HEADERS:
+                    out.append([name, _scrub_value(v)])
+                else:
+                    out.append([name, _FILTERED if v not in (None, "", {}, []) else v])
+            else:
+                out.append(_scrub_value(item))
+        return out
+    return _scrub_value(value)
+
+
+def _scrub_request(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for key, v in value.items():
+        name = str(key)
+        if name in _ALLOWED_REQUEST_FIELDS:
+            out[key] = _scrub_value(v)
+        elif name == "headers":
+            out[key] = _scrub_headers(v)
+        # query string, body, data, env, cookies and unknown keys: dropped
+    return out
+
+
+def _scrub_breadcrumb(crumb: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, v in crumb.items():
+        if str(key) in _ALLOWED_BREADCRUMB_FIELDS:
+            out[key] = _scrub_value(v)
+        # ``data`` and any other key are free-form: dropped
+    return out
+
+
+def _scrub_breadcrumbs(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for key, v in value.items():
+        if key == "values" and isinstance(v, list):
+            out[key] = [_scrub_breadcrumb(c) for c in v if isinstance(c, dict)]
+        else:
+            out[key] = _scrub_field(key, v)
+    return out
+
+
+def _scrub_user(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _scrub_value(value)
+    out: Dict[str, Any] = {}
+    for key, v in value.items():
+        name = str(key)
+        if _is_credential_field(name):
+            out[key] = _FILTERED if v not in (None, "", {}, []) else v
+        elif name in _ALLOWED_USER_FIELDS:
+            out[key] = _scrub_value(v)
+        # anything else is free-form: dropped
+    return out
+
+
+_CONTAINER_HANDLERS = {
+    "extra": _scrub_extra,
+    "contexts": _scrub_contexts,
+    "request": _scrub_request,
+    "breadcrumbs": _scrub_breadcrumbs,
+    "user": _scrub_user,
+}
+
+
+def _scrub_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in event.items():
+        handler = _CONTAINER_HANDLERS.get(str(key))
+        if handler is not None:
+            out[key] = handler(value)
+        else:
+            out[key] = _scrub_field(key, value)
+    return out
+
+
+def scrub_error_event(event: Dict[str, Any], hint: Any = None) -> Optional[Dict[str, Any]]:
+    """Sentry before_send / before_send_transaction hook.
+
+    Returns a scrubbed copy of ``event``; the input is not mutated. If the
+    scrub itself fails the event is dropped (None): an unscrubbed report must
+    never leave.
+    """
+    try:
+        return _scrub_event(event)
+    except Exception as exc:  # noqa: BLE001 -- fail closed, never send unscrubbed
+        logger.warning("error report dropped: scrub failed (%s)", type(exc).__name__)
+        return None
+
+
 def init_sentry() -> bool:
     """Initialize Sentry when SENTRY_DSN is set. No-op otherwise."""
     global _sentry_enabled
@@ -201,10 +464,19 @@ def init_sentry() -> bool:
         ],
         environment=os.getenv("ENV", os.getenv("ENVIRONMENT", "production")),
         send_default_pii=False,
+        include_local_variables=False,
+        max_request_body_size="never",
+        before_send=scrub_error_event,
+        before_send_transaction=scrub_error_event,
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0") or 0),
     )
     _sentry_enabled = True
     return True
+
+
+def in_web_request() -> bool:
+    """Whether the caller runs on behalf of an HTTP request in this process."""
+    return web_request_ctx.get()
 
 
 def sentry_enabled() -> bool:
@@ -355,6 +627,7 @@ async def observability_middleware(request: Request, call_next) -> Response:
     incoming = request.headers.get("X-Request-ID", "").strip()
     rid = incoming or str(uuid.uuid4())[:12]
     token = request_id_ctx.set(rid)
+    web_token = web_request_ctx.set(True)
     request.state.request_id = rid
     start = datetime.now(timezone.utc)
     try:
@@ -387,6 +660,7 @@ async def observability_middleware(request: Request, call_next) -> Response:
             },
         )
         request_id_ctx.reset(token)
+        web_request_ctx.reset(web_token)
 
 
 # ── Prometheus counter (PR #98) ───────────────────────────────────────────

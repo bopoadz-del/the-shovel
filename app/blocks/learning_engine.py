@@ -66,6 +66,55 @@ _TIER_RULES = [
 ]
 
 
+def _forward_correction(
+    data: Dict, params: Dict, formula_id: str, predicted: float, actual: float,
+) -> None:
+    """Forward a numeric correction to the ML loop block (``record_correction``).
+
+    The block is the store of record in production, where this engine's
+    JSON writes stay hard-off. Never raises.
+    """
+    from app.blocks.ml_loop import record as ml_record
+
+    project_id = data.get("project_id") or params.get("project_id") or "default"
+    ml_record("record_correction", {
+        "project_id": str(project_id),
+        "formula_id": str(formula_id),
+        "predicted": predicted,
+        "actual": actual,
+        "source": str(data.get("source") or params.get("source") or "manual")[:64],
+    })
+
+
+def _forward_route_correction(
+    project_id: str, category: str, observation: Optional[Dict[str, Any]], source: str,
+) -> None:
+    """Forward a corrected routing pattern to ``record_route_correction``.
+
+    Only an observation flagged ``corrected`` in the routing category is a
+    correction; the router's own (uncorrected) routing log is not. Never
+    raises.
+    """
+    if category != "routing_decisions" or not observation:
+        return
+    if observation.get("corrected") is not True:
+        return
+    text = str(observation.get("text") or "").strip()
+    action = str(observation.get("action") or "").strip()
+    if not text or not action:
+        return
+    from app.blocks.ml_loop import record as ml_record
+
+    original = observation.get("original_action")
+    ml_record("record_route_correction", {
+        "project_id": str(project_id),
+        "message": text,
+        "correct_action": action[:120],
+        "original_action": str(original)[:120] if original else None,
+        "source": str(observation.get("source") or source or "user_correction")[:64],
+    })
+
+
 class LearningEngineBlock(UniversalBlock):
     name = "learning_engine"
     version = "1.0.0"
@@ -320,6 +369,7 @@ class LearningEngineBlock(UniversalBlock):
             })
             self._save_state()
             total = len(bucket)
+        _forward_route_correction(project_id, category, parsed_obs, pattern_source)
         return {
             "status": "success",
             "project_id": project_id,
@@ -443,6 +493,8 @@ class LearningEngineBlock(UniversalBlock):
                 "executions": 0,
                 "created_at": time.time(),
             }
+
+        _forward_correction(data, params, formula_id, predicted, actual)
 
         formula = self._state["formulas"][formula_id]
         formula["samples"].append({"predicted": predicted, "actual": actual, "ts": time.time()})

@@ -1,0 +1,327 @@
+{
+  "exam": "C1 conflict detection, working set",
+  "note": "Every document, project and figure here is invented. Expected values are written by hand from the passages below, never from product output. Kinds: differ (documents disagree on the asked thing), agree (same value), looks_different (same value after unit or format normalisation), other_thing (values that answer different questions, or one document only). 'governs' names the document whose value governs under a precedence statement found in the evidence; null where no statement covers the documents in conflict. 'value' is the value as written in its document.",
+  "cases": [
+    {
+      "id": "differ-figure-grade",
+      "kind": "differ",
+      "question": "What concrete grade is specified for the suspended slabs?",
+      "rows": [
+        {"doc_name": "Harbourview Structural Specification.pdf", "page_or_section": "Section 03 30 00", "snippet": "Concrete for suspended slabs shall be grade C40/50 placed and cured in accordance with this Section."},
+        {"doc_name": "Harbourview Slab Layout Drawing S-201.pdf", "page_or_section": "General notes", "snippet": "Suspended slab concrete: grade C35/45 unless noted otherwise."}
+      ],
+      "model_answer": "The suspended slabs are specified as grade C40/50 concrete.",
+      "expected": {"conflict": true, "values": [
+        {"value": "C40/50", "document": "Harbourview Structural Specification.pdf"},
+        {"value": "C35/45", "document": "Harbourview Slab Layout Drawing S-201.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-date-completion",
+      "kind": "differ",
+      "question": "What is the date for completion of the Works?",
+      "rows": [
+        {"doc_name": "Larkfield Contract Data.pdf", "page_or_section": "Part A", "snippet": "Date for Completion of the Works: 30 June 2027."},
+        {"doc_name": "Larkfield Particular Conditions.pdf", "page_or_section": "Clause 8.2", "snippet": "The Contractor shall complete the whole of the Works by 14 July 2027."}
+      ],
+      "model_answer": "The Works must be completed by 30 June 2027.",
+      "expected": {"conflict": true, "values": [
+        {"value": "30 June 2027", "document": "Larkfield Contract Data.pdf"},
+        {"value": "14 July 2027", "document": "Larkfield Particular Conditions.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-quantity-rebar",
+      "kind": "differ",
+      "question": "What is the quantity of slab reinforcement?",
+      "rows": [
+        {"doc_name": "Oakmere Bill of Quantities.xlsx", "page_or_section": "Bill 4 item 4.2", "snippet": "High yield steel bar reinforcement to suspended slabs: 182 t"},
+        {"doc_name": "Oakmere Reinforcement Drawing S-310.pdf", "page_or_section": "Bar schedule summary", "snippet": "Total suspended slab reinforcement: 167 t"}
+      ],
+      "model_answer": "The slab reinforcement quantity is 182 t.",
+      "expected": {"conflict": true, "values": [
+        {"value": "182 t", "document": "Oakmere Bill of Quantities.xlsx"},
+        {"value": "167 t", "document": "Oakmere Reinforcement Drawing S-310.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-clause-membrane",
+      "kind": "differ",
+      "question": "What roof membrane is required?",
+      "rows": [
+        {"doc_name": "Pinecrest Architectural Specification.pdf", "page_or_section": "Section 07 54 00", "snippet": "Roof membrane: single-ply TPO membrane, mechanically fixed."},
+        {"doc_name": "Pinecrest Roof Plan Drawing A-401.pdf", "page_or_section": "Roof build-up note", "snippet": "Roof membrane: bituminous built-up membrane, two layers."}
+      ],
+      "model_answer": "The roof membrane is a single-ply TPO membrane.",
+      "expected": {"conflict": true, "values": [
+        {"value": "single-ply TPO membrane", "document": "Pinecrest Architectural Specification.pdf"},
+        {"value": "bituminous built-up membrane", "document": "Pinecrest Roof Plan Drawing A-401.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-unit-slab-thickness",
+      "kind": "differ",
+      "question": "What is the ground floor slab thickness?",
+      "rows": [
+        {"doc_name": "Westbrook Structural Specification.pdf", "page_or_section": "Clause 5.3", "snippet": "The ground floor slab thickness shall be 250 mm."},
+        {"doc_name": "Westbrook Foundation Drawing S-102.pdf", "page_or_section": "Section A-A", "snippet": "Ground floor slab thickness 0.20 m on 50 mm blinding."}
+      ],
+      "model_answer": "The ground floor slab is 250 mm thick.",
+      "expected": {"conflict": true, "values": [
+        {"value": "250 mm", "document": "Westbrook Structural Specification.pdf"},
+        {"value": "0.20 m", "document": "Westbrook Foundation Drawing S-102.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-unit-dnp",
+      "kind": "differ",
+      "question": "How long is the defects notification period?",
+      "rows": [
+        {"doc_name": "Brightwater Contract Data.pdf", "page_or_section": "Part A", "snippet": "Defects Notification Period: 365 days."},
+        {"doc_name": "Brightwater Particular Conditions.pdf", "page_or_section": "Clause 11.1", "snippet": "The Defects Notification Period shall be 24 months from the date of the Taking-Over Certificate."}
+      ],
+      "model_answer": "The defects notification period is 365 days.",
+      "expected": {"conflict": true, "values": [
+        {"value": "365 days", "document": "Brightwater Contract Data.pdf"},
+        {"value": "24 months", "document": "Brightwater Particular Conditions.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-money-contract-sum",
+      "kind": "differ",
+      "question": "What is the accepted contract amount?",
+      "rows": [
+        {"doc_name": "Cedarpoint Letter of Acceptance.pdf", "page_or_section": "Paragraph 2", "snippet": "We accept your tender for the Accepted Contract Amount of AED 48,500,000."},
+        {"doc_name": "Cedarpoint Form of Agreement.pdf", "page_or_section": "Article 1", "snippet": "The Accepted Contract Amount is AED 45.8 million."}
+      ],
+      "model_answer": "The accepted contract amount is AED 48,500,000.",
+      "expected": {"conflict": true, "values": [
+        {"value": "AED 48,500,000", "document": "Cedarpoint Letter of Acceptance.pdf"},
+        {"value": "AED 45.8 million", "document": "Cedarpoint Form of Agreement.pdf"}], "governs": null}
+    },
+    {
+      "id": "differ-three-docs-one-odd",
+      "kind": "differ",
+      "question": "What is the minimum concrete cover to the basement walls?",
+      "rows": [
+        {"doc_name": "Elmstead Structural Specification.pdf", "page_or_section": "Clause 6.4", "snippet": "Minimum cover to reinforcement in basement walls: 50 mm."},
+        {"doc_name": "Elmstead Basement Wall Drawing S-150.pdf", "page_or_section": "Note 3", "snippet": "Basement wall cover to reinforcement 50 mm minimum."},
+        {"doc_name": "Elmstead Durability Report.pdf", "page_or_section": "Table 2", "snippet": "Basement walls, minimum cover to reinforcement: 40 mm."}
+      ],
+      "model_answer": "The minimum cover to the basement walls is 50 mm.",
+      "expected": {"conflict": true, "values": [
+        {"value": "50 mm", "document": "Elmstead Structural Specification.pdf"},
+        {"value": "50 mm", "document": "Elmstead Basement Wall Drawing S-150.pdf"},
+        {"value": "40 mm", "document": "Elmstead Durability Report.pdf"}], "governs": null}
+    },
+    {
+      "id": "precedence-spec-over-drawings",
+      "kind": "differ",
+      "question": "What concrete grade is specified for the columns?",
+      "rows": [
+        {"doc_name": "Ashgrove Structural Specification.pdf", "page_or_section": "Section 03 30 00", "snippet": "Concrete for columns shall be grade C50/60."},
+        {"doc_name": "Ashgrove Column Schedule Drawing S-220.pdf", "page_or_section": "Notes", "snippet": "Column concrete: grade C45/55."},
+        {"doc_name": "Ashgrove Conditions of Contract.pdf", "page_or_section": "Clause 1.5", "snippet": "In the event of any discrepancy between the Specification and the Drawings, the Specification shall take precedence."}
+      ],
+      "model_answer": "The columns are grade C45/55 concrete.",
+      "expected": {"conflict": true, "values": [
+        {"value": "C50/60", "document": "Ashgrove Structural Specification.pdf"},
+        {"value": "C45/55", "document": "Ashgrove Column Schedule Drawing S-220.pdf"}],
+        "governs": "Ashgrove Structural Specification.pdf", "basis_document": "Ashgrove Conditions of Contract.pdf"}
+    },
+    {
+      "id": "precedence-drawings-over-bill",
+      "kind": "differ",
+      "question": "What is the quantity of blockwork to the internal partitions?",
+      "rows": [
+        {"doc_name": "Fernhill Bill of Quantities.xlsx", "page_or_section": "Bill 6 item 6.1", "snippet": "200 mm hollow blockwork to internal partitions: 2,450 m2"},
+        {"doc_name": "Fernhill Partition Layout Drawing A-210.pdf", "page_or_section": "Area table", "snippet": "Internal partition blockwork, 200 mm: 2,610 m2"},
+        {"doc_name": "Fernhill Preambles.pdf", "page_or_section": "Preamble 1.3", "snippet": "Where the Bill of Quantities and the Drawings differ, the Drawings shall prevail over the Bill of Quantities."}
+      ],
+      "model_answer": "The internal partition blockwork is 2,450 m2.",
+      "expected": {"conflict": true, "values": [
+        {"value": "2,450 m2", "document": "Fernhill Bill of Quantities.xlsx"},
+        {"value": "2,610 m2", "document": "Fernhill Partition Layout Drawing A-210.pdf"}],
+        "governs": "Fernhill Partition Layout Drawing A-210.pdf", "basis_document": "Fernhill Preambles.pdf"}
+    },
+    {
+      "id": "precedence-ordered-list",
+      "kind": "differ",
+      "question": "What is the date for completion?",
+      "rows": [
+        {"doc_name": "Millbrook Letter of Acceptance.pdf", "page_or_section": "Paragraph 4", "snippet": "The Date for Completion is 28 February 2028."},
+        {"doc_name": "Millbrook Particular Conditions.pdf", "page_or_section": "Clause 8.2", "snippet": "Date for Completion: 31 March 2028."},
+        {"doc_name": "Millbrook Form of Agreement.pdf", "page_or_section": "Article 2", "snippet": "The documents forming the Contract shall be taken as mutually explanatory of one another. For the purposes of interpretation the priority of the documents shall be in the following order: (a) the Form of Agreement, (b) the Letter of Acceptance, (c) the Particular Conditions, (d) the General Conditions, (e) the Specification, (f) the Drawings."}
+      ],
+      "model_answer": "The date for completion is 31 March 2028.",
+      "expected": {"conflict": true, "values": [
+        {"value": "28 February 2028", "document": "Millbrook Letter of Acceptance.pdf"},
+        {"value": "31 March 2028", "document": "Millbrook Particular Conditions.pdf"}],
+        "governs": "Millbrook Letter of Acceptance.pdf", "basis_document": "Millbrook Form of Agreement.pdf"}
+    },
+    {
+      "id": "precedence-not-covering-pair",
+      "kind": "differ",
+      "question": "What is the quantity of formwork to the slab soffits?",
+      "rows": [
+        {"doc_name": "Thornbury Bill of Quantities.xlsx", "page_or_section": "Bill 3 item 3.7", "snippet": "Formwork to soffits of suspended slabs: 3,200 m2"},
+        {"doc_name": "Thornbury Construction Programme.pdf", "page_or_section": "Quantities register", "snippet": "Slab soffit formwork: 3,450 m2"},
+        {"doc_name": "Thornbury Conditions of Contract.pdf", "page_or_section": "Clause 1.5", "snippet": "In the event of any discrepancy between the Specification and the Drawings, the Specification shall take precedence."}
+      ],
+      "model_answer": "The slab soffit formwork is 3,200 m2.",
+      "expected": {"conflict": true, "values": [
+        {"value": "3,200 m2", "document": "Thornbury Bill of Quantities.xlsx"},
+        {"value": "3,450 m2", "document": "Thornbury Construction Programme.pdf"}], "governs": null}
+    },
+    {
+      "id": "agree-grade",
+      "kind": "agree",
+      "question": "What concrete grade is specified for the pile caps?",
+      "rows": [
+        {"doc_name": "Kingsmead Structural Specification.pdf", "page_or_section": "Section 03 30 00", "snippet": "Concrete for pile caps shall be grade C40/50."},
+        {"doc_name": "Kingsmead Foundation Drawing S-110.pdf", "page_or_section": "Notes", "snippet": "Pile cap concrete: grade C40/50."}
+      ],
+      "model_answer": "The pile caps are grade C40/50 concrete.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "agree-date",
+      "kind": "agree",
+      "question": "When is the date for completion?",
+      "rows": [
+        {"doc_name": "Riverside Contract Data.pdf", "page_or_section": "Part A", "snippet": "Date for Completion: 30 September 2027."},
+        {"doc_name": "Riverside Letter of Acceptance.pdf", "page_or_section": "Paragraph 3", "snippet": "The Date for Completion is 30 September 2027."}
+      ],
+      "model_answer": "The date for completion is 30 September 2027.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "agree-three-docs",
+      "kind": "agree",
+      "question": "What is the retention percentage?",
+      "rows": [
+        {"doc_name": "Hollybank Contract Data.pdf", "page_or_section": "Part A", "snippet": "Percentage of retention: 5%."},
+        {"doc_name": "Hollybank Particular Conditions.pdf", "page_or_section": "Clause 14.3", "snippet": "Retention shall be deducted at 5% of each interim payment."},
+        {"doc_name": "Hollybank Tender Appendix.pdf", "page_or_section": "Item 9", "snippet": "Retention: 5%."}
+      ],
+      "model_answer": "The retention percentage is 5%.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "looks-different-mm-m",
+      "kind": "looks_different",
+      "question": "What is the first floor slab thickness?",
+      "rows": [
+        {"doc_name": "Greystone Structural Specification.pdf", "page_or_section": "Clause 5.3", "snippet": "The first floor slab thickness shall be 200 mm."},
+        {"doc_name": "Greystone Slab Drawing S-202.pdf", "page_or_section": "Section B-B", "snippet": "First floor slab thickness 0.2 m."}
+      ],
+      "model_answer": "The first floor slab is 200 mm thick.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "looks-different-thousands-superscript",
+      "kind": "looks_different",
+      "question": "What is the volume of bulk excavation?",
+      "rows": [
+        {"doc_name": "Stonebridge Bill of Quantities.xlsx", "page_or_section": "Bill 2 item 2.1", "snippet": "Bulk excavation to reduced level: 1,250 m3"},
+        {"doc_name": "Stonebridge Earthworks Drawing C-101.pdf", "page_or_section": "Volume table", "snippet": "Bulk excavation volume: 1250 m³"}
+      ],
+      "model_answer": "The bulk excavation volume is 1,250 m3.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "looks-different-date-format",
+      "kind": "looks_different",
+      "question": "What is the commencement date?",
+      "rows": [
+        {"doc_name": "Lindenfield Letter of Acceptance.pdf", "page_or_section": "Paragraph 5", "snippet": "The Commencement Date shall be 15 March 2027."},
+        {"doc_name": "Lindenfield Construction Programme.pdf", "page_or_section": "Key dates", "snippet": "Commencement Date: 2027-03-15"}
+      ],
+      "model_answer": "The commencement date is 15 March 2027.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "looks-different-money-million",
+      "kind": "looks_different",
+      "question": "What is the provisional sum for landscaping?",
+      "rows": [
+        {"doc_name": "Meadowview Bill of Quantities.xlsx", "page_or_section": "Bill 9 item 9.4", "snippet": "Provisional sum for landscaping: AED 2,500,000"},
+        {"doc_name": "Meadowview Tender Summary.pdf", "page_or_section": "Provisional sums", "snippet": "Landscaping provisional sum: AED 2.5 million"}
+      ],
+      "model_answer": "The landscaping provisional sum is AED 2,500,000.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "looks-different-weeks-days",
+      "kind": "looks_different",
+      "question": "What is the period for the mobilisation stage?",
+      "rows": [
+        {"doc_name": "Ivybridge Construction Programme.pdf", "page_or_section": "Stage 1", "snippet": "Mobilisation stage duration: 12 weeks."},
+        {"doc_name": "Ivybridge Particular Conditions.pdf", "page_or_section": "Clause 8.1", "snippet": "The mobilisation stage shall be completed within 84 days of the Commencement Date."}
+      ],
+      "model_answer": "The mobilisation stage lasts 12 weeks.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "looks-different-mpa",
+      "kind": "looks_different",
+      "question": "What is the characteristic strength of the blinding concrete?",
+      "rows": [
+        {"doc_name": "Foxley Structural Specification.pdf", "page_or_section": "Clause 3.2", "snippet": "Blinding concrete characteristic strength: 20 N/mm2."},
+        {"doc_name": "Foxley Foundation Drawing S-105.pdf", "page_or_section": "Notes", "snippet": "Blinding concrete strength 20 MPa."}
+      ],
+      "model_answer": "The blinding concrete strength is 20 N/mm2.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "other-thing-slab-vs-wall",
+      "kind": "other_thing",
+      "question": "What is the roof slab thickness?",
+      "rows": [
+        {"doc_name": "Ravenscourt Structural Specification.pdf", "page_or_section": "Clause 5.3", "snippet": "The roof slab thickness shall be 200 mm."},
+        {"doc_name": "Ravenscourt Core Wall Drawing S-301.pdf", "page_or_section": "Notes", "snippet": "Core wall thickness 300 mm."}
+      ],
+      "model_answer": "The roof slab is 200 mm thick.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "other-thing-two-elements-each-doc",
+      "kind": "other_thing",
+      "question": "What concrete grade is specified for the blinding?",
+      "rows": [
+        {"doc_name": "Ambleside Structural Specification.pdf", "page_or_section": "Section 03 30 00", "snippet": "Blinding concrete shall be grade C16/20. Concrete for suspended slabs shall be grade C40/50."},
+        {"doc_name": "Ambleside Foundation Drawing S-104.pdf", "page_or_section": "Notes", "snippet": "Blinding: grade C16/20. Pile caps: grade C35/45."}
+      ],
+      "model_answer": "The blinding is grade C16/20 concrete.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "other-thing-one-document-only",
+      "kind": "other_thing",
+      "question": "What is the delay damages rate?",
+      "rows": [
+        {"doc_name": "Saltmarsh Contract Data.pdf", "page_or_section": "Part A", "snippet": "Delay damages: 0.1% of the Final Contract Price per day. Maximum amount of delay damages: 10% of the Final Contract Price."}
+      ],
+      "model_answer": "Delay damages are 0.1% of the Final Contract Price per day.",
+      "expected": {"conflict": false}
+    },
+    {
+      "id": "differ-yield-strength",
+      "kind": "differ",
+      "question": "What reinforcement yield strength applies to the pump station: what do the contract drawing and the contractor's method statement each say?",
+      "rows": [
+        {"doc_name": "Vol 3 - Drawings (6 of 7).pdf", "page_or_section": "Reinforcement notes", "snippet": "Reinforcement: high yield strength of 500N/mm2 to BS4449, type 2 deformed bars."},
+        {"doc_name": "Cast In-Situ Concretes Method Statement.pdf", "page_or_section": "Materials", "snippet": "All reinforcement shall be type 2 high yield deformed bars grade 420N/mm2 to BS4449."}
+      ],
+      "model_answer": "The pump station reinforcement yield strength is 500N/mm2 to BS4449.",
+      "expected": {"conflict": true, "values": [
+        {"value": "500N/mm2", "document": "Vol 3 - Drawings (6 of 7).pdf"},
+        {"value": "420N/mm2", "document": "Cast In-Situ Concretes Method Statement.pdf"}], "governs": null}
+    },
+    {
+      "id": "other-thing-yield-different-structure",
+      "kind": "other_thing",
+      "question": "What reinforcement yield strength is required for the pump station?",
+      "rows": [
+        {"doc_name": "Pump Station Reinforcement Drawing.pdf", "page_or_section": "Notes", "snippet": "Pump station reinforcement: high yield strength 500N/mm2."},
+        {"doc_name": "Footing Reinforcement Drawing.pdf", "page_or_section": "Notes", "snippet": "Footing reinforcement: high yield strength 420N/mm2."}
+      ],
+      "model_answer": "The pump station reinforcement yield strength is 500N/mm2.",
+      "expected": {"conflict": false}
+    }
+  ]
+}

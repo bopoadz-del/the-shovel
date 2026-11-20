@@ -78,6 +78,10 @@ class DatasetRecord:
     retrieved_ids: tuple[str, ...] = ()
     citations: tuple[dict[str, Any], ...] = ()
     logged_at: str = ""
+    #: The conversation and stored assistant message this turn belongs to,
+    #: when the caller knows them. ``None`` is stored as NULL downstream.
+    conversation_id: str | None = None
+    message_id: str | None = None
 
     def with_timestamp(self, now: datetime | None = None) -> "DatasetRecord":
         """Return a copy carrying an ISO-8601 UTC ``logged_at`` stamp."""
@@ -160,4 +164,47 @@ def append_dataset_record(
     with _APPEND_LOCK:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+    _forward_to_ml_loop(project_id, stamped)
     return path
+
+
+def _citation_ids(citations: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Distinct source ids of the reduced citation rows, in order."""
+    ids: dict[str, None] = {}
+    for row in citations:
+        value = row.get("doc_id") or row.get("document_id") or row.get("id")
+        if value not in (None, ""):
+            ids[str(value)] = None
+    return list(ids)
+
+
+def _forward_to_ml_loop(project_id: str, record: DatasetRecord) -> None:
+    """Forward the turn to the ML loop block's ``record_turn``.
+
+    The file above stays the dataset of record; the block's write is in
+    addition and never raises (``ml_loop.record`` logs and returns an error).
+    An empty question is not a turn and is not forwarded.
+    """
+    if not record.question.strip():
+        return
+    from app.blocks.ml_loop import record as ml_record
+
+    ml_record("record_turn", {
+        "project_id": str(project_id),
+        "question": record.question,
+        "answer": record.answer,
+        "verdict": record.verdict,
+        "evidence_plan": [str(x) for x in record.evidence_plan],
+        "retrieved_ids": [str(x) for x in record.retrieved_ids],
+        "cited_ids": _citation_ids(record.citations),
+        "conversation_id": _optional_id(record.conversation_id),
+        "message_id": _optional_id(record.message_id),
+    })
+
+
+def _optional_id(value: Any) -> str | None:
+    """A row key as a string, or ``None`` when the record does not carry it."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

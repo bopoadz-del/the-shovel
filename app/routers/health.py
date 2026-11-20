@@ -18,6 +18,9 @@ router = APIRouter()
 # SOURCE_VERSION is an accepted alias. Never invent a hash.
 _BUILD_SHA_ENV_KEYS = ("GIT_SHA", "SOURCE_VERSION")
 
+# Response header naming the build that served it (stamped in app.main).
+BUILD_ID_HEADER = "X-Build-Id"
+
 
 def _deployed_build_sha() -> str | None:
     """SHA from the already-deployed environment, or None if unset.
@@ -164,8 +167,12 @@ def ready(response: Response):
     # (a mocked payload that omits the llm probe must not crash the route).
     llm_serving = (payload.get("checks") or {}).get("llm") or {}
     llm_serving = llm_serving.get("serving", True)
+    # KS-3: a broken agent or hat setting is not ready either.
+    agents = _probe_agent_settings()
+    payload["checks"]["agents"] = agents
     payload["ready"] = (
         payload["checks"]["database"]["ok"] and embedder_ok and llm_serving
+        and agents["ok"]
     )
     if not embedder_ok:
         payload["embedder_identity"] = "mismatch — serving blocked"
@@ -211,6 +218,26 @@ def _llm_usage_meter() -> dict:
         return {"calls": usage_tracker.totals()["calls"]}
     except Exception as exc:  # noqa: BLE001 -- a meter never breaks /health
         return {"calls": 0, "error": type(exc).__name__}
+
+
+def _probe_agent_settings() -> dict:
+    """Agent configs and hat manifests as start-up left them.
+
+    ``failed_configs`` maps each agent config file the last load could not
+    parse to its error type; ``hat_catalog_error`` is the hat catalog's error
+    type, or None. Names and types only: /ready is public. A probe that
+    cannot read the settings is not ready (fails closed)."""
+    try:
+        from app.agents.catalog import catalog_load_error
+        from app.agents.runtime import AGENT_LOAD_FAILURES
+
+        failed = dict(sorted(AGENT_LOAD_FAILURES.items()))
+        hat_error = catalog_load_error()
+    except Exception as exc:  # noqa: BLE001 -- unreadable settings are not ready
+        return {"ok": False, "failed_configs": {}, "hat_catalog_error": None,
+                "error": type(exc).__name__}
+    return {"ok": not failed and hat_error is None,
+            "failed_configs": failed, "hat_catalog_error": hat_error}
 
 
 def _probe_workflows() -> dict:

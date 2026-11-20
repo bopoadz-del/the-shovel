@@ -231,6 +231,28 @@ def test_when_both_fail_the_user_gets_one_plain_message(providers, primary, fall
     _no_plumbing(text)
 
 
+# A turn where a calculator has ALREADY run before the provider failed: the
+# computed figure is the answer, with one line that the explanation is
+# unavailable -- never the bare outage message. Figures are computed here.
+@pytest.mark.parametrize("primary,fallback,message,figure", [
+    ("refused", "402",
+     "Calculate the excavation volume for a trench 8 m long, 1.5 m wide and 2 m deep.",
+     f"{8 * 1.5 * 2:.2f}"),
+    ("timeout", "500",
+     "Calculate the concrete volume for a slab 12 m long, 5 m wide and 0.2 m thick.",
+     f"{12 * 5 * 0.2 * 1.05:g}"),
+], ids=["refused+balance/excavation", "timeout+500/concrete"])
+def test_a_computed_figure_survives_when_both_providers_fail(
+        providers, primary, fallback, message, figure):
+    fake = providers(primary, fallback)
+    shown, errors = _ask(message)
+    _keys_are_paired(fake)
+    assert not errors, (shown, errors)
+    assert figure in shown, shown
+    assert "the language model could not be reached" in shown.lower(), shown
+    _no_plumbing(shown)
+
+
 # ── the net itself ──────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("meant_for_a_user", [

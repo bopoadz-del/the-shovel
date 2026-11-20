@@ -28,6 +28,11 @@ PRIVILEGED_BLOCKS = frozenset({
     # through this gate.
     "google_drive",
     "onedrive",
+    # Reads and writes the learning-loop tables of EVERY project: an
+    # ``export_tables`` with no project_id has no id for the project-access
+    # check to see, and the store applies no filter. Hosts reach it in
+    # process (``app.blocks.ml_loop.record``), never through this gate.
+    "ml_loop",
 })
 
 _caller_role: ContextVar[Optional[str]] = ContextVar("caller_role", default=None)
@@ -174,4 +179,10 @@ def raise_if_inaccessible_document_ids(auth: Optional[dict], *blobs: Any) -> Non
                 raise HTTPException(404, "document not found")
             pid = doc.get("project_id")
             if projects_store.get_project_accessible(pid, uid) is None:
+                raise HTTPException(404, "document not found")
+            # A chat session's file is reachable by id only from that chat
+            # (the session scope the chat route bound), by the user who
+            # attached it: another user's, or another chat's, is as foreign
+            # as another project's. A route that binds no chat reaches none.
+            if not projects_store.document_in_scope(doc.get("metadata")):
                 raise HTTPException(404, "document not found")

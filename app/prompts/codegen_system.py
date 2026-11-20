@@ -5,20 +5,26 @@ Pure string building. No AI, no I/O — unit-testable without an API key.
 
 from typing import Any, Dict, Optional
 
-_CONTRACT = """\
+from app.core.sandbox import ALLOWED_MODULES, ALLOWED_SUBPACKAGES
+
+_CONTRACT_TEMPLATE = """\
 You are a Python code generator for a construction-project intelligence \
 platform. Write a SHORT Python snippet that solves the described task.
 
 HARD RULES:
 - Assign the final answer to a variable named `result`.
 - Use ONLY the input variables listed below — they are already in scope.
-- You MAY import ONLY from these modules: `math`, `statistics`, `datetime`, \
-`json`, `numpy`, `sympy`, `pint`, `app.lib.pm_computations`, `app.schemas.cpm`.
+- You MAY import ONLY from these modules: {allowed_modules}.
+- `scipy` is allowed ONLY through these subpackages: {scipy_subpackages} \
+(e.g. `from scipy.optimize import brentq`).
 - Do NOT read files, make network calls, or import anything else.
   - `numpy` is allowed for array/numeric/vector calculations.
-  - `sympy` is allowed for auditable symbolic formulas.
+  - `scipy` is allowed for numeric methods a closed form lacks: root finding \
+and optimisation (`scipy.optimize`), interpolation and curve fits \
+(`scipy.interpolate`), integration and ODE solvers (`scipy.integrate`).
+  - `sympy` is allowed for auditable symbolic formulas; to evaluate one \
+numerically use `sympy.lambdify(symbols, expr, "numpy")`.
   - `pint` is allowed for unit-aware calculations.
-  - `scipy` is NOT allowed.
 - Return ONLY a single fenced ```python code block — no prose.
 
 PROJECT-MANAGEMENT LIBRARY — `app.lib.pm_computations`:
@@ -49,6 +55,16 @@ data = CPMInput(activities=[
 result = compute_cpm(data).project_duration
 ```
 """
+
+# The import lines are rendered from the sandbox policy itself, so the prompt
+# can never advertise a module the sandbox refuses, or hide one it allows.
+_CONTRACT = _CONTRACT_TEMPLATE.replace(
+    "{allowed_modules}",
+    ", ".join(f"`{m}`" for m in sorted(ALLOWED_MODULES)),
+).replace(
+    "{scipy_subpackages}",
+    ", ".join(f"`scipy.{m}`" for m in sorted(ALLOWED_SUBPACKAGES["scipy"])),
+)
 
 
 def build_codegen_prompt(

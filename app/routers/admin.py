@@ -247,6 +247,7 @@ async def _doc_reindex_job(
             chunker,
             force_ocr=force_ocr,
             stamp_as_indexed=True,
+            profile=_doc_index.PROFILE_CORPUS_BUILD,
         )
         job.update(result)
         job["status"] = result.get("status") or "error"
@@ -729,7 +730,9 @@ def admin_project_reindex(
     """
     _require_admin(auth)
     from app.core import doc_index as _doc_index
-    result = _doc_index.index_project(project_id)
+    result = _doc_index.index_project(
+        project_id, profile=_doc_index.PROFILE_CORPUS_BUILD,
+    )
     if result.get("status") == "error":
         raise HTTPException(status_code=422, detail=result)
     return result
@@ -873,7 +876,9 @@ async def admin_drive_ingest_proof(
             "name": original_name,
         }
 
-    idx_result = _doc_index.index_document(req.project_id, doc["id"])
+    idx_result = _doc_index.index_document(
+        req.project_id, doc["id"], profile=_doc_index.PROFILE_CORPUS_BUILD,
+    )
     if idx_result.get("status") == "error":
         banner = idx_result.get(
             "banner",
@@ -1706,7 +1711,8 @@ def admin_corpus_bulk_insert(
             # Residual store-side guard (model identity) — surfaced, not 500.
             raise HTTPException(status_code=400, detail=str(exc))
         counts["chunks"] += written
-        verified[doc_id] = store.count_by_doc(project_id).get(doc_id, 0)
+        # The write check reads back the row it just wrote, whatever its session.
+        verified[doc_id] = store.count_by_doc(project_id, all_sessions=True).get(doc_id, 0)
 
     return {
         "status": "ok",
@@ -1747,6 +1753,68 @@ def admin_repair_document_sizes(
 
     result = _p.repair_document_sizes(req.project_id, dry_run=req.dry_run)
     return {"status": "ok", **result}
+
+
+@router.post("/v1/admin/corpus/doc-typing")
+def admin_corpus_doc_typing(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = apply the planned fills"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) fill doc_type / doc_role on existing rows (RQ-3).
+
+    The plan (always computed, never writes) gives counts per new type and per
+    new role and every change as (doc_id, column, old, new), with a
+    ``plan_hash``. Only a column still at its default is filled. ``execute=true``
+    writes only when ``plan_hash`` equals the live plan's; each write is
+    compare-and-set on the planned old value.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.doc_typing_backfill import doc_typing_backfill
+
+    out = doc_typing_backfill(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.doc_typing_backfilled",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            updated=out["updated"],
+            counts=out["plan"]["counts"],
+        )
+    return out
+
+
+@router.post("/v1/admin/corpus/doc-standing")
+def admin_corpus_doc_standing(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = store the planned kinds"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) store each document's kind of standing.
+
+    Writes ONE field, ``metadata.standing`` of the document row; touches no
+    chunk. The plan (always computed, never writes) gives the count per kind
+    after the write, how many stay ``other``, and every change with a
+    ``plan_hash``. ``execute=true`` writes only when ``plan_hash`` equals the
+    live plan's, and skips a row whose stored kind moved since the plan.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.doc_standing_backfill import doc_standing_backfill
+
+    out = doc_standing_backfill(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.doc_standing_backfilled",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            updated=out["updated"],
+            after=out["plan"]["after"],
+        )
+    return out
 
 
 class _DeleteDocsRequest(BaseModel):
@@ -2089,6 +2157,209 @@ def admin_corpus_ghost_tombstone(
     return p3_ghost_tombstone(project_id=project_id, execute=execute)
 
 
+@router.post("/v1/admin/documents/{document_id}/exclude")
+def admin_exclude_document(
+    document_id: str,
+    project_id: str = Query(..., description="Project the document must belong to"),
+    execute: bool = Query(False, description="false = plan only. true = delete chunks + mark excluded"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    reason: str = Query("", description="Why the owner excluded the document; stored on the row"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) apply an owner exclusion of one document.
+
+    The plan (always computed, never writes) lists the document, its
+    chunk_count, the exact chunk rows to delete, the project chunk total and
+    a ``plan_hash`` over those rows. ``execute=true`` writes only when
+    ``plan_hash`` equals the live plan's hash; otherwise ``refused`` says why
+    and nothing changes. Executing deletes every chunk of the document, keeps
+    the row, and stores ``metadata.excluded = {by, at, reason}``, which every
+    ingest entry point and the documents list read from then on.
+    """
+    _require_admin(auth)
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.core import audit
+    from app.core import projects as _projects
+
+    plan = _projects.plan_document_exclusion(document_id)
+    if plan is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    if plan["project_id"] != project_id:
+        raise HTTPException(400, "document does not belong to project")
+    out: Dict[str, Any] = {"plan": plan, "executed": False}
+    if not execute:
+        return out
+    if not reason.strip():
+        out["refused"] = "reason is required with execute=true"
+        return out
+    if not plan_hash or plan_hash != plan["plan_hash"]:
+        out["refused"] = "plan_hash does not match the live plan; nothing written"
+        return out
+    at = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = _projects.exclude_document(document_id, by="owner", reason=reason.strip(), at=at)
+    if result is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    after = _projects.plan_document_exclusion(document_id) or {}
+    doc = result["document"] or {}
+    audit.record(
+        "document.excluded",
+        project_id=project_id,
+        user_id=auth.get("user_id"),
+        document_id=document_id,
+        chunks_deleted=result["chunks_deleted"],
+    )
+    out.update({
+        "executed": True,
+        "chunks_deleted": result["chunks_deleted"],
+        "index_pruned": result["index_pruned"],
+        "chunk_rows_after": after.get("chunk_rows"),
+        "chunk_count_after": doc.get("chunk_count"),
+        "project_chunk_total_after": after.get("project_chunk_total"),
+        "excluded": (doc.get("metadata") or {}).get("excluded"),
+        "ingest_status": doc.get("ingest_status"),
+        "retrieval_visible": doc.get("retrieval_visible"),
+    })
+    return out
+
+
+@router.get("/v1/admin/corpus/chunk-bounds")
+def admin_corpus_chunk_bounds(
+    project_id: str = Query(..., description="Project to report (no default)"),
+    auth: dict = Depends(require_api_key),
+):
+    """Read-only (RQ-2): stored chunks outside the chunk floor/ceiling, and
+    PDF chunks / documents missing their page locators. Never writes."""
+    _require_admin(auth)
+    from app.core.chunk_bounds_plan import chunk_bounds_plan
+
+    return chunk_bounds_plan(project_id=project_id)
+
+
+def _doc_id_list(doc_ids: str) -> list:
+    ids = [d.strip() for d in (doc_ids or "").split(",") if d.strip()]
+    if not ids:
+        raise HTTPException(400, "doc_ids is required (comma-separated document ids)")
+    return ids
+
+
+@router.get("/v1/admin/corpus/chunk-resplit")
+def admin_corpus_chunk_resplit_plan(
+    project_id: str = Query(..., description="Project of the documents (no default)"),
+    doc_ids: str = Query(..., description="Comma-separated document ids; no whole-project run"),
+    sample: int = Query(50, ge=0, le=500, description="Pieces embedded to time the estimate"),
+    auth: dict = Depends(require_api_key),
+):
+    """Read-only (RQ-4): stored chunks of the listed documents that are longer
+    than the embedder's token window, the pieces a re-split would write, an
+    embedding-time estimate and the plan hash. Never writes."""
+    _require_admin(auth)
+    from app.core.chunk_resplit import chunk_resplit
+
+    try:
+        return chunk_resplit(project_id=project_id, doc_ids=_doc_id_list(doc_ids), sample=sample)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/v1/admin/corpus/chunk-resplit")
+def admin_corpus_chunk_resplit_execute(
+    project_id: str = Query(..., description="Project of the documents (no default)"),
+    doc_ids: str = Query(..., description="Comma-separated document ids; no whole-project run"),
+    expected_plan_hash: str = Query(..., description="plan_hash of the live plan"),
+    doc_type: Optional[str] = Query(None, description="Only re-split documents of this doc_type"),
+    max_parents: Optional[int] = Query(
+        None, ge=1, le=2000,
+        description="Parents staged this call (default RESPLIT_MAX_PARENTS); repeat until "
+                    "continuation.parents_remaining is 0",
+    ),
+    auth: dict = Depends(require_api_key),
+):
+    """RQ-4 execute: re-split and re-embed in place, one document per
+    transaction, refused unless ``expected_plan_hash`` matches the live plan.
+
+    A plain ``def`` route: FastAPI runs it in its threadpool, off the event
+    loop. Each call stages a bounded number of parents and returns a
+    continuation; a second EXECUTE while one is in flight is refused."""
+    _require_admin(auth)
+    from app.core.chunk_resplit import chunk_resplit
+
+    try:
+        return chunk_resplit(
+            project_id=project_id, doc_ids=_doc_id_list(doc_ids), execute=True,
+            expected_plan_hash=expected_plan_hash, doc_type=doc_type, sample=0,
+            max_parents=max_parents,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/v1/admin/documents/{document_id}/include")
+def admin_include_document(
+    document_id: str,
+    project_id: str = Query(..., description="Project the document must belong to"),
+    execute: bool = Query(False, description="false = plan only. true = clear the owner exclusion"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    reason: str = Query("", description="Why the owner brought the document back; stored on the row"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) apply the reverse of an owner exclusion.
+
+    The plan (always computed, never writes) shows the stored exclusion
+    record, the row's status and chunk rows, whether it is ``eligible`` (only
+    a row carrying ``metadata.excluded`` is) and a ``plan_hash``.
+    ``execute=true`` writes only for an eligible row, with a reason and the
+    live ``plan_hash``; otherwise ``refused`` says why and nothing changes.
+    Executing clears the exclusion and its tombstone (status ``UNVERIFIED``,
+    retrieval-visible) so the next index run of that document reads it; the
+    chunks the exclusion deleted are not restored by this call.
+    """
+    _require_admin(auth)
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.core import audit
+    from app.core import projects as _projects
+
+    plan = _projects.plan_document_inclusion(document_id)
+    if plan is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    if plan["project_id"] != project_id:
+        raise HTTPException(400, "document does not belong to project")
+    out: Dict[str, Any] = {"plan": plan, "executed": False}
+    if not execute:
+        return out
+    if not plan["eligible"]:
+        out["refused"] = f"{plan['not_eligible']}; nothing written"
+        return out
+    if not reason.strip():
+        out["refused"] = "reason is required with execute=true"
+        return out
+    if not plan_hash or plan_hash != plan["plan_hash"]:
+        out["refused"] = "plan_hash does not match the live plan; nothing written"
+        return out
+    at = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = _projects.include_document(document_id, by="owner", reason=reason.strip(), at=at)
+    if result is None:
+        raise HTTPException(404, f"document '{document_id}' not found")
+    doc = result["document"] or {}
+    audit.record(
+        "document.included_back",
+        project_id=project_id,
+        user_id=auth.get("user_id"),
+        document_id=document_id,
+    )
+    meta = doc.get("metadata") or {}
+    out.update({
+        "executed": bool(result["changed"]),
+        "excluded_after": meta.get("excluded"),
+        "included_back": meta.get("included_back"),
+        "ingest_status": doc.get("ingest_status"),
+        "retrieval_visible": doc.get("retrieval_visible"),
+        "chunk_count": doc.get("chunk_count"),
+    })
+    return out
+
+
 @router.post("/v1/admin/corpus/legacy-guard-chunks")
 def admin_corpus_legacy_guard_chunks(
     project_id: Optional[str] = Query(None),
@@ -2117,6 +2388,37 @@ def admin_corpus_legacy_guard_chunks(
     return p3_legacy_guard_chunk_purge(
         project_id=project_id, execute=execute, expected_count=expected_count,
     )
+
+
+@router.post("/v1/admin/corpus/noise-chunks")
+def admin_corpus_noise_chunks(
+    project_id: str = Query(..., description="Project to plan (no default)"),
+    execute: bool = Query(False, description="false = plan only. true = delete the planned chunks"),
+    plan_hash: Optional[str] = Query(None, description="Required with execute=true: the plan_hash of the live plan"),
+    auth: dict = Depends(require_api_key),
+):
+    """Plan and (opt-in) delete noise chunks: empty rows, header repeats, guard sentences.
+
+    The plan (always computed, never writes) lists the chunk ids and counts
+    per class and a ``plan_hash`` over them. ``execute=true`` deletes only
+    when ``plan_hash`` equals the live plan's; otherwise ``refused`` says why
+    and nothing changes. Documents are never deleted; each touched document's
+    chunk_count and ingest status are re-derived.
+    """
+    _require_admin(auth)
+    from app.core import audit
+    from app.core.noise_chunk_purge import noise_chunk_purge
+
+    out = noise_chunk_purge(project_id=project_id, execute=execute, plan_hash=plan_hash)
+    if out["executed"]:
+        audit.record(
+            "corpus.noise_chunks_purged",
+            project_id=project_id,
+            user_id=auth.get("user_id"),
+            deleted=out["deleted"],
+            counts=out["plan"]["counts"],
+        )
+    return out
 
 
 # ──────────────────────────────────────────────────────────────────────────

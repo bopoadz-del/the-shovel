@@ -239,6 +239,53 @@ def _wipe(*pids: str):
     _wipe_retry(_do)
 
 
+def _protected_origins(protected):
+    """Read each protected row's origin BEFORE a wipe ({pid: origin|None})."""
+    with SessionLocal() as session:
+        return {
+            pid: (getattr(session.get(Project, pid), "origin", None))
+            for pid in protected
+        }
+
+
+def _default_origin(pid):
+    """Origin for a protected row that did not exist before the wipe.
+
+    The master-corpus SOURCE is a Drive-imported corpus in production
+    (``user_drive_import``), never a boot seed: seeding it as
+    ``system_seed`` grants it platform-wide open access and silently changes
+    the meaning of every later ACL test in the same process.
+    """
+    from app.core.projects import MASTER_CORPUS_SOURCE_PROJECT_ID
+
+    if pid == MASTER_CORPUS_SOURCE_PROJECT_ID:
+        return "user_drive_import"
+    return "system_seed"
+
+
+def _restore_protected(prior):
+    """Re-create / re-stamp each protected row with the origin it HAD.
+
+    Isolation TRUNCATE + a live TestClient knowledge-seed can both see a
+    missing GK/master row and INSERT the same PK, so creation goes through
+    the race-safe helper; a row that came back with another origin (a
+    concurrent seed won the insert) is put back to its prior origin.
+    """
+    from app.core import projects as store
+    from app.core.users import SYSTEM_USER_ID
+
+    for pid, was in prior.items():
+        origin = was or _default_origin(pid)
+        store.get_or_create_project(
+            pid, user_id=SYSTEM_USER_ID, project_id=pid, origin=origin,
+        )
+        with SessionLocal() as session:
+            row = session.get(Project, pid)
+            if row is not None and row.origin != origin:
+                row.origin = origin
+                session.commit()
+
+
 def _wipe_all():
     """Delete every RagChunk/Document/Project row for test isolation.
 
@@ -249,13 +296,16 @@ def _wipe_all():
     Keep protected project rows (``training_material``, master-corpus
     alias/source). Later boot seed / tests insert documents into
     ``training_material``; dropping that parent trips
-    ``documents_project_id_fkey`` on Postgres.
+    ``documents_project_id_fkey`` on Postgres. Each protected row comes
+    back with the origin it had before the wipe, so the wipe never changes
+    who may open it (the open-access gate tests run after this file).
     """
     from app.core.projects import _PURGE_PROTECTED_IDS
     from app.core.users import SYSTEM_USER_ID, ensure_user_exists
 
     _ensure_schema()
     protected = {pid for pid in _PURGE_PROTECTED_IDS if pid}
+    prior = _protected_origins(protected)
 
     def _do(session):
         session.query(_chunk_cls()).delete()
@@ -267,15 +317,7 @@ def _wipe_all():
 
     _wipe_retry(_do)
     ensure_user_exists(SYSTEM_USER_ID, role="admin")
-    from app.core import projects as store
-    for pid in protected:
-        # Isolation TRUNCATE + a live TestClient knowledge-seed can both
-        # see a missing GK/master row and INSERT the same PK. Use the
-        # race-safe helper (IntegrityError → re-fetch) instead of
-        # check-then-create.
-        store.get_or_create_project(
-            pid, user_id=SYSTEM_USER_ID, project_id=pid, origin="system_seed",
-        )
+    _restore_protected(prior)
 
 
 def _seed_misplaced_chunks():
@@ -424,6 +466,66 @@ def test_wipe_all_keeps_training_material_project(client):
     )
     _wipe_all()
     assert store.get_project("training_material") is not None
+
+
+def _drop_project_row(pid):
+    with SessionLocal() as session:
+        session.query(Document).filter(Document.project_id == pid).delete()
+        session.query(Project).filter(Project.id == pid).delete()
+        session.commit()
+
+
+@pytest.mark.parametrize("origin", ["system_seed", "user_drive_import"])
+def test_wipe_restores_each_protected_row_with_its_own_origin(client, origin):
+    """A row that vanishes mid-wipe comes back with the origin it HAD."""
+    from app.core import projects as store
+    from app.core.users import SYSTEM_USER_ID, ensure_user_exists
+
+    pid = store.MASTER_CORPUS_SOURCE_PROJECT_ID
+    _ensure_schema()
+    ensure_user_exists(SYSTEM_USER_ID, role="admin")
+    try:
+        store.get_or_create_project(
+            pid, user_id=SYSTEM_USER_ID, project_id=pid, origin=origin,
+        )
+        with SessionLocal() as session:
+            session.get(Project, pid).origin = origin
+            session.commit()
+        prior = _protected_origins({pid})
+        assert prior == {pid: origin}
+        _drop_project_row(pid)  # the concurrent isolation TRUNCATE
+        assert store.get_project(pid) is None
+        _restore_protected(prior)
+        assert store.get_project(pid)["origin"] == origin
+    finally:
+        _drop_project_row(pid)
+
+
+@pytest.mark.parametrize(
+    "which, expected",
+    [("source", "user_drive_import"), ("general_knowledge", "system_seed")],
+)
+def test_wipe_seeds_a_missing_protected_row_with_its_real_origin(
+    client, which, expected,
+):
+    """No prior row: the master source is never seeded as an open GK seed."""
+    from app.core import projects as store
+
+    pid = {
+        "source": store.MASTER_CORPUS_SOURCE_PROJECT_ID,
+        "general_knowledge": store.primary_general_knowledge_project(),
+    }[which]
+    _ensure_schema()
+    existed = store.get_project(pid)
+    try:
+        _drop_project_row(pid)
+        _wipe_all()
+        assert store.get_project(pid)["origin"] == expected
+    finally:
+        if existed is None:
+            _drop_project_row(pid)
+        else:
+            _restore_protected({pid: existed["origin"]})
 
 
 def test_coverage_endpoint_is_queryable(client):

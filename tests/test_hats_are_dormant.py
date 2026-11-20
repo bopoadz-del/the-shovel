@@ -70,10 +70,14 @@ def test_the_manifests_are_actually_being_read():
     when it stops working."""
     declared = _declared_actions()
     assert len(declared) >= 6, f"only found {sorted(declared)} in {MANIFEST_DIR}"
-    total = set().union(*declared.values())
-    # 35 originally; 7 unbacked names were REMOVED (not stubbed) when the
-    # dispatch gap was closed on 2026-08-15.
-    assert len(total) >= 25, f"only {len(total)} plain action names parsed: {sorted(total)}"
+    assert set().union(*declared.values()), "no plain action name parsed at all"
+    # The plain names shrink on purpose: an action that is a calculation or a
+    # container route is written as its reference (construction_calc:<name>,
+    # construction:<route>). The parser is proven on every declared action.
+    every = set()
+    for path in sorted(MANIFEST_DIR.glob("fork.*.json")):
+        every.update(json.loads(path.read_text(encoding="utf-8")).get("allowed_actions") or [])
+    assert len(every) >= 25, f"only {len(every)} declared actions parsed: {sorted(every)}"
 
 
 def test_the_hats_are_always_on():

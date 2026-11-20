@@ -47,6 +47,8 @@ _GENERIC_BLOCK_SPECS: List[Tuple[str, str, str]] = [
     ("onedrive",         "app.blocks.onedrive",        "OneDriveBlock"),
     ("sandbox",          "app.blocks.sandbox",         "SandboxBlock"),
     ("aconex",           "app.blocks.aconex",          "AconexBlock"),
+    # The learning loop: one Store-shaped block, no domain names in it.
+    ("ml_loop",          "app.blocks.ml_loop",         "MLLoopBlock"),
 ]
 
 # Extended platform blocks — loaded when CEREBRUM_VIRGIN=false (legacy production).

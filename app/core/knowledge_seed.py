@@ -115,7 +115,7 @@ def seed_knowledge() -> None:
 
                 # New or changed: drop any stale doc(s) with the same filename
                 # so a re-edited knowledge file REPLACES rather than duplicates.
-                for d in store.list_documents(gk):
+                for d in store.list_documents(gk, all_sessions=True):
                     if (d.get("original_name") or d.get("name")) == name:
                         try:
                             store.delete_document(d["id"])

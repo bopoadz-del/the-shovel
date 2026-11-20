@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail the build if secret material is in the working tree.
 
-Four hardcoded credential-shape rules, in descending order of certainty:
+Seven hardcoded credential-shape rules, in descending order of certainty:
 
   1. AWS access key ids   -- `AKIA` + 16 uppercase alphanumerics. Unambiguous.
   2. Private key blocks   -- `-----BEGIN ... PRIVATE KEY`. Unambiguous.
@@ -11,6 +11,29 @@ Four hardcoded credential-shape rules, in descending order of certainty:
      salt, IV or Fernet key. These are the quiet ones: they do not look
      like a password, and they make every derived key reproducible by
      anyone holding the source.
+  5. Connection strings that carry a literal password --
+     `scheme://user:password@host`. Rules 1-4 all key on a NAME or on a
+     provider prefix, so a bot scan that reported 29 such lines across
+     16 files in this tree produced zero hits here: a URL credential has
+     neither. The password decides -- an interpolation, a redaction mask,
+     a short stand-in or a well-known placeholder word is not credential
+     material; a literal of eight or more characters is. See
+     `PREDICATE_RULES`.
+  6. Personal mailbox addresses -- an address at a consumer webmail
+     provider (`@gmail.com`, `@outlook.com`, ...). Every rule above keys on
+     a credential, and a credential can be rotated; an address cannot. It is
+     identity, it is permanent in history, and a committed one is a privacy
+     defect even when it is not a secret. The rule is keyed on the PROVIDER
+     CLASS, never on a person: consumer webmail exists to serve individuals,
+     so an address there is personal by construction, while a product or
+     support contact uses the product's own domain and does not fire.
+  7. Session identifiers committed as literals -- a session-ish field
+     (`session_id` and its spellings) assigned an opaque value: a UUID, a
+     32+ hex run, or a long token whose digit density only randomness
+     produces. A session id is a bearer credential -- whoever holds it
+     resumes the conversation -- and rule 3 walks past it, because the field
+     is named `session`, not `token`. A human-readable scope label is a
+     name, not a credential, and does not fire. See `PREDICATE_RULES`.
 
 Plus an env-fed client-pattern denylist (``SECRET_SCAN_PATTERNS``): one
 regex per line, from a repository secret. Those patterns are themselves
@@ -114,6 +137,38 @@ RULES = [
         ),
         "long literal assigned to a secret-named field",
     ),
+    (
+        # A committed personal address is the one privacy defect in this
+        # scanner that no rotation can undo: the commit is forever. This rule
+        # was added because a bot scan of this tree reported addresses as a
+        # pattern class and the reader had to adjudicate them BY EYE -- no
+        # rule here fired on an address at all, so the next one would have
+        # landed unread. It fires on the provider class, not on any person, so
+        # a product, support or documentation address at the project's own
+        # domain is not a finding. The trailing lookahead is what makes it a
+        # provider and not a prefix: `@gmail.com.evil` is a different domain
+        # and does not fire. No test-path gate: a fixture address in a test
+        # is still published, so deliberate ones carry the allowlist marker
+        # like every other fixture in tests/test_scan_secrets.py.
+        "consumer-mailbox-address",
+        re.compile(
+            r"[\w.+-]+@(?:"
+            r"gmail\.com|googlemail\.com"
+            r"|outlook\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|hotmail\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|live\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|yahoo\.[a-z]{2,3}(?:\.[a-z]{2})?|ymail\.com|rocketmail\.com"
+            r"|icloud\.com|me\.com|mac\.com"
+            r"|proton\.me|protonmail\.com"
+            r"|aol\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|gmx\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|mail\.ru|yandex\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|qq\.com|163\.com|126\.com"
+            r")(?![A-Za-z0-9.-])",
+            re.I,
+        ),
+        "personal address at a consumer mailbox provider",
+    ),
 ]
 
 # Rule 4 — key-derivation material. Only meaningful outside tests, where a
@@ -136,6 +191,108 @@ KDF_RULES = [
             r"[\"'][^\"']{8,}[\"']"
         ),
         "key derivation seeded from a literal",
+    ),
+]
+
+# Rule 5 — a connection string carrying a literal password. The regex finds the
+# shape; `_accepts_password` decides whether the password is credential
+# material, because regex alone cannot tell `:${DB_PASSWORD}@` from a real one,
+# and a rule that flagged every fixture URL would be switched off within a
+# week. Eight characters is the floor: shorter literals in this tree are
+# redaction stand-ins (`:x@`, `:pw@`), not passwords. This rule has NO
+# non-test gate — a connection string in a test is still published, so the
+# deliberate fixtures carry the allowlist marker instead of a path exclusion.
+URL_CREDENTIAL = re.compile(
+    r"\b[a-z][a-z0-9+.\-]*://[^/\s:@]+:(?P<password>[^/\s@]+)@[^\s/]+", re.I
+)
+#: A password that IS one of these is a stand-in, not a secret. Whole-value
+#: match only: a real password merely containing "test" still fails the gate.
+PLACEHOLDER_PASSWORDS = frozenset({
+    "password", "passwd", "pass", "pwd", "secret", "changeme", "change_me",
+    "changeit", "example", "test", "testpass", "postgres", "postgresql",
+    "mysql", "redis", "mongo", "mongodb", "user", "username", "admin",
+    "root", "demo", "placeholder", "yourpassword", "your_password",
+    "password123", "development", "local", "guest", "dummy", "sample",
+    "default", "password1",
+})
+#: `$VAR`, `${...}`, `%(var)s`, `<password>`, `{{ var }}`, `[password]` — any
+#: of these means the value is supplied at deploy time, not committed.
+PASSWORD_REFERENCE = re.compile(r"[$%]|<|\{\{|\}|\[|\]")
+#: `***`, `xxx`, `...` — a redaction, and its length proves nothing.
+PASSWORD_MASK = re.compile(r"^(?:[*xX._\-]){3,}$")
+MIN_LITERAL_PASSWORD = 8
+
+
+def _accepts_password(match: re.Match[str]) -> bool:
+    """True when the captured password looks like committed credential material."""
+    password = match.group("password")
+    if PASSWORD_REFERENCE.search(password):
+        return False
+    if PASSWORD_MASK.match(password):
+        return False
+    if len(password) < MIN_LITERAL_PASSWORD:
+        return False
+    return password.lower() not in PLACEHOLDER_PASSWORDS
+
+
+# Rule 6 -- a session identifier committed as a literal. A session id is a
+# bearer credential: whoever holds it resumes the conversation. Nothing above
+# fires on one -- the assigned-name rule keys on names like token/secret and
+# the field here is called session, and a session id carries no provider
+# prefix -- so a tree could carry a live one and still scan clean. The value
+# test is what keeps the rule honest. A UUID or a 32+ hex run is an identifier
+# by construction. Anything else has to look like randomness rather than a
+# label: 24+ characters, letters and digits, at a digit density the usual
+# encodings produce (~1 in 3 to 1 in 6) and a readable scope name does not
+# reach. A label long enough to look like a token can still be marked on its
+# own line with the allowlist marker, which is visible and greppable.
+SESSION_FIELD = r"(?i)session[_-]?id\b"
+SESSION_ID = re.compile(
+    SESSION_FIELD + r"\s*[\"']?\s*[:=]\s*[\"']?(?P<value>[A-Za-z0-9_\-+/=]{16,})"
+)
+_UUID_LITERAL = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_HEX_LITERAL = re.compile(r"[0-9a-fA-F]{32,}")
+MIN_OPAQUE_SESSION = 24
+MIN_OPAQUE_DISTINCT = 12
+#: A random alphanumeric token carries a digit roughly one character in six to
+#: one in three. A readable scope label that happens to end in a number carries
+#: one in twelve or fewer. The ratio, not the presence of a digit, is what
+#: separates an opaque identifier from a name.
+MAX_LABEL_DIGIT_DENSITY = 1 / 12
+
+
+def _accepts_session_id(match: re.Match[str]) -> bool:
+    """True when the captured session value is an opaque identifier."""
+    value = match.group("value")
+    if _UUID_LITERAL.fullmatch(value) or _HEX_LITERAL.fullmatch(value):
+        return True
+    if len(value) < MIN_OPAQUE_SESSION:
+        return False
+    if not any(character.isalpha() for character in value):
+        return False
+    digits = sum(character.isdigit() for character in value)
+    if digits / len(value) <= MAX_LABEL_DIGIT_DENSITY:
+        return False
+    return len(set(value)) >= MIN_OPAQUE_DISTINCT
+
+
+#: Rules whose regex alone cannot decide an answer: the match must also pass
+#: the rule's predicate on the captured value.
+PREDICATE_RULES = [
+    (
+        "url-credential",
+        URL_CREDENTIAL,
+        "literal password inside a connection string",
+        _accepts_password,
+    ),
+    (
+        "session-identifier",
+        SESSION_ID,
+        "session id committed as a literal",
+        _accepts_session_id,
     ),
 ]
 
@@ -209,10 +366,34 @@ def scan_client_text(
     """
     hits: list[tuple[int, int]] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
+        forms = (line, decode_escapes(line))
         for index, pattern in enumerate(patterns):
-            if pattern.search(line):
+            if any(pattern.search(form) for form in forms):
                 hits.append((line_number, index))
     return hits
+
+
+_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})")
+
+
+def decode_escapes(line: str) -> str:
+    r"""Spell out ``\uXXXX`` / ``\UXXXXXXXX`` escapes as the characters they name.
+
+    A denylisted word written in a non-Latin script is just as present in a
+    source file when it is written as escapes (a Python or JS string literal
+    with ``\u....``) as when it is written literally, but a regex over the raw
+    text only ever sees the backslashes. Matching the decoded form too closes
+    that path for every pattern, whatever script it is in. An escape that
+    names no character (beyond U+10FFFF) is left as written.
+    """
+
+    def _char(match: re.Match[str]) -> str:
+        try:
+            return chr(int(match.group(1) or match.group(2), 16))
+        except (ValueError, OverflowError):
+            return match.group(0)
+
+    return _ESCAPE.sub(_char, line)
 
 
 def scan_client_paths(
@@ -263,8 +444,17 @@ def scan(rel_paths: list[str] | None = None) -> list[str]:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if ALLOW_MARKER in line:
                 continue
+            reported = False
             for name, pattern, description in rules:
                 if pattern.search(line):
+                    findings.append(f"{rel}:{lineno}  [{name}] {description}")
+                    reported = True
+                    break
+            if reported:
+                continue
+            for name, pattern, description, accepts in PREDICATE_RULES:
+                match = pattern.search(line)
+                if match is not None and accepts(match):
                     findings.append(f"{rel}:{lineno}  [{name}] {description}")
                     break
     return findings

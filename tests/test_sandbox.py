@@ -195,6 +195,43 @@ def test_sandbox_result_json_round_trips_with_a_defined_function():
     assert isinstance(r.namespace["helper"], str)
 
 
+@pytest.mark.parametrize("base, expected", [(3.0, 3.0 * 2 + 1), (-4.5, -4.5 * 2 + 1)])
+def test_functions_see_the_snippets_other_top_level_names(base, expected):
+    # Module semantics: a helper (and a lambda) may call another helper and
+    # read a top-level name the snippet bound. With a separate locals dict
+    # this raised NameError.
+    code = (
+        "offset = 1\n"
+        "def double(x):\n    return 2 * x\n"
+        "def step(x):\n    return double(x) + offset\n"
+        "f = lambda x: step(x)\n"
+        "result = f(base)"
+    )
+    r = run_sandboxed(code, {"base": base})
+    assert r.success is True, r.error
+    assert r.result == expected
+
+
+def test_injected_result_is_not_read_back_unless_reassigned():
+    r = run_sandboxed("x = result", {"result": 5})
+    assert r.success is True and r.result is None
+    r = run_sandboxed("result = result + 1", {"result": 5})
+    assert r.success is True and r.result == 6
+
+
+@pytest.mark.parametrize(
+    "code, state, bound",
+    [
+        ("items.append(1)\ntotal = len(items)", {"items": [7], "unused": 3}, {"total"}),
+        ("rate = base * 2\nbase = rate", {"base": 4, "other": "x"}, {"rate", "base"}),
+    ],
+)
+def test_namespace_holds_only_the_codes_own_bindings(code, state, bound):
+    r = run_sandboxed(code, state)
+    assert r.success is True, r.error
+    assert set(r.namespace) == bound
+
+
 def test_invalid_result_var_raises_sandbox_error():
     with pytest.raises(SandboxError):
         run_sandboxed("result = 1", result_var="not an identifier")

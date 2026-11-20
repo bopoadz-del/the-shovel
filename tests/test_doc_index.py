@@ -1912,7 +1912,7 @@ def test_search_project_documents_uses_retrieval_worker_when_enabled(monkeypatch
 
     async def fake_call(job, *args):
         calls.append(job)
-        return [{"ok": True}]
+        return [{"ok": True}], {"retrieved_k": 1, "chunks": [], "not_handed": []}
 
     monkeypatch.setattr(rag.retrieval_worker, "call", fake_call)
     monkeypatch.setattr("app.core.privileges.caller_role", lambda: "admin")

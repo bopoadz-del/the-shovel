@@ -316,3 +316,62 @@
   background: var(--bg-surface);
   color: var(--text-primary);
 }
+
+/* W2: the open session's own files, above the project's documents. */
+.left-panel__subhead {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.left-panel__session-docs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.left-panel__session-doc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.left-panel__session-doc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.left-panel__session-doc-tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border, currentColor);
+  color: var(--text-tertiary);
+}
+
+.left-panel__session-doc-tag--produced {
+  color: var(--text-secondary);
+}
+
+.left-panel__session-docs-retry {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

@@ -122,7 +122,10 @@ def _resolve_via_project(project_id: str, raw: str) -> str:
     Layered fallback for callers that hand us a filename instead of a path
     (the LLM typically does this -- it knows the original document name from
     the user, not the disk location). Returns the input unchanged if no
-    matching document is found or the project store isn't reachable.
+    matching document is found, its bytes cannot be produced, or the project
+    store isn't reachable. The matched row goes through
+    ``projects.materialize_document_path``: a Drive-ingested document keeps
+    no local copy, so its ``file_path`` alone never exists on this disk.
     """
     if not raw or not project_id or not isinstance(raw, str):
         return raw
@@ -145,16 +148,16 @@ def _resolve_via_project(project_id: str, raw: str) -> str:
     for doc in docs:
         on = (doc.get("original_name") or "").strip().lower()
         if on and on == needle:
-            fp = doc.get("file_path") or ""
-            if fp and os.path.exists(fp):
+            fp = _projects.materialize_document_path(doc)
+            if fp:
                 return fp
 
     # Pass 2: substring match either direction (LLM truncations / rewordings).
     for doc in docs:
         on = (doc.get("original_name") or "").strip().lower()
-        if on and (needle in on or on in needle):
-            fp = doc.get("file_path") or ""
-            if fp and os.path.exists(fp):
+        if on and on != needle and (needle in on or on in needle):
+            fp = _projects.materialize_document_path(doc)
+            if fp:
                 return fp
 
     return raw

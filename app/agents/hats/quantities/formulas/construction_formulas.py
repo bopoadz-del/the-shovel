@@ -3,6 +3,7 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 from app.lib.formula_registry import Param, formula
 from typing import Any, Dict
 
@@ -239,6 +240,12 @@ def cost_buildup_rebar(
         "currency": currency,
     }
 
+#: Declared constants of cost_buildup_formwork (D1 rule C).
+_FORMWORK_K = Constants(
+    shuttering_uses=Constant(6.0, "uses", "times one set of shuttering is used before it is written off"),
+)
+
+
 @formula(
     owner='quantities',
     display_name='Formwork cost build-up',
@@ -278,7 +285,7 @@ def cost_buildup_formwork(
         raise ValueError("area_m2 must be >= 0")
     if crane_output_m2_hr <= 0:
         raise ValueError("crane_output_m2_hr must be > 0")
-    shuttering = shuttering_supply_per_m2 / 6  # 6 uses
+    shuttering = shuttering_supply_per_m2 / _FORMWORK_K.shuttering_uses
     scaffolding = scaffolding_per_m2_day * cycle_days
     material = shuttering + scaffolding
     labour = labour_mhr_m2 * labour_rate_per_hr

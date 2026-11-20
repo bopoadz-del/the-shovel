@@ -13,6 +13,31 @@ logger = logging.getLogger(__name__)
 _async_client: Optional[aioredis.Redis] = None
 _sync_client: Optional[redis.Redis] = None
 
+DEFAULT_REDIS_SOCKET_TIMEOUT_S = 3.0
+
+
+def redis_socket_timeout_s() -> float:
+    """Bound, in seconds, on connecting to Redis and on every reply.
+
+    ``REDIS_SOCKET_TIMEOUT_S`` overrides the default; a missing, non-numeric
+    or non-positive value falls back to it. Without a bound, a Redis that
+    accepts the connection and never answers holds the caller forever.
+    """
+    raw = os.getenv("REDIS_SOCKET_TIMEOUT_S", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_REDIS_SOCKET_TIMEOUT_S
+    if not value > 0 or value == float("inf"):
+        return DEFAULT_REDIS_SOCKET_TIMEOUT_S
+    return value
+
+
+def redis_timeout_kwargs() -> dict[str, float]:
+    """Keyword arguments every Redis constructor in the app passes."""
+    bound = redis_socket_timeout_s()
+    return {"socket_connect_timeout": bound, "socket_timeout": bound}
+
 
 async def get_redis_client() -> Optional[aioredis.Redis]:
     global _async_client
@@ -22,7 +47,9 @@ async def get_redis_client() -> Optional[aioredis.Redis]:
     if not redis_url:
         return None
     try:
-        _async_client = aioredis.from_url(redis_url, decode_responses=True)
+        _async_client = aioredis.from_url(
+            redis_url, decode_responses=True, **redis_timeout_kwargs()
+        )
         await _async_client.ping()
     except Exception as exc:
         logger.warning("Redis async client unavailable (%s); fallbacks active", exc)
@@ -38,7 +65,9 @@ def get_sync_redis_client() -> Optional[redis.Redis]:
     if not redis_url:
         return None
     try:
-        _sync_client = redis.from_url(redis_url, decode_responses=True)
+        _sync_client = redis.from_url(
+            redis_url, decode_responses=True, **redis_timeout_kwargs()
+        )
         _sync_client.ping()
     except Exception as exc:
         logger.warning("Redis sync client unavailable (%s); fallbacks active", exc)

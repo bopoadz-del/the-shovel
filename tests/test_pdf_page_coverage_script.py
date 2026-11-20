@@ -164,13 +164,16 @@ def test_main_needs_exactly_one_document_per_id(monkeypatch, tmp_path, matches, 
     seen = []
 
     class _Res:
+        def __init__(self, out):
+            self._out = out
+
         def all(self):
-            return rows
+            return self._out
 
     class _S:
         def execute(self, stmt, params):
             seen.append(params)
-            return _Res()
+            return _Res(rows if "p" in params else [(1, 2, 40)])
 
         def __enter__(self):
             return self
@@ -183,20 +186,62 @@ def test_main_needs_exactly_one_document_per_id(monkeypatch, tmp_path, matches, 
     monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
     monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
     assert mod.main() == code
-    assert seen == [{"p": "abc%"}]
+    # the prefix select, then one stored-chunk read per printed document
+    assert seen == [{"p": "abc%"}] + ([{"pr": "p1", "d": "d0"}] if matches == 1 else [])
 
 
-# --- drive-path selector (scope widened 05:12Z) -------------------------------
+# --- the report is a public log: ids, counts and page numbers only -------------
 
-def _fake_session(monkeypatch, rows, seen):
-    class _Res:
-        def all(self):
-            return rows
+@pytest.mark.parametrize("value", ["Signed Set", "x"])
+def test_main_refuses_the_withdrawn_drive_path_selector_without_echoing_it(monkeypatch, capsys, value):
+    mod = _load()
+    monkeypatch.setenv("COVERAGE_DRIVE_PATH", value)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
+    assert mod.main() == 2
+    captured = capsys.readouterr()
+    assert value not in captured.out + captured.err
+
+
+@pytest.mark.parametrize("n, code", [(21, 2), (20, 1)])
+def test_main_caps_the_number_of_documents(monkeypatch, n, code):
+    mod = _load()
+    seen: list = []
 
     class _S:
         def execute(self, stmt, params):
-            seen.append((str(stmt), params))
-            return _Res()
+            seen.append(params)
+            return _NoRows()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", " ".join(f"id{i}" for i in range(n)))
+    assert mod.main() == code
+    assert len(seen) == (0 if code == 2 else n)
+
+
+class _NoRows:
+    def all(self):
+        return []
+
+
+def _session_with(monkeypatch, doc_rows, chunk_rows):
+    class _Res:
+        def __init__(self, out):
+            self._out = out
+
+        def all(self):
+            return self._out
+
+    class _S:
+        def execute(self, stmt, params):
+            return _Res(doc_rows if "p" in params else chunk_rows)
 
         def __enter__(self):
             return self
@@ -208,64 +253,64 @@ def _fake_session(monkeypatch, rows, seen):
     monkeypatch.setattr(db, "SessionLocal", lambda: _S())
 
 
-@pytest.mark.parametrize("raw, pattern", [
-    ("  Tender Pack FINAL ", "%tender pack final%"),
-    ("50%_a!b", "%50!%!_a!!b%"),
+# Each input is a client-looking name, Drive path, project id and free-text
+# reason / metadata built here; none may reach the printed report.
+@pytest.mark.parametrize("name, folder, project, exists", [
+    ("Harbour Tower Vol 3 Drawings.pdf", "Client Alpha/Tender Pack FINAL", "proj-alpha-7731", True),
+    ("Riverside_Mall_BOQ_rev2.pdf", "Zeta Holdings/Signed", "proj-zeta-0042", False),
 ])
-def test_like_contains_lowers_and_escapes(raw, pattern):
-    assert _load().like_contains(raw) == pattern
-
-
-@pytest.mark.parametrize("raw", ["", "   "])
-def test_like_contains_refuses_a_blank_selector(raw):
-    with pytest.raises(ValueError):
-        _load().like_contains(raw)
-
-
-@pytest.mark.parametrize("needle, expected", [
-    ("tender pack final", ["a", "b"]),
-    ("50%", ["c"]),
-])
-def test_path_sql_matches_literal_substring_case_insensitively(needle, expected):
-    """The selector's WHERE clause, run for real against SQLite. ``%`` in the
-    input is a literal, never a wildcard."""
+def test_rendered_report_carries_no_file_name_path_or_project(
+        monkeypatch, tmp_path, capsys, name, folder, project, exists):
     import json
-    import sqlite3
 
     mod = _load()
-    con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE documents (id TEXT, project_id TEXT, original_name TEXT, "
-                "size INT, file_path TEXT, ingest_status TEXT, chunk_count INT, "
-                "pages_in_file INT, pages_ocrd INT, ingest_status_reason TEXT, metadata TEXT)")
-    paths = {"a": "X/Tender pack FINAL/v1.pdf", "b": "y/TENDER PACK final/v2.pdf",
-             "c": "z/50% set/v3.pdf", "d": "z/500 set/v4.pdf"}
-    for did, dp in paths.items():
-        con.execute("INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (did, "p", did + ".pdf", 1, None, "INDEXED", 0, None, None, None,
-                     json.dumps({"drive_path": dp})))
-    sql = mod._PATH_SQL.replace("metadata->>'drive_path'", "json_extract(metadata, '$.drive_path')")
-    got = [r[0] for r in con.execute(sql.replace(":p", "?"), (mod.like_contains(needle),))]
-    assert sorted(got) == expected
-    for verb in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE"):
-        assert not re.search(rf"\b{verb}\b", mod._PATH_SQL.upper())
-
-
-@pytest.mark.parametrize("matches, code", [(0, 1), (2, 0)])
-def test_main_runs_the_drive_path_selector(monkeypatch, tmp_path, matches, code, capsys):
-    mod = _load()
-    path = _pdf(tmp_path, "c.pdf", ["Bill 1 item rate amount " * 4])
-    rows = [(f"d{i}", "p1", "c.pdf", 10, path, "ZERO_CHUNK", 0, None, None, None, None)
-            for i in range(matches)]
-    seen: list = []
-    _fake_session(monkeypatch, rows, seen)
-    monkeypatch.setenv("COVERAGE_DRIVE_PATH", "Signed Set")
-    monkeypatch.delenv("COVERAGE_DOC_IDS", raising=False)
-    assert mod.main() == code
-    assert [params for _sql, params in seen] == [{"p": "%signed set%"}]
+    sub = tmp_path / folder
+    sub.mkdir(parents=True)
+    path = _pdf(sub, name, ["Bill 1 item rate amount " * 4, ""]) if exists else str(sub / name)
+    stem = name.rsplit(".", 1)[0]
+    meta = {"drive_path": f"{folder}/{name}",
+            "extract_failed_detail": f"FileNotFoundError: {path}",
+            "ingest_attempts": {"n": 2, "last": stem},
+            "ocr_skip_reason": "size"}
+    reason = f"pdf_extract_failed|could not open {name}"
+    row = ("d0c1d", project, name, 10, path, "EXTRACT_FAILED", 0, 2, None, reason,
+           json.dumps(meta))
+    _session_with(monkeypatch, [row], [(1, 1, 40)])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "d0c1d")
+    assert mod.main() == 0
     out = capsys.readouterr().out
-    assert out.startswith("budgets: ")
-    assert f"drive path selector: {matches} documents" in out
-    assert out.count("== doc ") == matches
+    low = out.lower()
+    for secret in (name, stem, folder, project, path, str(tmp_path), "Client", "Zeta"):
+        assert secret.lower() not in low, secret
+    # What it does print: the id, codes and counts.
+    assert "== doc d0c1d" in out
+    assert "reason: pdf_extract_failed|<text len=" in out
+    assert "meta.ocr_skip_reason: size" in out
+    assert "meta.ingest_attempts: {n=2} keys=2" in out
+    assert ("text_stops_at=2" in out) is exists
+    assert ("file not on this filesystem" in out) is (not exists)
+
+
+@pytest.mark.parametrize("line, kept", [
+    ("open failed at /data/u/Bay Bridge Spec.pdf", "open failed at "),
+    ("pages=3 chunks=12 span=3", "pages=3 chunks=12 span=3"),
+])
+def test_withhold_replaces_the_rows_own_name_and_path(line, kept):
+    mod = _load()
+    row = ("d1", "proj-xyz1", "Bay Bridge Spec.pdf", 1, "/data/u/Bay Bridge Spec.pdf",
+           "INDEXED", 1, 1, None, None, None)
+    out = mod.withhold([line], row)[0]
+    assert "Bay Bridge" not in out
+    assert out.startswith(kept)
+
+
+@pytest.mark.parametrize("reason, shown", [
+    ("pdf_text_sparse|terminal", "pdf_text_sparse|terminal"),
+    ("ocr_failed|Tesseract choked on Alpha.pdf", "ocr_failed|<text len=29>"),
+])
+def test_safe_reason_keeps_codes_and_hides_free_text(reason, shown):
+    assert _load().safe_reason(reason) == shown
 
 
 # --- failure evidence ----------------------------------------------------------
@@ -293,14 +338,15 @@ def test_terminal_meaning_is_none_without_a_mark(reason):
 
 
 @pytest.mark.parametrize("meta, shown, hidden", [
-    ({"drive_path": "a/b.pdf", "extract_failed_detail": "MemoryError", "chunk_pages": [1]},
-     ["drive_path: a/b.pdf", "meta.extract_failed_detail: MemoryError"], "chunk_pages"),
+    ({"drive_path": "a/b.pdf", "extract_failed_detail": "MemoryError at a/b.pdf", "chunk_pages": [1]},
+     ["meta.extract_failed_detail: <text len=22>"], "a/b.pdf"),
     ({"ingest_attempts": {"n": 1}, "ocr_skip_reason": "size", "sheet_names": ["x"]},
-     ["meta.ingest_attempts: {'n': 1}", "meta.ocr_skip_reason: size"], "sheet_names"),
+     ["meta.ingest_attempts: {n=1} keys=1", "meta.ocr_skip_reason: size"], "sheet_names"),
 ])
 def test_failure_evidence_prints_failure_keys_only(meta, shown, hidden):
     out = "\n".join(_load().failure_evidence("r1", meta))
     assert "reason: r1" in out
+    assert "drive_path" not in out
     for s in shown:
         assert s in out
     assert hidden not in out
@@ -337,3 +383,434 @@ def test_budgets_follow_the_product_env(monkeypatch, timeout, mem):
     assert b["file_mem_mb"] == int(mem)
     from app.core import ingest_status as st
     assert b["extractor_version"] == st.EXTRACTOR_VERSION
+
+
+# --- the index's own page coverage (stored chunks by page locator) --------------
+
+@pytest.mark.parametrize("rows, pif, with_chunk, missing_runs, span_from", [
+    # page 3 of 5 carries no chunk: named as a gap, span read from the row
+    ([(1, 2, 900), (2, 1, 400), (4, 1, 50), (5, 3, 1200)], 5, 4, [(3, 3)], "pages_in_file"),
+    # every page carries a chunk; pages_in_file unknown -> span = top page
+    ([(1, 1, 10), (2, 1, 10), (3, 1, 10)], None, 3, [], "highest_chunk_page"),
+])
+def test_stored_page_coverage_names_pages_without_a_chunk(rows, pif, with_chunk, missing_runs, span_from):
+    cov = _load().stored_page_coverage(rows, pif)
+    assert cov["pages_with_chunk"] == with_chunk
+    assert cov["pages_without_chunk_runs"] == missing_runs
+    assert cov["span_from"] == span_from
+
+
+@pytest.mark.parametrize("pif, span, tail_gap", [
+    (8, 8, [(5, 8)]),       # the file is longer than the last chunked page
+    (None, 4, []),          # unknown length: no invented tail gap
+])
+def test_stored_span_uses_the_file_length_when_recorded(pif, span, tail_gap):
+    cov = _load().stored_page_coverage([(1, 1, 5), (2, 1, 5), (3, 1, 5), (4, 1, 5)], pif)
+    assert cov["span"] == span
+    assert cov["pages_without_chunk_runs"] == tail_gap
+
+
+@pytest.mark.parametrize("rows, no_page, total", [
+    ([(None, 4, 300), (1, 1, 20)], 4, 5),
+    ([(1, 1, 20), (2, 2, 30)], 0, 3),
+])
+def test_chunks_without_a_page_locator_are_counted_not_dropped(rows, no_page, total):
+    cov = _load().stored_page_coverage(rows, None)
+    assert cov["chunks_without_page"] == no_page
+    assert cov["chunks"] == total
+
+
+@pytest.mark.parametrize("n_pages", [9, 400])
+def test_stored_by_range_is_bounded_and_sums_to_total(n_pages):
+    mod = _load()
+    rows = [(p, 1, p) for p in range(1, n_pages + 1)]
+    cov = mod.stored_page_coverage(rows, n_pages)
+    assert len(cov["by_range"]) <= mod._MAX_RANGE_ROWS
+    assert sum(r["chars"] for r in cov["by_range"]) == sum(range(1, n_pages + 1))
+    assert sum(r["pages_with_chunk"] for r in cov["by_range"]) == n_pages
+
+
+@pytest.mark.parametrize("gaps, page, named", [
+    # a gap far past the first 40 document-wide runs is still named by its range row
+    (set(range(2, 600, 4)), 302, True),
+    # the same page carrying a chunk is not named
+    (set(range(2, 600, 4)) - {302}, 302, False),
+])
+def test_each_range_row_names_its_own_pages_without_a_chunk(gaps, page, named):
+    mod = _load()
+    rows = [(p, 1, 10) for p in range(1, 591) if p not in gaps]
+    cov = mod.stored_page_coverage(rows, 590)
+    assert len(cov["pages_without_chunk_runs"]) > 40
+    row = next(r for r in cov["by_range"] if r["pages"][0] <= page <= r["pages"][1])
+    assert ((page, page) in row["pages_without_chunk_runs"]) is named
+    line = next(x for x in mod.render_stored(cov)
+                if x.startswith(f"   {row['pages'][0]}-{row['pages'][1]} |"))
+    assert (str(page) in line.split(" | ")[-1].split(", ")) is named
+    assert sum(len(list(range(a, b + 1)))
+               for r in cov["by_range"] for a, b in r["pages_without_chunk_runs"]
+               ) == cov["pages_without_chunk"]
+
+
+@pytest.mark.parametrize("n_runs, shown, more", [(3, 3, ""), (20, 12, " (+8 more runs)")])
+def test_range_row_runs_are_bounded(n_runs, shown, more):
+    mod = _load()
+    text = mod._render_runs([(p, p) for p in range(1, 2 * n_runs, 2)], mod._MAX_RUNS_PER_RANGE)
+    assert text.endswith(more)
+    assert len(text.removesuffix(more).split(", ")) == shown
+
+
+@pytest.mark.parametrize("namespace, table", [("v2", "chunks_v2"), ("x9", "chunks_x9")])
+def test_stored_sql_is_a_select_on_the_namespaced_table_with_a_bound_id(monkeypatch, namespace, table):
+    mod = _load()
+    monkeypatch.setenv("RAG_VECTOR_NAMESPACE", namespace)
+    sql = mod._stored_pages_sql(mod.stored_chunk_table())
+    assert sql.lstrip().upper().startswith("SELECT")
+    assert f"FROM {table} " in sql and "project_id = :pr AND doc_id = :d" in sql
+    for verb in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER"):
+        assert not re.search(r"\b" + verb + r"\b", sql.upper())
+
+
+@pytest.mark.parametrize("fail", [True, False])
+def test_stored_lines_print_a_failed_read_instead_of_raising(monkeypatch, fail):
+    mod = _load()
+
+    class _S:
+        def execute(self, stmt, params):
+            if fail:
+                raise RuntimeError("no such table")
+            return _Res2()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Res2:
+        def all(self):
+            return [(1, 1, 10), (3, 1, 10)]
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    row = ("d1", "p1", "a.pdf", 10, "/gone", "INDEXED", 2, 3, None, None, None)
+    out = "\n".join(mod.stored_lines(row))
+    assert ("READ FAILED" in out) is fail
+    assert ("pages_without_chunk_runs: 2" in out) is (not fail)
+
+
+# --- #409 follow-up: a failing id is named by class; only marked lines publish --
+
+class _Boom:
+    """A session whose read raises with a message quoting a client path."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def execute(self, stmt, params):
+        raise self._exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+@pytest.mark.parametrize("exc, cls", [
+    (RuntimeError("could not read /data/Client Alpha/Harbour Tower.pdf"), "RuntimeError"),
+    (KeyError("Riverside_Mall_BOQ_rev2"), "KeyError"),
+])
+def test_main_loop_names_a_failure_by_class_and_goes_on(monkeypatch, capsys, exc, cls):
+    mod = _load()
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _Boom(exc))
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc def")
+    assert mod.main() == 1
+    out = capsys.readouterr().out
+    assert out.count(f"failed ({cls})") == 2        # both ids reported, loop went on
+    assert "done: ids=2 failed=2" in out
+    for secret in ("Client Alpha", "Harbour", "Riverside"):
+        assert secret not in out
+
+
+@pytest.mark.parametrize("ids, code", [
+    ("abc", 1),   # the run path: budgets, a skipped id, the tally (stdout)
+    ("", 2),      # the refusal path: no id given (stderr)
+])
+def test_every_printed_line_carries_the_mark(monkeypatch, capsys, ids, code):
+    mod = _load()
+    _session_with(monkeypatch, [], [])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", ids)
+    assert mod.main() == code
+    cap = capsys.readouterr()
+    lines = [ln for ln in (cap.out + cap.err).splitlines() if ln]
+    assert lines and all(ln.startswith(mod.MARK) for ln in lines)
+
+
+def summary_writes_unmarked(run: str, mark: str) -> list[str]:
+    """Lines that write to the step summary without selecting the mark."""
+    return [ln.strip() for ln in run.splitlines()
+            if "GITHUB_STEP_SUMMARY" in ln and f"^{mark}" not in ln]
+
+
+@pytest.mark.parametrize("run, bad", [
+    ("aws logs get-log-events --output text | tee -a \"$GITHUB_STEP_SUMMARY\"", 1),
+    ("sed -n 's/^PPC| //p' stream.txt | tee -a \"$GITHUB_STEP_SUMMARY\"", 0),
+])
+def test_summary_checker_flags_the_whole_stream(run, bad):
+    assert len(summary_writes_unmarked(run, "PPC| ")) == bad
+
+
+_WHOLE_STREAM_WF = """
+jobs:
+  report:
+    steps:
+      - run: |
+          aws logs get-log-events --log-stream-name s --output text | tee -a "$GITHUB_STEP_SUMMARY"
+"""
+
+
+@pytest.mark.parametrize("source, clean", [
+    ("committed", True),        # the real workflow file
+    ("whole-stream", False),    # the #409 shape: the whole container stream teed
+])
+def test_workflow_publishes_only_the_scripts_marked_lines(source, clean):
+    import yaml
+
+    mod = _load()
+    wf = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pdf-page-coverage.yml"
+    body = wf.read_text(encoding="utf-8") if source == "committed" else _WHOLE_STREAM_WF
+    doc = yaml.safe_load(body)
+    run = "\n".join(s["run"] for job in doc["jobs"].values() for s in job["steps"]
+                    if isinstance(s.get("run"), str))
+    assert "GITHUB_STEP_SUMMARY" in run
+    assert (summary_writes_unmarked(run, mod.MARK) == []) is clean
+    assert ("--output text | tee" not in run) is clean
+
+
+@pytest.mark.parametrize("broken", [True, False])
+def test_unreadable_budgets_are_named_by_class_and_the_run_goes_on(monkeypatch, capsys, broken):
+    mod = _load()
+    if broken:
+        def _raise():
+            raise OSError("/srv/Client Alpha/config")
+        monkeypatch.setattr(mod, "budgets", _raise)
+    _session_with(monkeypatch, [], [])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "abc")
+    assert mod.main() == 1
+    out = capsys.readouterr().out
+    assert ("budgets: unreadable (OSError)" in out) is broken
+    assert "Client Alpha" not in out and "done: ids=1 failed=1" in out
+
+
+# --- pageless-chunk count by document id (one project) ------------------------
+
+def test_pageless_sql_is_one_select_bound_to_the_project():
+    sql = _load()._pageless_sql("rag_chunks_x")
+    assert sql.lstrip().upper().startswith("SELECT")
+    assert ":pr" in sql and "GROUP BY doc_id" in sql
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b", sql, re.IGNORECASE)
+
+
+@pytest.mark.parametrize("rows, n_hit, pageless, top", [
+    ([("dA", 0, 5), ("dB", 3, 9), ("dC", 7, 7)], 2, 10, [("dC", 7, 7), ("dB", 3, 9)]),
+    ([("dZ", 2, 4), ("dY", 2, 2), ("dX", None, 1)], 2, 4, [("dY", 2, 2), ("dZ", 2, 4)]),
+])
+def test_pageless_summary_counts_and_orders_by_count_then_id(rows, n_hit, pageless, top):
+    summ = _load().pageless_summary(rows)
+    assert summ["documents"] == len(rows)
+    assert summ["documents_with_pageless"] == n_hit
+    assert summ["pageless_chunks"] == pageless
+    assert summ["top"] == top
+
+
+@pytest.mark.parametrize("n, cap, listed, more", [(5, 3, 3, 2), (2, 3, 2, 0)])
+def test_pageless_listing_is_capped_and_says_how_many_more(n, cap, listed, more):
+    mod = _load()
+    summ = mod.pageless_summary([(f"d{i}", i + 1, 10) for i in range(n)], cap=cap)
+    lines = mod.render_pageless("anc", summ)
+    assert len([ln for ln in lines if re.match(r"^   d\d+ \|", ln)]) == listed
+    assert any(f"+{more} more" in ln for ln in lines) == (more > 0)
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+@pytest.mark.parametrize("flag, pageless_read", [("1", True), ("", False)])
+def test_main_pageless_mode_reads_the_anchor_project_and_prints_no_project(
+    monkeypatch, capsys, flag, pageless_read,
+):
+    mod = _load()
+    pid, seen = "proj-secret-0001", []
+    doc = ("d0c1d", pid, "client_file.pdf", 10, "/data/x/client_file.pdf",
+           "indexed", 3, 2, 0, None, None)
+
+    class _S:
+        def execute(self, stmt, params):
+            seen.append(params)
+            if "p" in params:
+                return _Rows([doc])
+            return _Rows([("d0c1d", 2, 3), ("d0c2e", 0, 4)])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    monkeypatch.setattr(mod, "report", lambda row: ["per-page report"])
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "d0c1d")
+    monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", flag)
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert ({"pr": pid} in seen) == pageless_read
+    assert ("pageless_chunks=2" in out) == pageless_read
+    assert ("per-page report" in out) != pageless_read
+    assert pid not in out and "client_file" not in out
+
+
+@pytest.mark.parametrize("flag", ["1", ""])
+def test_pageless_mode_keeps_the_ids_required_guard(monkeypatch, flag):
+    mod = _load()
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "")
+    monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", flag)
+    assert mod.main() == 2
+
+
+# --- pageless by what the document IS (file kind x stored type) ---------------
+
+def test_kind_sql_is_one_select_bound_to_the_project():
+    sql = _load()._KIND_SQL
+    assert sql.lstrip().upper().startswith("SELECT")
+    assert ":pr" in sql and "doc_type" in sql
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b", sql, re.IGNORECASE)
+
+
+@pytest.mark.parametrize("name, kind", [
+    ("Sheet 12 Rev C.PDF", ".pdf"),
+    ("bill.xlsx", ".xlsx"),
+    ("no extension", "(none)"),
+    (None, "(none)"),
+    ("Client Alpha.final draft", "(other)"),  # a suffix with a space is name text, withheld
+    ("Jordan.Whitfield", "(other)"),  # a word as the suffix: a short alphanumeric name part, withheld
+    ("Jordan.Whitfield.dwg", ".dwg"),
+])
+def test_file_kind_is_an_accepted_kind_or_a_placeholder(name, kind):
+    assert _load().file_kind(name) == kind
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("drawing", "drawing"),
+    ("document", "document"),
+    ("whitfield", "(other)"),  # a lower-case word that is not a declared type, withheld
+    ("Free Text Type", "(other)"),
+    ("", "(none)"),
+])
+def test_stored_type_is_a_declared_type_or_a_placeholder(value, shown):
+    assert _load().stored_type(value) == shown
+
+
+@pytest.mark.parametrize("filename", ["Sheet A-101 drawing.pdf", "site photo.jpg", "notes.txt"])
+def test_declared_types_cover_every_type_the_classifier_writes(filename):
+    from app.core.projects import classify_doc_type
+    assert classify_doc_type(filename) in _load()._declared_types()[0]
+
+
+@pytest.mark.parametrize("custom_name, value, shown", [
+    ("Jordan Whitfield notes", "Jordan Whitfield notes", "(custom)"),  # user text: counted, never printed
+    ("Jordan Whitfield notes", "drawing", "drawing"),  # a built-in still prints by name
+    ("Jordan Whitfield notes", "Casey Morgan log", "(other)"),  # neither declared
+    ("drawing", "drawing", "(custom)"),  # a custom entry overriding a built-in name is user-declared
+])
+def test_custom_document_type_prints_as_custom_never_by_name(tmp_path, monkeypatch, custom_name, value, shown):
+    import json
+    (tmp_path / "custom_document_types.json").write_text(
+        json.dumps([{"name": custom_name, "description": "x"}]), encoding="utf-8")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert _load().stored_type(value) == shown
+
+
+@pytest.mark.parametrize("ext", [".pdf", ".xer"])
+def test_accepted_kinds_are_the_products_upload_constant(ext):
+    from app.core.upload_limits import ALLOWED_UPLOAD_EXTENSIONS
+    kinds = _load()._accepted_kinds()
+    assert kinds == frozenset(e.lower() for e in ALLOWED_UPLOAD_EXTENSIONS) and ext in kinds
+
+
+@pytest.mark.parametrize("chunks, docs, expected", [
+    (
+        [("a", 4, 4), ("b", 0, 6), ("c", 3, 3)],
+        [("a", "x.xlsx", "boq"), ("b", "y.pdf", "drawing"), ("c", "z.pdf", "drawing")],
+        [(".xlsx", "boq", 1, 1, 4, 4), (".pdf", "drawing", 2, 1, 9, 3)],
+    ),
+    (
+        [("a", 2, 5), ("ghost", 7, 7)],
+        [("a", "x.pdf", "Free Text Type")],
+        [("(no document row)", "(no document row)", 1, 1, 7, 7), (".pdf", "(other)", 1, 1, 5, 2)],
+    ),
+])
+def test_pageless_by_kind_groups_and_never_guesses_a_missing_row(chunks, docs, expected):
+    assert _load().pageless_by_kind(chunks, docs) == expected
+
+
+@pytest.mark.parametrize("groups, pdf_line", [
+    ([(".pdf", "drawing", 2, 1, 9, 3), (".pdf", "spec", 1, 0, 5, 0), (".txt", "document", 1, 1, 2, 2)],
+     "pdf-born (.pdf, every type listed above): chunks=14 with_page=11 without_page=3"),
+    ([(".xlsx", "boq", 1, 1, 4, 4)], None),
+])
+def test_render_by_kind_totals_the_pdf_born_chunks(groups, pdf_line):
+    lines = _load().render_by_kind(groups)
+    assert len(lines) == 1 + len(groups) + (1 if pdf_line else 0)
+    assert (lines[-1].strip() == pdf_line) if pdf_line else not any("pdf-born" in ln for ln in lines)
+
+
+@pytest.mark.parametrize("kind_read_fails", [False, True])
+def test_main_pageless_mode_prints_the_kind_table_or_its_read_failure(
+    monkeypatch, capsys, kind_read_fails,
+):
+    mod = _load()
+    pid = "proj-secret-0002"
+    doc = ("d0c1d", pid, "client_file.pdf", 10, "/data/x/client_file.pdf",
+           "indexed", 3, 2, 0, None, None)
+
+    class _S:
+        def execute(self, stmt, params):
+            sql = str(stmt)
+            if "p" in params:
+                return _Rows([doc])
+            if "original_name" in sql:
+                if kind_read_fails:
+                    raise RuntimeError("boom")
+                return _Rows([("d0c1d", "client_file.pdf", "drawing"),
+                              ("d0c2e", "client_bill.xlsx", "boq")])
+            return _Rows([("d0c1d", 2, 3), ("d0c2e", 4, 4)])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    from app.core import db
+    monkeypatch.setattr(db, "SessionLocal", lambda: _S())
+    monkeypatch.delenv("COVERAGE_DRIVE_PATH", raising=False)
+    monkeypatch.setenv("COVERAGE_DOC_IDS", "d0c1d")
+    monkeypatch.setenv("COVERAGE_PAGELESS_SUMMARY", "1")
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "pageless_chunks=6" in out  # the per-document summary prints either way
+    assert ("by kind: READ FAILED: RuntimeError" in out) == kind_read_fails
+    assert ("chunks=3 with_page=1 without_page=2" in out) != kind_read_fails
+    assert pid not in out and "client_file" not in out and "client_bill" not in out

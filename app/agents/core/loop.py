@@ -54,11 +54,12 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
     from app.core.rag.vector_store import end_turn_memo, start_turn_memo
 
     token = start_turn_memo()
-    turn, turn_token = answer_exit.begin_turn()
+    asked = _user_message_of(self, args, kwargs)
+    turn, turn_token = answer_exit.begin_turn(asked)
     from app.lib import construction_formulas as _calc_words
 
     # The user's own words reach every calculator run this turn makes.
-    ask_token = _calc_words.set_current_ask(_user_message_of(self, args, kwargs))
+    ask_token = _calc_words.set_current_ask(asked)
     try:
         result = await self._chat_impl(*args, **kwargs)
         # M4: the tier + confidence cap are applied on the SERVER envelope by
@@ -125,7 +126,8 @@ async def _chat_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
         _final_text_needs_forced_retry, _forced_retry_nudge, _fulfill_answer_report, _has_unread_windows,
-        _inline_boq_hard_excludes, _is_capability_request, _latest_operator_ask, _llm_config,
+        forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
+        _is_capability_request, _llm_config,
         _log_dataset_turn,
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
         _normalize_tool_call_ids, _nudge_for_failed_tool, _off_loop, _parse_dsml_tool_calls,
@@ -135,13 +137,15 @@ async def _chat_impl(
         _predispatch_resource_histogram, _predispatch_wbs_duration_override,
         _predispatch_wir_form, _project_has_non_rag_context, _project_is_rag_ready_off_process,
         _rag_inject_off_process, _recover_answer_from_tool_messages,
+        _resolve_model_key, _call_model_unless_missing, _recover_after_provider_failure,
+        _with_model_unreached_note,
         _recover_tool_calls_from_content, _recovered_calls_are_search_only,
         _requested_char_offset, _sanitize_citation_labels, _sanitize_final_text,
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
-        _text_needs_tool_recovery, _tool_result_content, _tool_result_errored,
-        _vo_draft_hard_excludes, _vo_draft_ready_for_synthesis, answer_report_export_enabled,
+        _text_needs_tool_recovery, _tool_message_extra, _tool_result_content, _tool_result_errored,
+        _vo_draft_ready_for_synthesis, answer_report_export_enabled,
         fulfill_wbs_export, inspect, json, message_wants_answer_report,
         message_wants_wbs_export, os, time,
     )
@@ -194,18 +198,10 @@ async def _chat_impl(
         }
 
     cfg = _llm_config()
-    # A provider with no env_key (none today) would need no auth — the
-    # empty-bearer guard downstream omits the header. DeepSeek/OpenRouter
-    # both declare an env_key, so this check requires their API key.
-    if cfg["env_key"]:
-        api_key = api_key or os.getenv(cfg["env_key"])
-        if not api_key:
-            return {
-                "status": "error",
-                "error": f"No {cfg['env_key']} configured. Set it in .env or pass via env.",
-            }
-    else:
-        api_key = api_key or ""
+    # A missing provider key is acted on at the FIRST model call, not here:
+    # the deterministic stages below (capability answer, pre-dispatch, fast
+    # paths) answer the turns they can answer with no model configured.
+    _model_missing, api_key = _resolve_model_key(cfg, api_key)
 
     _call_stack = _call_stack or [self.name]
 
@@ -240,7 +236,13 @@ async def _chat_impl(
             for m in prior
             if m.get("role") in ("user", "assistant")
         ]
-        effective_history = prior_turns + effective_history
+        # The stored conversation is authoritative. The UI mirrors the same
+        # thread back as `history` every turn, so concatenating both
+        # duplicates the conversation and — under the MAX_HISTORY_TURNS cap —
+        # can replay an older question right before the current one (the reply
+        # answers the previous turn). Use the DB when it has turns; the client
+        # thread is only a fallback for a fresh, still-empty conversation.
+        effective_history = prior_turns if prior_turns else effective_history
         # Persist the user turn up front so it survives even if the LLM
         # call errors mid-loop — otherwise the conversation history loses
         # the question and ends up inconsistent.
@@ -272,9 +274,11 @@ async def _chat_impl(
     # whose first pass is uncovered runs the #163 plan -> actions -> coverage
     # -> <=3 rounds loop before the answer, so a figure outside the default
     # top-k is still fetched (never a refusal dressed as grounding).
-    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
+    # The re-query planner is a model call: with no model, keep the first pass.
+    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id and not _model_missing:
         _rag_sys_msg = await _agentic_figure_retrieval_augment(
             self, user_message, project_id, api_key, user_id, _rag_sys_msg,
+            audit_rec=_rag_audit,
         )
     if _rag_sys_msg and _rag_sys_msg.get("content"):
         _apply_rag_context(
@@ -481,20 +485,14 @@ async def _chat_impl(
     # search_project_documents calls, then stop offering the tool so the
     # model answers from injected context instead of grinding to the cap.
     SEARCH_TOOL_CAP = int(os.getenv("AGENT_SEARCH_TOOL_CAP", "2"))
-    search_calls = 0
-    excluded_tools: set = set()
-    # Live tip 0a95d03: VO ask2 stole to construction/sympy when
-    # predispatch missed — hard-exclude on draft intent alone.
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _vo_draft_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("vo hard-exclude skipped", exc_info=True)
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _inline_boq_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("inline-boq hard-exclude skipped", exc_info=True)
+    # S-R9: the cap and the chunks already handed live on one turn object
+    # that every tool call receives; the search tool enforces the cap per
+    # call (a parallel batch cannot overrun it) and skips handed chunks.
+    from app.core.rag.handed_set import SearchTurn
+    _search_turn = SearchTurn.from_audit(SEARCH_TOOL_CAP, _rag_audit)
+    # Hard excludes on the operator's draft intent (VO / inline BOQ).
+    excluded_tools, _op = self._intent_hard_excludes(messages)
+    _sf: dict = {}  # S-R8: one runtime search round before a draft may decline
     # Once a deliverable (non-search) tool returns, force a tool-free
     # synthesis call — see the streaming loop for the full rationale (stops
     # the tool-loop and the Groq large-context tool_use_failed/429 hang).
@@ -517,15 +515,15 @@ async def _chat_impl(
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         await _emit("iteration", {"n": iteration + 1})
-        resp = await self._call_llm(
-            messages, api_key, project_id=project_id, user_id=user_id,
-            exclude_tools=excluded_tools or None,
-            with_tools=not force_synthesis,
+        resp = await _call_model_unless_missing(
+            self, _model_missing, messages, api_key, project_id=project_id, user_id=user_id,
+            exclude_tools=excluded_tools or None, with_tools=not force_synthesis,
         )
         if resp.get("status") == "error":
-            err = resp.get("error") or _EMPTY_RESPONSE_FALLBACK
-            recovered = _recover_answer_from_tool_messages(err, messages)
-            if recovered != err and not (await _off_loop(_text_needs_tool_recovery, recovered)):
+            # Any provider failure: a result already in the thread is the
+            # answer, with one line that the explanation is unavailable.
+            recovered = await _off_loop(_recover_after_provider_failure, messages)
+            if recovered:
                 final_text = _sanitize_inline_paths(
                     _sanitize_citation_labels(recovered)
                 )
@@ -535,6 +533,7 @@ async def _chat_impl(
                     project_id=project_id,
                     audit_rec=_rag_audit,
                 ))
+                final_text = _with_model_unreached_note(final_text)
                 messages.append({"role": "assistant", "content": final_text})
                 if conversation_id:
                     from app.core import agent_memory
@@ -583,7 +582,7 @@ async def _chat_impl(
                 and _recovered_calls_are_search_only(recovered_tool_calls)
                 and (
                     "search_project_documents" in excluded_tools
-                    or search_calls >= SEARCH_TOOL_CAP
+                    or _search_turn.spent
                 )
             ):
                 recovered_tool_calls = []
@@ -602,6 +601,13 @@ async def _chat_impl(
                     "content": "",
                     "tool_calls": recovered_tool_calls,
                 }
+            elif (_sf_call := await self._search_before_refusal(
+                    raw_content, messages, _sf, user_message=user_message, project_id=project_id,
+                    tool_results=tool_calls_made, search_calls=_search_turn.calls, search_cap=SEARCH_TOOL_CAP,
+                    excluded_tools=excluded_tools, force_synthesis=force_synthesis,
+                    iterations_left=MAX_TOOL_ITERATIONS - iteration - 1)) is not None:
+                tool_calls = [_sf_call]  # S-R8: search, do not finalise the draft
+                assistant_msg = {"role": "assistant", "content": "", "tool_calls": tool_calls}
             else:
                 # Genuine final answer — sanitize DSML markup, raw tool JSON,
                 # and empty content before it reaches the user.
@@ -618,11 +624,12 @@ async def _chat_impl(
                     if priced:
                         final_text = priced
                     else:
+                        await _off_loop(log_forced_retry_start, "chat", final_text)
                         _nudge = await _off_loop(_forced_retry_nudge, final_text)
                         if _nudge:
                             messages.append({"role": "user", "content": _nudge})
                         forced_resp = await self._call_llm(messages, api_key, project_id=project_id, with_tools=False, user_id=user_id)
-                        if forced_resp.get("status") == "error":
+                        if forced_retry_failed("chat", forced_resp):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
                             forced_msg = forced_resp["choice"].get("message") or {}
@@ -630,7 +637,7 @@ async def _chat_impl(
                                 forced_msg.get("content") or "",
                                 messages=messages, tool_results=tool_calls_made,
                             )
-                        if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                        if (await _off_loop(forced_retry_still_unusable, "chat", final_text)):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 # An answer that names its own missing input gets ONE
@@ -669,10 +676,6 @@ async def _chat_impl(
             # so the UI can show "️ tool_name — running…" live.
             fn = tc.get("function") or {}
             tc_name = fn.get("name") or tc.get("name") or "unknown"
-            if tc_name == "search_project_documents":
-                search_calls += 1
-                if search_calls >= SEARCH_TOOL_CAP:
-                    excluded_tools.add("search_project_documents")
             tc_args_raw = fn.get("arguments") or tc.get("arguments") or "{}"
             try:
                 tc_args = json.loads(tc_args_raw) if isinstance(tc_args_raw, str) else dict(tc_args_raw)
@@ -684,8 +687,9 @@ async def _chat_impl(
                 "id": tc.get("id") or "",
             })
             _t0 = time.monotonic()
-            tool_result = await self._run_tool_call(
+            tool_result = await self._run_turn_tool_call(
                 tc,
+                search_turn=_search_turn,
                 api_key=api_key,
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -694,6 +698,8 @@ async def _chat_impl(
                 user_message=user_message,
                 history=effective_history,
             )
+            if _search_turn.spent:
+                excluded_tools.add("search_project_documents")
             duration_ms = int((time.monotonic() - _t0) * 1000)
             tool_calls_made.append(tool_result)
             # Determine ok/error by introspecting the tool's result payload.
@@ -703,9 +709,11 @@ async def _chat_impl(
             if isinstance(_inner, dict) and _inner.get("status") == "error":
                 ok = False
                 err = str(_inner.get("error") or "")[:200]
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
             _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
+                _tool_payload,
                 offset=_requested_char_offset(tc),
             )
             # Half a document is not a deliverable: locking synthesis here
@@ -730,7 +738,10 @@ async def _chat_impl(
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
             })
+            from app.agents import answer_exit as _answer_exit
+            _answer_exit.note_tool_message(tc, messages[-1])
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(
@@ -741,7 +752,7 @@ async def _chat_impl(
                 pending_nudges.append({"role": "user", "content": _superseded if _superseded is not None
                                        else _nudge_for_failed_tool(
                     tool_result, self, project_id=project_id, messages=messages) + (await _off_loop(_file_tool_hint, messages, project_id, self.allowed_blocks))})
-        messages.extend(pending_nudges)
+        messages.extend(pending_nudges + self._search_first_nudges(_sf))
 
     # Hit the cap without a final answer — force one more call with tools disabled
     # so the model is required to emit a plain-text summary.
@@ -948,7 +959,10 @@ async def chat_stream(
                         timeout_s, _stalled, _stalled_for,
                     )
                     if not token_emitted:
-                        yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
+                        # A tool that already answered this turn answers
+                        # before the generic reply (same recovery as the end).
+                        _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+                        yield {"type": "token", "content": _recovered or _EMPTY_RESPONSE_FALLBACK}
                         token_emitted = True
                     yield {
                         "type": "error",
@@ -1008,6 +1022,7 @@ async def chat_stream(
     # Opened before the producer task exists, so the task (and the threads it
     # offloads to) record this turn's evidence into the same record.
     _exit_turn = answer_exit.open_turn()
+    _exit_turn.question = user_message or ""
     # The user's own words reach every calculator run this turn makes.
     from app.lib import construction_formulas as _calc_words
 
@@ -1058,8 +1073,10 @@ async def chat_stream(
         if not token_emitted:
             # Make sure the UI does NOT render an empty bubble. A token
             # event populates the bubble with the friendly fallback; the
-            # error event then triggers the styled error banner.
-            yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
+            # error event then triggers the styled error banner. A tool that
+            # already answered this turn answers before the generic reply.
+            _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+            yield {"type": "token", "content": _recovered or _EMPTY_RESPONSE_FALLBACK}
             token_emitted = True
         yield {"type": "error", "message": f"chat_stream crashed: {exc}"}
         terminal_emitted = True
@@ -1076,8 +1093,10 @@ async def chat_stream(
             token_emitted,
         )
         if not token_emitted:
-            yield {"type": "token", "content": _EMPTY_RESPONSE_FALLBACK}
-            _streamed.append(_EMPTY_RESPONSE_FALLBACK)
+            _recovered = await off_loop(answer_exit.recovered_answer, _exit_turn)
+            _first = _recovered or _EMPTY_RESPONSE_FALLBACK
+            yield {"type": "token", "content": _first}
+            _streamed.append(_first)
         yield _with_hat_signals(
             await off_loop(
                 answer_exit.check_end_event,

@@ -51,7 +51,7 @@ def backfill(apply: bool) -> dict:
         projects = store.list_projects(include_hidden=True)
         for proj in projects:
             pid = proj["id"]
-            for doc in store.list_documents(pid):
+            for doc in store.list_documents(pid, all_sessions=True):
                 did = doc["id"]
                 layer, authority = layers.classify(
                     pid, doc.get("original_name") or doc.get("name") or "",

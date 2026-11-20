@@ -137,7 +137,8 @@ _SMOKE_INPUTS = {
                                   formwork_height_m=3, formwork_width_m=8),
     # Referenced from construction_knowledge (reporting/commercial/procurement/risk).
     "calculate_evm": dict(bac=1_000_000, bcwp=400_000, bcws=500_000, acwp=450_000),
-    "calculate_payment": dict(claimed_amount=100_000, certified_amount=90_000),
+    "calculate_payment": dict(claimed_amount=100_000, certified_amount=90_000,
+                              retention_rate=0.05),
     "evaluate_tender": dict(tenderers=[
         {"name": "A", "technical_score": 80, "commercial_score": 70,
          "hse_score": 90, "local_content_score": 50}]),
@@ -200,6 +201,8 @@ _SMOKE_INPUTS = {
     "productivity_rate": dict(output_quantity=500, labor_hours=40, crew_size=4),
     # Additive discipline library — planning.
     "critical_path_float": dict(early_start=5, early_finish=10, late_start=8, late_finish=13),
+    "cpm_network": dict(activities=[{"id": "A", "duration": 2},
+                                     {"id": "B", "duration": 3, "predecessors": ["A"]}]),
     "progress_quantity": dict(total_qty=1000, planned_qty=400, actual_qty=350),
     "productivity_manpower_duration": dict(
         quantity_executed=100, man_hours=50, quantity=200, daily_production=20,
@@ -232,6 +235,12 @@ _SMOKE_INPUTS = {
     "crew_sizing": dict(quantity=3000, duration_days=15, rate_per_crew_day=12),
     "floor_cycle_progress": dict(completed_units=[6, 4], total_units=[8, 8], weights=[1, 1]),
     "productivity_benchmark": dict(work_item="blockwork walls"),
+    # Procedure-rule checks (contracts / qaqc hats).
+    "generate_doc_number": dict(doc_type="IR", sequence=12),
+    "enforce_critical_rules": dict(document_text="Engineer approval of the design drawing."),
+    "next_ncr_status": dict(ncr_status="IMPLEMENTING"),
+    "validate_design_status": dict(design_status="BUY_OFF"),
+    "check_review_timeline": dict(distribution_date="2026-02-02", workshop_date="2026-02-12"),
 }
 
 

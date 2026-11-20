@@ -131,6 +131,101 @@ def panel(
             and str(row.get("doc_name") or "") not in seen_names
         ]
         out = [*extra, *out][:_MAX_SOURCES]
+    entries = cited_entry_rows(trail, answer)
+    if entries:
+        out = [*out[:_MAX_SOURCES - min(len(entries), _MAX_SOURCES)], *entries][:_MAX_SOURCES]
+    return out
+
+
+#: How deep a tool result is read for cited entries: a result, its lists of
+#: groups and their records.
+_ENTRY_DEPTH = 5
+
+
+def _cited_entries(value: Any, depth: int = 0) -> List[Dict[str, Any]]:
+    """Every mapping inside a tool result that names its own source: a
+    ``provenance`` with a non-empty ``source`` and a ``credibility_tier``.
+    Read to a bounded depth (a result, its lists, their records); deeper
+    nesting is another record's payload, not an entry the tool returned."""
+    if depth > _ENTRY_DEPTH:
+        return []
+    if isinstance(value, list):
+        return [e for item in value for e in _cited_entries(item, depth + 1)]
+    if not isinstance(value, dict):
+        return []
+    prov = value.get("provenance")
+    if (isinstance(prov, dict) and str(prov.get("source") or "").strip()
+            and value.get("credibility_tier") is not None):
+        return [value]
+    return [e for v in value.values() for e in _cited_entries(v, depth + 1)]
+
+
+def _entry_used(entry: Dict[str, Any], answer: str, written: List[float]) -> bool:
+    """The answer used the entry: it writes the entry's computed figure, or
+    it quotes the entry's statement."""
+    from app.agents.driver.render import _near
+
+    figure = entry.get("result")
+    if isinstance(figure, (int, float)) and not isinstance(figure, bool):
+        if any(_near(w, float(figure)) for w in written):
+            return True
+    statement = str(entry.get("statement") or "").strip()
+    if statement:
+        from app.agents.runtime import _answer_quotes_passage
+
+        return _answer_quotes_passage(answer, statement)
+    return False
+
+
+def cited_entry_rows(trail: List[Dict[str, Any]], answer: str) -> List[Dict[str, Any]]:
+    """Panel rows for the cited entries (rules, formulas) the answer used,
+    whatever tool returned them. Retrieval passages are rows already.
+
+    The entry's tier travels as given. With no retrieval score, confidence is
+    Medium at most, and Low when the entry is unverified or carries a
+    warning: a tier is never shown stronger than it is.
+    """
+    from app.agents.driver.render import _numbers
+
+    written = _numbers(answer)
+    entries: List[Dict[str, Any]] = []
+    for m in trail:
+        if m.get("role") != "tool" or m.get("name") in RETRIEVAL_TOOLS:
+            continue
+        try:
+            payload = json.loads(m.get("content") or "")
+        except (TypeError, ValueError):
+            continue
+        entries.extend(_cited_entries(payload.get("result") if isinstance(payload, dict) else None))
+
+    def _id(entry: Dict[str, Any]) -> str:
+        return str(entry.get("id") or entry.get("rule_id") or "")
+
+    # An evaluation names its rule by id only; the matched entry of the same
+    # id carries the title a reader opens.
+    titles = {_id(e): str(e.get("title") or "").strip() for e in entries if e.get("title")}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for entry in entries:
+        entry_id = _id(entry)
+        source = str(entry["provenance"]["source"]).strip()
+        key = entry_id or source
+        if key in seen or not _entry_used(entry, answer, written):
+            continue
+        seen.add(key)
+        unverified = (not entry["provenance"].get("verified_against_standard")
+                      or bool(entry.get("warnings")))
+        out.append({
+            "doc_id": entry_id,
+            "doc_name": source,
+            "page_or_section": titles.get(entry_id, ""),
+            "score": 0.0,
+            "confidence": "Low" if unverified else "Medium",
+            "layer": "general_knowledge",
+            "layer_label": _LAYER_LABELS["general_knowledge"],
+            "ocr": False,
+            "credibility_tier": entry.get("credibility_tier"),
+        })
     return out
 
 

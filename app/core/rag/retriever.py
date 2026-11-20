@@ -8,6 +8,7 @@ where caching, dimension matching, and graceful-degradation policy live.
 
 from __future__ import annotations
 
+import functools
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -17,14 +18,18 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from app.core.contract_data_chunks import (
     filled_particulars_rows,
     particulars_chunk_states_a_value,
+    per_search_parse_cache,
 )
 from app.core.rag.embeddings import Embedder, get_embedder
 from app.core.rag.vector_store import (
     Chunk,
+    fusion_records,
     get_lexical_store,
     get_store,
     normalize_cesmm_item_codes,
+    record_fused_candidates,
 )
+from app.core.rag import fusion_trace as _fusion_trace
 from app.core.rag import layers
 from app.lib.boq_ref_codes import find_ref_codes
 from app.core.rag import revision as _revision
@@ -7700,10 +7705,13 @@ _BOQ_CURRENCY_ATOM = (
     r"(?:SAR|SR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR|EGP|CNY|INR|JPY|riyal[s]?)"
 )
 _BOQ_CURRENCY_PREFIX = rf"(?:{_BOQ_CURRENCY_ATOM}\s+)?"
+# Units are the bill's own column vocabulary: a weight column prints "t",
+# "tn", "ton(s)", "tonne(s)" or "kg", a count column "nr", "no." or "nos".
 _PRICED_BOQ_TRIPLE_RE = re.compile(
     r"(?i)(?P<qty>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
     r"\s+"
-    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|no\.?|item|sum|ls|m)\b"
+    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|nos|no\.?|item|sum|ls"
+    r"|tonnes?|tons?|tn|kg|t|m)\b"
     r"\s*[@]?\s*"
     + _BOQ_CURRENCY_PREFIX
     + r"(?P<rate>\d{1,3}(?:,\d{3})*(?:\.\d+)?)"
@@ -7722,7 +7730,8 @@ _PRICED_BOQ_TRIPLE_RE = re.compile(
 # the first order is: the caller only accepts qty × rate == amount.
 _PRICED_BOQ_TRIPLE_UNIT_FIRST_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9.])"
-    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|no\.?|item|sum|ls|ha|kg|t|m)"
+    r"(?P<unit>m[2²³3]|sq\.?\s*m|lin\.?\s*m|nr|nos|no\.?|item|sum|ls|ha|kg"
+    r"|tonnes?|tons?|tn|t|m)"
     r"\s*"
     r"(?P<qty>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
     r"\s+"
@@ -9571,6 +9580,24 @@ def _lexical_only_retrieve(query: str, project_id: str, k: int) -> tuple:
     return kept, noise_filtered
 
 
+def _scoped_per_search_parse_cache(fn):
+    """Run ``fn`` with one :func:`per_search_parse_cache` scope per call.
+
+    ``retrieve_with_filter`` is the single search entry point and one search
+    re-parses the same candidate chunk in several re-scoring predicates
+    (delay-damages rate, accepted contract amount, time for completion,
+    defects notification period, ...), so scoping the cache to the call
+    makes each chunk parse once per search while never persisting across
+    searches.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with per_search_parse_cache():
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+@_scoped_per_search_parse_cache
 def retrieve_with_filter(
     query: str,
     project_id: str,
@@ -9667,10 +9694,15 @@ def retrieve_with_filter(
     gk_over_fetch = max(k * 12, 80)
 
     # Active project (operator's own corpus — first so it wins ties).
+    # The first fusion this search records is the raw query's: the trace
+    # follows its best single-leg candidates (S-R7b; no ranking change).
+    fusion_mark = len(fusion_records(project_id))
     raw_active = _dual_search(
         store, project_id, query_vec, retrieval_lexical_query(query),
         alt_vec, alt_query, k=over_fetch,
     )
+    _new_fusions = fusion_records(project_id)[fusion_mark:]
+    follow = _fusion_trace.Follow(_new_fusions[0] if _new_fusions else None)
 
     # Particulars-shaped questions: a third search whose wording matches the
     # index-time "CONTRACT DATA particulars" prefix. Additive to F18 dual-query
@@ -10259,11 +10291,13 @@ def retrieve_with_filter(
         name = name_by_id.get(c.doc_id, "")
         if _is_noise_filename(name):
             noise_dropped += 1
+            follow.drop(c, "noise_filename")
             continue
         # Named-contract questions stay on that contract/doc id. Wrong
         # year (AB-2023 query / AB-2022 chunk) is dropped here, not ranked
         # through. Empty kept after this loop is fail-closed.
         if not scope.allow(name, c.text or ""):
+            follow.drop(c, "contract_scope")
             continue
         # Prefer the highest revision of a given drawing: skip this chunk when a
         # strictly-higher, same-kind revision of the SAME drawing number is also
@@ -10273,14 +10307,17 @@ def retrieve_with_filter(
         rank = _revision.revision_rank(c.revision)
         if dn and rank is not None and best_rev.get((dn, rank[0]), rank[1]) > rank[1]:
             revision_suppressed += 1
+            follow.drop(c, "revision_superseded")
             continue
         # Signed and unsigned copies of one clause share a body. Keep the
         # higher-scored copy (this list is rank order) and free the slot.
         copy_key = chunk_copy_key(c.text or "") if spec_boost_guard_enabled() else ""
         if copy_key and copy_key in seen_copies:
+            follow.drop(c, "duplicate_copy")
             continue
         if gk_cap is not None and c.project_id in gk_id_set:
             if gk_kept >= gk_cap:
+                follow.drop(c, "gk_cap")
                 continue
             gk_kept += 1
         if copy_key:
@@ -10292,6 +10329,7 @@ def retrieve_with_filter(
     # Second-stage rerank: reorder the survivors by cross-encoder relevance
     # and cut to k. Degrades to kept[:k] (i.e. today's exact result) on any
     # model/scoring failure — see reranker.rerank.
+    kept_before_rerank = list(kept)
     if rerank_on and len(kept) > k:
         kept = _reranker.rerank(query, kept, k)
 
@@ -10348,6 +10386,12 @@ def retrieve_with_filter(
             "revision currency: suppressed %d lower-revision chunk(s) in favour "
             "of a higher revision of the same drawing", revision_suppressed,
         )
+
+    # Recorded even when no fusion ran, so the trace never shows an earlier
+    # retrieval's summary for this one.
+    record_fused_candidates(
+        project_id, follow.finish([c for _, c in scored], kept_before_rerank, kept),
+    )
 
     return kept, noise_dropped
 

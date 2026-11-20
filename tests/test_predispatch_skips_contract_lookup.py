@@ -35,7 +35,7 @@ def _names_follow_the_document_list(monkeypatch):
 def _wire(monkeypatch, docs):
     import app.core.projects as projects_mod
     fake = _FakeQTO()
-    monkeypatch.setattr(projects_mod, "list_documents", lambda pid: docs, raising=False)
+    monkeypatch.setattr(projects_mod, "list_documents", lambda pid, **_kw: docs, raising=False)
     monkeypatch.setattr(runtime, "block_instances", {"drawing_qto": fake}, raising=False)
     monkeypatch.setattr(
         runtime, "_resolve_file_path",

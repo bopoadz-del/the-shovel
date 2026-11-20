@@ -147,13 +147,52 @@ def calculate_float(
     return ff
 
 
+def parse_near_critical_band(value: Any) -> Optional[float]:
+    """Read a caller-supplied near-critical band in days.
+
+    ``None`` / ``""`` mean "not supplied" and return ``None``: there is no
+    default band. Anything else must be a positive number; a bad value raises
+    ``ValueError`` naming the input instead of being replaced by a guess.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError("near_critical_band_days must be a positive number of days")
+    try:
+        band = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"near_critical_band_days must be a positive number of days, got {value!r}"
+        ) from None
+    if not band > 0:
+        raise ValueError(
+            f"near_critical_band_days must be a positive number of days, got {value!r}"
+        )
+    return band
+
+
+def near_critical_ids(
+    floats: List[Tuple[str, float]], band: Optional[float]
+) -> Optional[List[str]]:
+    """Ids whose total float is positive and within ``band`` days (inclusive).
+
+    Returns ``None`` when ``band`` is ``None``: near-criticality is not
+    computed without a band the caller chose.
+    """
+    if band is None:
+        return None
+    return [aid for aid, tf in floats if 0 < tf <= band]
+
+
 def compute_cpm(data: CPMInput) -> CPMOutput:
     """Run the full Critical Path Method over an activity network."""
     activities = data.activities
     if not activities:
         return CPMOutput(results=[], project_duration=0, project_finish=None,
                          critical_path=[], critical_percentage=0.0,
-                         near_critical=[])
+                         near_critical=near_critical_ids(
+                             [], data.near_critical_band_days),
+                         near_critical_band_days=data.near_critical_band_days)
 
     acts = {a.id: a for a in activities}
     if len(acts) != len(activities):
@@ -188,7 +227,8 @@ def compute_cpm(data: CPMInput) -> CPMOutput:
 
     critical = sorted((r for r in results if r.is_critical),
                       key=lambda r: (r.early_start_day, r.early_finish_day))
-    near = [r.id for r in results if 0 < r.total_float <= 5]
+    near = near_critical_ids([(r.id, r.total_float) for r in results],
+                             data.near_critical_band_days)
     return CPMOutput(
         results=results,
         project_duration=project_duration,
@@ -196,6 +236,7 @@ def compute_cpm(data: CPMInput) -> CPMOutput:
         critical_path=[r.id for r in critical],
         critical_percentage=round(len(critical) / len(results) * 100, 1),
         near_critical=near,
+        near_critical_band_days=data.near_critical_band_days,
     )
 
 

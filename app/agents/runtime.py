@@ -13,6 +13,7 @@ chat block as a fallback; see ``app/blocks/chat.py``.
 from __future__ import annotations
 
 from app.core.offload import off_loop as _off_loop
+from app.core.offload import to_thread_in as _to_thread_in
 from app.core.turn_timing import timed as _turn_timing_stage
 from app.core import turn_progress as _turn_progress
 import asyncio
@@ -311,7 +312,10 @@ def _apply_rag_context(
                 "Do not cite a clause or a standard as the basis of the "
                 "calculation unless the excerpts state it. Do not compare the "
                 "result with a limit the request and the excerpts never state. "
-                "Never write an internal id; the reader sees the display name."
+                "Never write an internal id, and never name the calculator or "
+                "any tool in the answer. Open with the figure and its unit, "
+                "then the working in one line (the formula with the numbers "
+                "substituted); add nothing the question did not ask for."
                 "\n\nCALCULATION REQUEST: "
             )
         elif _message_wants_boq_scope_wbs_ask(question):
@@ -406,12 +410,14 @@ def _apply_rag_context(
                 "above. Reproduce its specific facts — numbers, deadlines, clause "
                 "references, named principles, definitions — EXACTLY. If the "
                 "context conflicts with what you think you know, the context "
-                "wins. If the context does not contain the answer but one of "
-                "your TOOLS can extract or compute it from the project's files "
-                "(BIM/IFC extraction, BOQ parsing, drawing take-off, "
-                "calculators), CALL THE TOOL and answer from its result. Only "
-                "say you don't have it when neither the context nor your tools "
-                "can produce the answer — never invent one.\n\nQUESTION: "
+                "wins. If the context does not contain the answer, one of "
+                "your TOOLS can find, extract or compute it from the project's "
+                "files (searching the project documents, BIM/IFC extraction, "
+                "BOQ parsing, drawing take-off, calculators): CALL THE TOOL and "
+                "answer from its result. Only say you don't have it when "
+                "neither the context nor your tools can produce the answer, "
+                "and then name what you searched for — never invent one."
+                "\n\nQUESTION: "
             )
         messages[-1] = {**messages[-1], "content": content + directive + question}
         return True
@@ -634,21 +640,34 @@ def _final_text_needs_forced_retry(
     text: str, *, user_message: str | None = None,
 ) -> bool:
     """True when sanitization left no usable user-facing answer."""
+    return forced_retry_reason(text) is not None
+
+
+def forced_retry_reason(text: str) -> str | None:
+    """The name of the rule that makes ``text`` unusable, else None.
+
+    One implementation for the retry decision, its nudge and the trace, so
+    the log names the rule that fired (never the text). The order is the
+    decision order.
+
+    A promise to search is never a usable answer to ANY question. This was
+    gated on deliverable/generative requests, so plain factual lookups fell
+    straight through and the user was shown "Let me search more precisely
+    for the Engineer's Representative..." as the final answer (a live
+    contract-particular lookup and a delay-damages ask). The request type
+    does not change whether a dangling promise is an answer.
+    """
     if not (text or "").strip():
-        return True
+        return "empty"
     if text == _TOOL_FORMAT_FALLBACK:
-        return True
-    # A promise to search is never a usable answer to ANY question. This was
-    # gated on deliverable/generative requests, so plain factual lookups fell
-    # straight through and the user was shown "Let me search more precisely
-    # for the Engineer's Representative..." as the final answer (a live
-    # contract-particular lookup and a delay-damages ask). The request
-    # type does not change whether a dangling promise is an answer.
+        return "tool_format"
     if _looks_like_search_preamble(text):
-        return True
+        return "search_promise"
     if _looks_like_greeting_only(text):
-        return True
-    return _exit_leaves_nothing(text)
+        return "greeting_only"
+    if _exit_leaves_nothing(text):
+        return "platform_only"
+    return None
 
 
 def _exit_leaves_nothing(text: str) -> bool:
@@ -674,17 +693,180 @@ _USER_TERMS_RETRY_NUDGE = (
 )
 
 
+#: Retry instruction when sanitization left nothing of the reply: it was
+#: empty, or only markup the user is never shown (most often a tool call made
+#: after tools were withdrawn). Without it the retry was the first request
+#: again, and at temperature 0 the model wrote the same draft again (D1).
+_EMPTY_RETRY_NUDGE = (
+    "Your previous reply had no text that can be shown to the user: it was "
+    "empty, or only tool-call markup or internal steps. Tools cannot run now. "
+    "Answer the user's question now in plain text from the documents and "
+    "results already in this thread. If they do not contain the answer, say "
+    "so plainly: name what was looked for and what is missing, in the user's "
+    "own terms."
+)
+
+
 def _forced_retry_nudge(text: str) -> str | None:
-    """The instruction that goes with the forced no-tools retry for ``text``."""
-    if text == _TOOL_FORMAT_FALLBACK:
-        return _TOOL_FORMAT_RETRY_NUDGE
-    if _looks_like_search_preamble(text):
-        return _SEARCH_PREAMBLE_RETRY_NUDGE
-    if _looks_like_greeting_only(text):
-        return _GREETING_RETRY_NUDGE
-    if _exit_leaves_nothing(text):
-        return _USER_TERMS_RETRY_NUDGE
+    """The instruction that goes with the forced no-tools retry for ``text``.
+
+    Every rule that forces a retry gets an instruction, so the retry never
+    sends the first request again unchanged (the same request at temperature
+    0 returns the same draft). A rule without its own wording gets the
+    empty-reply one."""
+    reason = forced_retry_reason(text)
+    if reason is None:
+        return None
+    return _FORCED_RETRY_NUDGES.get(reason, _EMPTY_RETRY_NUDGE)
+
+
+_FORCED_RETRY_NUDGES = {
+    "empty": _EMPTY_RETRY_NUDGE,
+    "tool_format": _TOOL_FORMAT_RETRY_NUDGE,
+    "search_promise": _SEARCH_PREAMBLE_RETRY_NUDGE,
+    "greeting_only": _GREETING_RETRY_NUDGE,
+    "platform_only": _USER_TERMS_RETRY_NUDGE,
+}
+
+
+def _is_retry_instruction(content: Any) -> bool:
+    """True for a user-role message that is the platform's forced-retry
+    instruction, not the operator's words. Readers of "the operator's
+    question" skip it, exactly as they skip a PRE-DISPATCH bubble: the
+    instruction is appended after the turn's tool results, so taking it for
+    the question would cut those results out of the turn."""
+    return str(content or "").strip() in _FORCED_RETRY_NUDGES.values()
+
+
+def _turn_forced_retry_nudged(messages: list[dict[str, Any]] | None) -> int | None:
+    """Index of the operator's question when this turn's forced retry was
+    sent with an instruction, else None.
+
+    The instruction is the last user message of the turn; the operator's
+    question is the user message before it that is neither an instruction
+    nor a platform pre-dispatch."""
+    nudges = set(_FORCED_RETRY_NUDGES.values())
+    msgs = list(messages or [])
+    nudged = False
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i] or {}
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content") or "")
+        if content in nudges:
+            nudged = True
+            continue
+        if content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            continue
+        return i if nudged else None
     return None
+
+
+def _turn_search_queries(turn: list[dict[str, Any]]) -> list[str]:
+    """The ``query`` argument of every tool call made in ``turn``, in order."""
+    out: list[str] = []
+    for m in turn:
+        for call in (m or {}).get("tool_calls") or []:
+            raw = ((call or {}).get("function") or {}).get("arguments")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (TypeError, ValueError):
+                continue
+            q = args.get("query") if isinstance(args, dict) else None
+            if isinstance(q, str) and q.strip():
+                out.append(" ".join(q.split()))
+    return list(dict.fromkeys(out))
+
+
+#: First line of the statement shown when an instructed retry RETURNED a
+#: reply that was still unusable (never after a provider error).
+_UNANSWERED_STATEMENT = "The documents available for this question did not yield an answer to it."
+
+
+def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str:
+    """A plain statement for a turn whose instructed retry still gave nothing.
+
+    Says what happened (the documents this turn had did not yield an answer)
+    and the searches and reads this turn's own messages record (nothing is
+    said about a search that was not recorded). Empty unless the turn ran an
+    instructed retry AND the provider returned a reply that was unusable
+    (``Turn.forced_retry_outcome``), so a provider error and every other
+    path keep their reply."""
+    if _forced_retry_outcome() != "unusable":
+        # No retry ran, or its provider call failed: a failure is not a
+        # not-found, so the caller keeps its own line.
+        return ""
+    start = _turn_forced_retry_nudged(messages)
+    if start is None:
+        return ""
+    turn = list(messages or [])[start + 1:]
+    if not any((m or {}).get("role") == "tool" for m in turn):
+        # The turn holds no tool result: nothing was looked at, so "the
+        # documents did not yield an answer" would be a claim the turn does
+        # not record. The caller keeps its own line.
+        return ""
+    queries = _turn_search_queries(turn)
+    read = _documents_read_this_turn("", list(messages or [])[start:], None)
+    lines = [_UNANSWERED_STATEMENT]
+    if queries:
+        lines.append("Searched for: " + "; ".join(f'"{q}"' for q in queries[:5]) + ".")
+    if read:
+        lines.append("Documents read: " + ", ".join(read[:5]) + ".")
+    lines.append(
+        "Naming the document or section that should hold the answer, or "
+        "rephrasing the question, gives the search more to go on."
+    )
+    return "\n".join(lines)
+
+
+def record_forced_retry_outcome(outcome: str) -> None:
+    """Record on the current turn how its forced retry ended (see
+    ``Turn.forced_retry_outcome``). No turn open: nothing to record."""
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    if turn is not None:
+        turn.forced_retry_outcome = outcome
+
+
+def _forced_retry_outcome() -> str:
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    return turn.forced_retry_outcome if turn is not None else ""
+
+
+def log_forced_retry_start(where: str, text: str) -> None:
+    """Trace the forced no-tools retry by the rule that fired, never the text.
+
+    Evaluating the rule is CPU work: the turn paths call this through
+    ``_off_loop`` like the neighbouring decision calls.
+    """
+    _LOG.info("%s: unusable final_text reason=%s, forcing no-tools retry",
+              where, forced_retry_reason(text))
+
+
+def forced_retry_failed(where: str, resp: dict) -> bool:
+    """True when the forced retry's provider call errored; traced as such."""
+    if resp.get("status") != "error":
+        return False
+    _LOG.warning("%s: forced retry failed reason=provider_error; fallback shown", where)
+    record_forced_retry_outcome("provider_error")
+    return True
+
+
+def forced_retry_still_unusable(where: str, text: str, *, raw_len: int | None = None) -> bool:
+    """The retry's own decision (same rule as the first), traced by rule name.
+
+    Our own fallback line is not traced again: reaching it means the retry
+    call already failed and was logged as ``provider_error``.
+    """
+    reason = forced_retry_reason(text)
+    if reason is not None and text != _EMPTY_RESPONSE_FALLBACK:
+        raw = "" if raw_len is None else f" raw={raw_len}c"
+        _LOG.warning("%s: forced retry unusable reason=%s%s; fallback shown", where, reason, raw)
+        record_forced_retry_outcome("unusable")
+    return reason is not None
 
 # Keys that strongly indicate an internal search tool argument payload.
 _SEARCH_TOOL_ARG_KEYS = {
@@ -881,7 +1063,10 @@ async def _rag_inject_off_process(**kwargs: Any):
             from app.core.privileges import caller_role
 
             return await retrieval_worker.call(retrieval_worker.rag_inject_job, kwargs, caller_role())
-        return await asyncio.to_thread(rag_inject, **kwargs)
+        # The bounded, named retrieval pool (same as document search), not the
+        # loop's default executor: CI's loop-lag captures showed default-
+        # executor threads in psycopg at every stall, unbounded beside it.
+        return await _to_thread_in("retrieval", rag_inject, **kwargs)
 
 
 def _agentic_figure_retrieval_excluded(text: str) -> bool:
@@ -985,6 +1170,72 @@ def _first_pass_composes_figure(user_message: str, evidence: str) -> bool:
     )
 
 
+def _bill_led_rag_msg(
+    user_message: str,
+    project_id: str,
+    rag_sys_msg: dict[str, str],
+    *,
+    documents: Callable[[str], list[dict[str, Any]]] | None = None,
+) -> dict[str, str]:
+    """``rag_sys_msg`` with a typed bill's rows leading, for a figure ask.
+
+    Applies ``evidence_actions.bill_led_evidence`` over the first-pass
+    excerpts using the project's ``documents.doc_type`` (typed bill or not)
+    and display names. A question that is not a figure ask, a failed
+    document read, or a project with no typed bill keeps the message as it
+    is. ``documents(project_id)`` defaults to ``projects.list_document_names``.
+    """
+    from app.core.rag import route as _rag_route
+    from app.core.rag.evidence_actions import bill_led_evidence
+    from app.core.rag.retriever import measured_quantity_kinds, priced_row_count
+
+    if not _rag_route.wants_agentic_figure_retrieval(
+        user_message,
+        asks_measured_quantity=measured_quantity_kinds,
+        exclude=_agentic_figure_retrieval_excluded,
+    ):
+        return rag_sys_msg
+    if documents is None:
+        from app.core import projects as _projects
+
+        documents = _projects.list_document_names
+    from app.core.projects import DOC_TYPE_BILL
+
+    try:
+        docs = [d for d in (documents(project_id) or []) if d.get("id")]
+    except Exception:  # noqa: BLE001 -- a document read must not break the turn
+        _LOG.warning(
+            "bill-led evidence: document read failed project=%s", project_id,
+            exc_info=True,
+        )
+        return rag_sys_msg
+    names = {str(d["id"]): d.get("original_name") for d in docs}
+    typed = [
+        str(d["id"]) for d in docs
+        if (d.get("doc_type") or "").strip().lower() == DOC_TYPE_BILL
+    ]
+    content = rag_sys_msg.get("content", "")
+    led = bill_led_evidence(
+        content, typed_bills=typed, row_count=priced_row_count, doc_name=names.get,
+    )
+    if led == content:
+        return rag_sys_msg
+    return {**rag_sys_msg, "content": led}
+
+
+def _wants_source_coverage_plan(user_message: str, first_pass: str) -> bool:
+    """A document ask that is not a figure ask still gets the evidence
+    loop's plan when the first pass covers fewer sources than the kinds of
+    document the question names (S-R5 c). The runtime's own "not a
+    retrieval ask" exclusions apply first, exactly as for a figure ask."""
+    from app.core.rag.handed_set import wants_source_coverage_retrieval
+
+    text = (user_message or "").strip()
+    if not text or _agentic_figure_retrieval_excluded(text):
+        return False
+    return wants_source_coverage_retrieval(text, first_pass)
+
+
 async def _agentic_figure_retrieval_augment(
     agent: Any,
     user_message: str,
@@ -992,9 +1243,16 @@ async def _agentic_figure_retrieval_augment(
     api_key: str,
     user_id: str | None,
     rag_sys_msg: dict[str, str] | None,
+    *,
+    audit_rec: dict[str, Any] | None = None,
 ) -> dict[str, str] | None:
     """Fold the #163 evidence loop into a project-figure / published-standard
     turn's RAG context.
+
+    ``audit_rec``, when supplied, is the turn's retrieval audit: every marked
+    excerpt the loop added is appended to its ``chunks`` (see
+    ``_fold_loop_excerpts_into_audit``) so the sources panel and the
+    provenance gate read the same handed set the model read.
 
     The first pass is the text ``rag_inject`` already retrieved. A plan is
     generated, coverage checked against that first pass, and only uncovered
@@ -1007,11 +1265,13 @@ async def _agentic_figure_retrieval_augment(
         return rag_sys_msg
     from app.core.offload import off_loop
     from app.core.rag import route as _rag_route
-    from app.core.rag.retriever import (
-        measured_quantity_kinds,
-        retrieve_with_filter,
-    )
+    from app.core.rag.inject import _content_terms
+    from app.core.rag.retriever import retrieve_with_filter
     from app.core.rag.vector_store import get_store as _get_store
+
+    # A typed bill's rows lead a non-bill workbook's before anything reads the
+    # first pass, so the no-LLM composers and the model see the bill first.
+    rag_sys_msg = _bill_led_rag_msg(user_message, project_id, rag_sys_msg)
 
     # A figure already parseable from the first pass is answered by one of the
     # existing no-LLM compose paths; retrieval augmentation must not spend an
@@ -1019,11 +1279,46 @@ async def _agentic_figure_retrieval_augment(
     if _first_pass_composes_figure(user_message, rag_sys_msg.get("content", "")):
         return rag_sys_msg
 
-    if not _rag_route.wants_agentic_figure_retrieval(
-        user_message,
-        asks_measured_quantity=measured_quantity_kinds,
-        exclude=_agentic_figure_retrieval_excluded,
-    ):
+    # The gate is the first pass's coverage of the question, not its wording
+    # (S-R10 b). A question term is MISSING when (a) the retrieved excerpts
+    # lack it as a whole word, (b) the project's index holds it, and (c) it
+    # is among the question's more informative terms by the project's own
+    # chunk counts (``route.informative_missing_terms``). The loop runs when
+    # a term is missing, or when the excerpts name fewer sources than the
+    # kinds of document the question names. The runtime's "not a retrieval
+    # ask" exclusions apply first.
+    question = (user_message or "").strip()
+    if not question or _agentic_figure_retrieval_excluded(question):
+        return rag_sys_msg
+    first_pass = rag_sys_msg.get("content", "")
+    terms, absent = _rag_route.question_coverage(
+        question, first_pass, content_terms=_content_terms,
+    )
+    store = _get_store()
+    indexed: tuple[str, ...] = ()
+    missing: tuple[str, ...] = ()
+    if absent:
+        try:
+            counts = await off_loop(store.term_chunk_counts, project_id, terms)
+        except Exception:
+            # An unreadable index gives the term rule no evidence: it does
+            # not run the loop on its own.
+            _LOG.warning(
+                "rag_evidence_gate project=%s term counts unavailable; the "
+                "term rule does not run the loop", project_id, exc_info=True,
+            )
+        else:
+            indexed, missing = _rag_route.informative_missing_terms(
+                terms, absent, counts,
+            )
+    source_gap = _wants_source_coverage_plan(question, first_pass)
+    _LOG.info(
+        "rag_evidence_gate project=%s question_terms=%d missing_a=%d "
+        "missing_ab=%d missing_abc=%d source_gap=%s run=%s",
+        project_id, len(terms), len(absent), len(indexed), len(missing),
+        source_gap, bool(missing or source_gap),
+    )
+    if not missing and not source_gap:
         return rag_sys_msg
 
     from functools import partial
@@ -1032,7 +1327,6 @@ async def _agentic_figure_retrieval_augment(
         agent, api_key=api_key, project_id=project_id, user_id=user_id,
     )
 
-    store = _get_store()
     augmented = await _rag_route.augment_figure_retrieval(
         question=user_message,
         project_id=project_id,
@@ -1054,8 +1348,57 @@ async def _agentic_figure_retrieval_augment(
     if augmented and augmented != rag_sys_msg.get("content", ""):
         merged = dict(rag_sys_msg)
         merged["content"] = augmented
+        _fold_loop_excerpts_into_audit(audit_rec, augmented)
         return merged
     return rag_sys_msg
+
+
+def _fold_loop_excerpts_into_audit(
+    audit_rec: dict[str, Any] | None, content: str,
+) -> int:
+    """Append to ``audit_rec["chunks"]`` every marked excerpt in ``content``
+    the audit does not already hold; return how many were added (S-R5b).
+
+    The evidence loop's fetches carry the first pass's excerpt marker
+    (``inject.chunk_marker``), so they are read back with the provenance
+    gate's own parser -- one format, one reader. Without this the sources
+    panel listed only first-pass chunks: an answer citing a bill the loop
+    fetched matched nothing and the panel fell back to a first-pass
+    workbook. ``score`` is left empty: a loop fetch may be lexical, whose
+    rank value is not on the first pass's similarity scale, so the row
+    reads as Low confidence and never outranks a first-pass chunk in the
+    panel's score fallback; it is listed when the answer cites it.
+    """
+    if not isinstance(audit_rec, dict) or not content:
+        return 0
+    chunks = audit_rec.get("chunks")
+    if not isinstance(chunks, list):
+        return 0
+    from app.agents.citation_provenance import excerpt_records
+
+    held = {(c.get("doc_id"), c.get("chunk_index")) for c in chunks if isinstance(c, dict)}
+    added = 0
+    for rec in excerpt_records(content):
+        key = (rec.doc_id, rec.chunk_index)
+        if rec.doc_id is None or rec.chunk_index is None or key in held:
+            continue
+        held.add(key)
+        chunks.append({
+            "doc_id": rec.doc_id,
+            "chunk_index": rec.chunk_index,
+            "chunk_id": None,
+            "page": rec.page,
+            "project_id": audit_rec.get("project_id"),
+            "score": None,
+            "layer": rec.layer or "own",
+            "knowledge_layer": None,
+            "source_name": rec.source_name if rec.source_name != rec.doc_id else "",
+            "source_class": rec.source_class,
+            "text": rec.text,
+            "via": "evidence_loop",
+        })
+        added += 1
+    return added
 
 
 def _stash_dataset_outcome(agent: Any, question: str, outcome: Any) -> None:
@@ -1292,8 +1635,9 @@ def _resolve_histogram_schedule_file(
         pick = xers[0]
     if not pick:
         return None, ""
-    fp = pick.get("file_path") or ""
-    if not os.path.exists(fp):
+    # Drive-ingested rows keep no local copy: materialise, do not stat.
+    fp = _projects.materialize_document_path(pick)
+    if not fp:
         return None, ""
     return fp, pick.get("original_name") or os.path.basename(fp)
 
@@ -2960,6 +3304,308 @@ def _effective_fetch_document_max_chars() -> int:
     return _FETCH_DOCUMENT_MAX_CHARS
 
 
+#: The never-cut part of a cut result: every field but its rows, and how
+#: many rows each row list holds ("rows_total"). It rides inside the
+#: truncation envelope, beside the window, so the size cap never takes the
+#: figure, the unit or the selection with the rows.
+OUTLINE_KEY = "whole_result_fields"
+ROWS_TOTAL_KEY = "rows_total"
+#: The private tool-message key holding the WHOLE result when the content
+#: was cut. Not an OpenAI message key, so _sanitize_messages_for_provider
+#: never sends it; the answer path reads it by reference.
+FULL_RESULT_KEY = "full_result"
+
+
+def _row_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
+    """Every list of rows (a list whose items include a dict or a list) in
+    ``node``, with its path. Lists of plain values (words, page numbers) are
+    selections, not rows, and are never listed."""
+    out: list[tuple[str, list[Any]]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            out.extend(_row_lists(v, f"{path}.{k}" if path else str(k)))
+    elif isinstance(node, list):
+        if any(isinstance(v, (dict, list)) for v in node):
+            out.append((path, node))
+        for i, v in enumerate(node):
+            out.extend(_row_lists(v, f"{path}[{i}]"))
+    return out
+
+
+#: Over budget, the outline keeps each part's scalar fields and a list of
+#: plain values this many entries. A statement (a text field) is NEVER cut:
+#: rows and parts give way first, and past that the floor below holds.
+_OUTLINE_LIST_ITEMS = 20
+#: The outline key naming, per list of parts it had to shorten, how many
+#: parts the result holds (the list itself holds the parts shown).
+PARTS_TOTAL_KEY = "parts_total"
+#: The outline key present only when the outline is at its floor -- every
+#: list of parts down to its first part and still over budget, so it is kept
+#: over budget rather than cut. It states the budget, the outline's own size
+#: and exactly which fields are kept.
+OUTLINE_FLOOR_KEY = "outline_floor"
+
+
+def _is_part_list(node: list[Any]) -> bool:
+    """A list of parts: every item an object, and some item holds rows."""
+    return bool(node) and all(isinstance(v, dict) for v in node) and any(_row_lists(v) for v in node)
+
+
+def _scalar_fields(node: Any, path: str, totals: dict[str, int]) -> Any:
+    """``node`` with only its scalar and statement fields: numbers, flags,
+    texts (whole, never cut), lists of plain values (the first
+    _OUTLINE_LIST_ITEMS) and objects of those. A list of parts keeps
+    every part, so reduced; every other list of rows is dropped and its
+    length counted in ``totals`` under its path."""
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            sub = f"{path}.{k}" if path else str(k)
+            if isinstance(v, list) and any(isinstance(x, (dict, list)) for x in v) and not _is_part_list(v):
+                totals[sub] = len(v)
+                continue
+            out[k] = _scalar_fields(v, sub, totals)
+        return out
+    if isinstance(node, list):
+        if _is_part_list(node):
+            return [_scalar_fields(v, f"{path}[{i}]", totals) for i, v in enumerate(node)]
+        return [_scalar_fields(v, path, totals) for v in node[:_OUTLINE_LIST_ITEMS]]
+    return node
+
+
+def _part_lists(node: Any, path: str = "") -> list[tuple[str, list[Any]]]:
+    """Every non-empty list of objects in ``node`` (outline keys skipped)."""
+    out: list[tuple[str, list[Any]]] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in (ROWS_TOTAL_KEY, PARTS_TOTAL_KEY):
+                continue
+            out.extend(_part_lists(v, f"{path}.{k}" if path else str(k)))
+    elif isinstance(node, list) and node and any(isinstance(v, dict) for v in node):
+        out.append((path, node))
+    return out
+
+
+def _part_index(key: str, path: str) -> int:
+    """The index of the part of list ``path`` that ``key`` lies under, or -1."""
+    head = f"{path}["
+    if not key.startswith(head):
+        return -1
+    digits = key[len(head):].split("]", 1)[0]
+    return int(digits) if digits.isdigit() else -1
+
+
+def _fit_parts(work: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Halve the longest list of parts until ``work`` fits ``budget``, and
+    name each shortened list's whole length under PARTS_TOTAL_KEY, so the
+    parts shown are said to be N of M. The top-level fields always stay, and
+    every list of parts keeps at least its first part. When nothing more can
+    give way and ``work`` is still over budget, the outline is at its floor:
+    it is kept as it is -- no statement cut -- and says so under
+    OUTLINE_FLOOR_KEY."""
+    parts: dict[str, int] = {}
+    while len(json.dumps(work, default=str)) > budget:
+        found = [(p, lst) for p, lst in _part_lists(work) if len(lst) > 1]
+        if not found:
+            work[OUTLINE_FLOOR_KEY] = _floor_statement(work, budget)
+            break
+        path, longest = max(found, key=lambda pl: len(json.dumps(pl[1], default=str)))
+        parts.setdefault(path, len(longest))
+        del longest[max(1, len(longest) // 2):]
+        work[PARTS_TOTAL_KEY] = parts
+        # The row counts of the parts no longer shown go with them.
+        totals = work.get(ROWS_TOTAL_KEY)
+        if isinstance(totals, dict):
+            for key in [k for k in totals if _part_index(k, path) >= len(longest)]:
+                del totals[key]
+    return work
+
+
+def _floor_statement(work: dict[str, Any], budget: int) -> dict[str, Any]:
+    """What an outline at its floor keeps: every top-level field, and the
+    first part of each list of parts, every statement whole."""
+    kept = [k for k in work if k not in (ROWS_TOTAL_KEY, PARTS_TOTAL_KEY, OUTLINE_FLOOR_KEY)]
+    firsts = [f"{p}[0]" for p, _lst in _part_lists(work)]
+    return {
+        "budget": budget,
+        "chars": len(json.dumps(work, default=str)),
+        "kept": kept + firsts,
+        "rule": "over budget at its floor: statements are kept whole, never cut; "
+                "rows and parts were shortened first",
+    }
+
+
+def _result_outline(payload: Any, budget: int) -> dict[str, Any] | None:
+    """Every field of ``payload`` except its innermost row lists, with how
+    many rows each of those held under ``rows_total`` -- the figure, the
+    unit, the selection and the count of rows, never cut. A list that holds
+    the parts of a result (one entry per bill) keeps its parts; only the rows
+    inside them go. None only when the result has no rows (a long text is
+    paged, not outlined).
+
+    The outline is NEVER dropped for its size. Over ``budget`` it keeps the
+    scalar and statement fields of every part and drops every other list
+    (``_scalar_fields``); still over, it shows the first parts of the
+    longest list of parts and names how many there are (``_fit_parts``);
+    still over with one part per list, it is kept at that floor, whole, and
+    states what it kept (OUTLINE_FLOOR_KEY)."""
+    try:
+        work = json.loads(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        _LOG.info("tool result outline: the result does not serialize", exc_info=True)
+        return None
+    if not isinstance(work, dict):
+        return None
+    totals: dict[str, int] = {}
+    for path, rows in _row_lists(work):
+        if any(inner for v in rows for _, inner in _row_lists(v)):
+            continue  # holds parts with rows of their own: keep the parts
+        totals[path] = len(rows)
+        del rows[:]
+    if not totals:
+        return None
+    work[ROWS_TOTAL_KEY] = totals
+    if len(json.dumps(work)) <= budget:
+        return work
+    whole = json.loads(json.dumps(payload, default=str))
+    dropped: dict[str, int] = {}
+    reduced = _scalar_fields(whole, "", dropped)
+    reduced[ROWS_TOTAL_KEY] = {**dropped, **totals}
+    return _fit_parts(reduced, budget)
+
+
+#: Present, True, only in a MINIMAL outline: the outline's fields were
+#: dropped because the outline alone did not fit the cap (``_minimal_outline``).
+OUTLINE_CUT_KEY = "outline_cut"
+
+
+def _minimal_outline(outline: dict[str, Any], chars_total: int, with_totals: bool = True) -> dict[str, Any]:
+    """The defined last resort for an outline that does not fit the cap even
+    with no preview beside it. A statement is never cut, so a long one can
+    make the outline larger than the cap by itself. It is then REPLACED, not
+    cut: this keeps that it was cut, the outline's own size, the size of the
+    whole result, the row totals and how many parts each list of parts holds
+    (or, ``with_totals`` False, the rows' sum and how many lists they
+    cover), and a floor note that the statements were dropped for size."""
+    totals = outline.get(ROWS_TOTAL_KEY) if isinstance(outline.get(ROWS_TOTAL_KEY), dict) else {}
+    out: dict[str, Any] = {
+        OUTLINE_CUT_KEY: True,
+        "outline_chars": len(json.dumps(outline, default=str)),
+        "result_chars": chars_total,
+    }
+    if with_totals:
+        out[ROWS_TOTAL_KEY] = totals
+        if isinstance(outline.get(PARTS_TOTAL_KEY), dict):
+            out[PARTS_TOTAL_KEY] = outline[PARTS_TOTAL_KEY]
+    else:
+        out["rows_total_sum"] = sum(v for v in totals.values() if isinstance(v, int))
+        out["row_lists"] = len(totals)
+    out[OUTLINE_FLOOR_KEY] = {
+        "rule": "statements were dropped for size: the outline alone was larger than the cap, "
+                "so only its size and the row totals are kept. Do not answer from this outline; "
+                "re-run the tool narrowed to the part the user asked about.",
+    }
+    return out
+
+
+def _fit_cap(build: Callable[[int, Any], str], cap: int, outline: Any, chars_total: int, keep: int) -> str:
+    """``build(keep, outline)`` shrunk until it fits ``cap``, GUARANTEED.
+
+    The preview gives way first, measured on the real envelope. With no
+    preview left and still over the cap, the outline steps down: the minimal
+    outline with its row totals, then with their sum only, then none. Past
+    that a bare cut marker is returned. Every rung says the result was cut.
+    The result is never longer than ``cap`` unless ``cap`` is below the
+    smallest valid cut marker, ``{"truncated": true}`` (19 characters)."""
+    rungs: list[Any] = [outline]
+    if isinstance(outline, dict):
+        rungs += [_minimal_outline(outline, chars_total), _minimal_outline(outline, chars_total, False), None]
+    for rung in rungs:
+        k = max(0, int(keep))
+        out = build(k, rung)
+        while len(out) > cap and k > 0:
+            k = max(0, k - max(len(out) - cap, 32))
+            out = build(k, rung)
+        if len(out) <= cap:
+            return out
+    bare = [
+        {"truncated": True, "chars_total": chars_total,
+         "note": "The result was cut for size; nothing of it fits the cap. Re-run the tool narrowed."},
+        {"truncated": True, "chars_total": chars_total},
+        {"truncated": True},
+    ]
+    for marker in bare:
+        out = json.dumps(marker)
+        if len(out) <= cap:
+            return out
+    return out
+
+
+ROWS_SHOWN_KEY = "rows_shown"
+
+
+def _rows_in_window(payload: Any, text: str, start: int, end: int) -> dict[str, int]:
+    """Per innermost list of rows (the paths of ``rows_total``), how many
+    WHOLE rows lie inside the character window ``text[start:end]`` of the
+    serialized ``payload``. Each row is found by its own serialization, in
+    order, so a row the window cuts in half is not counted."""
+    shown: dict[str, int] = {}
+    try:
+        work = json.loads(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        _LOG.info("tool result rows: the result does not serialize", exc_info=True)
+        return shown
+    for path, rows in _row_lists(work):
+        if any(inner for v in rows for _, inner in _row_lists(v)):
+            continue  # a list of parts: its rows are counted in the parts
+        cursor, n = 0, 0
+        for row in rows:
+            piece = json.dumps(row)
+            at = text.find(piece, cursor)
+            if at < 0:
+                break
+            cursor = at + len(piece)
+            if at >= start and cursor <= end:
+                n += 1
+        shown[path] = n
+    return shown
+
+
+def _rows_note(shown: dict[str, int], totals: dict[str, int]) -> str:
+    """'rows shown: N of M (path)' for every list the window shortened."""
+    return "; ".join(f"rows shown: {n} of {totals[p]} ({p})"
+                     for p, n in shown.items() if p in totals and n < totals[p])
+
+
+def _tool_result_was_cut(content: Any) -> bool:
+    """True when a serialized tool result is not the whole result: a
+    character window."""
+    if not isinstance(content, str) or not content.startswith("{"):
+        return False
+    try:
+        head = json.loads(content)
+    except (TypeError, ValueError):
+        _LOG.info("tool result: content is not JSON, so it is not a cut envelope", exc_info=True)
+        return False
+    return isinstance(head, dict) and bool(head.get("truncated"))
+
+
+def _tool_message_extra(payload: dict[str, Any], content: str, name: str = "") -> dict[str, Any]:
+    """The private keys a tool message carries besides its content: the
+    whole result, by reference, when the content was cut AND the tool
+    DECLARES a computed result (``tool_registry``), the only kind the answer
+    path renders. A document read or a search is never held: nothing renders
+    it, and its model copy already says it was cut and where to read on.
+    The key is turn-local: ``_sanitize_messages_for_provider`` never sends
+    it, and ``agent_memory.append_message`` stores only a role and a text."""
+    if not _tool_result_was_cut(content):
+        return {}
+    kind, _spec = _declared_kind({"name": name})
+    if kind != "computed":
+        return {}
+    return {FULL_RESULT_KEY: payload}
+
+
 def _tool_result_content(
     payload: dict[str, Any],
     offset: int = 0,
@@ -2999,11 +3645,18 @@ def _tool_result_content(
     if len(text) <= cap and not start:
         return text
     window = text[start:]
+    # The figure, the unit, the selection and the row counts ride beside the
+    # window, whole: a window that cuts the rows never cuts the statement.
+    outline = _result_outline(payload, cap // 4)
 
-    def _envelope(keep: int) -> str:
+    def _envelope(keep: int, outline: Any) -> str:
         shown = min(keep, len(window))
         next_offset = start + shown
         more = next_offset < len(text)
+        totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
+        rows_shown = ({p: n for p, n in _rows_in_window(payload, text, start, next_offset).items()
+                       if p in totals} if totals else {})
+        rows_note = _rows_note(rows_shown, totals)
         return json.dumps(
             {
                 "truncated": True,
@@ -3046,6 +3699,9 @@ def _tool_result_content(
                         "statement about what this result contains is safe."
                     )
                 ),
+                **({OUTLINE_KEY: outline} if outline is not None else {}),
+                **({ROWS_SHOWN_KEY: rows_shown} if rows_shown else {}),
+                **({"rows_note": rows_note} if rows_note else {}),
                 "preview": window[:keep],
             },
             default=str,
@@ -3054,14 +3710,12 @@ def _tool_result_content(
     # Embedding the preview as a JSON string RE-escapes it — every `"` becomes
     # `\"` and every `\` becomes `\\` — so escape-heavy content (exactly what
     # this guards) can nearly double. A fixed budget therefore overshoots the
-    # cap; shrink until the ENVELOPE fits, measuring the real thing.
-    keep = cap
-    out = _envelope(keep)
-    while len(out) > cap and keep > 0:
-        overshoot = len(out) - cap
-        keep = max(0, keep - max(overshoot, 32))
-        out = _envelope(keep)
-    return out
+    # cap; shrink until the ENVELOPE fits, measuring the real thing. A
+    # statement is never cut, so the outline alone can exceed the cap:
+    # _fit_cap then replaces it by a minimal one and the result always fits.
+    # A named call, as in _compacted_tool_payload, so the envelope's callers
+    # (and the tests that name them) are visible from a static call graph.
+    return _fit_cap(lambda k, o: _envelope(k, o), cap, outline, len(text), cap)
 
 
 def _persist_failed_turn(conversation_id: str | None) -> None:
@@ -3995,6 +4649,103 @@ def _strip_reasoning_blocks(text: str) -> str:
     return text.strip()
 
 
+#: Keys of a truncation envelope (``_tool_result_content`` and
+#: ``_compacted_tool_payload``, both marked ``"truncated": True``) whose text is
+#: addressed to the MODEL -- how to read the rest, what it may not conclude.
+#: Never user-facing. ``tests/test_tool_directive_echo.py`` builds both
+#: envelopes and checks every string key outside ``preview`` is listed here.
+_TOOL_DIRECTIVE_KEYS: tuple[str, ...] = ("note", "scope_of_absence", "rows_note")
+
+#: Words in a row an answer sentence must share with a tool directive before
+#: the run counts as copied. Five words in the same order is a quotation, not
+#: a coincidence of vocabulary.
+_DIRECTIVE_NGRAM = 5
+
+
+def _directive_words(text: str) -> list[str]:
+    """Lower-case words of ``text`` with identifiers split and figures masked.
+
+    ``char_offset=7098`` and ``char offset 7098`` and ``char-offset 512`` all
+    read ``char offset #``: a copy that passed through the exit check (which
+    turns identifiers into words) or a paraphrase that changed only the number
+    is still the same instruction.
+    """
+    spaced = re.sub(r"[^0-9a-z]+", " ", (text or "").lower())
+    return ["#" if w.isdigit() else w for w in spaced.split()]
+
+
+def _ngrams(words: list[str], n: int) -> set[tuple[str, ...]]:
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def _tool_directive_texts(messages: list[dict[str, Any]] | None) -> list[str]:
+    """Every model-directed instruction the turn's tool results carried."""
+    out: list[str] = []
+    for m in messages or []:
+        if not isinstance(m, dict) or m.get("role") != "tool":
+            continue
+        raw = m.get("content")
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("truncated") is not True:
+            continue
+        for key in _TOOL_DIRECTIVE_KEYS:
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                out.append(val)
+    return out
+
+
+def _strip_tool_directive_echo(
+    text: str, messages: list[dict[str, Any]] | None,
+) -> str:
+    """Remove every sentence of ``text`` that copies a tool's directive.
+
+    A truncation envelope tells the model to call the tool again with the
+    next offset. That instruction is for the model; shipped as the answer it
+    tells the user to operate a tool they do not have. The check reads the
+    directives this turn's tool results actually carried, so it follows the
+    envelope's wording wherever it changes, and a sentence goes only when
+    most of its word runs appear, in order, in one of them. An answer that
+    merely uses the same words ("the next window", "the file") keeps them.
+    """
+    if not text or not text.strip():
+        return text
+    directives = _tool_directive_texts(messages)
+    if not directives:
+        return text
+    grams: set[tuple[str, ...]] = set()
+    for d in directives:
+        grams |= _ngrams(_directive_words(d), _DIRECTIVE_NGRAM)
+    if not grams:
+        return text
+    kept: list[str] = []
+    dropped = 0
+    for line in text.splitlines(keepends=True):
+        parts = re.split(r"(?<=[.!?])(\s+)", line)
+        # re.split with a capture group alternates sentence, separator.
+        out_line: list[str] = []
+        for i in range(0, len(parts), 2):
+            sentence = parts[i]
+            sep = parts[i + 1] if i + 1 < len(parts) else ""
+            own = _ngrams(_directive_words(sentence), _DIRECTIVE_NGRAM)
+            if own and len(own & grams) * 2 >= len(own):
+                dropped += 1
+                continue
+            out_line.append(sentence + sep)
+        joined = "".join(out_line)
+        if joined.strip():
+            kept.append(joined)
+        elif not line.strip():
+            kept.append(line)
+    if not dropped:
+        return text
+    _LOG.warning("final answer copied %d tool-directive sentence(s); removed", dropped)
+    return "".join(kept).strip()
+
+
 def _sanitize_final_text(
     text: str,
     messages: list[dict[str, Any]] | None = None,
@@ -4009,12 +4760,16 @@ def _sanitize_final_text(
     5. If that fallback would hide a ``validation_pipeline`` verdict, graft it.
     6. Return empty string if nothing usable remains.
     """
-    if not text:
-        cleaned = ""
-    else:
+    cleaned = ""
+    if text:
         cleaned = _strip_dsml(text).strip()
         cleaned = _strip_answer_routing_preamble(cleaned)
         cleaned = _strip_reasoning_blocks(cleaned)
+        # A tool's instruction to the model is never the user's answer.
+        # Removed here, the one chokepoint both answer paths share, so a
+        # reply that was nothing but the directive comes out empty and takes
+        # the no-tools retry the empty answer already gets.
+        cleaned = _strip_tool_directive_echo(cleaned, messages)
 
     if cleaned:
         # Unwrap a sole markdown fence / BOM before the tool-JSON detector so
@@ -4175,8 +4930,12 @@ def _resolve_file_path(project_id: str, raw: Any) -> Any:
       - ``raw`` is already an absolute path that exists;
       - no matching document is found.
 
-    Otherwise looks up the project's documents (via ``projects.list_documents``)
-    and returns the document's ``file_path`` when the name matches.
+    Otherwise looks up the project's documents (via ``projects.list_document_names``)
+    and returns a readable local path for the matched document, produced by
+    ``projects.materialize_document_path`` (local bytes, preview cache or a
+    Drive download -- Drive-ingested rows keep no local copy). A match whose
+    bytes cannot be produced is skipped, so ``raw`` comes back unchanged and
+    the block reports its own "File not found".
 
     Matching is tried in two passes:
       1. Exact match on ``original_name`` (case-insensitive).
@@ -4207,17 +4966,17 @@ def _resolve_file_path(project_id: str, raw: Any) -> Any:
     for doc in docs:
         on = (doc.get("original_name") or "").strip().lower()
         if on and on == needle:
-            fp = doc.get("file_path") or ""
-            if fp and _os.path.exists(fp):
+            fp = _projects.materialize_document_path(doc)
+            if fp:
                 return fp
 
     # Pass 2: substring match either direction (handles the LLM truncating
     # or rewording the filename slightly).
     for doc in docs:
         on = (doc.get("original_name") or "").strip().lower()
-        if on and (needle in on or on in needle):
-            fp = doc.get("file_path") or ""
-            if fp and _os.path.exists(fp):
+        if on and on != needle and (needle in on or on in needle):
+            fp = _projects.materialize_document_path(doc)
+            if fp:
                 return fp
 
     return raw
@@ -4782,7 +5541,11 @@ def _looks_like_self_contained_calculation(text: str) -> bool:
         return False
     if _ARITH_EXPR_RE.search(text):
         return True
-    return _count_dimensions(text) >= _MIN_DIMENSIONS_FOR_CALC
+    if _count_dimensions(text) < _MIN_DIMENSIONS_FOR_CALC:
+        return False
+    # "How many 1.8 x 1.8 m manholes are billed" carries dimensions, but
+    # they describe the item a record is asked about.
+    return not _figures_only_describe_record_ask(text)
 
 
 def _forced_specific_tool(messages: list[dict[str, Any]], available: set) -> str | None:
@@ -5206,7 +5969,7 @@ def _latest_user_text(messages: list[dict[str, Any]] | None) -> str:
         if m.get("role") != "user":
             continue
         content = str(m.get("content") or "")
-        if content.lstrip().startswith(_PREDISPATCH_PREFIX):
+        if content.lstrip().startswith(_PREDISPATCH_PREFIX) or _is_retry_instruction(content):
             continue
         return content
     return ""
@@ -5409,35 +6172,76 @@ def _looks_like_tool_truncation_notice(text: str) -> bool:
 
 def _text_needs_tool_recovery(text: str) -> bool:
     """True when the LLM hop died and a tool/predispatch draft should speak."""
+    return tool_recovery_reason(text) is not None
+
+
+def tool_recovery_reason(text: str) -> str | None:
+    """The name of the rule that hands ``text`` to tool recovery, else None.
+
+    One implementation for the recovery decision and its trace, so the log
+    names the rule that fired (never the text). The order is the decision
+    order.
+    """
+    from app.agents.core.computed_answer import has_words
+
     t = (text or "").strip()
     if not t:
-        return True
+        return "empty"
+    if not has_words(t):
+        # Markdown alone (rules, bullets, emphasis marks): it says nothing.
+        return "no_words"
     if t == _EMPTY_RESPONSE_FALLBACK:
-        return True
+        return "fallback_line"
     if "unable to generate" in t.lower():
-        return True
+        return "unable_to_generate"
     if re.search(r"HTTP 413|tokens per minute|\bTPM\b", t):
-        return True
+        return "provider_limit"
     # Leftover E4: "Let me validate…" is not an answer. Recover the
     # construction_calc volume (or any other deliverable already in the
     # thread) instead of shipping the promise.
     if _looks_like_search_preamble(t):
-        return True
+        return "search_promise"
     if _looks_like_tool_error_json(t):
-        return True
+        return "tool_error_json"
     if _looks_like_formula_template(t):
-        return True
+        return "formula_template"
     if _looks_like_tool_truncation_notice(t):
-        return True
+        return "truncation_notice"
     try:
         from app.lib.construction_formulas_commercial import (
             answer_is_unbound_delay_damages,
         )
         if answer_is_unbound_delay_damages(t):
-            return True
+            return "unbound_delay_damages"
     except Exception:  # noqa: BLE001 — recovery probe must never break a turn
         _LOG.debug("unbound delay-damages probe failed", exc_info=True)
-    return False
+    return None
+
+
+def recover_answer_traced(
+    text: str,
+    messages: list[dict[str, Any]] | None,
+    *,
+    reason: str | None = None,
+    raw_len: int | None = None,
+) -> str:
+    """``_recover_answer_from_tool_messages``, traced when it replaces the text.
+
+    The line names the rule that handed the text to recovery (or the
+    caller's ``reason``, ``gate_emptied`` when a gate removed every clause)
+    and lengths only: ``raw`` is the text it replaced (``raw_len`` when the
+    caller's text was already emptied), ``recovered`` what stands in for it.
+    Never the text. The answer is exactly the untraced call's.
+    """
+    out = _recover_answer_from_tool_messages(text, messages)
+    if out != text:
+        _LOG.info(
+            "postprocess: recovery replaced final_text reason=%s raw=%dc recovered=%dc",
+            reason or tool_recovery_reason(text),
+            len(text or "") if raw_len is None else raw_len,
+            len(out or ""),
+        )
+    return out
 
 
 def _format_variation_order(payload: dict[str, Any]) -> str:
@@ -5820,6 +6624,14 @@ def _recover_answer_from_tool_messages(
     surface that draft instead of an empty bubble or a 413 error."""
     if not _text_needs_tool_recovery(text):
         return text
+    # Every computed call of the turn that states its figures (or failed)
+    # answers first. When one succeeded but states nothing, the result
+    # formatters below get their say; if they say nothing either, the
+    # computed calls still answer plainly at the end -- never the generic
+    # sentence.
+    computed = _computed_turn_answer(messages, require_stated=True)
+    if computed:
+        return computed
     error_fallback = ""
     for m in reversed(messages or []):
         if m.get("role") == "user":
@@ -5839,13 +6651,20 @@ def _recover_answer_from_tool_messages(
         if not isinstance(payload, dict):
             # Truncation envelope: {"truncated": true, "preview": "..."}
             continue
-        inner = payload
-        if payload.get("truncated") and payload.get("preview"):
+        if payload.get("truncated"):
+            # A truncation envelope is a paging message to the model. Only a
+            # whole result inside its preview can be a draft; the envelope's
+            # own note ("This is the LAST window ...") never is.
             try:
-                inner = json.loads(payload["preview"])
+                inner = json.loads(payload.get("preview") or "")
             except (TypeError, json.JSONDecodeError):
-                inner = payload
+                continue
+        else:
+            inner = payload
         if not isinstance(inner, dict):
+            continue
+        if _declared_kind(m)[0] == "search":
+            # Passages are evidence for an answer, never the answer (G-8).
             continue
         action = inner.get("action")
         if action == "commissioning_checklist_generated":
@@ -5896,17 +6715,232 @@ def _recover_answer_from_tool_messages(
         formatted = _format_construction_calc(inner)
         if formatted:
             return formatted
-        generic = _format_any_calc_result(inner)
+        kb_figure = _format_kb_evaluation(inner)
+        if kb_figure:
+            return kb_figure
+        # The generic note/summary reader is for a calculator's result only.
+        # Any other tool's note (a search's rows-withheld count, an "already
+        # handed" notice) is addressed to the model, not the user.
+        generic = (
+            _format_any_calc_result(inner) if _is_calc_tool_result(m, inner) else ""
+        )
         if generic:
             return generic
+        if _declared_kind(m)[0] == "computed":
+            # A computed call's failure is stated by the computed renderer
+            # below (declared code or the plain sentence), never by pasting
+            # the tool's own error text.
+            continue
         err_payload = _tool_error_payload(inner)
         if (
             err_payload
             and not error_fallback
             and _is_calc_tool_error(m, inner, err_payload)
         ):
-            error_fallback = _format_tool_error_plain(err_payload)
-    return error_fallback or text
+            error_fallback = _plain_tool_error_sentence(err_payload)
+    return error_fallback or _computed_turn_answer(messages) or text
+
+
+#: The one plain line that stands in for the model's explanation when the
+#: model could not be reached and a computed result is shown on its own.
+MODEL_UNREACHED_NOTE = (
+    "The explanation is unavailable because the language model could not be reached."
+)
+
+
+def _missing_model_error(cfg: dict[str, Any], api_key: str | None) -> str | None:
+    """The error a model call WOULD return when no provider key is configured.
+
+    Read once per turn, but acted on only at the first model call, so every
+    deterministic stage before it (calculator pre-dispatch, capability answer,
+    fast paths) still answers a turn it can answer without a model.
+    """
+    if cfg.get("env_key") and not (api_key or os.getenv(cfg["env_key"])):
+        return f"No {cfg['env_key']} configured."
+    return None
+
+
+def _resolve_model_key(cfg: dict[str, Any], api_key: str | None) -> tuple[str | None, str]:
+    """``(missing-key error or None, the key to use)`` for one turn."""
+    resolved = api_key or (os.getenv(cfg["env_key"]) if cfg.get("env_key") else "") or ""
+    return _missing_model_error(cfg, api_key), resolved
+
+
+async def _call_model_unless_missing(agent: Any, model_missing: str | None,
+                                     messages: list[dict[str, Any]], api_key: str,
+                                     **kwargs: Any) -> dict[str, Any]:
+    """The turn's model call. With no model configured the missing-key message
+    is that call's error, so the caller's provider-failure recovery runs."""
+    if model_missing:
+        return {"status": "error", "error": model_missing}
+    return await agent._call_llm(messages, api_key, **kwargs)
+
+
+def _recover_after_provider_failure(messages: list[dict[str, Any]] | None) -> str:
+    """A provider failure of ANY kind -- no key, refused connection, timeout,
+    exhausted balance, an HTTP error, an empty reply -- recovers the tool or
+    pre-dispatch result already in the thread, followed by one plain line that
+    the explanation is unavailable. Returns "" when the thread holds nothing
+    the user can be given, so the caller keeps its honest failure message.
+    """
+    # A pre-dispatch bubble is addressed to the model (the raw result plus
+    # instructions on how to present it). Where the same run was also recorded
+    # as a tool result, that record is what the user is shown, through the
+    # result formatters; the bubble is the fallback for drafts recorded only
+    # as a bubble.
+    tool_only = [
+        m for m in (messages or [])
+        if not (
+            m.get("role") == "user"
+            and "PLATFORM PRE-DISPATCH:" in str(m.get("content") or "")[:80]
+        )
+    ]
+    for thread in (tool_only, messages):
+        recovered = _recover_answer_from_tool_messages("", thread)
+        if recovered and not _text_needs_tool_recovery(recovered):
+            return recovered
+    return ""
+
+
+def _with_model_unreached_note(text: str) -> str:
+    """Append the unreached-model line once, after the result."""
+    body = (text or "").rstrip()
+    if MODEL_UNREACHED_NOTE in body:
+        return body
+    return f"{body}\n\n{MODEL_UNREACHED_NOTE}"
+
+
+def _declared_kind(msg: dict[str, Any] | None) -> tuple[str, Any]:
+    """(the result kind a tool message's tool DECLARED, its registry spec).
+
+    The kind comes from the tool's own declaration in the registry, never
+    from a list of tool names here."""
+    from app.agents.core import tool_registry
+
+    name = str((msg or {}).get("name") or "")
+    spec = tool_registry.result_spec(name) if name else None
+    return (spec.kind if spec is not None else ""), spec
+
+
+def _tool_message_payload(msg: dict[str, Any]) -> dict[str, Any] | None:
+    """The result dict a tool message carries (a truncation envelope's whole
+    preview included), or None."""
+    raw = msg.get("content") or ""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        _LOG.info("tool message %s: content is not a JSON result", msg.get("name"), exc_info=True)
+        return None
+    if isinstance(payload, dict) and payload.get("truncated"):
+        try:
+            payload = json.loads(payload.get("preview") or "")
+        except (TypeError, json.JSONDecodeError):
+            _LOG.info("tool message %s: truncated preview is not whole JSON", msg.get("name"), exc_info=True)
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _tool_message_cut_unreadable(msg: dict[str, Any]) -> bool:
+    """True when a tool message's content is not its whole result and the
+    whole result is not held by reference: a truncation envelope whose
+    preview is not whole JSON. The tool returned, but its result cannot
+    be read here -- it was too large to show, it did not return nothing."""
+    if isinstance(msg.get(FULL_RESULT_KEY), dict):
+        return False
+    raw = msg.get("content") or ""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        _LOG.info("tool message %s: content is not JSON, so it is not a cut envelope", msg.get("name"), exc_info=True)
+        return False
+    if not (isinstance(payload, dict) and payload.get("truncated")):
+        return False
+    try:
+        json.loads(payload.get("preview") or "")
+    except (TypeError, json.JSONDecodeError):
+        return True
+    return False
+
+
+def _computed_call(msg: dict[str, Any], spec: Any,
+                   messages: list[dict[str, Any]], language: str) -> Any:
+    """One computed call of the turn as ``computed_answer.Call``: its
+    statements, or its failure, and the arguments it was asked with."""
+    from app.agents.core import computed_answer
+
+    # The whole result, by reference, when the content handed to the model
+    # was cut; the content is never re-parsed for figures it lost.
+    full = msg.get(FULL_RESULT_KEY)
+    cut_unreadable = _tool_message_cut_unreadable(msg)
+    if isinstance(full, dict):
+        payload = full
+    elif cut_unreadable:
+        payload = {}
+    else:
+        payload = _tool_message_payload(msg) or {}
+    inner = payload.get("result")
+    body = inner if isinstance(inner, dict) else payload
+    statements: list[Any] = []
+    error = ""
+    err = _tool_error_payload(body)
+    status = str(body.get("status") or "").strip().lower()
+    if cut_unreadable:
+        # The call returned, but its result was cut and the whole result is
+        # not held: say it was too large to show, rather than leave the call
+        # open (an open call is waited for, and this one can never state
+        # anything) or read it as no figure.
+        error = computed_answer.RESULT_CUT_UNREADABLE
+    elif payload.get("ok") is False or err is not None or status in _FAILURE_STATUSES:
+        error = computed_answer.failure_text(err or body)
+    elif body:
+        try:
+            # The statement reads the tool's result; a result recorded
+            # without the tool's envelope is read whole.
+            statements = list(spec.statement(body) or [])
+            if not statements and body is not payload:
+                statements = list(spec.statement(payload) or [])
+        except (TypeError, ValueError, KeyError, AttributeError):
+            _LOG.warning("computed tool %s: its result states no figure", spec.name, exc_info=True)
+    return computed_answer.Call(
+        tool=str(spec.name),
+        heading=computed_answer.heading_for(spec.display_name or spec.name, language),
+        statements=tuple(statements),
+        asked=computed_answer.tool_call_args(messages, str(msg.get("tool_call_id") or "")),
+        error=error, declared=tuple(getattr(spec, "reason_codes", ()) or ()))
+
+
+def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
+                          require_stated: bool = False) -> str:
+    """The one answer the computed calls of the current turn (after the
+    user's last question) give, worded in the question's language
+    (``computed_answer.answer_turn``: results lead, a repeat is shown once,
+    a call with no figure only when no result answered its part).
+
+    ``require_stated``: answer only when every call that is still shown
+    stated its figures or its failure; otherwise "" (so no call is left
+    out)."""
+    from app.agents.core import computed_answer
+
+    msgs = list(messages or [])
+    start, question = 0, ""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        content = str(m.get("content") or "")
+        if (m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]
+                and not _is_retry_instruction(content)):
+            start, question = i + 1, content
+            break
+    language = computed_answer.question_language(question)
+    calls = []
+    for m in msgs[start:]:
+        if m.get("role") != "tool":
+            continue
+        kind, spec = _declared_kind(m)
+        if kind == "computed" and spec.statement is not None:
+            calls.append(_computed_call(m, spec, msgs, language))
+    if require_stated and any(not c.stated for c in computed_answer.unanswered(calls)):
+        return ""
+    return computed_answer.answer_turn(calls, language, question)
 
 
 def _unwrap_construction_calc_inner(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -6133,7 +7167,9 @@ def _nonblank_after_empty_synthesis(
         messages,
     ):
         return _with_footer(_SYNTH_CUTOFF_NOTICE)
-    return _with_footer(body or _EMPTY_RESPONSE_FALLBACK)
+    # An instructed retry that still gave nothing: say plainly what happened
+    # and what was searched, never the bare generic line.
+    return _with_footer(_unanswered_after_forced_retry(messages) or _EMPTY_RESPONSE_FALLBACK)
 
 
 def _construction_calc_tool_schema() -> dict[str, Any]:
@@ -6141,7 +7177,13 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
     calculation enum is built from the live registry so it never drifts from the
     library. For cost build-ups the model is told to pass real rates from RAG;
     the library's defaults are indicative fallbacks only (keeps cost grounded)."""
+    from app.agents.driver.tools import calculator_catalogue
     from app.lib import construction_formulas as _cf
+    # The same labelled catalogue the driver schema offers (one registry, one
+    # builder): each calculator with its inputs' labels, units and ranges, so
+    # the default path fills params by label and unit, not by guessing from a
+    # bare name.
+    _specs, _lines = calculator_catalogue(None)
     return {
         "type": "function",
         "function": {
@@ -6155,7 +7197,10 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
                 "are indicative GCC fallbacks only. For concrete/raft/slab volume, "
                 "use calculation=concrete_volume; the project's documented waste "
                 "factor (5%) is applied and volume_m3 is the with-waste figure "
-                "(30×20×1.5 m → 945 m3). Deterministic: call once."
+                "(30×20×1.5 m → 945 m3). Deterministic: call once. Fill params "
+                "by each input's key as listed below, matching the user's figures "
+                "by label and unit; leave out an input the user did not give.\n"
+                + "\n".join(_lines)
             ),
             "parameters": {
                 "type": "object",
@@ -6498,7 +7543,8 @@ def _cg_is_platform_bubble(content: str) -> bool:
     operator's, and must never seed the user-arithmetic closure.
     """
     head = content.lstrip()
-    return head.startswith(_PREDISPATCH_PREFIX) or head.startswith(_TOOL_RESULT_PREFIX)
+    return (head.startswith(_PREDISPATCH_PREFIX) or head.startswith(_TOOL_RESULT_PREFIX)
+            or _is_retry_instruction(head))
 
 
 def _cg_pair_grounds(value: float, base: tuple, tol: float) -> bool:
@@ -8217,8 +9263,14 @@ def _should_short_circuit_delay_damages_daily(
 
 
 def _calc_input_question(pre: dict[str, Any] | None) -> str:
-    """The pre-dispatched calculator's question for inputs it would not run, or ''."""
+    """The pre-dispatched calculator's question for inputs it would not run, or ''.
+
+    A calculator that only lacks inputs on a message that asked for no
+    computation does not end the turn: the turn goes on to retrieval.
+    """
     if not pre or pre.get("name") != "construction_calc":
+        return ""
+    if pre.get("falls_to_retrieval"):
         return ""
     result = pre.get("result")
     if not isinstance(result, dict) or not result.get("needs_input"):
@@ -9311,6 +10363,162 @@ _POST_GATE_ANSWER_COMPOSERS: list[tuple[str, Any]] = [
 ]
 
 
+#: The failure keys and the first ``filename`` key of a tool result, read
+#: from the head of its JSON so a result cut at the tool-result cap is still
+#: judged (a key inside a string value is escaped, so it never matches).
+_TOOL_FAILED_HEAD_RE = re.compile(r'"ok":\s*false\b|"status":\s*"(?:error|needs_input)"')
+_TOOL_FILENAME_RE = re.compile(r'"filename":\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _read_tool_result(content: str) -> tuple[bool, str]:
+    """(succeeded, the filename the result reports or ``""``).
+
+    A tool message holds what ``_tool_result_content`` wrote: the tool's
+    result object, or past the cap a truncation envelope whose ``preview``
+    is the head of that object's JSON. A result failed when it says so the
+    way :func:`_tool_result_errored` reads it (``ok: false``, or an
+    ``error`` / ``needs_input`` status at any level); any other result
+    object succeeded."""
+    text = content if isinstance(content, str) else ""
+    try:
+        parsed: Any = json.loads(text)
+    except (TypeError, ValueError):
+        parsed = None
+    if (isinstance(parsed, dict) and parsed.get("truncated") is True
+            and isinstance(parsed.get("preview"), str)):
+        text = parsed["preview"]
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+    if isinstance(parsed, dict):
+        inner = parsed.get("result")
+        name = parsed.get("filename") or (
+            inner.get("filename") if isinstance(inner, dict) else "")
+        failed = _tool_result_errored({"ok": parsed.get("ok"), "result": parsed})
+        return not failed, str(name or "").strip()
+    if not text.lstrip().startswith("{"):
+        return False, ""
+    found = _TOOL_FILENAME_RE.search(text)
+    return (not _TOOL_FAILED_HEAD_RE.search(text),
+            json.loads(f'"{found.group(1)}"') if found else "")
+
+
+def _operator_turn_start(msgs: list[dict[str, Any]]) -> int:
+    """Index of the operator's latest message; a PRE-DISPATCH bubble is the
+    platform's, not a new turn."""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i] or {}
+        content = str(m.get("content") or "")
+        if (m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX)
+                and not _is_retry_instruction(content)):
+            return i
+    return 0
+
+
+#: A document read that stopped at the fetch cap, from text no index holds.
+#: Read from the head of the tool message, where fetch_document puts its
+#: flags, so a message cut at the tool-result cap still reports them.
+_FETCH_CUT_RE = re.compile(r'"truncated":\s*true\b')
+_FETCH_EXTRACTED_RE = re.compile(r'"source":\s*"extracted"')
+
+
+def _opening_part_reads(messages: list[dict[str, Any]] | None) -> list[str]:
+    """Names of the documents this turn read only the opening part of.
+
+    A fetch_document result that came back ``truncated`` from raw extraction
+    (``source: extracted``: the document has no indexed text) ends at the
+    fetch cap, and nothing can search the rest. A cut read of an indexed
+    document is not listed: search still reaches all of its text."""
+    msgs = list(messages or [])
+    names: list[str] = []
+    for m in msgs[_operator_turn_start(msgs) + 1:]:
+        m = m or {}
+        if m.get("role") != "tool" or m.get("name") != "fetch_document":
+            continue
+        head = str(m.get("content") or "")
+        try:
+            parsed = json.loads(head)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict) and not isinstance(parsed.get("preview"), str):
+            if parsed.get("truncated") is True and parsed.get("source") == "extracted":
+                names.append(str(parsed.get("filename") or "").strip())
+            continue
+        if isinstance(parsed, dict):
+            head = parsed["preview"]
+        found = _TOOL_FILENAME_RE.search(head)
+        if found and _FETCH_CUT_RE.search(head) and _FETCH_EXTRACTED_RE.search(head):
+            names.append(json.loads(f'"{found.group(1)}"').strip())
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def _note_opening_part_reads(text: str, messages: list[dict[str, Any]] | None) -> str:
+    """Say so when the answer rests on the opening part of a document only."""
+    names = [n for n in _opening_part_reads(messages)
+             if f"read only the opening part of {n}" not in (text or "")]
+    if not names or not (text or "").strip():
+        return text
+    lines = [
+        f"Note: I read only the opening part of {n}. It is stored but not "
+        "searchable, so anything further in was not read."
+        for n in names
+    ]
+    return text.rstrip() + "\n\n" + "\n".join(lines)
+
+
+def _documents_read_this_turn(
+    text: str,
+    messages: list[dict[str, Any]] | None,
+    attached_documents: list[dict[str, Any]] | None,
+) -> list[str]:
+    """Names of the documents this turn's answer was built from, those it
+    cites first.
+
+    A resolved attachment is a pointer, not a read (the attachment note asks
+    the model to read it). A document counts as read when this turn's
+    successful tool evidence names it, a document read reports it, the
+    composer marker carries its content, or the answer cites it by name.
+    The turn starts at the operator's latest message."""
+    msgs = list(messages or [])
+    start = _operator_turn_start(msgs)
+    from app.core.rag.retriever import ATTACHED_MARKER_RE
+
+    operator = str((msgs[start] or {}).get("content") or "") if msgs else ""
+    turn = msgs[start + 1:] if msgs else []
+    succeeded: dict[str, bool] = {}
+    evidence: list[str] = []
+    read: list[str] = []
+    for m in turn:
+        m = m or {}
+        content = str(m.get("content") or "")
+        ok, reported = _read_tool_result(content) if m.get("role") == "tool" else (False, "")
+        if ok:
+            succeeded[str(m.get("tool_call_id") or "")] = True
+            evidence.append(content)
+            if m.get("name") == "fetch_document":
+                read.append(reported)
+        elif m.get("role") == "user" and content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            evidence.append(content)
+    for m in turn:
+        for call in (m or {}).get("tool_calls") or []:
+            if succeeded.get(str((call or {}).get("id") or "")):
+                evidence.append(str(((call or {}).get("function") or {}).get("arguments") or ""))
+    joined = "\n".join(evidence)
+    for d in attached_documents or []:
+        name = str(d.get("original_name") or d.get("filename") or "").strip()
+        did = str(d.get("id") or d.get("document_id") or "").strip()
+        if name and ((name in joined) or (did and did in joined) or name in (text or "")):
+            read.append(name)
+    read.extend(
+        (mk.group(1) or "").strip()
+        for mk in ATTACHED_MARKER_RE.finditer(operator)
+        if (mk.group(2) or "").strip()
+    )
+    names = list(dict.fromkeys(n for n in read if n))
+    return sorted(names, key=lambda n: n not in (text or ""))
+
+
 def _run_answer_composers(
     text: str,
     composers: list[tuple[str, Any]],
@@ -9323,6 +10531,83 @@ def _run_answer_composers(
     for _question_type, apply in composers:
         text = apply(text, messages, rag_sys_msg, project_id, extra_project_ids)
     return text
+
+
+def _apply_clarify_cases(
+    text: str,
+    rag_sys_msg: dict[str, Any] | None,
+    messages: list[dict[str, Any]] | None,
+) -> str:
+    """The 15:03Z general behaviour (all sources), enforced at the answer exit.
+
+    When the handed evidence carries more than one materially different value
+    for what was asked, the question names none of them, and the draft has
+    silently committed to exactly one, the exit replaces the draft with ONE
+    short clarifying question that names the cases it found, each with its
+    source (``app/agents/clarify_cases.py``). It rides the existing
+    awaiting-inputs turn state, so the client renders "the agent is asking"
+    the way it already renders a calculator's missing input.
+
+    The guards here are defensive early returns (disabled, empty question,
+    empty draft, no passages) that short-circuit before building the evidence.
+    The first (the ``CLARIFY_CASES=0`` kill switch) is observable -- it skips
+    the evidence build entirely, which the wiring test asserts -- so its
+    drop_rule mutant is killed. The rest mirror the detector's own checks
+    (``clarifying_question`` returns None for each of them) and only avoid the
+    work. Never raises: a failure passes the answer through unchanged.
+    """
+    from app.agents.clarify_cases import (
+        cases_from_passages,
+        clarifying_question,
+        enabled,
+    )
+
+    if not enabled():
+        return text or ""
+    if not (text or "").strip():
+        return text or ""
+    ask = _latest_operator_ask(messages) or ""
+    if not ask.strip():
+        return text or ""
+    try:
+        from app.agents.citation_provenance import build_evidence
+
+        evidence = build_evidence(rag_sys_msg, messages, tool_passages=True)
+        passages = [
+            (rec.source_name or rec.doc_id or "", rec.text)
+            for rec in evidence.records
+            if rec.kind == "retrieval" and (rec.text or "").strip()
+        ]
+        if not passages:
+            return text or ""
+        question = clarifying_question(ask, text, cases_from_passages(passages))
+        if question is None:
+            return text or ""
+        _record_clarifying_question(question)
+        return question
+    except Exception:  # noqa: BLE001 -- an exit check must never break an answer
+        _LOG.warning("clarify-cases exit failed; answer passed through", exc_info=True)
+        return text or ""
+
+
+def _record_clarifying_question(question: str) -> None:
+    """Record the clarifying question on the turn so the exit reads "asking".
+
+    The question wording goes on ``Turn.questions`` (preserved verbatim by the
+    answer contract), and a general marker goes on ``Turn.awaiting_inputs`` so
+    the ``{"missing": [...]}`` carrier the route observer already trusts (S1c)
+    reads non-empty.
+    """
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    if turn is None:
+        return
+    if question not in turn.questions:
+        turn.questions.append(question)
+    marker = "which_case"
+    if marker not in turn.awaiting_inputs:
+        turn.awaiting_inputs.append(marker)
 
 
 @_turn_timing_stage("postprocess")
@@ -9348,7 +10633,7 @@ def _postprocess_answer(
     from app.agents import answer_exit
 
     answer_exit.note_evidence(rag_sys_msg, messages)
-    text = _recover_answer_from_tool_messages(text, messages)
+    text = recover_answer_traced(text, messages)
     # The fetch-window truncation notice is not an
     # answer. Blank it so later grafts can compose, and so we never
     # ship "Tool result exceeded … char_offset=" to the operator.
@@ -9375,7 +10660,7 @@ def _postprocess_answer(
     # A gate that removes every clause of an answer leaves the turn's own
     # tool result, never an empty answer for the footers to dress.
     if gated.strip() and not text.strip():
-        text = _recover_answer_from_tool_messages("", messages)
+        text = recover_answer_traced("", messages, reason="gate_emptied", raw_len=len(gated))
     # Figure provenance (same evidence objects): every figure credited to user
     # input, calculator, project document or general knowledge; a figure with
     # no source is not stated. Enforced on turns that ran a need plan.
@@ -9419,21 +10704,19 @@ def _postprocess_answer(
         # Live: pe_unit_convert ran and the answer still opened with it.
         text = _MASTER_CORPUS_FALLBACK_NOTE + text
     from app.core.rag.coverage_honesty import apply_coverage_honesty
-    # Name the tier that actually answered. An answer is "attached" tier only
-    # when it cites an attached document's name; otherwise the void line keeps
-    # the general-reference wording. Names only, no ids.
-    attached_names = [
-        (str(d.get("original_name") or d.get("filename") or "")).strip()
-        for d in (attached_documents or [])
-    ]
-    cited = [n for n in attached_names if n and n in text]
+    # Name the tier that actually answered. An answer is "attached" tier when
+    # this turn read a document, whether or not the answer repeats its name;
+    # otherwise the void line keeps the general-reference wording. Names
+    # only, no ids.
+    read_names = _documents_read_this_turn(text, messages, attached_documents)
     text = apply_coverage_honesty(
         text,
         project_id=project_id or (audit_rec or {}).get("project_id"),
         coverage=coverage,
-        source_tier="attached" if cited else None,
-        attached_names=cited,
+        source_tier="attached" if read_names else None,
+        attached_names=read_names,
     )
+    text = _note_opening_part_reads(text, messages)
     # After graft: #587's INTERNAL GUIDANCE did not stop extract from
     # electing the ENGINEER APPOINTMENT heading. Strip leftover steering
     # so EXAMPLAR (or any other particular) is what the user sees.
@@ -9452,6 +10735,12 @@ def _postprocess_answer(
     # Last: the answer's own working must agree with its own result. Checked
     # after every graft, so a grafted figure is checked too.
     text = _annotate_derivation_mismatches(text)
+    # 15:03Z general behaviour (all sources): when the handed evidence carries
+    # more than one case and the draft silently picked one, the exit replaces
+    # the draft with ONE clarifying question (app/agents/clarify_cases.py).
+    # Runs last so the question lists the final, scrubbed values and is never
+    # itself scrubbed or annotated.
+    text = _apply_clarify_cases(text, rag_sys_msg, messages)
     # 0-token force_synthesis must never persist an empty bubble.
     return _nonblank_after_empty_synthesis(text, messages)
 
@@ -9472,7 +10761,7 @@ def _next_agent_from_turn(messages: list[dict[str, Any]] | None) -> str:
     """Pick the leftover L5 handoff hat from the user's named file/intent."""
     text = ""
     for m in reversed(messages or []):
-        if m.get("role") == "user":
+        if m.get("role") == "user" and not _is_retry_instruction(m.get("content")):
             text = str(m.get("content") or "")
             break
     low = text.lower()
@@ -9758,6 +11047,88 @@ def _working_document_sources(
     return rows
 
 
+#: The Sources panel's label for each retrieval layer (STEP 0b).
+_SOURCE_LAYER_LABELS = {
+    "own": "Project document",
+    "master_corpus": "Master Corpus (fallback)",
+    "general_knowledge": "Knowledge base",
+}
+
+
+def _search_rows_read(
+    tool_results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """The rows the model's own search handed this turn (S-R9), in order."""
+    rows: list[dict[str, Any]] = []
+    for payload in _coerce_tool_payloads(tool_results):
+        if payload.get("ok") is False:
+            continue
+        result = payload.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("results"), list):
+            continue
+        for row in result["results"]:
+            if isinstance(row, dict) and row.get("document_id") and row.get("filename"):
+                rows.append(row)
+    return rows
+
+
+def _search_row_sources(
+    final_text: str,
+    tool_results: list[dict[str, Any]] | None,
+    audit_rec: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Source rows for documents the answer cites from the search tool's rows.
+
+    The pre-injected chunks reach Sources through the audit; a document the
+    model found with its own search never did (S-R9). A search row counts as
+    cited by the same signs the pre-injected path reads: a source citation
+    naming its document (file name or id), its file name in the prose, or a
+    quoted run of its passage. A declining answer only counts a quote, as the
+    pre-injected path lists nothing for a decline. A document found by two
+    searches gives two rows here; the caller dedupes every source row.
+    """
+    from app.core.rag.source_class import classify, label_for
+
+    declines = _answer_is_caveat(final_text)
+    cites = [] if declines else _extract_cited_chunk_indexes(final_text)
+    cite_tokens = [(tok, _normalise_filename(tok)) for tok, _idx in cites]
+    text_n = _normalise_filename(final_text)
+    out: list[dict[str, Any]] = []
+    for row in _search_rows_read(tool_results):
+        doc_id = str(row.get("document_id"))
+        name = str(row.get("filename"))
+        name_n = _normalise_filename(name)
+        snippet = str(row.get("snippet") or "")
+        cited = _answer_quotes_passage(final_text, snippet)
+        if not cited and not declines:
+            cited = bool(name_n and name_n in text_n) or any(
+                tok == doc_id or (tok_n and name_n and (tok_n in name_n or name_n in tok_n))
+                for tok, tok_n in cite_tokens
+            )
+        if not cited:
+            continue
+        layer = str(row.get("origin") or "own")
+        score = float(row.get("score") or 0.0)
+        pages = row.get("pages") or []
+        source_class = classify(layer, name, snippet)
+        out.append({
+            "doc_id": doc_id,
+            "doc_name": _clean_path_label(name),
+            "page_or_section": page_or_section_label({"page": pages[0] if pages else None}),
+            "page": pages[0] if pages else None,
+            "chunk_index": None,
+            "chunk_id": None,
+            "project_id": (audit_rec or {}).get("project_id"),
+            "score": score,
+            "confidence": "High" if score >= 0.75 else "Medium" if score >= 0.5 else "Low",
+            "layer": layer,
+            "layer_label": _SOURCE_LAYER_LABELS.get(layer, "Knowledge base"),
+            "source_class": source_class,
+            "source_class_label": label_for(source_class),
+        })
+    return out
+
+
 def _dedupe_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
@@ -9845,7 +11216,10 @@ def _build_sources_from_audit(
     the answer credits a platform calculator — that row is the source —
     or it used a working document.
     """
-    used_documents = _working_document_sources(final_text, tool_results, audit_rec)
+    used_documents = _dedupe_source_rows([
+        *_working_document_sources(final_text, tool_results, audit_rec),
+        *_search_row_sources(final_text, tool_results, audit_rec),
+    ])
 
     def _finish(
         rows: list[dict[str, Any]] | None, *, fallback: bool = False,
@@ -9963,11 +11337,7 @@ def _build_sources_from_audit(
     # STEP 0b — human-readable layer labels for the sources panel so a
     # Master-Corpus fallback (and disclosed general-knowledge context) is
     # visible per-source, not just in the answer banner.
-    _LAYER_LABELS = {
-        "own": "Project document",
-        "master_corpus": "Master Corpus (fallback)",
-        "general_knowledge": "Knowledge base",
-    }
+    _LAYER_LABELS = _SOURCE_LAYER_LABELS
 
     def _format(chunk_meta: dict[str, Any], doc_name: str) -> dict[str, Any]:
         score = chunk_meta.get("score") or 0.0
@@ -10787,7 +12157,8 @@ _LAST_TOOL_PREVIEW = 6000
 
 
 def _compacted_tool_payload(
-    content: str, keep: int, note: str | None = None,
+    content: str, keep: int, note: str | None = None, outline_budget: int | None = None,
+    max_chars: int | None = None,
 ) -> str:
     """A truncated tool result that says exactly what it lost.
 
@@ -10808,8 +12179,52 @@ def _compacted_tool_payload(
       same cut with different phrasing produces "the BOQ contains no
       demolition in cubic metres" -- a false statement about the customer's
       own contract, stated with the tool's authority behind it.
+
+    ``max_chars``, when given, is a hard cap the result is GUARANTEED to fit
+    (``_fit_cap``): the preview gives way first, then the outline is replaced
+    by a minimal one, because a statement is never cut and an outline can
+    exceed the cap by itself.
     """
     kept = max(0, int(keep))
+    try:
+        whole = json.loads(content)
+    except (TypeError, ValueError):
+        whole = None
+    if isinstance(whole, dict) and whole.get("truncated"):
+        # Cut once already: its outline is kept whole, not cut again.
+        outline = whole.get(OUTLINE_KEY) if isinstance(whole.get(OUTLINE_KEY), dict) else None
+    else:
+        # Small beside the preview; the hop's budget pass measures the
+        # real length of what it built, outline included.
+        # ``outline_budget`` lets a caller that shrinks the preview to fit
+        # a cap keep the outline whole: only the preview gives way.
+        budget = outline_budget if outline_budget is not None else kept // 4
+        outline = _result_outline(whole, max(1, int(budget)))
+    if max_chars is not None:
+        return _fit_cap(lambda k, o: _compacted_envelope(content, whole, k, note, o),
+                        int(max_chars), outline, len(content), kept)
+    return _compacted_envelope(content, whole, kept, note, outline)
+
+
+def _compacted_envelope(content: str, whole: Any, kept: int, note: str | None, outline: Any) -> str:
+    """The envelope of ``_compacted_tool_payload`` for one preview length
+    and one outline."""
+    totals = (outline or {}).get(ROWS_TOTAL_KEY) or {}
+    countable = bool(totals) and isinstance(whole, dict) and not whole.get("truncated")
+
+    def _shown(k: int) -> tuple[dict[str, int], str]:
+        if not countable:
+            return {}, ""
+        rs = {p: n for p, n in _rows_in_window(whole, content, 0, k).items() if p in totals}
+        return rs, _rows_note(rs, totals)
+
+    rows_shown, rows_note = _shown(kept)
+    if rows_shown:
+        # The count of rows shown is paid for out of the preview, so an
+        # envelope for a given ``keep`` is no longer than before: a caller
+        # that budgets by ``keep`` (the TPM pass) still fits.
+        kept = max(0, kept - len(json.dumps({ROWS_SHOWN_KEY: rows_shown, "rows_note": rows_note})))
+        rows_shown, rows_note = _shown(kept)
     dropped = max(0, len(content) - kept)
     return json.dumps(
         {
@@ -10829,6 +12244,9 @@ def _compacted_tool_payload(
                 "enough to know that. Offer to re-run narrowed to the "
                 "section, page, or code the user wants."
             ),
+            **({OUTLINE_KEY: outline} if outline is not None else {}),
+            **({ROWS_SHOWN_KEY: rows_shown} if rows_shown else {}),
+            **({"rows_note": rows_note} if rows_note else {}),
             "preview": content[:kept],
         },
         default=str,
@@ -10883,9 +12301,9 @@ def _compact_retrieval_message(content: str, budget: int) -> str:
             "retrieved excerpts were dropped to fit this request, lowest "
             "relevance first. The sample you are reading is SMALLER than "
             "what search found, so the SCOPE OF ABSENCE rule above applies "
-            "with more force, not less: say what you found and offer to "
-            "search again by document name or section. Never report that "
-            "something is absent.\n"
+            "with more force, not less: search the project documents for "
+            "what the excerpts lack before answering, and say what you "
+            "searched for. Never report that something is absent.\n"
         )
 
     for kept in range(len(excerpts), 0, -1):
@@ -11718,6 +13136,9 @@ class Agent:
     _chat_impl = _core_loop._chat_impl
 
     _fetch_named_missing_input = _core_context._fetch_named_missing_input
+    _search_before_refusal = _core_context._search_before_refusal
+    _search_first_nudges = _core_context._search_first_nudges
+    _intent_hard_excludes = _core_context._intent_hard_excludes
 
     chat_stream = _core_loop.chat_stream
 
@@ -11730,6 +13151,7 @@ class Agent:
     _stream_synthesis = _core_llm._stream_synthesis
 
     _run_tool_call = _core_tools._run_tool_call
+    _run_turn_tool_call = _core_tools._run_turn_tool_call
 
 
 # ── Auto-validation middleware ───────────────────────────────────────────
@@ -11889,20 +13311,33 @@ async def _auto_validate(envelope: dict[str, Any]) -> None:
 
 # ── Loader ────────────────────────────────────────────────────────────────
 AGENT_REGISTRY: dict[str, Agent] = {}
+# Agent configs the last load_agents() could not parse: file name -> the
+# error's type. Readiness reads it (app/routers/health.py), so a broken agent
+# setting fails /ready instead of leaving one stdout line and a missing agent.
+AGENT_LOAD_FAILURES: dict[str, str] = {}
 
 
 def load_agents(configs_dir: Path | None = None) -> dict[str, Agent]:
-    """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing)."""
+    """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing).
+
+    A config that does not parse is skipped, logged, and recorded in
+    AGENT_LOAD_FAILURES; the others still load. A missing directory is
+    recorded under its own name."""
     configs_dir = configs_dir or CONFIGS_DIR
     AGENT_REGISTRY.clear()
+    AGENT_LOAD_FAILURES.clear()
     if not configs_dir.exists():
+        # No configs directory means no agents at all: a broken setting too.
+        AGENT_LOAD_FAILURES[configs_dir.name] = "FileNotFoundError"
+        logging.getLogger(__name__).error("agent configs directory not found: %s", configs_dir)
         return AGENT_REGISTRY
     for md in sorted(configs_dir.glob("*.md")):
         try:
             agent = _parse_agent_file(md)
             AGENT_REGISTRY[agent.name] = agent
         except Exception as e:
-            print(f"failed to load agent {md.name}: {e}")
+            AGENT_LOAD_FAILURES[md.name] = type(e).__name__
+            logging.getLogger(__name__).error("failed to load agent %s: %s", md.name, e)
     return AGENT_REGISTRY
 
 
@@ -12108,21 +13543,46 @@ def _user_supplied_registered_calculation(
     this, even when the same sentence also contains numbers.
     """
     raw = text or ""
-    if not raw.strip():
-        return None
-    if _message_wants_inline_boq(raw) or _message_is_schedule_or_programme_deliverable(raw):
-        return None
-    if (
-        _message_wants_drawing_qto(raw)
-        or _message_wants_rfi_draft(raw)
-        or _message_wants_vo_draft(raw)
-    ):
+    if _not_a_supplied_calculation(raw):
         return None
     try:
         from app.lib.construction_formulas import formula_completed_by_user_text
         return formula_completed_by_user_text(raw)
     except Exception:  # noqa: BLE001 — routing must still classify
         _LOG.exception("supplied-input formula selection failed")
+        return None
+
+
+def _not_a_supplied_calculation(raw: str) -> bool:
+    """True for an empty ask or a deliverable that merely contains numbers
+    (a bill, a schedule, a drawing take-off, an RFI or a variation)."""
+    if not raw.strip():
+        return True
+    if _message_wants_inline_boq(raw) or _message_is_schedule_or_programme_deliverable(raw):
+        return True
+    return bool(
+        _message_wants_drawing_qto(raw)
+        or _message_wants_rfi_draft(raw)
+        or _message_wants_vo_draft(raw)
+    )
+
+
+#: The chat tool that searches and evaluates the construction knowledge base.
+_KB_TOOL = "construction_advisor"
+
+
+def _user_supplied_kb_formula(text: str) -> tuple[str, dict[str, Any]] | None:
+    """``(rule_id, values)`` for the one knowledge-base formula entry whose
+    title and every input are in ``text``; the same contract and the same
+    vetoes as the registry selector above. None on any doubt."""
+    raw = text or ""
+    if _not_a_supplied_calculation(raw):
+        return None
+    try:
+        from app.blocks._knowledge import formula_completed_by_user_text
+        return formula_completed_by_user_text(raw)
+    except Exception:  # noqa: BLE001 — routing must still classify
+        _LOG.exception("supplied-input knowledge formula selection failed")
         return None
 
 
@@ -12216,8 +13676,82 @@ def _document_question(text: str) -> bool:
     return bool(
         _DOCUMENT_FRAME_RE.search(raw)
         or _REPORT_FRAME_RE.search(raw)
+        or _RECORD_CHOICE_RE.search(raw)
+        or _RECORD_ACT_RE.search(raw)
         or _own_upload_nouns(raw)
     )
+
+
+# The ask picks a record by its kind: "which drawing fixes ...", "which
+# contract specification volume governs ...". The answer is a record.
+_RECORD_CHOICE_RE = re.compile(
+    rf"\b(?:which|what)\s+(?:{_PHRASE_BREAK}[\w-]+\s+){{0,3}}?{_DOCUMENT_NOUN}\b",
+    re.IGNORECASE,
+)
+# The ask says what a record does to the item: "how many are billed",
+# "what grade is specified". Only a record bills, schedules or specifies.
+_RECORD_ACT_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been)\s+"
+    r"(?:billed|scheduled|specified|itemi[sz]ed|listed\s+in|shown\s+on|shown\s+in)\b",
+    re.IGNORECASE,
+)
+# The user asks for a computation in their own words. A count word ("how
+# many") or the subject of a formula ("lap length") is not this.
+_COMPUTE_REQUEST_RE = re.compile(
+    r"\b(?:calculat(?:e|ing|ion|ions)|comput(?:e|ing|ation)|"
+    r"work(?:ing)?\s+out|estimate)\b",
+    re.IGNORECASE,
+)
+
+
+def _figures_only_describe_record_ask(text: str) -> bool:
+    """A document question whose figures only describe the item asked about.
+
+    The figures neither complete a registered formula nor come with a
+    request to compute, so no calculator runs and no calculator asks the
+    user for inputs: the documents answer it.
+    """
+    raw = text or ""
+    if not _document_question(raw):
+        return False
+    if _COMPUTE_REQUEST_RE.search(raw) or _ARITH_EXPR_RE.search(raw):
+        return False
+    if _user_supplied_registered_calculation(raw):
+        return False
+    try:
+        from app.lib.construction_formulas import formula_inputs_supplied_by_text
+        return not formula_inputs_supplied_by_text(
+            _formula_calculator_name_from_message(raw), raw,
+        )
+    except Exception:  # noqa: BLE001 — routing must still classify
+        _LOG.exception("supplied-input dry run failed")
+        return False
+
+
+def _message_requests_computation(text: str) -> bool:
+    """The user asks for a computation: in words, as arithmetic, or by
+    writing the figures to compute with beside a calculation verb."""
+    raw = text or ""
+    return bool(
+        _COMPUTE_REQUEST_RE.search(raw)
+        or _ARITH_EXPR_RE.search(raw)
+        or _looks_like_self_contained_calculation(raw)
+    )
+
+
+def _missing_inputs_fall_to_retrieval(result: Any, text: str) -> bool:
+    """A calculator that only lacks inputs, on a message that asked for no
+    computation, does not end the turn with its question.
+
+    The calculator was elected without a request to compute, so the
+    documents are asked instead; its missing-input note may ride along. A
+    value the user supplied and the calculator rejected is still asked about.
+    """
+    if not isinstance(result, dict) or result.get("status") != "needs_input":
+        return False
+    if not result.get("missing") or result.get("rejected"):
+        return False
+    return not _message_requests_computation(text)
 
 
 _FILE_TOKEN_RE = re.compile(_FILE_TOKEN, re.IGNORECASE)
@@ -12283,9 +13817,15 @@ def _formula_run_authorized(text: str, calculation: str | None = None) -> bool:
 
 
 def _document_question_without_operands(text: str) -> bool:
-    """A question about what a record says that supplies no figure."""
+    """A question about what a record says that supplies no figure.
+
+    Figures that only describe the item asked about (a size, a depth band)
+    are not operands either.
+    """
     raw = text or ""
-    return _document_question(raw) and not _user_supplied_operand(raw)
+    if not _document_question(raw):
+        return False
+    return not _user_supplied_operand(raw) or _figures_only_describe_record_ask(raw)
 
 
 def _defaulted_run_refusal(
@@ -12348,7 +13888,7 @@ def _message_is_formula_style_ask(text: str) -> bool:
     # User-supplied operands complete a registered formula before any
     # document-lookup veto. The numbers are the inputs; the excerpts
     # are not required to repeat them.
-    if _user_supplied_registered_calculation(raw):
+    if _user_supplied_registered_calculation(raw) or _user_supplied_kb_formula(raw):
         return True
     if not _formula_ask_force_enabled():
         return False
@@ -12611,6 +14151,19 @@ def _formula_not_run_bubble(calc_name: str | None, result: Any) -> str:
     return " ".join(parts)
 
 
+def _calc_missing_input_retrieval_note(result: dict[str, Any]) -> str:
+    """The platform note when a calculator lacked inputs nobody asked it to
+    compute with: the documents answer, the missing inputs may be mentioned."""
+    question = str(result.get("question") or "").strip()
+    note = (f"{_CALC_NOT_RUN_HEAD} The user did not ask for a computation. "
+            "Answer the question from the project documents. Do not compute "
+            "a figure or choose an input.")
+    if question:
+        note += (" If the documents do not answer it, you may say that the "
+                 f"calculator would need: {question}")
+    return note
+
+
 async def _predispatch_formula_calc(
     agent: "Agent",
     messages: list,
@@ -12648,6 +14201,10 @@ async def _predispatch_formula_calc(
         if await _off_loop(_document_question_without_operands, detect):
             return None
         completed = await _off_loop(_user_supplied_registered_calculation, detect)
+        if not completed:
+            kb_pre = await _predispatch_kb_formula(agent, messages, detect)
+            if kb_pre:
+                return kb_pre
         bound: dict[str, Any] = {}
         if completed:
             calc_name, bound = completed
@@ -12694,19 +14251,26 @@ async def _predispatch_formula_calc(
                 json.dumps(inner, default=str)[:4000],
                 (await _off_loop(_formula_predispatch_instruction, calc_name, result)),
             )
-        else:
+        falls_to_retrieval = False
+        if not ran:
             from app.agents import answer_exit
 
             answer_exit.note_tool_result("construction_calc", inner)
-            messages.append({
-                "role": "user",
-                "content": await _off_loop(_formula_not_run_bubble, calc_name, result),
-            })
+            falls_to_retrieval = await _off_loop(
+                _missing_inputs_fall_to_retrieval, inner, detect,
+            )
+            note = (
+                _calc_missing_input_retrieval_note(inner)
+                if falls_to_retrieval
+                else await _off_loop(_formula_not_run_bubble, calc_name, result)
+            )
+            messages.append({"role": "user", "content": note})
         return {
             "name": "construction_calc",
             "ok": bool(isinstance(result, dict) and result.get("ok")),
             "predispatched": True,
             "result": inner,
+            "falls_to_retrieval": falls_to_retrieval,
         }
     except Exception:  # noqa: BLE001
         _LOG.warning(
@@ -12714,6 +14278,113 @@ async def _predispatch_formula_calc(
             exc_info=True,
         )
         return None
+
+
+async def _predispatch_kb_formula(
+    agent: "Agent",
+    messages: list,
+    detect: str,
+) -> dict[str, Any] | None:
+    """Evaluate the knowledge-base formula the ask names and fully supplies.
+
+    The registry selector comes first; this runs only when no registered
+    calculator is completed by the ask. The evaluation is recorded as a tool
+    result like a calculator run, so the answer, the Sources panel and the
+    no-model recovery read it from the thread. Anything short of an evaluated
+    figure returns None and the turn continues as before.
+    """
+    from app.agents.core import tool_registry
+
+    # Offered on the same terms as the model's tool list: the agent allows it.
+    if (tool_registry.get(_KB_TOOL) is None
+            or _KB_TOOL not in getattr(agent, "allowed_blocks", ())):
+        return None
+    completed = await _off_loop(_user_supplied_kb_formula, detect)
+    if not completed:
+        return None
+    rule_id, values = completed
+    tc = {
+        "id": f"predispatch-{_KB_TOOL}",
+        "type": "function",
+        "function": {
+            "name": _KB_TOOL,
+            "arguments": json.dumps({
+                "query": detect, "rule_id": rule_id, "values": values,
+            }),
+        },
+    }
+    result = await agent._run_tool_call(tc)
+    inner = result.get("result") if isinstance(result, dict) else None
+    if not (isinstance(inner, dict) and _kb_evaluation(inner)):
+        return None
+    inner = {**inner, "values": values}
+    rendered = json.dumps(inner, default=str)
+    messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
+    messages.append({
+        "role": "tool", "name": _KB_TOOL, "tool_call_id": tc["id"],
+        "content": rendered,
+    })
+    _inject_predispatch(
+        messages, _KB_TOOL, rendered[:4000],
+        "The knowledge-base formula has already been evaluated with the "
+        "values the user stated. Answer from that result: the figure with "
+        "its unit first, then the working in one line. Do not recompute it.",
+    )
+    return {
+        "name": _KB_TOOL,
+        "ok": True,
+        "predispatched": True,
+        "result": inner,
+        "falls_to_retrieval": False,
+    }
+
+
+def _kb_evaluation(inner: dict[str, Any]) -> dict[str, Any] | None:
+    """The evaluated figure in a knowledge-base tool result, or None."""
+    ev = inner.get("evaluation")
+    if not isinstance(ev, dict) or ev.get("result") is None or not ev.get("rule_id"):
+        return None
+    return ev
+
+
+def _format_kb_evaluation(inner: dict[str, Any]) -> str:
+    """Figure first, then the working with the stated values substituted.
+
+    Title and expression come from the matched entry the result carries; an
+    entry absent from the matches still yields the figure and its unit.
+    """
+    ev = _kb_evaluation(inner)
+    if ev is None:
+        return ""
+    entry = next(
+        (m for m in inner.get("matches") or []
+         if isinstance(m, dict) and m.get("id") == ev["rule_id"]),
+        {},
+    )
+    unit = str(ev.get("unit") or "").strip()
+    figure = f"{_round_display(ev['result'])}{(' ' + unit) if unit else ''}"
+    title = str(entry.get("title") or "").strip()
+    lines = [f"{title}: {figure}" if title else figure]
+    expression = str(entry.get("expression") or "").strip()
+    values = inner.get("values") if isinstance(inner.get("values"), dict) else {}
+    if expression and values:
+        stated = ", ".join(f"{k} = {_round_display(v)}" for k, v in values.items())
+        working = f"{expression} with {stated}"
+        if ev.get("unrounded") is not None:
+            working += f" (= {_round_display(ev['unrounded'])} before rounding up)"
+        lines.append(working)
+    return "\n".join(lines)
+
+
+def _round_display(value: Any) -> str:
+    """A number as a reader writes it: no float noise, no trailing zeros."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if num == int(num) and abs(num) < 1e15:
+        return str(int(num))
+    return f"{round(num, 4):g}"
 
 
 def _message_names_registered_calculator(text: str) -> bool:
@@ -13051,12 +14722,19 @@ def _parse_agent_file(path: Path) -> Agent:
     if not body:
         raise ValueError(f"empty system prompt in {path}")
     body, hat_ids = _apply_hat_kernels(body, config.get("hats"), path)
+    body = _apply_answer_export_capability(body)
     return Agent(
         name=name,
         description=config.get("description", ""),
         system_prompt=body,
         allowed_blocks=list(config.get("allowed_blocks") or []),
-        model=config.get("model") or DEEPSEEK_DEFAULT_MODEL,
+        # An agent file with no ``model:`` line is UNPINNED (""), so each
+        # call uses the active provider's default from ``_llm_config`` --
+        # which honours ``DEEPSEEK_MODEL`` / ``OPENROUTER_MODEL``. Falling
+        # back to the ``deepseek-chat`` literal here would be a pin that
+        # ``_resolve_attempt_model`` keeps on DeepSeek, silently overriding
+        # an operator's ``DEEPSEEK_MODEL``.
+        model=str(config.get("model") or ""),
         temperature=float(config.get("temperature", 0.3)),
         max_tokens=int(config.get("max_tokens", 2048)),
         icon=config.get("icon", ""),
@@ -13067,6 +14745,19 @@ def _parse_agent_file(path: Path) -> Agent:
             in ("true", "1", "yes", "on")
         ),
     )
+
+
+def _apply_answer_export_capability(body: str) -> str:
+    """Tell every agent which files the user can download from its answer.
+
+    The workspace puts download controls under every finished answer, and the
+    conversation export route renders them. An agent that is not told says it
+    "can't produce a .docx" while the button sits under its own reply. The
+    section comes from the one declaration both the route and the controls
+    follow (``ANSWER_EXPORT_FORMATS``)."""
+    from app.core.answer_report_intent import answer_export_capability_note
+
+    return body + answer_export_capability_note()
 
 
 def _apply_hat_kernels(body: str, hats_cfg: Any, path: Path) -> tuple[str, list[str]]:
@@ -13104,9 +14795,13 @@ def _apply_hat_kernels(body: str, hats_cfg: Any, path: Path) -> tuple[str, list[
         errors = validate_manifest_bindings(m)
         if errors:
             raise ValueError(f"hat '{m.id}' has broken formula bindings: {errors}")
+    from app.agents.procedures import render_procedures
     sections = ["\n\n## Discipline kernels\n"]
     for m in manifests:
         sections.append(f"### {m.name} ({m.id})\n{m.system_prompt_guidance}\n")
+        procedures_block = render_procedures(m)
+        if procedures_block:
+            sections.append(procedures_block + "\n")
     # S-7 improvisation harness — applies to every hatted agent.
     sections.append(
         "### Improvisation harness\n"
@@ -13252,15 +14947,60 @@ def _format_tool_error_plain(
     return sentence
 
 
+#: A request id is shown only in this shape (the platform's own correlation
+#: id); anything else a payload carries under that key is not shown.
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def _plain_tool_error_sentence(payload: dict[str, Any] | None) -> str:
+    """The plain sentence for a failed tool. The tool's own error text never
+    appears in it: only which of two fixed sentences applies, and the
+    request id when it is an id."""
+    err = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+    if "unknown calculation" in err.lower():
+        sentence = (
+            "The calculator does not have a formula for that request. "
+            "Please restate the inputs or name the calculation."
+        )
+    else:
+        sentence = "The tool could not complete that request."
+    request_id = ""
+    if isinstance(payload, dict):
+        request_id = str(payload.get("request_id") or "")
+    request_id = request_id or _current_request_id()
+    if request_id and _REQUEST_ID_RE.fullmatch(request_id):
+        sentence = f"{sentence} Request id: {request_id}."
+    return sentence
+
+
 def _plain_sentence_for_tool_error_json(text: str) -> str:
     """Plain sentence if ``text`` is a tool-error JSON blob, else ''."""
     obj = _parse_json_object(text)
-    if not obj:
-        return ""
     payload = _tool_error_payload(obj)
     if not payload:
         return ""
-    return _format_tool_error_plain(payload)
+    return _plain_tool_error_sentence(payload)
+
+
+def _is_calc_tool_result(
+    msg: dict[str, Any] | None,
+    inner: dict[str, Any] | None,
+) -> bool:
+    """True when a tool message carries a calculator's result.
+
+    A tool DECLARED computed (tool_registry) is one; otherwise a calculator
+    names its ``calculation`` (on the envelope or on its
+    ``result``); a search or lookup never does, so its notes stay with the
+    model.
+    """
+    if _declared_kind(msg)[0] == "computed":
+        return True
+    blob = inner if isinstance(inner, dict) else {}
+    result = blob.get("result")
+    return bool(
+        blob.get("calculation")
+        or (isinstance(result, dict) and result.get("calculation"))
+    )
 
 
 def _is_calc_tool_error(
@@ -13269,8 +15009,7 @@ def _is_calc_tool_error(
     err_payload: dict[str, Any] | None,
 ) -> bool:
     """True when the failed tool is a calculator, not a search/lookup."""
-    name = str((msg or {}).get("name") or "").lower()
-    if name in ("construction_calc", "formula_executor_v2", "formula_executor"):
+    if _declared_kind(msg)[0] == "computed":
         return True
     blob = inner or {}
     err = err_payload or {}

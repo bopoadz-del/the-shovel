@@ -7,12 +7,12 @@
       "domain": "construction.buildings",
       "type": "formula",
       "title": "Mass concrete pour equilibrium time",
-      "statement": "Time for a mass concrete pour of half-thickness X (m) to reach thermal equilibrium with ambient. Result is hours; the constant 168 carries the hour unit while (X / 1.5) is dimensionless (meter/meter).",
+      "statement": "Time for a mass concrete pour of full thickness X (m) to reach thermal equilibrium with ambient. Result is hours; the constant 168 carries the hour unit while (X / 1.5) is dimensionless (meter/meter): a 1.5 m thick pour takes 168 h (one week). WORKED EXAMPLES: a 1.2 m thick slab gives 168 x (1.2 / 1.5)^2 = 107.52 h; a 150 m thick dam gives 168 x 100^2 = 1,680,000 h = 10,000 weeks (about 192 years).",
       "expression": "168 * (X / 1.5)**2",
       "variables": {
         "X": {
           "unit": "meter",
-          "desc": "Half-thickness of the pour"
+          "desc": "Full thickness of the pour (not the half-thickness)"
         }
       },
       "thresholds": {
@@ -30,6 +30,7 @@
       "remediation": [],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure and mass concrete notes, part 1 p55-56",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -313,7 +314,7 @@
       "domain": "construction.buildings",
       "type": "formula",
       "title": "Foundation uplift factor of safety (counterweight vs uplift)",
-      "statement": "Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + ballast) divided by the uplift force. Result is dimensionless (force/force). Acceptance criterion: FOS >= 1.25. WORKED EXAMPLE: counterweight = 34 (kN), uplift = 100 (kN) gives FOS = 34/100 = 0.34, which is far below 1.25, so the basement/raft would float -> tension (anchor) piles are required. Units must be consistent on both inputs; the ratio cancels them.",
+      "statement": "Factor of safety against hydrostatic/buoyant uplift = available counterweight (dead load + ballast) divided by the uplift force. Result is dimensionless (force/force). Acceptance criterion: FOS >= 1.2 (owner-supplied course material, roads and earthworks section 1, p10). WORKED EXAMPLE: counterweight = 34 (kN), uplift = 100 (kN) gives FOS = 34/100 = 0.34, which is far below 1.2, so the basement/raft would float -> tension (anchor) piles are required. Units must be consistent on both inputs; the ratio cancels them.",
       "expression": "counterweight / uplift",
       "variables": {
         "counterweight": {
@@ -327,8 +328,8 @@
       },
       "thresholds": {
         "unit": "dimensionless",
-        "min_fos": 1.25,
-        "criterion": ">= 1.25"
+        "min_fos": 1.2,
+        "criterion": ">= 1.2"
       },
       "applicability": {
         "applies_to": [
@@ -339,10 +340,11 @@
         "standards_cross_ref": []
       },
       "remediation": [
-        "If FOS < 1.25, provide tension/anchor piles to make up the deficit (see foundation.uplift_remediation_tension_piles)."
+        "If FOS < 1.2, provide tension/anchor piles to make up the deficit (see foundation.uplift_remediation_tension_piles)."
       ],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -354,8 +356,8 @@
       "id": "foundation.uplift_remediation_tension_piles",
       "domain": "construction.buildings",
       "type": "decision_pattern",
-      "title": "Uplift remediation: provide tension/anchor piles when FOS < 1.25",
-      "statement": "Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (counterweight / uplift) falls below 1.25, THEN the gravity counterweight alone is insufficient and tension/anchor piles must be provided to resist the residual uplift. Size the tension-pile group for the deficit (uplift x 1.25 - available counterweight).",
+      "title": "Uplift remediation: provide tension/anchor piles when FOS < 1.2",
+      "statement": "Decision pattern paired with foundation.uplift_fos. WHEN the uplift factor of safety (counterweight / uplift) falls below 1.2, THEN the gravity counterweight alone is insufficient and tension/anchor piles must be provided to resist the residual uplift. Size the tension-pile group for the deficit (uplift x 1.2 - available counterweight).",
       "expression": null,
       "variables": {
         "fos": {
@@ -365,7 +367,7 @@
       },
       "thresholds": {
         "unit": "dimensionless",
-        "trigger_below": 1.25
+        "trigger_below": 1.2
       },
       "applicability": {
         "applies_to": [
@@ -380,6 +382,93 @@
       ],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "foundation.uplift_pressure",
+      "domain": "construction.buildings",
+      "type": "formula",
+      "title": "Hydrostatic uplift pressure under a basement raft",
+      "statement": "Uplift pressure on the underside of a basement raft = unit weight of water x water head h above the raft underside, the uplift term of the factor of safety in foundation.uplift_fos. WORKED EXAMPLE (course dewatering uplift check): h = 23.00 m at 1 t/m3 gives 1 x 23 = 23 t/m2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "water_unit_weight * water_head",
+      "variables": {
+        "water_unit_weight": {
+          "unit": "tonne/meter**3",
+          "desc": "Unit weight of groundwater"
+        },
+        "water_head": {
+          "unit": "meter",
+          "desc": "Water head above the raft underside"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne/meter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "foundation.floor_counterweight",
+      "domain": "construction.buildings",
+      "type": "formula",
+      "title": "Counterweight per unit area from the raft and the floor slabs above it",
+      "statement": "Counterweight per unit area that resists uplift = concrete unit weight x (raft thickness + number of floor slabs x slab thickness), the counterweight term of foundation.uplift_fos; dewatering stays on until this balances the uplift at the required factor. WORKED EXAMPLE (course dewatering uplift check): raft 0.9 m and 5 slabs of 0.3 m at 2.5 t/m3 give 2.5 x (0.9 + 5 x 0.3) = 2.25 + 3.75 = 6 t/m2; against an uplift of 23 t/m2 the factor is 6 / 23 = 0.26, below the course's 1.2, so tension piles anchor the foundation. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "concrete_unit_weight * (raft_thickness + slab_count * slab_thickness)",
+      "variables": {
+        "concrete_unit_weight": {
+          "unit": "tonne/meter**3",
+          "desc": "Unit weight of reinforced concrete"
+        },
+        "raft_thickness": {
+          "unit": "meter",
+          "desc": "Raft (foundation slab) thickness"
+        },
+        "slab_count": {
+          "unit": "dimensionless",
+          "desc": "Number of floor slabs cast above the raft"
+        },
+        "slab_thickness": {
+          "unit": "meter",
+          "desc": "Typical floor slab thickness"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne/meter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -390,23 +479,30 @@
     {
       "id": "foundation.dewatering_stop_floors",
       "domain": "construction.buildings",
-      "type": "rule",
+      "type": "formula",
       "title": "Dewatering can stop once enough floors are built to counter uplift",
-      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift; once enough floors (and their dead load) are in place to satisfy the uplift FOS, dewatering can be switched off and the water table allowed to recover. [CHECK] The exact number-of-floors trigger / the precise dead-load-vs-uplift formula was ambiguous in the source scan and is project- and groundwater-specific. Do NOT act on a fixed floor count from this entry; recompute via foundation.uplift_fos using the actual staged dead load and design water table before stopping dewatering.",
-      "expression": null,
+      "statement": "Construction dewatering must continue until the permanent structure's accumulated dead load is sufficient to counter hydrostatic uplift. Floors required before dewatering can stop = (min_fos x uplift - raft_weight) / floor_weight, rounded UP to a whole floor (zero when the raft alone already satisfies the factor of safety). All loads are per unit plan area in the same unit: uplift = water unit weight x head (t/m2), raft_weight = raft thickness x concrete unit weight (t/m2), floor_weight = equivalent concrete thickness of one floor x concrete unit weight (t/m2 per floor). min_fos is the required uplift factor of safety, 1.2 per foundation.uplift_fos (owner-supplied course material, roads and earthworks section 1, p10); it is an input, not assumed here. The count includes basement levels: the above-ground level at which dewatering may stop = floors required - number of basement levels. WORKED EXAMPLE: head 23 m -> uplift 23 t/m2; 1.25 x 23 = 28.75 t/m2; raft 4 m x 2.5 t/m3 = 10 t/m2; floor 0.60 m equivalent x 2.5 t/m3 = 1.5 t/m2; (28.75 - 10) / 1.5 = 12.5, say 13 floors; less 5 basement levels = level 8 (that page applies 1.25). At the required 1.2: 1.2 x 23 = 27.6 t/m2; (27.6 - 10) / 1.5 = 11.73, say 12 floors; less 5 basement levels = level 7. Recompute with the actual staged dead load and design water table before stopping dewatering.",
+      "expression": "Max(0, ceiling((min_fos * uplift - raft_weight) / floor_weight))",
       "variables": {
-        "floors_built": {
-          "unit": "floors",
-          "desc": "Number of floors (and their dead load) completed"
+        "min_fos": {
+          "unit": "dimensionless",
+          "desc": "Required uplift factor of safety (counterweight / uplift)"
         },
         "uplift": {
-          "unit": "kN",
-          "desc": "Design uplift force at the dewatering-stop check"
+          "unit": "ton/meter**2",
+          "desc": "Uplift pressure under the raft = water unit weight x head"
+        },
+        "raft_weight": {
+          "unit": "ton/meter**2",
+          "desc": "Raft self-weight per unit area = raft thickness x concrete unit weight"
+        },
+        "floor_weight": {
+          "unit": "ton/meter**2",
+          "desc": "Dead load of one floor per unit area = equivalent concrete thickness x concrete unit weight"
         }
       },
       "thresholds": {
-        "unit": "floors",
-        "note": "trigger ambiguous in source scan"
+        "unit": "floors"
       },
       "applicability": {
         "applies_to": [
@@ -419,12 +515,13 @@
       "remediation": [],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p9-10",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
       },
-      "credibility_tier": 2,
-      "needs_review": true
+      "credibility_tier": 3,
+      "needs_review": false
     },
     {
       "id": "foundation.shrinkage_strip_1200mm",
@@ -461,7 +558,7 @@
       "domain": "construction.buildings",
       "type": "reference_design",
       "title": "Diaphragm wall panel sequence and guide-wall geometry",
-      "statement": "Reference construction for a cast-in-situ diaphragm (slurry) wall, built as a 5-step panel sequence (the source gives a 5-step sequence but did not itemise the individual steps, so they are not enumerated here). Panels are excavated and cast in a Primary/Secondary (P/S) sequence with primary panels cast first and secondaries closing the gaps. Typical panel layout 2.0 / 6.53 / 2.0 m (P / S-bite / P). Guide walls are 250 / 1500 / 250 mm (toe / clear gap / toe) and 1400 mm deep. CRITICAL: install/prop the support system BEFORE backfilling against the wall - prop before backfill - to avoid over-stressing the wall.",
+      "statement": "Reference construction for a cast-in-situ diaphragm (slurry) wall, built as a 5-step panel sequence: (1) build the guide walls and make the first-pass excavation under bentonite; (2) make the second pass and excavate the middle bite; (3) recycle the bentonite, place the stop-ends and lower the reinforcement cage; (4) place the concrete by tremie while recovering the displaced bentonite; (5) excavate the follower panel, remove the stop-end and repeat. Panels are excavated and cast in a Primary/Secondary (P/S) sequence with primary panels cast first and secondaries closing the gaps. Typical panel layout 2.0 / 6.53 / 2.0 m (P / S-bite / P). Guide walls are 250 / 1500 / 250 mm (toe / clear gap / toe) and 1400 mm deep. CRITICAL: install/prop the support system BEFORE backfilling against the wall - prop before backfill - to avoid over-stressing the wall.",
       "expression": null,
       "variables": {
         "panel_layout": {
@@ -479,6 +576,13 @@
       },
       "thresholds": {
         "panel_sequence_steps": 5,
+        "panel_sequence": [
+          "guide walls and first-pass excavation under bentonite",
+          "second pass and middle bite excavation",
+          "bentonite recycling, stop-ends and reinforcement cage",
+          "tremie concrete with bentonite recovery",
+          "follower panel excavation, stop-end removal, repeat"
+        ],
         "panel_layout_m": [
           2.0,
           6.53,
@@ -503,6 +607,7 @@
       "remediation": [],
       "provenance": {
         "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p6",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -1292,6 +1397,92 @@
       "needs_review": false
     },
     {
+      "id": "earthworks.grader_volume_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Grader output in volume from its area rate and the layer thickness",
+      "statement": "Grader volume rate (m3/hr) = grader area rate (m2/hr) x compacted layer thickness (m), used to size graders against a volume target. WORKED EXAMPLES (course fleet studies): 750 m2/hr at 0.25 m = 187.5 m3/hr (printed 187); 700 m2/hr at 0.25 m = 175 m3/hr. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "grader_area_rate * layer_thickness",
+      "variables": {
+        "grader_area_rate": {
+          "unit": "meter**2/hour",
+          "desc": "Grader spreading/levelling rate per hour"
+        },
+        "layer_thickness": {
+          "unit": "meter",
+          "desc": "Compacted layer thickness"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.grading_area_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Area to grade and roll per working hour over the whole fill",
+      "statement": "Area rate (m2/hr) = number of layers x fill area (m2) / (working days x working hours per day); dividing it by one grader's area rate gives the graders needed (equipment.machines_required), and the course pairs one roller with every two graders. WORKED EXAMPLES (course fleet studies): 19 layers x 2,000,000 m2 / (210 x 20) = 9,047.6 m2/hr (printed 9,048); 20 layers x 2,000,000 m2 / (210 x 20) = 9,523.8 m2/hr (printed 9,524). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "layer_count * fill_area / (working_days * hours_per_day)",
+      "variables": {
+        "layer_count": {
+          "unit": "dimensionless",
+          "desc": "Number of compacted layers (earthworks.fill_layers)"
+        },
+        "fill_area": {
+          "unit": "meter**2",
+          "desc": "Plan area of the fill"
+        },
+        "working_days": {
+          "unit": "day",
+          "desc": "Working days in the programme"
+        },
+        "hours_per_day": {
+          "unit": "hour/day",
+          "desc": "Working hours per day, all shifts"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**2/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
       "id": "compaction.field_density",
       "domain": "construction.roads",
       "type": "formula",
@@ -1662,21 +1853,15 @@
       "domain": "construction.roads",
       "type": "reference_design",
       "title": "Asphalt bitumen content by course",
-      "statement": "Reference bitumen content by asphalt course: base course 3-6%, binder course approximately 4.15%, wearing course approximately 4.45% (by mass of total mix). Typical budget/material allowances: 4.5% for 60/70 penetration-grade bitumen, and 4-8% for 40/50 penetration-grade bitumen. Final binder content must be set by Marshall/Superpave mix design and confirmed on the trial section.",
+      "statement": "Reference bitumen content by asphalt course: base course approximately 3.6%, binder course approximately 4.15%, wearing course approximately 4.45% (by mass of total mix). Typical budget/material allowances: 4.5% for 60/70 penetration-grade bitumen, and 4.8% for 40/50 penetration-grade bitumen. Theoretical bitumen consumption = tonnage laid x course bitumen percentage / 100. Note: a retyped copy of the source sheet shows the base course and 40/50 figures as \"3-6%\" and \"4-8%\"; the typed original reads 3.6% and 4.8% (decimal points lost in retyping), consistent with the neighbouring 4.15%, 4.45% and 4.5%. Final binder content must be set by Marshall/Superpave mix design and confirmed on the trial section.",
       "expression": null,
       "variables": {},
       "thresholds": {
-        "base_course_percent_range": [
-          3,
-          6
-        ],
+        "base_course_percent": 3.6,
         "binder_course_percent": 4.15,
         "wearing_course_percent": 4.45,
         "allowance_60_70_percent": 4.5,
-        "allowance_40_50_percent_range": [
-          4,
-          8
-        ],
+        "allowance_40_50_percent": 4.8,
         "unit": "percent_by_mass"
       },
       "applicability": {
@@ -1693,6 +1878,7 @@
       ],
       "provenance": {
         "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, asphalt section 3 p35 (typed sheet; p39 is the retyped copy)",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -1733,6 +1919,279 @@
       ],
       "provenance": {
         "source": "roads / earthworks / geotech site-experience reference",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.theoretical_bitumen",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Theoretical bitumen consumption of laid asphalt",
+      "statement": "Theoretical bitumen (t) = tonnage of asphalt laid x the course's bitumen content (% by mass of mix) / 100, per course layer. The bitumen content is an input (the course's sheet notes base 3.6 %, binder 4.15 %, wearing 4.45 %; see asphalt.bitumen_content). The monthly material sheet sets this against the bitumen actually consumed and the budget. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "tonnage_laid * bitumen_content / 100",
+      "variables": {
+        "tonnage_laid": {
+          "unit": "tonne",
+          "desc": "Asphalt laid in the period for one course layer"
+        },
+        "bitumen_content": {
+          "unit": "percent",
+          "desc": "Bitumen content of that course, % by mass of total mix"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.bitumen_budget",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Budgeted bitumen for laid asphalt",
+      "statement": "Budget bitumen (t) = tonnage of asphalt laid x the budget allowance (%) / 100. The allowance is an input and depends on the bitumen grade (the course's sheet notes 4.5 % for 60/70 and 4.8 % for 40/50). The material sheet sets the budget against theoretical and actual consumption. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "tonnage_laid * budget_allowance / 100",
+      "variables": {
+        "tonnage_laid": {
+          "unit": "tonne",
+          "desc": "Asphalt laid in the period"
+        },
+        "budget_allowance": {
+          "unit": "percent",
+          "desc": "Budget bitumen allowance for the grade used, % of mix"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.material_overconsumption",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Material consumed beyond the theoretical quantity",
+      "statement": "Over-consumption = actual consumption - theoretical consumption, for one material row of the monthly asphalt material sheet (this period or cumulative). A positive result is material used beyond what the laid tonnage accounts for; a negative result means the actual figure is below theory and should be checked. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "actual_consumption - theoretical_consumption",
+      "variables": {
+        "actual_consumption": {
+          "unit": "tonne",
+          "desc": "Material actually consumed (from issues / stock count)"
+        },
+        "theoretical_consumption": {
+          "unit": "tonne",
+          "desc": "Material the laid tonnage should have used"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.material_stock",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Material in stock on the asphalt material sheet",
+      "statement": "Quantity in stock = cumulative quantity received - cumulative actual consumption, for one material row of the monthly asphalt material sheet. The course's plant rules stop production on any shortage, so the stock is tracked for every material (bitumen grades, cutback, emulsion, diesel, aggregate sizes). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "cumulative_received - cumulative_consumption",
+      "variables": {
+        "cumulative_received": {
+          "unit": "tonne",
+          "desc": "Quantity received since the start, weighbridge-checked"
+        },
+        "cumulative_consumption": {
+          "unit": "tonne",
+          "desc": "Quantity actually consumed since the start"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p18",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.haul_ton_km",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Ton-kilometres of asphalt haulage",
+      "statement": "Ton-km = asphalt quantity laid (t) x average haul distance (km) from the plant, per course layer; the monthly summary of asphalt operations reports it with the tonnage laid and the average haul distance. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "quantity_laid * average_haul_distance",
+      "variables": {
+        "quantity_laid": {
+          "unit": "tonne",
+          "desc": "Asphalt laid in the period"
+        },
+        "average_haul_distance": {
+          "unit": "kilometer",
+          "desc": "Average haul distance from plant to laying point"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne*kilometer"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p36 and p40",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.marshall_stiffness",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Marshall stiffness of an asphalt mix",
+      "statement": "Marshall stiffness (kg/mm) = Marshall stability (kg) / Marshall flow (mm), the quotient behind the course's mix requirement of at least 500 kg/mm for base, binder and wearing courses (with stability at least 1000 kg and flow 2-4 mm). The course's mix design result, stability 1633 kg at flow 2.6 mm, gives about 628 kg/mm. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "marshall_stability / marshall_flow",
+      "variables": {
+        "marshall_stability": {
+          "unit": "kilogram_force",
+          "desc": "Marshall stability of the compacted specimen"
+        },
+        "marshall_flow": {
+          "unit": "millimeter",
+          "desc": "Marshall flow at failure"
+        }
+      },
+      "thresholds": {
+        "unit": "kilogram_force/millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p12 and p13",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "asphalt.paving_hours",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Paver hours to lay an asphalt quantity",
+      "statement": "Paving time (hr) = asphalt tonnage to lay / paver production rate (t/hr). The rate is an input taken from the cited production norm for the layer (the course's paver norms: stabilized sub-base 280, asphalt base course 320, wearing course 240 t/hr); truck numbers follow from plant and paver capacity, paver speed and the haul distance. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "tonnage_to_lay / paver_rate",
+      "variables": {
+        "tonnage_to_lay": {
+          "unit": "tonne",
+          "desc": "Asphalt (or stabilized material) to be laid"
+        },
+        "paver_rate": {
+          "unit": "tonne/hour",
+          "desc": "Paver production rate for the layer"
+        }
+      },
+      "thresholds": {
+        "unit": "hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 3, p20 and p23",
         "project": null,
         "confidence": "site_experience",
         "verified_against_standard": false
@@ -2000,6 +2459,1720 @@
         "verified_against_standard": false
       },
       "credibility_tier": 4,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.loader_buckets_per_truck",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Loader buckets needed to fill one truck",
+      "statement": "Number of loader passes (buckets) to fill one truck = truck body capacity / loader bucket capacity, rounded UP to a whole bucket (a part bucket is still a pass); the loader also reports the unrounded quotient. Both capacities in the same volume unit (loose m3). WORKED EXAMPLE: bucket 3.1 m3, 6-wheel truck body 18 m3: 18 / 3.1 = 5.81, say 6 buckets. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(truck_capacity / bucket_capacity)",
+      "variables": {
+        "truck_capacity": {
+          "unit": "meter**3",
+          "desc": "Truck body capacity (loose volume)"
+        },
+        "bucket_capacity": {
+          "unit": "meter**3",
+          "desc": "Loader bucket capacity (loose volume)"
+        }
+      },
+      "thresholds": {
+        "unit": "buckets"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p3",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.wet_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Wet (bulk) density from a weighed sample of known volume",
+      "statement": "Wet density = (mass of container + soil - mass of container) / volume. In the compaction (Proctor) test the container is the mould and the volume is the mould volume; in the sand-replacement field test the soil from the hole is weighed net (container_mass = 0, stated) and the volume is the hole volume (earthworks.sand_cone_hole_volume). Masses in g and volume in cm3 give g/cm3, numerically equal to Mg/m3 (t/m3). WORKED EXAMPLE (compaction worksheet, point 1): (8764 - 4562) / 2114 = 1.988 Mg/m3. The worksheet prints no unit on the mould volume; cm3 is inferred from the result. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(gross_mass - container_mass) / volume",
+      "variables": {
+        "gross_mass": {
+          "unit": "gram",
+          "desc": "Mass of container (mould) plus wet soil"
+        },
+        "container_mass": {
+          "unit": "gram",
+          "desc": "Mass of the empty container (mould); 0 when the soil is weighed net"
+        },
+        "volume": {
+          "unit": "centimeter**3",
+          "desc": "Volume the soil occupies (mould volume or test-hole volume)"
+        }
+      },
+      "thresholds": {
+        "unit": "megagram/meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p11 (formula p9-10)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.moisture_content",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Moisture content from container weighings",
+      "statement": "Moisture content w (%) = (A - B) / (B - C) x 100, where A = container + wet soil, B = container + oven-dry soil, C = container. Used by both the laboratory compaction test and the field density test. WORKED EXAMPLE (compaction worksheet, point 1): (117.0 - 111.9) / (111.9 - 16.2) x 100 = 5.33%, printed 5.3. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(wet_with_container - dry_with_container) / (dry_with_container - container_mass) * 100",
+      "variables": {
+        "wet_with_container": {
+          "unit": "gram",
+          "desc": "A: container plus wet soil"
+        },
+        "dry_with_container": {
+          "unit": "gram",
+          "desc": "B: container plus oven-dry soil"
+        },
+        "container_mass": {
+          "unit": "gram",
+          "desc": "C: empty container"
+        }
+      },
+      "thresholds": {
+        "unit": "percent"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180",
+          "AASHTO T 191"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.dry_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Dry density from wet density and moisture content",
+      "statement": "Dry density = wet density / (1 + w / 100), the course form W = W1 / (w + 100) x 100, with w the moisture content in percent (earthworks.moisture_content). The result is in the unit of the wet density. WORKED EXAMPLES: compaction worksheet point 1: 1.988 / 1.0533 = 1.887 Mg/m3; field density position 1: 2.267 / 1.0776 = 2.104 Mg/m3 (98.7% of a 2.131 laboratory maximum via compaction.field_density). The worksheets print the unit as mg/m3; Mg/m3 is meant. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "wet_density / (1 + moisture_percent / 100)",
+      "variables": {
+        "wet_density": {
+          "unit": "megagram/meter**3",
+          "desc": "Wet (bulk) density"
+        },
+        "moisture_percent": {
+          "unit": "percent",
+          "desc": "Moisture content w in percent"
+        }
+      },
+      "thresholds": {
+        "unit": "megagram/meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 180",
+          "AASHTO T 191"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11, p15",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.sand_cone_hole_volume",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Sand-replacement test: volume of the test hole",
+      "statement": "Hole volume V = (mass of sand before test - mass of sand after test - mass of sand held in the cone) / calibrated sand density. Masses in g and sand density in g/cm3 give V in cm3. The in-place wet density is then the net wet soil mass / V (earthworks.wet_density), dry density via earthworks.dry_density and the percentage via compaction.field_density. WORKED EXAMPLE (field density worksheet, position 1): (8000 - 2514 - 1564) / 1.512 = 2593.9 cm3. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(sand_before - sand_after - sand_in_cone) / sand_density",
+      "variables": {
+        "sand_before": {
+          "unit": "gram",
+          "desc": "Mass of sand and jar before the test"
+        },
+        "sand_after": {
+          "unit": "gram",
+          "desc": "Mass of sand and jar after the test"
+        },
+        "sand_in_cone": {
+          "unit": "gram",
+          "desc": "Mass of sand that fills the cone (calibration)"
+        },
+        "sand_density": {
+          "unit": "gram/centimeter**3",
+          "desc": "Calibrated bulk density of the test sand"
+        }
+      },
+      "thresholds": {
+        "unit": "centimeter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": [
+          "AASHTO T 191"
+        ]
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14-15",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "ground_improvement.dynamic_compaction_vibration_radius",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Dynamic compaction: radius beyond which vibration is not harmful",
+      "statement": "R = 130 x sqrt(M x H), with M the falling mass in tonnes and H the drop height in metres; R in metres is the distance beyond which the course states there is no harmful vibration. The coefficient 130 is the course's empirical constant (it carries the unit m per sqrt(t x m)); the pairing depth formula is ground_improvement.dynamic_compaction. WORKED EXAMPLE: M = 25 t, H = 20 m: 130 x sqrt(500) = 2,907 m, printed 2.9 km. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "130 * sqrt(M * H)",
+      "variables": {
+        "M": {
+          "unit": "tonne",
+          "desc": "Falling (pounder) mass"
+        },
+        "H": {
+          "unit": "meter",
+          "desc": "Drop height"
+        }
+      },
+      "thresholds": {
+        "unit": "meter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 1, p33",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.truck_cycle_time",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Haul truck cycle time",
+      "statement": "Truck cycle time (min) = fixed time + 60 x haul distance / loaded speed + 60 x return distance / empty speed. The fixed time is loading + manoeuvre at the tip + weighing (the course's borrow-pit example: 6 + 3 + 3 = 12 min) and is an input, not assumed. Distances in km, speeds in km/hr; 60 converts hours to minutes. Course average speeds (loaded / empty): asphalt road 65 / 75, well graded and compacted 45 / 50, fair haul road 35 / 40, narrow poorly graded dusty 25 / 30 km/hr. Trips per hour and hourly output follow from equipment.cycle_production. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "fixed_time + 60 * haul_distance / loaded_speed + 60 * return_distance / empty_speed",
+      "variables": {
+        "fixed_time": {
+          "unit": "minute",
+          "desc": "Fixed time per cycle: loading + manoeuvre + weighing/tipping"
+        },
+        "haul_distance": {
+          "unit": "kilometer",
+          "desc": "One-way loaded haul distance"
+        },
+        "loaded_speed": {
+          "unit": "kilometer/hour",
+          "desc": "Average loaded speed"
+        },
+        "return_distance": {
+          "unit": "kilometer",
+          "desc": "Empty return distance"
+        },
+        "empty_speed": {
+          "unit": "kilometer/hour",
+          "desc": "Average empty speed"
+        }
+      },
+      "thresholds": {
+        "unit": "minute"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2 p24 and section 3, p26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.cycle_production",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Hourly production of one machine from its cycle time",
+      "statement": "Production per machine per hour = (60 / cycle time in minutes) x capacity per cycle; 60 / cycle time is the number of trips (cycles) per hour. The result is in the capacity's unit per hour (m3/hr for a bucket or body in m3, t/hr for a water tanker load in t). Apply any job efficiency to the cycle time or the result explicitly; none is assumed here. Machines needed follow from equipment.machines_required. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "60 / cycle_time * unit_capacity",
+      "variables": {
+        "cycle_time": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine"
+        },
+        "unit_capacity": {
+          "unit": "meter**3",
+          "desc": "Quantity moved per cycle (m3, or t for a tanker)"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.machines_required",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Number of machines for a required hourly rate",
+      "statement": "Machines required = required hourly rate / production per machine per hour, rounded UP (a fraction of a machine is a machine); the loader also reports the unrounded quotient. Required rate = total quantity / working days / working hours per day; production per machine from equipment.cycle_production (trucks, scrapers, loaders, water tankers) or a production norm (graders in m2/hr, rollers). Both rates in the same unit. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(required_rate / production_per_machine)",
+      "variables": {
+        "required_rate": {
+          "unit": "meter**3/hour",
+          "desc": "Required output per hour"
+        },
+        "production_per_machine": {
+          "unit": "meter**3/hour",
+          "desc": "Output of one machine per hour"
+        }
+      },
+      "thresholds": {
+        "unit": "machines"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-27",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.fleet_study_hourly_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Fleet study: hourly rate per hauling machine from its outputs at three haul distances",
+      "statement": "Fleet study method of the course: for each of the three haul distances of the study, output per machine per hour = (60 / cycle time in minutes) x load per trip; the three outputs are combined (added) into the hourly rate per machine used for the fleet count. The count follows from equipment.fleet_study_machines. This is the course's fleet study route and is kept separate from equipment.cycle_production / equipment.machines_required, which size a fleet for a single haul. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "60 / cycle_time_short * unit_capacity + 60 / cycle_time_middle * unit_capacity + 60 / cycle_time_long * unit_capacity",
+      "variables": {
+        "unit_capacity": {
+          "unit": "meter**3",
+          "desc": "Quantity carried per load by one hauling machine (scraper bowl, truck body)"
+        },
+        "cycle_time_short": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the shortest haul distance of the study"
+        },
+        "cycle_time_middle": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the middle haul distance of the study"
+        },
+        "cycle_time_long": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the longest haul distance of the study"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.fleet_study_machines",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Fleet study: number of hauling machines by the course's route",
+      "statement": "Fleet study method of the course: machines = required hourly rate / hourly rate per machine, rounded UP, where the rate per machine is the combined output at the study's three haul distances (equipment.fleet_study_hourly_rate) and the required hourly rate is the cut quantity over the working days and all shift hours (equipment.required_hourly_rate). The loader also reports the unrounded quotient. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(required_rate / (60 / cycle_time_short * unit_capacity + 60 / cycle_time_middle * unit_capacity + 60 / cycle_time_long * unit_capacity))",
+      "variables": {
+        "required_rate": {
+          "unit": "meter**3/hour",
+          "desc": "Required output per hour, all shifts"
+        },
+        "unit_capacity": {
+          "unit": "meter**3",
+          "desc": "Quantity carried per load by one hauling machine (scraper bowl, truck body)"
+        },
+        "cycle_time_short": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the shortest haul distance of the study"
+        },
+        "cycle_time_middle": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the middle haul distance of the study"
+        },
+        "cycle_time_long": {
+          "unit": "minute",
+          "desc": "Full cycle time of one machine at the longest haul distance of the study"
+        }
+      },
+      "thresholds": {
+        "unit": "machines"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.fill_layers",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Number of compacted fill layers",
+      "statement": "Layers = fill volume / (plan area x compacted layer thickness), rounded UP to a whole layer; the loader also reports the unrounded quotient. Total area to spread and compact = layers x plan area; the area rate per hour (for grader and roller counts via equipment.machines_required) = total area / (days x hours per day). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "ceiling(fill_volume / (area * layer_thickness))",
+      "variables": {
+        "fill_volume": {
+          "unit": "meter**3",
+          "desc": "Compacted fill volume"
+        },
+        "area": {
+          "unit": "meter**2",
+          "desc": "Plan area of the fill"
+        },
+        "layer_thickness": {
+          "unit": "meter",
+          "desc": "Compacted layer thickness"
+        }
+      },
+      "thresholds": {
+        "unit": "layers"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p27",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.compaction_water",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Water to add for compaction per day",
+      "statement": "Water to add (t/day) = daily fill quantity x material density x (optimum moisture - natural moisture) / 100, moisture in percent. Water per hour = daily water / working hours; tankers = water per hour / (tanker load x trips per hour) rounded up (equipment.cycle_production then equipment.machines_required, with the tanker load in t). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "daily_quantity * density * (optimum_moisture - natural_moisture) / 100",
+      "variables": {
+        "daily_quantity": {
+          "unit": "meter**3",
+          "desc": "Fill quantity placed per day"
+        },
+        "density": {
+          "unit": "tonne/meter**3",
+          "desc": "Material density the daily quantity is measured at"
+        },
+        "optimum_moisture": {
+          "unit": "percent",
+          "desc": "Optimum moisture content (laboratory)"
+        },
+        "natural_moisture": {
+          "unit": "percent",
+          "desc": "Natural moisture content of the fill"
+        }
+      },
+      "thresholds": {
+        "unit": "tonne"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p27-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.required_daily_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Required daily output from quantity and working days",
+      "statement": "Required daily output = total quantity / working days. Split by shift with equipment.shift_quantity; hourly target with equipment.required_hourly_rate. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "total_quantity / working_days",
+      "variables": {
+        "total_quantity": {
+          "unit": "meter**3",
+          "desc": "Total quantity to move or place"
+        },
+        "working_days": {
+          "unit": "day",
+          "desc": "Working days available"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/day"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.shift_quantity",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Share of the daily output for one shift",
+      "statement": "Shift quantity = daily output x shift hours / working hours per day (the course splits a 20 h day as 11 h day shift and 9 h night shift). The hourly rate is then the same on every shift: shift quantity / shift hours = daily output / working hours per day. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "daily_quantity * shift_hours / hours_per_day",
+      "variables": {
+        "daily_quantity": {
+          "unit": "meter**3/day",
+          "desc": "Required daily output"
+        },
+        "shift_hours": {
+          "unit": "hour",
+          "desc": "Working hours of this shift"
+        },
+        "hours_per_day": {
+          "unit": "hour",
+          "desc": "Working hours per day, all shifts"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "equipment.required_hourly_rate",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Required hourly output from quantity, days and hours per day",
+      "statement": "Required hourly output = total quantity / (working days x working hours per day). Equal to each shift's quantity divided by its hours (see equipment.shift_quantity). Feeds equipment.machines_required. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "total_quantity / (working_days * hours_per_day)",
+      "variables": {
+        "total_quantity": {
+          "unit": "meter**3",
+          "desc": "Total quantity to move or place"
+        },
+        "working_days": {
+          "unit": "day",
+          "desc": "Working days available"
+        },
+        "hours_per_day": {
+          "unit": "hour",
+          "desc": "Working hours per day, all shifts"
+        }
+      },
+      "thresholds": {
+        "unit": "meter**3/hour"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "earthworks.sand_bulk_density",
+      "domain": "construction.roads",
+      "type": "formula",
+      "title": "Calibrated bulk density of the sand-cone sand",
+      "statement": "Sand bulk density = mass of sand filling the calibration container / container volume (the calibration step of the sand-cone field density test; the course's lb-unit form is W1 = 62.427 W2 / V1, with V1 from the water calibration). The result feeds earthworks.sand_cone_hole_volume. Masses in g and volume in cm3 give g/cm3 (= t/m3). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "sand_mass / container_volume",
+      "variables": {
+        "sand_mass": {
+          "unit": "gram",
+          "desc": "Mass of sand filling the calibration container"
+        },
+        "container_volume": {
+          "unit": "centimeter**3",
+          "desc": "Calibrated volume of the container"
+        }
+      },
+      "thresholds": {
+        "unit": "gram/centimeter**3"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.roads"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "roads / earthworks / geotech site-experience reference",
+        "course_reference": "owner-supplied course material, roads and earthworks section 2, p14",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.target_mean_strength",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Target mean strength of a concrete mix",
+      "statement": "Target mean strength fm = characteristic strength fk + 1.64 x standard deviation S of the test results (fk = fm - 1.64 S; 1.64 S is the current margin, the 5 % defective fractile). Strengths in N/mm2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "characteristic_strength + 1.64*standard_deviation",
+      "variables": {
+        "characteristic_strength": {
+          "unit": "N/mm**2",
+          "desc": "Specified characteristic 28-day strength fk (the grade)"
+        },
+        "standard_deviation": {
+          "unit": "N/mm**2",
+          "desc": "Standard deviation S of the strength test results"
+        }
+      },
+      "thresholds": {
+        "unit": "N/mm**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, p28",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.workability_water",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Mix water beyond what hydration needs",
+      "statement": "Water added for workability = mix water (w/c x cement) - water needed for hydration (hydration fraction x cement). The course states hydration needs about 20-25 % of the cement weight as water; the fraction is an input, not fixed. Cement in kg gives litres of water. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "water_cement_ratio*cement_content - hydration_fraction*cement_content",
+      "variables": {
+        "water_cement_ratio": {
+          "unit": "dimensionless",
+          "desc": "Free water / cement ratio of the mix"
+        },
+        "cement_content": {
+          "unit": "kilogram",
+          "desc": "Cement in the batch or per m3"
+        },
+        "hydration_fraction": {
+          "unit": "dimensionless",
+          "desc": "Water needed for hydration as a fraction of cement weight (course: 0.20-0.25)"
+        }
+      },
+      "thresholds": {
+        "unit": "liter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp25-26",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "structure.axial_shortening",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Elastic axial shortening of a member",
+      "statement": "Elastic shortening (or elongation) of an axially loaded member dL = P x L / (A x E), with E the concrete modulus (the course gives Ec = 15000 sqrt(f'c) in kg/cm2). Consistent units: P in N, L in mm, A in mm2, E in N/mm2 give dL in mm. Creep adds to this under sustained load. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "axial_load*member_length/(section_area*elastic_modulus)",
+      "variables": {
+        "axial_load": {
+          "unit": "newton",
+          "desc": "Axial load P on the member"
+        },
+        "member_length": {
+          "unit": "millimeter",
+          "desc": "Member length L"
+        },
+        "section_area": {
+          "unit": "millimeter**2",
+          "desc": "Cross-section area A"
+        },
+        "elastic_modulus": {
+          "unit": "N/mm**2",
+          "desc": "Modulus of elasticity E"
+        }
+      },
+      "thresholds": {
+        "unit": "millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp33-34",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.equivalent_temperature_drop",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Temperature drop equivalent to a strain",
+      "statement": "Thermal strain = alpha x dT, so a strain (for example a shrinkage strain) equals a temperature drop dT = strain / alpha. The course quotes alpha 7.2e-6 to 10.8e-6 per C, 10e-6 per C usually used; alpha is an input. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "strain/thermal_coefficient",
+      "variables": {
+        "strain": {
+          "unit": "dimensionless",
+          "desc": "Strain to express as a temperature change"
+        },
+        "thermal_coefficient": {
+          "unit": "1/delta_degC",
+          "desc": "Coefficient of thermal expansion alpha"
+        }
+      },
+      "thresholds": {
+        "unit": "delta_degC"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, p35",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.modulus_of_rupture_beam",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Modulus of rupture from a centre-point beam test",
+      "statement": "Flexural tensile strength fr = M / Z with M = P x L / 4 (central load P at failure, span L) and Z = b x d^2 / 6. The course's standard beam is 15 x 15 cm on a 55 cm span (Z = 562.5 cm3). P in kgf and lengths in cm give kgf/cm2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "(failure_load*span/4)/(beam_width*beam_depth**2/6)",
+      "variables": {
+        "failure_load": {
+          "unit": "kilogram_force",
+          "desc": "Central load P at failure"
+        },
+        "span": {
+          "unit": "centimeter",
+          "desc": "Test span L"
+        },
+        "beam_width": {
+          "unit": "centimeter",
+          "desc": "Beam width b"
+        },
+        "beam_depth": {
+          "unit": "centimeter",
+          "desc": "Beam depth d"
+        }
+      },
+      "thresholds": {
+        "unit": "kilogram_force/centimeter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "concrete.split_cylinder_tensile",
+      "domain": "construction.concrete",
+      "type": "formula",
+      "title": "Splitting tensile strength of a cylinder",
+      "statement": "Splitting tensile strength f = 2P / (pi x D x L), cylinder loaded along its full length (course standard cylinder 15 cm dia x 30 cm). P in kgf and lengths in cm give kgf/cm2. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": "2*failure_load/(pi*cylinder_diameter*cylinder_length)",
+      "variables": {
+        "failure_load": {
+          "unit": "kilogram_force",
+          "desc": "Load P at splitting failure"
+        },
+        "cylinder_diameter": {
+          "unit": "centimeter",
+          "desc": "Cylinder diameter D"
+        },
+        "cylinder_length": {
+          "unit": "centimeter",
+          "desc": "Cylinder length L"
+        }
+      },
+      "thresholds": {
+        "unit": "kilogram_force/centimeter**2"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "concrete technology site-experience reference",
+        "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "thermal.mass_pour_mockup_peak_temperatures",
+      "domain": "construction.concrete",
+      "type": "table",
+      "title": "Mass-concrete mock-up: peak temperature and time of peak per logger",
+      "statement": "Recorded maximum temperature and the elapsed time at which it occurred, per embedded logger, for a mass-concrete mock-up instrumented on four lines (centre, side, intermediate, corner) at depth labels from bottom to top. The hottest zone is mid-depth on the centre line, peaking late; side and corner loggers peak earlier and lower; bottom loggers are coolest. One worked record from course material, not a limit: use it to read what a pour of this kind did, not what a project pour must do. Depth labels are as printed (no unit printed). Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "table": {
+        "columns": [
+          {
+            "name": "line",
+            "unit": null,
+            "desc": "Logger line as printed: centre, side, intermediate, corner"
+          },
+          {
+            "name": "depth_label",
+            "unit": null,
+            "desc": "Logger position label as printed (bottom, top or a number; no unit printed)"
+          },
+          {
+            "name": "sensor",
+            "unit": null,
+            "desc": "Sensor number at that position (two sensors at one centre position)"
+          },
+          {
+            "name": "max_temperature",
+            "unit": "degree_Celsius",
+            "desc": "Maximum temperature recorded"
+          },
+          {
+            "name": "time_of_max",
+            "unit": "hour",
+            "desc": "Elapsed time at which the maximum was recorded"
+          }
+        ],
+        "rows": [
+          {
+            "line": "centre",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": null
+          },
+          {
+            "line": "centre",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 61,
+            "time_of_max": 37.92
+          },
+          {
+            "line": "centre",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 44.3
+          },
+          {
+            "line": "centre",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 53.07
+          },
+          {
+            "line": "centre",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 52.7
+          },
+          {
+            "line": "centre",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 51.3
+          },
+          {
+            "line": "centre",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": 66,
+            "time_of_max": 107.92
+          },
+          {
+            "line": "centre",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 66,
+            "time_of_max": 94.33
+          },
+          {
+            "line": "centre",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 59.3
+          },
+          {
+            "line": "centre",
+            "depth_label": "220",
+            "sensor": 2,
+            "max_temperature": 65,
+            "time_of_max": 65.18
+          },
+          {
+            "line": "centre",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 44.22
+          },
+          {
+            "line": "centre",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 49.38
+          },
+          {
+            "line": "centre",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 61,
+            "time_of_max": 37.87
+          },
+          {
+            "line": "centre",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 27.37
+          },
+          {
+            "line": "side",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 48,
+            "time_of_max": 29.27
+          },
+          {
+            "line": "side",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 58,
+            "time_of_max": 37.57
+          },
+          {
+            "line": "side",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 31.68
+          },
+          {
+            "line": "side",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 39.63
+          },
+          {
+            "line": "side",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 29.95
+          },
+          {
+            "line": "side",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 30.42
+          },
+          {
+            "line": "side",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 32.68
+          },
+          {
+            "line": "side",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 29.73
+          },
+          {
+            "line": "side",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 42.1
+          },
+          {
+            "line": "side",
+            "depth_label": "250",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 40.28
+          },
+          {
+            "line": "side",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 31.9
+          },
+          {
+            "line": "side",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 59,
+            "time_of_max": 31.27
+          },
+          {
+            "line": "side",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 27.05
+          },
+          {
+            "line": "side",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": 24.4
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": 38.58
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 62,
+            "time_of_max": 41.08
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 45.82
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 38.55
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 52.02
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 63.1
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": 65,
+            "time_of_max": 59.1
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 42.1
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 41.87
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "250",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 41.85
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 40.07
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 64,
+            "time_of_max": 41.05
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 62,
+            "time_of_max": 32.82
+          },
+          {
+            "line": "intermediate",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 28.65
+          },
+          {
+            "line": "corner",
+            "depth_label": "bottom",
+            "sensor": 1,
+            "max_temperature": 49,
+            "time_of_max": null
+          },
+          {
+            "line": "corner",
+            "depth_label": "top",
+            "sensor": 1,
+            "max_temperature": 53,
+            "time_of_max": 21.83
+          },
+          {
+            "line": "corner",
+            "depth_label": "40",
+            "sensor": 1,
+            "max_temperature": 55,
+            "time_of_max": 23.27
+          },
+          {
+            "line": "corner",
+            "depth_label": "70",
+            "sensor": 1,
+            "max_temperature": 54,
+            "time_of_max": 23.45
+          },
+          {
+            "line": "corner",
+            "depth_label": "100",
+            "sensor": 1,
+            "max_temperature": 56,
+            "time_of_max": 25.9
+          },
+          {
+            "line": "corner",
+            "depth_label": "130",
+            "sensor": 1,
+            "max_temperature": 55,
+            "time_of_max": 24.35
+          },
+          {
+            "line": "corner",
+            "depth_label": "160",
+            "sensor": 1,
+            "max_temperature": null,
+            "time_of_max": 25.98
+          },
+          {
+            "line": "corner",
+            "depth_label": "190",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 34.17
+          },
+          {
+            "line": "corner",
+            "depth_label": "220",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 26.88
+          },
+          {
+            "line": "corner",
+            "depth_label": "250",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 24.23
+          },
+          {
+            "line": "corner",
+            "depth_label": "280",
+            "sensor": 1,
+            "max_temperature": 57,
+            "time_of_max": 21.77
+          },
+          {
+            "line": "corner",
+            "depth_label": "310",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 24.62
+          },
+          {
+            "line": "corner",
+            "depth_label": "340",
+            "sensor": 1,
+            "max_temperature": 60,
+            "time_of_max": 19.95
+          },
+          {
+            "line": "corner",
+            "depth_label": "370",
+            "sensor": 1,
+            "max_temperature": 56,
+            "time_of_max": 20.02
+          }
+        ],
+        "held": [
+          {
+            "line": "centre",
+            "depth_label": "bottom",
+            "column": "time_of_max",
+            "reason": "digit not separable on the page (5/6/8 glyph); needs the owner's reading"
+          },
+          {
+            "line": "corner",
+            "depth_label": "bottom",
+            "column": "time_of_max",
+            "reason": "last digit not separable on the page; needs the owner's reading"
+          },
+          {
+            "line": "corner",
+            "depth_label": "160",
+            "column": "max_temperature",
+            "reason": "digit not separable on the page (5/6/8 glyph); needs the owner's reading"
+          }
+        ],
+        "not_present": [
+          {
+            "line": "centre",
+            "depth_label": "250",
+            "reason": "no logger printed at this position"
+          }
+        ]
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.concrete",
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "mass concrete site-experience reference",
+        "course_reference": "owner-supplied course material, mass concrete mock-up results, pp12-13, 15-16, 18-19, 21-22",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "highrise.pt_floor_five_day_cycle_chart",
+      "domain": "construction.buildings",
+      "type": "table",
+      "title": "Post-tensioned floor: five-day cycle bar chart (quarter-day cells)",
+      "statement": "Bar positions of a post-tensioned floor cycle chart titled a five-day cycle time program: columns, slab formwork, anchorages, steel and tendons, concrete, stripping, grouting, and the next floor's column formwork. Each printed day column is divided into four equal cells; a bar is given as its day column and its first and last cell (1-4). The chart does not print what time one cell stands for. Two rows (strip edge, stress tendon) carry no bar on the chart and are recorded as such, not given a position. Day columns after the fifth hold the floor's tail activities overlapping the next cycle. Step references are as printed. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {},
+      "table": {
+        "columns": [
+          {
+            "name": "chart_row",
+            "unit": null,
+            "desc": "Row order on the chart, top to bottom"
+          },
+          {
+            "name": "step_ref",
+            "unit": null,
+            "desc": "Step reference as printed (blank where none is printed)"
+          },
+          {
+            "name": "activity",
+            "unit": null,
+            "desc": "Activity as printed"
+          },
+          {
+            "name": "bar_printed",
+            "unit": null,
+            "desc": "False where the chart row carries no bar"
+          },
+          {
+            "name": "day",
+            "unit": null,
+            "desc": "Printed day column number of this bar segment"
+          },
+          {
+            "name": "first_quarter",
+            "unit": null,
+            "desc": "First of the four cells of the day column the bar covers (1-4)"
+          },
+          {
+            "name": "last_quarter",
+            "unit": null,
+            "desc": "Last of the four cells of the day column the bar covers (1-4)"
+          }
+        ],
+        "rows": [
+          {
+            "chart_row": 1,
+            "step_ref": "",
+            "activity": "Column Formwork",
+            "bar_printed": true,
+            "day": 1,
+            "first_quarter": 1,
+            "last_quarter": 2
+          },
+          {
+            "chart_row": 2,
+            "step_ref": "",
+            "activity": "Column Reinforcement",
+            "bar_printed": true,
+            "day": 1,
+            "first_quarter": 2,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 2,
+            "step_ref": "",
+            "activity": "Column Reinforcement",
+            "bar_printed": true,
+            "day": 2,
+            "first_quarter": 1,
+            "last_quarter": 2
+          },
+          {
+            "chart_row": 3,
+            "step_ref": "",
+            "activity": "Concrete Columns",
+            "bar_printed": true,
+            "day": 2,
+            "first_quarter": 2,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 4,
+            "step_ref": "1.2",
+            "activity": "Slab Formwork",
+            "bar_printed": true,
+            "day": 3,
+            "first_quarter": 1,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 4,
+            "step_ref": "1.2",
+            "activity": "Slab Formwork",
+            "bar_printed": true,
+            "day": 4,
+            "first_quarter": 1,
+            "last_quarter": 1
+          },
+          {
+            "chart_row": 5,
+            "step_ref": "3",
+            "activity": "Fix Anchorage",
+            "bar_printed": true,
+            "day": 4,
+            "first_quarter": 1,
+            "last_quarter": 2
+          },
+          {
+            "chart_row": 6,
+            "step_ref": "4-7",
+            "activity": "Steel and Tendons",
+            "bar_printed": true,
+            "day": 4,
+            "first_quarter": 1,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 7,
+            "step_ref": "8",
+            "activity": "Concrete",
+            "bar_printed": true,
+            "day": 5,
+            "first_quarter": 1,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 8,
+            "step_ref": "9,10",
+            "activity": "Strip Edge",
+            "bar_printed": false,
+            "day": null,
+            "first_quarter": null,
+            "last_quarter": null
+          },
+          {
+            "chart_row": 9,
+            "step_ref": "12",
+            "activity": "Stress Tendon",
+            "bar_printed": false,
+            "day": null,
+            "first_quarter": null,
+            "last_quarter": null
+          },
+          {
+            "chart_row": 10,
+            "step_ref": "13",
+            "activity": "Strip Forms and Back props",
+            "bar_printed": true,
+            "day": 8,
+            "first_quarter": 1,
+            "last_quarter": 4
+          },
+          {
+            "chart_row": 11,
+            "step_ref": "14",
+            "activity": "Grout and Finish",
+            "bar_printed": true,
+            "day": 9,
+            "first_quarter": 1,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 12,
+            "step_ref": "",
+            "activity": "Column Formwork",
+            "bar_printed": true,
+            "day": 6,
+            "first_quarter": 1,
+            "last_quarter": 3
+          },
+          {
+            "chart_row": 12,
+            "step_ref": "",
+            "activity": "Column Formwork",
+            "bar_printed": true,
+            "day": 9,
+            "first_quarter": 1,
+            "last_quarter": 3
+          }
+        ],
+        "held": []
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p10",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
+      "needs_review": false
+    },
+    {
+      "id": "steelwork.temporary_truss_min_fillet_weld",
+      "domain": "construction.buildings",
+      "type": "threshold",
+      "title": "Temporary steel truss and strut details: fillet welds 10 mm minimum",
+      "statement": "General note on the course's temporary steel truss and strut detail drawings: welds are full penetration butt welds unless otherwise stated, and fillet welds are 10 mm minimum weld size. An example drawing note from course material, not a code minimum: the governing weld sizes are those on the project's own drawings. Site-practice knowledge from course material; not a code or standard requirement.",
+      "expression": null,
+      "variables": {},
+      "thresholds": {
+        "value": 10,
+        "unit": "millimeter"
+      },
+      "applicability": {
+        "applies_to": [
+          "construction.buildings"
+        ],
+        "region_specific": false,
+        "project_specific": false,
+        "standards_cross_ref": []
+      },
+      "remediation": [],
+      "provenance": {
+        "source": "high-rise construction site-experience reference",
+        "course_reference": "owner-supplied course material, high-rise structure part 3, p27 and p30 (general notes)",
+        "project": null,
+        "confidence": "site_experience",
+        "verified_against_standard": false
+      },
+      "credibility_tier": 3,
       "needs_review": false
     }
   ]

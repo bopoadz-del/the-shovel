@@ -14,7 +14,9 @@ absent).
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -27,11 +29,16 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from app.dependencies import require_user
 from app.core import projects as projects_store
 from app.core import agent_memory
 from app.core import byte_store, doc_index, privileges
+from app.core.answer_report_intent import (
+    answer_export_declined_message,
+    answer_export_format_pattern,
+)
 
 router = APIRouter()
 
@@ -701,6 +708,139 @@ async def export_cost_boq(
     )
 
 
+PRODUCED_SESSION_DETAIL = (
+    "Made by the product in this chat session: stored and askable by pin, "
+    "not added to the project's search."
+)
+
+
+def _produced_source_digest(source: Any) -> str:
+    """Identity of a produced file: a digest of what it was rendered FROM.
+
+    A rendered file is not a stable identity. OOXML stamps its write time
+    in ``docProps/core.xml``, and a renderer may stamp the export time into
+    the body itself (the answer sheet carries "Exported ... HH:MM UTC"). So
+    the same answer exported a minute apart differs in its bytes and in its
+    text. The render inputs do not change: the format, the answer or staged
+    plan rendered, and the range or heading. Two exports with equal inputs
+    are the same output. ``source`` is canonicalised as sorted-key JSON.
+    """
+    canonical = json.dumps(source, sort_keys=True, default=str,
+                           ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _produced_document_id(
+    doc_project: str, conversation_id: str, user_id: str, digest: str,
+) -> str:
+    """The documents-row id a produced file is kept under: derived from the
+    project, session, user and render-source digest, so two workers keeping
+    the same output race on one primary key and the database keeps one row.
+    Same shape as an upload's id (8 hex chars)."""
+    key = "".join((doc_project, conversation_id, user_id, digest))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+
+
+def _is_kept_copy(
+    row: Optional[Dict[str, Any]], conversation_id: str, user_id: str, digest: str,
+) -> bool:
+    """True when ``row`` is this session's kept copy of this render source."""
+    meta = (row or {}).get("metadata") or {}
+    return (
+        meta.get("produced_source_sha256") == digest
+        and meta.get("session_id") == conversation_id
+        and meta.get("uploader_id") == user_id
+    )
+
+
+def _save_produced_to_session(
+    project_id: str,
+    conversation_id: str,
+    user_id: str,
+    path: str,
+    display_name: str,
+    *,
+    source: Any,
+) -> Optional[str]:
+    """Keep a file the product produced in a chat session as that session's
+    document (W2): listed under the session tagged Produced, downloadable
+    again and askable by pin, but never indexed, so the product's own output
+    is not evidence for a later answer.
+
+    ``source`` is what the file was rendered from (see
+    ``_produced_source_digest``). The same source produced twice in one
+    session is kept once, whenever the second render happened. Best-effort:
+    a storage failure is logged and the download is still served. Returns
+    the document id, or None when nothing was stored.
+    """
+    from app.core import ingest_status as ist
+
+    try:
+        with open(path, "rb") as fh:
+            raw_bytes = fh.read()
+        digest = _produced_source_digest(source)
+        doc_project = projects_store.ui_project_id(project_id) or project_id
+        # Copies kept before ids were derived carry a random id: found here.
+        for existing in projects_store.list_session_documents(
+            doc_project, conversation_id, user_id,
+        ):
+            if (existing.get("metadata") or {}).get("produced_source_sha256") == digest:
+                return existing.get("id")
+        # Keep-once is decided by the primary key, not by that read alone: a
+        # read then an insert lets two concurrent exports both see "not
+        # kept" and both store (grader G-2). The id is derived from what
+        # identifies the output, so the second insert of it fails in the
+        # database, whichever worker process it runs in.
+        kept_id = _produced_document_id(doc_project, conversation_id, user_id, digest)
+        stored_as = f"{uuid.uuid4().hex[:8]}_{display_name}"
+        stored_path = byte_store.allocate_path(stored_as)
+        byte_store.write_bytes(stored_path, raw_bytes)
+        metadata = {
+            "provenance": "produced",
+            "origin": "produced",
+            "uploader_id": user_id,
+            "session_id": conversation_id,
+            "produced_source_sha256": digest,
+        }
+        try:
+            doc = projects_store.add_document(
+                doc_project, display_name, stored_as, stored_path,
+                len(raw_bytes), role=None, metadata=metadata, document_id=kept_id,
+            )
+        except IntegrityError:
+            if _is_kept_copy(projects_store.get_document(kept_id),
+                             conversation_id, user_id, digest):
+                # Another export of the same output won the insert: drop
+                # the bytes this one wrote and answer with the kept row.
+                try:
+                    os.remove(stored_path)
+                except OSError:
+                    logger.warning("unkept produced copy %s not removed", stored_path)
+                return kept_id
+            # An unrelated row holds the derived id (an 8-hex collision):
+            # keep this copy under a fresh id.
+            doc = projects_store.add_document(
+                doc_project, display_name, stored_as, stored_path,
+                len(raw_bytes), role=None, metadata=metadata,
+            )
+        projects_store.stamp_document_index(
+            doc["id"], chunk_count=0,
+            ingest_status=ist.NOT_INDEXED_POLICY,
+            ingest_status_reason=ist.SESSION_ONLY_POLICY_REASON,
+            stamp_extractor_version=False,
+        )
+        projects_store.update_document_metadata(doc["id"], {"indexing": {
+            "status": "not_indexed",
+            "detail": PRODUCED_SESSION_DETAIL,
+        }})
+        return doc["id"]
+    except Exception:  # noqa: BLE001 - keeping the copy is best-effort
+        logger.warning(
+            "produced file of session %s not kept; download still served",
+            conversation_id, exc_info=True)
+        return None
+
+
 def _persist_and_index(
     project_id: str, name: str, path: str, background_tasks: BackgroundTasks,
 ) -> None:
@@ -1168,6 +1308,163 @@ def _render_answers_docx(
     return path
 
 
+#: The Sources line of a produced document that cites nothing.
+_NO_SOURCES_LINE = "No document was cited in this answer."
+#: A bracketed whole number already in the answer's text (a clause or note
+#: reference). It is held out of the contract run so that only the markers the
+#: contract itself numbered are stripped from the document body.
+_BRACKET_NUMBER_RE = re.compile(r"\[(\d+)\]")
+_HELD_OPEN, _HELD_CLOSE = "", ""
+_HELD_RE = re.compile(_HELD_OPEN + r"(\d+)" + _HELD_CLOSE)
+_HEADING_LINE_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.+?)\s*#*\s*$")
+_BOLD_LINE_RE = re.compile(r"^\s*(?:\*\*|__)(?P<text>[^*_\n]+?)(?:\*\*|__)\s*$")
+#: A line ending in a question mark of any script (Latin, Arabic, full-width).
+_ENDS_ASKING_RE = re.compile(r"[?؟？⸮][\s*_]*$")
+#: Sentence-final punctuation of any script: a line ending in one is prose,
+#: not a title.
+_ENDS_SENTENCE_RE = re.compile(r"[.!?:;؟۔。！？][\s*_]*$")
+#: ``label: body`` -- a short label of any script, then a colon.
+_LABELLED_LINE_RE = re.compile(
+    r"^[ \t]*(?:[-*•][ \t]+)?[*_]*[ \t]*(?P<label>[^:：\n\d]{1,40}?)[ \t]*[*_]*[ \t]*[:：]"
+    r"[ \t]*[*_]*[ \t]*(?P<body>.+?)[ \t]*[*_]*[ \t]*[.۔]?[ \t]*$"
+)
+#: A parenthesised or bracketed span.
+_SPAN_RE = re.compile(r"[ \t]*[(\[](?P<inner>[^()\[\]\n]{1,260})[)\]]")
+
+
+def _cited_line(entry: Dict[str, Any]) -> str:
+    doc = str(entry.get("document") or "").strip()
+    sec = str(entry.get("section") or "").strip()
+    return f"{doc}, {sec}" if doc and sec else doc
+
+
+def _names_a_source(text: str, names: List[str]) -> bool:
+    """True when ``text`` names one of the cited documents or a file."""
+    from app.agents.answer_contract import _FILE_EXTS
+
+    low = (text or "").lower()
+    if any(n and n.lower() in low for n in names):
+        return True
+    return bool(re.search(rf"\.(?:{_FILE_EXTS})\b", low, re.IGNORECASE))
+
+
+def _drop_cited_span(m: "re.Match[str]", names: List[str], found: List[str]) -> str:
+    """A bracketed span that names a cited document or a file leaves the text
+    (its citation goes to ``found``); any other bracketed span -- a note, a
+    dimension, an aside -- stays as written."""
+    if _names_a_source(m.group("inner"), names):
+        found.append(m.group("inner").strip())
+        return ""
+    return m.group(0)
+
+
+def _is_source_line(line: str, names: List[str]) -> str | None:
+    """The citation a line carries when the line is nothing but a citation.
+
+    Structural, in any language: a short label (at most three words, no
+    figure), a colon, and a body that names a cited document or a file, with
+    at most a few words (a page or section) beside it. Returns the body, else
+    ``None``.
+    """
+    from app.agents.answer_contract import _FILE_EXTS
+
+    m = _LABELLED_LINE_RE.match(line or "")
+    if not m or len(m.group("label").split()) > 3:
+        return None
+    body = m.group("body").strip()
+    if not _names_a_source(body, names):
+        return None
+    rest = body
+    for n in sorted((n for n in names if n), key=len, reverse=True):
+        rest = re.sub(re.escape(n), " ", rest, flags=re.IGNORECASE)
+    rest = re.sub(rf"[^\s,;،]+\.(?:{_FILE_EXTS})\b", " ", rest, flags=re.IGNORECASE)
+    words = [w for w in re.split(r"[\s,;،؛]+", rest) if w and not w.isdigit()]
+    return body if len(words) <= 4 else None
+
+
+def _requested_document(answer: str, stored: Any, fallback_title: str) -> Dict[str, Any]:
+    """The document a produce-a-file export of ``answer`` is (W2-a).
+
+    ``stored`` is the assistant message's own structured citations
+    (``agent_memory.attach_citations``); the source list is built from them.
+    Re-reading the text is only the fallback for an answer stored without
+    them. Every step is structural, so it holds for an answer in any
+    language:
+
+    * the answer contract (``app.agents.answer_contract``) numbers the
+      citations it recognises and drops padding and machinery wording;
+    * a line that is nothing but a citation of a cited document or a file,
+      and a bracketed span naming one, leave the body;
+    * a closing question to the reader (the last line ends in a question
+      mark of any script and carries no figure) leaves the body;
+    * only the markers the contract itself numbered are stripped: a
+      bracketed number that was in the answer (a clause or note) stays;
+    * the title is the answer's own title -- its opening heading, a bold
+      opening line, or a short opening line with no sentence punctuation --
+      else ``fallback_title``. Never the user's request.
+
+    Returns ``{"title", "body", "citations"}``; ``citations`` are the source
+    lines, in the order the answer cited them.
+    """
+    from app.agents import answer_contract
+    from app.lib.markdown_docx import strip_inline_markdown
+
+    entries = [e for e in (stored or []) if isinstance(e, dict) and str(e.get("document") or "").strip()]
+    held = _BRACKET_NUMBER_RE.sub(lambda m: f"{_HELD_OPEN}{m.group(1)}{_HELD_CLOSE}", answer or "")
+    rows = [{"doc_name": e["document"], "page_or_section": e.get("section") or ""} for e in entries]
+    done = answer_contract.apply(held, sources=rows)
+    numbered = {int(e["marker"]) for e in done.citations if isinstance(e.get("marker"), int)}
+    names = [str(e.get("document") or "").strip() for e in [*entries, *done.citations]]
+
+    fallback: List[str] = [_cited_line(e) for e in done.citations]
+
+    lines: List[str] = []
+    for line in (done.text or "").split("\n"):
+        body = _is_source_line(line, names)
+        if body is not None:
+            fallback.extend(p.strip() for p in re.split(r"[;؛]", body) if p.strip())
+            continue
+        lines.append(_SPAN_RE.sub(lambda m: _drop_cited_span(m, names, fallback), line).rstrip())
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len([ln for ln in lines if ln.strip()]) > 1:
+        last = lines[-1]
+        if _ENDS_ASKING_RE.search(last) and not re.search(r"\d", _HELD_RE.sub("", last)):
+            lines.pop()
+    text = "\n".join(lines)
+    if numbered:
+        text = re.sub(
+            r"[ \t]*\[(\d+)\]",
+            lambda m: "" if int(m.group(1)) in numbered else m.group(0),
+            text,
+        )
+    text = _HELD_RE.sub(lambda m: f"[{m.group(1)}]", text)
+
+    title = ""
+    body_lines = text.split("\n")
+    first = next((i for i, ln in enumerate(body_lines) if ln.strip()), None)
+    if first is not None:
+        line = body_lines[first]
+        m = _HEADING_LINE_RE.match(line) or _BOLD_LINE_RE.match(line)
+        if m:
+            title = m.group("text")
+        elif (len(line.split()) <= 10 and not _ENDS_SENTENCE_RE.search(line)
+              and any(ln.strip() for ln in body_lines[first + 1:])):
+            title = line
+        title = strip_inline_markdown(title).strip()
+        if title:
+            body_lines = body_lines[first + 1:]
+
+    if entries:
+        ordered = sorted((e for e in entries if isinstance(e.get("marker"), int)), key=lambda e: e["marker"])
+        ordered += [e for e in entries if not isinstance(e.get("marker"), int)]
+        sources = [_cited_line(e) for e in ordered]
+    else:
+        sources = fallback
+    citations = [c for c in dict.fromkeys(c.strip() for c in sources) if c]
+    return {"title": title or fallback_title, "body": "\n".join(body_lines).strip(), "citations": citations}
+
+
 def _render_message_docx(
     project_name: str,
     assistant_text: str,
@@ -1175,8 +1472,16 @@ def _render_message_docx(
     message_index: int,
     base_url: str = "",
     sources: list | None = None,
+    *,
+    title: str | None = None,
+    citations: List[str] | None = None,
 ) -> str:
     """Render a single assistant message to a temp DOCX and return its path.
+
+    With ``title`` and ``citations`` (a produced document, W2-a, see
+    ``_requested_document``) the file is headed by the document's own title
+    and lists its sources once, at the end; without them it is the plain
+    conversation excerpt, unchanged.
 
     Markdown is RENDERED, not printed: an exported
     ``word/document.xml`` once carried literal asterisks
@@ -1192,13 +1497,12 @@ def _render_message_docx(
     from app.lib.markdown_docx import render_markdown_into_docx
 
     doc = Document()
-    title = doc.add_heading(f"{project_name} - Conversation Excerpt", level=0)
-    for run in title.runs:
+    heading = doc.add_heading(title or f"{project_name} - Conversation Excerpt", level=0)
+    for run in heading.runs:
         run.font.size = Pt(18)
 
-    subtitle = doc.add_paragraph(
-        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    )
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    subtitle = doc.add_paragraph(f"{project_name} — {stamp}" if title else stamp)
     subtitle.runs[0].italic = True
 
     doc.add_paragraph()  # spacer
@@ -1207,7 +1511,10 @@ def _render_message_docx(
 
     doc.add_paragraph()
     doc.add_heading("Sources", level=2)
-    if sources:
+    if citations is not None:
+        for line in citations or [_NO_SOURCES_LINE]:
+            doc.add_paragraph(line)
+    elif sources:
         from app.core.rag.source_class import visible_label
 
         for s in sources:
@@ -1270,12 +1577,19 @@ def _render_message_xlsx(
     project_name: str,
     assistant_text: str,
     conversation_id: str,
+    *,
+    title: str | None = None,
+    citations: List[str] | None = None,
 ) -> str:
     """Render an assistant message to a temp XLSX and return its path.
 
     Markdown pipe-tables (the shape cost/BOQ answers arrive in) become real
     worksheets with a bold header row; prose goes on a Message sheet. A
     message with no tables still exports — Message sheet only.
+
+    With ``title`` and ``citations`` (a produced document, W2-a) the first
+    sheet is headed by the document's title and a last sheet, Sources, lists
+    the sources; without them the workbook is unchanged.
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -1287,15 +1601,16 @@ def _render_message_xlsx(
     wb = Workbook()
     wb.remove(wb.active)
 
-    if prose or not tables:
+    if prose or not tables or title:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         ws = wb.create_sheet("Message")
-        ws.cell(row=1, column=1, value=f"{project_name} - Conversation Excerpt").font = Font(bold=True)
+        ws.cell(row=1, column=1, value=title or f"{project_name} - Conversation Excerpt").font = Font(bold=True)
         ws.cell(
             row=2, column=1,
-            value=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            value=f"{project_name} — {stamp}" if title else stamp,
         ).font = Font(italic=True)
         r = 4
-        for line in prose or [(assistant_text or "").strip()]:
+        for line in prose or ([] if tables else [(assistant_text or "").strip()]):
             # An Excel cell cannot carry mixed runs, so the markers are
             # stripped rather than rendered. H2 found "**Total activities:**
             # 204" sitting in a cell; either way a reader must never see the
@@ -1311,6 +1626,13 @@ def _render_message_xlsx(
                 out = ws.cell(row=r, column=c, value=strip_inline_markdown(cell))
                 if r == 1:
                     out.font = Font(bold=True)
+
+    if citations is not None:
+        ws = wb.create_sheet("Sources")
+        ws.cell(row=1, column=1, value="Sources").font = Font(bold=True)
+        for r, line in enumerate(citations or [_NO_SOURCES_LINE], start=2):
+            ws.cell(row=r, column=1, value=line)
+        ws.column_dimensions["A"].width = 100
 
     with tempfile.NamedTemporaryFile(
         suffix=".xlsx", delete=False, prefix=f"export-{conversation_id[:8]}-"
@@ -1362,9 +1684,14 @@ async def export_conversation_schedule(
     )
     fd, path = tempfile.mkstemp(prefix="sched_conv_", suffix=".xlsx"); os.close(fd)
     wb.save(path)
+    download_name = f"{name.replace(' ', '_')}_schedule.xlsx"
+    _save_produced_to_session(
+        project_id, conversation_id, auth["user_id"], path, download_name,
+        source={"render": "schedule_workbook", "project": name,
+                "staged": staged})
     return FileResponse(
         path, media_type=_XLSX_MEDIA,
-        filename=f"{name.replace(' ', '_')}_schedule.xlsx",
+        filename=download_name,
         headers={"X-Activities": str(len(acts)), "X-WBS-Source": "conversation"},
     )
 
@@ -1373,15 +1700,19 @@ async def export_conversation_schedule(
 async def export_conversation_message(
     project_id: str,
     conversation_id: str,
-    format: str = Query("docx", pattern="^(docx|pdf|xlsx)$"),
+    format: str = Query("docx", pattern=answer_export_format_pattern()),
     message_index: int = Query(
         -1,
         description="Index of the assistant message to export; -1 = most recent",
     ),
     scope: str = Query(
         "message",
-        pattern="^(message|answers)$",
-        description="message = one turn (default); answers = answer-range report",
+        pattern="^(message|answers|document)$",
+        description=(
+            "message = one turn as a conversation excerpt (default); "
+            "document = one turn as the document the user asked for (the "
+            "answer's own download control); answers = answer-range report"
+        ),
     ),
     range: str = Query(
         "",
@@ -1392,7 +1723,11 @@ async def export_conversation_message(
 ):
     """Export conversation answers as a downloadable file.
 
-    Default ``scope=message`` is the one-turn excerpt. ``scope=answers``
+    Default ``scope=message`` is the one-turn excerpt. ``scope=document`` is
+    the same turn produced as the document asked for (W2-a): its own title, no
+    chat text, the message's stored citations listed once at the end. The
+    control the user pressed decides which; the answer's wording never does.
+    ``scope=answers``
     compiles a labelled range (or all) of the chat answers into one report — the live H1
     ask, which used to be misread as RFP attachments.
 
@@ -1446,15 +1781,15 @@ async def export_conversation_message(
             media = _XLSX_MEDIA
             ext = "xlsx"
         elif fmt == "pdf":
-            raise HTTPException(
-                501,
-                "format='pdf' is not offered — export as 'docx' or 'xlsx' "
-                "(operator decision 2026-07-24).",
-            )
+            raise HTTPException(501, answer_export_declined_message(fmt))
         else:
             raise HTTPException(400, f"Unsupported format '{format}'")
         safe_name = _sanitize_filename(project_name)
         download_name = f"{safe_name}-{_sanitize_filename(heading)}.{ext}"
+        _save_produced_to_session(
+            project_id, conversation_id, auth["user_id"], path, download_name,
+            source={"render": "answers", "format": ext, "project": project_name,
+                    "heading": heading, "pairs": pairs})
         return FileResponse(path, media_type=media, filename=download_name)
 
     # message_index is the position within assistant_msgs; -1 means newest.
@@ -1463,13 +1798,25 @@ async def export_conversation_message(
     except IndexError:
         raise HTTPException(404, f"message_index {message_index} out of range")
 
+    produced = (scope or "message").lower() == "document"
+    answer_text = chosen.get("content") or ""
+    shape: Dict[str, Any] = {}
+    if produced:
+        document = _requested_document(answer_text, chosen.get("citations"), project_name)
+        answer_text = document["body"]
+        shape = {"title": document["title"], "citations": document["citations"]}
+    render_source: Dict[str, Any] = {
+        "render": "document" if produced else "message", "format": fmt,
+        "project": project_name, "answer": chosen.get("content") or "",
+    }
     if fmt == "docx":
         path = _render_message_docx(
             project_name,
-            chosen.get("content") or "",
+            answer_text,
             conversation_id,
             message_index,
             base_url,
+            **shape,
         )
         media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ext = "docx"
@@ -1484,6 +1831,7 @@ async def export_conversation_message(
             and message_looks_like_wbs_answer(chosen.get("content") or "")
         ):
             acts = staged.get("activities") or []
+            render_source["staged"] = staged
             wb = _workbook_from_wbs_activities(
                 acts, project_name,
                 start_date=staged.get("start_date"),
@@ -1498,22 +1846,25 @@ async def export_conversation_message(
         else:
             path = _render_message_xlsx(
                 project_name,
-                chosen.get("content") or "",
+                answer_text,
                 conversation_id,
+                **shape,
             )
         media = _XLSX_MEDIA
         ext = "xlsx"
     elif fmt == "pdf":
-        raise HTTPException(
-            501,
-            "format='pdf' is not offered — export as 'docx' or 'xlsx' "
-            "(operator decision 2026-07-24).",
-        )
+        raise HTTPException(501, answer_export_declined_message(fmt))
     else:
         raise HTTPException(400, f"Unsupported format '{format}'")
 
-    safe_name = _sanitize_filename(project_name)
-    download_name = f"{safe_name}-{conversation_id[:8]}.{ext}"
+    if produced:
+        # A produced document is named after the document it is.
+        download_name = f"{_sanitize_filename(shape['title'][:80])}.{ext}"
+    else:
+        download_name = f"{_sanitize_filename(project_name)}-{conversation_id[:8]}.{ext}"
+    _save_produced_to_session(
+        project_id, conversation_id, auth["user_id"], path, download_name,
+        source=render_source)
     return FileResponse(path, media_type=media, filename=download_name)
 
 

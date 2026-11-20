@@ -5,18 +5,31 @@
  * walks assistant messages in order so the server-side per-index lookup
  * works the same as before the redesign.
  */
-import { useEffect, useRef } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
+import AnswerFeedback from './AnswerFeedback'
 import ChatBubble from './ChatBubble'
+import type { FeedbackBody, FeedbackEcho } from './feedbackPayload'
 import type { ChatMessage, ExportDescriptor } from './types'
 import './ChatList.css'
 
 interface Props {
   messages: ChatMessage[]
-  documentCount: number
+  /** Documents the project holds (server total, not one page). */
+  heldDocumentCount: number | null
+  /** How many of them project search reaches (server total). */
+  searchableDocumentCount: number | null
   onSuggestion: (text: string) => void
   suggestionsDisabled: boolean
   onDownloadMessage?: (assistantIndex: number, format: 'docx' | 'xlsx') => void
   onExport?: (descriptor: ExportDescriptor) => void
+  /** Open a marker's entry in the Sources panel. */
+  onCitation?: (marker: number) => void
+  /** When set with both ids, each settled answer gets a feedback control. */
+  feedback?: {
+    projectId: string
+    conversationId: string
+    post: (body: FeedbackBody) => Promise<FeedbackEcho>
+  }
 }
 
 const EMPTY_SUGGESTIONS = [
@@ -25,13 +38,29 @@ const EMPTY_SUGGESTIONS = [
   'What are the main project risks?',
 ]
 
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/** The chat pane's document line, from the server's two totals. */
+function documentTotalsLine(held: number | null, searchable: number | null): string {
+  if (held === null) return 'Documents in this project are listed on the left'
+  if (held === 0) return 'This project holds no documents yet'
+  const holds = `This project holds ${plural(held, 'document', 'documents')}`
+  if (searchable === null) return holds
+  return `${holds}; ${searchable} ${searchable === 1 ? 'is' : 'are'} searchable`
+}
+
 export default function ChatList({
   messages,
-  documentCount,
+  heldDocumentCount,
+  searchableDocumentCount,
   onSuggestion,
   suggestionsDisabled,
   onDownloadMessage,
   onExport,
+  onCitation,
+  feedback,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -40,12 +69,7 @@ export default function ChatList({
   }, [messages])
 
   if (messages.length === 0) {
-    const docLabel =
-      documentCount === 0
-        ? 'No documents indexed yet for this project'
-        : documentCount === 1
-          ? 'I have access to 1 document in this project'
-          : `I have access to ${documentCount} documents in this project`
+    const docLabel = documentTotalsLine(heldDocumentCount, searchableDocumentCount)
     return (
       <div className="chat-list__empty">
         <p className="chat-list__empty-title">Ask anything about your project</p>
@@ -95,7 +119,21 @@ export default function ChatList({
           const idx = assistantIndexById.get(msg.id) ?? 0
           downloadHandler = (format) => onDownloadMessage(idx, format)
         }
-        return <ChatBubble key={msg.id} message={msg} onDownload={downloadHandler} onExport={onExport} />
+        const bubble = <ChatBubble key={msg.id} message={msg} onDownload={downloadHandler} onExport={onExport} onCitation={onCitation} />
+        if (!isDownloadable || !feedback?.projectId || !feedback.conversationId) return bubble
+        return (
+          <Fragment key={msg.id}>
+            {bubble}
+            <AnswerFeedback
+              key={`${feedback.conversationId}:${msg.id}`}
+              content={msg.content}
+              projectId={feedback.projectId}
+              conversationId={feedback.conversationId}
+              assistantIndex={assistantIndexById.get(msg.id) ?? 0}
+              post={feedback.post}
+            />
+          </Fragment>
+        )
       })}
       <div ref={bottomRef} />
     </div>

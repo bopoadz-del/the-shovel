@@ -142,6 +142,52 @@ def test_user_upload_with_a_project_is_stored_not_indexed(client, as_caller, ind
     assert queued == [] and indexed == []
 
 
+@pytest.mark.parametrize("principal,expect_status,expect_reason,expect_scheduled", [
+    (USER, "NOT_INDEXED_POLICY", "rag_admin_only:terminal", False),
+    (ADMIN, "UNVERIFIED", None, True),
+])
+def test_upload_ledger_says_policy_for_a_user_and_stays_open_for_an_admin(
+    client, as_caller, indexed, principal, expect_status, expect_reason, expect_scheduled,
+):
+    """P-U1: a user's stored-not-indexed upload is a SETTLED ledger outcome
+    (an inventory reads "not indexed by policy", not a lost UNVERIFIED job);
+    an admin upload is untouched -- still open, indexing still scheduled. The
+    stamp changes neither retrieval visibility nor the extractor stamp."""
+    from app.core import ingest_status as ist
+
+    as_caller(principal)
+    pid = _project_owned_by(principal)
+
+    r = _post_document(client, pid)
+
+    assert r.status_code == 201, r.text
+    row = store.get_document(r.json()["document"]["id"])
+    assert row["ingest_status"] == expect_status
+    assert row.get("ingest_status_reason") == expect_reason
+    assert ist.is_open(row["ingest_status"], row.get("ingest_status_reason")) is expect_scheduled
+    assert (row["ingest_status"] in ist.OPEN_STATUSES) is expect_scheduled
+    assert bool(indexed) is expect_scheduled
+    assert row["retrieval_visible"] is True
+    assert int(row.get("chunk_count") or 0) == 0
+    assert row.get("extractor_version") in (None, "")
+    assert os.path.exists(row["file_path"])
+
+
+@pytest.mark.parametrize("status,reason,expect_open", [
+    ("NOT_INDEXED_POLICY", "rag_admin_only:terminal", False),
+    ("UNVERIFIED", None, True),
+])
+def test_policy_status_is_a_closed_known_status(status, reason, expect_open):
+    """The new status is in the vocabulary (the CHECK migration carries it)
+    and is closed; the status it replaces on a user upload was open."""
+    from app.core import ingest_status as ist
+
+    assert status in ist.ALL_STATUSES
+    assert ist.is_open(status, reason) is expect_open
+    assert (status in ist.OPEN_STATUSES) is expect_open
+    assert (status in ist.INDEXED_STATUSES) is False
+
+
 # ── rule 2: the admin path adds to the project RAG ────────────────────────
 
 

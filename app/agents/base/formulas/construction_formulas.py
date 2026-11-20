@@ -3,8 +3,15 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 from app.lib.formula_registry import Param, formula
 from typing import Dict
+
+
+#: Declared constants of diaphragm_wall_panel_volume (D1 rule C).
+_DWALL_K = Constants(
+    tremie_waste_factor=Constant(1.10, "ratio", "concrete placed over the neat panel volume (tremie waste)"),
+)
 
 
 @formula(
@@ -34,6 +41,6 @@ def diaphragm_wall_panel_volume(
         "panel_count": panel_count,
         "volume_per_panel_m3": round(vol, 2),
         "total_volume_m3": round(total, 2),
-        "volume_with_waste_m3": round(total * 1.10, 2),
-        "waste_factor": 1.10,
+        "volume_with_waste_m3": round(total * _DWALL_K.tremie_waste_factor, 2),
+        "waste_factor": _DWALL_K.tremie_waste_factor,
     }

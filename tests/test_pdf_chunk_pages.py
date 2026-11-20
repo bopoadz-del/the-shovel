@@ -9,6 +9,8 @@ Synthetic PDFs and text only.
 """
 from __future__ import annotations
 
+from tests._isolated_store import give_documents_table
+
 import numpy as np
 import pytest
 
@@ -81,8 +83,12 @@ def test_no_page_offsets_means_no_pages():
 # ── extraction → chunks ──────────────────────────────────────────────────────
 
 
-def test_pdf_extraction_records_pages_and_chunks_keep_their_text(tmp_path):
+def test_pdf_extraction_records_pages_and_chunks_keep_their_text(tmp_path, monkeypatch):
     # 400 words a page, 500-word chunks: chunks start on pages 1, 2 and 4.
+    # The chunk floor/ceiling (RQ-2) is off here so the unbounded chunker's
+    # exact output is pinned; bounded pages: tests/test_chunk_bounds.py.
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "0")
+    monkeypatch.setenv("CHUNK_MIN_CHARS", "0")
     path = _pdf(tmp_path / "synthetic_book.pdf",
                 [_page_body(1, 400), _page_body(2, 400), None, _page_body(4, 400)])
     text, meta = doc_index._extract_pdf(path, "synthetic_book.pdf")
@@ -148,6 +154,7 @@ def store(tmp_path, monkeypatch):
     embedder = _emb.get_embedder()
     st = _vs.VectorStore(db_path=str(tmp_path / "pages.db"), dim=embedder.dim,
                          namespace="pagetest")
+    give_documents_table(st)
     yield st, embedder
     st.close()
     _emb.reset_embedder_cache()
@@ -197,6 +204,7 @@ def test_a_table_created_before_pages_gains_the_column(tmp_path):
     con.close()
     _vs.reset_store_cache()
     st = _vs.VectorStore(db_path=str(db), dim=8, namespace="oldpages", model_name="fake")
+    give_documents_table(st)
     texts = ["delta synthetic"]
     st.upsert_chunks("p1", "d3", texts, np.ones((1, 8), dtype=np.float32), pages=[5])
     assert [c.page for c in st.chunks_for_docs("p1", ["d3"])] == [5]

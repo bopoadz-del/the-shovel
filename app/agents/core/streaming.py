@@ -9,70 +9,15 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator
 
-# One shared label for the pre-first-token tool phase, so the bubble is
-# never blank while the predispatch probes and retrieval run. Defined here
-# rather than inline so the wording lives in one place.
-_TOOL_PHASE_STATUS = "Working through your request…"
-
-# Tool-phase budget (long-ask cap, ORDERS_2220Z step 2). Generic and
-# project-independent: a count cap plus a wall-time backstop, with ONE fixed
-# priority order -- no per-question or per-document rules. DEFAULT IS INERT:
-# the count default covers all probes and the time budget is disabled, so this
-# changes nothing until a budget is set with TESTER data. A skipped probe is
-# logged. The count cap ranks probes by this fixed order and is therefore
-# deterministic (independent of timing); the wall-time arm is the only
-# non-deterministic cap, a backstop for a pathologically slow/hung probe, and
-# defaults off so normal turns stay byte-stable.
-_TOOL_PHASE_PRIORITY = (
-    "file", "wbs_duration", "resource_histogram", "look_ahead",
-    "wir_form", "remaining_deliverables", "formula_calc",
+# The pre-first-token tool phase (status label, probe budget, probes) lives in
+# its own module; the names stay importable from here for existing callers.
+from app.agents.core.streaming_tool_phase import (  # noqa: F401 -- re-exported
+    _TOOL_PHASE_PRIORITY,
+    _TOOL_PHASE_STATUS,
+    _ToolPhaseBudget,
+    _make_tool_phase_budget,
+    _run_tool_phase,
 )
-
-
-class _ToolPhaseBudget:
-    """Decides, deterministically, whether the next predispatch probe may run.
-
-    ``allow(key)`` returns False once the probe's rank in the fixed priority
-    order reaches the count cap, or (backstop) once the wall-clock deadline is
-    past; each refusal is recorded in ``skipped``. Rank-based counting means
-    the same probes are skipped for the same ``max_probes`` regardless of how
-    long earlier probes took, so outputs stay deterministic under the count cap.
-    """
-
-    def __init__(self, max_probes: int, time_budget_ms: float, clock):
-        self._max = max_probes
-        self._clock = clock
-        self._deadline = (
-            clock() + time_budget_ms / 1000.0 if time_budget_ms > 0 else None
-        )
-        self._rank = {k: i for i, k in enumerate(_TOOL_PHASE_PRIORITY)}
-        self.skipped: list[str] = []
-
-    def allow(self, key: str) -> bool:
-        if self._rank.get(key, len(self._rank)) >= self._max:
-            self.skipped.append(key)
-            return False
-        if self._deadline is not None and self._clock() > self._deadline:
-            self.skipped.append(key)
-            return False
-        return True
-
-
-def _make_tool_phase_budget(clock) -> "_ToolPhaseBudget":
-    """Read the (env-overridable) budget at call time. Bad values fall back to
-    the inert defaults rather than crashing the turn."""
-    import os
-    try:
-        max_probes = int(
-            os.getenv("TOOL_PHASE_MAX_PROBES") or len(_TOOL_PHASE_PRIORITY)
-        )
-    except ValueError:
-        max_probes = len(_TOOL_PHASE_PRIORITY)
-    try:
-        time_ms = float(os.getenv("TOOL_PHASE_TIME_BUDGET_MS") or 0)
-    except ValueError:
-        time_ms = 0.0
-    return _ToolPhaseBudget(max_probes, time_ms, clock)
 
 
 def _safe_stream_margin(excerpts: str) -> int:
@@ -116,7 +61,7 @@ async def _chat_stream_impl(
 ) -> AsyncIterator[dict[str, Any]]:
     """Internal implementation. ``chat_stream`` wraps this with an emit
     guarantee so silent / crashing exits become structured error events."""
-    from app.agents.answer_exit import end_on_a_sentence
+    from app.agents.answer_exit import end_on_a_sentence, note_tool_message
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         MAX_TOOL_ITERATIONS, _CONTEXT_LEAK_RETRY_NUDGE, _EMPTY_RESPONSE_FALLBACK,
         _EMPTY_ROUTER_NUDGE, _LOG, _SEARCH_PREAMBLE_RETRY_NUDGE, _approx_prompt_tokens,
@@ -130,8 +75,8 @@ async def _chat_stream_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _cost_grounding_enabled, _empty_router_verdict,
         _file_tool_hint, _final_text_needs_forced_retry, _forced_retry_min_seconds, _forced_retry_nudge,
-        _fulfill_answer_report, _has_unread_windows, _inline_boq_hard_excludes,
-        _is_capability_request, _is_cost_shaped_query, _latest_operator_ask, _llm_config,
+        _fulfill_answer_report, _has_unread_windows, forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
+        _is_capability_request, _is_cost_shaped_query, _llm_config,
         _log_dataset_turn,
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
         _looks_like_search_preamble, _looks_like_tool_markup_leak,
@@ -143,14 +88,16 @@ async def _chat_stream_impl(
         _predispatch_wbs_duration_override, _predispatch_wir_form,
         _project_has_non_rag_context, _project_is_rag_ready_off_process,
         _rag_inject_off_process, _recover_answer_from_tool_messages,
+        _resolve_model_key, _call_model_unless_missing, _recover_after_provider_failure,
+        _with_model_unreached_note,
         _recover_tool_calls_from_content, _recovered_calls_are_search_only,
         _requested_char_offset, _sanitize_citation_labels, _sanitize_final_text,
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
         _strip_answer_routing_preamble, _summarize_result, _text_needs_tool_recovery,
-        _timing_log, _tool_result_content, _tool_result_errored, _turn_progress,
-        _vo_draft_hard_excludes, _vo_draft_ready_for_synthesis,
+        _timing_log, _tool_message_extra, _tool_result_content, _tool_result_errored, _turn_progress,
+        _vo_draft_ready_for_synthesis,
         _withhold_names_in_streamed_segment, answer_report_export_enabled, fulfill_wbs_export,
         json, message_wants_answer_report, message_wants_wbs_export, os, time,
     )
@@ -206,16 +153,10 @@ async def _chat_stream_impl(
         }
         return
 
-    # A provider with no env_key (none today) would need no auth. Both
-    # DeepSeek and OpenRouter declare an env_key, so require their API key.
-    if cfg["env_key"]:
-        api_key = api_key or os.getenv(cfg["env_key"])
-        if not api_key:
-            _LOG.warning("chat_stream: missing %s — yielding error", cfg["env_key"])
-            yield {"type": "error", "message": f"No {cfg['env_key']} configured."}
-            return
-    else:
-        api_key = api_key or ""
+    # A missing provider key is acted on at the FIRST model call, not here:
+    # the deterministic stages below (capability answer, pre-dispatch, fast
+    # paths) answer the turns they can answer with no model configured.
+    _model_missing, api_key = _resolve_model_key(cfg, api_key)
 
     _call_stack = _call_stack or [self.name]
 
@@ -253,7 +194,13 @@ async def _chat_stream_impl(
             for m in prior
             if m.get("role") in ("user", "assistant")
         ]
-        effective_history = prior_turns + effective_history
+        # The stored conversation is authoritative. The UI mirrors the same
+        # thread back as `history` every turn, so concatenating both
+        # duplicates the conversation and — under the MAX_HISTORY_TURNS cap —
+        # can replay an older question right before the current one (the reply
+        # answers the previous turn). Use the DB when it has turns; the client
+        # thread is only a fallback for a fresh, still-empty conversation.
+        effective_history = prior_turns if prior_turns else effective_history
         # Persist the user turn up front so it survives a mid-loop error.
         (await _off_loop(agent_memory.append_message, conversation_id, "user", user_message))
 
@@ -294,9 +241,11 @@ async def _chat_stream_impl(
     # whose first pass is uncovered runs the #163 plan -> actions -> coverage
     # -> <=3 rounds loop before the answer, so a figure outside the default
     # top-k is still fetched (never a refusal dressed as grounding).
-    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
+    # The re-query planner is a model call: with no model, keep the first pass.
+    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id and not _model_missing:
         _rag_sys_msg = await _agentic_figure_retrieval_augment(
             self, user_message, project_id, api_key, user_id, _rag_sys_msg,
+            audit_rec=_rag_audit,
         )
     # The message preparation below scans the question and the excerpts with
     # many patterns: in a worker thread, like retrieval (CI: 125-203 ms loop
@@ -328,239 +277,15 @@ async def _chat_stream_impl(
     # Tool results accumulated this turn — feeds the schedule download offer
     # (a generate_wbs call becomes a 'Schedule (Excel)' export descriptor).
     stream_tool_results: list[dict[str, Any]] = []
-    # Fill the bubble the instant the tool phase begins. The predispatch
-    # probes below run before the first token, and in the common case they
-    # return None -- emitting no tool_call -- so without this the bubble sits
-    # blank for the whole pre-first-token phase (TESTER's long-ask stall).
-    # The frontend shows a `status` label only until content arrives and
-    # clears it on the first token, so a brief label before a fast answer is
-    # harmless. One emit, deterministic, changes no computed result.
-    yield {"type": "status", "label": _TOOL_PHASE_STATUS}
-    # Generic tool-phase budget (default inert). Each probe below asks the
-    # budget first; when a cap is set, lower-priority probes are skipped
-    # deterministically and recorded in `_budget.skipped`.
-    _budget = _make_tool_phase_budget(time.monotonic)
-    # Deterministic file pre-dispatch BEFORE the RAG-miss short-circuit
-    # (leftover L1 timestamped .docx looks like an identifier).
-    _locked = (await _off_loop(_message_wants_locked_deliverable, user_message))
-    _pre = None
-    if not _locked and _budget.allow("file"):
-        _pre = await _predispatch_file_tool(self, messages, project_id)
-    if _pre:
-        # The file read is a source for this turn. The other predispatches
-        # are already on this list; the named-file read has to be too, or
-        # Sources never sees the document the answer quoted.
-        stream_tool_results.append(_pre)
-        _note_tool(_pre["name"])
-        # SSE contract: the browser reads "tool" + "args_preview" on a
-        # tool_call and "summary" on a tool_result -- see the main tool
-        # loop below, which emits "name" only as an alias. This
-        # pre-dispatch pair emitted the REVERSE (name, no tool), so the
-        # deterministic file fast path -- the IFC and named-document
-        # route -- rendered as a blank, unnamed entry in the UI. The turn
-        # then narrated work the user could not see it do, which reads as
-        # the assistant wandering rather than as a tool that ran.
-        _pre_file = ""
-        if isinstance(_pre.get("result"), dict):
-            _pre_file = str(_pre["result"].get("filename") or "")
-        _pre_summary = _summarize_result(_pre["result"])
-        yield {"type": "tool_call",
-               "tool": _pre["name"],
-               "name": _pre["name"],  # alias, see the main loop
-               "args_preview": (
-                   json.dumps({"filename": _pre_file})[:200]
-                   if _pre_file else ""
-               ),
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _pre["name"],
-               "name": _pre["name"],  # alias, see the main loop
-               "ok": True,
-               "summary": _pre_summary[:400],
-               "result": _pre_summary,
-               "predispatched": True}
-
-    _wbs_pre = None
-    if _budget.allow("wbs_duration"):
-        _wbs_pre = await _predispatch_wbs_duration_override(
-            self, messages, project_id,
-        )
-    if _wbs_pre:
-        _note_tool(_wbs_pre["name"])
-        stream_tool_results.append(_wbs_pre)
-        _wbs_summary = _summarize_result(_wbs_pre.get("result"))
-        yield {"type": "tool_call",
-               "tool": _wbs_pre["name"],
-               "name": _wbs_pre["name"],
-               "args_preview": json.dumps({
-                   "duration_overrides": (
-                       (_wbs_pre.get("result") or {}).get(
-                           "duration_overrides_applied"
-                       )
-                       if isinstance(_wbs_pre.get("result"), dict)
-                       else None
-                   ),
-               }, default=str)[:200],
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _wbs_pre["name"],
-               "name": _wbs_pre["name"],
-               "ok": True,
-               "summary": _wbs_summary[:400],
-               "result": _wbs_summary,
-               "predispatched": True}
-
-    _hist_pre = None
-    if _budget.allow("resource_histogram"):
-        _hist_pre = await _predispatch_resource_histogram(
-            self, messages, project_id,
-        )
-    if _hist_pre:
-        _note_tool(_hist_pre["name"])
-        stream_tool_results.append(_hist_pre)
-        _hist_summary = _summarize_result(_hist_pre.get("result"))
-        _hist_file = ""
-        if isinstance(_hist_pre.get("result"), dict):
-            _hist_file = str(
-                (_hist_pre.get("result") or {}).get("source") or ""
-            )
-        yield {"type": "tool_call",
-               "tool": _hist_pre["name"],
-               "name": _hist_pre["name"],
-               "args_preview": json.dumps({
-                   "source": _hist_file,
-                   "histogram_kind": (
-                       (_hist_pre.get("result") or {}).get("histogram_kind")
-                       if isinstance(_hist_pre.get("result"), dict)
-                       else None
-                   ),
-               }, default=str)[:200],
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _hist_pre["name"],
-               "name": _hist_pre["name"],
-               "ok": True,
-               "summary": _hist_summary[:400],
-               "result": _hist_summary,
-               "predispatched": True}
-
-    _la_pre = None
-    if _budget.allow("look_ahead"):
-        _la_pre = await _predispatch_look_ahead(
-            self, messages, project_id,
-        )
-    if _la_pre:
-        _note_tool(_la_pre["name"])
-        stream_tool_results.append(_la_pre)
-        _la_summary = _summarize_result(_la_pre.get("result"))
-        _la_file = ""
-        if isinstance(_la_pre.get("result"), dict):
-            _la_file = str(
-                (_la_pre.get("result") or {}).get("schedule_file") or ""
-            )
-        yield {"type": "tool_call",
-               "tool": _la_pre["name"],
-               "name": _la_pre["name"],
-               "args_preview": json.dumps({
-                   "schedule_file": _la_file,
-                   "activity_count": (
-                       (_la_pre.get("result") or {}).get("activity_count")
-                       if isinstance(_la_pre.get("result"), dict)
-                       else None
-                   ),
-               }, default=str)[:200],
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _la_pre["name"],
-               "name": _la_pre["name"],
-               "ok": True,
-               "summary": _la_summary[:400],
-               "result": _la_summary,
-               "predispatched": True}
-
-    _wir_pre = None
-    if not _locked and _budget.allow("wir_form"):
-        _wir_pre = await _predispatch_wir_form(
-            self, messages, project_id, operator_text=user_message,
-        )
-    if _wir_pre:
-        _note_tool(_wir_pre["name"])
-        stream_tool_results.append(_wir_pre)
-        _wir_summary = _summarize_result(_wir_pre.get("result"))
-        yield {"type": "tool_call",
-               "tool": _wir_pre["name"],
-               "name": _wir_pre["name"],
-               "args_preview": json.dumps({
-                   "action": "wir_form",
-                   "wir_number": (
-                       (_wir_pre.get("result") or {}).get("wir_number")
-                       if isinstance(_wir_pre.get("result"), dict)
-                       else None
-                   ),
-               }, default=str)[:200],
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _wir_pre["name"],
-               "name": _wir_pre["name"],
-               "ok": True,
-               "summary": _wir_summary[:400],
-               "result": _wir_summary,
-               "predispatched": True}
-
-    _more_pre = None
-    if not _hist_pre and _budget.allow("remaining_deliverables"):
-        _more_pre = await _predispatch_remaining_deliverables(
-            self, messages, project_id, operator_text=user_message,
-            conversation_id=conversation_id,
-        )
-    if _more_pre:
-        _note_tool(_more_pre["name"])
-        stream_tool_results.append(_more_pre)
-        _more_summary = _summarize_result(_more_pre.get("result"))
-        yield {"type": "tool_call",
-               "tool": _more_pre["name"],
-               "name": _more_pre["name"],
-               "args_preview": json.dumps({
-                   "action": _more_pre["name"],
-               }, default=str)[:200],
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _more_pre["name"],
-               "name": _more_pre["name"],
-               "ok": True,
-               "summary": _more_summary[:400],
-               "result": _more_summary,
-               "predispatched": True}
-
-    _calc_pre = None
-    if _budget.allow("formula_calc") and (not _locked or _message_is_formula_style_ask(user_message)):
-        _calc_pre = await _predispatch_formula_calc(
-            self, messages, project_id, operator_text=user_message,
-        )
-    if _budget.skipped:
-        # Visible in the turn trace: which probes the cap dropped and why.
-        _LOG.info(
-            "tool-phase cap: skipped %d probe(s) %s (max=%s)",
-            len(_budget.skipped), _budget.skipped, _budget._max,
-        )
-    if _calc_pre:
-        _note_tool(_calc_pre["name"])
-        stream_tool_results.append(_calc_pre)
-        _calc_summary = _summarize_result(_calc_pre.get("result"))
-        yield {"type": "tool_call",
-               "tool": _calc_pre["name"],
-               "name": _calc_pre["name"],
-               "args_preview": json.dumps({
-                   "action": "construction_calc",
-               }, default=str)[:200],
-               "predispatched": True}
-        yield {"type": "tool_result",
-               "tool": _calc_pre["name"],
-               "name": _calc_pre["name"],
-               "ok": bool(_calc_pre.get("ok")),
-               "summary": _calc_summary[:400],
-               "result": _calc_summary,
-               "predispatched": True}
+    _tool_phase: dict[str, Any] = {}
+    async for _event in _run_tool_phase(
+        self, messages, project_id, user_message, conversation_id,
+        stream_tool_results=stream_tool_results, note_tool=_note_tool,
+        state=_tool_phase,
+    ):
+        yield _event
+    (_pre, _wbs_pre, _hist_pre, _la_pre, _wir_pre, _more_pre,
+     _calc_pre) = _tool_phase["probes"]
 
     _pin_reference_miss(messages, user_message, attached_documents, _rag_audit, _rag_sys_msg)
     # Fast path: exact reference miss with no RAG context. Skip when a
@@ -691,20 +416,14 @@ async def _chat_stream_impl(
     # it has (or honestly say it doesn't) instead of looping. generate_wbs and
     # other tools stay available.
     SEARCH_TOOL_CAP = int(os.getenv("AGENT_SEARCH_TOOL_CAP", "2"))
-    search_calls = 0
-    excluded_tools: set = set()
-    # Live tip 0a95d03: VO ask2 stole to construction/sympy when
-    # predispatch missed — hard-exclude on draft intent alone.
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _vo_draft_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("vo hard-exclude skipped", exc_info=True)
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _inline_boq_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("inline-boq hard-exclude skipped", exc_info=True)
+    # S-R9: the cap and the chunks already handed live on one turn object
+    # that every tool call receives; the search tool enforces the cap per
+    # call (a parallel batch cannot overrun it) and skips handed chunks.
+    from app.core.rag.handed_set import SearchTurn
+    _search_turn = SearchTurn.from_audit(SEARCH_TOOL_CAP, _rag_audit)
+    # Hard excludes on the operator's draft intent (VO / inline BOQ).
+    excluded_tools, _op = self._intent_hard_excludes(messages)
+    _sf: dict = {}  # S-R8: one runtime search round before a draft may decline
     # Once a deliverable (non-search) tool has returned its result, the model
     # has what it needs — the next call is synthesis. Offering tools on that
     # synthesis call is pure downside: it lets the model loop, and on Groq a
@@ -739,7 +458,8 @@ async def _chat_stream_impl(
     # path below; every per-segment sanitise / name-withhold / tool-leak guard
     # is unchanged.
     _synth_stream_enabled = (
-        os.getenv("SYNTHESIS_STREAMING", "1") != "0"
+        not _model_missing
+        and os.getenv("SYNTHESIS_STREAMING", "1") != "0"
         # DeepSeek and OpenRouter both stream the OpenAI SSE shape. Keep
         # this list in step with the allowlist in _stream_synthesis.
         and cfg["provider"] in ("openrouter", "deepseek")
@@ -1140,10 +860,9 @@ async def _chat_stream_impl(
         # iterations grow the prompt with tool results, so capture iter 0 only.
         if iteration == 0:
             _turn_timing.mark_value("prompt_tokens_in", _approx_prompt_tokens(messages))
-        resp = await self._call_llm(
-            messages, api_key, project_id=project_id, user_id=user_id,
-            exclude_tools=excluded_tools or None,
-            with_tools=not force_synthesis,
+        resp = await _call_model_unless_missing(
+            self, _model_missing, messages, api_key, project_id=project_id, user_id=user_id,
+            exclude_tools=excluded_tools or None, with_tools=not force_synthesis,
             deadline=_llm_deadline(),
         )
         if _timing:
@@ -1153,8 +872,10 @@ async def _chat_stream_impl(
                          _tcs or "final", time.monotonic() - _turn_t0)
         if resp.get("status") == "error":
             err = resp.get("error", "LLM call failed")
-            recovered = _recover_answer_from_tool_messages(err, messages)
-            if recovered != err and not (await _off_loop(_text_needs_tool_recovery, recovered)):
+            # Any provider failure: a result already in the thread is the
+            # answer, with one line that the explanation is unavailable.
+            recovered = await _off_loop(_recover_after_provider_failure, messages)
+            if recovered:
                 final_text = _sanitize_inline_paths(
                     _sanitize_citation_labels(recovered)
                 )
@@ -1164,6 +885,7 @@ async def _chat_stream_impl(
                     project_id=project_id,
                     audit_rec=_rag_audit,
                 ))
+                final_text = _with_model_unreached_note(final_text)
                 _LOG.warning(
                     "chat_stream: iter=%d recovered deliverable after LLM error %s",
                     iteration, err[:80],
@@ -1219,7 +941,7 @@ async def _chat_stream_impl(
                 and _recovered_calls_are_search_only(recovered_tool_calls)
                 and (
                     "search_project_documents" in excluded_tools
-                    or search_calls >= SEARCH_TOOL_CAP
+                    or _search_turn.spent
                 )
             ):
                 recovered_tool_calls = []
@@ -1238,6 +960,13 @@ async def _chat_stream_impl(
                     "content": "",
                     "tool_calls": recovered_tool_calls,
                 }
+            elif (_sf_call := await self._search_before_refusal(
+                    raw_content, messages, _sf, user_message=user_message, project_id=project_id,
+                    tool_results=stream_tool_results, search_calls=_search_turn.calls, search_cap=SEARCH_TOOL_CAP,
+                    excluded_tools=excluded_tools, force_synthesis=force_synthesis,
+                    iterations_left=MAX_TOOL_ITERATIONS - iteration - 1)) is not None:
+                tool_calls = [_sf_call]  # S-R8: search, do not finalise the draft
+                assistant_msg = {"role": "assistant", "content": "", "tool_calls": tool_calls}
             else:
                 # Final answer — sanitize DSML markup, raw tool JSON, and
                 # empty content before streaming it to the user.
@@ -1278,7 +1007,7 @@ async def _chat_stream_impl(
                                 )
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
-                            _LOG.info("chat_stream: unusable final_text, forcing no-tools retry")
+                            await _off_loop(log_forced_retry_start, "chat_stream", final_text)
                             if _timing:
                                 _timing_log("TIMING chat_stream EMPTY-FINAL raw=%dc -> forced retry, cum=%.1fs",
                                              len(raw_content), time.monotonic() - _turn_t0)
@@ -1295,7 +1024,7 @@ async def _chat_stream_impl(
                             if _timing:
                                 _timing_log("TIMING chat_stream forced-retry call=%.1fs status=%s cum=%.1fs",
                                              time.monotonic() - _fr_t0, forced_resp.get("status"), time.monotonic() - _turn_t0)
-                            if forced_resp.get("status") == "error":
+                            if forced_retry_failed("chat_stream", forced_resp):
                                 final_text = _EMPTY_RESPONSE_FALLBACK
                             else:
                                 served_model = (forced_resp.get("raw") or {}).get("model") or served_model
@@ -1304,7 +1033,7 @@ async def _chat_stream_impl(
                                     forced_msg.get("content") or "",
                                     messages=messages, tool_results=stream_tool_results,
                                 )
-                                if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                                if (await _off_loop(forced_retry_still_unusable, "chat_stream", final_text, raw_len=len(forced_msg.get("content") or ""))):
                                     final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
@@ -1366,12 +1095,6 @@ async def _chat_stream_impl(
         pending_nudges: list[dict[str, Any]] = []
         for tc in tool_calls:
             fn = (tc.get("function") or {})
-            if fn.get("name") == "search_project_documents":
-                search_calls += 1
-                if search_calls >= SEARCH_TOOL_CAP:
-                    # Stop offering the search tool for the rest of this turn —
-                    # the model has searched enough; force it to answer.
-                    excluded_tools.add("search_project_documents")
             # SSE contract (distinct from the ``on_event`` callback above,
             # which uses "name"/"args"/"id"): the browser reads "tool" and
             # "args_preview" — see frontend ProjectWorkspace.tsx. "name" is
@@ -1384,8 +1107,9 @@ async def _chat_stream_impl(
                 "name": fn.get("name"),
                 "args_preview": (fn.get("arguments") or "")[:200],
             }
-            tool_result = await self._run_tool_call(
+            tool_result = await self._run_turn_tool_call(
                 tc,
+                search_turn=_search_turn,
                 api_key=api_key,
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -1394,12 +1118,15 @@ async def _chat_stream_impl(
                 user_message=user_message,
                 history=effective_history,
             )
+            if _search_turn.spent:
+                # Stop offering the search tool for the rest of this turn —
+                # the model has searched enough; force it to answer.
+                excluded_tools.add("search_project_documents")
             stream_tool_results.append(tool_result)
-            _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
-                offset=_requested_char_offset(tc),
-            )
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
+            _tool_content = _tool_result_content(_tool_payload, offset=_requested_char_offset(tc))
             # A successful deliverable tool (anything but search) means the
             # model now has authoritative data to synthesize from — stop
             # offering tools so the next call is a clean, tool-free answer.
@@ -1425,12 +1152,13 @@ async def _chat_stream_impl(
                 "ok": tool_result.get("ok", True),
                 "summary": _summarize_result(tool_result["result"])[:400],
             }
-            messages.append({
+            messages.append(note_tool_message(tc, {
                 "role": "tool",
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
-            })
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
+            }))
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(
@@ -1443,7 +1171,7 @@ async def _chat_stream_impl(
                                            tool_result, self, project_id=project_id, messages=messages)
                                        + (await _off_loop(_file_tool_hint, messages, project_id,
                                                          self.allowed_blocks))})
-        messages.extend(pending_nudges)
+        messages.extend(pending_nudges + self._search_first_nudges(_sf))
 
     # Hit the cap without a final answer — force one more call with tools disabled.
     daily_damages_cap = (await _off_loop(_should_short_circuit_delay_damages_daily, _rag_sys_msg, messages, has_predispatch=False,

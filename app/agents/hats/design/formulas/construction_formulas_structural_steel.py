@@ -3,6 +3,7 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 import re
 from app.lib.formula_registry import Param, formula
 import math
@@ -251,6 +252,13 @@ def bolt_shear_capacity(
                     else (" The property class was not given; alpha_v 0.6 is used." if cc == _EC else ""))),
     }
 
+#: Declared constants of weld_capacity (D1 rule C).
+_WELD_K = Constants(
+    weld_metal_shear_ratio=Constant(0.60, "ratio", "nominal weld-metal shear stress over FEXX",
+                                    source="AISC 360-16 Table J2.5 (fillet weld, Fnw = 0.60 FEXX)"),
+)
+
+
 @formula(
     owner='design',
     display_name='Fillet weld capacity',
@@ -309,7 +317,7 @@ def weld_capacity(
         expr = (f"fvw,d = fu/(sqrt3*beta_w*gM2) = {fu}/"
                 f"(1.732*{beta}*1.25) = {fvw_d:.1f} MPa; x throat {throat:.3f}")
     else:
-        per_mm = 0.75 * 0.60 * fu * throat
+        per_mm = 0.75 * _WELD_K.weld_metal_shear_ratio * fu * throat
         std = "AISC 360-16 §J2.4 (LRFD, phi=0.75)"
         expr = (f"0.75*0.60*FEXX*throat = 0.75*0.60*{fu}*"
                 f"{throat:.3f}")

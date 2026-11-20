@@ -1,0 +1,161 @@
+name: document-exclude
+
+# Ops workflow (Advisor 15:05Z, 13 Nov, owner order): run
+# POST /v1/admin/documents/{document_id}/exclude on the live deployment.
+# Same shape as corpus-ghost-tombstone.yml.
+#
+# Safety, in order:
+#   1. A plan call (execute=false) runs first, ALWAYS. It prints the document,
+#      its chunk_count, the NUMBER of chunk rows it would delete, the project
+#      chunk total and plan_hash. It writes nothing.
+#   2. The write runs only when the operator passed execute=true, a reason, AND
+#      an expected_plan_hash equal to the live plan's (from an earlier plan run).
+#      The route checks the hash again server-side.
+#   3. The write deletes every chunk of the document, KEEPS the row, and stores
+#      metadata.excluded = {by: owner, at, reason}; chunk_rows_after must be 0.
+# project_id, document_id, reason and expected_plan_hash have NO committed
+# default: the operator supplies them.
+# PUBLIC repository: the run log, the step summary, the run page and any
+# artifact are public. Every response is printed ONLY through
+# scripts/ops_public_view.py, a whitelist of id, code, count, flag and hash
+# fields; any other key is never read, and a stored reason, a refusal or
+# not_eligible prints as its LENGTH. Nothing is uploaded as an artifact (the
+# raw response carries the file name); the raw files are deleted on the
+# runner. Every dispatch input is public: the first step refuses a reason
+# that is not a short code (a-z 0-9 _ -), in every mode, before any request.
+# An operator maps a document id to its document in the app (the project's
+# documents list), never in a log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project the document belongs to (no default committed). PUBLIC: visible on the run page"
+        required: true
+      document_id:
+        description: "Document to exclude (no default committed). PUBLIC: visible on the run page"
+        required: true
+      reason:
+        description: "The owner's reason CODE (a-z 0-9 _ -, at most 64), required with execute=true. PUBLIC: every dispatch input is visible on the run page and in the log of this public repository; a code such as duplicate_volume, never a name or a sentence. Refused in every mode otherwise"
+        required: false
+        default: ""
+      expected_plan_hash:
+        description: "plan_hash from an earlier plan run; the write runs only if the live plan equals it. PUBLIC: visible on the run page"
+        required: false
+        default: ""
+      execute:
+        description: "false = plan only (default). true = delete chunks + mark excluded"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  exclude:
+    name: Document exclude (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_URL: ${{ vars.SHOVEL_BASE_URL || 'https://theshovel.ai' }}
+      PROJECT_ID: ${{ inputs.project_id }}
+      DOCUMENT_ID: ${{ inputs.document_id }}
+      EXPECTED: ${{ inputs.expected_plan_hash }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ops_public_view.py
+          sparse-checkout-cone-mode: false
+
+      - name: Refuse a reason that is not a short code (every mode, before any request)
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ops_public_view.py reason-gate "$REASON"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Resolve CEREBRUM_MASTER_KEY from the live task definition
+        run: |
+          td=$(aws ecs describe-services --cluster cerebrum --services the-fork --query 'services[0].taskDefinition' --output text)
+          val=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].environment[?name=='CEREBRUM_MASTER_KEY'].value | [0]" --output text)
+          if [ -z "$val" ] || [ "$val" = "None" ]; then
+            ref=$(aws ecs describe-task-definition --task-definition "$td" --query "taskDefinition.containerDefinitions[0].secrets[?name=='CEREBRUM_MASTER_KEY'].valueFrom | [0]" --output text)
+            case "$ref" in
+              arn:aws:secretsmanager:*)
+                secret_id=$(printf '%s' "$ref" | cut -d: -f1-7)
+                json_key=$(printf '%s' "$ref" | cut -d: -f8)
+                secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text)
+                if [ -n "$json_key" ]; then
+                  val=$(printf '%s' "$secret_json" | JSON_KEY="$json_key" python3 -c "import os,sys,json;print(json.load(sys.stdin).get(os.environ['JSON_KEY'],''))")
+                else
+                  val=$secret_json
+                fi
+                ;;
+              arn:aws:ssm:*|/*) val=$(aws ssm get-parameter --with-decryption --name "${ref##*parameter}" --query Parameter.Value --output text) ;;
+            esac
+          fi
+          [ -n "$val" ] && [ "$val" != "None" ] || { echo "::error::CEREBRUM_MASTER_KEY is not configured on the live the-fork task definition"; exit 1; }
+          echo "::add-mask::$val"; echo "CEREBRUM_MASTER_KEY=$val" >> "$GITHUB_ENV"
+
+      - name: Plan (execute=false, always)
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/documents/$(enc "$DOCUMENT_ID")/exclude?project_id=$(enc "$PROJECT_ID")&execute=false"
+          echo "POST ${url}"
+          curl --fail-with-body --max-time 300 -X POST \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
+            -H "Accept: application/json" \
+            -o plan.json -w "\nHTTP %{http_code}\n" "${url}"
+          {
+            echo "### Plan (execute=false)"
+            python3 scripts/ops_public_view.py exclude-plan plan.json
+            echo "- expected_plan_hash (operator): $(python3 scripts/ops_public_view.py hash "$EXPECTED")"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PLANNED=$(jq -r '.plan.plan_hash' plan.json)" >> "$GITHUB_ENV"
+
+      - name: Refuse the write when the plan differs from the expected hash
+        if: inputs.execute
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          [ -n "$REASON" ] || { echo "::error::reason is required with execute=true"; exit 1; }
+          printf '%s' "$REASON" | grep -Eq '^[a-z0-9_-]{1,64}$' || { echo "::error::reason must be a code (a-z 0-9 _ -, at most 64); no write was made"; exit 1; }
+          if [ "$PLANNED" != "$EXPECTED" ]; then
+            # Each hash prints only if it has a hash's shape, else its length.
+            live=$(python3 scripts/ops_public_view.py hash "$PLANNED")
+            want=$(python3 scripts/ops_public_view.py hash "$EXPECTED")
+            echo "::error::live plan_hash=${live} != expected_plan_hash=${want}; no write was made"
+            echo "**REFUSED:** plan ${live} != expected ${want}; nothing written." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Exclude (execute=true)
+        if: inputs.execute
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          enc() { jq -rn --arg v "$1" '$v|@uri'; }
+          url="${BASE_URL%/}/v1/admin/documents/$(enc "$DOCUMENT_ID")/exclude?project_id=$(enc "$PROJECT_ID")&execute=true&plan_hash=$(enc "$EXPECTED")&reason=$(enc "$REASON")"
+          curl --fail-with-body --max-time 600 -X POST \
+            -H "Authorization: Bearer ${CEREBRUM_MASTER_KEY}" \
+            -H "Accept: application/json" \
+            -o applied.json -w "\nHTTP %{http_code}\n" "${url}"
+          {
+            echo "### Write (execute=true)"
+            python3 scripts/ops_public_view.py exclude-applied applied.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$(jq -r '.executed' applied.json)" = "true" ] || { echo "::error::write refused"; exit 1; }
+          [ "$(jq -r '.chunk_rows_after' applied.json)" = "0" ] || { echo "::error::chunk rows remain after the write"; exit 1; }
+
+      - name: Delete the raw responses, never uploaded (they carry the file name)
+        if: always()
+        run: rm -f plan.json applied.json

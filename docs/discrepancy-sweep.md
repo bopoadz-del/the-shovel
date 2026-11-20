@@ -1,0 +1,65 @@
+# Discrepancy sweep (STREAM A2, PR 2a) — design note
+
+Owner 06:01Z (19 Nov UTC): "the product goes and looks for the other value."
+When the drafted answer states a value for what was asked, the exit takes the
+DISTINCTIVE IDENTIFIERS of that statement and runs ONE narrow lexical search
+over the project for passages that carry the same identifier together with a
+typed value of the same kind whose value DIFFERS. Every such passage is added
+to the turn's evidence, and the existing conflict statement then does the
+rest (every value, every origin with its standing, "the documents differ",
+the user decides).
+
+This PR carries the **pure detection half** only, so it can land independently
+and be tested against recorded strings (the same discipline as the
+clarifying-question exit). The caller-owned integration (the single
+`bm25_search` call, the evidence merge, and the digest-only trace) is the next
+commit; it needs a read-only replay on the real data, which is the acceptance
+and is owner-gated.
+
+## What the detector decides
+
+`app.agents.discrepancy_sweep.sweep_differences(stated_text, candidates)`:
+
+- reads the stated sentence's figures (`_figure_mentions` / `_figure_unit`)
+  and its distinctive identifiers (`_DESIGNATION_RE` — a clause / code /
+  standard / table designation such as "ACI 318", "Vol 6", "Table 7.3.1.1");
+- for each candidate passage the caller retrieved, a hit is a passage that
+  shares at least one identifier AND states a figure that differs from a
+  stated figure in the same unit (`_competing_figure_sentences`, which already
+  applies the product's own close-number / rounding tolerance, so a repeated
+  figure or a rounding is never a difference).
+
+Readers are reused from `citation_provenance` — the same typed readers the
+conflict statement uses — not re-implemented. No case, document, standard,
+value, item or row is named anywhere.
+
+## Bounds (each one a test)
+
+1. Only passages that share a distinctive identifier are recalled.
+2. Only a *different* figure (same unit) is recalled; a repeated figure is
+   not.
+3. A rounding to the same figure is not recalled (`_close`).
+4. A different unit is not recalled here (unit equivalence is the conflict
+   statement's judgement, not this recall filter's).
+5. A bare number is never a figure (the shared reader already excludes it).
+
+## Known limits (stated, not hidden)
+
+- A bare dotted clause id ("4.2.1") with no letter prefix is not matched by
+  `_DESIGNATION_RE`; the concrete owner case is a *named standard*, which is.
+  The clarifying-question exit's reference reader (`#498`) covers dotted ids;
+  folding it in is a follow-up once that PR merges.
+- Unit equivalence ("500 mm" vs "0.5 m") is deliberately not judged here; the
+  conflict statement owns that negative.
+- A value in a passage that was never handed cannot be reported (the 05:55Z
+  known limit); the sweep only widens recall within one narrow search, it is
+  not a re-retrieval of the whole project.
+
+## Acceptance (next commit, owner-gated)
+
+A read-only replay on the real data, counts only: the conflict row — the sweep
+finds the other value and the answer states both (5 of 5); the tester's last
+two full sets — how many plain rows gain a "differ" line, each judged (a true
+discrepancy is a gain, a false one a fail); added time per turn, median and
+worst. The time budget and clean skip (answer goes out as-is, trace says
+"skipped") are the caller's.

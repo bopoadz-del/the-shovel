@@ -1,0 +1,227 @@
+# PLAN the derived bill sheet for ONE document, as a one-off task; with
+# `execute_hash` set, EXECUTE it (see below).
+#
+# EXECUTE: with `execute_hash` (64 hex) the script rebuilds the whole-document
+# plan from the saved word boxes and writes the derived sheet through
+# bill_derived.derive_bill_sheet ONLY when the rebuilt plan's hash equals
+# `execute_hash` and every run condition holds (scripts/bill_plan_once.py
+# Gates: priced verdict, every page from the cache, shares of unreconciled and
+# description-less priced rows under their ceilings, no header conflict, no
+# priced row without a section path, and the optional `min_reconciled_rows`
+# floor). Without `execute_hash` nothing below writes.
+#
+# Runs inside the `the-fork-ingest` task definition (same image, env, network
+# and data mount as doc-reindex-once.yml), never in the web task: the plan
+# renders and OCRs pages. That task's WORKER_COMMAND is a Secrets Manager
+# secret that beats argv and a same-name environment override, so the
+# selectors travel as distinct environment names (BILL_PLAN_*);
+# `p1b_ingest_drive_server.main` hands over to `scripts/bill_plan_once.py`
+# when BILL_PLAN_DOCUMENT_ID is set. The script calls
+# bill_derived.plan_bill_sheet only: it adds no document row, indexes nothing
+# and writes no database row. Each page's word boxes stay under
+# $DATA_DIR/bill_plan/<document id>, so a long document is planned in page
+# ranges, one task run each, and a later range or a whole-document run reads
+# them back. It prints one `BILLPLANSUMMARY <json>` line of ids and counts.
+# No project, document or page range is committed here. An ops tool, not a gate.
+#
+# Actions logs and job summaries are world-readable, so nothing from the
+# document reaches them: the task's log lines are never echoed, the summary is
+# re-filtered here (every string must be a short code token, at most a hash
+# long, else "redacted"), and without a summary only a line count and the
+# last exception CLASS name are printed. The full plan with its labels stays
+# in the task's work directory on the data mount.
+name: bill-plan-once
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: "Project id the document belongs to"
+        required: true
+        type: string
+      document_id:
+        description: "Document id to plan"
+        required: true
+        type: string
+      pages:
+        description: "Optional 0-based half-open page range first:stop (empty = every page)"
+        required: false
+        type: string
+      execute_hash:
+        description: "EXECUTE: the 64-hex plan hash to write (empty = plan only). The run rebuilds the whole-document plan from saved boxes and writes only if its hash and every run condition hold"
+        required: false
+        type: string
+      min_reconciled_rows:
+        description: "EXECUTE: floor of priced, reconciled rows for this run (empty = no floor)"
+        required: false
+        type: string
+      wait:
+        description: "Wait for the task to stop and report"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECS_CLUSTER: cerebrum
+  TASK_FAMILY: the-fork-ingest
+  SERVICE_FOR_NETWORK: the-fork-ingest
+
+jobs:
+  plan-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Validate inputs
+        env:
+          PAGES: ${{ inputs.pages }}
+          EXECUTE_HASH: ${{ inputs.execute_hash }}
+          MIN_RECONCILED: ${{ inputs.min_reconciled_rows }}
+        run: |
+          if [ -n "$PAGES" ] && ! printf '%s' "$PAGES" | grep -Eq '^[0-9]{1,5}:[0-9]{1,5}$'; then
+            echo "::error::pages must be first:stop (0-based, half-open)"
+            exit 1
+          fi
+          if [ -n "$EXECUTE_HASH" ] && ! printf '%s' "$EXECUTE_HASH" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::execute_hash must be 64 lowercase hex"
+            exit 1
+          fi
+          if [ -n "$EXECUTE_HASH" ] && [ -n "$PAGES" ]; then
+            echo "::error::an execute is whole-document: leave pages empty"
+            exit 1
+          fi
+          if [ -n "$MIN_RECONCILED" ] && ! printf '%s' "$MIN_RECONCILED" | grep -Eq '^[0-9]{1,7}$'; then
+            echo "::error::min_reconciled_rows must be a whole number"
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Start one task
+        id: start
+        env:
+          PROJECT_ID: ${{ inputs.project_id }}
+          DOCUMENT_ID: ${{ inputs.document_id }}
+          PAGES: ${{ inputs.pages }}
+          EXECUTE_HASH: ${{ inputs.execute_hash }}
+          MIN_RECONCILED: ${{ inputs.min_reconciled_rows }}
+        run: |
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_FOR_NETWORK" \
+            --query 'services[0].networkConfiguration' --output json)
+          if [ "$netcfg" = "null" ] || [ -z "$netcfg" ]; then
+            echo "::error::no network configuration found on $SERVICE_FOR_NETWORK"
+            exit 1
+          fi
+          td=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --output json)
+          container=$(printf '%s' "$td" | jq -r '.taskDefinition.containerDefinitions[0].name')
+          log_group=$(printf '%s' "$td" | jq -r '.taskDefinition.containerDefinitions[0].logConfiguration.options."awslogs-group" // empty')
+          if [ -z "$log_group" ]; then
+            echo "::error::no awslogs group on $TASK_FAMILY task definition"
+            exit 1
+          fi
+          env_json=$(jq -cn \
+            --arg pid "$PROJECT_ID" --arg did "$DOCUMENT_ID" --arg pages "$PAGES" \
+            --arg xh "$EXECUTE_HASH" --arg minr "$MIN_RECONCILED" \
+            '[{name:"P1B_KEEP_ALIVE",value:"0"},
+              {name:"BILL_PLAN_PROJECT_ID",value:$pid},
+              {name:"BILL_PLAN_DOCUMENT_ID",value:$did}] +
+             (if ($pages | length) > 0 then [{name:"BILL_PLAN_PAGES",value:$pages}] else [] end) +
+             (if ($xh | length) > 0 then [{name:"BILL_PLAN_EXECUTE_HASH",value:$xh}] else [] end) +
+             (if ($minr | length) > 0 then [{name:"BILL_EXECUTE_MIN_RECONCILED",value:$minr}] else [] end)')
+          overrides=$(jq -cn --arg c "$container" --argjson env "$env_json" \
+            '{containerOverrides:[{name:$c, environment:$env}]}')
+          arn=$(aws ecs run-task --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_FAMILY" \
+            --launch-type FARGATE --count 1 \
+            --network-configuration "$netcfg" \
+            --overrides "$overrides" \
+            --started-by "bill-plan-once:${{ github.run_id }}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "task=$arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+          echo "task-id=${arn##*/}" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+          echo "log-group=$log_group" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for it to stop
+        if: ${{ inputs.wait }}
+        run: |
+          arn="${{ steps.start.outputs.arn }}"
+          for i in $(seq 1 30); do
+            if aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$arn" 2>/dev/null; then
+              break
+            fi
+            echo "still running ($i)"
+          done
+          aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].{status:lastStatus,stoppedReason:stoppedReason,exit:containers[0].exitCode,started:startedAt,stopped:stoppedAt}' \
+            --output table
+
+      - name: Capture BILLPLANSUMMARY and report
+        if: ${{ always() && inputs.wait }}
+        env:
+          CONTAINER: ${{ steps.start.outputs.container }}
+          TASK_ID: ${{ steps.start.outputs.task-id }}
+          LOG_GROUP: ${{ steps.start.outputs.log-group }}
+        run: |
+          set -euo pipefail
+          stream="ecs/$CONTAINER/$TASK_ID"
+          : > logs.txt
+          token=""
+          prev=""
+          for i in $(seq 1 50); do
+            if [ -z "$token" ]; then
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --start-from-head \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            else
+              out=$(aws logs get-log-events --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$stream" --next-token "$token" \
+                --output json 2>/dev/null) || { sleep 4; continue; }
+            fi
+            printf '%s' "$out" | jq -r '.events[]?.message // empty' >> logs.txt
+            token=$(printf '%s' "$out" | jq -r '.nextForwardToken // empty')
+            if [ -z "$token" ] || [ "$token" = "$prev" ]; then break; fi
+            prev="$token"
+          done
+          line=$(grep 'BILLPLANSUMMARY ' logs.txt | tail -n 1 || true)
+          if [ -z "$line" ]; then
+            # Never echo task output: a line count and the last exception
+            # class name (a bare identifier) only.
+            nlines=$(wc -l < logs.txt | tr -d ' ')
+            err_class=$(grep -oE '\b[A-Z][A-Za-z0-9_]{0,63}(Error|Exception|Interrupt|Exit)\b' logs.txt \
+              | tail -n 1 || true)
+            {
+              echo "## bill-plan-once: no BILLPLANSUMMARY captured"
+              echo "- log lines read: ${nlines}"
+              echo "- last exception class: ${err_class:-none}"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::no BILLPLANSUMMARY captured from the task"
+            exit 1
+          fi
+          printf '%s' "$line" | sed -n 's/.*BILLPLANSUMMARY //p' \
+            | jq -c 'walk(if type == "string" and (test("^[A-Za-z0-9_.:+-]{1,64}$") | not)
+                          then "redacted" else . end)' > bill-plan-summary.json
+          {
+            echo "## bill-plan-once"
+            echo '```json'
+            jq . bill-plan-summary.json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$(jq -r .ok bill-plan-summary.json)" = "true" ]
+
+      - name: Upload summary
+        if: ${{ always() && inputs.wait }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bill-plan-summary
+          path: bill-plan-summary.json
+          if-no-files-found: ignore
+          retention-days: 7

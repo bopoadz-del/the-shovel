@@ -519,6 +519,13 @@ def _raw_reply(doc: dict) -> str:
             f"I used smart_orchestrator; delta_ok=false.\n\nSource: {doc['name']}, chunk {doc['chunk']}.")
 
 
+def _cited_beside(env: dict, text: str, name: str) -> bool:
+    """The answer contract (BUILD 0): the document travels beside the answer
+    as a structured citation, the text carries only its numbered marker."""
+    docs = [c.get("document") for c in env.get("citations") or []]
+    return name in docs and "[1]" in text and name not in text
+
+
 @pytest.mark.asyncio
 async def test_agent_chat_answer_and_sources_pass_the_exit(monkeypatch):
     _ax()
@@ -528,7 +535,7 @@ async def test_agent_chat_answer_and_sources_pass_the_exit(monkeypatch):
     _assert_nothing_internal(result["answer"], docs)
     assert "smart_orchestrator" not in result["answer"]
     assert not re.search(r"delta[ _]ok", result["answer"]), "a dump read as words is still a dump"
-    assert docs[0]["name"] in result["answer"]
+    assert _cited_beside(result, result["answer"], docs[0]["name"])
     for row in result.get("sources") or []:
         assert row.get("doc_name") and not re.search(r"chunk|#", row.get("page_or_section") or "")
 
@@ -543,7 +550,7 @@ async def test_agent_stream_end_passes_the_exit(monkeypatch):
     content = end.get("content") or ""
     assert content.strip(), "the end event carries no checked answer for the client to show"
     _assert_nothing_internal(content, docs)
-    assert "smart_orchestrator" not in content and docs[0]["name"] in content
+    assert "smart_orchestrator" not in content and _cited_beside(end, content, docs[0]["name"])
     assert not re.search(r"delta[ _]ok", content), "a dump read as words is still a dump"
     for row in end.get("sources") or []:
         assert row.get("doc_name") and not re.search(r"chunk|#", row.get("page_or_section") or "")
@@ -569,7 +576,7 @@ def test_router_stream_end_passes_the_exit():
     out = asyncio.run(run())
     end = json.loads(out[-1][len("data:"):])
     _assert_nothing_internal(end["content"], docs)
-    assert d["name"] in end["content"]
+    assert _cited_beside(end, end["content"], d["name"])
     assert end["sources"][0]["page_or_section"] in ("", f"p. {d['page']}")
 
 

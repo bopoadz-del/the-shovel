@@ -27,7 +27,8 @@ def wind_load_on_formwork(
     formwork_width_m: float = 0.0,
     shape_factor: float = 1.0,
 ) -> Dict[str, float]:
-    """Wind on climbing formwork: q = 0.613 x V^2, F = q x A, M = F x h/2.
+    """Wind on climbing formwork: q = 0.613 x V^2, F = q x A, M = F x h/2,
+    section modulus z = b x h^2/6, bending stress = M/z.
 
     When the area is not given, it is the product of the width and the height.
     """

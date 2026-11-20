@@ -2,7 +2,6 @@
 name: validation
 description: Runs every output through the 5-stage validation pipeline (syntactic / dimensional / physical / empirical / operational) and assigns a credibility tier.
 icon: ✅
-model: kimi-k2.6
 temperature: 0.1
 max_tokens: 4096
 allowed_blocks:

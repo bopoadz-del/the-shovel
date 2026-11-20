@@ -29,6 +29,14 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
         block_class = BLOCK_REGISTRY.get(block_name)
         if not block_class or not caller_may_use_block(block_name):
             continue  # a tool the caller would be refused is not offered
+        # A block whose tool is registered with a declared schema (see
+        # app.agents.core.tool_registry) is offered with that schema; the
+        # registry's handler answers its calls.
+        from app.agents.core import tool_registry as _tool_registry
+        _spec = _tool_registry.get(block_name)
+        if _spec is not None and _spec.schema:
+            tools.append(_spec.schema)
+            continue
         # File-consuming blocks get a typed schema with required file_path.
         override = _FILE_TOOL_SCHEMAS.get(block_name)
         if override:
@@ -157,6 +165,38 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
                     "properties": {
                         "document_id": {"type": "string", "description": "The document id (preferred when known, e.g. from an attachment note or a prior search result)."},
                         "filename": {"type": "string", "description": "The document's original filename (used when the id is not known)."},
+                    },
+                    "required": [],
+                },
+            },
+        })
+
+    # ── synthetic tool: bill_rows_aggregate (project-scoped) ─────────────
+    # A count or a total over bill rows is computed over EVERY row of the
+    # derived bill sheet (app.core.bill_aggregate), never by adding the row
+    # chunks a top-K search happened to return.
+    if project_id:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "bill_rows_aggregate",
+                "description": (
+                    "Count, or total the quantity or amount of, the bill of "
+                    "quantities rows whose description contains every given "
+                    "term (optionally only inside a section). Use this for "
+                    "'how many items ...' and 'what is the total quantity / "
+                    "amount of ...' over a bill: it reads every row of the "
+                    "bill and lists the rows it used with reference and page. "
+                    "Report its count, sum and rows as given; do not add "
+                    "figures yourself."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "terms": {"type": "string", "description": "Words every matching row's description contains."},
+                        "section": {"type": "string", "description": "Words of the bill section (heading path) to stay inside. Optional."},
+                        "measure": {"type": "string", "enum": ["quantity", "amount"], "description": "What to sum (default quantity)."},
+                        "document_id": {"type": "string", "description": "The bill document (source PDF or its derived sheet). Optional: default every derived bill."},
                     },
                     "required": [],
                 },
@@ -617,6 +657,37 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
     return tools
 
 
+def search_cap_reached_result(cap: int) -> dict[str, Any]:
+    """The tool result for a search the turn's cap does not allow."""
+    return {
+        "name": "search_project_documents",
+        "ok": False,
+        "result": {
+            "status": "skipped",
+            "error": "search limit reached",
+            "hint": (
+                f"This turn has already run its {cap} project searches; this "
+                "one was not run. Answer from the excerpts and search rows "
+                "already in the conversation, and say what they do not state."
+            ),
+        },
+    }
+
+
+async def _run_turn_tool_call(
+    self, tool_call: dict[str, Any], *, search_turn: Any, **kwargs: Any,
+) -> dict[str, Any]:
+    """One tool call of a chat turn. Both chat loops run their calls through
+    here so the turn's declared search cap holds per CALL, not per round: a
+    batch of parallel searches past the cap is answered without searching
+    (the loops used to count such a batch and run all of it). Every admitted
+    call goes to ``_run_tool_call`` with the turn's state."""
+    name = (tool_call.get("function") or {}).get("name")
+    if name == "search_project_documents" and not search_turn.admit():
+        return search_cap_reached_result(search_turn.cap)
+    return await self._run_tool_call(tool_call, search_turn=search_turn, **kwargs)
+
+
 async def _run_tool_call(
     self,
     tool_call: dict[str, Any],
@@ -627,6 +698,7 @@ async def _run_tool_call(
     _call_stack: list[str] | None = None,
     user_message: str | None = None,
     history: list | None = None,
+    search_turn: Any = None,
 ) -> dict[str, Any]:
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         BLOCK_REGISTRY, _FILE_CONSUMING_BLOCKS, _HAT_CALC_ALIASES, _HAT_CONTAINER_ALIASES,
@@ -670,6 +742,7 @@ async def _run_tool_call(
             agent=self, name=name, args=args, tool_call=tool_call, api_key=api_key,
             project_id=project_id, conversation_id=conversation_id, depth=_depth,
             call_stack=_call_stack, user_message=user_message, history=history,
+            search_turn=search_turn,
         ))
 
     # ── declared hat-manifest actions -> real implementations ───────────

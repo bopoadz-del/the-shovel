@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 import re
 import threading
 from typing import Any, Dict, List, Optional
+
+_LOG = logging.getLogger(__name__)
 
 # sympy is imported lazily in evaluate() — it costs ~1.0s at BOOT and only
 # `formula` entries need it, so a service that never evaluates a formula should
@@ -194,7 +197,11 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
         raise ValueError(f"entry {rule_id!r} has no expression")
     # evaluate=False keeps sympy from collapsing the parsed tree before
     # substitution; we run .evalf() once at the end for the final float.
-    expr = sympy.sympify(expr_str, evaluate=False)
+    # The entry's declared variables are symbols, whatever their name: without
+    # ``locals`` sympify reads a name sympy reserves (S, Q, E, I, N, O) as its
+    # own object, so the stated value is never substituted.
+    declared = {name: sympy.Symbol(name) for name in (entry.get("variables") or {})}
+    expr = sympy.sympify(expr_str, locals=declared, evaluate=False)
     subs = {sympy.Symbol(name): value for name, value in values.items()}
     result = expr.subs(subs).evalf()
     try:
@@ -204,10 +211,54 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
             f"formula did not reduce to a scalar — missing variables? got {result!r}"
         ) from exc
 
-    return {
+    out = {
         "rule_id": rule_id,
         "result": result_f,
         "unit": (entry.get("thresholds") or {}).get("unit"),
+        "provenance": entry.get("provenance", {}),
+        "credibility_tier": entry.get("credibility_tier"),
+        "warnings": _build_warnings(entry),
+    }
+    # A count rounded UP (machines, layers, floors) shows the figure it was
+    # rounded from, so a reader sees 2.03 -> 3 and not only 3. Read from the
+    # expression's own structure: one ceiling() node, its argument evaluated.
+    ceilings = [n for n in sympy.preorder_traversal(expr) if isinstance(n, sympy.ceiling)]
+    if len(ceilings) == 1:
+        out["unrounded"] = float(ceilings[0].args[0].subs(subs).evalf())
+    return out
+
+
+def lookup_table(rule_id: str, **match: Any) -> Dict[str, Any]:
+    """Return the rows of a ``type=table`` entry whose cells equal every given value.
+
+    The columns come from the entry's own ``table.columns``; a filter on a
+    column the table does not declare is refused, not silently matched to
+    nothing. A cell held for the owner's reading is stored as null and named
+    in ``table.held``, which is returned with the rows so an answer can say
+    the cell is not read rather than present a gap as a value.
+    """
+    entry = get_rule(rule_id)
+    if entry is None:
+        raise KeyError(f"unknown rule_id: {rule_id}")
+    kind = entry.get("type")
+    if kind != "table":
+        raise ValueError(f"lookup_table() only supports type=table (got {kind!r})")
+    table = entry.get("table") or {}
+    columns = table.get("columns") or []
+    names = {c.get("name") for c in columns}
+    unknown = sorted(set(match) - names)
+    if unknown:
+        raise ValueError(f"table {rule_id!r} has no column(s) {unknown}")
+    rows = [
+        row
+        for row in table.get("rows") or []
+        if all(row.get(name) == value for name, value in match.items())
+    ]
+    return {
+        "rule_id": rule_id,
+        "columns": columns,
+        "rows": rows,
+        "held": table.get("held") or [],
         "provenance": entry.get("provenance", {}),
         "credibility_tier": entry.get("credibility_tier"),
         "warnings": _build_warnings(entry),
@@ -439,3 +490,136 @@ def validate_transition(
         "credibility_tier": entry.get("credibility_tier"),
         "warnings": warnings,
     }
+
+
+# ---------------------------------------------------------------------------
+# A formula entry the ask names AND supplies, chosen without a model.
+# Same contract as construction_formulas.formula_completed_by_user_text for
+# the registry: the ask is a calculation request, every content word of the
+# entry's title is in it, and every declared variable binds to exactly one
+# figure. A tie, a missing or an ambiguous input is no selection (None): the
+# turn is never guessed.
+# ---------------------------------------------------------------------------
+_FIGURE_RE = re.compile(
+    r"(?<![\w.])(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(%|[^\W\d_][\w³²]*(?:\s+[^\W\d_]+)?)?"
+)
+_POWER_SUFFIX_RE = re.compile(r"^([^\W\d_]+)([23])$")
+
+
+def _unit_registry():
+    import pint
+    global _UREG
+    try:
+        return _UREG
+    except NameError:
+        _UREG = pint.UnitRegistry()
+        return _UREG
+
+
+def _parse_unit(text: str):
+    """pint units for ``text`` or None. ``m3`` reads as ``m**3``."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    m = _POWER_SUFFIX_RE.match(raw)
+    if m:
+        raw = f"{m.group(1)}**{m.group(2)}"
+    try:
+        return _unit_registry().parse_units(raw)
+    except Exception:  # noqa: BLE001 -- not a unit: the figure has none
+        _LOG.debug("not a unit: %r", raw, exc_info=True)
+        return None
+
+
+def _figures(text: str) -> List[Dict[str, Any]]:
+    """Every figure in ``text`` with its span and the unit written after it.
+
+    A two-word unit (``cubic meter``) is tried before its first word, so
+    the longest reading wins; a word that is not a unit leaves the figure
+    without one (it can then bind only by name).
+    """
+    out: List[Dict[str, Any]] = []
+    for m in _FIGURE_RE.finditer(text or ""):
+        value = float(m.group(1).replace(",", ""))
+        unit = None
+        tail = m.group(2) or ""
+        words = tail.split()
+        for n in range(len(words), 0, -1):
+            unit = _parse_unit(" ".join(words[:n]))
+            if unit is not None:
+                break
+        out.append({"value": value, "unit": unit, "start": m.start(1)})
+    return out
+
+
+def _bind_by_name(text: str, name: str, figures: List[Dict[str, Any]]):
+    """The figure written as ``name = n`` / ``name: n`` / ``name of n``."""
+    flags = 0 if len(name) < 3 else re.IGNORECASE
+    pat = re.compile(rf"(?<![\w.]){re.escape(name)}\s*(?:=|:|\bof\b|\bis\b)\s*", flags)
+    hits = []
+    for m in pat.finditer(text):
+        hits += [f for f in figures if f["start"] == m.end()]
+    return hits[0] if len(hits) == 1 else None
+
+
+def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str, float]]:
+    """Every declared variable of ``entry`` bound from ``text``, or None.
+
+    By name first. A variable left over binds by its declared unit only
+    when it is the one left-over variable of that unit and exactly one
+    unused figure carries that unit. No unit conversion: a figure in a
+    different unit is not this variable's figure.
+    """
+    variables = entry.get("variables") or {}
+    if not isinstance(variables, dict) or not variables:
+        return None
+    figures = _figures(text)
+    bound: Dict[str, float] = {}
+    used: set = set()
+    for name in variables:
+        fig = _bind_by_name(text, name, figures)
+        if fig is not None and id(fig) not in used:
+            bound[name] = fig["value"]
+            used.add(id(fig))
+    left = [n for n in variables if n not in bound]
+    declared = {n: _parse_unit(str((variables[n] or {}).get("unit") or "")) for n in left}
+    for name in left:
+        unit = declared[name]
+        if unit is None or sum(1 for n in left if declared[n] == unit) != 1:
+            return None
+        cands = [f for f in figures if id(f) not in used and f["unit"] == unit]
+        if len(cands) != 1:
+            return None
+        bound[name] = cands[0]["value"]
+        used.add(id(cands[0]))
+    return bound
+
+
+def formula_completed_by_user_text(text: str) -> Optional[tuple]:
+    """``(rule_id, values)`` for the one formula entry the ask names and
+    supplies, or None."""
+    raw = text or ""
+    from app.lib.construction_formulas import (
+        _display_content_words, _words_all_present, explicit_calculation_request,
+    )
+    if not raw.strip() or not explicit_calculation_request(raw):
+        return None
+    candidates = []
+    for entry in load_knowledge():
+        if entry.get("type") != "formula":
+            continue
+        words = _display_content_words(str(entry.get("title") or ""))
+        if not words or not _words_all_present(raw, words):
+            continue
+        values = bind_entry_variables(entry, raw)
+        if values is None:
+            continue
+        candidates.append((entry["id"], values, len(words)))
+    if not candidates:
+        return None
+    best = max(c[2] for c in candidates)
+    tied = [c for c in candidates if c[2] == best]
+    if len(tied) != 1:
+        return None
+    return tied[0][0], tied[0][1]
