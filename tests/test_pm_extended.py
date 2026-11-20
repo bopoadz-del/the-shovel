@@ -89,6 +89,38 @@ def test_resource_histogram_peak_is_one_day_not_one_bucket(spans, counts, period
     assert hist.peak_period == peak_period
 
 
+@pytest.mark.parametrize("dur, synthetic_count, qty, weeks", [
+    # 10 days, 80 man-hours exported by P6: 8 per day -> 40 in each 5-day week.
+    (10, 99, 80, [40.0, 40.0]),
+    # 6 days, 120 man-hours: 20 per day -> 100 in week 1, 20 in the 1-day tail.
+    (6, 7, 120, [100.0, 20.0]),
+])
+def test_resource_histogram_prefers_the_exported_task_rows(dur, synthetic_count, qty, weeks):
+    """A real TASKRSRC export outranks the synthetic activity.resources guess.
+
+    The synthetic crew count is deliberately absurd (99 / 7) so that a code path
+    that silently falls back to it is visible in the totals.
+    """
+    acts = [_act("A", dur, resources=[ResourceAssignment(trade="entered-by-hand", count=synthetic_count)])]
+    out = compute_cpm(CPMInput(activities=acts))
+    hist = resource_histogram(
+        out.results, acts, period_unit="week",
+        task_resources=[{"task_code": "A", "target_qty": qty, "rsrc_id": "from-p6"}],
+    )
+    assert hist.by_trade_totals == {"from-p6": float(qty)}
+    assert "entered-by-hand" not in hist.by_trade_totals
+    assert hist.total_manhours == float(qty)
+    assert [p.total for p in hist.periods] == weeks
+
+
+@pytest.mark.parametrize("bad_unit", ["quarter", "day"])
+def test_resource_histogram_rejects_an_unknown_period_unit(bad_unit):
+    acts = [_act("A", 5, resources=[ResourceAssignment(trade="civil", count=2)])]
+    out = compute_cpm(CPMInput(activities=acts))
+    with pytest.raises(ValueError, match="period_unit"):
+        resource_histogram(out.results, acts, period_unit=bad_unit)
+
+
 def test_resource_histogram_total_manhours():
     # crew 4 x 10 days x 8 h = 320
     acts = [_act("A", 10, resources=[ResourceAssignment(trade="civil", count=4)])]
