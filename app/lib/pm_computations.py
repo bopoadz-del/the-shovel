@@ -256,6 +256,12 @@ def resource_histogram(
     """Time-phased manpower. An activity contributes its crew to every period
     its early-date span overlaps (concurrent headcount, not man-days).
 
+    The peak is a property of a DAY, not of a bucket: ``peak_total`` is the
+    largest number of persons on site on any one day, and ``peak_period`` is
+    the period that day falls in. A bucket total adds every crew whose span
+    touches the bucket, including crews that finish before the next one
+    starts, so it is not the site's headcount at any instant.
+
     When ``task_resources`` is provided (a list of TASKRSRC-shaped dicts from
     :func:`parse_xer_full`), prefer the real per-task assignments and skip the
     synthetic ``Activity.resources`` distribution. The TASKRSRC path is the
@@ -309,12 +315,28 @@ def resource_histogram(
             )
             total_manhours += res.count * span * _HOURS_PER_DAY
 
-    peak = max(periods, key=lambda hp: hp.total, default=None)
+    # Day-level concurrency: day d is covered by a span when es <= d < ef.
+    day_totals: Dict[int, float] = {}
+    for rid, (es, ef) in es_ef.items():
+        persons = sum(res.count for res in res_by_id.get(rid, []))
+        if persons <= 0:
+            continue
+        first = int(es)
+        stop = int(ef) + (1 if ef > int(ef) else 0)  # a part-day still has people on site
+        for day in range(first, stop):
+            day_totals[day] = day_totals.get(day, 0.0) + persons
+
+    if day_totals:
+        peak_day = max(day_totals, key=lambda d: day_totals[d])
+        peak_total = round(day_totals[peak_day], 2)
+        peak_period = periods[min(peak_day // length, len(periods) - 1)].label
+    else:
+        peak_total, peak_period = 0.0, ""
     return ResourceHistogram(
         period_unit=period_unit,
         periods=periods,
-        peak_total=peak.total if peak else 0.0,
-        peak_period=peak.label if peak else "",
+        peak_total=peak_total,
+        peak_period=peak_period,
         by_trade_totals=by_trade_totals,
         total_manhours=round(total_manhours, 2),
     )

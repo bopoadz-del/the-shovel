@@ -202,10 +202,6 @@ def test_m05_week_histogram_and_man_days(spec, crews, weeks, man_days):
     assert hist.total_manhours / 8 == pytest.approx(man_days, rel=_REL)  # engine uses 8 h per day
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect (wrong number): the histogram peak sums every crew that touches a week, "
-    "even crews that never work on the same day; the plan's peak is the largest number of "
-    "persons on site on one day (M05: 16 on days 11-16; the week sum gives 28)"))
 @pytest.mark.parametrize("spec, crews, daily_peak", [
     (M05, M05_CREWS, 16),  # days 11-16: B 10 + C 6 = 16; no other day is higher
     (TWIN, TWIN_CREWS, 8),  # days 6-9: Q 3 + R 5 = 8; S (6) never overlaps R

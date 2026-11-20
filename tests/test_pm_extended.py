@@ -70,6 +70,25 @@ def test_resource_histogram_sums_concurrent_trades():
     assert hist.peak_total == 9
 
 
+@pytest.mark.parametrize("spans, counts, period_total, peak, peak_period", [
+    # A 5 persons days 0-3, then B 4 persons days 3-5: both touch week 1, so the
+    # bucket sums 9, but no day ever holds more than A's 5.
+    ([(3, []), (2, ["A"])], {"A": 5, "B": 4}, 9, 5, "W1"),
+    # A 6 persons days 0-4, B 6 persons days 4-8: week 1 sums 12 (B starts
+    # inside it), yet the busiest day holds one crew of 6, which is in week 1.
+    ([(4, []), (4, ["A"])], {"A": 6, "B": 6}, 12, 6, "W1"),
+])
+def test_resource_histogram_peak_is_one_day_not_one_bucket(spans, counts, period_total, peak, peak_period):
+    acts = [_act("A" if i == 0 else "B", dur, preds,
+                 resources=[ResourceAssignment(trade="crew", count=counts["A" if i == 0 else "B"])])
+            for i, (dur, preds) in enumerate(spans)]
+    out = compute_cpm(CPMInput(activities=acts))
+    hist = resource_histogram(out.results, acts, period_unit="week")
+    assert hist.periods[0].total == period_total
+    assert hist.peak_total == peak
+    assert hist.peak_period == peak_period
+
+
 def test_resource_histogram_total_manhours():
     # crew 4 x 10 days x 8 h = 320
     acts = [_act("A", 10, resources=[ResourceAssignment(trade="civil", count=4)])]
