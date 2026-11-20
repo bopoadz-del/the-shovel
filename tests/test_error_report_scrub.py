@@ -154,9 +154,9 @@ def test_secrets_inside_messages_are_masked(text, leak):
 @pytest.mark.parametrize(
     "dsn,leak",
     [
-        ("postgresql://appuser:Inv3ntedDbPw@db.example.invalid:5432/main", "Inv3ntedDbPw"),
+        ("postgresql://appuser:Inv3ntedDbPw@db.example.invalid:5432/main", "Inv3ntedDbPw"),  # pragma: allowlist secret
         ("redis://:inv3ntedRedisPw@cache.example.invalid:6379/0", "inv3ntedRedisPw"),
-        ("mongodb+srv://u:inv3ntedMongoPw@cluster.example.invalid/db", "inv3ntedMongoPw"),
+        ("mongodb+srv://u:inv3ntedMongoPw@cluster.example.invalid/db", "inv3ntedMongoPw"),  # pragma: allowlist secret
     ],
 )
 def test_connection_strings_lose_their_credentials(dsn, leak):
@@ -324,7 +324,7 @@ def test_init_sentry_installs_the_scrub_hook_and_no_locals(dsn):
 @_needs_sdk
 @pytest.mark.parametrize(
     "secret_text",
-    ["password=Inv3ntedSdkPw for ops@example.invalid", "postgresql://u:Inv3ntedSdkDb@h.example.invalid/d"],
+    ["password=Inv3ntedSdkPw for ops@example.invalid", "postgresql://u:Inv3ntedSdkDb@h.example.invalid/d"],  # pragma: allowlist secret
 )
 def test_a_real_sdk_event_leaves_scrubbed(secret_text):
     import sentry_sdk

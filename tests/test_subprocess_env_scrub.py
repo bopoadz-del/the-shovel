@@ -81,7 +81,7 @@ def test_python_code_block_subprocess_cannot_read_secret(monkeypatch):
     from app.blocks import code as code_mod
 
     monkeypatch.setenv("SECRET_KEY", ENV_SECRET_13)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:PLANTED_PW@h/db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:PLANTED_PW@h/db")  # pragma: allowlist secret
     snippet = (
         "import os\n"
         "print('LEAK' if os.environ.get('SECRET_KEY') "
