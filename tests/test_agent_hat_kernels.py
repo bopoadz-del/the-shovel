@@ -91,6 +91,15 @@ def test_an_unknown_hat_id_fails_loudly(tmp_path):
         _parse_agent_file(bad)
 
 
+def test_an_unknown_scalar_hat_id_fails_loudly(tmp_path):
+    """The scalar ``hats:`` form has its own unknown-id raise; a typo there
+    must not silently produce an unhatted agent either."""
+    from app.agents.runtime import _apply_hat_kernels
+
+    with pytest.raises(ValueError, match="unknown hat"):
+        _apply_hat_kernels("body", "fork.hat.nonexistent", tmp_path / "a.md")
+
+
 def test_the_orchestrator_contract_routes_novel_computations_to_self_coding(agents):
     """'The orchestrator should have it all' includes the code path for
     computations no calculator covers: delegate to the self-coding agent,
