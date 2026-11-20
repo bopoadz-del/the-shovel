@@ -39,6 +39,8 @@ from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from typing import Any
 
+from app.core.rag.bill_sections import _CARRIED_RE, _HEADING_RE, _TITLE_MAX
+
 # Output column order for the derived sheet. The labels resolve through
 # BOQProcessorBlock._resolve_columns (asserted by the tests), so the existing
 # spreadsheet row chunker maps them without a second alias table.
@@ -1025,6 +1027,55 @@ def _wrapped(a: _Label, b: _Label) -> bool:
             and not _outer(a, b, gap) and not _outer(b, a, gap))
 
 
+def _heading_title(rest: str) -> str:
+    """The title of a heading line: the text after the number, stripped and
+    bounded; ``""`` for a bare heading (a number with no title) or a title
+    that is a figure only."""
+    title = (rest or "").strip()
+    if not title or not any(ch.isalpha() for ch in title):
+        return ""
+    return title[:_TITLE_MAX]
+
+
+def index_number_map(rows: list[BillRow], printed: Sequence[_Label]) -> dict[str, str]:
+    """``{normalised title: bill number}`` from the document's own headings.
+
+    A heading is a line shaped ``BILL NO. N - TITLE`` (the one grammar in
+    :mod:`app.core.rag.bill_sections`), wherever it is printed: above a
+    page's header (a label) or as a measured row's description (an index
+    page read as a table). A ``carried to summary`` closing row is not a
+    heading. A title carried by more than one number is ambiguous and maps
+    nothing -- a missing number is safer than a wrong one.
+    """
+    by_title: dict[str, set[str]] = defaultdict(set)
+    for lab in printed:
+        match = _HEADING_RE.match(lab.text)
+        if not match or _CARRIED_RE.search(lab.text):
+            continue
+        title = _heading_title(match.group(2))
+        if title:
+            by_title[_norm(title)].add(match.group(1).upper())
+    for row in rows:
+        text = row.fields.get("description", "")
+        match = _HEADING_RE.match(text)
+        if not match or _CARRIED_RE.search(text):
+            continue
+        title = _heading_title(match.group(2))
+        if title:
+            by_title[_norm(title)].add(match.group(1).upper())
+    return {title: next(iter(numbers)) for title, numbers in by_title.items() if len(numbers) == 1}
+
+
+def _numbered(text: str, title_by_norm: dict[str, str]) -> str:
+    """Prefix ``text`` with its bill number when the document's index assigns
+    exactly one number to its title. A heading that already prints its own
+    number is left verbatim; a title absent from the index is left verbatim."""
+    key = _norm(text)
+    if key in title_by_norm and not _HEADING_RE.match(text):
+        return f"Bill No. {title_by_norm[key]} - {text}"
+    return text
+
+
 def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) -> list[BillRow]:
     """Rewrite every row's path as (section title, sub-heading..., preamble).
 
@@ -1033,8 +1084,10 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     ANY page of a section are that section's title, on every row of it (a
     section with none takes the outermost level of its first row); (d) a
     continued heading is written as its original; (e) wrapped lines of one
-    label are one element. A line in the title band (below the page label,
-    above the column header) is a title even when it repeats on most pages.
+    label are one element; (f) an unnumbered heading whose title is named in
+    the document's own index takes that index's bill number. A line in the
+    title band (below the page label, above the column header) is a title
+    even when it repeats on most pages.
 
     A read with no running header is left alone. When the page label carries
     no section digit (it is only a page number, or a page number plus
@@ -1069,6 +1122,8 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
             if _norm(t) not in {_norm(x) for x in sec}:
                 sec.append(t)
 
+    title_by_norm = index_number_map(rows, printed)
+
     for row in rows:
         key = sections.get(row.source_page)
         body: list[_Label] = []
@@ -1085,8 +1140,9 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         if not titles[key] and body:
             titles[key].append(body[0].text)
         in_title = {_norm(t) for t in titles[key]}
-        levels = [lab.text for lab in body if _norm(lab.text) not in in_title]
-        title = TITLE_SEP.join(titles[key])
+        levels = [_numbered(lab.text, title_by_norm)
+                  for lab in body if _norm(lab.text) not in in_title]
+        title = TITLE_SEP.join(_numbered(t, title_by_norm) for t in titles[key])
         row.path = tuple(([title] if title else []) + levels)
         row.section = row.path[-1] if row.path else ""
     return rows
