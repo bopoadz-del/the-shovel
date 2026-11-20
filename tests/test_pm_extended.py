@@ -114,12 +114,15 @@ def test_resource_histogram_prefers_the_exported_task_rows(dur, synthetic_count,
 
 
 @pytest.mark.parametrize("bad_unit", ["quarter", "day"])
-def test_resource_histogram_rejects_an_unknown_period_unit(bad_unit):
+@pytest.mark.parametrize("with_export", [False, True])
+def test_resource_histogram_rejects_an_unknown_period_unit(bad_unit, with_export):
+    """Both branches refuse an unknown unit; each has its own guard."""
     acts = [_act("A", 5, resources=[ResourceAssignment(trade="civil", count=2)])]
     out = compute_cpm(CPMInput(activities=acts))
+    rows = ([{"task_code": "A", "target_qty": 40, "rsrc_id": "lab"}]
+            if with_export else None)
     with pytest.raises(ValueError, match="period_unit"):
-        resource_histogram(out.results, acts, period_unit=bad_unit,
-                           task_resources=[{"task_code": "A", "target_qty": 40, "rsrc_id": "lab"}])
+        resource_histogram(out.results, acts, period_unit=bad_unit, task_resources=rows)
 
 
 @pytest.mark.parametrize("parallel, period_totals, peak, peak_period", [
