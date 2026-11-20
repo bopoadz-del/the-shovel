@@ -88,49 +88,88 @@ def _starts_of(pages):
     return starts
 
 
-def test_a_labelled_chunk_is_located_by_its_first_source_line():
-    # A stage prepends a lead the source never held (a label naming the
-    # stage). The chunk's next line is verbatim source text, so the page is
-    # recoverable instead of the chunk losing its locator.
+# A stage prepends a lead the source never held (a label naming the stage).
+# The chunk's next line is verbatim source text, so the page is recoverable
+# instead of the chunk losing its locator.
+_LABEL = "SYNTHETIC STAGE LABEL NOT IN THE SOURCE"
+_TWO_LINE_LEAD = _LABEL + "\nRESERIALISED LEAD ROW ALSO ABSENT FROM THE SOURCE"
+
+
+@pytest.mark.parametrize(
+    ("lead", "body_pages", "expected"),
+    [
+        (_LABEL, (2, 3), [2, 3]),
+        # A second lead line that is not source text either: the probe walks
+        # the chunk's line starts until one lands, not only the one after the
+        # first.
+        (_TWO_LINE_LEAD, (1, 3), [1, 3]),
+    ],
+)
+def test_a_labelled_chunk_is_located_by_its_first_source_line(lead, body_pages, expected):
     pages = [_page_body(n) for n in (1, 2, 3)]
     text = "\n".join(pages)
-    label = "SYNTHETIC STAGE LABEL NOT IN THE SOURCE"
+    chunks = [f"{lead}\n{_page_body(n)}" for n in body_pages]
 
-    got = doc_index.chunk_start_pages(
-        text, _starts_of(pages),
-        [f"{label}\n{_page_body(2)}", f"{label}\n{_page_body(3)}"],
-    )
+    got = doc_index.chunk_start_pages(text, _starts_of(pages), chunks)
 
-    assert got == [2, 3]
+    assert got == expected
 
 
-def test_a_chunk_with_no_source_text_keeps_no_page():
+@pytest.mark.parametrize(
+    ("chunk", "expected"),
+    [
+        # Wholly synthetic: no line of it is in the source.
+        ("SYNTHETIC TOTALS SUMMARY " + " ".join(
+            f"figure{i}" for i in range(40)
+        ), [None]),
+        # A later line shorter than the minimum probe is never guessed at:
+        # an eight-character floor is what makes a short line unambiguous.
+        ("SYNTHETIC STAGE LABEL NOT IN THE SOURCE\nTOTAL 42", [None]),
+    ],
+)
+def test_a_chunk_with_no_source_text_keeps_no_page(chunk, expected):
     pages = [_page_body(n) for n in (1, 2)]
     text = "\n".join(pages)
-    synthetic = "SYNTHETIC TOTALS SUMMARY " + " ".join(
-        f"figure{i}" for i in range(40)
-    )
 
     assert doc_index.chunk_start_pages(
-        text, _starts_of(pages), [synthetic],
-    ) == [None]
+        text, _starts_of(pages), [chunk],
+    ) == expected
 
 
-def test_a_later_line_only_present_before_the_cursor_gives_no_page():
-    # Reading order is not negotiable: a later line that occurs only before
-    # the previous chunk's position cannot place this chunk, so it keeps
-    # None rather than taking an earlier page.
-    pages = [_page_body(n) for n in (1, 2)]
+_SHARED_LINE = (
+    "SYNTHETIC SHARED BOILERPLATE SENTENCE REPEATED ON EVERY PAGE OF THE DOCUMENT"
+)
+
+
+@pytest.mark.parametrize(
+    ("pages", "chunks", "expected"),
+    [
+        # Reading order is not negotiable: a later line that occurs only
+        # before the previous chunk's position cannot place this chunk.
+        (
+            [_page_body(n) for n in (1, 2)],
+            [f"{_LABEL}\n{_page_body(2)}",
+             f"{_LABEL}\n{_page_body(1)[:200]}"],
+            [2, None],
+        ),
+        # A later line that occurs twice after this point is ambiguous:
+        # taking either occurrence could place the chunk on a page it never
+        # started on.
+        (
+            [f"{_SHARED_LINE}\n{_page_body(n)}" for n in (1, 2, 3)],
+            [f"{_LABEL}\n{_page_body(1)}", f"{_LABEL}\n{_SHARED_LINE}"],
+            [1, None],
+        ),
+    ],
+)
+def test_a_later_line_that_cannot_place_the_chunk_gives_no_page(
+    pages, chunks, expected,
+):
     text = "\n".join(pages)
-    stale = _page_body(1)[:200]
-    chunks = [
-        f"SYNTHETIC LABEL\n{_page_body(2)}",
-        f"SYNTHETIC LABEL\n{stale}",
-    ]
 
     assert doc_index.chunk_start_pages(
         text, _starts_of(pages), chunks,
-    ) == [2, None]
+    ) == expected
 
 
 # ── extraction → chunks ──────────────────────────────────────────────────────
