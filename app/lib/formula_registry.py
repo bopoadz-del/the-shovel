@@ -44,9 +44,13 @@ phrase lists.
 from __future__ import annotations
 
 import inspect
+import json as _json
 import math
+import os as _os
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache as _lru_cache
+from pathlib import Path as _Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 BASE = "base"
@@ -114,6 +118,9 @@ class FormulaSpec:
     #: must be supplied (e.g. EVM accepts ``pv`` OR ``bcws``). Declared on the
     #: formula so the requirement lives with the kernel, not a central table.
     required_groups: Tuple[Tuple[str, ...], ...] = ()
+    #: The published standard / code the formula implements, declared with
+    #: the kernel (empty: none declared). Half of what "certified" needs.
+    standard: str = ""
 
 
 _REGISTRY: Dict[str, FormulaSpec] = {}
@@ -158,6 +165,7 @@ def formula(
     name: Optional[str] = None,
     main_output: str = "",
     required_groups: Tuple[Tuple[str, ...], ...] = (),
+    standard: str = "",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Declare a formula. Raises at import on an unknown owner, an empty
     description, an empty display name or a duplicate name -- a formula
@@ -182,7 +190,8 @@ def formula(
                                      display_name.strip(),
                                      {k: p.unit for k, p in params.items()},
                                      dict(outputs), params, main_output,
-                                     tuple(tuple(g) for g in required_groups))
+                                     tuple(tuple(g) for g in required_groups),
+                                     (standard or "").strip())
         fn.__formula__ = _REGISTRY[key]  # type: ignore[attr-defined]
         return fn
 
@@ -208,6 +217,25 @@ def calculators() -> Dict[str, Callable[..., Any]]:
 def get(name: str) -> Optional[FormulaSpec]:
     _load_all()
     return _REGISTRY.get(name)
+
+
+def written_method(fn: Callable[..., Any]) -> str:
+    """The method a calculator states in its own words: its docstring's first
+    paragraph plus every paragraph that writes an equation (holds ``=``).
+
+    A coefficient or factor the body applies (the 384 of 5wL^4/384EI, a
+    partial factor) is stated where the calculator writes its formula; the
+    door carries that text so the result says how it was computed. Paragraphs
+    with no equation after the first are left out. Empty when the calculator
+    has no docstring.
+    """
+    doc = inspect.getdoc(inspect.unwrap(fn)) or ""
+    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", doc)]
+    paragraphs = [p for p in paragraphs if p]
+    if not paragraphs:
+        return ""
+    kept = [paragraphs[0]] + [p for p in paragraphs[1:] if "=" in p]
+    return "\n".join(kept)
 
 
 def formula_modules() -> List[str]:
@@ -841,3 +869,183 @@ _AMOUNT_UNITS = frozenset({"", "-", "currency", "count", "ratio", "no", "nr"})
 
 def _norm_unit(unit: str) -> str:
     return (unit or "").strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Certified means verified (KS-1).
+#
+# A formula is *certified* only when BOTH hold:
+#   * it declares the published standard it implements (``standard=`` on
+#     ``@formula``), and
+#   * it has at least one hand-value case -- inputs, the expected outputs
+#     worked by hand from that standard, and the working -- and the kernel
+#     reproduces every one of its cases right now.
+# Nothing sets "certified" by hand: it is derived here from the declaration
+# and the kernel's own output on the hand cases, so a kernel that drifts from
+# its hand value loses the label on the next run.
+#
+# Hand-value cases are verification data, not product data: they live in
+# tests/hand_values/*.json (override with FORMULA_HAND_VALUES_DIR), one list of
+# cases per file:
+#   [{"formula": "<registered name>", "inputs": {...},
+#     "expect": {"<output key>": <value>, ...}, "rel_tol": 0.001,
+#     "working": "<the hand working, step by step>"}]
+# A missing or unreadable directory certifies nothing (fail closed).
+# ---------------------------------------------------------------------------
+
+#: Relative tolerance a hand case is checked to unless it states its own.
+HAND_VALUE_REL_TOL = 1e-3
+
+
+def hand_values_dir() -> _Path:
+    """Where the hand-value cases are read from."""
+    override = (_os.getenv("FORMULA_HAND_VALUES_DIR") or "").strip()
+    if override:
+        return _Path(override)
+    return _Path(__file__).resolve().parents[2] / "tests" / "hand_values"
+
+
+def _case_problem(row: Any) -> str:
+    """The first field a hand case is missing ("" when it is well formed)."""
+    if not isinstance(row, dict):
+        return "not_an_object"
+    if not str(row.get("formula") or "").strip():
+        return "formula"
+    if not isinstance(row.get("inputs"), dict):
+        return "inputs"
+    if not isinstance(row.get("expect"), dict) or not row["expect"]:
+        return "expect"
+    if not str(row.get("working") or "").strip():
+        return "working"
+    return ""
+
+
+@_lru_cache(maxsize=8)
+def _load_hand_values(directory: str) -> Tuple[Tuple[Dict[str, Any], ...], Tuple[str, ...]]:
+    """(cases, problems) from every ``*.json`` file in ``directory``. Each case
+    carries the file and position it came from."""
+    cases: List[Dict[str, Any]] = []
+    problems: List[str] = []
+    root = _Path(directory)
+    if not root.is_dir():
+        return (), ("hand_value_dir:missing",)
+    for path in sorted(root.glob("*.json")):
+        try:
+            rows = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            problems.append(f"hand_value:{path.name}:unreadable:{type(exc).__name__}")
+            continue
+        if not isinstance(rows, list):
+            problems.append(f"hand_value:{path.name}:not_a_list")
+            continue
+        for i, row in enumerate(rows):
+            problem = _case_problem(row)
+            if problem:
+                problems.append(f"hand_value:{path.name}[{i}]:{problem}")
+                continue
+            cases.append({**row, "_file": path.name, "_index": i})
+    return tuple(cases), tuple(problems)
+
+
+def clear_hand_value_cache() -> None:
+    """Forget loaded cases and verdicts (a test that writes a directory)."""
+    _load_hand_values.cache_clear()
+    _verdict.cache_clear()
+
+
+def hand_value_cases(name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every well-formed hand case, or only those for formula ``name``."""
+    cases, _problems = _load_hand_values(str(hand_values_dir()))
+    return [c for c in cases if name is None or c["formula"] == name]
+
+
+def _output(result: Any, key: str) -> Any:
+    if isinstance(result, dict):
+        if key in result:
+            return result[key]
+        inner = result.get("result")
+        if isinstance(inner, dict) and key in inner:
+            return inner[key]
+    return None
+
+
+def _matches(actual: Any, expected: Any, rel_tol: float) -> bool:
+    if isinstance(expected, bool) or not isinstance(expected, (int, float)):
+        return actual == expected
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        return False
+    return math.isclose(float(actual), float(expected), rel_tol=rel_tol, abs_tol=1e-9)
+
+
+def _case_tolerance(case: Dict[str, Any]) -> float:
+    tol = case.get("rel_tol")
+    if isinstance(tol, (int, float)) and not isinstance(tol, bool) and tol > 0:
+        return float(tol)
+    return HAND_VALUE_REL_TOL
+
+
+def hand_value_failures(name: str) -> List[str]:
+    """Why the kernel of ``name`` does not reproduce its hand cases (empty when
+    every case is reproduced, or when there is no case -- see
+    :func:`verified_by_hand`)."""
+    spec = get(name)
+    failures: List[str] = []
+    for case in hand_value_cases(name):
+        where = f"{case['_file']}[{case['_index']}]"
+        if spec is None:
+            failures.append(f"{where}: no registered formula {name!r}")
+            continue
+        try:
+            result = spec.fn(**case["inputs"])
+        except Exception as exc:  # noqa: BLE001 -- a raising kernel is a failed case, said so
+            failures.append(f"{where}: kernel raised {type(exc).__name__}: {exc}")
+            continue
+        tol = _case_tolerance(case)
+        for key, expected in case["expect"].items():
+            actual = _output(result, key)
+            if not _matches(actual, expected, tol):
+                failures.append(f"{where}: {key} = {actual!r}, hand value {expected!r}")
+    return failures
+
+
+@_lru_cache(maxsize=512)
+def _verdict(directory: str, name: str) -> bool:
+    return bool(hand_value_cases(name)) and not hand_value_failures(name)
+
+
+def verified_by_hand(name: str) -> bool:
+    """True when ``name`` has at least one hand case and its kernel reproduces
+    every one of them."""
+    return _verdict(str(hand_values_dir()), str(name or ""))
+
+
+def certified(name: str) -> bool:
+    """Derived, never declared: a registered formula that states its standard
+    AND reproduces its hand values."""
+    spec = get(str(name or ""))
+    return bool(spec is not None and spec.standard and verified_by_hand(spec.name))
+
+
+def certification_gaps() -> List[str]:
+    """The registry check for "certified means verified":
+
+    * ``formula:<name>:standard_or_hand_value`` -- declares neither a standard
+      nor a hand case;
+    * ``formula:<name>:hand_value_mismatch`` -- a hand case the kernel does not
+      reproduce (never acceptable, whatever else the formula declares);
+    * ``hand_value:<file>...`` -- a malformed case, or one naming no
+      registered formula.
+    """
+    cases, problems = _load_hand_values(str(hand_values_dir()))
+    gaps: List[str] = list(problems)
+    names = {spec.name for spec in all_specs()}
+    for case in cases:
+        if case["formula"] not in names:
+            gaps.append(f"hand_value:{case['_file']}[{case['_index']}]:unknown_formula")
+    for spec in all_specs():
+        has_cases = bool(hand_value_cases(spec.name))
+        if not spec.standard and not has_cases:
+            gaps.append(f"formula:{spec.name}:standard_or_hand_value")
+        if has_cases and hand_value_failures(spec.name):
+            gaps.append(f"formula:{spec.name}:hand_value_mismatch")
+    return sorted(gaps)

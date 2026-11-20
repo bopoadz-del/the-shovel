@@ -309,3 +309,87 @@ def test_empty_pool_hands_nothing(slots):
 def test_one_named_kind_never_plans_even_with_no_sources(first_pass):
     assert hs.wants_source_coverage_retrieval(_ONE, first_pass) is False
     assert hs.wants_source_coverage_retrieval(_THREE, first_pass) is True
+
+
+# --- (b) the document share counted in characters ---------------------------
+# Slots are not equal: two long chunks of one document can take most of the
+# character budget in two slots and leave a shorter, later document out.
+
+def _ids(chunks):
+    return [c.chunk_id for c in chunks]
+
+
+@pytest.mark.parametrize("budget,pool,gained,deferred", [
+    # 'a' holds 6,000 of 10,000 in two slots; 'y' and 'z' did not fit.
+    (10_000,
+     [("a", 0, 0.90, 3_000), ("a", 1, 0.88, 3_000), ("x", 0, 0.86, 2_500),
+      ("y", 0, 0.84, 2_500), ("z", 0, 0.82, 1_600)],
+     ["p:y:0", "p:z:0"], "p:a:1"),
+    # 'a' holds 4,000 of 8,000; 'd' was cut with the budget full.
+    (8_000,
+     [("a", 0, 0.90, 2_000), ("b", 0, 0.89, 1_500), ("a", 1, 0.88, 2_000),
+      ("c", 0, 0.87, 2_500), ("d", 0, 0.86, 2_000)],
+     ["p:d:0"], "p:a:1"),
+])
+def test_one_document_may_not_take_more_than_its_share_of_the_characters(
+        budget, pool, gained, deferred, monkeypatch):
+    monkeypatch.setenv("RAG_HANDED_CHAR_BUDGET", str(budget))
+    chunks = [_c(d, i, s, text_len=n) for d, i, s, n in pool]
+    reasons: dict[str, str] = {}
+    handed, allotment = hs.select_handed(chunks, k=5, reasons=reasons)
+    got = _ids(handed)
+    assert all(g in got for g in gained)
+    assert deferred not in got
+    assert reasons[deferred] == "family_share"
+    # the family keeps its first (best) chunk
+    assert "p:a:0" in got
+    assert allotment["chars_handed"] <= budget
+
+
+@pytest.mark.parametrize("other_score", [0.50, None])
+def test_no_competing_document_moves_nothing(other_score, monkeypatch):
+    """One relevant document still hands all of it that fits, in order."""
+    monkeypatch.setenv("RAG_HANDED_CHAR_BUDGET", "10000")
+    chunks = [_c("a", i, 0.9 - i * 0.01, text_len=3_000) for i in range(3)]
+    if other_score is not None:  # another document, far outside the margin
+        chunks.append(_c("b", 0, other_score, text_len=500))
+    handed, _ = hs.select_handed(chunks, k=5)
+    assert _ids(handed)[:3] == ["p:a:0", "p:a:1", "p:a:2"]
+
+
+@pytest.mark.parametrize("first_len", [6_000, 9_000])
+def test_a_documents_first_chunk_is_never_deferred_for_its_size(first_len, monkeypatch):
+    monkeypatch.setenv("RAG_HANDED_CHAR_BUDGET", "10000")
+    chunks = [_c("b", 0, 0.90, text_len=500), _c("a", 0, 0.89, text_len=first_len),
+              _c("c", 0, 0.88, text_len=500)]
+    handed, _ = hs.select_handed(chunks, k=5)
+    assert _ids(handed) == ["p:b:0", "p:a:0", "p:c:0"]
+
+
+@pytest.mark.parametrize("budget,a1_len", [(10_000, 2_500), (20_000, 5_000)])
+def test_a_chunk_passed_over_for_room_does_not_count_toward_the_share(
+        budget, a1_len, monkeypatch):
+    """The share counts what is handed: 'a:1' does not fit the room left, so
+    it does not use 'a's share, and 'a:2' (which fits) is handed in its rank
+    place ahead of the later 'c:0'."""
+    monkeypatch.setenv("RAG_HANDED_CHAR_BUDGET", str(budget))
+    tenth = budget // 10
+    chunks = [_c("a", 0, 0.90, text_len=tenth), _c("b", 0, 0.89, text_len=budget - 2 * tenth),
+              _c("a", 1, 0.88, text_len=a1_len), _c("a", 2, 0.87, text_len=tenth - 100),
+              _c("c", 0, 0.86, text_len=tenth)]
+    # k=10: the slot share (4 of 10) leaves all three of 'a' in the lead.
+    handed, _ = hs.select_handed(chunks, k=10)
+    got = _ids(handed)
+    assert "p:a:2" in got and "p:c:0" not in got and "p:a:1" not in got
+
+
+@pytest.mark.parametrize("share,budget", [(0.4, 10_000), (0.5, 12_000)])
+def test_share_characters_reads_the_document_share(share, budget):
+    """The same share as the slot rule; nothing new to tune."""
+    limit = int(share * budget)
+    ordered = [_c("a", 0, 0.9, text_len=limit - 100), _c("a", 1, 0.8, text_len=200),
+               _c("b", 0, 0.7, text_len=100)]
+    out = hs.share_characters(ordered, budget=budget, share=share, competing=True)
+    assert _ids(out) == ["p:a:0", "p:b:0", "p:a:1"]
+    out = hs.share_characters(ordered, budget=budget, share=share, competing=False)
+    assert _ids(out) == ["p:a:0", "p:a:1", "p:b:0"]

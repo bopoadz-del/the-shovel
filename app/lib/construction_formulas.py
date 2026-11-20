@@ -3406,6 +3406,11 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     }
     if conversions:
         envelope["conversions"] = conversions
+    # The calculator's own written method (its formula and the factors it
+    # applies): a constant the body uses is stated, not silent (D1 rule C).
+    method = formula_registry.written_method(fn)
+    if method:
+        envelope["method"] = method
     envelope.update(envelope_provenance(name, result, fn))
     return envelope
 
@@ -3420,7 +3425,9 @@ def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any
     provenance is ``kernel`` for a registered formula_registry kernel,
     ``reference_table`` for a kernel whose module is a reference-table module
     (indicative data, not a derivation), else ``improvised``. Only a kernel
-    answer is labelled ``certified``. ``standard`` is the standard the result
+    answer can be ``certified``, and only when the formula declares
+    its standard and reproduces its hand values
+    (``formula_registry.certified``). ``standard`` is the standard the result
     states (first of ``_STANDARD_KEYS``), else an explicit
     ``"none declared"`` -- every envelope carries the key.
     """
@@ -3441,8 +3448,12 @@ def envelope_provenance(name: str, result: Any, fn: Any = None) -> Dict[str, Any
             if isinstance(val, str) and val.strip():
                 standard = val.strip()
                 break
+    if not standard and spec is not None:
+        standard = spec.standard
     return {
         "provenance": provenance,
         "standard": standard or "none declared",
-        "certified": provenance == "kernel",
+        # Certified means verified (KS-1): a kernel that declares its standard
+        # and reproduces its hand values -- derived, never labelled by hand.
+        "certified": provenance == "kernel" and _fr.certified(spec.name),
     }
