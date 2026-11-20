@@ -32,8 +32,13 @@ import string
 
 import pytest
 
+_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(_SCRIPTS))
+
+import scan_text  # noqa: E402  (after the path insert, so the scanner finds it)
+
 _SPEC = importlib.util.spec_from_file_location(
-    "scan_secrets", Path(__file__).resolve().parents[1] / "scripts" / "scan_secrets.py"
+    "scan_secrets", _SCRIPTS / "scan_secrets.py"
 )
 scan_secrets = importlib.util.module_from_spec(_SPEC)
 sys.modules["scan_secrets"] = scan_secrets
@@ -538,3 +543,84 @@ def test_a_deliberate_fixture_session_id_can_be_allowlisted(tmp_path, monkeypatc
     monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["fixture.md"])
 
     assert scan_secrets.scan() == []
+
+
+# ── the encoding of a file must not decide whether it is seen ──────────────
+# A UTF-16 file is what Windows PowerShell 5.1 writes for `>` and `Out-File`,
+# and a file pasted from another locale is often latin-1. Both readers used to
+# decode UTF-8 only: errors="ignore" turned a UTF-16 file into text whose
+# characters are separated by NULs, so no rule matched it, and errors="strict"
+# raised in the client reader, which skipped the file outright. Same bytes,
+# same leak, different save button.
+#
+# The café line is what makes the latin-1 case real: without a non-ASCII byte
+# the encodings coincide and the fallback would never be exercised.
+
+_ENCODED_LINES = [
+    "caf\u00e9 runbook",
+    _KEY_BLOCK.format("RSA "),
+    "contact " + "slm.probe.five@gmail.com",   # pragma: allowlist secret
+    'session_id: "' + _SESSION_UUID + '"',
+]
+
+_ENCODINGS = ["utf-16-le", "utf-16-be", "utf-16-le-nobom", "utf-16-be-nobom",
+              "utf-8-sig", "latin-1"]
+
+
+def _encoded(lines, encoding: str) -> bytes:
+    text = "\n".join(lines) + "\n"
+    if encoding in ("utf-16-le", "utf-16-be"):
+        return ("\ufeff" + text).encode(encoding)
+    if encoding in ("utf-16-le-nobom", "utf-16-be-nobom"):
+        return text.encode(encoding.removesuffix("-nobom"))
+    return text.encode(encoding)
+
+
+@pytest.mark.parametrize("encoding", _ENCODINGS)
+def test_every_rule_reads_a_file_in_any_encoding(encoding, tmp_path, monkeypatch):
+    """The walk judges the text, not the codec the file happens to be saved in."""
+    (tmp_path / "runbook.md").write_bytes(_encoded(_ENCODED_LINES, encoding))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["runbook.md"])
+
+    fired = {
+        finding.split("[", 1)[1].split("]", 1)[0]
+        for finding in scan_secrets.scan()
+    }
+    assert {"private-key-block", "consumer-mailbox-address", "session-identifier"} <= fired
+
+
+@pytest.mark.parametrize("encoding", _ENCODINGS)
+def test_the_client_denylist_reads_a_file_in_any_encoding(encoding, tmp_path):
+    """The name and account-handle classes ride on this reader, and it used to
+    skip every file the strict decode refused."""
+    word = "zqxfixtureword"  # invented here; nothing real is stored
+    (tmp_path / "notes.md").write_bytes(_encoded(["see " + word], encoding))
+
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: word})
+    hits = scan_secrets.scan_client_paths([tmp_path / "notes.md"], patterns)
+    assert [(line, index) for _, line, index in hits] == [(1, 0)]
+
+
+def test_a_utf16_head_is_text_and_a_binary_head_is_not():
+    """The decoder widens what counts as text to every encoding of it, and
+    nothing else: a real binary still carries NULs after the decode."""
+    assert scan_text.looks_like_text(("\ufeff" + "hello\n").encode("utf-16-le"))
+    assert scan_text.looks_like_text("hello\n".encode("utf-16-be"))
+    assert scan_text.looks_like_text("hello\n".encode("utf-16-le"))
+    assert not scan_text.looks_like_text(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    assert not scan_text.looks_like_text(b"SQLite format 3\x00" + b"\x00" * 64)
+
+
+def test_the_wrong_endianness_is_not_accepted():
+    """The wrong endianness does not fail to decode -- it decodes into
+    block-drawing code points -- so a reading is accepted only when it is
+    overwhelmingly ASCII, which is what source text is."""
+    for endian in ("utf-16-le", "utf-16-be"):
+        text = scan_text.decode_bytes("alpha beta\ngamma\n".encode(endian))
+        assert text == "alpha beta\ngamma\n"
+    # Text with no ASCII at all is not guessed at: latin-1 keeps every byte.
+    cjk = "中文文本\n"
+    raw = cjk.encode("utf-16-le")
+    assert scan_text.decode_bytes(raw) != cjk
+    assert scan_text.decode_bytes(raw).encode("latin-1") == raw

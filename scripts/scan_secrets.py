@@ -73,6 +73,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import scan_text
+
 ENV_VAR = "SECRET_SCAN_PATTERNS"
 
 ALLOW_MARKER = "pragma: allowlist secret"
@@ -407,9 +409,11 @@ def scan_client_paths(
         if not path.exists():
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="strict")
+            # Whatever the encoding, so a UTF-16 or latin-1 file is judged
+            # by its text instead of being dropped unread. See scan_text.
+            text = scan_text.read(path)
         except (OSError, UnicodeDecodeError):
-            continue  # unreadable or binary; nothing a text regex can judge
+            continue  # unreadable; no text a regex can judge
         findings.extend(
             (rel, line_number, index)
             for line_number, index in scan_client_text(text, patterns)
@@ -432,7 +436,7 @@ def scan(rel_paths: list[str] | None = None) -> list[str]:
         if not path.exists():          # staged deletion
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
+            text = scan_text.read(path)
         except OSError as exc:
             print(f"WARN  could not read {rel}: {exc}", file=sys.stderr)
             continue

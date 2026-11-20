@@ -199,3 +199,24 @@ def test_model_manifest_pins_the_image_weights():
     assert names["safety_world_v2.onnx"]["required_for_image"] is True
     assert len(names["safety_world_v2.onnx"]["sha256"]) == 64
     assert not m["release_tag"].startswith("v")  # docker-publish fires on v* tags
+
+def test_a_utf16_file_is_text_and_its_live_name_is_found(tmp_path):
+    """A UTF-16 file is the ordinary save path on Windows (`>` / `Out-File`).
+
+    It used to be called a binary: one NUL in the first 4 KB was enough, and
+    an allow-listed binary is never checked for live names. Decoded, its text
+    carries no NULs, so it is a text file and is checked like one."""
+    hashes = _hash_file(tmp_path, {"documents": [SYNTHETIC_NAME], "document_ids": [],
+                                   "projects": []})
+    text = "# regression from zephyr-quarry annex 7741 method_statement\n"
+    rel = _write(tmp_path, "tests/test_x.py", ("\ufeff" + text).encode("utf-16-le"))
+    findings, _ = _scan(tmp_path, [rel], hashes)
+    assert not any(f.startswith(f"BINARY {rel}") for f in findings)
+    assert [f.split(": live")[0] for f in findings] == [f"LIVE-NAME {rel}:1"]
+
+
+def test_a_real_binary_is_still_a_binary(tmp_path):
+    """The decode widens text to every encoding of it, and stops there."""
+    files = [_write(tmp_path, "data/blob", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)]
+    findings, _ = _scan(tmp_path, files)
+    assert findings == ["BINARY data/blob: PNG image -- documents, data and models never live in git"]
