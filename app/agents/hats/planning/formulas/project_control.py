@@ -6,6 +6,7 @@ project names, no activity ids. Source: owner-supplied project-control
 template, 09 Nov 2026; standard planner practice.
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 
 import math
 
@@ -153,6 +154,12 @@ def progress_kpi(
     }
 
 
+#: Declared constants of cash_flow (D1 rule C).
+_CASH_K = Constants(
+    days_per_month=Constant(30.0, "d", "days in a month when a payment lag in days is turned into months"),
+)
+
+
 @formula(
     owner="planning",
     display_name="Contractor cash flow (monthly)",
@@ -198,7 +205,7 @@ def cash_flow(
     if len(C) != len(V):
         return {"error": "monthly_cost must match monthly_value length."}
     ap, rp = float(advance_pct), float(retention_pct)
-    lag = math.ceil(float(payment_lag_days) / 30.0)
+    lag = math.ceil(float(payment_lag_days) / _CASH_K.days_per_month)
     contract_value = sum(V)
     advance_payment = ap * contract_value
     retention_total = rp * contract_value
