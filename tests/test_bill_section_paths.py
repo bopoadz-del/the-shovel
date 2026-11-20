@@ -430,3 +430,42 @@ def test_section_heading_survives_in_the_path(prefix):
         ("SUPPLEMENTARY", f"{prefix} 3"),
         ("SUPPLEMENTARY", f"{prefix} 3"),
     ]
+
+
+def _heading_is_page_label_words(heading_fn, title, pages=6):
+    """A constant running header, a constant title line, and a per-bill
+    heading whose number is the only varying digit on the page, so
+    ``running_lines`` reads the heading as the page label (which then
+    carries no section field of its own)."""
+    words: list[g.Word] = []
+    layout = [(1, 1, "Item 1"), (2, 1, "Item 2"), (3, 15, "Item 3"),
+              (4, 15, "Item 4"), (5, 16, "Item 5"), (6, 16, "Item 6")]
+    for p, n, item in layout:
+        above = [("Contractor Limited", H), (heading_fn(n), HEAVY), (title, HEAVY)]
+        words += _page(p, COLS_A, above, [[item, "m", "1", "2", "2"]])
+    return words
+
+
+@pytest.mark.parametrize("heading_fn, title", [
+    (lambda n: f"BILL NO. {n}", "GENERAL SUMMARY"),
+    (lambda n: f"Bill Number {n}", "BILL OF QUANTITIES"),
+], ids=["bill-no", "bill-number"])
+def test_bill_heading_survives_as_a_path_level_when_it_is_the_page_label(heading_fn, title):
+    """A per-bill heading read as the page label must still be a path level.
+    It is a section heading wherever it is printed, even when its masked form
+    is the page's only varying digit and it would otherwise be furniture."""
+    words = _heading_is_page_label_words(heading_fn, title)
+    printed = _printed(words)
+    running = g.running_lines(printed, 6)
+    # the heading is the only digit-varying line, so the page label carries
+    # no section field and the title-band fallback must keep the heading.
+    assert g.page_sections(printed, running) == {}
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+    ]

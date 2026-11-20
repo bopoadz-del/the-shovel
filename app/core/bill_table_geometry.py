@@ -1104,6 +1104,12 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         return cont.get(_norm(lab.text), lab.text)
 
     def furniture(lab: _Label) -> bool:
+        # A bill heading ("BILL NO. 15", "Bill Number 12A") is a section
+        # title wherever it is printed, even when it repeats like a running
+        # line or carries the page label's varying digit: it is never page
+        # furniture. The closing total row is not a heading.
+        if _HEADING_RE.match(lab.text) and not _CARRIED_RE.search(lab.text):
+            return False
         if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
             return False  # title band: a title even when it repeats
         return running.holds(lab.text)
