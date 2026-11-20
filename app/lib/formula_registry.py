@@ -219,6 +219,25 @@ def get(name: str) -> Optional[FormulaSpec]:
     return _REGISTRY.get(name)
 
 
+def written_method(fn: Callable[..., Any]) -> str:
+    """The method a calculator states in its own words: its docstring's first
+    paragraph plus every paragraph that writes an equation (holds ``=``).
+
+    A coefficient or factor the body applies (the 384 of 5wL^4/384EI, a
+    partial factor) is stated where the calculator writes its formula; the
+    door carries that text so the result says how it was computed. Paragraphs
+    with no equation after the first are left out. Empty when the calculator
+    has no docstring.
+    """
+    doc = inspect.getdoc(inspect.unwrap(fn)) or ""
+    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", doc)]
+    paragraphs = [p for p in paragraphs if p]
+    if not paragraphs:
+        return ""
+    kept = [paragraphs[0]] + [p for p in paragraphs[1:] if "=" in p]
+    return "\n".join(kept)
+
+
 def formula_modules() -> List[str]:
     """Every module of ``app.agents.base.formulas`` and of each
     ``app.agents.hats.<hat>.formulas`` -- discovered, so a hat's formulas are

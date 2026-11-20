@@ -3406,6 +3406,11 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     }
     if conversions:
         envelope["conversions"] = conversions
+    # The calculator's own written method (its formula and the factors it
+    # applies): a constant the body uses is stated, not silent (D1 rule C).
+    method = formula_registry.written_method(fn)
+    if method:
+        envelope["method"] = method
     envelope.update(envelope_provenance(name, result, fn))
     return envelope
 
