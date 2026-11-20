@@ -160,5 +160,9 @@ def resolve_hat_with_base(hat: AgentManifest) -> AgentManifest:
     merged.playbook.formulas = merged_formulas
     if hat.playbook.flows:
         merged.playbook.flows = list(hat.playbook.flows)
+    # Procedures (S-K1) are hat-owned: a procedure belongs to exactly one hat,
+    # so they REPLACE the base's (empty) list rather than accumulate.
+    merged.playbook.procedures = list(hat.playbook.procedures or [])
+    merged.playbook.rules = hat.playbook.rules
 
     return merged
