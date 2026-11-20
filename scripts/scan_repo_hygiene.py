@@ -44,6 +44,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import scan_text
+
 ROOT = Path(__file__).resolve().parents[1]
 HASH_FILE = "config/live_name_hashes.txt"
 #: Grandfathered live-name hits ``{path: {digest: count}}`` -- digests only --
@@ -236,7 +238,11 @@ def binary_kind(rel: str, path: Path) -> str | None:
         return label
     if suffix in BLOCKED_SUFFIXES:
         return f"{suffix} file"
-    if b"\x00" in head:
+    # A NUL byte is what a binary looks like in its first 4 KB -- but it is
+    # also every other byte of a BOM-less UTF-16 file, which is text. Decode
+    # first: if no NUL survives the decode, the file is text and is scanned
+    # for live names like any other.
+    if not scan_text.looks_like_text(head):
         return "binary file"
     return None
 
@@ -251,7 +257,9 @@ def live_hits(root: Path, files: list[str], hashes: LiveHashes) -> dict[str, lis
         if not path.is_file() or binary_kind(rel, path):
             continue
         found = [(0, d, t) for d, t in hashes.hits(rel)]
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        # Whatever the encoding: a UTF-16 or latin-1 file used to be read as
+        # mojibake or skipped, so a live name in it was never compared.
+        text = scan_text.read(path)
         for lineno, line in enumerate(text.splitlines(), 1):
             found += [(lineno, d, t) for d, t in hashes.hits(line)]
         if found:
