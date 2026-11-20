@@ -217,6 +217,61 @@ def test_a_handle_split_by_a_separator_still_matches(spelling):
     assert hits == [(1, 0)], spelling
 
 
+# -- the same name set in capitals ----------------------------------------------
+
+
+def _set_in_capitals(phrase: str) -> str:
+    """A phrase written the way a title block or a signature line is set.
+
+    Derived from whatever the invented words are, never typed by hand: the
+    written form a drawing prints is those words in capitals.
+    """
+    return phrase.upper()
+
+
+CAPITALISED_ORDERS = [
+    ("given then surname", f"{FIRST} {LAST}"),
+    ("surname then given", f"{LAST} {FIRST}"),
+    ("with a middle initial", f"{FIRST} A. {LAST}"),
+    ("surname first, middle initial", f"{LAST} A. {FIRST}"),
+    ("hyphenated", f"{FIRST}-{LAST}"),
+    ("wrapped across two lines", f"{FIRST}\n{LAST}"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, spelled",
+    CAPITALISED_ORDERS,
+    ids=[label for label, _ in CAPITALISED_ORDERS],
+)
+def test_a_name_set_in_capitals_is_caught_however_it_is_ordered(label, spelled):
+    """Capitals are a case a document uses, not a different spelling.
+
+    A title block, a table header and a signature line set a name in
+    capitals. The run rule reads capitals as a name word for the same reason
+    it reads Titlecase as one: a reader sees a name either way, so the gate
+    cannot be walked past by pressing the caps-lock key.
+    """
+    text = f"Filed by {_set_in_capitals(spelled)} on site\n"
+    assert _hits(text) == [(1, 0)], label
+
+
+@pytest.mark.parametrize(
+    "label, core",
+    [
+        ("a capitalised sentence", "See CHAPTER SUMMARY FOR DETAILS"),
+        ("an identifier in capitals", f"see build_{FIRST.upper()}_{LAST.upper()}.py for totals"),
+        ("an initials column", "REF AB CD EF GH"),
+    ],
+)
+def test_capitals_that_are_not_a_name_stay_clean(label, core):
+    assert _hits(core + "\n") == [], label
+
+
+def test_a_full_stop_ends_a_capitalised_run_too():
+    """A sentence break is not a surname-first attribution."""
+    assert _hits(f"{_set_in_capitals(LAST)}. {_set_in_capitals(FIRST)} signed\n") == []
+
 # -- the other direction: no manufactured hits ---------------------------------
 
 

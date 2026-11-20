@@ -48,8 +48,8 @@ and the choice of separator are normalised away. A phrase wrapped across a
 line break is the same phrase. A denylist entry that is a written proper
 name -- every word capitalised -- is additionally matched as a name is
 written: surname first, or with one middle name or initial between the two
-words. See ``fold_for_match``, ``name_pattern_words`` and
-``scan_client_document``.
+words, in mixed case or in capitals. See ``fold_for_match``,
+``name_pattern_words`` and ``scan_client_document``.
 
 FAIL-CLOSED: if ``SECRET_SCAN_PATTERNS`` is unset, empty, or comments-only,
 this exits non-zero and never prints or concludes "clean". A scan that
@@ -674,15 +674,19 @@ def folded_matcher(pattern: re.Pattern[str]) -> re.Pattern[str]:
     return re.compile(r"(?<!\w)" + re.escape(folded) + r"(?!\w)", re.IGNORECASE)
 
 
-# A written personal name is a run of Titlecase words: ``Given Surname``,
-# ``Surname Given``, ``Given A. Surname``. That is a property of names, not a
-# guess: prose mid-sentence is lower case, code is an identifier, and only a
-# proper noun is spelled with a capital at every word. So the rule below
-# applies to a denylist entry only when EVERY word of it is Titlecase -- an
-# entry that spells a name. An order-independent, gap-tolerant match over
-# ordinary words was tried and withdrawn because it matched word sets across a
-# sentence; this one never forgets which word is which: it reads the exact
-# sequence, forwards or backwards, with at most one interior insertion.
+# A written personal name is a run of capitalised words: ``Given Surname``,
+# ``Surname Given``, ``Given A. Surname``, and the same name set in capitals
+# for a title block. That is a property of names, not a guess: prose
+# mid-sentence is lower case, code is an identifier, and only a proper noun is
+# spelled with a capital at every word. So the rule below applies to a denylist
+# entry only when EVERY word of it is Titlecase -- an entry that spells a name.
+# The document side is judged by the same shape the entry has, capitals
+# included: whether a page sets a name in mixed case or in capitals is a
+# typographic choice, not a different name. An order-independent, gap-tolerant
+# match over ordinary words was tried and withdrawn because it matched word
+# sets across a sentence; this one never forgets which word is which: it reads
+# the exact sequence, forwards or backwards, with at most one interior
+# insertion.
 _NAME_SEPARATORS = frozenset(
     " \t\n\x0b\x0c\r\x85\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
     "\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000-\u2010\u2011\u2012"
@@ -693,12 +697,21 @@ _NAME_SEPARATORS = frozenset(
 # all, which breaks the run instead of guessing at the apostrophe's meaning.
 _EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’"
 _TITLECASE_WORD = re.compile(r"[A-Z][a-z]+\Z")
+_CAPITALISED_WORD = re.compile(r"[A-Z]+\Z")
 _INITIAL = re.compile(r"[A-Z]\Z")
 
 
 def _is_name_word(word: str) -> bool:
-    """True for a Titlecase word or a single capital -- a name, or an initial."""
-    return bool(_TITLECASE_WORD.match(word) or _INITIAL.match(word))
+    """True for a capitalised word: Titlecase, all capitals, or one initial.
+
+    A name is spelled with a capital at every word. The same name is also
+    printed in capitals -- on a drawing title block, a table header, a
+    signature line -- and there every letter carries the capital instead, so
+    the run a reader sees is still a name. A lower-case word is prose, and an
+    identifier is never split into words, so neither joins a run: the case a
+    document happens to use cannot decide whether a name is hidden.
+    """
+    return bool(_TITLECASE_WORD.match(word) or _CAPITALISED_WORD.match(word))
 
 
 def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
@@ -708,7 +721,9 @@ def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
     literal words to sequence, and an entry with a lower-case word is a phrase
     -- the folded phrase match already covers it, and reordering its words
     would be inventing names out of vocabulary. Two to four words, every one
-    Titlecase, is the shape of a person's name on a denylist.
+    Titlecase, is the shape of a person's name on a denylist; the entry is
+    stored folded, and the written forms compared against it are read from the
+    document, caps included.
     """
     if _REGEX_SYNTAX.search(pattern.pattern):
         return None
