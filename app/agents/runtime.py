@@ -10732,6 +10732,12 @@ def _postprocess_answer(
     # derivation check then sees that text.
     text = _scrub_supplied_input_wording(text, messages, rag_sys_msg)
     text = _scrub_registry_ids(text)
+    # A table's stated total is the sum of the rows the table prints, or the
+    # answer says it is incomplete (app/agents/answer_row_totals.py). Runs
+    # before the derivation check so a corrected figure is what the check,
+    # and the user, reads.
+    from app.agents.answer_row_totals import reconcile as _reconcile_row_totals
+    text = _reconcile_row_totals(text)
     # Last: the answer's own working must agree with its own result. Checked
     # after every graft, so a grafted figure is checked too.
     text = _annotate_derivation_mismatches(text)
