@@ -308,10 +308,13 @@ class LiveDump:
         return self._fh is not None
 
     def arm(self, after_s: Optional[float] = None) -> None:
-        """(Re)arm the one timer; arming again replaces the pending one."""
+        """(Re)arm the timer; arming again replaces the pending one. The
+        timer repeats while armed, so a stall longer than one delay is
+        captured even when a single fire is lost to signal-delivery jitter
+        (each repeat appends one more dump until ``cancel``)."""
         if self._fh is not None:
             delay = self.after_s if after_s is None else after_s
-            faulthandler.dump_traceback_later(delay, repeat=False, file=self._fh)
+            faulthandler.dump_traceback_later(delay, repeat=True, file=self._fh)
 
     def cancel(self) -> None:
         if self._fh is not None:
