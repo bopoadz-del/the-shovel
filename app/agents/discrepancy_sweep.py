@@ -117,9 +117,10 @@ def sweep_differences(
     """
     stated_ids = set(_designations(stated_text))
     stated = _stated_figures(stated_text)
-    if not stated_ids or not stated:
-        return []
 
+    # An empty ``stated_ids`` or ``stated`` is handled by the loop itself:
+    # no candidate can share a designation from an empty id set, and no
+    # candidate can hit when there is no stated figure to compare against.
     hits: list[SweepHit] = []
     for source, text in candidates:
         shared = stated_ids & set(_designations(text))
