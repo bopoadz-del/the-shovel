@@ -1,20 +1,25 @@
-"""A denylisted name has more than one spelling, and the gate must know them.
+"""A denylisted phrase has more than one spelling, and the gate must know them.
 
 The env-fed client-pattern denylist used to compare a pattern to the raw line
 and to its escape-decoded form. Both comparisons are literal, so a name was
 only caught in the exact spacing the list happened to be typed in: hyphenated
 it walked past, joined by a non-breaking space it walked past, split by a
-zero-width space it walked past, wrapped onto the next line it walked past,
-written surname-first it walked past, and given a middle initial it walked
-past. Each of those is the same person, and a privacy gate that recognises one
+zero-width space it walked past, wrapped onto the next line it walked past.
+Each of those is the same person, and a privacy gate that recognises one
 spelling of a name recognises the spelling nobody had to hide.
 
-The tests below are the matrix, in both directions: every line-level
-obfuscation is caught, the one wrapped-line spelling is caught, and the
-ordinary prose that shares letters with it is not. The words are invented
-here, assembled at runtime, so the repository contains no name and no
-fixture that the real scan would have to chase. What is NOT caught is listed
-as a gap in its own test rather than left for a reader to assume.
+The repair has to survive the opposite failure at the same time, and this file
+records it: a fold that joins *any* two words read every underscored file name
+in this repository as the words around it, and a match allowed to ignore word
+order and the words between them turned ordinary prose into hits. Seventeen
+files that main scans clean went red. So the rules here are: fold presentation,
+never word order; fold prose separators, never code's joiners; join lines only
+where a human reads a paragraph; and refuse a folded match that sits inside a
+longer identifier. What the scanner still does not catch is asserted as a gap
+in its own test rather than left for a reader to assume.
+
+The words are invented here and assembled at runtime, so the repository
+contains no name and no fixture that the real scan would have to chase.
 
 `scan_client_text` keeps its literal contract; `scan_client_document` is the
 superset the file walk uses.
@@ -59,7 +64,7 @@ def _hits(text: str, *extra: str) -> list[tuple[int, int]]:
     return scan_secrets.scan_client_document(text, _patterns(*extra))
 
 
-# â”€â”€ every spelling of one name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- every spelling of one name -------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -88,45 +93,59 @@ def test_one_name_in_any_spelling_is_caught(label, text):
     assert _hits(text) == [(1, 0)], label
 
 
-def test_order_and_gap_variants_are_a_known_gap_not_a_silent_one():
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        ("surname first", f"{LAST} {FIRST} reviewed this change.\n"),
+        ("middle initial", f"{FIRST} A. {LAST} reviewed this change.\n"),
+        ("full middle name", f"{FIRST} Ambrose {LAST} reviewed this change.\n"),
+        ("underscore between the words", f"{FIRST}_{LAST} reviewed this change.\n"),
+    ],
+)
+def test_order_and_gap_variants_are_a_known_gap_not_a_silent_one(label, text):
     """Recorded, not pretended away.
 
     A surname-first attribution and a middle name between the two denylisted
     words are the same person, and this scanner does not catch them yet. An
     order-independent, gap-tolerant match was tried in this branch and
-    withdrawn: on the real denylist it turned 17 ordinary lines of this
+    withdrawn: on the real denylist it turned seventeen ordinary lines of this
     repository into hits, so it was manufacturing the thing it was meant to
-    find. Catching these needs an exact-sequence rule (the reversed phrase,
-    one bounded insert) with its own evidence, not a wider window. The
-    underscore spelling is here for the same reason in the other direction: an
-    underscore between two words is code's joiner, so treating it as a name
-    separator is what made seventeen lines of code read as client content.
+    find. Catching these needs an exact-sequence rule (the reversed phrase, one
+    bounded insert) with its own evidence, not a wider window.
+
+    The underscore spelling is here for the other direction: an underscore
+    between two words is code's joiner, so treating it as a name separator is
+    what made underscored identifiers read as client content.
     """
-    for text in (
-        f"{LAST} {FIRST} reviewed this change.\n",
-        f"{FIRST} A. {LAST} reviewed this change.\n",
-        f"{FIRST} Ambrose {LAST} reviewed this change.\n",
-        f"{FIRST}_{LAST} reviewed this change.\n",
-    ):
-        assert _hits(text) == [], "if this ever matches, retire the gap note"
+    assert _hits(text) == [], f"if this ever matches, retire the gap note: {label}"
 
 
-def test_the_wrapped_name_is_reported_at_the_line_it_starts_on():
+@pytest.mark.parametrize(
+    "label, prefix, expected",
+    [
+        ("wrapped after the first word", "intro\n", 2),
+        ("wrapped deeper in the page", "one\ntwo\n\nthree\n", 5),
+    ],
+)
+def test_the_wrapped_name_is_reported_at_the_line_it_starts_on(
+    label, prefix, expected
+):
     """A location, not the text: the first line of the match is the address."""
-    hits = _hits("intro\n" + f"{FIRST}\n{LAST} signed\n")
-    assert hits == [(2, 0)]
+    hits = _hits(prefix + f"{FIRST}\n{LAST} signed\n")
+    assert hits == [(expected, 0)], label
 
 
-def test_a_handle_split_by_a_separator_still_matches():
-    handle = "qvant" + "rey" + "_" + "zz"
-    patterns = scan_secrets.load_client_patterns(
-        {scan_secrets.ENV_VAR: handle}
-    )
-    hits = scan_secrets.scan_client_document(f"author: {handle}\n", patterns)
-    assert hits == [(1, 0)]
+@pytest.mark.parametrize(
+    "spelling",
+    ["_".join(["qvant" + "rey", "zz"]), "-".join(["qvant" + "rey", "zz"])],
+)
+def test_a_handle_split_by_a_separator_still_matches(spelling):
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: spelling})
+    hits = scan_secrets.scan_client_document(f"author: {spelling}\n", patterns)
+    assert hits == [(1, 0)], spelling
 
 
-# â”€â”€ the other direction: no manufactured hits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- the other direction: no manufactured hits ---------------------------------
 
 
 @pytest.mark.parametrize(
@@ -141,106 +160,165 @@ def test_clean_prose_stays_clean(text):
     assert _hits(text) == []
 
 
-def test_a_pattern_of_function_words_is_not_matched_across_lines():
+@pytest.mark.parametrize(
+    "phrase, text",
+    [
+        ("the of", "the\nsilt and gravel\nof the bank\n"),
+        ("a in", "a\nspade and a barrow\nin the trench\n"),
+    ],
+)
+def test_a_pattern_of_function_words_is_not_matched_across_lines(phrase, text):
     """Two short common words are prose, not an identity.
 
-    The literal comparison catches the phrase where it is written as one
-    line; joining consecutive lines must not extend a function-word pair into
-    every paragraph that happens to use both words.
+    The literal comparison catches the phrase where it is written as one line;
+    joining consecutive lines must not extend a function-word pair into every
+    paragraph that happens to use both words.
     """
-    patterns = scan_secrets.load_client_patterns(
-        {scan_secrets.ENV_VAR: "the of"}
-    )
-    text = "the\nsilt and gravel\nof the bank\n"
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: phrase})
     assert scan_secrets.scan_client_document(text, patterns) == []
 
 
-def test_a_pattern_with_regex_syntax_is_left_to_the_literal_path():
-    patterns = scan_secrets.load_client_patterns(
-        {scan_secrets.ENV_VAR: r"qvantrey_\d+"}
-    )
-    text = "author: qvantrey_ 12\n"
+@pytest.mark.parametrize(
+    "phrase, text",
+    [
+        (r"qvantrey_\d+", "author: qvantrey_ 12\n"),
+        (r"qvantrey[0-9]+", "author: qvantrey 12\n"),
+    ],
+)
+def test_a_pattern_with_regex_syntax_is_left_to_the_literal_path(phrase, text):
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: phrase})
     assert scan_secrets.scan_client_document(text, patterns) == []
 
 
-def test_an_ordinary_word_near_a_name_word_is_not_a_hit():
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{FIRST} walked past the vantage point\nand the vault beyond\n",
+        f"the vault and the vantage, said {FIRST}\n",
+    ],
+)
+def test_an_ordinary_word_near_a_name_word_is_not_a_hit(text):
     """The folding matches whole words, so a lookalike word is not the name."""
-    patterns = scan_secrets.load_client_patterns(
-        {scan_secrets.ENV_VAR: LAST}
-    )
-    text = f"{FIRST} walked past the vantage point\nand the vault beyond\n"
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: LAST})
     assert scan_secrets.scan_client_document(text, patterns) == []
 
 
-def test_a_phrase_inside_an_identifier_is_not_a_hit():
-    """Folding joins ``rate_card`` into ``rate card``; code is not content.
+@pytest.mark.parametrize(
+    "template",
+    [
+        "see build_{slug}.py for the totals\n",
+        "docs/{slug}/notes.md\n",
+        "docs/{slug}.md\n",
+        "the {slug}: a column of totals\n",
+    ],
+)
+def test_a_phrase_inside_an_identifier_is_not_a_hit(template):
+    """An identifier is one word to a reader, and code naming is not content.
 
     Without this rule the folded comparison reported ordinary files of this
-    repository -- script names, test fixtures -- as client content, seventeen
-    lines of them, on a denylist that main scans clean.
+    repository -- script names, test fixtures -- as client content, on a
+    denylist that main scans clean.
     """
-    slug = f"{FIRST.lower()}_{LAST.lower()}"
-    for text in (
-        f"see build_{slug}.py for the totals\n",
-        f"docs/{slug}/notes.md\n",
-        f"docs/{slug}.md\n",
-        f"the {slug}: a column of totals\n",
-    ):
-        assert _hits(text) == [], text
+    text = template.format(slug=f"{FIRST.lower()}_{LAST.lower()}")
+    assert _hits(text) == [], text
 
 
-def test_an_underscore_never_joins_two_words_of_a_name():
+@pytest.mark.parametrize(
+    "text",
+    [
+        "run scan_secrets before the build\n",
+        "see the scan_secrets module\n",
+    ],
+)
+def test_an_underscore_never_joins_two_words_of_a_name(text):
     """Underscore is code's joiner, not prose's.
 
-    Folding it as a separator made every underscored identifier in the tree
-    read as the words around it, which is how a denylist of ordinary product
-    vocabulary turned into hundreds of hits on this repository's own files.
+    A denylist entry written as two words must not match an identifier that
+    joins those two words with an underscore: folding it as a separator made
+    every underscored identifier in the tree read as the words around it, which
+    is how a denylist of ordinary product vocabulary turned into hundreds of
+    hits on this repository's own files.
     """
-    assert _hits(f"run scan{'_'}secrets before the build\n") == []
-    assert _hits(f"see the scan_{'secrets'} module\n") == []
+    # The phrase is assembled, never spelled: writing a denylist entry into a
+    # tracked line would make the scan find its own fixture, which is exactly
+    # the noise this rule exists to remove.
+    phrase = " ".join(("scan", "secrets"))
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: phrase})
+    assert scan_secrets.scan_client_document(text, patterns) == []
 
 
-def test_a_phrase_ending_a_sentence_is_still_a_hit():
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"Signed by {FULL}.\n",
+        f"Signed by {FULL}, reviewed.\n",
+    ],
+)
+def test_a_phrase_ending_a_sentence_is_still_a_hit(text):
     """The dot of a full stop is not the dot of a file extension."""
-    assert _hits(f"Signed by {FULL}.\n") == [(1, 0)]
-    assert _hits(f"Signed by {FULL}, reviewed.\n") == [(1, 0)]
+    assert _hits(text) == [(1, 0)], text
 
 
-def test_a_handle_inside_an_identifier_does_not_fire():
-    handle = "qvant" + "rey" + "_" + "zz"
-    patterns = scan_secrets.load_client_patterns(
-        {scan_secrets.ENV_VAR: handle}
-    )
-    # The exact spelling in a path is still a hit: a literal match is never
-    # suppressed, because the denylist named that exact string.
-    assert scan_secrets.scan_client_document(
-        f"tests/{handle}.py\n", patterns
-    ) == [(1, 0)]
-    # A spelling only the fold recognises, sitting inside a file name, is not.
-    wide = "".join(chr(ord(c) - ord("a") + ord("\uff41")) for c in handle)
-    assert scan_secrets.scan_client_document(
-        f"tests/{wide}.py\n", patterns
-    ) == []
+@pytest.mark.parametrize(
+    "label, spelling, expected",
+    [
+        ("exact spelling in a path", lambda handle: handle, [(1, 0)]),
+        (
+            "folded-only spelling in a path",
+            lambda handle: "".join(
+                chr(ord(c) - ord("a") + ord("\uff41")) if c.islower() else c
+                for c in handle
+            ),
+            [],
+        ),
+    ],
+)
+def test_a_handle_inside_an_identifier_does_not_fire(label, spelling, expected):
+    """A literal hit is never suppressed; a folded-only one inside a path is.
+
+    The denylist named the exact string, so finding it in a path is a real
+    finding and stays one. The folded path is a judgement: a full-width
+    spelling sitting inside a file name is the fold having read an identifier
+    as two words, not a person's handle in prose.
+    """
+    handle = "_".join(["qvant" + "rey", "zz"])
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: handle})
+    text = f"tests/{spelling(handle)}.py\n"
+    assert scan_secrets.scan_client_document(text, patterns) == expected, label
 
 
-def test_one_location_is_reported_once():
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{FULL} signed\n",
+        f"reviewed by {FULL}\n",
+    ],
+)
+def test_one_location_is_reported_once(text):
     """Both the literal path and the folding path see this line."""
-    hits = _hits(f"{FULL} signed\n")
+    hits = _hits(text)
     assert hits == [(1, 0)], "the same line was reported twice"
 
 
-# â”€â”€ the interface that mattered: the file walk, the exit code, the silence â”€
+# -- the interface that mattered: the file walk, the exit code, the silence ----
 
 
-def test_the_file_walk_uses_the_folding_and_reports_location_only(tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize(
+    "label, body",
+    [
+        ("no-break space", f"Attribution: {FIRST}\u00a0{LAST}\n"),
+        ("zero-width space", f"Attribution: {FIRST}\u200b{LAST}\n"),
+    ],
+)
+def test_the_file_walk_uses_the_folding_and_reports_location_only(
+    label, body, tmp_path, capsys, monkeypatch
+):
     fixture = tmp_path / "notes.md"
-    fixture.write_text(f"Attribution: {FIRST}\u00a0{LAST}\n", encoding="utf-8")
+    fixture.write_text(body, encoding="utf-8")
     monkeypatch.setenv(scan_secrets.ENV_VAR, FULL)
-    monkeypatch.setattr(
-        "sys.argv", ["scan_secrets.py", "--paths", str(fixture)]
-    )
+    monkeypatch.setattr("sys.argv", ["scan_secrets.py", "--paths", str(fixture)])
 
-    assert scan_secrets.main() == 1
+    assert scan_secrets.main() == 1, label
     captured = capsys.readouterr()
     combined = captured.out + captured.err
     assert "notes.md:1" in combined
@@ -249,9 +327,16 @@ def test_the_file_walk_uses_the_folding_and_reports_location_only(tmp_path, caps
         assert secret not in combined, "the denylisted text was echoed"
 
 
-def test_a_missing_denylist_still_refuses(monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["scan_secrets.py", "--paths"],
+        ["scan_secrets.py"],
+    ],
+)
+def test_a_missing_denylist_still_refuses(argv, monkeypatch, capsys):
     """The folding must not have opened a path around the fail-closed check."""
     monkeypatch.delenv(scan_secrets.ENV_VAR, raising=False)
-    monkeypatch.setattr("sys.argv", ["scan_secrets.py", "--paths"])
+    monkeypatch.setattr("sys.argv", argv)
     assert scan_secrets.main() == 2
     assert "NO SECRET MATERIAL" not in capsys.readouterr().out
