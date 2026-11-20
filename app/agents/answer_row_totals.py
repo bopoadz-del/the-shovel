@@ -20,13 +20,20 @@ Three rules, all decided from the answer's own text and its own figures:
     plain line says what the total now covers and what it leaves out.
 (2) A row printed without a figure (``-``, ``n/a``, an empty cell) is named
     as a row the answer did not read. It adds nothing to the sum.
-(3) An entry that stands for rows the answer does not print - "the
-    remaining rows", "others", "balance", "not listed" - is a remainder
-    bucket, not a row. Its figure never enters a total; it is named in the
-    appended line as rows that were not itemised.
+(3) An entry that stands for rows rather than being one - "the remaining
+    rows", "others", "balance", "not listed" - is a remainder bucket, not
+    a row. Whether its figure is already in the total is decided from the
+    bucket's own words: a bucket that names a reference the answer also
+    prints on a row it counted describes rows already counted, so it is a
+    truncated view and its figure is not counted twice (rule 3a); a bucket
+    that names no such reference stands for rows the answer did not
+    itemise, so a total equal to the printed rows PLUS that bucket is the
+    answer disclosing the rows it left out, and is left alone (rule 3b).
 
 A total that already equals its column is returned byte for byte: the check
-may only rewrite an answer that disagrees with itself. A total the answer
+may only rewrite an answer that disagrees with itself. Where rule (3) cannot
+tell a truncated view from rows left out, the answer is not rewritten: a
+check that guesses is worse than a check that stays silent. A total the answer
 credits to a document ("[source: ...]", "as printed", "carried to") is that
 document's figure, not a sum of the rows above it, and is left alone - as is
 a prose total the answer itself discloses as partial ("the remaining rows
@@ -54,6 +61,13 @@ _TOTAL_CELL_RE = re.compile(r"(?i)^\s*(?:grand\s+|sub\s*[- ]?)?(?:total|totals|s
 _REMAINDER_RE = re.compile(
     r"(?i)\b(?:remaining|remainder|others?|further|balance|rest|"
     r"not\s+listed|unlisted|left\s+over|and\s+more|etc)\b",
+)
+
+#: An item reference a row prints: "K 133", "K137.8", "A-12". A remainder
+#: bucket that repeats a reference the answer already prints on a row it
+#: counted describes that row, so its figure is a restatement, not an addition.
+_REFERENCE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])([A-Za-z]{1,3})\s?(\d[\d./\-]*\d|\d)(?![A-Za-z0-9])",
 )
 
 #: A total row the answer credits to a document is that document's figure.
@@ -116,6 +130,7 @@ class Correction:
     rows: int
     without_figure: list[str] = field(default_factory=list)
     remainders: list[str] = field(default_factory=list)
+    restated: list[str] = field(default_factory=list)
     #: False when the statement is prose ("the sum of the rows is 168 No")
     #: rather than a cell of the table.
     in_cell: bool = True
@@ -218,6 +233,90 @@ def _row_label(row: list[str], figure_col: int) -> str:
     return re.sub(r"(?i)^(?:plus|and|with|\+)\s+", "", label or "row with no reference")
 
 
+def _row_words(row: list[str], figure_col: int) -> str:
+    """The row's own words: every cell but the figure it states."""
+    return " ".join(
+        (cell or "").strip() for index, cell in enumerate(row) if index != figure_col
+    )
+
+
+def _references(text: str) -> set[str]:
+    """The item references a line prints, normalised so "K 133" equals "K133"."""
+    return {
+        f"{match.group(1).lower()}{match.group(2).lower()}"
+        for match in _REFERENCE_RE.finditer(text or "")
+    }
+
+
+@dataclass
+class _RowRead:
+    """What a table's data rows contribute to one column's total.
+
+    ``kept`` are the rows the answer printed with a figure; ``without`` are
+    rows it printed with none; ``restated`` are remainder buckets whose own
+    words name a reference already counted (a truncated view of the rows
+    above); ``unread`` are remainder buckets that name no such row - rows the
+    answer itself says it did not itemise.
+    """
+
+    kept: list[float] = field(default_factory=list)
+    without: list[str] = field(default_factory=list)
+    restated: list[str] = field(default_factory=list)
+    unread: list[str] = field(default_factory=list)
+
+    @property
+    def printed(self) -> float:
+        return sum(self.kept)
+
+
+def _read_rows(rows: list[list[str]], figure_col: int) -> _RowRead:
+    """Sort a table's data rows into printed rows and remainder buckets.
+
+    A bucket's own words decide what it is. It repeats a reference the answer
+    already printed on a row it counted -> it describes rows already in the
+    total (a truncated view), so it is named as such and adds nothing. It
+    names no such row -> it stands for rows the answer did not itemise, which
+    the caller reads as the answer's own disclosure that its list is partial.
+    """
+    read = _RowRead()
+    counted: set[str] = set()
+    buckets: list[tuple[list[str], str]] = []
+    for row in rows:
+        words = _row_words(row, figure_col)
+        if _REMAINDER_RE.search(words):
+            buckets.append((row, words))
+            continue
+        value = _number(row[figure_col] if figure_col < len(row) else "")
+        if value is None:
+            read.without.append(_row_label(row, figure_col))
+            continue
+        read.kept.append(value)
+        counted |= _references(words)
+    for row, words in buckets:
+        label = _row_label(row, figure_col)
+        if _references(words) & counted:
+            read.restated.append(label)
+            continue
+        read.unread.append(label)
+    return read
+
+
+def _disclosed_total(stated: float, read: _RowRead) -> bool:
+    """True when the answer's total agrees with what it printed, either way.
+
+    A total equal to the printed rows is already the sum of the rows above.
+    A total ABOVE the printed rows while a remainder bucket stands for rows
+    the answer did not itemise is the answer disclosing the rows it left out:
+    it says its own list is incomplete, which is the other half of the rule,
+    so nothing is rewritten. Only a total that agrees with neither is a
+    disagreement - and a bucket already shown to restate counted rows is not
+    a disclosure, so it never excuses the total.
+    """
+    if _agrees(stated, read.printed):
+        return True
+    return bool(read.unread) and stated > read.printed
+
+
 def _header_unit(cell: str) -> str:
     """The unit a column header states in its own words ("Length (m)" -> "m")."""
     match = _HEADER_UNIT_RE.search((cell or "").strip())
@@ -246,8 +345,10 @@ def _column_correction(
 
     A column is a candidate only when its Total cell is a figure (so a
     description or reference column is never summed) and the row credits no
-    document. Rule (3) removes a remainder bucket from the sum before the
-    comparison; rule (2) records a row printed without a figure.
+    document. Rule (2) records a row printed without a figure; rule (3) sorts
+    the remainder buckets, and a total that already agrees with what the
+    answer printed - the rows alone, or the rows plus the buckets that name
+    no counted row - is left alone.
 
     ``value_col`` is the column the rows state their figures in when it is
     not the total's own column: a total row prints a blank cell before its
@@ -261,30 +362,16 @@ def _column_correction(
     if any(_ATTRIBUTED_RE.search(c or "") for c in total_cells):
         return None
     figures_in = col if value_col is None else value_col
-    kept: list[float] = []
-    without: list[str] = []
-    remainders: list[str] = []
-    for row in data_rows:
-        label = _row_label(row, figures_in)
-        row_text = " ".join((c or "").strip() for c in row)
-        value = _number(row[figures_in] if figures_in < len(row) else "")
-        if _REMAINDER_RE.search(row_text):
-            remainders.append(label)
-            continue
-        if value is None:
-            without.append(label)
-            continue
-        kept.append(value)
-    if not kept:
+    read = _read_rows(data_rows, figures_in)
+    if not read.kept:
         return None
-    computed = sum(kept)
-    if _agrees(stated, computed):
+    if _disclosed_total(stated, read):
         return None
     unit = _header_unit(header_cells[figures_in] if figures_in < len(header_cells) else "")
     return Correction(
         line_index=line_index, col=col, stated_text=stated_text, stated=stated,
-        computed=computed, unit=unit, rows=len(kept),
-        without_figure=without, remainders=remainders,
+        computed=read.printed, unit=unit, rows=len(read.kept),
+        without_figure=read.without, remainders=read.unread, restated=read.restated,
     )
 
 
@@ -375,26 +462,14 @@ def _prose_correction(
         if stated is None:
             continue
         stated_text, stated_value = stated
-        kept: list[float] = []
-        without: list[str] = []
-        remainders: list[str] = []
-        for row in data[1:]:
-            label = _row_label(row, col)
-            row_text = " ".join((c or "").strip() for c in row)
-            value = _number(row[col] if col < len(row) else "")
-            if _REMAINDER_RE.search(row_text):
-                remainders.append(label)
-                continue
-            if value is None:
-                without.append(label)
-                continue
-            kept.append(value)
-        if not kept or _agrees(stated_value, sum(kept)):
+        read = _read_rows(data[1:], col)
+        if not read.kept or _disclosed_total(stated_value, read):
             continue
         return Correction(
             line_index=index, col=col, stated_text=stated_text, stated=stated_value,
-            computed=sum(kept), unit=unit, rows=len(kept),
-            without_figure=without, remainders=remainders, in_cell=False,
+            computed=read.printed, unit=unit, rows=len(read.kept),
+            without_figure=read.without, remainders=read.unread,
+            restated=read.restated, in_cell=False,
         )
     return None
 
@@ -512,6 +587,14 @@ def _summary(correction: Correction, computed_text: str) -> str:
             f"{named} {verb} for rows this answer does not itemise; "
             "not a row of the bill, so not part of the total, and the total "
             "is therefore incomplete."
+        )
+    if correction.restated:
+        named = ", ".join(correction.restated)
+        verb = "restates" if len(correction.restated) == 1 else "restate"
+        parts.append(
+            f"{named} {verb} rows the answer has already counted - the same "
+            "reference is printed above - so it is not a further row and is "
+            "not added a second time."
         )
     return " ".join(parts)
 
