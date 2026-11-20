@@ -180,8 +180,13 @@ async def run_project_figure_retrieval(
         run = await run_sync(run_loop, plan, actions, initial_evidence=first_pass_evidence)
     logger.info(
         "rag_evidence_loop_trace project=%s plan_items=%d rounds=%d "
-        "actions=%d missing=%d reason=%s", project_id, len(plan.items),
+        "actions=%d missing=%d reason=%s evidence_chars=%d added_chars=%d "
+        "added_blocks=%d duplicate_blocks=%d withheld_blocks=%d "
+        "item_chars=%s backstop_cut=%s", project_id, len(plan.items),
         len(run.rounds), len(actions), len(run.missing), run.stop_reason,
+        len(run.evidence), run.added_chars, run.added_blocks,
+        run.duplicate_blocks, run.withheld_blocks,
+        [run.item_chars.get(item, 0) for item in plan.items], run.backstop_cut,
     )
     return EvidenceLoopOutcome(
         evidence=run.evidence,

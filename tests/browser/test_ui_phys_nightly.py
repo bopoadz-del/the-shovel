@@ -114,6 +114,51 @@ def _ask(page: Page, text: str, timeout: float = 90_000) -> None:
         )
 
 
+def _project_documents(page: Page) -> list[dict]:
+    """The open project's documents as the platform serves them."""
+    got = page.evaluate(
+        """async () => {
+          // Same order as frontend/src/lib/token.ts getToken().
+          const token = sessionStorage.getItem('tf_token') ?? localStorage.getItem('tf_token');
+          const m = location.pathname.match(/\\/projects\\/([^/]+)/);
+          if (!token || !m) return { error: 'no token or project in ' + location.pathname };
+          const r = await fetch('/v1/projects/' + m[1], {
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          const body = await r.json();
+          return { status: r.status, path: location.pathname,
+                   keys: Object.keys(body || {}), documents: body.documents };
+        }"""
+    )
+    docs = got.get("documents")
+    assert isinstance(docs, list) and docs, f"project documents not served: {got!r}"[:800]
+    return docs
+
+
+def _assert_sources_cite(page: Page, uploaded_name: str) -> None:
+    """The Sources line cites the upload by the title the platform gives it
+    (``display_title``: type + short id) and never by its file name; project
+    file names stay out of citations (app/core/project_identity.py)."""
+    from app.core.project_identity import display_title
+
+    # The stored name keeps the stem; the extension may be the one the
+    # bytes prove (upload_limits.typed_upload_name), so match on the stem.
+    stem = Path(uploaded_name).stem
+    all_docs = _project_documents(page)
+    docs = [d for d in all_docs if Path(str(d.get("original_name") or "")).stem == stem]
+    assert len(docs) == 1, (
+        f"expected one upload with stem {stem!r}, got "
+        f"{[d.get('original_name') for d in all_docs]!r}"
+    )
+    doc = docs[0]
+    shown = display_title(str(doc["id"]), str(doc.get("doc_type") or ""))
+    sources = page.locator(".sources-list")
+    expect(sources).to_contain_text(shown, timeout=10_000)
+    expect(sources).not_to_contain_text(stem)
+    expect(sources).not_to_contain_text(str(doc.get("original_name")))
+    expect(sources).not_to_contain_text(uploaded_name)
+
+
 def _last_answer(page: Page) -> str:
     return page.locator(".chat-bubble--assistant").last.inner_text()
 
@@ -149,7 +194,7 @@ def test_ui_phys_nightly_login_upload_ask_export(page: Page, live_app, ui_phys_c
     _pin(page, cases["A1"]["agent"])
     _ask(page, cases["A1"]["ask"])
     _assert_case(page, cases["A1"])
-    expect(page.locator(".sources-list")).to_contain_text("S1_contract_data", timeout=10_000)
+    _assert_sources_cite(page, "S1_contract_data.md")
 
     # B1 — quantity-surveyor BOQ numeric QA
     _pin(page, cases["B1"]["agent"])

@@ -80,14 +80,33 @@ class Turn:
     #: The turn's authoritative "I asked for inputs" state, read on the end
     #: event by the route observer -- never a phrase match (S1c).
     awaiting_inputs: list[str] = field(default_factory=list)
+    #: The user's question, for the language a recovered answer is worded in.
+    question: str = ""
+    #: Every tool call of the turn and its whole result, as the messages the
+    #: turn's own recovery reads (an assistant call, then its tool message).
+    #: Paths that never see the turn's messages -- the wall-clock deadline,
+    #: the crash safety net, the exit check -- recover from these.
+    tool_messages: list[dict[str, Any]] = field(default_factory=list)
+    #: Every passage the turn put in front of the model (pre-injected
+    #: excerpts and tool passages), one row each: ``doc_id``, ``doc_name``,
+    #: ``page``, ``page_or_section``, ``chunk_index``, ``snippet``. The
+    #: Sources rows name only what the answer cited, without the passage;
+    #: a check over what the turn was HANDED reads these.
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    #: How this turn's forced no-tools retry ended: "" when none ran,
+    #: "unusable" when the provider RETURNED a reply that was still unusable,
+    #: "provider_error" when the provider call itself failed. Only a returned
+    #: reply may be stated as "the documents did not yield an answer"; an
+    #: error must never read as a not-found.
+    forced_retry_outcome: str = ""
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
 
 
-def open_turn() -> Turn:
+def open_turn(question: str = "") -> Turn:
     """Start a turn's record. Tasks and threads started afterwards share it."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     _TURN.set(turn)
     return turn
 
@@ -100,9 +119,9 @@ def reset_turn(token: contextvars.Token) -> None:
     _TURN.reset(token)
 
 
-def begin_turn() -> tuple[Turn, contextvars.Token]:
+def begin_turn(question: str = "") -> tuple[Turn, contextvars.Token]:
     """``open_turn`` for a caller that restores the previous record afterwards."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     return turn, _TURN.set(turn)
 
 
@@ -238,6 +257,68 @@ def note_tool_result(tool: str, payload: Any, turn: Turn | None = None) -> None:
         _LOG.warning("answer_exit: could not record a tool error", exc_info=True)
 
 
+def note_tool_message(tool_call: dict[str, Any] | None, message: dict[str, Any],
+                      turn: Turn | None = None) -> dict[str, Any]:
+    """Record one tool call and its tool message (whole result) in the turn,
+    so a path that never sees the turn's messages can still recover from it.
+    Returns ``message`` unchanged, so a caller can record as it appends."""
+    turn = turn or _TURN.get()
+    if turn is None or not isinstance(message, dict):
+        return message
+    try:
+        fn = (tool_call or {}).get("function") or {}
+        call_id = str(message.get("tool_call_id") or (tool_call or {}).get("id") or "")
+        raw = fn.get("arguments")
+        turn.tool_messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": call_id, "function": {"name": str(fn.get("name") or message.get("name") or ""),
+                                        "arguments": raw if isinstance(raw, (str, dict)) else "{}"}}]})
+        content = message.get("content")
+        turn.tool_messages.append({**message, "tool_call_id": call_id,
+                                   "content": content if isinstance(content, str)
+                                   else json.dumps(content, default=str)})
+    except Exception:  # noqa: BLE001 -- bookkeeping must never break a tool
+        _LOG.warning("answer_exit: could not record a tool message", exc_info=True)
+    return message
+
+
+def recovered_answer(turn: Turn | None = None) -> str:
+    """The turn's answer recovered from its own tool results -- the same
+    recovery the turn's end runs over its messages -- or "" when they say
+    nothing. Read by every path that would otherwise emit the platform's
+    generic empty-turn reply."""
+    turn = turn if turn is not None else _TURN.get()
+    if turn is None or not turn.tool_messages:
+        return ""
+    from app.agents.core.computed_answer import has_words
+    from app.agents.runtime import _EMPTY_RESPONSE_FALLBACK, _recover_answer_from_tool_messages
+
+    try:
+        text = _recover_answer_from_tool_messages(
+            "", [{"role": "user", "content": turn.question}, *list(turn.tool_messages)])
+    except Exception:  # noqa: BLE001 -- a recovery failure leaves the fallback in place
+        _LOG.exception("answer_exit: recovery from the turn's tool results failed")
+        return ""
+    text = text if isinstance(text, str) else ""
+    return text if has_words(text) and text.strip() != _EMPTY_RESPONSE_FALLBACK else ""
+
+
+def _note_passage(turn: Turn, rec: Any) -> None:
+    """One handed passage as an evidence row on the turn, once per chunk."""
+    text = str(getattr(rec, "text", "") or "").strip()
+    name = _display_name(str(rec.source_name or rec.doc_id or ""))
+    if not text or not name:
+        return
+    doc_id = str(rec.doc_id or "")
+    key = (doc_id or name, rec.chunk_index, text[:80])
+    for row in turn.evidence:
+        if (row["doc_id"] or row["doc_name"], row["chunk_index"], row["snippet"][:80]) == key:
+            return
+    page = _page(rec.page)
+    turn.evidence.append({"doc_id": doc_id, "doc_name": name, "page": page,
+                          "page_or_section": f"p. {page}" if page else "",
+                          "chunk_index": rec.chunk_index, "snippet": text})
+
+
 def note_evidence(
     rag_sys_msg: dict[str, Any] | None,
     messages: Iterable[dict[str, Any]] | None,
@@ -261,6 +342,7 @@ def note_evidence(
                           chunk=rec.chunk_index, page=_page(rec.page))
             if place not in turn.places:
                 turn.places.append(place)
+            _note_passage(turn, rec)
         for m in msgs:
             if isinstance(m, dict) and m.get("role") == "assistant":
                 for call in m.get("tool_calls") or []:
@@ -1588,7 +1670,8 @@ def check_text_or_fallback(text: str, **kwargs: Any) -> str:
             not (checked or "").strip() or checked.strip() == _EMPTY_RESPONSE_FALLBACK):
         turn = kwargs.get("turn") or _TURN.get()
         asked = check_text("\n".join(turn.questions), **kwargs) if turn and turn.questions else ""
-        return asked.strip() or _EMPTY_RESPONSE_FALLBACK
+        # A tool that answered this turn answers before the generic reply.
+        return asked.strip() or recovered_answer(turn) or _EMPTY_RESPONSE_FALLBACK
     return checked
 
 
@@ -1685,6 +1768,77 @@ def _apply_answer_tier(env: dict[str, Any]) -> dict[str, Any]:
     return env
 
 
+def _handed_evidence(turn: Turn | None, rows: Any) -> list[dict[str, Any]]:
+    """The turn's handed passages, each named as its Sources row names the
+    same document (by id), so one document never reads as two."""
+    if turn is None or not turn.evidence:
+        return []
+    names = {str(r.get("doc_id")): str(r.get("doc_name") or "") for r in (rows if isinstance(rows, list) else [])
+             if isinstance(r, dict) and r.get("doc_id") and r.get("doc_name")}
+    return [dict(e, doc_name=names.get(e["doc_id"]) or e["doc_name"]) for e in turn.evidence]
+
+
+def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None) -> dict[str, Any]:
+    """The answer contract (``app.agents.answer_contract``) on the text that
+    leaves: citations become numbered markers whose entries ride out as
+    ``citations``, the coverage footer rides out as ``coverage``, machinery
+    wording and padding go. Form only -- nothing it does adds a claim."""
+    from app.agents import answer_contract
+
+    text = env.get(key)
+    if not isinstance(text, str):
+        return env
+    asking = bool(turn and (turn.questions or turn.awaiting_inputs))
+    done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
+                                 question=(turn.question or None) if turn else None,
+                                 evidence=_handed_evidence(turn, rows))
+    env[key] = done.text
+    if done.citations:
+        env["citations"] = done.citations
+    if done.coverage is not None:
+        env["coverage"] = done.coverage
+    if done.conflicts:
+        env["conflicts"] = done.conflicts
+    return env
+
+
+def citations_to_store(event: Any) -> list[dict[str, Any]]:
+    """The structured citations an answer is stored with (W2-a).
+
+    First every entry the answer contract numbered, in marker order; then
+    each Sources row of the turn that no numbered entry already names, with
+    ``marker: None`` -- a document the answer drew on but did not cite inline
+    is still one of its sources. Read from the fields of the checked event,
+    never from the answer's wording.
+    """
+    if not isinstance(event, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in event.get("citations") or []:
+        if not isinstance(entry, dict):
+            continue
+        doc = str(entry.get("document") or "").strip()
+        if not doc:
+            continue
+        sec = str(entry.get("section") or "").strip()
+        out.append({"marker": entry.get("marker"), "document": doc, "section": sec,
+                    "tier": entry.get("tier"), "kind": entry.get("kind") or "document"})
+        seen.add((doc, sec))
+    named = {doc for doc, _sec in seen}
+    for row in event.get("sources") or []:
+        if not isinstance(row, dict):
+            continue
+        doc = str(row.get("doc_name") or row.get("document") or "").strip()
+        sec = str(row.get("page_or_section") or "").strip()
+        if not doc or (doc, sec) in seen or (doc in named and not sec):
+            continue
+        out.append({"marker": None, "document": doc, "section": sec,
+                    "tier": row.get("layer_label") or row.get("layer") or None, "kind": "document"})
+        seen.add((doc, sec))
+    return out
+
+
 def check_result(result: Any, turn: Turn | None = None) -> Any:
     """A whole-turn result (``answer`` and ``sources``) as it may leave."""
     if not isinstance(result, dict):
@@ -1694,6 +1848,7 @@ def check_result(result: Any, turn: Turn | None = None) -> Any:
     index = build_index(turn, rows if isinstance(rows, list) else None)
     if isinstance(fixed.get("answer"), str):
         fixed["answer"] = check_text_or_fallback(fixed["answer"], turn=turn, index=index, sources=rows)
+        fixed = _apply_contract(fixed, "answer", rows, turn)
         # A completed answer carries its awaiting-inputs STATE: the field names
         # a tool asked for ({"missing":[...]}), or none ({"missing":[]}) when the
         # turn answered. A reader (the route observer) trusts this over any
@@ -1724,6 +1879,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
         checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
+            fixed = _apply_contract(fixed, "content", rows, turn)
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
     # The turn's awaiting-inputs STATE rides out on the end event: the field

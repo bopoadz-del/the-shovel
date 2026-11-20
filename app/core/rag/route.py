@@ -24,8 +24,98 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from app.core.rag.evidence_loop import run_project_figure_retrieval
+from app.core.rag.evidence_plan import is_platform_note
 
 PlanCaller = Callable[[str], Awaitable[dict[str, Any]]]
+
+# One excerpt marker as ``inject.chunk_marker`` prints it. Text before the
+# first marker is the header the platform wrote (instructions, notes); the
+# marker itself is the platform's label. Only the text after each marker is
+# what retrieval returned.
+_EXCERPT_MARKER_RE = re.compile(r"\[doc_id=[^\]\n]*\]")
+
+# A word as the first-pass query tokeniser reads one (``inject._content_terms``),
+# so a question term and an excerpt word are cut the same way.
+_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-/\.]*")
+
+
+def _norm_word(word: str) -> str:
+    return word.lower().rstrip(".-/")
+
+
+def excerpt_words(evidence_text: str) -> frozenset[str]:
+    """The whole words of the retrieved excerpts in ``evidence_text``.
+
+    The header before the first excerpt marker, the markers themselves and
+    every line the platform wrote (``evidence_plan.is_platform_note``) are
+    dropped: words the platform supplied never show that retrieval found
+    something.
+    """
+    bodies = _EXCERPT_MARKER_RE.split(evidence_text or "")[1:]
+    words: set[str] = set()
+    for body in bodies:
+        for line in body.splitlines():
+            if is_platform_note(line):
+                continue
+            words.update(_norm_word(w) for w in _WORD_RE.findall(line))
+    words.discard("")
+    return frozenset(words)
+
+
+def question_coverage(
+    question: str,
+    evidence_text: str,
+    *,
+    content_terms: Callable[[str], Iterable[str]],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(terms, missing)``: the question's content terms and those the
+    retrieved excerpts do not contain as whole words.
+
+    ``content_terms`` is the tokeniser the first-pass query was built with,
+    injected so the gate asks exactly "did the first pass return the terms
+    it searched on". A question with no content terms carries no signal and
+    is never uncovered.
+    """
+    found = excerpt_words(evidence_text)
+    terms: list[str] = []
+    for raw in content_terms(question or ""):
+        term = _norm_word(raw)
+        if term and term not in terms:
+            terms.append(term)
+    return tuple(terms), tuple(t for t in terms if t not in found)
+
+
+def informative_missing_terms(
+    terms: Sequence[str],
+    absent: Iterable[str],
+    chunk_counts: Mapping[str, int],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(indexed, informative)`` among the ``absent`` question terms.
+
+    A term the first pass lacks (``absent``, rule a) is a reason to search
+    again only when a second retrieval could find it and it says something
+    about the question:
+
+    * (b) ``indexed``: the project's index holds it (``chunk_counts`` > 0).
+      A word no document uses cannot be retrieved.
+    * (c) ``informative``: its count is at or below the median count of the
+      question's terms the index holds. A word most of the project's
+      chunks carry ("many", "give") is scaffolding for this project, not
+      the fact asked for.
+
+    Every number comes from ``chunk_counts`` (the project's own index) and
+    the question's own terms: there is no word list and no fixed threshold.
+    """
+    def count(term: str) -> int:
+        return max(0, int(chunk_counts.get(term, 0) or 0))
+
+    held = sorted(count(t) for t in terms if count(t) > 0)
+    indexed = tuple(t for t in absent if count(t) > 0)
+    if not held:
+        return indexed, ()
+    mid = len(held) // 2
+    median = held[mid] if len(held) % 2 else (held[mid - 1] + held[mid]) / 2
+    return indexed, tuple(t for t in indexed if count(t) <= median)
 
 # An interrogative that asks for a value (as opposed to a procedure or a
 # yes/no): "what is the rate", "how much cover", "how many lux".

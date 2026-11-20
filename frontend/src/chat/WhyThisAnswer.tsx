@@ -77,9 +77,20 @@ export function resolveDocumentSource(
 }
 
 const BADGE: Record<string, { label: string; tone: string }> = {
-  kernel: { label: 'Certified calculation', tone: 'ok' },
+  kernel: { label: 'Platform calculation', tone: 'info' },
   reference_table: { label: 'Reference data', tone: 'info' },
   improvised: { label: 'Estimated', tone: 'warn' },
+}
+
+/** "Certified" means verified (KS-1): only a kernel run the backend marks
+ *  certified (declared standard AND hand values reproduced) says so; a kernel
+ *  that is not verified is a plain platform calculation. */
+const CERTIFIED_BADGE = { label: 'Certified calculation', tone: 'ok' }
+
+function badgeFor(e: { provenance?: string; certified?: boolean }) {
+  if (!e.provenance) return null
+  if (e.provenance === 'kernel' && e.certified === true) return CERTIFIED_BADGE
+  return BADGE[e.provenance] || null
 }
 
 /** A plain word for where one input's value came from. An unknown value is
@@ -178,7 +189,7 @@ function CalcRow({
   onOpenSource?: (source: CitedSource) => void
 }) {
   const [open, setOpen] = useState(false)
-  const badge = (e.provenance && BADGE[e.provenance]) || null
+  const badge = badgeFor(e)
   const formula = humaniseFormula(e.formula)
   const standard = e.standard && e.standard !== 'none declared' ? e.standard : null
   const inputs = Array.isArray(e.inputs) ? e.inputs : []

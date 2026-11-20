@@ -3,6 +3,7 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 from app.agents.hats.qaqc.results import qaqc_calculator
 from app.lib.formula_registry import Param, formula, grade_label
 import json
@@ -155,6 +156,12 @@ def fineness_modulus(sieve_retained_percentages: List[float]) -> float:
         }
     return round(sum(figures) / 100.0, 2)
 
+#: Declared constants of modulus_of_rupture (D1 rule C).
+_RUPTURE_K = Constants(
+    split_cylinder_coefficient=Constant(1.78, "sqrt(kg/cm2)", "split-cylinder tensile strength over sqrt(f'c) in kg/cm2"),
+)
+
+
 @formula(
     owner='qaqc',
     display_name='Concrete modulus of rupture',
@@ -196,7 +203,7 @@ def modulus_of_rupture(fck_n_mm2: float, code: str = "metric_technical") -> Dict
         }
     fck_kg = fck * 10
     fr = 2.4 * math.sqrt(fck_kg) / 10
-    ft_aci = 1.78 * math.sqrt(fck_kg) / 10
+    ft_aci = _RUPTURE_K.split_cylinder_coefficient * math.sqrt(fck_kg) / 10
     return {
         "fck_n_mm2": fck_n_mm2,
         "value": round(fr, 3),

@@ -373,6 +373,16 @@ def _retrieval_records(rag_sys_msg: dict[str, Any] | None) -> list[EvidenceRecor
     return records
 
 
+def excerpt_records(content: str) -> list[EvidenceRecord]:
+    """The marked excerpts in ``content``, one record each; empty when
+    ``content`` holds no marker. The public reader of the excerpt marker
+    (``inject.chunk_marker``): the sources panel folds the evidence loop's
+    fetches in with it, so the panel and this gate parse one format once."""
+    if not _MARKER_RE.search(content or ""):
+        return []
+    return _retrieval_records({"content": content})
+
+
 _TOOL_NAME_RE = re.compile(r"\s*(?:the\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
 

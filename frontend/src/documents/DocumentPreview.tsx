@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react'
 import { apiGet, ApiError } from '../lib/api'
 import { getToken } from '../lib/token'
+import { documentPath } from '../chat/sessionDocuments'
 import './DocumentPreview.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8000'
@@ -28,6 +29,8 @@ interface DocRef {
 
 interface Props {
   projectId: string
+  /** The open chat: a file attached to it is reachable by id only from it. */
+  sessionId?: string | null
   document: DocRef | null
   /** Functional empty-state copy shown when no document is selected. */
   emptyLabel?: string
@@ -41,7 +44,7 @@ type PreviewData =
   | { kind: 'text'; text: string; truncated?: boolean; size?: number; has_file?: boolean; indexed_only?: boolean; note?: string }
   | { kind: 'unsupported'; ext: string; size?: number; has_file?: boolean }
 
-export default function DocumentPreview({ projectId, document: doc, emptyLabel, onHydrated }: Props) {
+export default function DocumentPreview({ projectId, sessionId, document: doc, emptyLabel, onHydrated }: Props) {
   if (!doc || !projectId) {
     return (
       <div className="doc-preview doc-preview--empty">
@@ -53,6 +56,7 @@ export default function DocumentPreview({ projectId, document: doc, emptyLabel, 
     <DocumentPreviewLoaded
       key={doc.id}
       projectId={projectId}
+      sessionId={sessionId}
       document={doc}
       onHydrated={onHydrated}
     />
@@ -60,8 +64,13 @@ export default function DocumentPreview({ projectId, document: doc, emptyLabel, 
 }
 
 function DocumentPreviewLoaded({
-  projectId, document: doc, onHydrated,
-}: { projectId: string; document: DocRef; onHydrated?: (docId: string, size: number) => void }) {
+  projectId, sessionId, document: doc, onHydrated,
+}: {
+  projectId: string
+  sessionId?: string | null
+  document: DocRef
+  onHydrated?: (docId: string, size: number) => void
+}) {
   const [data, setData] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -72,7 +81,7 @@ function DocumentPreviewLoaded({
     void (async () => {
       try {
         const resp = await apiGet<PreviewData>(
-          `/v1/projects/${projectId}/documents/${doc.id}/preview`,
+          documentPath(projectId, doc.id, '/preview', sessionId),
         )
         if (cancelled) return
         setData(resp)
@@ -93,7 +102,7 @@ function DocumentPreviewLoaded({
       }
     })()
     return () => { cancelled = true }
-  }, [projectId, doc.id, onHydrated])
+  }, [projectId, sessionId, doc.id, onHydrated])
 
   if (loading) {
     return (
@@ -107,7 +116,7 @@ function DocumentPreviewLoaded({
     return (
       <div className="doc-preview doc-preview--status" role="alert">
         {error}
-        <DownloadButton projectId={projectId} docId={doc.id} name={doc.original_name} />
+        <DownloadButton projectId={projectId} sessionId={sessionId} docId={doc.id} name={doc.original_name} />
       </div>
     )
   }
@@ -126,7 +135,7 @@ function DocumentPreviewLoaded({
         <div className="doc-preview__title" title={doc.original_name}>
           {doc.original_name}
         </div>
-        <DownloadButton projectId={projectId} docId={doc.id} name={doc.original_name} />
+        <DownloadButton projectId={projectId} sessionId={sessionId} docId={doc.id} name={doc.original_name} />
       </div>
       {data.kind === 'table' && (
         <TablePreview
@@ -137,7 +146,7 @@ function DocumentPreviewLoaded({
         />
       )}
       {data.kind === 'pdf' && (
-        <PdfPreview key={doc.id} projectId={projectId} docId={doc.id} name={doc.original_name} />
+        <PdfPreview key={doc.id} projectId={projectId} sessionId={sessionId} docId={doc.id} name={doc.original_name} />
       )}
       {data.kind === 'text' && (
         <div className="doc-preview__scroll">
@@ -176,7 +185,9 @@ function dispositionFilename(header: string | null, fallback: string): string {
   return plain ? plain[1] : fallback
 }
 
-function DownloadButton({ projectId, docId, name }: { projectId: string; docId: string; name: string }) {
+function DownloadButton({ projectId, sessionId, docId, name }: {
+  projectId: string; sessionId?: string | null; docId: string; name: string
+}) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -188,7 +199,7 @@ function DownloadButton({ projectId, docId, name }: { projectId: string; docId: 
       // Bearer-gated, so fetch the bytes and save a blob URL rather than
       // pointing a link at a URL the browser cannot authorize.
       const res = await fetch(
-        `${API_BASE}/v1/projects/${projectId}/documents/${docId}/download`,
+        `${API_BASE}${documentPath(projectId, docId, '/download', sessionId)}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
       )
       if (!res.ok) {
@@ -304,11 +315,12 @@ function TablePreview({ sheets, truncated, activeSheet, onSelectSheet }: TablePr
 
 interface PdfPreviewProps {
   projectId: string
+  sessionId?: string | null
   docId: string
   name: string
 }
 
-function PdfPreview({ projectId, docId, name }: PdfPreviewProps) {
+function PdfPreview({ projectId, sessionId, docId, name }: PdfPreviewProps) {
   const [url, setUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -319,7 +331,7 @@ function PdfPreview({ projectId, docId, name }: PdfPreviewProps) {
       try {
         const token = getToken()
         const res = await fetch(
-          `${API_BASE}/v1/projects/${projectId}/documents/${docId}/preview/raw`,
+          `${API_BASE}${documentPath(projectId, docId, '/preview/raw', sessionId)}`,
           { headers: token ? { Authorization: `Bearer ${token}` } : {} },
         )
         if (!res.ok) {
@@ -346,7 +358,7 @@ function PdfPreview({ projectId, docId, name }: PdfPreviewProps) {
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [projectId, docId])
+  }, [projectId, sessionId, docId])
 
   if (error) {
     return <div className="doc-preview--status" role="alert">{error}</div>

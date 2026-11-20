@@ -35,13 +35,12 @@
   ],
   "allowed_actions": [
     "construction_calc:score_risk",
-    "variation_order_generator",
-    "eot_claim_assessor",
-    "fidic_clause_lookup",
-    "dispute_timeline_builder",
-    "compliance_gate_checker",
-    "construction_calc:generate_doc_number",
+    "construction:variation_order_manager",
+    "construction:forensic_delay_analysis",
+    "search_project_documents",
+    "construction:claims_builder",
     "construction_calc:enforce_critical_rules",
+    "construction_calc:generate_doc_number",
     "construction_calc:next_ncr_status"
   ],
   "available_tools": ["rfi_generator"],
@@ -80,21 +79,21 @@
       {
         "id": "generate_doc_number",
         "description": "Generate a sequential document number for a document type",
-        "implemented_by": "app.core.construction_knowledge.generate_doc_number",
+        "implemented_by": "app.agents.hats.contracts.formulas.document_rules.generate_doc_number",
         "domain": "contracts",
         "tier": "operational"
       },
       {
         "id": "enforce_critical_rules",
         "description": "Validate a list of items against critical business rules",
-        "implemented_by": "app.core.construction_knowledge.enforce_critical_rules",
+        "implemented_by": "app.agents.hats.contracts.formulas.document_rules.enforce_critical_rules",
         "domain": "contracts",
         "tier": "operational"
       },
       {
         "id": "next_ncr_status",
         "description": "Determine the next status for a Non-Conformance Report",
-        "implemented_by": "app.core.construction_knowledge.next_ncr_status",
+        "implemented_by": "app.agents.hats.contracts.formulas.document_rules.next_ncr_status",
         "domain": "contracts",
         "tier": "operational"
       }

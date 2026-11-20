@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { getToken } from '../lib/token'
 import { asciiUploadName, isImageUpload, unreadableFileMessage } from './uploadName'
+import { withSessionId } from './sessionDocuments'
 import './ChatComposer.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8000'
@@ -73,7 +74,12 @@ interface Props {
   disabled: boolean
   disabledReason?: string
   projectId: string
-  onAttached?: (docName: string, docId?: string) => void
+  /** The open chat session (W2): a document attached here is recorded on
+   *  it, listed under "This session" and pinned to its questions. */
+  sessionId?: string | null
+  /** A file attached here was stored: its name, id and the stored record
+   *  the server returned (so the documents list can show it at once). */
+  onAttached?: (docName: string, docId?: string, document?: unknown) => void
   onClear?: () => void
   hasHistory?: boolean
   /** Open the Google Drive picker (parent renders DrivePanel as a modal). */
@@ -84,12 +90,17 @@ interface Props {
   pinnedAgent?: string | null
   /** Pin an agent (or null to return to automatic routing). */
   onPinAgent?: (name: string | null) => void
+  /** Documents pinned to the next question ("Ask about this document"). */
+  pinnedDocuments?: Array<{ id: string; name: string }>
+  /** Unpin one document from the next question. */
+  onUnpinDocument?: (id: string) => void
 }
 
 export default function ChatComposer({
-  onSend, disabled, disabledReason, projectId,
+  onSend, disabled, disabledReason, projectId, sessionId,
   onAttached, onClear, hasHistory, onOpenDrive,
   agents, pinnedAgent, onPinAgent,
+  pinnedDocuments, onUnpinDocument,
 }: Props) {
   const [text, setText] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -253,7 +264,10 @@ export default function ChatComposer({
       const endpoint = isImage
         ? `${API_BASE}/v1/chat/analyze-photo`
         : `${API_BASE}/v1/projects/${projectId}/documents`
-      if (!isImage) fd.append('role', role)
+      if (!isImage) {
+        fd.append('role', role)
+        withSessionId(fd, sessionId)
+      }
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -275,10 +289,16 @@ export default function ChatComposer({
         ? `Attached: ${docName} -- ${observations.join('; ')}`
         : `Attached: ${docName}`
       setAttachStatus(statusMsg)
-      onAttached?.(docName, docId)
-      const inlineTag = observations.length
-        ? `[attached: ${docName} | observations: ${observations.join('; ')}] `
-        : `[attached: ${docName}] `
+      onAttached?.(docName, docId, body?.document)
+      // A photo's marker comes ready-made from the server: it carries the
+      // text read off the image (OCR) as well as the observations, made safe
+      // for the marker grammar there.
+      const serverMarker = typeof body?.attachment_marker === 'string' ? body.attachment_marker : ''
+      const inlineTag = serverMarker
+        ? `${serverMarker} `
+        : observations.length
+          ? `[attached: ${docName} | observations: ${observations.join('; ')}] `
+          : `[attached: ${docName}] `
       setText((prev) => (prev ? `${prev}\n` : '') + inlineTag)
       setTimeout(() => setAttachStatus(null), 6000)
     } catch (err) {
@@ -398,6 +418,25 @@ export default function ChatComposer({
             </button>
           </div>
         )}
+
+        {(pinnedDocuments ?? []).map((d) => (
+          <div
+            key={d.id}
+            className="chat-composer__docpin"
+            data-testid="composer-pinned-doc"
+            title="The next question is asked about this document"
+          >
+            <span>Asking about: {d.name}</span>
+            <button
+              type="button"
+              className="chat-composer__pin-x"
+              aria-label={`Unpin ${d.name}`}
+              onClick={() => onUnpinDocument?.(d.id)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
 
         {slashOpen && (
           <div className="chat-composer__slash" role="listbox" aria-label="Pick an agent">

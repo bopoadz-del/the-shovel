@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiPost } from '../lib/api'
 import { getRememberedEmail } from '../lib/token'
+import { passwordAutoComplete } from '../lib/passwordField'
 import BrandMark from '../components/BrandMark'
 import './pages.css'
 import './auth.css'
@@ -87,6 +88,14 @@ export default function Login() {
     }
   }, [loading, user, navigate])
 
+  // Once a password has been sent it is not kept: not in state, not in the
+  // field. On a refused sign-in the user types it again (or the browser's
+  // password manager fills it), which is the price of not holding it.
+  function forgetPassword() {
+    setPassword('')
+    if (passwordRef.current) passwordRef.current.value = ''
+  }
+
   function switchMode(next: Mode) {
     setMode(next)
     setError(null)
@@ -141,10 +150,11 @@ export default function Login() {
     setSubmitting(true)
     try {
       await apiPost('/v1/users/reset-password', { token: resetToken, new_password: newPassword })
+      forgetPassword()
       setMode('signin')
-      setPassword('')
       setNotice('Password changed. Sign in with your new password.')
     } catch (err) {
+      forgetPassword()
       setError(err instanceof Error ? err.message : 'Could not change the password.')
     } finally {
       setSubmitting(false)
@@ -172,8 +182,10 @@ export default function Login() {
     try {
       if (mode === 'signin') {
         await login(emailVal, passwordVal, remember)
+        forgetPassword()
       } else {
         const result = await register(emailVal, passwordVal, displayName.trim() || undefined)
+        forgetPassword()
         if (result.verificationRequired) {
           // The account exists but has no session yet. Navigating to the app
           // would bounce off ProtectedRoute; tell them to check their mail.
@@ -189,6 +201,7 @@ export default function Login() {
       }
       navigate('/', { replace: true })
     } catch (err) {
+      forgetPassword()
       setError(err instanceof Error ? err.message : 'An unexpected error occurred.')
     } finally {
       setSubmitting(false)
@@ -223,7 +236,7 @@ export default function Login() {
                 id="newPassword"
                 className="auth-input"
                 type="password"
-                autoComplete="new-password"
+                autoComplete={passwordAutoComplete('new')}
                 placeholder="Minimum 8 characters"
                 required
                 minLength={8}
@@ -287,7 +300,7 @@ export default function Login() {
               id="password"
               className="auth-input"
               type="password"
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              autoComplete={passwordAutoComplete(mode === 'signin' ? 'sign-in' : 'new')}
               placeholder={mode === 'register' ? 'Minimum 8 characters' : '••••••••'}
               required
               minLength={8}

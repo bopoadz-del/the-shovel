@@ -10,6 +10,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.agents import driver
+from app.agents.core.computed_answer import has_words
 from app.agents.driver import context, llm, render, routes, sources, tools
 from app.core import turn_progress
 from app.core.offload import off_loop
@@ -24,6 +25,26 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 
 #: How much of one tool result the model is given.
 _TOOL_RESULT_CHARS = 20000
+
+
+def _shown_to_model(text: str) -> str:
+    """A tool result as the model gets it: whole when it fits; otherwise a
+    valid envelope that keeps every figure, unit and selection whole, with
+    how many rows each row list holds, and a preview of the rest -- never a
+    raw slice that no longer parses."""
+    if len(text) <= _TOOL_RESULT_CHARS:
+        return text
+    from app.agents.runtime import _compacted_tool_payload
+
+    note = f"Tool result exceeded {_TOOL_RESULT_CHARS} characters and was cut."
+    # The preview is re-escaped inside the envelope and the envelope adds its
+    # own fields, so keeping _TOOL_RESULT_CHARS of preview overshoots the cap.
+    # The PREVIEW gives way first, measured on the real envelope; the outline
+    # (figure, unit, selection, row counts) keeps a fixed budget. max_chars
+    # makes the fit a guarantee: an outline over the cap by itself (a
+    # statement is never cut) is replaced by a minimal one.
+    return _compacted_tool_payload(text, _TOOL_RESULT_CHARS, note=note,
+                                   outline_budget=_TOOL_RESULT_CHARS // 4, max_chars=_TOOL_RESULT_CHARS)
 
 _STOP = ("I could not finish this answer within the steps a turn may take. "
          "Please narrow the question or split it into parts.")
@@ -348,7 +369,9 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
             answer_done = True
             break
         if not calls:
-            for piece in (held, buffer):
+            # A reply with no words (empty, or markdown alone) is not shown;
+            # the turn is then answered from its tool results below.
+            for piece in ((held, buffer) if has_words((held or "") + buffer) else ()):
                 if piece:
                     event = await off_loop(_release, piece)
                     if event:
@@ -440,11 +463,12 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 if envelope.get("status") != "success" and str(envelope.get("question") or "").strip():
                     questions.append(str(envelope["question"]).strip())
             else:
-                shown = json.dumps(_without_missing_pages(result_of_call), default=str)[:_TOOL_RESULT_CHARS]
+                shown = _shown_to_model(json.dumps(_without_missing_pages(result_of_call), default=str))
                 if isinstance(envelope, dict) and envelope.get("status") == "success":
                     tabled.extend(render.record_lists(envelope))
             msgs.append({**tool_msg, "content": shown})
             evidence.append({**tool_msg, "content": full})
+            answer_exit.note_tool_message(call, evidence[-1])
         # A calculator that rejected or lacks an input ends the turn with its
         # own question: the model is never given the chance to compute a
         # figure the calculator refused (lane 2: it did).
@@ -543,6 +567,20 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
                 event = _release("\n\n" + block + "\n", model_text=False)
                 if event:
                     yield event
+    if model_answered and evidence and not has_words("".join(sent)):
+        # The model's reply carried no words and nothing above stood in for
+        # it: the same recovery every other path uses answers from this
+        # turn's tool results (a computed figure, or what was asked and why
+        # there is none) -- never a blank answer. It reads the turn's own
+        # messages, so each tool result keeps the call (and the arguments)
+        # that asked for it.
+        from app.agents.runtime import _recover_answer_from_tool_messages
+
+        recovered = await off_loop(_recover_answer_from_tool_messages, "", _trail())
+        if has_words(recovered):
+            event = await off_loop(_release, recovered.rstrip() + "\n", model_text=False)
+            if event:
+                yield event
     from app.agents import citation_provenance as cp
 
     # Once, at the end: the calculator credit the answer does not carry, and

@@ -986,6 +986,11 @@ def main() -> int:
         from scripts import doc_reindex_once
 
         return doc_reindex_once.main_from_env()
+    # bill-plan-once.yml: PLAN (never write) one document's bill sheet.
+    if (os.getenv("BILL_PLAN_DOCUMENT_ID") or "").strip():
+        from scripts import bill_plan_once
+
+        return bill_plan_once.main_from_env()
 
     args = build_parser().parse_args()
     args = apply_env_fallbacks(args)
@@ -1502,7 +1507,7 @@ def main() -> int:
             drive_by_id = {str(fm.get("id") or ""): fm for fm in files if fm.get("id")}
 
             folder_stale_open = 0
-            for doc in projects_mod.list_documents(project_id):
+            for doc in projects_mod.list_documents(project_id, all_sessions=True):
                 # Duplicate-content source files recorded against this row:
                 # done while their content token is unchanged.
                 for alias_fid, alias_token in ((doc.get("metadata") or {}).get("source_aliases") or {}).items():

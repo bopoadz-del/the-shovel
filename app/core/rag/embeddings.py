@@ -287,6 +287,30 @@ class Embedder:
             and stored.get("normalized") is True
         )
 
+    def token_window(self) -> Optional[tuple]:
+        """``(count_tokens, window)`` of the loaded model, or None.
+
+        ``window`` is the model's own ``max_seq_length`` minus the special
+        tokens its tokenizer adds to a single text; ``count_tokens(text)``
+        counts the text's tokens without them. A passage that counts more than
+        ``window`` is cut by the model before it is embedded. None when the
+        backend exposes no tokenizer or no sequence bound (fake, model2vec).
+        """
+        model = self._model
+        tok = getattr(model, "tokenizer", None)
+        max_len = getattr(model, "max_seq_length", None)
+        if self._backend != "sentence_transformers" or tok is None or not max_len:
+            return None
+        special = int(tok.num_special_tokens_to_add(pair=False))
+        window = int(max_len) - special
+        if window <= 0:
+            return None
+
+        def count_tokens(text: str) -> int:
+            return len(tok(text, add_special_tokens=False, truncation=False)["input_ids"])
+
+        return count_tokens, window
+
     def _encode_raw(self, texts: List[str]) -> np.ndarray:
         """Raw model output, not normalized. Internal use only."""
         if self._backend == "sentence_transformers":

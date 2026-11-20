@@ -25,6 +25,19 @@ except ImportError:
 # The rate limiter's own tests re-enable it explicitly via monkeypatch.
 os.environ["RATE_LIMIT_PER_MINUTE"] = "0"
 
+# A test's own requests must not share the database with the app's background
+# warm-up. By default the lifespan starts `_warm_models` as a task and serves
+# at once. Its knowledge seed (asyncio.to_thread) then creates the chunk
+# table's FTS5 table and triggers and writes documents and chunks on a second
+# SQLite connection while the test's requests write on the first. Cancelling
+# the task at shutdown does not stop that thread. Two red mains came from this
+# interleave: `database is locked` and `vtable constructor failed: chunks_fts`
+# on an upload's `DELETE FROM chunks`, both in the first test of a module.
+# Here the lifespan finishes the warm-up before the client is handed to a test.
+# This uses the app's existing switch, so the code under test is unchanged.
+# Tests of the production default (serve before warm-up) unset it themselves.
+os.environ.setdefault("WARM_MODELS_BLOCKING", "1")
+
 # Drive dev-only behaviour (open registration, dev API key) from ENV, not from
 # detecting the pytest runner in sys.modules. That `"pytest" in sys.modules`
 # check shipped in production code (users.py, core/auth.py) and would open

@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from functools import lru_cache, partial
 from types import SimpleNamespace
 from typing import Callable, Iterable, Mapping, Sequence
 
 from app.core.rag.bill_sections import (
     in_named_span,
-    item_rows,
     named_sections,
+    row_index,
+    rows_for_item,
     section_label,
     section_map,
 )
@@ -43,9 +45,35 @@ def chunk_text(chunk) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _is_marked_chunk(chunk) -> bool:
+    """A retrieved chunk that can carry the excerpt marker: it names its
+    document and its position. A plain string or a fake without them cannot."""
+    return (
+        not isinstance(chunk, str)
+        and bool(getattr(chunk, "doc_id", None))
+        and isinstance(getattr(chunk, "chunk_index", None), int)
+    )
+
+
+def chunk_evidence(chunk) -> str:
+    """One chunk as evidence text: with the same ``[doc_id=… chunk=N …]``
+    marker the first pass carries when the chunk names its document, else
+    its bare text. The marker is what the sources panel and the provenance
+    gate read, so a chunk the loop fetched is evidence of its own document
+    instead of text glued to the previous excerpt (S-R5b)."""
+    if not _is_marked_chunk(chunk):
+        return chunk_text(chunk)
+    from app.core.rag.inject import chunk_marker
+    return chunk_marker(chunk)
+
+
 def chunks_to_text(chunks) -> str:
-    """Concatenate chunk texts into one evidence string."""
-    return "\n".join(chunk_text(c) for c in chunks if chunk_text(c).strip())
+    """Concatenate chunks into one evidence string, each marked as in
+    ``chunk_evidence``, with each chunk's document kind read in one batch."""
+    from app.core.rag.inject import annotate_document_kinds
+    chunks = list(chunks or [])
+    annotate_document_kinds([c for c in chunks if _is_marked_chunk(c)])
+    return "\n".join(chunk_evidence(c) for c in chunks if chunk_text(c).strip())
 
 
 def _budgeted_text(
@@ -246,6 +274,14 @@ def typed_bill_ids(
         return frozenset()
 
 
+#: Chunk attributes the excerpt marker (``inject.chunk_marker``) reads beyond
+#: doc_id / chunk_index / score / text.
+_MARKER_ATTRS = (
+    "source_name", "layer", "page", "revision", "superseded",
+    "knowledge_layer", "source_class",
+)
+
+
 def _section_tagged(chunk, label: str) -> SimpleNamespace:
     """A copy of ``chunk`` whose text leads with its bill section ``label``.
 
@@ -257,6 +293,9 @@ def _section_tagged(chunk, label: str) -> SimpleNamespace:
         chunk_id=getattr(chunk, "chunk_id", None),
         chunk_index=getattr(chunk, "chunk_index", None),
         score=getattr(chunk, "score", None),
+        # What the excerpt marker prints, so a tagged chunk is attributed to
+        # its document exactly like the chunk it copies.
+        **{name: getattr(chunk, name) for name in _MARKER_ATTRS if hasattr(chunk, name)},
         text=f"{label}\n{chunk_text(chunk)}",
     )
 
@@ -406,23 +445,45 @@ def _total_status_text(total_status, doc_ids) -> str:
     return "\n".join(lines)
 
 
-def _item_rows_text(maps, named, item: str, row_segments) -> tuple[str, dict]:
+def _bill_row_index(maps, doc_id: str, numbers, row_segments, indexes):
+    """``doc_id``'s :class:`RowIndex` for ``numbers``, built once per action.
+
+    ``indexes`` is the action's own dict: the section maps it reads from are
+    cached for the action's life, so a bill's rows for the same named
+    sections are the same for every plan item and round. ``None`` builds
+    afresh.
+    """
+    sections, doc_chunks = maps[doc_id]
+    key = (doc_id, frozenset(str(n) for n in numbers))
+    if indexes is not None and key in indexes:
+        return indexes[key]
+    index = row_index(
+        ((int(c.chunk_index), chunk_text(c)) for c in doc_chunks),
+        sections, row_segments=row_segments, numbers=numbers,
+    )
+    if indexes is not None:
+        indexes[key] = index
+    return index
+
+
+def _item_rows_text(
+    maps, named, item: str, row_segments, indexes: dict | None = None,
+) -> tuple[str, dict]:
     """The item's complete row list over every bill read, and its counts.
 
     A bill whose section the ask names gives only that section's rows; every
     other bill gives all its matching rows. Nothing is ranked or cut here:
     the rows are the asked item's own evidence, so the chunk budget does not
-    apply to them.
+    apply to them. Each bill is segmented into rows once per ``indexes``
+    (one action, i.e. one turn); each item is then only scored.
     """
     lines: list[str] = []
     counts: dict[str, int] = {}
     for doc_id in sorted(maps):
-        sections, doc_chunks = maps[doc_id]
-        rows = item_rows(
-            ((int(c.chunk_index), chunk_text(c)) for c in doc_chunks),
-            sections, item, row_segments=row_segments,
-            numbers=named.get(doc_id, ()),
+        index = _bill_row_index(
+            maps, doc_id, named.get(doc_id, ()), row_segments, indexes,
         )
+        rows = rows_for_item(index, item)
         if rows:
             counts[doc_id] = len(rows)
             lines.extend(rows)
@@ -439,6 +500,7 @@ def _bill_rows_retrieve(
     ask: str = "",
     row_segments: Callable[[str], Sequence[str]] | None = None,
     total_status: Callable[[str], Mapping | None] | None = None,
+    row_indexes: dict | None = None,
 ) -> str:
     pool = list(bm25_fn(project_id, item, k=k) or ())
     typed = frozenset(typed_bills(project_id)) if typed_bills is not None else frozenset()
@@ -466,7 +528,7 @@ def _bill_rows_retrieve(
         handed = _tag_sections(handed, maps)
     _trace("bill_rows", item, handed)
     rows_text, row_counts = (
-        _item_rows_text(maps, named, item, row_segments)
+        _item_rows_text(maps, named, item, row_segments, row_indexes)
         if (maps and row_segments is not None) else ("", {})
     )
     if named or row_counts:
@@ -555,7 +617,93 @@ def bill_rows_action(
         total_status=(
             lru_cache(maxsize=None)(total_status) if total_status is not None else None
         ),
+        # One bill's rows are segmented once per action, not once per item.
+        row_indexes={},
     ))
+
+
+#: One retrieved excerpt's marker in the first-pass context
+#: (``inject.format_chunks_as_system_message``): ``[doc_id=X chunk=N score=``.
+_EXCERPT_MARKER_RE = re.compile(r"\[doc_id=([^\]\s]+)\s+chunk=\d+\s+score=")
+
+#: Leads the excerpts of a billed-figure ask when a document typed as a bill
+#: and a document that is not both print priced rows. Names documents only
+#: by their own display names; says nothing about any one item.
+BILL_LEAD_NOTE = (
+    "[bill source rule: {bills} {bill_verb} typed as a bill; {others} "
+    "{other_verb} not. For a billed quantity or rate, the lead figure is the "
+    "bill's own row. A row for the same item in a document that is not a "
+    "bill (a forecast, a tracker, a comparison sheet) is a secondary source: "
+    "list it after the bill's row, naming its document, and never state it "
+    "as the billed figure.]"
+)
+
+#: Leads the excerpts when the project has typed bills but no excerpt that
+#: prints a priced row comes from one.
+NO_BILL_ROW_NOTE = (
+    "[bill source rule: no excerpt here that prints a priced row is from a "
+    "document typed as a bill. A figure taken from {others} is stated as "
+    "that document's figure, and the answer says {other_pronoun} not a bill.]"
+)
+
+
+def _names(doc_ids: Sequence[str], doc_name: Callable[[str], str | None]) -> str:
+    return ", ".join(str(doc_name(d) or d) for d in doc_ids)
+
+
+def bill_led_evidence(
+    content: str,
+    *,
+    typed_bills: Iterable[str],
+    row_count: Callable[[str], int],
+    doc_name: Callable[[str], str | None],
+) -> str:
+    """First-pass excerpts with a typed bill's rows leading a non-bill's.
+
+    ``content`` is the first-pass context: a header, then one excerpt per
+    ``[doc_id=...]`` marker. ``typed_bills`` are the project's documents the
+    ingest typed as a bill (``documents.doc_type``); ``row_count`` counts the
+    priced rows (qty x rate = amount) an excerpt prints; ``doc_name(doc_id)``
+    is the document's display name.
+
+    * Typed-bill excerpts AND non-bill excerpts print priced rows: every
+      typed-bill excerpt moves ahead of the rest (each group keeps its order)
+      and ``BILL_LEAD_NOTE`` names both groups' documents.
+    * Only non-bill excerpts print priced rows: the order is kept and
+      ``NO_BILL_ROW_NOTE`` names them as not a bill.
+    * The project has no typed bill, no excerpt prints a priced row, or only
+      typed bills do: ``content`` is returned unchanged.
+    """
+    typed = {str(d) for d in (typed_bills or ()) if d}
+    if not typed:
+        return content
+    parts = re.split(r"(?=\[doc_id=[^\]\s]+\s+chunk=\d+\s+score=)", content or "")
+    header, blocks = parts[0], parts[1:]
+    bills: list[str] = []
+    others: list[str] = []
+    for block in blocks:
+        doc_id = _EXCERPT_MARKER_RE.match(block).group(1)
+        group = bills if doc_id in typed else others
+        if doc_id not in group and row_count(block) > 0:
+            group.append(doc_id)
+    if not others:
+        return content
+    if not bills:
+        note = NO_BILL_ROW_NOTE.format(
+            others=_names(others, doc_name),
+            other_pronoun="it is" if len(others) == 1 else "they are",
+        )
+        return f"{header.rstrip()}\n{note}\n\n" + "".join(blocks)
+    lead = [b for b in blocks if _EXCERPT_MARKER_RE.match(b).group(1) in typed]
+    rest = [b for b in blocks if _EXCERPT_MARKER_RE.match(b).group(1) not in typed]
+    note = BILL_LEAD_NOTE.format(
+        bills=_names(bills, doc_name),
+        bill_verb="is" if len(bills) == 1 else "are",
+        others=_names(others, doc_name),
+        other_verb="is" if len(others) == 1 else "are",
+    )
+    ordered = "\n\n".join(b.rstrip("\n") for b in lead + rest)
+    return f"{header.rstrip()}\n{note}\n\n{ordered}"
 
 
 def _rows_for_item(

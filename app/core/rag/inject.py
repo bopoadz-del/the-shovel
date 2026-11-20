@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.rag.vector_store import Chunk
@@ -36,14 +37,28 @@ retrieve_first_ctx: ContextVar[bool] = ContextVar("shovel_retrieve_first", defau
 _MAX_SOURCE_NAME_CHARS = 60
 
 
+# A document number at the head of a filename: a run of letters and digits
+# joined by '-' or '.', with at least one digit and one joint
+# ("AB-CDE-001-0000-XYZ-SPC-IF-000001-B_Specification.pdf"). It names the
+# document, so shortening the name must not cut it (S-R11).
+_LEADING_DOC_NUMBER_RE = re.compile(r"^(?=[^\s_]*\d)[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)+")
+
+
+def _leading_doc_number(name: str) -> str:
+    m = _LEADING_DOC_NUMBER_RE.match(name or "")
+    # A file extension glued to the number ("...-000001-B.pdf") is not part of it.
+    return re.sub(r"\.[A-Za-z]{2,4}$", "", m.group(0)) if m else ""
+
+
 def _truncate_source_name(name: str) -> str:
     """Fit ``name`` into the per-excerpt src= budget.
 
-    The tail is kept (expiry dates / revision letters live there). When
-    the filename also carries a PREFIX-YEAR-SEQ contract id, that id is
-    preserved at the front so a contract answer can name the cited
-    contract — tail-only truncation used to drop the contract id from
-    long package filenames.
+    The tail is kept (expiry dates / revision letters live there). The head
+    that names the document is kept in front of it: a PREFIX-YEAR-SEQ
+    contract id when the filename carries one (so a contract answer can name
+    the cited contract), else the leading document number (so a cited sheet
+    or specification keeps the number it is known by). Tail-only truncation
+    used to drop both from long filenames.
     """
     if not name:
         return ""
@@ -51,20 +66,62 @@ def _truncate_source_name(name: str) -> str:
         return name
     from app.core.rag.retriever import extract_contract_doc_ids
     ids = extract_contract_doc_ids(name)
-    if not ids:
-        return "…" + name[-(_MAX_SOURCE_NAME_CHARS - 1):]
-    name_l = name.lower()
-    prefix_parts: List[str] = []
-    for cid in ids:
-        idx = name_l.find(cid)
-        if idx >= 0:
-            prefix_parts.append(name[idx:idx + len(cid)])
-    prefix = " ".join(prefix_parts) if prefix_parts else ids[0]
+    if ids:
+        name_l = name.lower()
+        prefix_parts: List[str] = []
+        for cid in ids:
+            idx = name_l.find(cid)
+            if idx >= 0:
+                prefix_parts.append(name[idx:idx + len(cid)])
+        prefix = " ".join(prefix_parts) if prefix_parts else ids[0]
+    else:
+        prefix = _leading_doc_number(name)
     ellip = "…"
+    if not prefix:
+        return ellip + name[-(_MAX_SOURCE_NAME_CHARS - 1):]
     budget = _MAX_SOURCE_NAME_CHARS - len(prefix) - len(ellip)
     if budget < 8:
         return prefix[:_MAX_SOURCE_NAME_CHARS]
     return prefix + ellip + name[-budget:]
+
+
+def annotate_document_kinds(chunks) -> None:
+    """Fill ``doc_type`` / ``doc_role`` on chunks that lack them, from their
+    documents rows, with one batch read (S-R11).
+
+    The marker then tells the model what kind of document each excerpt is.
+    A failed read leaves the fields empty: the excerpt is still handed, it
+    just carries no kind.
+    """
+    need = [c for c in chunks or []
+            if not isinstance(c, str) and getattr(c, "doc_id", None)
+            and not getattr(c, "doc_type", "") and not getattr(c, "doc_role", "")]
+    if not need:
+        return
+    try:
+        from app.core import projects as _projects
+        kinds = _projects.document_kinds([c.doc_id for c in need])
+    except Exception:  # noqa: BLE001 -- the excerpt is handed without a kind
+        _LOG.debug("document kind lookup failed", exc_info=True)
+        return
+    for c in need:
+        c.doc_type, c.doc_role = kinds.get(c.doc_id, ("", ""))
+
+
+def _kind_attrs(c) -> str:
+    """`` kind=… role=…`` for the marker. A column default (the type table
+    did not recognise the document, or no role was assigned) is not a kind,
+    so it is left off rather than printed as if it were one."""
+    from app.core.doc_typing import DEFAULT_DOC_TYPE
+    from app.core.projects import ROLE_OTHER
+    doc_type = (getattr(c, "doc_type", "") or "").strip()
+    doc_role = (getattr(c, "doc_role", "") or "").strip()
+    out = ""
+    if doc_type and doc_type != DEFAULT_DOC_TYPE:
+        out += f" kind={doc_type.replace(' ', '_')}"
+    if doc_role and doc_role != ROLE_OTHER:
+        out += f" role={doc_role.replace(' ', '_')}"
+    return out
 
 
 def _estimate_tokens(text: str) -> int:
@@ -73,15 +130,68 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+#: One word in any script: a run of Unicode letters and digits (``\w``
+#: without the underscore). An Arabic question has words too; a Latin-only
+#: pattern gave it none, and every tie it split fell to the chunk id.
+_TERM_RE = re.compile(r"[^\W_]+")
+
+
+def _terms(text: str) -> set[str]:
+    """Distinct words of ``text`` in any script, case-folded and with the
+    document-typing rule's Arabic folding (short vowels and tatweel dropped,
+    hamza alefs to alef, alef maqsura to ya, ta marbuta to ha) on BOTH the
+    question and the passage, so one word spelt two ways is one term."""
+    from app.core.doc_types import _norm as _fold
+    return set(_TERM_RE.findall(_fold((text or "").casefold())))
+
+
+def tie_break_key(chunk: Chunk, query_terms: set[str]) -> Tuple[int, str]:
+    """Neutral order inside an EXACT score tie: more of the question's own
+    words in the passage text first, then the chunk id (a stable key).
+
+    Reads only the question and the passage; no document kind, name or
+    type is consulted, so no kind of document outranks another."""
+    return (-len(query_terms & _terms(chunk.text)), str(chunk.chunk_id or ""))
+
+
+def _walk_band(band: List[Chunk], room: int) -> Tuple[List[Chunk], List[Chunk]]:
+    """Greedy walk of one tie band through ``room`` tokens: (kept, skipped)."""
+    kept: List[Chunk] = []
+    skipped: List[Chunk] = []
+    for c in band:
+        t = _estimate_tokens(c.text)
+        if t > room:
+            skipped.append(c)
+            continue
+        kept.append(c)
+        room -= t
+    return kept, skipped
+
+
 def apply_token_cap(
     chunks: List[Chunk],
     query: str = "",
+    reasons: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Chunk], int]:
     """Drop whole chunks from the bottom (lowest score) until total
     estimated tokens are <= MAX_RAG_TOKENS.
 
     Never truncates mid-chunk; a chunk is included or excluded whole.
-    Returns ``(kept_chunks, total_estimated_tokens)``.
+    Returns ``(kept_chunks, total_estimated_tokens)``. When ``reasons`` is
+    a dict, each chunk left out gets the rule that dropped it (chunk_id ->
+    code) for the retrieval trace, written where the decision is made:
+
+    * ``noise_filter``      the daily-damages noise filter removed it
+    * ``token_budget``      it does not fit what was left of MAX_RAG_TOKENS
+                            even ahead of every chunk it ties with (its size)
+    * ``score_tie_overlap`` it would have fit ahead of the chunks it ties
+                            with, and the tie-break put them first
+
+    An exact score tie keeps its retrieval order unless the walk in that
+    order keeps one member of the tie and leaves another out. Only then is
+    that tie (and only that tie) reordered by ``tie_break_key``: overlap
+    with the question's words, then chunk id. When everything fits, or no
+    tie is split by the cut, the order handed to the model is unchanged.
 
     When ``query`` is a daily delay-damages ask, keep the
     Contract Data 0.1% and standalone excl-VAT operands even if Cosine
@@ -131,11 +241,19 @@ def apply_token_cap(
             daily_damages_ask = False
     protected = [c for c in chunks if c.chunk_id in protect_ids]
     rest = [c for c in chunks if c.chunk_id not in protect_ids]
+    why: Dict[str, str] = {}
     if daily_damages_ask and protect_ids:
         try:
             from app.core.rag.retriever import _is_daily_damages_cap_noise
-            rest = [c for c in rest if not _is_daily_damages_cap_noise(c.text or "")]
+            clean: List[Chunk] = []
+            for c in rest:
+                if _is_daily_damages_cap_noise(c.text or ""):
+                    why[c.chunk_id] = "noise_filter"
+                else:
+                    clean.append(c)
+            rest = clean
         except Exception:  # noqa: BLE001 — keep rest if noise class fails
+            why.clear()
             _LOG.debug(
                 "e1 token-cap noise filter failed; keeping rest",
                 exc_info=True,
@@ -152,12 +270,30 @@ def apply_token_cap(
         t = _estimate_tokens(c.text)
         kept.append(c)
         total += t
-    for c in rest:
-        t = _estimate_tokens(c.text)
-        if total + t > cap:
-            continue
-        kept.append(c)
-        total += t
+    query_terms = _terms(query)
+    # ``rest`` is in score order (stable), so each run of one score is one
+    # exact tie. Each tie is walked whole against the room left when it
+    # starts, so every skip is decided, and named, right here.
+    i = 0
+    while i < len(rest):
+        j = i + 1
+        while j < len(rest) and (rest[j].score or 0) == (rest[i].score or 0):
+            j += 1
+        band = rest[i:j]
+        room = cap - total
+        band_kept, band_skipped = _walk_band(band, room)
+        split = bool(band_kept) and bool(band_skipped)
+        if split:
+            band = sorted(band, key=lambda c: tie_break_key(c, query_terms))
+            band_kept, band_skipped = _walk_band(band, room)
+        for c in band_skipped:
+            fits_alone = _estimate_tokens(c.text) <= room
+            why[c.chunk_id] = "score_tie_overlap" if fits_alone else "token_budget"
+        kept += band_kept
+        total += sum(_estimate_tokens(c.text) for c in band_kept)
+        i = j
+    if reasons is not None:
+        reasons.update(why)
     return kept, total
 
 
@@ -240,6 +376,55 @@ def _term_equivalence_note(query: str) -> str:
     )
 
 
+def chunk_marker(c) -> str:
+    """One excerpt as the model sees it: ``[doc_id=… chunk=N score=… class=…
+    layer=… page=… kind=… role=… rev=… src=…] text``.
+
+    The single formatter for every chunk handed to the model -- the first
+    pass here and the evidence loop's fetches (``evidence_actions``) -- so the
+    provenance gate and the sources panel read every handed chunk the same
+    way (S-R5b: loop chunks without a marker were glued to the previous
+    excerpt and their documents were never evidence).
+    """
+    rev = getattr(c, "revision", "") or ""
+    rev_s = f" rev={rev}" if rev else ""
+    sup_s = " SUPERSEDED" if getattr(c, "superseded", False) else ""
+    # The FILENAME is evidence in its own right on construction documents:
+    # expiry dates, revision letters, discipline codes and status live
+    # there and frequently never reach the text layer. Live case — asked
+    # when the Street Lighting NOC expires, retrieval returned the right
+    # document, but "17 July 2025" exists only in
+    # "AM Rev Design NOC ... (exp. 17Jul25).pdf". The extracted text held
+    # only an OCR-mangled "Issue Date 13\02\2025" and "Time Duration
+    # 6 months", so the model did arithmetic on noise to reach a date the
+    # document never states. Nothing about retrieval could fix that; the
+    # model simply never saw the name.
+    #
+    # Truncated because a marker is repeated per excerpt and long
+    # engineering filenames would otherwise crowd the token budget. The
+    # tail is kept rather than the head: that is where revision letters and
+    # parenthesised dates sit.
+    name = _truncate_source_name((getattr(c, "source_name", "") or "").strip())
+    src_s = f" src={name}" if name else ""
+    # class= sits immediately AFTER score= and never between chunk= and
+    # score=: the internal-leak detector and _EXCERPT_SPLIT_RE in
+    # runtime.py both anchor on "chunk=N score=" being adjacent, and an
+    # attribute inserted there would silently switch the leak guard off.
+    cls_s = f" class={_source_class(c)}"
+    # Provenance: the excerpt's layer and real page ride on the marker so
+    # an answer's figures can be credited to "document, page" -- after
+    # class=, never between chunk= and score=.
+    layer = getattr(c, "layer", None)
+    page = getattr(c, "page", None)
+    prov_s = (f" layer={layer}" if layer else "") + (f" page={page}" if page else "")
+    # What the document is (S-R11): its type and role from the documents
+    # row, after page= and before src= (src= is read up to the next
+    # attribute or the end of the marker, so it stays last).
+    kind_s = _kind_attrs(c)
+    return (f"[doc_id={c.doc_id} chunk={c.chunk_index} "
+            f"score={(c.score or 0):.3f}{cls_s}{prov_s}{kind_s}{rev_s}{sup_s}{src_s}] {c.text}")
+
+
 def format_chunks_as_system_message(
     chunks: List[Chunk],
     total_candidates: int,
@@ -274,8 +459,9 @@ def format_chunks_as_system_message(
         "(numbers, deadlines, clause references, named principles, definitions), "
         "reproduce them EXACTLY and do NOT substitute or override them with your own "
         "prior knowledge — your training data on this topic may be wrong or generic. "
-        "If a detail the user asks for is not in this context, say you don't have it "
-        "rather than inventing a plausible answer.\n"
+        "If a detail the user asks for is not in this context, search the project "
+        "documents for it before you say it is missing; never invent a plausible "
+        "answer.\n"
         # Scoped-absence rule. These excerpts are a top-K sample of a corpus that
         # can run to thousands of chunks — they are evidence of what IS present,
         # never evidence of what is absent. Live failure (2026-08-17): asked about
@@ -290,8 +476,10 @@ def format_chunks_as_system_message(
         "excerpts for this question. NEVER state or imply that the project, the "
         "corpus, or the documents do not contain it, that it is 'not mentioned "
         "anywhere', or that it 'does not apply' — you cannot see far enough to "
-        "know that. Say what you did not find, then offer to search again with "
-        "the exact document name, code, or section number.\n"
+        "know that. When the excerpts do not state what is asked, search the "
+        "project documents yourself before you answer; only after a search came "
+        "back without it, say so and name what you searched for. Never ask the "
+        "user for a document name you could search for.\n"
         # Without this the model treats src= as decoration. Construction
         # filenames routinely carry the answer -- expiry dates, revision
         # letters, discipline codes, status -- where the text layer does not.
@@ -647,42 +835,8 @@ def format_chunks_as_system_message(
             "a different year's or different contract's documents.\n"
         )
 
-    def _marker(c) -> str:
-        rev = getattr(c, "revision", "") or ""
-        rev_s = f" rev={rev}" if rev else ""
-        sup_s = " SUPERSEDED" if getattr(c, "superseded", False) else ""
-        # The FILENAME is evidence in its own right on construction documents:
-        # expiry dates, revision letters, discipline codes and status live
-        # there and frequently never reach the text layer. Live case — asked
-        # when the Street Lighting NOC expires, retrieval returned the right
-        # document, but "17 July 2025" exists only in
-        # "AM Rev Design NOC ... (exp. 17Jul25).pdf". The extracted text held
-        # only an OCR-mangled "Issue Date 13\02\2025" and "Time Duration
-        # 6 months", so the model did arithmetic on noise to reach a date the
-        # document never states. Nothing about retrieval could fix that; the
-        # model simply never saw the name.
-        #
-        # Truncated because a marker is repeated per excerpt and long
-        # engineering filenames would otherwise crowd the token budget. The
-        # tail is kept rather than the head: that is where revision letters and
-        # parenthesised dates sit.
-        name = _truncate_source_name((getattr(c, "source_name", "") or "").strip())
-        src_s = f" src={name}" if name else ""
-        # class= sits immediately AFTER score= and never between chunk= and
-        # score=: the internal-leak detector and _EXCERPT_SPLIT_RE in
-        # runtime.py both anchor on "chunk=N score=" being adjacent, and an
-        # attribute inserted there would silently switch the leak guard off.
-        cls_s = f" class={_source_class(c)}"
-        # Provenance: the excerpt's layer and real page ride on the marker so
-        # an answer's figures can be credited to "document, page" -- after
-        # class=, never between chunk= and score=.
-        layer = getattr(c, "layer", None)
-        page = getattr(c, "page", None)
-        prov_s = (f" layer={layer}" if layer else "") + (f" page={page}" if page else "")
-        return (f"[doc_id={c.doc_id} chunk={c.chunk_index} "
-                f"score={(c.score or 0):.3f}{cls_s}{prov_s}{rev_s}{sup_s}{src_s}] {c.text}")
-
-    body_parts = [_marker(c) for c in chunks]
+    annotate_document_kinds(chunks)
+    body_parts = [chunk_marker(c) for c in chunks]
     return {"role": "system", "content": header + "\n" + "\n\n".join(body_parts)}
 
 
@@ -724,6 +878,7 @@ def _drop_master_corpus_for_formula_fixture(
 
 from app.core.rag import audit as _audit
 from app.core.rag import budget as _budget
+from app.core.rag import handed_set as _handed_set
 
 
 # ── follow-up query context (RAG_FOLLOWUP_CONTEXT, default OFF) ──────────────
@@ -894,22 +1049,78 @@ def retrieval_trace_enabled() -> bool:
     )
 
 
-def _trace_chunk(rank: int, c) -> Dict[str, Any]:
-    """Identity and rank of one chunk. Never its text."""
-    name = getattr(c, "source_name", "") or ""
-    if not name:
-        from app.core.rag.retriever import _doc_name_for_id
+def _leg_fields(c) -> Dict[str, Any]:
+    """The hybrid path's per-leg scores and fused rank (``_rrf_combine``),
+    so a trace can tell a lexical-leg chunk from a vector-leg one. None when
+    the chunk did not come through fusion. Never text or names."""
+    out: Dict[str, Any] = {}
+    for key in ("vector_score", "lexical_score"):
+        v = getattr(c, key, None)
+        out[key] = round(float(v), 6) if v is not None else None
+    r = getattr(c, "fused_rank", None)
+    out["fused_rank"] = int(r) if r is not None else None
+    return out
 
-        name = _doc_name_for_id(getattr(c, "doc_id", "") or "")
+
+def _public_fused(record, handed, *, read_names: bool = True):
+    """The fused-candidate record in trace form. The stored names of the
+    documents its ``leg_docs`` list are read in one batch, only so that an
+    id equal to its document's name is printed as a digest (names are never
+    logged). A failed read treats every listed id as a name: fail closed.
+
+    ``read_names=False`` (the tool search path, which adds no database read):
+    no lookup is made and every listed id is treated as a name, the same
+    fail-closed form, so ``leg_docs`` prints digests only."""
+    from app.core.rag.fusion_trace import public_view
+
+    ids = sorted({
+        e.get("doc_id")
+        for entries in ((record or {}).get("leg_docs") or {}).values()
+        for e in entries if e.get("doc_id")
+    })
+    names: Dict[str, str] = {}
+    if ids and not read_names:
+        names = {d: d for d in ids}
+    elif ids:
+        try:
+            from app.core import projects as _projects
+            names = _projects.document_names(ids)
+        except Exception:  # noqa: BLE001 -- digest every id rather than risk a name
+            _LOG.debug("leg_docs name lookup failed", exc_info=True)
+            names = {d: d for d in ids}
+    return public_view(record, handed, names)
+
+
+def _trace_chunk(rank: int, c) -> Dict[str, Any]:
+    """Identity and rank of one chunk. Never its text, never its document's
+    name: the document is named by ``doc_id`` alone (names never in logs;
+    an operator maps an id to a document in the app)."""
     score = getattr(c, "score", None)
     return {
         "rank": rank,
         "chunk_id": getattr(c, "chunk_id", None),
         "doc_id": getattr(c, "doc_id", None),
-        "doc_name": name,
         "score": round(float(score), 6) if score is not None else None,
+        **_leg_fields(c),
+        # Its length, so a replay can refit the handed set's token budget
+        # (``_estimate_tokens``: characters // 4) exactly. Never the text.
+        "chars": len(getattr(c, "text", "") or ""),
         "layer": getattr(c, "layer", "own"),
+        # What kind of document the chunk came from (doc_typing / S-R11),
+        # so a trace shows which document kinds held the handed slots.
+        # Empty when the kind is unknown; never guessed from the name here.
+        "doc_type": (getattr(c, "doc_type", "") or "").strip(),
+        "doc_role": (getattr(c, "doc_role", "") or "").strip(),
     }
+
+
+def _dropped_by(c, drop_reasons: Optional[Dict[str, str]],
+                threshold_fired: bool) -> str:
+    """The trace's ``dropped_by`` code for one chunk that was not handed."""
+    code = (drop_reasons or {}).get(getattr(c, "chunk_id", None) or "", "")
+    if code:
+        return code
+    return "below_threshold" if threshold_fired else "unexplained"
 
 
 def _emit_retrieval_trace(
@@ -923,8 +1134,24 @@ def _emit_retrieval_trace(
     threshold_fired: bool,
     identifier_miss: bool,
     top_score: float,
+    k_info: Optional[Dict[str, Any]] = None,
+    drop_reasons: Optional[Dict[str, str]] = None,
+    query_chars: Optional[int] = None,
 ) -> None:
-    """Write the trace line. Best-effort: a logging failure never costs a turn."""
+    """Write the trace line. Best-effort: a logging failure never costs a turn.
+
+    The query is written as its source code (``query``: ``user_message`` or
+    ``followup_context``) and its length in characters (``query_chars``),
+    never its words. Chunks carry document ids, never document names.
+
+    Every ``not_handed`` entry carries ``dropped_by``: the rule that left it
+    out (``drop_reasons``, written by ``select_handed`` and
+    ``apply_token_cap`` where each one leaves a chunk out), ``below_threshold``
+    when the threshold fired and nothing was handed, else ``unexplained``.
+
+    ``k_info`` carries requested_k, effective_k, the pool depth, whether the
+    day's token budget was spent, and the handed set's allotment (character
+    budget, characters handed, per-layer counts, families)."""
     if not retrieval_trace_enabled():
         return
     try:
@@ -932,8 +1159,15 @@ def _emit_retrieval_trace(
 
         rid = request_id_ctx.get()
         handed_ids = {getattr(c, "chunk_id", None) for c in handed}
+        # The handed chunks were annotated when their excerpts were built;
+        # the ones left out were not. One batch read gives them their kind
+        # too (a chunk that already has one is skipped, so nothing is read
+        # twice); a failed read leaves the fields empty.
+        annotate_document_kinds(retrieved)
         from app.core.rag.retriever import retrievable_project_ids
-        from app.core.rag.vector_store import _MISS, _memo_get
+        from app.core.rag.vector_store import (
+            _MISS, _memo_get, fused_candidates_record,
+        )
 
         lexical = {}
         for pid in retrievable_project_ids(project_id):
@@ -943,19 +1177,27 @@ def _emit_retrieval_trace(
             "request_id": rid,
             "path": "pre_injection",
             "query": query_label,
+            "query_chars": query_chars,
             "project_id": project_id,
             "conversation_id": conversation_id,
             "agent": agent_name,
             "retrieved_k": len(retrieved),
             "handed_k": len(handed),
+            **dict(k_info or {}),
             "threshold_fired": threshold_fired,
             "identifier_miss": identifier_miss,
             "lexical": lexical,
             "degraded": any(v != "hit" for v in lexical.values()),
+            "fused_candidates": (
+                _public_fused(fused_candidates_record(project_id), handed)
+                if project_id else None
+            ),
             "top_score": round(float(top_score or 0.0), 6),
             "chunks": [_trace_chunk(i + 1, c) for i, c in enumerate(handed)],
             "not_handed": [
-                _trace_chunk(i + 1, c) for i, c in enumerate(retrieved)
+                {**_trace_chunk(i + 1, c),
+                 "dropped_by": _dropped_by(c, drop_reasons, threshold_fired)}
+                for i, c in enumerate(retrieved)
                 if getattr(c, "chunk_id", None) not in handed_ids
             ],
         }
@@ -966,6 +1208,81 @@ def _emit_retrieval_trace(
         )
     except Exception:  # noqa: BLE001 - instrumentation must not break a turn
         _LOG.warning("retrieval trace line failed", exc_info=True)
+
+
+def trace_chunk_ids(rank: int, c) -> Dict[str, Any]:
+    """Identity and rank of one chunk with no name: ids, score, per-leg
+    scores and fused rank, layer.
+
+    The tool-path line (``emit_search_trace``) is built from this alone, so
+    it carries neither chunk text nor a file name."""
+    score = getattr(c, "score", None)
+    return {
+        "rank": rank,
+        "chunk_id": getattr(c, "chunk_id", None),
+        "doc_id": getattr(c, "doc_id", None),
+        "score": round(float(score), 6) if score is not None else None,
+        **_leg_fields(c),
+        "layer": getattr(c, "layer", "own") or "own",
+    }
+
+
+def emit_search_trace(
+    *,
+    path: str,
+    project_id: Optional[str],
+    requested_top_k: int,
+    trace: Dict[str, Any],
+    conversation_id: Optional[str] = None,
+) -> None:
+    """One ``rag_retrieval_trace`` line for a document search outside
+    pre-injection (``path="tool"`` for the agent's search tool).
+
+    ``trace`` is what ``doc_index._search_trace`` built: ``retrieved_k``,
+    ``chunks`` (handed, with ``result_rank``) and ``not_handed`` (dropped by
+    the per-document collapse, with the reason), and, where the search ran
+    in a turn, its own fused-candidate record (``fused``) and lexical-leg
+    states (``lexical``). Those are written as the pre_injection line writes
+    them (``fused_candidates`` through the same ``public_view``: ranks,
+    handed positions and ``leg_chunk_digests``, no chunk id; ``lexical``;
+    ``degraded``), with no database read: every ``leg_docs`` id is digested.
+    The query is written as a label, never its words. Best-effort, like the
+    retriever's line: a failure here never touches the search's results."""
+    if not retrieval_trace_enabled():
+        return
+    try:
+        from app.infra.monitoring import request_id_ctx
+
+        rid = request_id_ctx.get()
+        trace = trace or {}
+        handed = list(trace.get("chunks") or [])
+        lexical = dict(trace.get("lexical") or {})
+        handed_refs = [SimpleNamespace(chunk_id=e.get("chunk_id")) for e in handed]
+        payload = {
+            "request_id": rid,
+            "path": path,
+            "query": "tool_query",
+            "project_id": project_id,
+            "conversation_id": conversation_id,
+            "requested_k": requested_top_k,
+            "retrieved_k": int(trace.get("retrieved_k") or 0),
+            "handed_k": len(handed),
+            "handed_docs": len({e.get("doc_id") for e in handed}),
+            "lexical": lexical,
+            "degraded": any(v != "hit" for v in lexical.values()),
+            "fused_candidates": _public_fused(
+                trace.get("fused"), handed_refs, read_names=False),
+            "top_score": max((e.get("score") or 0.0 for e in handed), default=0.0),
+            "chunks": handed,
+            "not_handed": list(trace.get("not_handed") or []),
+        }
+        _TRACE_LOG.info(
+            "%s %s", _TRACE_EVENT,
+            json.dumps(payload, default=str, separators=(",", ":")),
+            extra={"event": _TRACE_EVENT, "request_id": rid},
+        )
+    except Exception:  # noqa: BLE001 - instrumentation must not break a turn
+        _LOG.warning("tool search trace line failed", exc_info=True)
 
 
 # A measured-quantity question that names its governing source ("per the
@@ -987,6 +1304,13 @@ def rag_retrieval_k(user_message: str, requested_k: int) -> int:
     return requested_k
 
 
+#: The paths that add to the day's RAG token counter (``budget.consume``).
+#: Only ``rag_inject`` writes it: the evidence loop, the bill-rows action and
+#: hydration hand evidence without counting it.
+BUDGET_PATH_FIRST_PASS = "first_pass"
+BUDGET_PATH_MISSING_INPUT = "missing_input"
+
+
 def rag_inject(
     user_message: str,
     project_id: Optional[str],
@@ -995,8 +1319,14 @@ def rag_inject(
     agent_name: str,
     history: Optional[List[Dict[str, Any]]] = None,
     retrieve_first: bool = False,
+    budget_path: str = BUDGET_PATH_FIRST_PASS,
 ) -> Tuple[Optional[Dict[str, str]], Dict[str, Any]]:
     """Per-turn RAG entry point.
+
+    ``budget_path`` names which path this call's injected tokens are counted
+    under (S-R5c): the turn's first pass, or the missing-input re-fetch. It
+    is printed in the trace with the tokens this call added to the day's
+    counter, so the day's spend can be summed by path from the trace lines.
 
     Returns ``(system_message_or_None, audit_record_dict)``.
 
@@ -1008,8 +1338,11 @@ def rag_inject(
        when the smart orchestrator routes a message to ``heavy-reasoning`` or
        another agent. ``agent_name`` is still recorded in the audit log for
        observability only.
-    3. Otherwise: snapshot the budget for today, derive ``effective_k`` (5
-       normally, 2 if budget_degraded), call ``retrieve_with_filter``.
+    3. Otherwise: snapshot the budget for today, derive ``effective_k`` (the
+       turn's k), call ``retrieve_with_filter`` for a pool of
+       ``handed_set.pool_k(effective_k)``; the handed set is chosen from it
+       by ``handed_set.select_handed`` (diverse across documents, bounded by
+       a character budget that is the same whatever the day's spend).
     4. If retrieved top_score < THRESHOLD or no chunks at all: return
        (None, audit_record) with ``threshold_fired=true`` so the caller can
        still write the audit log and prepend its fallback prefix. When
@@ -1033,10 +1366,14 @@ def rag_inject(
     requested_k = int(os.getenv("RAG_K", "5"))
 
     budget_state = _budget.snapshot(day=today)
-    effective_k = (
-        2 if budget_state["degraded"]
-        else rag_retrieval_k(user_message, requested_k)
-    )
+    # The day's token counter is MEASURE-ONLY (owner order, 13 Nov): it is
+    # read for the trace and never changes the depth or the handed set. On
+    # 13 Nov the old degrade cut every user's answer to two excerpts. The
+    # pool is wider than k so the handed set can be diverse.
+    budget_degraded = bool(budget_state["degraded"])
+    budget_consumed = budget_state["consumed"]
+    effective_k = rag_retrieval_k(user_message, requested_k)
+    retrieval_pool_k = _handed_set.pool_k(effective_k)
 
     # A short follow-up ("layers thickness ?") cannot retrieve on its own —
     # see build_retrieval_query. Flag-gated; returns user_message untouched
@@ -1048,7 +1385,7 @@ def rag_inject(
     )
 
     chunks, noise_filtered = retrieve_with_filter(
-        retrieval_query, project_id, k=effective_k,
+        retrieval_query, project_id, k=retrieval_pool_k,
         operator_text=user_message,
     )
     chunks = _drop_master_corpus_for_formula_fixture(
@@ -1126,10 +1463,13 @@ def rag_inject(
         "retrieval_query_preview": (retrieval_query or "")[:200],
         "followup_context_applied": retrieval_query != (user_message or ""),
         "requested_k": requested_k,
+        "effective_k": effective_k,
         "noise_filtered_count": noise_filtered,
         "top_score": top_score,
         "budget_remaining": budget_state["remaining"],
         "budget_degraded": budget_state["degraded"],
+        "budget_consumed": budget_consumed,
+        "budget_path": budget_path,
         "fallback_used": fallback_used,
         "extracted_contract_ids": named_contracts,
     }
@@ -1154,14 +1494,25 @@ def rag_inject(
         })
         _audit.write(audit_rec)
         _emit_retrieval_trace(
-            query_label=_query_label, project_id=project_id,
+            query_label=_query_label, query_chars=len(retrieval_query or ""),
+            project_id=project_id,
             conversation_id=conversation_id, agent_name=agent_name,
             retrieved=chunks, handed=[], threshold_fired=True,
             identifier_miss=identifier_miss, top_score=top_score,
+            k_info={"requested_k": requested_k, "effective_k": effective_k,
+                    "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
+                    "budget_consumed": budget_consumed,
+                    "budget_path": budget_path, "budget_tokens": 0},
         )
         return None, audit_rec
 
-    kept, total_tokens = apply_token_cap(chunks, query=user_message or "")
+    drop_reasons: Dict[str, str] = {}
+    _tie_terms = _terms(user_message or "")
+    handed_pool, allotment = _handed_set.select_handed(
+        chunks, k=effective_k, reasons=drop_reasons,
+        tie_key=lambda c: tie_break_key(c, _tie_terms))
+    kept, total_tokens = apply_token_cap(
+        handed_pool, query=user_message or "", reasons=drop_reasons)
     sys_msg = format_chunks_as_system_message(
         kept, total_candidates=len(chunks), query=user_message or "",
     )
@@ -1182,10 +1533,17 @@ def rag_inject(
     })
     _audit.write(audit_rec)
     _emit_retrieval_trace(
-        query_label=_query_label, project_id=project_id,
+        query_label=_query_label, query_chars=len(retrieval_query or ""),
+        project_id=project_id,
         conversation_id=conversation_id, agent_name=agent_name,
         retrieved=chunks, handed=kept, threshold_fired=False,
         identifier_miss=False, top_score=top_score,
+        drop_reasons=drop_reasons,
+        k_info={"requested_k": requested_k, "effective_k": effective_k,
+                "pool_k": retrieval_pool_k, "budget_degraded": budget_degraded,
+                "budget_consumed": budget_consumed,
+                "budget_path": budget_path, "budget_tokens": total_tokens,
+                "allotment": allotment},
     )
     _budget.consume(day=today, tokens=total_tokens)
     return sys_msg, audit_rec

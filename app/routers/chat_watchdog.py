@@ -32,6 +32,7 @@ bug you can find and a bug you cannot.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -202,6 +203,14 @@ async def guarantee_terminal(
     saw_token = False
     last_type = "nothing"
     iterator = frames.__aiter__()
+    # One context for the whole wrapped stream. ``asyncio.wait_for`` runs each
+    # ``__anext__`` as its own task (Python 3.11), and a task runs in a COPY of
+    # the caller's context: a context variable the stream set while producing
+    # one frame was gone when it produced the next. The stream is one turn,
+    # so every step of it runs in the same context, as it would under a plain
+    # ``async for``.
+    stream_context = contextvars.copy_context()
+    loop = asyncio.get_running_loop()
 
     def _close(reason: str) -> list[str]:
         out: list[str] = []
@@ -235,7 +244,8 @@ async def guarantee_terminal(
                 saw_terminal = True
                 return
             try:
-                raw = await asyncio.wait_for(iterator.__anext__(), timeout=remaining)
+                step = loop.create_task(iterator.__anext__(), context=stream_context)
+                raw = await asyncio.wait_for(step, timeout=remaining)
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:

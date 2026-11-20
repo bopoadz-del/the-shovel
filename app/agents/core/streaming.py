@@ -116,7 +116,7 @@ async def _chat_stream_impl(
 ) -> AsyncIterator[dict[str, Any]]:
     """Internal implementation. ``chat_stream`` wraps this with an emit
     guarantee so silent / crashing exits become structured error events."""
-    from app.agents.answer_exit import end_on_a_sentence
+    from app.agents.answer_exit import end_on_a_sentence, note_tool_message
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         MAX_TOOL_ITERATIONS, _CONTEXT_LEAK_RETRY_NUDGE, _EMPTY_RESPONSE_FALLBACK,
         _EMPTY_ROUTER_NUDGE, _LOG, _SEARCH_PREAMBLE_RETRY_NUDGE, _approx_prompt_tokens,
@@ -130,8 +130,8 @@ async def _chat_stream_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _cost_grounding_enabled, _empty_router_verdict,
         _file_tool_hint, _final_text_needs_forced_retry, _forced_retry_min_seconds, _forced_retry_nudge,
-        _fulfill_answer_report, _has_unread_windows, _inline_boq_hard_excludes,
-        _is_capability_request, _is_cost_shaped_query, _latest_operator_ask, _llm_config,
+        _fulfill_answer_report, _has_unread_windows, forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
+        _is_capability_request, _is_cost_shaped_query, _llm_config,
         _log_dataset_turn,
         _looks_like_internal_context_leak, _looks_like_internal_tool_json,
         _looks_like_search_preamble, _looks_like_tool_markup_leak,
@@ -143,14 +143,16 @@ async def _chat_stream_impl(
         _predispatch_wbs_duration_override, _predispatch_wir_form,
         _project_has_non_rag_context, _project_is_rag_ready_off_process,
         _rag_inject_off_process, _recover_answer_from_tool_messages,
+        _resolve_model_key, _call_model_unless_missing, _recover_after_provider_failure,
+        _with_model_unreached_note,
         _recover_tool_calls_from_content, _recovered_calls_are_search_only,
         _requested_char_offset, _sanitize_citation_labels, _sanitize_final_text,
         _sanitize_inline_paths, _scrub_history, _should_force_synthesis,
         _should_short_circuit_delay_damages_daily, _should_short_circuit_part_summary,
         _should_short_circuit_priced_boq, _should_short_circuit_rag_miss, _pin_reference_miss,
         _strip_answer_routing_preamble, _summarize_result, _text_needs_tool_recovery,
-        _timing_log, _tool_result_content, _tool_result_errored, _turn_progress,
-        _vo_draft_hard_excludes, _vo_draft_ready_for_synthesis,
+        _timing_log, _tool_message_extra, _tool_result_content, _tool_result_errored, _turn_progress,
+        _vo_draft_ready_for_synthesis,
         _withhold_names_in_streamed_segment, answer_report_export_enabled, fulfill_wbs_export,
         json, message_wants_answer_report, message_wants_wbs_export, os, time,
     )
@@ -206,16 +208,10 @@ async def _chat_stream_impl(
         }
         return
 
-    # A provider with no env_key (none today) would need no auth. Both
-    # DeepSeek and OpenRouter declare an env_key, so require their API key.
-    if cfg["env_key"]:
-        api_key = api_key or os.getenv(cfg["env_key"])
-        if not api_key:
-            _LOG.warning("chat_stream: missing %s — yielding error", cfg["env_key"])
-            yield {"type": "error", "message": f"No {cfg['env_key']} configured."}
-            return
-    else:
-        api_key = api_key or ""
+    # A missing provider key is acted on at the FIRST model call, not here:
+    # the deterministic stages below (capability answer, pre-dispatch, fast
+    # paths) answer the turns they can answer with no model configured.
+    _model_missing, api_key = _resolve_model_key(cfg, api_key)
 
     _call_stack = _call_stack or [self.name]
 
@@ -294,9 +290,11 @@ async def _chat_stream_impl(
     # whose first pass is uncovered runs the #163 plan -> actions -> coverage
     # -> <=3 rounds loop before the answer, so a figure outside the default
     # top-k is still fetched (never a refusal dressed as grounding).
-    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id:
+    # The re-query planner is a model call: with no model, keep the first pass.
+    if _rag_sys_msg and _rag_sys_msg.get("content") and project_id and not _model_missing:
         _rag_sys_msg = await _agentic_figure_retrieval_augment(
             self, user_message, project_id, api_key, user_id, _rag_sys_msg,
+            audit_rec=_rag_audit,
         )
     # The message preparation below scans the question and the excerpts with
     # many patterns: in a worker thread, like retrieval (CI: 125-203 ms loop
@@ -691,20 +689,14 @@ async def _chat_stream_impl(
     # it has (or honestly say it doesn't) instead of looping. generate_wbs and
     # other tools stay available.
     SEARCH_TOOL_CAP = int(os.getenv("AGENT_SEARCH_TOOL_CAP", "2"))
-    search_calls = 0
-    excluded_tools: set = set()
-    # Live tip 0a95d03: VO ask2 stole to construction/sympy when
-    # predispatch missed — hard-exclude on draft intent alone.
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _vo_draft_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("vo hard-exclude skipped", exc_info=True)
-    try:
-        _op = _latest_operator_ask(messages) or ""
-        excluded_tools |= _inline_boq_hard_excludes(_op)
-    except Exception:  # noqa: BLE001
-        _LOG.debug("inline-boq hard-exclude skipped", exc_info=True)
+    # S-R9: the cap and the chunks already handed live on one turn object
+    # that every tool call receives; the search tool enforces the cap per
+    # call (a parallel batch cannot overrun it) and skips handed chunks.
+    from app.core.rag.handed_set import SearchTurn
+    _search_turn = SearchTurn.from_audit(SEARCH_TOOL_CAP, _rag_audit)
+    # Hard excludes on the operator's draft intent (VO / inline BOQ).
+    excluded_tools, _op = self._intent_hard_excludes(messages)
+    _sf: dict = {}  # S-R8: one runtime search round before a draft may decline
     # Once a deliverable (non-search) tool has returned its result, the model
     # has what it needs — the next call is synthesis. Offering tools on that
     # synthesis call is pure downside: it lets the model loop, and on Groq a
@@ -739,7 +731,8 @@ async def _chat_stream_impl(
     # path below; every per-segment sanitise / name-withhold / tool-leak guard
     # is unchanged.
     _synth_stream_enabled = (
-        os.getenv("SYNTHESIS_STREAMING", "1") != "0"
+        not _model_missing
+        and os.getenv("SYNTHESIS_STREAMING", "1") != "0"
         # DeepSeek and OpenRouter both stream the OpenAI SSE shape. Keep
         # this list in step with the allowlist in _stream_synthesis.
         and cfg["provider"] in ("openrouter", "deepseek")
@@ -1140,10 +1133,9 @@ async def _chat_stream_impl(
         # iterations grow the prompt with tool results, so capture iter 0 only.
         if iteration == 0:
             _turn_timing.mark_value("prompt_tokens_in", _approx_prompt_tokens(messages))
-        resp = await self._call_llm(
-            messages, api_key, project_id=project_id, user_id=user_id,
-            exclude_tools=excluded_tools or None,
-            with_tools=not force_synthesis,
+        resp = await _call_model_unless_missing(
+            self, _model_missing, messages, api_key, project_id=project_id, user_id=user_id,
+            exclude_tools=excluded_tools or None, with_tools=not force_synthesis,
             deadline=_llm_deadline(),
         )
         if _timing:
@@ -1153,8 +1145,10 @@ async def _chat_stream_impl(
                          _tcs or "final", time.monotonic() - _turn_t0)
         if resp.get("status") == "error":
             err = resp.get("error", "LLM call failed")
-            recovered = _recover_answer_from_tool_messages(err, messages)
-            if recovered != err and not (await _off_loop(_text_needs_tool_recovery, recovered)):
+            # Any provider failure: a result already in the thread is the
+            # answer, with one line that the explanation is unavailable.
+            recovered = await _off_loop(_recover_after_provider_failure, messages)
+            if recovered:
                 final_text = _sanitize_inline_paths(
                     _sanitize_citation_labels(recovered)
                 )
@@ -1164,6 +1158,7 @@ async def _chat_stream_impl(
                     project_id=project_id,
                     audit_rec=_rag_audit,
                 ))
+                final_text = _with_model_unreached_note(final_text)
                 _LOG.warning(
                     "chat_stream: iter=%d recovered deliverable after LLM error %s",
                     iteration, err[:80],
@@ -1219,7 +1214,7 @@ async def _chat_stream_impl(
                 and _recovered_calls_are_search_only(recovered_tool_calls)
                 and (
                     "search_project_documents" in excluded_tools
-                    or search_calls >= SEARCH_TOOL_CAP
+                    or _search_turn.spent
                 )
             ):
                 recovered_tool_calls = []
@@ -1238,6 +1233,13 @@ async def _chat_stream_impl(
                     "content": "",
                     "tool_calls": recovered_tool_calls,
                 }
+            elif (_sf_call := await self._search_before_refusal(
+                    raw_content, messages, _sf, user_message=user_message, project_id=project_id,
+                    tool_results=stream_tool_results, search_calls=_search_turn.calls, search_cap=SEARCH_TOOL_CAP,
+                    excluded_tools=excluded_tools, force_synthesis=force_synthesis,
+                    iterations_left=MAX_TOOL_ITERATIONS - iteration - 1)) is not None:
+                tool_calls = [_sf_call]  # S-R8: search, do not finalise the draft
+                assistant_msg = {"role": "assistant", "content": "", "tool_calls": tool_calls}
             else:
                 # Final answer — sanitize DSML markup, raw tool JSON, and
                 # empty content before streaming it to the user.
@@ -1278,7 +1280,7 @@ async def _chat_stream_impl(
                                 )
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
-                            _LOG.info("chat_stream: unusable final_text, forcing no-tools retry")
+                            await _off_loop(log_forced_retry_start, "chat_stream", final_text)
                             if _timing:
                                 _timing_log("TIMING chat_stream EMPTY-FINAL raw=%dc -> forced retry, cum=%.1fs",
                                              len(raw_content), time.monotonic() - _turn_t0)
@@ -1295,7 +1297,7 @@ async def _chat_stream_impl(
                             if _timing:
                                 _timing_log("TIMING chat_stream forced-retry call=%.1fs status=%s cum=%.1fs",
                                              time.monotonic() - _fr_t0, forced_resp.get("status"), time.monotonic() - _turn_t0)
-                            if forced_resp.get("status") == "error":
+                            if forced_retry_failed("chat_stream", forced_resp):
                                 final_text = _EMPTY_RESPONSE_FALLBACK
                             else:
                                 served_model = (forced_resp.get("raw") or {}).get("model") or served_model
@@ -1304,7 +1306,7 @@ async def _chat_stream_impl(
                                     forced_msg.get("content") or "",
                                     messages=messages, tool_results=stream_tool_results,
                                 )
-                                if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                                if (await _off_loop(forced_retry_still_unusable, "chat_stream", final_text, raw_len=len(forced_msg.get("content") or ""))):
                                     final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 final_text = (await _off_loop(_postprocess_answer, final_text, _rag_sys_msg, messages, fallback_used=bool(_rag_audit.get("fallback_used")), agent_name=self.name, project_id=project_id, audit_rec=_rag_audit, attached_documents=attached_documents))
@@ -1366,12 +1368,6 @@ async def _chat_stream_impl(
         pending_nudges: list[dict[str, Any]] = []
         for tc in tool_calls:
             fn = (tc.get("function") or {})
-            if fn.get("name") == "search_project_documents":
-                search_calls += 1
-                if search_calls >= SEARCH_TOOL_CAP:
-                    # Stop offering the search tool for the rest of this turn —
-                    # the model has searched enough; force it to answer.
-                    excluded_tools.add("search_project_documents")
             # SSE contract (distinct from the ``on_event`` callback above,
             # which uses "name"/"args"/"id"): the browser reads "tool" and
             # "args_preview" — see frontend ProjectWorkspace.tsx. "name" is
@@ -1384,8 +1380,9 @@ async def _chat_stream_impl(
                 "name": fn.get("name"),
                 "args_preview": (fn.get("arguments") or "")[:200],
             }
-            tool_result = await self._run_tool_call(
+            tool_result = await self._run_turn_tool_call(
                 tc,
+                search_turn=_search_turn,
                 api_key=api_key,
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -1394,12 +1391,15 @@ async def _chat_stream_impl(
                 user_message=user_message,
                 history=effective_history,
             )
+            if _search_turn.spent:
+                # Stop offering the search tool for the rest of this turn —
+                # the model has searched enough; force it to answer.
+                excluded_tools.add("search_project_documents")
             stream_tool_results.append(tool_result)
-            _tool_content = _tool_result_content(
-                {**(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
-                 **({"validation": tool_result["validation"]} if "validation" in tool_result else {})},
-                offset=_requested_char_offset(tc),
-            )
+            _tool_payload = {
+                **(tool_result["result"] if isinstance(tool_result.get("result"), dict) else {"result": tool_result.get("result")}),
+                **({"validation": tool_result["validation"]} if "validation" in tool_result else {})}
+            _tool_content = _tool_result_content(_tool_payload, offset=_requested_char_offset(tc))
             # A successful deliverable tool (anything but search) means the
             # model now has authoritative data to synthesize from — stop
             # offering tools so the next call is a clean, tool-free answer.
@@ -1425,12 +1425,13 @@ async def _chat_stream_impl(
                 "ok": tool_result.get("ok", True),
                 "summary": _summarize_result(tool_result["result"])[:400],
             }
-            messages.append({
+            messages.append(note_tool_message(tc, {
                 "role": "tool",
                 "tool_call_id": tc.get("id"),
                 "name": tool_result["name"],
                 "content": _tool_content,
-            })
+                **_tool_message_extra(_tool_payload, _tool_content, tool_result["name"]),
+            }))
             if _empty_router_verdict(tool_result):
                 pending_nudges.append({"role": "user", "content": _EMPTY_ROUTER_NUDGE})
             elif ((_superseded := await _off_loop(
@@ -1443,7 +1444,7 @@ async def _chat_stream_impl(
                                            tool_result, self, project_id=project_id, messages=messages)
                                        + (await _off_loop(_file_tool_hint, messages, project_id,
                                                          self.allowed_blocks))})
-        messages.extend(pending_nudges)
+        messages.extend(pending_nudges + self._search_first_nudges(_sf))
 
     # Hit the cap without a final answer — force one more call with tools disabled.
     daily_damages_cap = (await _off_loop(_should_short_circuit_delay_damages_daily, _rag_sys_msg, messages, has_predispatch=False,

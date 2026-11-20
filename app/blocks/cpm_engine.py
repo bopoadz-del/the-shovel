@@ -40,6 +40,15 @@ class CPMEngineBlock(UniversalBlock):
 
         project_start = data.get("project_start") or params.get("project_start")
 
+        from app.lib.pm_computations import parse_near_critical_band
+        band_in = data.get("near_critical_band_days")
+        if band_in is None:
+            band_in = params.get("near_critical_band_days")
+        try:
+            band = parse_near_critical_band(band_in)
+        except ValueError as exc:
+            return {"status": "error", "error": str(exc)}
+
         try:
             from app.lib.pm_computations import compute_cpm
             from app.schemas.cpm import Activity, CPMInput, WorkCalendar
@@ -56,6 +65,7 @@ class CPMEngineBlock(UniversalBlock):
                 activities=cpm_activities,
                 project_start=project_start,
                 calendar=cal,
+                near_critical_band_days=band,
             )
             output = compute_cpm(cpm_input)
             return {
@@ -67,6 +77,7 @@ class CPMEngineBlock(UniversalBlock):
                 "critical_path": output.critical_path,
                 "critical_percentage": output.critical_percentage,
                 "near_critical": output.near_critical,
+                "near_critical_band_days": output.near_critical_band_days,
                 "results": [r.model_dump() for r in output.results],
             }
         except Exception as exc:  # noqa: BLE001

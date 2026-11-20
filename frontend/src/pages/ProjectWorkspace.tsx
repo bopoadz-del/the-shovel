@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import AppHeader from '../components/AppHeader'
 import { type Project } from './ProjectCard'
-import { apiGet, apiPatch, apiPost, apiPostForm, ApiError } from '../lib/api'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, ApiError } from '../lib/api'
 import { getToken } from '../lib/token'
 import { exportEndpointForWorkspace } from '../lib/exportEndpoint'
 import { ReconnectGaveUp, sendWithReconnect } from '../lib/reconnect'
@@ -20,16 +20,29 @@ import ChatComposer, { type AgentOption } from '../chat/ChatComposer'
 import SourcesList, { type CitedSource } from '../chat/SourcesList'
 import WhyThisAnswer, { type ProvenanceEntry } from '../chat/WhyThisAnswer'
 import { sanitizeAssistantContent } from '../chat/toolJsonGuard'
+import type { FeedbackEcho } from '../chat/feedbackPayload'
 import {
+  afterSessionDeleted,
   freshSessionEntropy,
   historyBelongsToSession,
   mintConversationId,
   orderSessionsNewestFirst,
+  readRememberedSession,
+  rememberSession,
   renameTitleError,
 } from '../chat/session'
 import { activityForTool, plainMetadata } from '../chat/userFacingText'
+import {
+  belongsToProjectList,
+  readSessionDocuments,
+  sessionDocumentsView,
+  withSessionId,
+  type SessionDocumentsState,
+} from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
+import { readCoverage } from '../chat/citationMarkers'
+import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
 
@@ -38,6 +51,23 @@ import './workspace.css'
 interface ProjectDetail extends Project {
   documents?: DocumentRecord[]
   readiness?: ProjectReadiness
+  /** Documents the project holds (hidden copies left out); the server's total. */
+  held_document_count?: number | null
+  /** Documents project search reaches; null when the index is unavailable. */
+  searchable_document_count?: number | null
+}
+
+/** A document pinned to the next question ("Ask about this document"). */
+interface PinnedDocument {
+  id: string
+  name: string
+}
+
+/** True for a stored document record as the upload routes return it. */
+function isDocumentRecord(value: unknown): value is DocumentRecord {
+  if (!value || typeof value !== 'object') return false
+  const row = value as { id?: unknown; original_name?: unknown }
+  return typeof row.id === 'string' && typeof row.original_name === 'string'
 }
 
 interface DocumentRecord {
@@ -61,6 +91,15 @@ interface DocumentRecord {
    * chunks are still stored.
    */
   panel_status?: { label: string; detail: string; status?: string } | null
+  /**
+   * The card's plain status line, set by the server from the same status:
+   * searchable / stored, not searchable (with the reason) / waiting to be
+   * read / failed (with the reason).
+   */
+  document_state?: { state: string; line: string } | null
+  /** The row's stored metadata. ``session_id`` names the chat session a
+   *  file was attached to; such a file is that session's, not the project's. */
+  metadata?: { session_id?: string | null; [key: string]: unknown } | null
 }
 
 interface DriveFile {
@@ -138,6 +177,10 @@ interface ChatMessage {
    *  answer came from (a calculator run with its envelope badge, the operator's
    *  own words, or a retrieved chunk). Drives the "Why this answer" panel. */
   provenance?: ProvenanceEntry[]
+  /** Marker entries from the SSE 'end' event (W3: shown in the Sources panel only). */
+  citations?: AnswerCitation[]
+  /** Coverage from the SSE 'end' event (a Sources panel line, never answer text). */
+  coverage?: AnswerCoverage
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -321,10 +364,17 @@ function friendlyErrorMessage(raw: string): string {
 
 interface DocumentsPanelProps {
   projectId: string
+  /** The open chat session (W2): an upload is recorded on it and listed
+   *  under "This session" only, never in the project's documents. */
+  sessionId?: string | null
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
   onDocumentRemoved: (docId: string) => void
   onDocumentReplaced: (doc: DocumentRecord) => void
+  /** Pin this document to the next question. */
+  onAsk: (doc: DocumentRecord) => void
+  /** Ids of the documents pinned to the next question. */
+  pinnedIds: string[]
 }
 
 // Cap how many document rows we render at once. The master-corpus alias backs
@@ -333,12 +383,15 @@ interface DocumentsPanelProps {
 // ample for the pilot; the remainder are summarised in a footer.
 const MAX_VISIBLE_DOCS = 200
 
-function DocumentsPanel({
+export function DocumentsPanel({
   projectId,
+  sessionId,
   documents,
   onDocumentAdded,
   onDocumentRemoved,
   onDocumentReplaced,
+  onAsk,
+  pinnedIds,
 }: DocumentsPanelProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -357,6 +410,7 @@ function DocumentsPanel({
     try {
       const form = new FormData()
       form.append('file', file)
+      withSessionId(form, sessionId)
       const resp = await apiPostForm<{ document: DocumentRecord }>(
         `/v1/projects/${projectId}/documents`,
         form,
@@ -431,12 +485,23 @@ function DocumentsPanel({
           {documents.slice(0, MAX_VISIBLE_DOCS).map((doc) => {
             const typeBadge = fileTypeBadge(doc.original_name)
             const indexNote = doc.panel_status
+            const pinned = pinnedIds.includes(doc.id)
+            const state = doc.document_state
             return (
-              <li key={doc.id} className="doc-row">
+              <li
+                key={doc.id}
+                className={`doc-row${pinned ? ' doc-row--pinned' : ''}`}
+                data-doc-id={doc.id}
+              >
                 <div className="doc-row__main">
-                  <span className="doc-row__name" title={doc.original_name}>
+                  <button
+                    type="button"
+                    className="doc-row__name"
+                    title={`Ask about ${doc.original_name}`}
+                    onClick={() => onAsk(doc)}
+                  >
                     {doc.original_name}
-                  </span>
+                  </button>
                   <span className="doc-row__meta">
                     {indexNote ? (
                       <span
@@ -457,6 +522,11 @@ function DocumentsPanel({
                     )}
                   </span>
                 </div>
+                {state?.line && (
+                  <span className={`doc-row__state doc-row__state--${state.state}`}>
+                    {state.line}
+                  </span>
+                )}
                 <div className="doc-row__data">
                   {doc.size != null && (
                     <span className="mono doc-row__size">
@@ -483,12 +553,23 @@ function DocumentsPanel({
                   )}
                   <button
                     type="button"
+                    className="btn btn--ghost doc-row__ask"
+                    aria-label={`Ask about ${doc.original_name}`}
+                    aria-pressed={pinned}
+                    disabled={pinned}
+                    onClick={() => onAsk(doc)}
+                  >
+                    {pinned ? 'Pinned' : 'Ask'}
+                  </button>
+                  <button
+                    type="button"
                     className="doc-row__delete"
                     aria-label={`Delete ${doc.original_name}`}
+                    title="Delete this document"
                     disabled={deletingId === doc.id}
                     onClick={() => void handleDeleteDirect(doc)}
                   >
-                    {deletingId === doc.id ? '…' : '×'}
+                    {deletingId === doc.id ? '…' : '× Delete'}
                   </button>
                 </div>
               </li>
@@ -860,6 +941,15 @@ export default function ProjectWorkspace() {
   return <ProjectWorkspaceInner key={id ?? 'none'} id={id} />
 }
 
+/** The browser's local storage, or null where it is unavailable. */
+function browserStorage(): Storage | null {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : null
+  } catch {
+    return null
+  }
+}
+
 function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   const [wsState, setWsState] = useState<WorkspaceState>(
@@ -878,6 +968,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   const [rightExpanded, setRightExpanded] = useState(false)
   const [driveModalOpen, setDriveModalOpen] = useState(false)
   const [previewRequest, setPreviewRequest] = useState<{ docId: string; nonce: number } | null>(null)
+  // W3: a marker clicked in an answer opens the Sources tab on its entry.
+  const [sourcesRequest, setSourcesRequest] = useState<{ marker: number; nonce: number } | null>(null)
+  // One counter numbers every side-panel request (a document preview, a
+  // marker's entry); the panel shows the higher number. A clock is no order:
+  // two clicks in one millisecond tie, and a clock set back runs backwards.
+  const panelRequestSeq = useRef(0)
+  const nextPanelRequest = useCallback(() => {
+    panelRequestSeq.current += 1
+    return panelRequestSeq.current
+  }, [])
+  const openCitation = useCallback((marker: number) => {
+    setSourcesRequest({ marker, nonce: nextPanelRequest() })
+  }, [nextPanelRequest])
+  useEffect(() => {
+    if (!sourcesRequest) return
+    document
+      .getElementById(`citation-entry-${sourcesRequest.marker}`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [sourcesRequest])
 
   // ── / agent-picker: available agents + the user's pinned choice ───────────
   // A pinned agent is sent as `agent` on /v1/chat/stream and runs directly
@@ -892,17 +1001,53 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     return () => { cancelled = true }
   }, [])
 
-  // Opening a project and "New chat" each mint a new id. The legacy
-  // stable id is never the composer thread, so the first send cannot
-  // append to an older conversation. Past sessions are reopened from
-  // the list. The list is GET /v1/projects/{id}/conversations.
+  // The open session is remembered per project in this browser: a reload,
+  // or leaving the workspace and coming back, reopens the same thread with
+  // its stored history. With nothing remembered, opening a project and
+  // "New chat" each mint a new id; the legacy stable id is never the
+  // composer thread. The list is GET /v1/projects/{id}/conversations.
+  const [restoredConversationId] = useState<string | null>(() =>
+    readRememberedSession(id, browserStorage()),
+  )
   const [activeConversationId, setActiveConversationId] = useState<string | null>(() =>
-    id ? mintConversationId(id, freshSessionEntropy()) : null,
+    restoredConversationId ?? (id ? mintConversationId(id, freshSessionEntropy()) : null),
   )
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
   const conversationId = activeConversationId
   const activeIdRef = useRef<string | null>(activeConversationId)
   activeIdRef.current = activeConversationId
+  useEffect(() => {
+    rememberSession(id, activeConversationId, browserStorage())
+  }, [id, activeConversationId])
+
+  // W2: the open session's own files (uploaded in it or produced by it),
+  // shown under "This session" above the project's documents. Re-read when
+  // the session changes, after an upload and after each answer; a reply for
+  // a session the user has since left is dropped.
+  // Rows are stored with the session they belong to, so another session's
+  // rows are never shown while the new session's reply is in flight. A
+  // failed read is kept as an error state (G-1), never shown as "no files".
+  const [sessionDocsState, setSessionDocsState] = useState<SessionDocumentsState | null>(null)
+  const sessionDocsStateRef = useRef<SessionDocumentsState | null>(null)
+  const sessionDocs = sessionDocumentsView(sessionDocsState, activeConversationId)
+  const refreshSessionDocuments = useCallback(() => {
+    const cid = activeIdRef.current
+    if (!id || !cid) return
+    void readSessionDocuments(
+      apiGet,
+      `/v1/projects/${id}/conversations/${encodeURIComponent(cid)}/documents`,
+      cid,
+      () => activeIdRef.current,
+      sessionDocsStateRef.current,
+    ).then((next) => {
+      if (!next) return
+      sessionDocsStateRef.current = next
+      setSessionDocsState(next)
+    })
+  }, [id])
+  useEffect(() => {
+    refreshSessionDocuments()
+  }, [refreshSessionDocuments, activeConversationId])
 
   const refreshConversations = useCallback(() => {
     if (!id) return
@@ -933,6 +1078,29 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // fallback), then cleared once the send goes out.
   const pendingAttachedDocIdsRef = useRef<string[]>([])
 
+  // Documents pinned from the sidebar ("Ask about this document"). The
+  // next send carries their ids as document_ids, the same path a composer
+  // upload uses; the server resolves each id to the document after its
+  // access check. The ref mirrors the state for the send callback.
+  const [pinnedDocs, setPinnedDocs] = useState<PinnedDocument[]>([])
+  const pinnedDocsRef = useRef<PinnedDocument[]>([])
+  const updatePinnedDocs = useCallback((next: (prev: PinnedDocument[]) => PinnedDocument[]) => {
+    setPinnedDocs((prev) => {
+      const value = next(prev)
+      pinnedDocsRef.current = value
+      return value
+    })
+  }, [])
+
+  // The list as last rendered, for handlers that must not double-count.
+  const documentsRef = useRef<DocumentRecord[]>([])
+  useEffect(() => { documentsRef.current = documents }, [documents])
+
+  // The chat pane's totals come from the server, never from one page.
+  const [docTotals, setDocTotals] = useState<{ held: number | null; searchable: number | null }>(
+    { held: null, searchable: null },
+  )
+
   // ── Load project ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -944,7 +1112,11 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         const project = await apiGet<ProjectDetail>(`/v1/projects/${id}`)
         if (cancelled) return
         setWsState({ tag: 'ready', project })
-        setDocuments(project.documents ?? [])
+        setDocuments((project.documents ?? []).filter(belongsToProjectList))
+        setDocTotals({
+          held: project.held_document_count ?? null,
+          searchable: project.searchable_document_count ?? null,
+        })
       } catch (err) {
         if (cancelled) return
         if (err instanceof ApiError && err.status === 404) {
@@ -962,11 +1134,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
 
   // ── Chat session switching (Quarry CHAT HISTORY) ──────────────────────────
 
-  const handleSelectConversation = useCallback((convId: string) => {
-    abortRef.current?.abort()
-    activeIdRef.current = convId
-    setActiveConversationId(convId)
-    setMessages([])
+  const loadSessionHistory = useCallback((convId: string) => {
     apiGet<{ messages: Array<{ role: string; content: string }> }>(
       `/v1/agents/conversations/${convId}/messages`,
     )
@@ -983,8 +1151,31 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         if (!kept) return
         setMessages(kept)
       })
-      .catch(() => { /* empty thread on failure — same as project load */ })
-  }, [])
+      .catch((err: unknown) => {
+        // A remembered session this caller can no longer open (deleted on
+        // another device, another user signed in on this browser) is not
+        // shown as an error: a fresh session takes its place.
+        if (err instanceof ApiError && err.status === 404 && id
+          && activeIdRef.current === convId) {
+          const next = mintConversationId(id, freshSessionEntropy())
+          activeIdRef.current = next
+          setActiveConversationId(next)
+        }
+      })
+  }, [id])
+
+  const handleSelectConversation = useCallback((convId: string) => {
+    abortRef.current?.abort()
+    activeIdRef.current = convId
+    setActiveConversationId(convId)
+    setMessages([])
+    loadSessionHistory(convId)
+  }, [loadSessionHistory])
+
+  // Reopen the remembered session once, when the workspace mounts.
+  useEffect(() => {
+    if (restoredConversationId) loadSessionHistory(restoredConversationId)
+  }, [restoredConversationId, loadSessionHistory])
 
   const handleNewConversation = useCallback(() => {
     if (!id) return
@@ -1008,16 +1199,57 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
     )
   }, [id])
 
+  const handleDeleteConversation = useCallback(async (convId: string) => {
+    if (!id) return
+    await apiDelete<{ status: string }>(
+      `/v1/projects/${id}/conversations/${encodeURIComponent(convId)}`,
+    )
+    // Read the open id before the list update: deleting the open session
+    // replaces it with a fresh one, deleting another leaves it alone.
+    const { replaceActive } = afterSessionDeleted([], convId, activeIdRef.current)
+    setConversationList((prev) => afterSessionDeleted(prev, convId, activeIdRef.current).rows)
+    if (replaceActive) handleNewConversation()
+  }, [id, handleNewConversation])
+
   // ── Document mutation callbacks ───────────────────────────────────────────
 
+  // The list is newest first, so a new document goes on top. The totals
+  // move with the list; a new upload is not searchable yet. A file attached
+  // to a chat session is that session's: it is listed under "This session"
+  // (refreshSessionDocuments), never in the project's list, which outlives
+  // the chat it was attached in.
   const handleDocumentAdded = useCallback((doc: DocumentRecord) => {
-    setDocuments((prev) => [...prev, doc])
+    if (!belongsToProjectList(doc)) return
+    if (documentsRef.current.some((d) => d.id === doc.id)) return
+    documentsRef.current = [doc, ...documentsRef.current]
+    setDocuments((prev) => (prev.some((d) => d.id === doc.id) ? prev : [doc, ...prev]))
+    setDocTotals((t) => ({ ...t, held: t.held === null ? null : t.held + 1 }))
   }, [])
 
   // PR #104: DocumentsPanel is back in the LeftPanel — handler used again.
   const handleDocumentRemoved = useCallback((docId: string) => {
+    const gone = documentsRef.current.find((d) => d.id === docId)
+    documentsRef.current = documentsRef.current.filter((d) => d.id !== docId)
     setDocuments((prev) => prev.filter((d) => d.id !== docId))
-  }, [])
+    if (gone) {
+      const wasSearchable = (gone.chunk_count ?? 0) > 0
+      setDocTotals((t) => ({
+        held: t.held === null ? null : Math.max(0, t.held - 1),
+        searchable: t.searchable === null || !wasSearchable ? t.searchable : Math.max(0, t.searchable - 1),
+      }))
+    }
+    updatePinnedDocs((prev) => prev.filter((d) => d.id !== docId))
+  }, [updatePinnedDocs])
+
+  const handleAskAboutDocument = useCallback((doc: DocumentRecord) => {
+    updatePinnedDocs((prev) => (
+      prev.some((d) => d.id === doc.id) ? prev : [...prev, { id: doc.id, name: doc.original_name }]
+    ))
+  }, [updatePinnedDocs])
+
+  const handleUnpinDocument = useCallback((docId: string) => {
+    updatePinnedDocs((prev) => prev.filter((d) => d.id !== docId))
+  }, [updatePinnedDocs])
 
   const handleDocumentReplaced = useCallback((doc: DocumentRecord) => {
     setDocuments((prev) => prev.map((row) => (row.id === doc.id ? doc : row)))
@@ -1047,6 +1279,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       role: m.role,
       content: m.content,
     }))
+    // Files attached in the composer and documents pinned from the sidebar,
+    // each id once.
+    const requestDocumentIds = Array.from(new Set([
+      ...pendingAttachedDocIdsRef.current,
+      ...pinnedDocsRef.current.map((d) => d.id),
+    ]))
 
     // Append user message + empty streaming assistant bubble.
     // Drop any stale error bubbles from a prior turn so they don't linger.
@@ -1135,9 +1373,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           // / agent-picker: omit (or "auto") = today's automatic routing.
           agent: pinnedAgent ?? undefined,
           // S4: real ids for files attached this turn (marker is the fallback).
-          document_ids: pendingAttachedDocIdsRef.current.length
-            ? [...pendingAttachedDocIdsRef.current]
-            : undefined,
+          document_ids: requestDocumentIds.length ? requestDocumentIds : undefined,
         }),
         signal: controller.signal,
       }),
@@ -1157,7 +1393,9 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         prev.map((m) => (m.id === assistantMsgId ? { ...m, toolStatus: undefined } : m))
       )
       // Sent (ok or not) — the server-side marker parser covers any retry.
+      // A pin is for one question: it is cleared with the send.
       pendingAttachedDocIdsRef.current = []
+      updatePinnedDocs(() => [])
 
       if (!res.ok || !res.body) {
         let errMsg = `HTTP ${res.status}`
@@ -1296,10 +1534,12 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawSources = Array.isArray(evt['sources']) ? (evt['sources'] as ChatMessage['sources']) : []
               const rawExports = Array.isArray(evt['exports']) ? (evt['exports'] as ChatMessage['exports']) : []
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
+              const rawCitations = Array.isArray(evt['citations']) ? (evt['citations'] as AnswerCitation[]) : []
+              const rawCoverage = readCoverage(evt['coverage'])
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage }
                     : m
                 )
               )
@@ -1395,8 +1635,9 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       // First message stamps the session title server-side — refresh the
       // sidebar CHAT HISTORY list so the new session appears named.
       refreshConversations()
+      refreshSessionDocuments()
     }
-  }, [id, conversationId, streaming, refreshConversations, pinnedAgent])
+  }, [id, conversationId, streaming, refreshConversations, refreshSessionDocuments, pinnedAgent, updatePinnedDocs])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1473,7 +1714,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // Sources list and the per-input "document" links in Why this answer.
   const openSource = (s: CitedSource) => {
     if (!s.doc_id) return
-    setPreviewRequest({ docId: s.doc_id, nonce: Date.now() })
+    setPreviewRequest({ docId: s.doc_id, nonce: nextPanelRequest() })
   }
 
   // Sources the answer cited that this project does not own — Master-Corpus
@@ -1520,17 +1761,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // without duplicating fetch wiring. Drive still opens as a modal from
   // the ChatComposer's + popover.
 
-  async function exportConversation() {
-    if (!id || !conversationId) return
+  // Every export the page offers goes through here. The server keeps what
+  // it serves in a session as that session's Produced document (W2), so
+  // after ANY successful export the session's list is re-read at once; a
+  // control that skipped this left "No files in this session yet" showing.
+  async function downloadExport(
+    url: string,
+    init: RequestInit,
+    fallbackName: string,
+    failLabel: string,
+  ) {
     const token = getToken() || ''
     try {
-      const res = await fetch(
-        `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=docx`,
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
-      )
+      const res = await fetch(url, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+      })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
-        alert(`Export failed (${res.status}): ${detail.slice(0, 200)}`)
+        alert(`${failLabel} failed (${res.status}): ${detail.slice(0, 200)}`)
         return
       }
       const blob = await res.blob()
@@ -1539,14 +1788,25 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       a.href = objUrl
       const cd = res.headers.get('Content-Disposition') || ''
       const m = /filename="?([^";]+)"?/.exec(cd)
-      a.download = m?.[1] || `the-fork-${conversationId.slice(0, 8)}.docx`
+      a.download = m?.[1] || fallbackName
       document.body.appendChild(a)
       a.click()
       a.remove()
       URL.revokeObjectURL(objUrl)
+      refreshSessionDocuments()
     } catch (err) {
-      alert(`Export error: ${(err as Error).message}`)
+      alert(`${failLabel} error: ${(err as Error).message}`)
     }
+  }
+
+  async function exportConversation() {
+    if (!id || !conversationId) return
+    await downloadExport(
+      `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=docx`,
+      { method: 'POST' },
+      `the-fork-${conversationId.slice(0, 8)}.docx`,
+      'Export',
+    )
   }
 
   async function clearConversation() {
@@ -1591,14 +1851,23 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
           onRenameConversation={handleRenameConversation}
+          onDeleteConversation={handleDeleteConversation}
           onClearConversation={clearConversation}
+          sessionDocuments={sessionDocs}
+          onRetrySessionDocuments={refreshSessionDocuments}
           documents={
             <DocumentsPanel
               projectId={id ?? ''}
+              sessionId={conversationId}
               documents={documents}
-              onDocumentAdded={handleDocumentAdded}
+              onDocumentAdded={(doc) => {
+                handleDocumentAdded(doc)
+                refreshSessionDocuments()
+              }}
               onDocumentRemoved={handleDocumentRemoved}
               onDocumentReplaced={handleDocumentReplaced}
+              onAsk={handleAskAboutDocument}
+              pinnedIds={pinnedDocs.map((d) => d.id)}
             />
           }
         />
@@ -1607,72 +1876,49 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
         <div className="workspace-main">
           <ChatList
             messages={messages}
-            documentCount={documents.length}
+            heldDocumentCount={docTotals.held}
+            searchableDocumentCount={docTotals.searchable}
             onSuggestion={(text) => void handleSend(text)}
             suggestionsDisabled={streaming || composerIsBlocked}
             onDownloadMessage={(assistantIndex, format) => {
               if (!id || !conversationId) return
-              const token = getToken() || ''
-              const url = `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}`
-              void fetch(url, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-              })
-                .then(async (res) => {
-                  if (!res.ok) {
-                    const detail = await res.text().catch(() => '')
-                    alert(`Download failed (${res.status}): ${detail.slice(0, 200)}`)
-                    return
-                  }
-                  const blob = await res.blob()
-                  const a = document.createElement('a')
-                  const objUrl = URL.createObjectURL(blob)
-                  a.href = objUrl
-                  const cd = res.headers.get('Content-Disposition') || ''
-                  const m = /filename="?([^";]+)"?/.exec(cd)
-                  a.download = m?.[1] || `the-fork-${conversationId.slice(0, 8)}.${format}`
-                  document.body.appendChild(a)
-                  a.click()
-                  a.remove()
-                  URL.revokeObjectURL(objUrl)
-                })
-                .catch((e) => alert(`Download error: ${(e as Error).message}`))
+              // The download control under an answer produces that answer as
+              // a document (W2-a): scope=document. The sidebar's conversation
+              // export stays the plain excerpt.
+              void downloadExport(
+                `${API_BASE}/v1/projects/${id}/conversations/${conversationId}/export?format=${format}&message_index=${assistantIndex}&scope=document`,
+                { method: 'POST' },
+                `the-fork-${conversationId.slice(0, 8)}.${format}`,
+                'Download',
+              )
             }}
+            feedback={
+              id && conversationId
+                ? {
+                    projectId: id,
+                    conversationId,
+                    post: (body) => apiPost<FeedbackEcho>('/v1/feedback/answer', body),
+                  }
+                : undefined
+            }
+            onCitation={openCitation}
             onExport={(descriptor) => {
               // Data-backed download offer (e.g. cost BOQ / A1–A9 Word). The
               // descriptor's endpoint is server-relative; generation happens
               // server-side on click (bounded), not in the chat hot path.
               // Rewrite a remapped RAG corpus id (drive_archive) to the
               // workspace the user is actually in.
-              const token = getToken() || ''
               const endpoint = exportEndpointForWorkspace(descriptor.endpoint, id)
-              void fetch(`${API_BASE}${endpoint}`, {
-                method: descriptor.method || 'POST',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'Content-Type': 'application/json',
+              void downloadExport(
+                `${API_BASE}${endpoint}`,
+                {
+                  method: descriptor.method || 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(descriptor.payload ?? {}),
                 },
-                body: JSON.stringify(descriptor.payload ?? {}),
-              })
-                .then(async (res) => {
-                  if (!res.ok) {
-                    const detail = await res.text().catch(() => '')
-                    alert(`Export failed (${res.status}): ${detail.slice(0, 200)}`)
-                    return
-                  }
-                  const blob = await res.blob()
-                  const a = document.createElement('a')
-                  const objUrl = URL.createObjectURL(blob)
-                  a.href = objUrl
-                  const cd = res.headers.get('Content-Disposition') || ''
-                  const m = /filename="?([^";]+)"?/.exec(cd)
-                  a.download = m?.[1] || `the-fork-export.${descriptor.format || 'xlsx'}`
-                  document.body.appendChild(a)
-                  a.click()
-                  a.remove()
-                  URL.revokeObjectURL(objUrl)
-                })
-                .catch((e) => alert(`Export error: ${(e as Error).message}`))
+                `the-fork-export.${descriptor.format || 'xlsx'}`,
+                'Export',
+              )
             }}
           />
           <ChatComposer
@@ -1687,16 +1933,23 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
             disabled={streaming || composerIsBlocked}
             disabledReason={composerBlockedReason}
             projectId={id ?? ''}
+            sessionId={conversationId}
             hasHistory={messages.length > 0}
             onOpenDrive={() => setDriveModalOpen(true)}
             onClear={clearConversation}
             agents={agents}
             pinnedAgent={pinnedAgent}
             onPinAgent={setPinnedAgent}
-            onAttached={(_name, docId) => {
+            pinnedDocuments={pinnedDocs}
+            onUnpinDocument={handleUnpinDocument}
+            onAttached={(_name, docId, stored) => {
               // S4: keep the real document_id so the next send carries it as
               // document_ids — the [attached: name] marker alone is lossy.
               if (docId) pendingAttachedDocIdsRef.current.push(docId)
+              // A project file shows in the documents list at once; a
+              // session file shows under "This session" (handleDocumentAdded).
+              if (isDocumentRecord(stored)) handleDocumentAdded(stored)
+              refreshSessionDocuments()
             }}
           />
         </div>
@@ -1707,6 +1960,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           expanded={rightExpanded}
           onToggleExpand={() => setRightExpanded((v) => !v)}
           projectId={id ?? ''}
+          sessionId={conversationId}
           documents={documents.map((d) => ({
             id: d.id,
             original_name: d.original_name,
@@ -1714,11 +1968,15 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
           }))}
           citedDocuments={citedPreviewDocs}
           previewRequest={previewRequest}
+          sourcesRequest={sourcesRequest}
           onPreviewHydrated={handlePreviewHydrated}
           sources={
             <>
               <SourcesList
                 sources={latestSources}
+                citations={latestAssistant?.citations}
+                coverage={latestAssistant?.coverage}
+                activeMarker={sourcesRequest?.marker ?? null}
                 streaming={latestAssistant?.streaming}
                 activeDocId={previewRequest?.docId}
                 onOpenSource={openSource}

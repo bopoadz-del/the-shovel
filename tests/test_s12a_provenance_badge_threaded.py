@@ -15,6 +15,8 @@ import json
 
 import pytest
 
+from app.lib import formula_registry
+
 from app.agents import provenance_trail as pt
 from app.agents.citation_provenance import (
     _calculator_credits,
@@ -65,7 +67,8 @@ def test_the_credit_carries_the_envelope_badge(calculation, params, tmpl):
     badge = envelope_provenance(calculation, env.get("result"))
     assert credits[0].envelope == badge
     assert badge["provenance"] in {"kernel", "reference_table", "improvised"}
-    assert badge["certified"] is (badge["provenance"] == "kernel")
+    # KS-1: certified is derived (declared standard AND hand values reproduced).
+    assert badge["certified"] is (badge["provenance"] == "kernel" and formula_registry.certified(calculation))
 
 
 @pytest.mark.parametrize("calculation, params, tmpl", _CASES)
@@ -81,7 +84,7 @@ def test_the_entry_carries_the_badge_threaded_through(calculation, params, tmpl)
     assert entry.get("standard") == badge["standard"]
     assert isinstance(entry.get("standard"), str) and entry["standard"].strip()
     assert entry.get("certified") == badge["certified"]
-    assert entry["certified"] is (entry["provenance"] == "kernel")
+    assert entry["certified"] is (entry["provenance"] == "kernel" and formula_registry.certified(calculation))
 
 
 @pytest.mark.parametrize("calculation, params, _tmpl", _CASES)

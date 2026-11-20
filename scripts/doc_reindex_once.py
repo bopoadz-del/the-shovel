@@ -22,7 +22,16 @@ place. The transient copy is deleted on every exit.
 
 The last line is ``REINDEXSUMMARY <json>`` with the before/after
 ``chunk_count``, ``ingest_status``, ``pages_in_file``, ``pages_ocrd`` and the
-heading lines found.
+heading lines found. A successful run with a heading pattern also stores those
+lines on the document row as ``metadata.headings`` (``pattern``, ``lines``,
+``at``).
+
+The summary is one log line, and a log line has a size limit: it carries the
+heading count and only the first ``DOC_REINDEX_SUMMARY_HEADINGS`` lines (each
+clipped), so it always parses; the full list is the one on the row. It also
+names the build that ran (``build_sha``) and the ingest profile and OCR skip
+reason the index reported, so a run on an image older than the code it was
+meant to test says so.
 """
 from __future__ import annotations
 
@@ -32,6 +41,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -40,7 +50,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 SUMMARY_PREFIX = "REINDEXSUMMARY "
+#: Document attribute (``metadata.headings``) holding the run's heading lines.
+HEADINGS_KEY = "headings"
 DOC_FIELDS = ("chunk_count", "ingest_status", "pages_in_file", "pages_ocrd")
+#: ``index_document`` result fields the summary carries.
+INDEX_RESULT_FIELDS = (
+    "status", "error", "indexed", "rag_indexed", "ingest_profile",
+    "ocr_skip_reason",
+)
+#: Heading lines the summary line carries by default (the row keeps them all).
+DEFAULT_SUMMARY_HEADINGS = 40
+#: Longest heading line, in characters, the summary line carries.
+SUMMARY_HEADING_CHARS = 160
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -57,7 +78,9 @@ class Deps:
     set_file_path: Callable[[str, str], Any]
     index_document: Callable[..., Dict[str, Any]]
     chunk_texts: Callable[[str, str], List[str]]
+    update_metadata: Callable[[str, Dict[str, Any]], Any]
     log: Callable[[str], None] = field(default=print)
+    build_sha: Callable[[], Optional[str]] = field(default=lambda: None)
 
 
 def doc_state(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -82,6 +105,32 @@ def heading_lines(texts: List[str], pattern: Optional[str]) -> List[str]:
     return out
 
 
+def summary_headings(lines: List[str], limit: int) -> Dict[str, Any]:
+    """The bounded view of ``lines`` the summary line carries.
+
+    ``count`` is every line found; ``lines`` is the first ``limit`` of them,
+    each clipped to ``SUMMARY_HEADING_CHARS``; ``truncated`` says whether any
+    line was left out.
+    """
+    limit = max(0, int(limit))
+    kept = [
+        line if len(line) <= SUMMARY_HEADING_CHARS
+        else line[:SUMMARY_HEADING_CHARS - 3] + "..."
+        for line in lines[:limit]
+    ]
+    return {"count": len(lines), "lines": kept, "truncated": len(lines) > limit}
+
+
+def parse_count(raw: Optional[str], *, default: int) -> int:
+    value = (raw or "").strip()
+    if not value:
+        return default
+    count = int(value)  # ValueError on a non-number
+    if count < 0:
+        raise ValueError(f"not a non-negative count: {raw!r}")
+    return count
+
+
 def parse_flag(raw: Optional[str], *, default: bool) -> bool:
     value = (raw or "").strip().lower()
     if not value:
@@ -100,12 +149,14 @@ def reindex_one(
     force_ocr: bool,
     heading_re: Optional[str],
     deps: Deps,
+    max_summary_headings: int = DEFAULT_SUMMARY_HEADINGS,
 ) -> Dict[str, Any]:
     """Re-index one document from its Drive original; never raises on I/O."""
     report: Dict[str, Any] = {
         "project_id": project_id,
         "document_id": document_id,
         "force_ocr": force_ocr,
+        "build_sha": deps.build_sha(),
         "ok": False,
     }
     if heading_re:
@@ -148,16 +199,30 @@ def reindex_one(
     finally:
         deps.discard_transient(path)
     report["index_result"] = {
-        k: result.get(k) for k in ("status", "error", "indexed", "rag_indexed")
-        if k in result
+        k: result.get(k) for k in INDEX_RESULT_FIELDS if k in result
     }
     report["after"] = doc_state(deps.get_document(document_id))
-    report["headings"] = heading_lines(
-        deps.chunk_texts(project_id, document_id), heading_re,
-    )
+    headings = heading_lines(deps.chunk_texts(project_id, document_id), heading_re)
+    bounded = summary_headings(headings, max_summary_headings)
+    report["headings"] = bounded["lines"]
+    report["headings_count"] = bounded["count"]
+    report["headings_truncated"] = bounded["truncated"]
     report["ok"] = not result.get("error") and result.get("status") != "error"
     if not report["ok"]:
         report["error"] = result.get("error") or "index_document reported an error"
+    report["headings_stored"] = False
+    if report["ok"] and heading_re:
+        # The row keeps what this run found in its own new chunks, with the
+        # pattern that found it; a failed run kept the old chunks, so it
+        # writes nothing.
+        deps.update_metadata(document_id, {
+            HEADINGS_KEY: {
+                "pattern": heading_re,
+                "lines": list(headings),
+                "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        })
+        report["headings_stored"] = True
     return report
 
 
@@ -183,6 +248,7 @@ def write_transient_copy(raw: bytes, name: str) -> Path:
 def production_deps() -> Deps:
     from app.core import doc_index, gdrive_service, projects as projects_mod
     from app.core.rag import vector_store as _vs
+    from app.routers import health as _health
     from scripts import p1b_ingest_drive_server as p1b
 
     def _chunk_texts(project_id: str, document_id: str) -> List[str]:
@@ -201,7 +267,9 @@ def production_deps() -> Deps:
             doc_index.index_document, profile=doc_index.PROFILE_CORPUS_BUILD,
         ),
         chunk_texts=_chunk_texts,
+        update_metadata=projects_mod.update_document_metadata,
         log=p1b.log,
+        build_sha=_health._deployed_build_sha,  # noqa: SLF001
     )
 
 
@@ -218,12 +286,16 @@ def main_from_env(env: Optional[Dict[str, str]] = None, deps: Optional[Deps] = N
         heading_re = env.get("DOC_REINDEX_HEADING_RE") or None
         if heading_re:
             re.compile(heading_re)
+        max_headings = parse_count(
+            env.get("DOC_REINDEX_SUMMARY_HEADINGS"), default=DEFAULT_SUMMARY_HEADINGS,
+        )
     except (ValueError, re.error) as exc:
         out(f"ERROR: {exc}")
         return 2
     deps = deps or production_deps()
     report = reindex_one(
         project_id, document_id, force_ocr=force_ocr, heading_re=heading_re, deps=deps,
+        max_summary_headings=max_headings,
     )
     deps.log(SUMMARY_PREFIX + json.dumps(report, sort_keys=True, default=str))
     return 0 if report["ok"] else 1

@@ -192,6 +192,7 @@ def _reindex_deps(projects, calls):
         set_file_path=lambda doc_id, path: None,
         index_document=lambda *a, **k: calls.append(("index", a[1])) or {"status": "ok"},
         chunk_texts=lambda p, d: [],
+        update_metadata=lambda doc_id, md: calls.append(("update_metadata", doc_id)),
         log=lambda m: None,
     )
 

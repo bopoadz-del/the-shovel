@@ -27,8 +27,8 @@ for (const [label, bytes, expected] of [
 }
 
 for (const [name, mime, bytes, expected] of [
-  ['Document from شادي Chadi 🇸🇦', '', JPEG, true],
-  ['Document from شادي Chadi 🇸🇦', '', PDF, false],
+  ['Document from مرسل Sender 🇸🇦', '', JPEG, true],
+  ['Document from مرسل Sender 🇸🇦', '', PDF, false],
   ['site.JPG', '', TEXT, true],
   ['shared', 'image/heic', TEXT, true],
   ['minutes.pdf', 'application/pdf', PDF, false],
@@ -39,7 +39,7 @@ for (const [name, mime, bytes, expected] of [
 }
 
 for (const [name, expected] of [
-  ['Document from شادي Chadi 🇸🇦', 'Document_from_Chadi'],
+  ['Document from مرسل Sender 🇸🇦', 'Document_from_Sender'],
   ['تقرير.pdf', 'upload.pdf'],
   ['Site Report v1.2.docx', 'Site_Report_v1.2.docx'],
   ['Café menu.txt', 'Cafe_menu.txt'],
@@ -52,7 +52,7 @@ for (const [name, expected] of [
   })
 }
 
-for (const name of ['Document from شادي', 'plan.pdf']) {
+for (const name of ['Document from مرسل', 'plan.pdf']) {
   test(`unreadableFileMessage names the file and the cause (${name})`, () => {
     const msg = unreadableFileMessage(name)
     assert.ok(msg.includes(name))

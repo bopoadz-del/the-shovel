@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.agents.runtime import (
     _EMPTY_RESPONSE_FALLBACK,
-    _SYNTH_CUTOFF_NOTICE,
     _postprocess_answer,
     _recover_answer_from_tool_messages,
 )
@@ -162,24 +163,28 @@ def test_unwrap_hostile_envelope_still_composes_from_the_ask():
     _assert_priced(out)
 
 
-def test_successful_calc_plus_truly_empty_never_ships_blank():
-    """Last-chance: a success-but-empty calc with a non-composable ask still
-    emits a cut-off sentence, not ''."""
+@pytest.mark.parametrize("calculation, figures", [
+    ("concrete_volume", {"ok": True}),
+    ("excavation_volume", {"standard": "geometry"}),
+])
+def test_successful_calc_plus_truly_empty_never_ships_blank(calculation, figures):
+    """Last-chance: a success-but-empty calc with a non-composable ask says
+    plainly that the calculator returned no figure -- not '', and not the
+    generic 'unable to generate' sentence (#392 grader point 1)."""
     # A non-calc ask matches no answer composer, and the envelope carries no
     # formatable volume, so nothing composes and synthesis stays empty.
     hostile = {
         "status": "success",
-        "calculation": "concrete_volume",
-        "result": {"ok": True},
+        "calculation": calculation,
+        "result": figures,
     }
     msgs = _msgs(ask="Please give me a short project status update.", payload=hostile)
     out = _postprocess_answer("", None, msgs)
     assert out.strip()
     assert "22912" not in out.replace(",", "")
-    assert out.strip() in (
-        _SYNTH_CUTOFF_NOTICE,
-        _EMPTY_RESPONSE_FALLBACK,
-    ) or _SYNTH_CUTOFF_NOTICE in out
+    assert _EMPTY_RESPONSE_FALLBACK not in out
+    assert "unable to generate" not in out.lower()
+    assert "returned no figure" in out
 
 
 def test_e4_raft_without_a_user_rate_is_not_priced():
