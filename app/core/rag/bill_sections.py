@@ -293,22 +293,19 @@ def _chunk_row_segments(row_segments, text: str, previous: str | None) -> list[s
 
 
 def _compact_row(text: str) -> str:
-    """A row's text for the model: whole when it fits, else head + tail.
+    """A row's text for the model: whole when the two windows meet, else
+    head + tail.
 
     The tail carries the figures and the description lines just above them;
     the head carries the item name. A long wrapped description (or one split
-    across a page break) is longer than :data:`_ROW_MAX`, and keeping only
-    the tail loses the item name, so the row cannot be matched to its item
-    in :func:`rows_for_item`. Keep both ends and elide the middle.
+    across a page break) is longer than both windows put together, and
+    keeping only the tail loses the item name, so the row cannot be matched
+    to its item in :func:`rows_for_item`. When the windows meet there is no
+    middle to elide and the row is returned whole.
     """
-    if len(text) <= _ROW_MAX:
+    if len(text) <= _ROW_HEAD_MAX + _ROW_MAX:
         return text
-    head = text[:_ROW_HEAD_MAX].rstrip()
-    tail = text[-_ROW_MAX:]
-    if len(head) + len(tail) >= len(text):
-        # The two windows already cover the whole row; no middle to elide.
-        return text
-    return f"{head} ... {tail}"
+    return f"{text[:_ROW_HEAD_MAX].rstrip()} ... {text[-_ROW_MAX:]}"
 
 
 def _labelled_rows(chunks, sections, numbers, row_segments):
