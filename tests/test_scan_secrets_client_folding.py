@@ -268,9 +268,14 @@ def test_capitals_that_are_not_a_name_stay_clean(label, core):
     assert _hits(core + "\n") == [], label
 
 
-def test_a_full_stop_ends_a_capitalised_run_too():
-    """A sentence break is not a surname-first attribution."""
-    assert _hits(f"{_set_in_capitals(LAST)}. {_set_in_capitals(FIRST)} signed\n") == []
+@pytest.mark.parametrize(
+    "label, break_between",
+    [("a full stop", "."), ("a semicolon", ";")],
+)
+def test_a_sentence_break_ends_a_capitalised_run(label, break_between):
+    """A break between two capitalised words is not a surname-first name."""
+    text = f"{_set_in_capitals(LAST)}{break_between} {_set_in_capitals(FIRST)} signed\n"
+    assert _hits(text) == [], label
 
 # -- the other direction: no manufactured hits ---------------------------------
 
