@@ -88,12 +88,14 @@ function render(entries, opts = {}) {
 // machine provenance value.
 const CALC_CASES = [
   { provenance: 'kernel', certified: true, label: 'Certified calculation' },
+  // KS-1: a kernel the backend has not verified is never shown as certified.
+  { provenance: 'kernel', certified: false, label: 'Platform calculation' },
   { provenance: 'reference_table', certified: false, label: 'Reference data' },
   { provenance: 'improvised', certified: false, label: 'Estimated' },
 ]
 
 for (const c of CALC_CASES) {
-  test(`a ${c.provenance} calc figure shows "${c.label}" and never the machine value`, () => {
+  test(`a ${c.provenance} (certified=${c.certified}) calc figure shows "${c.label}" and never the machine value`, () => {
     const html = render([{
       figure: '8.75 T/m2',
       source: 'calculator',
@@ -115,6 +117,7 @@ for (const c of CALC_CASES) {
     assert.doesNotMatch(text, SNAKE)
     assert.doesNotMatch(text, KEY_VALUE)
     assert.doesNotMatch(text, /none declared/)
+    if (!c.certified) assert.doesNotMatch(text, /certified/i)
   })
 }
 

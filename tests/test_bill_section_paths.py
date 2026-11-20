@@ -419,14 +419,163 @@ def test_section_heading_is_not_a_running_line(prefix):
     assert running.page_label == "page #"
 
 
-@pytest.mark.parametrize("prefix", ["BILL NO.", "SECTION"], ids=["bill-no", "section"])
-def test_section_heading_survives_in_the_path(prefix):
+@pytest.mark.parametrize("prefix, expected", [
+    ("BILL NO.", [
+        ("GENERAL ITEMS / BILL NO. 1",),
+        ("GENERAL ITEMS / BILL NO. 1",),
+        ("GENERAL ITEMS / BILL NO. 2",),
+        ("SUPPLEMENTARY / BILL NO. 2",),
+        ("SUPPLEMENTARY / BILL NO. 3",),
+        ("SUPPLEMENTARY / BILL NO. 3",),
+    ]),
+    ("SECTION", [
+        ("GENERAL ITEMS", "SECTION 1"),
+        ("GENERAL ITEMS", "SECTION 1"),
+        ("GENERAL ITEMS", "SECTION 2"),
+        ("SUPPLEMENTARY", "SECTION 2"),
+        ("SUPPLEMENTARY", "SECTION 3"),
+        ("SUPPLEMENTARY", "SECTION 3"),
+    ]),
+], ids=["bill-no", "section"])
+def test_section_heading_survives_in_the_path(prefix, expected):
+    """A repeated per-bill heading is not a running line and survives in the
+    path: a bill heading (the ``_HEADING_RE`` grammar) joins the title band
+    as the section title wherever it is printed; a generic section heading is
+    a body sub-level."""
     words = _section_heading_words(prefix)
-    assert [r.path for r in g.extract_bill_rows(words)] == [
-        ("GENERAL ITEMS", f"{prefix} 1"),
-        ("GENERAL ITEMS", f"{prefix} 1"),
-        ("GENERAL ITEMS", f"{prefix} 2"),
-        ("SUPPLEMENTARY", f"{prefix} 2"),
-        ("SUPPLEMENTARY", f"{prefix} 3"),
-        ("SUPPLEMENTARY", f"{prefix} 3"),
+    assert [r.path for r in g.extract_bill_rows(words)] == expected
+
+def _heading_is_page_label_words(heading_fn, title, pages=6):
+    """A constant running header, a constant title line, and a per-bill
+    heading whose number is the only varying digit on the page, so
+    ``running_lines`` reads the heading as the page label (which then
+    carries no section field of its own)."""
+    words: list[g.Word] = []
+    layout = [(1, 1, "Item 1"), (2, 1, "Item 2"), (3, 15, "Item 3"),
+              (4, 15, "Item 4"), (5, 16, "Item 5"), (6, 16, "Item 6")]
+    for p, n, item in layout:
+        above = [("Contractor Limited", H), (heading_fn(n), HEAVY), (title, HEAVY)]
+        words += _page(p, COLS_A, above, [[item, "m", "1", "2", "2"]])
+    return words
+
+
+@pytest.mark.parametrize("heading_fn, title", [
+    (lambda n: f"BILL NO. {n}", "GENERAL SUMMARY"),
+    (lambda n: f"Bill Number {n}", "BILL OF QUANTITIES"),
+], ids=["bill-no", "bill-number"])
+def test_bill_heading_survives_as_a_path_level_when_it_is_the_page_label(heading_fn, title):
+    """A per-bill heading read as the page label must still be a path level.
+    It is a section heading wherever it is printed, even when its masked form
+    is the page's only varying digit and it would otherwise be furniture."""
+    words = _heading_is_page_label_words(heading_fn, title)
+    printed = _printed(words)
+    running = g.running_lines(printed, 6)
+    assert g.page_sections(printed, running) == {}
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
     ]
+
+
+def _footer_page_label_words(heading_fn, title, pages=6):
+    """A constant running header, a bill heading with its constant title
+    printed above the column header, and the page label printed below the
+    header (a footer). The heading's title line repeats on every page, so the
+    footer label's vertical position must not make it page furniture."""
+    words: list[g.Word] = []
+    layout = [(1, 1, "Item 1"), (2, 1, "Item 2"), (3, 15, "Item 3"),
+              (4, 15, "Item 4"), (5, 16, "Item 5"), (6, 16, "Item 6")]
+    for p, n, item in layout:
+        above = [("Contractor Limited", H), (heading_fn(n), HEAVY), (title, HEAVY)]
+        body = [[item, "m", "1", "2", "2"], (f"Page {p}", H)]
+        words += _page(p, COLS_A, above, body)
+    return words
+
+
+@pytest.mark.parametrize("heading_fn, title", [
+    (lambda n: f"BILL NO. {n}", "GENERAL SUMMARY"),
+    (lambda n: f"Bill Number {n}", "BILL OF QUANTITIES"),
+], ids=["bill-no", "bill-number"])
+def test_heading_title_line_survives_a_footer_page_label(heading_fn, title):
+    """A bill heading's title line (the line directly below the number) is
+    part of the heading, so it stays a path level even when the page label is
+    a footer and the title line repeats like a running line."""
+    words = _footer_page_label_words(heading_fn, title)
+    printed = _printed(words)
+    running = g.running_lines(printed, 6)
+    assert running.page_label == "page #"
+    assert g.page_sections(printed, running) == {}
+    assert g._masked(title) in running.masks  # it repeats on most pages ...
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [  # ... yet it is still the heading title
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+    ]
+
+
+def _below_header_heading_words(heading_fn, title):
+    """A constant running header, the column header, then a bill heading and
+    its constant title printed BELOW the column header (above_header=False),
+    and the page label as a footer. The heading is the section wherever it
+    is printed."""
+    words: list[g.Word] = []
+    layout = [(1, 1, "Item 1"), (2, 1, "Item 2"), (3, 15, "Item 3"),
+              (4, 15, "Item 4"), (5, 16, "Item 5"), (6, 16, "Item 6")]
+    for p, n, item in layout:
+        above = [("Contractor Limited", H)]
+        body = [(heading_fn(n), HEAVY), (title, HEAVY),
+                [item, "m", "1", "2", "2"], (f"Page {p}", H)]
+        words += _page(p, COLS_A, above, body)
+    return words
+
+
+@pytest.mark.parametrize("heading_fn, title", [
+    (lambda n: f"BILL NO. {n}", "GENERAL SUMMARY"),
+    (lambda n: f"Bill Number {n}", "BILL OF QUANTITIES"),
+], ids=["bill-no", "bill-number"])
+def test_heading_below_the_header_is_still_a_path_level(heading_fn, title):
+    """A bill heading printed below the column header (above_header=False) is
+    still a section title: the title-band fallback collects it regardless of
+    above/below-header placement, so it gives the same path as the same
+    heading printed above the header."""
+    words = _below_header_heading_words(heading_fn, title)
+    printed = _printed(words)
+    running = g.running_lines(printed, 6)
+    assert g.page_sections(printed, running) == {}
+    heading = next(lab for lab in printed
+                   if g._HEADING_RE.match(lab.text) and not g._CARRIED_RE.search(lab.text))
+    assert heading.above_header is False  # printed below the column header
+    rows = g.extract_bill_rows(words)
+    assert [r.path for r in rows] == [
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(1)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(15)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+        (f"{heading_fn(16)} / {title}",),
+    ]
+
+
+@pytest.mark.parametrize("heading_fn", [
+    lambda n: f"BILL NO. {n}",
+    lambda n: f"Bill Number {n}",
+], ids=["bill-no", "bill-number"])
+def test_geometry_diagnostic_counts_sides_and_label_position(heading_fn):
+    """The read-only diagnostic reports, per masked form, how many labels sit
+    above vs below the column header, and the page label's vertical position."""
+    words = _footer_page_label_words(heading_fn, "GENERAL SUMMARY")
+    printed = _printed(words)
+    diag = g.geometry_diagnostic(printed, 6)
+    assert diag["page_label"][1]["above_header"] is False  # a footer label
+    title_mask = g._masked("GENERAL SUMMARY")
+    assert diag["masks"][title_mask]["above_header"] == 6
+    assert diag["masks"][title_mask]["below_header"] == 0

@@ -15,11 +15,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "alembic" / "versions" / "0036_documents_doc_role_check_by_catalog.py"
+_MIGRATION_0039 = ROOT / "alembic" / "versions" / "0039_documents_doc_role_contractor_submittal.py"
 _ON_POSTGRES = os.getenv("PYTEST_USE_POSTGRES", "").strip().lower() in ("1", "true", "yes")
 
 
 def _load():
     spec = importlib.util.spec_from_file_location("doc_role_check_migration_0036", MIGRATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_0039():
+    spec = importlib.util.spec_from_file_location("doc_role_migration_0039", _MIGRATION_0039)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -112,8 +120,9 @@ def _schema_check_text() -> str:
 
 @pytest.mark.parametrize("source", [_model_check_text, _schema_check_text])
 def test_vocabulary_matches_the_model_and_the_schema_file(source):
-    # A fresh database (schema file) and the ORM (model) carry the same roles.
-    assert set(_load().ROLES) == set(re.findall(r"'(\w+)'", source()))
+    # A fresh database (schema file) and the ORM (model) carry the same roles
+    # as the WIDEST doc-role migration (0039), the source of truth today.
+    assert set(_load_0039().ROLES) == set(re.findall(r"'(\w+)'", source()))
 
 
 @pytest.mark.skipif(not _ON_POSTGRES, reason="pg_constraint is PostgreSQL (test-postgres job)")

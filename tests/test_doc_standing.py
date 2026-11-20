@@ -19,11 +19,12 @@ from tests.test_ingest_reconcile import _reload_projects
 TABLE = [
     {"kind": "contract_agreement", "doc_types": ["contract"], "doc_roles": ["contract"]},
     {"kind": "specification", "doc_types": ["specification"]},
+    {"kind": "contractor_submittal", "doc_types": ["method_statement", "itp"]},
+    {"kind": "contractor_submittal", "doc_types": ["drawing"], "doc_roles": ["contractor_submittal"]},
     {"kind": "contract_drawing", "doc_types": ["drawing"]},
     {"kind": "priced_boq", "doc_types": ["boq"]},
-    {"kind": "contractor_submittal", "doc_types": ["method_statement", "itp"]},
 ]
-FOLDERS = {"Signed Pack": "contract", "Draft Pack": "draft"}
+FOLDERS = {"Signed Pack": "contract", "Draft Pack": "draft", "Submittals": "contractor_submittal"}
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,23 @@ def _tables(monkeypatch):
     ],
 )
 def test_standing_for_reads_the_table(doc_type, doc_role, kind):
+    assert ds.standing_for(doc_type, doc_role) == kind
+
+
+@pytest.mark.parametrize(
+    "doc_type, doc_role, kind",
+    [
+        # a shop drawing / a drawing in a contractor-submittal folder
+        ("drawing", "contractor_submittal", "contractor_submittal"),
+        # an ordinary contract drawing (any other role)
+        ("drawing", "design", "contract_drawing"),
+    ],
+)
+def test_a_drawing_role_decides_before_the_drawing_type(monkeypatch, doc_type, doc_role, kind):
+    # The SHIPPED table puts the role-scoped drawing entry before the type-only
+    # drawing entry, so the folder role decides first where one is known.
+    monkeypatch.delenv("DOC_STANDING", raising=False)
+    monkeypatch.delenv("DOC_STANDING_FILE", raising=False)
     assert ds.standing_for(doc_type, doc_role) == kind
 
 

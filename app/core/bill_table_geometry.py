@@ -667,6 +667,7 @@ def extract_bill_rows(
     block=None,
     on_label: Callable[[LabelEvent], None] | None = None,
     stats: ColumnStats | None = None,
+    on_geometry: Callable[[Sequence[_Label], int], None] | None = None,
 ) -> list[BillRow]:
     """Rows of every bill table found in ``words`` (any number of pages).
 
@@ -700,7 +701,8 @@ def extract_bill_rows(
 
     ``on_label`` (optional) observes every label as a :class:`LabelEvent`;
     ``stats`` (optional) collects the column-source counts. Neither changes
-    the rows.
+    the rows. ``on_geometry`` (optional) receives the printed labels and the
+    page count after the section pass, for :func:`geometry_diagnostic`.
     """
     block = block or _resolver()
     by_page: dict[int, list[Word]] = {}
@@ -827,7 +829,10 @@ def extract_bill_rows(
                 stats.labels_reread_as_rows += 1
             emit(page, cur.fields, cur.extra)
         flush(page)
-    return section_paths(rows, printed, len(by_page))
+    rows = section_paths(rows, printed, len(by_page))
+    if on_geometry is not None:
+        on_geometry(printed, len(by_page))
+    return rows
 
 
 # --- Section pass: running headers, page label, section title --------------
@@ -1027,6 +1032,36 @@ def _wrapped(a: _Label, b: _Label) -> bool:
             and not _outer(a, b, gap) and not _outer(b, a, gap))
 
 
+def _follows(a: _Label, b: _Label) -> bool:
+    """``b`` is printed directly below ``a`` on the same page with no blank
+    line between them: the next printed line, whatever its face. A bill
+    heading's title line follows its number line this way even when the two
+    are set in different faces."""
+    gap = max(a.height, b.height, 1.0)
+    return a.page == b.page and b.top >= a.top and b.top - a.bottom <= gap
+
+
+def heading_title_lines(printed: Sequence[_Label]) -> set[int]:
+    """``{id(label)}`` for every label that is the title line of a bill
+    heading printed directly above it on the same page (a heading whose
+    number line carries no title of its own, so its title is the next line).
+
+    Such a line is part of the heading wherever it is printed, so it is never
+    page furniture: it survives the title-band fallback whether the page
+    label sits above or below the header, whether the heading is above or
+    below the column header, and whether the title wraps onto its own line."""
+    out: set[int] = set()
+    for lab, nxt in pairwise(printed):
+        if not (_HEADING_RE.match(lab.text) and not _CARRIED_RE.search(lab.text)):
+            continue
+        if (not _follows(lab, nxt)
+                or not has_letter(nxt.text)
+                or (_HEADING_RE.match(nxt.text) and not _CARRIED_RE.search(nxt.text))):
+            continue
+        out.add(id(nxt))
+    return out
+
+
 def _heading_title(rest: str) -> str:
     """The title of a heading line: the text after the number, stripped and
     bounded; ``""`` for a bare heading (a number with no title) or a title
@@ -1099,24 +1134,48 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         return rows
     cont = continuation_map(printed)
     band = furniture_band(printed, running)
+    titled = heading_title_lines(printed)
 
     def text_of(lab: _Label) -> str:
         return cont.get(_norm(lab.text), lab.text)
 
+    def is_heading(lab: _Label) -> bool:
+        # A bill heading number line ("BILL NO. 15", "Bill Number 12A"):
+        # the one grammar in :mod:`app.core.rag.bill_sections`. The closing
+        # total row is not a heading.
+        return bool(_HEADING_RE.match(lab.text) and not _CARRIED_RE.search(lab.text))
+
+    def heading_or_title(lab: _Label) -> bool:
+        # A bill heading number line, or its title line (the line printed
+        # directly below it on the same page).
+        return is_heading(lab) or id(lab) in titled
+
     def furniture(lab: _Label) -> bool:
+        # A bill heading and its title line are section titles wherever they
+        # are printed, even when they repeat like a running line or carry the
+        # page label's varying digit: never page furniture. The closing total
+        # row is not a heading.
+        if heading_or_title(lab):
+            return False
         if lab.above_header and lab.top >= band.get(lab.page, float("inf")):
             return False  # title band: a title even when it repeats
         return running.holds(lab.text)
 
+    def is_title(lab: _Label) -> bool:
+        # A section title: a title-band line above the column header, or a
+        # bill heading with its title line printed anywhere (below the header
+        # or on a page with no detected header line).
+        return not furniture(lab) and (lab.above_header or heading_or_title(lab))
+
     sections = page_sections(printed, running)
     if not sections:
-        sections = title_sections(printed, cont, lambda lab: lab.above_header and not furniture(lab))
+        sections = title_sections(printed, cont, is_title)
         if not any(sections.values()):
             return rows
 
     titles: dict[tuple[str, ...] | None, list[str]] = defaultdict(list)
     for lab in printed:
-        if lab.above_header and not furniture(lab):
+        if is_title(lab):
             t = text_of(lab)
             sec = titles[sections.get(lab.page)]
             if _norm(t) not in {_norm(x) for x in sec}:
@@ -1128,7 +1187,7 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         key = sections.get(row.source_page)
         body: list[_Label] = []
         for lab in row.labels:
-            if lab.above_header or furniture(lab):
+            if lab.above_header or furniture(lab) or heading_or_title(lab):
                 continue
             lab = replace(lab, text=text_of(lab))
             if body and _wrapped(body[-1], lab):
@@ -1146,6 +1205,44 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         row.path = tuple(([title] if title else []) + levels)
         row.section = row.path[-1] if row.path else ""
     return rows
+
+
+def geometry_diagnostic(printed: Sequence[_Label], pages: int) -> dict[str, Any]:
+    """Read-only summary of the section pass's geometry, for inspecting a
+    title-band decision without the raw word boxes.
+
+    Returns ``{"masks": {masked: {"above_header": n, "below_header": m,
+    "distinct": k}}, "page_label": {page: {"above_header": bool, "top": top,
+    "bottom": bottom}}}``. ``above_header`` / ``below_header`` count the label
+    lines carrying each masked form on each side of the column header;
+    ``page_label`` records the page label's vertical position per page. Every
+    figure is read from the labels given: no document, id or threshold name."""
+    running = running_lines(printed, pages)
+    above: dict[str, int] = defaultdict(int)
+    below: dict[str, int] = defaultdict(int)
+    distinct: dict[str, set[str]] = defaultdict(set)
+    positions: dict[int, dict[str, Any]] = {}
+    for lab in printed:
+        mask = _masked(lab.text)
+        (above if lab.above_header else below)[mask] += 1
+        distinct[mask].add(_norm(lab.text))
+        if running.page_label and mask == running.page_label:
+            positions.setdefault(lab.page, {
+                "above_header": lab.above_header,
+                "top": lab.top,
+                "bottom": lab.bottom,
+            })
+    return {
+        "masks": {
+            mask: {
+                "above_header": above.get(mask, 0),
+                "below_header": below.get(mask, 0),
+                "distinct": len(distinct[mask]),
+            }
+            for mask in sorted(set(above) | set(below))
+        },
+        "page_label": dict(sorted(positions.items())),
+    }
 
 
 def _sheet_title(name: str, used: set[str]) -> str:

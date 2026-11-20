@@ -18,7 +18,7 @@ from app.lib.formula_registry import Param, formula
 )
 def calculate_interim_payment(
     gross_valuation: float | int,
-    retention_percent: float | int = 10.0,
+    retention_percent: float | int,
 ) -> dict:
     """
     Calculate interim payment after retention deduction.
@@ -30,7 +30,8 @@ def calculate_interim_payment(
 
     Args:
         gross_valuation: Certified gross amount for this period.
-        retention_percent: Retention percentage (default 10%).
+        retention_percent: Retention percentage stated by the contract. It has
+            no default: a missing rate is an error that names the input.
 
     Returns:
         dict with gross, retention, net payment, and breakdown.
@@ -38,6 +39,9 @@ def calculate_interim_payment(
     gross = float(gross_valuation)
     if gross < 0:
         return {"error": "gross_valuation must be >= 0."}
+    if retention_percent is None:
+        return {"error": "retention_percent is required (the contract's retention rate); "
+                         "it has no default.", "missing": ["retention_percent"]}
     if not (0.0 <= float(retention_percent) <= 100.0):
         return {"error": "retention_percent must be between 0 and 100."}
     retention_rate = float(retention_percent) / 100.0
@@ -52,7 +56,7 @@ def calculate_interim_payment(
         "calculation": f"{gross} - ({gross} x {retention_percent}%) = {round(net_payment, 2)}",
         "standard": "FIDIC Red Book Clause 14.3",
         "note": (
-            "Retention default 10%; FIDIC cap is 5% of Accepted Contract Amount. "
+            "Retention at the rate given; FIDIC cap is 5% of Accepted Contract Amount. "
             "Verify if retention cap has been reached on this project."
         ),
     }

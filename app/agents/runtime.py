@@ -14795,9 +14795,13 @@ def _apply_hat_kernels(body: str, hats_cfg: Any, path: Path) -> tuple[str, list[
         errors = validate_manifest_bindings(m)
         if errors:
             raise ValueError(f"hat '{m.id}' has broken formula bindings: {errors}")
+    from app.agents.procedures import render_procedures
     sections = ["\n\n## Discipline kernels\n"]
     for m in manifests:
         sections.append(f"### {m.name} ({m.id})\n{m.system_prompt_guidance}\n")
+        procedures_block = render_procedures(m)
+        if procedures_block:
+            sections.append(procedures_block + "\n")
     # S-7 improvisation harness — applies to every hatted agent.
     sections.append(
         "### Improvisation harness\n"

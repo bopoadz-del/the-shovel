@@ -408,6 +408,32 @@ def gc_summary(record: GcRecord, window_start: float) -> str:
     return f"gc_passes={record.passes} gc2_max={worst}"
 
 
+_FREEZE_OFF = ("0", "false", "no", "off")
+
+
+def freeze_startup_heap() -> Optional[int]:
+    """Move every object alive now out of the collector's reach (``gc.freeze``).
+
+    Called once, when a long-lived process has finished starting (models
+    loaded): that heap lives as long as the process, and without this every
+    full collection re-scans all of it while holding the interpreter lock,
+    the event loop included (see ``GcRecord``). Objects made afterwards are
+    collected as before. No ``gc.collect()`` first: that is itself a full
+    pass. ``GC_FREEZE_AT_STARTUP=0`` turns it off. Returns the frozen object
+    count, or ``None`` when off."""
+    if os.getenv("GC_FREEZE_AT_STARTUP", "1").strip().lower() in _FREEZE_OFF:
+        return None
+    gc.freeze()
+    return gc.get_freeze_count()
+
+
+def release_startup_heap() -> None:
+    """Undo ``freeze_startup_heap`` at shutdown, so a process that runs the
+    app's start-up more than once (a test session) never keeps a frozen heap
+    after the app is gone."""
+    gc.unfreeze()
+
+
 class LagMonitor:
     """Measures how late the loop serves a heartbeat; optionally logs stalls."""
 

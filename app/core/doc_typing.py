@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_DOC_TYPE = "document"
 
 #: Roles a folder table may assign. ``ck_documents_doc_role`` allows these
-#: plus the readiness roles in ``app.core.projects``; alembic 0034 widens it.
-FOLDER_ROLES = frozenset({"contract", "draft", "tender", "award", "reporting", "design"})
+#: plus the readiness roles in ``app.core.projects``; alembic 0039 widens it.
+FOLDER_ROLES = frozenset({"contract", "draft", "tender", "award", "reporting", "design", "contractor_submittal"})
 
 #: Metadata keys that carry a document's source path, nearest source first.
 _PATH_KEYS = ("drive_path", "local_drive_path", "source_path")
