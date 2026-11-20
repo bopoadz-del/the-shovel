@@ -418,27 +418,44 @@ def test_unrelated_prose_in_another_script_is_not_a_hit(text):
     assert _hits(text) == []
 
 
-def test_a_lookalike_name_written_surname_first_is_caught():
+def _substitute(word: str, source: str, latin: str) -> str:
+    """``word`` with its first lower-case ``latin`` letter written as ``source``.
+
+    Only a lower-case position is a lookalike of the same letter: a capital
+    ``V`` replaced by a lower-case Greek nu is a different word, not a hidden
+    one, and testing that would prove nothing.
+    """
+    for position, char in enumerate(word):
+        if char.islower() and char.casefold() == latin:
+            return word[:position] + source + word[position + 1:]
+    raise AssertionError(f"{word!r} has no lower-case {latin!r} to substitute")
+
+
+def _lookalike_pairs(word: str) -> list[tuple[str, str]]:
+    """The table's entries that can be substituted into ``word``.
+
+    Built from the table so a case is written against whatever letters the
+    invented words happen to contain, without naming a character by hand.
+    """
+    pairs = []
+    for source, latin in sorted(scan_secrets._LOOKALIKE_LETTERS.items()):
+        if any(char.islower() and char.casefold() == latin for char in word):
+            pairs.append((source, latin))
+    assert len(pairs) >= 2, "the invented word carries too few lookalike letters"
+    return pairs
+
+
+@pytest.mark.parametrize("source, latin", _lookalike_pairs(LAST))
+def test_a_lookalike_name_written_surname_first_is_caught(source, latin):
     """The two holes are not stacked: a homoglyph name in reverse order fires."""
-    source = next(
-        source for source, latin in sorted(scan_secrets._LOOKALIKE_LETTERS.items())
-        if latin in LAST.casefold()
-    )
-    index = LAST.casefold().index(scan_secrets._LOOKALIKE_LETTERS[source])
-    written = LAST[:index] + source + LAST[index + 1:]
+    written = _substitute(LAST, source, latin)
     assert _hits(f"{written} {FIRST} confirmed the minutes\n") == [(1, 0)]
 
 
-def test_a_lookalike_inside_an_identifier_is_still_not_a_hit():
+@pytest.mark.parametrize("source, latin", _lookalike_pairs(FIRST))
+def test_a_lookalike_inside_an_identifier_is_still_not_a_hit(source, latin):
     """The identifier guard keeps its contract after the lookalike fold."""
-    source = next(
-        source for source, latin in sorted(scan_secrets._LOOKALIKE_LETTERS.items())
-        if latin in FIRST.casefold()
-    )
-    index = FIRST.casefold().index(
-        scan_secrets._LOOKALIKE_LETTERS[source]
-    )
-    written = FIRST[:index] + source + FIRST[index + 1:]
+    written = _substitute(FIRST, source, latin)
     text = f"see build_{written.casefold()}_{LAST.casefold()}.py for the totals\n"
     assert _hits(text) == []
 
