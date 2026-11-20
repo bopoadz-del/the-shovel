@@ -99,25 +99,97 @@ def test_one_name_in_any_spelling_is_caught(label, text):
         ("surname first", f"{LAST} {FIRST} reviewed this change.\n"),
         ("middle initial", f"{FIRST} A. {LAST} reviewed this change.\n"),
         ("full middle name", f"{FIRST} Ambrose {LAST} reviewed this change.\n"),
-        ("underscore between the words", f"{FIRST}_{LAST} reviewed this change.\n"),
+        ("surname first with a middle initial", f"{LAST} A. {FIRST} signed.\n"),
+        (
+            "surname first, decomposed accent",
+            f"{LAST[:6]}\u0301{LAST[6:]} {FIRST} signed.\n",
+        ),
+        (
+            "surname first, soft hyphen inside a word",
+            f"{LAST[:4]}\u00ad{LAST[4:]} {FIRST} signed.\n",
+        ),
     ],
 )
-def test_order_and_gap_variants_are_a_known_gap_not_a_silent_one(label, text):
-    """Recorded, not pretended away.
+def test_a_name_written_surname_first_or_with_a_middle_name_is_caught(label, text):
+    """The orders a written name actually takes, and nothing wider.
 
-    A surname-first attribution and a middle name between the two denylisted
-    words are the same person, and this scanner does not catch them yet. An
-    order-independent, gap-tolerant match was tried in this branch and
-    withdrawn: on the real denylist it turned seventeen ordinary lines of this
-    repository into hits, so it was manufacturing the thing it was meant to
-    find. Catching these needs an exact-sequence rule (the reversed phrase, one
-    bounded insert) with its own evidence, not a wider window.
-
-    The underscore spelling is here for the other direction: an underscore
-    between two words is code's joiner, so treating it as a name separator is
-    what made underscored identifiers read as client content.
+    A person is spelled surname-first in an attribution and with a middle name
+    or an initial in a legal one. Both are the exact sequence of the
+    denylisted words -- reversed, or with one word inserted between them -- so
+    they are matched by reading the run of capitalised words, never by
+    matching a set of words that happen to appear in the same sentence. An
+    entry that is not a written name (not every word capitalised) is not
+    reordered at all.
     """
-    assert _hits(text) == [], f"if this ever matches, retire the gap note: {label}"
+    assert _hits(text) == [(1, 0)], label
+
+
+@pytest.mark.parametrize(
+    "phrase, reversed_text",
+    [
+        (f"{FIRST.lower()} {LAST.lower()}", f"{LAST.lower()} {FIRST.lower()} signed\n"),
+        (f"{LAST.lower()} drafted", f"drafted {LAST.lower()} signed\n"),
+    ],
+)
+def test_an_entry_that_is_not_a_written_name_is_never_reordered(
+    phrase, reversed_text
+):
+    """Only a name-shaped entry gets the name rule.
+
+    A lower-case entry is a phrase, not a person: the folded phrase match
+    already covers it, and reordering a phrase's words would invent names out
+    of ordinary vocabulary -- which is the false positive the withdrawn
+    word-set match produced.
+    """
+    patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: phrase})
+    assert scan_secrets.scan_client_document(
+        phrase + " signed\n", patterns
+    ) == [(1, 0)]
+    assert scan_secrets.scan_client_document(reversed_text, patterns) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{FIRST}_{LAST} reviewed this change.\n",
+        f"see docs/{FIRST.lower()}_{LAST.lower()}.md\n",
+    ],
+)
+def test_an_underscore_between_the_words_is_an_identifier_not_a_name(text):
+    """Underscore is code's joiner: a run of name words never spans one."""
+    assert _hits(text) == [], text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"{LAST}. {FIRST} signed.\n",
+        f"{FIRST} and {LAST} signed.\n",
+        f"{LAST} owns it; {FIRST} reviewed it.\n",
+    ],
+)
+def test_a_name_run_does_not_bridge_a_sentence_or_a_conjunction(text):
+    """Two capitalised words are not a name when a break sits between them.
+
+    The full stop of one sentence, a lower-case conjunction, and a semicolon
+    all end the run. Without that, the rule would read one sentence's last
+    word and the next sentence's first as a surname and a given name.
+    """
+    assert _hits(text) == [], text
+
+
+@pytest.mark.parametrize(
+    "label, prefix, expected",
+    [
+        ("name on the second line", "one\n", 2),
+        ("name deeper in the page", "one\ntwo\n\nthree\n", 5),
+    ],
+)
+def test_a_reordered_name_is_reported_at_the_line_it_starts_on(
+    label, prefix, expected
+):
+    hits = _hits(prefix + f"{LAST} {FIRST} signed\n")
+    assert hits == [(expected, 0)], label
 
 
 @pytest.mark.parametrize(
