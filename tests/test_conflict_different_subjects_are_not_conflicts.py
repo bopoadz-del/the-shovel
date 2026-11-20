@@ -40,12 +40,19 @@ def test_two_subjects_are_not_a_conflict(a, b, question):
                   question) == []
 
 
-def test_one_subject_worded_differently_is_still_a_conflict():
+@pytest.mark.parametrize(
+    "b",
+    [
+        "Spacers give a minimum cover to concrete of 40 mm throughout, as fixed on site.",
+        "On site the minimum cover achieved to concrete is 40 mm at every location.",
+    ],
+)
+def test_one_subject_worded_differently_is_still_a_conflict(b):
     """Only ONE side adding its own words keeps it one thing: a longer sentence
     or another verb never turns a real discrepancy into two subjects."""
     rows = _rows(
         ("Drawings", "Minimum cover to concrete shall be 50 mm."),
-        ("Spec", "Spacers give a minimum cover to concrete of 40 mm throughout, as fixed on site."),
+        ("Spec", b),
     )
     found = detect("The minimum cover is 50 mm (Drawings).", rows,
                    "What is the minimum concrete cover?")
@@ -53,14 +60,22 @@ def test_one_subject_worded_differently_is_still_a_conflict():
     assert {v["value"] for v in found[0]["values"]} == {"50 mm", "40 mm"}
 
 
-def test_a_prepositional_qualifier_still_separates_the_subjects():
-    """'cover to the foundation' vs 'cover to the slab': the qualifier follows
-    a preposition, so the passages still name two subjects."""
-    rows = _rows(
-        ("Drawings", "Concrete cover to the foundation shall be 50 mm."),
-        ("Spec", "Concrete cover to the slab shall be 40 mm."),
-    )
-    assert detect("The cover is 50 mm (Drawings).", rows, "What is the concrete cover?") == []
+@pytest.mark.parametrize(
+    "a, b, question",
+    [
+        ("Concrete cover to the foundation shall be 50 mm.",
+         "Concrete cover to the slab shall be 40 mm.",
+         "What is the concrete cover?"),
+        ("Cover for the retaining wall is 50 mm.",
+         "Cover for the base slab is 40 mm.",
+         "What cover is required?"),
+    ],
+)
+def test_a_prepositional_qualifier_still_separates_the_subjects(a, b, question):
+    """A qualifier that follows a preposition ('cover to the foundation') still
+    names its own subject, so the passages state two subjects."""
+    rows = _rows(("Drawings", a), ("Spec", b))
+    assert detect("The cover is 50 mm (Drawings).", rows, question) == []
 
 
 # --- the case-2 question: it must actually fire on those passages ----------
