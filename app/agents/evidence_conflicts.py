@@ -42,13 +42,17 @@ its document. The comparison is deterministic; no model decides it.
   * No thing, no conflict: when the asked words that name the thing are
     empty, nothing is compared.
   * The value's thing is read from its own clause: a passage is cut at a
-    heading-path step, a semicolon or a line break, and only the words
-    within a few of the value say what it is a value of (a table row or a
-    page of text with no full stop is not one claim).
+    heading-path step, a semicolon or a line break; a clause holding ONE
+    value is named by its whole clause, a clause holding several values by
+    only the words within a few of each value (a table row or a page of
+    text with no full stop is not one claim).
   * The question's thing: its content words less the kind of value (a kind
-    word and the words that run straight into it, "concrete grade"). A
-    question that names only the kind names no thing: no conflict, since
-    two values found for it may belong to two different elements.
+    word and the single word that runs straight into it, "concrete grade").
+    A question that names only the kind names no thing: no conflict, since
+    two values found for it may belong to two different elements. A
+    trailing "what do X and Y each say?" clause asks what each source
+    says; its words name the sources, not the thing, and are dropped
+    before the thing is read.
   * An answer that already states every one of the differing values has
     told the user both; it is left as written -- unless it also says the
     documents agree (match, are consistent): then it has not told the user
@@ -103,21 +107,40 @@ _KIND_TERMS = frozenset(_stem(w) for w in (
     "period", "pressure", "force", "percent", "percentage", "price", "cost", "sum"))
 
 
+#: A trailing "what do X and Y each say?" clause asks what each SOURCE
+#: says; its words name the sources, not the thing the values belong to.
+_SOURCE_ASK_RE = re.compile(r"\b(?:what|which)\s+(?:do|does)\b", re.IGNORECASE)
+_SOURCE_SAY_RE = re.compile(
+    r"\b(?:each\s+)?(?:say|says|state|states|specify|specifies|give|gives|show|shows|indicate|indicates)\s*\??$",
+    re.IGNORECASE)
+
+
+def _drop_source_query(question: str) -> str:
+    """The question with a trailing source query ("what do X and Y each
+    say?") removed; unchanged when it asks no such thing."""
+    text = question or ""
+    for m in reversed(list(_SOURCE_ASK_RE.finditer(text))):
+        if _SOURCE_SAY_RE.search(text[m.start():]):
+            return text[: m.start()].rstrip()
+    return text
+
+
 def _question_thing(question: str) -> set[str]:
     """The thing the question names: its content words, less the words that
-    only name the kind of value. A kind word ("grade", "date", "price") and
-    the words that run straight into it ("concrete grade", "completion
-    date") name the kind; a question made of nothing else names no thing,
-    and two values found for it may be about two different elements."""
+    only name the kind of value and the words of a trailing source query. A
+    kind word ("grade", "date", "price") and the single word that runs
+    straight into it ("concrete grade", "completion date") name the kind; a
+    question made of nothing else names no thing, and two values found for
+    it may be about two different elements."""
+    question = _drop_source_query(question)
     words = [w for w in re.findall(r"[A-Za-z][A-Za-z'-]*", question or "") if len(w) > 1]
     kind_phrase: set[str] = set()
     for i, w in enumerate(words):
         if _stem(w) not in _KIND_TERMS:
             continue
         j = i - 1
-        while j >= 0 and words[j].lower() not in _STOP and _stem(words[j]) not in _KIND_TERMS:
+        if j >= 0 and words[j].lower() not in _STOP and _stem(words[j]) not in _KIND_TERMS:
             kind_phrase.add(_stem(words[j]))
-            j -= 1
     return _terms(question) - _KIND_TERMS - kind_phrase
 
 
@@ -382,8 +405,9 @@ def _row_text(row: dict[str, Any]) -> str:
 
 #: A passage "sentence" can be a whole table row, a heading path or a page of
 #: text with no full stop. A value's claim is its own clause: the passage is
-#: cut at a heading-path step, a semicolon or a line break, and within the
-#: clause only the words near the value say what it is a value of.
+#: cut at a heading-path step, a semicolon or a line break. A clause holding
+#: one value is named by its whole clause; a clause holding several values
+#: (a long table row or enumeration) is named by the words near each value.
 _CLAUSE_SPLIT_RE = re.compile(r"\s+>\s+|;\s*|\n+")
 _WINDOW_WORDS = 12
 
@@ -417,7 +441,10 @@ def _candidates(rows: list[dict[str, Any]]) -> list[_Cand]:
                 lo = vals[i - 1].end if i else 0
                 hi = vals[i + 1].start if i + 1 < len(vals) else len(sent)
                 local = sent[lo: v.start] + " " + sent[v.end: hi]
-                near = _terms(_window(masked, v.start, v.end))
+                if len(vals) == 1:
+                    near = _terms(masked)
+                else:
+                    near = _terms(_window(masked, v.start, v.end))
                 out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si)))
     return out
 
