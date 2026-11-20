@@ -46,7 +46,7 @@ def _hits(line: str, *, test_path: bool = False):
     if not test_path:
         rules += scan_secrets.KDF_RULES
     names = [name for name, pattern, _ in rules if pattern.search(line)]
-    for name, pattern, _, accepts in scan_secrets.URL_CREDENTIAL_RULES:
+    for name, pattern, _, accepts in scan_secrets.PREDICATE_RULES:
         match = pattern.search(line)
         if match is not None and accepts(match):
             names.append(name)
@@ -439,6 +439,99 @@ def test_the_walk_reports_a_personal_address(tmp_path, monkeypatch, address):
 def test_a_deliberate_fixture_address_can_be_allowlisted(tmp_path, monkeypatch, address):
     (tmp_path / "fixture.md").write_text(
         f"example fixture: {address}  # {scan_secrets.ALLOW_MARKER}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["fixture.md"])
+
+    assert scan_secrets.scan() == []
+
+
+# -- rule 7: a session identifier committed as a literal ---------------------
+#
+# A session id is a bearer credential: whoever holds it resumes the
+# conversation. No rule above fires on one -- the assigned-name rule keys on
+# names like token/secret, and the field here is called `session` -- so a tree
+# could carry a live one and still scan clean. What keeps the rule usable is
+# the value test: a UUID, a 32+ hex run, or a long token whose digit density
+# only randomness produces fires; a readable scope label does not. A gate that
+# fired on a scope name would be noise, and noise gets switched off.
+#
+# Every value below is invented here and assembled at runtime, so this tracked
+# file carries no line that the rule itself would fire on.
+
+#: A 30-character cycle: mixed case, one digit in three, every character
+#: distinct. Sliced to any length it keeps the profile of an opaque token, and
+#: uppercased it is the base32-style encoding some issuers use.
+_CYCLE = "A1bC2dE3fG4hI5jK6lM7nO8pQ9rS0tU"
+_OPAQUE_43 = (_CYCLE * 2)[:43]
+_UPPER_26 = _CYCLE.upper()[:26]
+#: 24 characters: passes every part of the opacity test. One character shorter
+#: is the side of the length floor that must not fire.
+_OPAQUE_24 = _CYCLE[:24]
+_OPAQUE_23 = _CYCLE[:23]
+#: Invented, never issued to anyone, shaped like the two identifier encodings.
+_SESSION_UUID = "5f2c1a9e" + "-3b47-4d81-9c0a-7e6b2d4f8a13"
+_SESSION_HEX = "3f9a1c7e" + "5b2d8046af13c9e70b5d2486"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'SESSION_ID = "' + _SESSION_UUID + '"',
+        "session_id: " + _SESSION_HEX,
+        '{"sessionId": "' + _OPAQUE_43 + '"}',
+        "session-id=" + _UPPER_26,
+    ],
+)
+def test_an_opaque_session_identifier_is_caught(line):
+    """Four field spellings, three value encodings. The rule keys on the field
+    class and on opacity -- never on a name, a project or a literal."""
+    assert "session-identifier" in _hits(line), f"matched {_hits(line)}"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"session_id": "ws-demo-corpus"}',
+        '"sessionId": "cache-warm-session"',
+        "session_id = request.session.session_key",
+        'session_id = meta["session_id"]',
+        "session_id = get_session_id()",
+        'SESSION_ID = "ws-example-corpus-production-01"',
+    ],
+)
+def test_a_readable_session_label_does_not_fire(line):
+    """A scope name is a name, not a credential."""
+    assert "session-identifier" not in _hits(line), f"matched {_hits(line)}"
+
+
+def test_the_session_length_floor_is_twenty_four_characters():
+    """Exactly 24 fires, 23 does not: the floor separates a token from a short
+    fixture label, so it is pinned on both sides."""
+    assert "session-identifier" in _hits('session_id = "' + _OPAQUE_24 + '"')
+    assert "session-identifier" not in _hits('session_id = "' + _OPAQUE_23 + '"')
+
+
+@pytest.mark.parametrize("value", [_SESSION_HEX, _OPAQUE_43, _UPPER_26])
+def test_the_walk_reports_a_session_identifier(tmp_path, monkeypatch, value):
+    """The rule is wired into scan(), not merely defined beside it."""
+    (tmp_path / "trace.md").write_text(
+        'session_id: "' + value + '"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["trace.md"])
+
+    findings = scan_secrets.scan()
+    assert len(findings) == 1
+    assert "[session-identifier]" in findings[0]
+    assert value not in findings[0]
+
+
+@pytest.mark.parametrize("value", [_SESSION_UUID, _OPAQUE_43])
+def test_a_deliberate_fixture_session_id_can_be_allowlisted(tmp_path, monkeypatch, value):
+    (tmp_path / "fixture.md").write_text(
+        'session_id: "' + value + f'"  # {scan_secrets.ALLOW_MARKER}\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
