@@ -41,6 +41,15 @@ secret — a committed list of the client names you must not commit *is a
 list of client names*. A match is reported as ``file:line (pattern #N)``
 only; the matched text and the regex are never echoed.
 
+A denylisted pattern is compared against three views of every line, because
+the pattern is a written form and a person has many: the literal line, the
+escape-decoded line, and a folded line in which case, accents, invisibles,
+and the choice of separator are normalised away. A plain phrase additionally
+matches when its words appear near each other in any order, so surname-first
+attribution, a middle initial, and a phrase wrapped across a line break are
+the same person as the one on the list. See ``fold_for_match`` and
+``scan_client_document``.
+
 FAIL-CLOSED: if ``SECRET_SCAN_PATTERNS`` is unset, empty, or comments-only,
 this exits non-zero and never prints or concludes "clean". A scan that
 inspected nothing because it was given nothing to look for has not found
@@ -71,6 +80,8 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
+from bisect import bisect_right
 from pathlib import Path
 
 import scan_text
@@ -365,6 +376,17 @@ def scan_client_text(
     Deliberately returns no matched text. Echoing a hit would write the
     client's content into a CI log, which is the leak this scan exists to
     prevent.
+
+    Two views of each line are matched, because a denylisted word can be
+    written in two ways and each defeats the other:
+
+    * the raw line -- the literal spelling;
+    * the escape-decoded line -- ``\\u0627`` spells the word without its
+      letters ever appearing (see ``decode_escapes``).
+
+    Folding lives in ``scan_client_document``, which is what the file walk
+    uses: a folded match has to be checked against the text as written before
+    it can be called a hit, and that check belongs beside the folding.
     """
     hits: list[tuple[int, int]] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
@@ -373,6 +395,281 @@ def scan_client_text(
             if any(pattern.search(form) for form in forms):
                 hits.append((line_number, index))
     return hits
+
+
+# Characters that carry no sound and no space of their own: a zero-width
+# space, joiner, non-joiner, word joiner, byte-order mark, or soft hyphen.
+# They are invisible in an editor, so a word split by one reads normally to a
+# human and as a different string to a regex.
+_INVISIBLE = dict.fromkeys(
+    map(ord, "\u00ad\u180e\u200b\u200c\u200d\u2060\ufeff"), None
+)
+
+# Every kind of whitespace that is not the ASCII space, folded to one space:
+# tab, newline, vertical tab, form feed, carriage return, NEL, NBSP, the whole
+# Unicode space-separator run (en/em/thin/hair space, ideographic space), and
+# the dash a writer reaches for when joining two words.
+#
+# NOT folded: underscore, period, middle dot, slash and backslash. Those are
+# not the punctuation of prose, they are the joiners of code: ``scan_secrets``
+# and ``docs/notes`` are one identifier each, and folding them into separate
+# words is what made a client-pattern scan report ordinary file names. A
+# name is never spelled with an underscore between its words, and a gate that
+# says it is manufactures hits in every tree that has underscores in it.
+_ASCII_SEPARATORS = dict.fromkeys(
+    map(ord, "\t\n\x0b\x0c\r-"), " "
+)
+_UNICODE_SEPARATORS = dict.fromkeys(
+    map(
+        ord,
+        "\t\n\x0b\x0c\r\x85\u00a0\u1680\u2000\u2001\u2002\u2003\u2004"
+        "\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"
+        "-\u2010\u2011\u2012\u2013\u2014",
+    ),
+    " ",
+)
+
+# Any of the invisible characters, so the second folding is only built for a
+# line that actually has one. Most lines do not, and most of the tree is
+# ASCII: the fast paths keep the added cost of the folded comparison small
+# enough that the scan stays a lint step rather than a coffee break.
+_INVISIBLE_RE = re.compile("[\u00ad\u180e\u200b\u200c\u200d\u2060\ufeff]")
+
+
+def fold_for_match(line: str, *, join_invisible: bool = False) -> str:
+    """Fold one line to the form a denylist pattern is compared against.
+
+    Compatibility-normalise (so full-width letters and digits become their
+    ASCII forms), remove invisible characters, decompose and strip combining
+    marks (so ``\u00e9`` and ``e`` + accent compare equal), turn every
+    non-ASCII-space whitespace and every joining punctuation mark into a
+    single space, and case-fold. What survives is the word sequence, which is
+    what makes a name a name; what is dropped is presentation.
+
+    ``join_invisible`` decides what an invisible character becomes. Removed
+    (the default) it splits two words a hidden character was standing
+    between; joined it fuses the halves of one word a hidden character was
+    pushed into. Both are real spellings of the same name, so
+    ``fold_views`` produces both and a match on either is a match.
+    """
+    if line.isascii():
+        # No compatibility variants, no combining marks and no invisible
+        # characters exist below U+0080: the fold is separators and case.
+        return " ".join(line.translate(_ASCII_SEPARATORS).split()).casefold()
+    folded = unicodedata.normalize("NFKC", line).translate(
+        dict.fromkeys(_INVISIBLE, "" if join_invisible else " ")
+    )
+    folded = unicodedata.normalize("NFKD", folded)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = folded.translate(_UNICODE_SEPARATORS)
+    return " ".join(folded.split()).casefold()
+
+
+def fold_views(line: str) -> tuple[str, ...]:
+    """Every folding of one line worth comparing a pattern against."""
+    split_view = fold_for_match(line)
+    if not _INVISIBLE_RE.search(line):
+        return (split_view,)      # the two foldings would be identical
+    joined_view = fold_for_match(line, join_invisible=True)
+    if joined_view == split_view:
+        return (split_view,)
+    return (split_view, joined_view)
+
+
+# A character that makes a run of text an identifier rather than prose: a
+# letter, a digit, or one of the two joining characters code uses to build one
+# name out of several words. A denylisted phrase sitting inside such a run --
+# the middle of ``build_rate_card``, or one segment of ``some/path/name`` -- is
+# code naming a thing, not prose naming a person. Matching those was how a
+# folded comparison turned ordinary files of this repository into client
+# content hits, and a gate that reports code as a leak is a gate that gets
+# switched off.
+_IDENTIFIER_CHARS = frozenset(
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-"
+)
+
+
+def fold_with_map(
+    raw: str, *, join_invisible: bool = False
+) -> tuple[str, list[int]]:
+    """``fold_for_match`` character by character, remembering each origin.
+
+    The folded text alone cannot say whether a match sat in the middle of an
+    identifier, because folding is precisely what erased the identifier's own
+    separators. So every folded character keeps the position in ``raw`` it
+    came from, and a caller can look at the text as written on either side of
+    a match.
+
+    ``join_invisible`` mirrors ``fold_for_match``: an invisible character
+    either breaks two words apart or is deleted from inside one, and which of
+    those the author meant cannot be known, so both readings are offered.
+    """
+    folded: list[str] = []
+    index: list[int] = []
+    spaced = False
+    for position, char in enumerate(raw):
+        code = ord(char)
+        if code in _INVISIBLE:
+            if join_invisible:
+                continue
+            spaced = bool(folded)
+            continue
+        if char.isspace() or code in _ASCII_SEPARATORS or code in _UNICODE_SEPARATORS:
+            spaced = bool(folded)      # a leading space is not a word break
+            continue
+        piece = fold_for_match(char)
+        if not piece:
+            continue
+        if spaced:
+            folded.append(" ")
+            index.append(position)
+            spaced = False
+        for out in piece:
+            folded.append(out)
+            index.append(position)
+    return "".join(folded), index
+
+
+def sits_in_identifier(raw: str, index: list[int], start: int, end: int) -> bool:
+    """True when a folded match is a piece of a longer identifier.
+
+    Only the two edges of the folded span are examined, so a name joined by a
+    hyphen *between* its words (``First-Last``, surrounded by spaces) is
+    untouched, while the same words inside ``rate_card`` or ``a/b`` are not.
+    A dot, slash or backslash counts only when it is welded to a word
+    character -- ``card.py`` is a file, ``Vantrey.`` is the end of a sentence.
+    An underscore anywhere inside the span is code's own joiner: no name is
+    spelled with one, so a match that spans it is an identifier.
+    """
+    first = index[start]
+    last = index[end - 1]
+    if "_" in raw[first:last + 1]:
+        return True      # an underscore between two words is code, not a name
+    left = raw[first - 1] if first > 0 else ""
+    right = raw[last + 1] if last + 1 < len(raw) else ""
+    if left in _IDENTIFIER_CHARS or right in _IDENTIFIER_CHARS:
+        return True
+    if left in "./\\":
+        before = raw[first - 2] if first - 2 >= 0 else ""
+        if before.isalnum():
+            return True
+    if right in "./\\":
+        after = raw[last + 2] if last + 2 < len(raw) else ""
+        if after.isalnum():
+            return True
+    return False
+
+
+def _blocks(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
+    """Group consecutive non-blank lines, with each line's place in the raw text.
+
+    A blank line ends a block, so two paragraphs are never joined: the line
+    break recovered here is the one a word processor inserts inside a single
+    sentence, not the structural break between sections. Each entry carries
+    the block's own raw text (lines re-joined with a newline, so offsets map
+    back to the document) and, per line, its (offset in that text, number).
+    """
+    blocks: list[tuple[str, list[tuple[int, int]]]] = []
+    current: list[str] = []
+    numbers: list[tuple[int, int]] = []
+    offset = 0
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if line.strip():
+            numbers.append((offset, line_number))
+            current.append(line)
+            offset += len(line) + 1
+            continue
+        if current:
+            blocks.append(("\n".join(current), numbers))
+            current, numbers, offset = [], [], 0
+    if current:
+        blocks.append(("\n".join(current), numbers))
+    return blocks
+
+
+# Regex syntax in a denylist entry means the author wrote a machine pattern,
+# not a fixed phrase: there is no literal text to fold, and escaping a regex
+# would destroy it. Such an entry is compared to folded text exactly as
+# written, which is what it was written for.
+_REGEX_SYNTAX = re.compile(r"[\\\[\]()|?*+{}^$]")
+
+
+def folded_matcher(pattern: re.Pattern[str]) -> re.Pattern[str]:
+    """The matcher to use against folded text, for one denylist entry.
+
+    Both sides of that comparison have to be folded, or a pattern written with
+    an underscore could never match a line where the same words are separated
+    by a space (which is the whole case this is for). A plain phrase is
+    therefore folded here, word-bounded, and escaped; anything else is left
+    exactly as its author wrote it.
+    """
+    if _REGEX_SYNTAX.search(pattern.pattern):
+        return pattern
+    folded = fold_for_match(pattern.pattern)
+    if not folded:
+        return pattern
+    return re.compile(r"(?<!\w)" + re.escape(folded) + r"(?!\w)", re.IGNORECASE)
+
+
+def scan_client_document(
+    text: str, patterns: list[re.Pattern[str]], *, allow_line_join: bool = True
+) -> list[tuple[int, int]]:
+    """Every client-pattern hit in one document, each location reported once.
+
+    Adds to ``scan_client_text`` the spellings a literal comparison cannot see,
+    and only those it can defend:
+
+    * case, accents, invisible characters and the choice of separator between
+      two words are normalised away (see ``fold_for_match``), so a name is
+      caught whether it was typed hyphenated, in full-width letters, with a
+      zero-width space inside it, or with an accent spelled two ways;
+    * with ``allow_line_join``, the same phrase is matched across the line
+      break of a wrapped line, reported at the line it starts on. The caller
+      sets this for prose only: in a source file a newline separates
+      statements, and joining them manufactures phrases nobody wrote;
+    * a match that sits inside a longer identifier is NOT a hit. ``rate_card``
+      and ``docs/notes`` are one word each to a reader, and without this rule
+      the scan reports code naming things as client content, which is how a
+      red gate teaches a team to bypass it.
+
+    An order-independent, gap-tolerant match was tried and withdrawn: on the
+    real denylist it turned seventeen ordinary lines of this repository into
+    hits. Same words, same order, nothing between them, or it is not a match.
+    """
+    found: set[tuple[int, int]] = set(scan_client_text(text, patterns))
+    matchers = [folded_matcher(pattern) for pattern in patterns]
+    blocks = (
+        _blocks(text)
+        if allow_line_join
+        else [
+            (line, [(0, number)])
+            for number, line in enumerate(text.splitlines(), start=1)
+            if line.strip()
+        ]
+    )
+    for raw_block, numbers in blocks:
+        split_fold = fold_for_match(raw_block)
+        joined_fold = (
+            fold_for_match(raw_block, join_invisible=True)
+            if _INVISIBLE_RE.search(raw_block)
+            else split_fold
+        )
+        cheap = {split_fold, joined_fold}
+        if not any(matcher.search(form) for matcher in matchers for form in cheap):
+            continue                     # no candidate: no need for the map
+        views = [fold_with_map(raw_block)]
+        if joined_fold != split_fold:
+            views.append(fold_with_map(raw_block, join_invisible=True))
+        starts = [offset for offset, _ in numbers]
+        for mapped, index in views:
+            for pattern_index, matcher in enumerate(matchers):
+                for match in matcher.finditer(mapped):
+                    if sits_in_identifier(raw_block, index, match.start(), match.end()):
+                        continue
+                    position = index[match.start()]
+                    line_number = numbers[bisect_right(starts, position) - 1][1]
+                    found.add((line_number, pattern_index))
+    return sorted(found)
 
 
 _ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})")
@@ -398,6 +695,22 @@ def decode_escapes(line: str) -> str:
     return _ESCAPE.sub(_char, line)
 
 
+# Line break inside a phrase is a typesetting artifact in prose and a statement
+# separator in code. Joining the lines of a source file invents adjacencies no
+# reader ever sees -- one docstring line ending in a word, the next starting
+# with another -- which is how a wrapped-line match turned ordinary fixtures
+# into client content. So the cross-line comparison is limited to the formats
+# where a human reads a paragraph, not a run of statements.
+PROSE_SUFFIXES = frozenset({
+    ".md", ".markdown", ".rst", ".txt", ".adoc", ".html", ".htm", ".tex",
+})
+
+
+def is_prose(path: str | Path) -> bool:
+    """True when a file is read as a paragraph rather than as statements."""
+    return Path(str(path).replace("\\", "/")).suffix.lower() in PROSE_SUFFIXES
+
+
 def scan_client_paths(
     paths: list[Path], patterns: list[re.Pattern[str]]
 ) -> list[tuple[str, int, int]]:
@@ -416,7 +729,9 @@ def scan_client_paths(
             continue  # unreadable; no text a regex can judge
         findings.extend(
             (rel, line_number, index)
-            for line_number, index in scan_client_text(text, patterns)
+            for line_number, index in scan_client_document(
+                text, patterns, allow_line_join=is_prose(rel)
+            )
         )
     return findings
 
