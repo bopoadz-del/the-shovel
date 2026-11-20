@@ -3106,6 +3106,14 @@ def _boq_chunks_for_document(
 
 _SPREADSHEET_EXTS = frozenset({".xlsx", ".xls", ".csv"})
 
+# The band field's value when the row chunk's own sheet states no band. This is
+# product text derived from the sheet's structure, not document wording. A row
+# chunk's locator chain is `Sheet:` (always present) followed by the band, so a
+# band that is silently absent makes a band-scoped question unable to reach the
+# row and an answer unable to attribute it; the marker keeps the field in the
+# same position for every row chunk.
+_SPREADSHEET_NO_BAND = "(no band stated on this sheet)"
+
 # A row whose measured columns are all empty becomes inherited "Bill:" context
 # rather than a chunk, so a bare description-only row (a bill banner, a
 # section title, a subtotal) scopes every measured row that follows it.
@@ -3188,6 +3196,21 @@ def _spreadsheet_heading_above(rows: list[list[str]]) -> str:
     return label
 
 
+def _spreadsheet_band_for(sheet_name: str, band: str, band_sheet: str) -> str:
+    """The band a row chunk on ``sheet_name`` may carry.
+
+    A band is a locator: it names the bill/section the figure belongs to. It
+    may be inherited only from a heading row in the SAME sheet. A band stated
+    on another sheet is refused, never used as a fallback -- attaching it would
+    give the row a foreign bill/section. When the row's own sheet states no
+    band the chunk carries the explicit absence marker in the same field
+    position, so the locator chain is complete for every row chunk.
+    """
+    if band and band_sheet == sheet_name:
+        return band
+    return _SPREADSHEET_NO_BAND
+
+
 def _spreadsheet_row_chunks(
     file_path: str, filename: str, ext: str,
 ) -> list[str]:
@@ -3219,7 +3242,11 @@ def _spreadsheet_row_chunks(
         header_cells = list(rows[hdr_idx])
         while header_cells and header_cells[-1] == "":
             header_cells.pop()
-        heading = _spreadsheet_heading_above(rows[:hdr_idx])
+        band = _spreadsheet_heading_above(rows[:hdr_idx])
+        # The sheet that stated `band`. Inheritance is refused across sheets
+        # by `_spreadsheet_band_for`, so a later sheet can never pick up this
+        # one's band even if this state outlives the loop iteration.
+        band_sheet = sheet_name
         for row in rows[hdr_idx + 1:]:
             cells = list(row)
             while cells and cells[-1] == "":
@@ -3244,13 +3271,15 @@ def _spreadsheet_row_chunks(
                 # context for the measured rows that follow.
                 label = " | ".join(c for c in cells if c != "")
                 if label:
-                    heading = label
+                    band = label
+                    band_sheet = sheet_name
                 continue
             parts: list[str] = []
             if sheet_name:
                 parts.append(f"Sheet: {sheet_name}")
-            if heading:
-                parts.append(f"Bill: {heading}")
+            parts.append(
+                f"Bill: {_spreadsheet_band_for(sheet_name, band, band_sheet)}"
+            )
             parts.append(f"Item: {desc}")
             for field, label in (
                 ("quantity", "Quantity"),
