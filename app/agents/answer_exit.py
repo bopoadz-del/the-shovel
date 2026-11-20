@@ -1221,6 +1221,18 @@ _PARAM_PHRASE_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: The answer-style machinery terms (tester's 18-pattern list) that the phrase
+#: rewriter above does not already take: single technical words the platform
+#: uses that have no user-facing meaning. Removed whole-word, case-insensitive.
+_MACHINERY_TERM_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:"
+    r"(?<!document )(?<!documents )indexed(?![ \t]+(?:documents?|files?|chunks?))|"
+    r"index(?:es)?|embed(?:ding|dings)|vector(?:s)?|top-?k|rag|"
+    r"context[ \t]+window|llm|token(?:s)?|pipeline|rerank(?:er)?|semantic[ \t]+search"
+    r")(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
+
 
 def _cap_like(original: str, new: str) -> str:
     return new[:1].upper() + new[1:] if original[:1].isupper() else new
@@ -1292,11 +1304,12 @@ def _machine_wording(text: str, tier: str = "project") -> str:
         return _cap_like(m.group(0), new)
 
     text = _MACHINE_PHRASE_RE.sub(phrase, text)
-    return _PARAM_PHRASE_RE.sub(
+    text = _PARAM_PHRASE_RE.sub(
         lambda m: _cap_like(m.group(0), (f"{m.group('adj')} inputs" if m.group("adj") else
                                          f"inputs {m.group('post')}")),
         text,
     )
+    return _MACHINERY_TERM_RE.sub(" ", text)
 
 
 # ── Step names and tool-call mechanics ───────────────────────────────────────
