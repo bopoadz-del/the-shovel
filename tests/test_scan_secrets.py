@@ -365,3 +365,83 @@ def test_a_denylisted_word_written_as_unicode_escapes_is_caught(text, expected):
 )
 def test_an_escape_that_names_no_character_is_left_as_written(raw, decoded):
     assert scan_secrets.decode_escapes(raw) == decoded
+
+
+# -- rule 6: a personal mailbox address, never a product contact -------------
+#
+# A committed address cannot be rotated the way a credential can: the commit
+# is permanent. The rule is keyed on the PROVIDER CLASS -- consumer webmail
+# exists to serve individuals -- so a person's address is a finding while a
+# product or support contact at the project's own domain is not. Every address
+# below is invented for this file; the allowlist markers keep the tree-clean
+# test green, exactly as the file's docstring describes.
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "slm.lane.probe@gmail.com",        # pragma: allowlist secret
+        "slm.probe.two@outlook.com",       # pragma: allowlist secret
+        "slm.probe.three@proton.me",       # pragma: allowlist secret
+        "slm.probe.four@yahoo.co.uk",      # pragma: allowlist secret
+    ],
+)
+def test_a_consumer_mailbox_address_is_caught(address):
+    assert "consumer-mailbox-address" in _hits(f"contact: {address}")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "support@example.com",
+        "ops@theshovel.ai",
+        "noreply@example.test",
+        "service@example-project.iam.gserviceaccount.com",
+        "a@notgmail.com",
+        "x@sub.example.com",
+        "a@gmail.com.evil",
+    ],
+)
+def test_documentation_and_product_addresses_do_not_fire(line):
+    """The provider class, not the word 'email', is what fires. A product
+    contact at its own domain is public by design and must stay clean."""
+    assert "consumer-mailbox-address" not in _hits(line)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "slm.lane.probe@gmail.com",   # pragma: allowlist secret
+        "slm.probe.two@outlook.com",  # pragma: allowlist secret
+    ],
+)
+def test_the_walk_reports_a_personal_address(tmp_path, monkeypatch, address):
+    """The rule is wired into scan(), not merely defined beside it."""
+    (tmp_path / "notes.md").write_text(
+        f"reach the team at {address}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["notes.md"])
+
+    findings = scan_secrets.scan()
+    assert len(findings) == 1
+    assert "notes.md:1" in findings[0]
+    assert "[consumer-mailbox-address]" in findings[0]
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "slm.probe.three@proton.me",   # pragma: allowlist secret
+        "slm.probe.four@yahoo.co.uk",  # pragma: allowlist secret
+    ],
+)
+def test_a_deliberate_fixture_address_can_be_allowlisted(tmp_path, monkeypatch, address):
+    (tmp_path / "fixture.md").write_text(
+        f"example fixture: {address}  # {scan_secrets.ALLOW_MARKER}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["fixture.md"])
+
+    assert scan_secrets.scan() == []

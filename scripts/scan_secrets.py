@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail the build if secret material is in the working tree.
 
-Five hardcoded credential-shape rules, in descending order of certainty:
+Six hardcoded credential-shape rules, in descending order of certainty:
 
   1. AWS access key ids   -- `AKIA` + 16 uppercase alphanumerics. Unambiguous.
   2. Private key blocks   -- `-----BEGIN ... PRIVATE KEY`. Unambiguous.
@@ -19,6 +19,14 @@ Five hardcoded credential-shape rules, in descending order of certainty:
      a short stand-in or a well-known placeholder word is not credential
      material; a literal of eight or more characters is. See
      `URL_CREDENTIAL_RULES`.
+  6. Personal mailbox addresses -- an address at a consumer webmail
+     provider (`@gmail.com`, `@outlook.com`, ...). Every rule above keys on
+     a credential, and a credential can be rotated; an address cannot. It is
+     identity, it is permanent in history, and a committed one is a privacy
+     defect even when it is not a secret. The rule is keyed on the PROVIDER
+     CLASS, never on a person: consumer webmail exists to serve individuals,
+     so an address there is personal by construction, while a product or
+     support contact uses the product's own domain and does not fire.
 
 Plus an env-fed client-pattern denylist (``SECRET_SCAN_PATTERNS``): one
 regex per line, from a repository secret. Those patterns are themselves
@@ -121,6 +129,38 @@ RULES = [
             SECRET_NAME + r"\s*[:=]\s*[\"']?(" + LONG_HEX + r"|" + LONG_B64 + r")[\"']?"
         ),
         "long literal assigned to a secret-named field",
+    ),
+    (
+        # A committed personal address is the one privacy defect in this
+        # scanner that no rotation can undo: the commit is forever. This rule
+        # was added because a bot scan of this tree reported addresses as a
+        # pattern class and the reader had to adjudicate them BY EYE -- no
+        # rule here fired on an address at all, so the next one would have
+        # landed unread. It fires on the provider class, not on any person, so
+        # a product, support or documentation address at the project's own
+        # domain is not a finding. The trailing lookahead is what makes it a
+        # provider and not a prefix: `@gmail.com.evil` is a different domain
+        # and does not fire. No test-path gate: a fixture address in a test
+        # is still published, so deliberate ones carry the allowlist marker
+        # like every other fixture in tests/test_scan_secrets.py.
+        "consumer-mailbox-address",
+        re.compile(
+            r"[\w.+-]+@(?:"
+            r"gmail\.com|googlemail\.com"
+            r"|outlook\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|hotmail\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|live\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|yahoo\.[a-z]{2,3}(?:\.[a-z]{2})?|ymail\.com|rocketmail\.com"
+            r"|icloud\.com|me\.com|mac\.com"
+            r"|proton\.me|protonmail\.com"
+            r"|aol\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|gmx\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|mail\.ru|yandex\.[a-z]{2,3}(?:\.[a-z]{2})?"
+            r"|qq\.com|163\.com|126\.com"
+            r")(?![A-Za-z0-9.-])",
+            re.I,
+        ),
+        "personal address at a consumer mailbox provider",
     ),
 ]
 
