@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail the build if secret material is in the working tree.
 
-Four hardcoded credential-shape rules, in descending order of certainty:
+Five hardcoded credential-shape rules, in descending order of certainty:
 
   1. AWS access key ids   -- `AKIA` + 16 uppercase alphanumerics. Unambiguous.
   2. Private key blocks   -- `-----BEGIN ... PRIVATE KEY`. Unambiguous.
@@ -11,6 +11,14 @@ Four hardcoded credential-shape rules, in descending order of certainty:
      salt, IV or Fernet key. These are the quiet ones: they do not look
      like a password, and they make every derived key reproducible by
      anyone holding the source.
+  5. Connection strings that carry a literal password --
+     `scheme://user:password@host`. Rules 1-4 all key on a NAME or on a
+     provider prefix, so a bot scan that reported 29 such lines across
+     16 files in this tree produced zero hits here: a URL credential has
+     neither. The password decides -- an interpolation, a redaction mask,
+     a short stand-in or a well-known placeholder word is not credential
+     material; a literal of eight or more characters is. See
+     `URL_CREDENTIAL_RULES`.
 
 Plus an env-fed client-pattern denylist (``SECRET_SCAN_PATTERNS``): one
 regex per line, from a repository secret. Those patterns are themselves
@@ -136,6 +144,58 @@ KDF_RULES = [
             r"[\"'][^\"']{8,}[\"']"
         ),
         "key derivation seeded from a literal",
+    ),
+]
+
+# Rule 5 — a connection string carrying a literal password. The regex finds the
+# shape; `_accepts_password` decides whether the password is credential
+# material, because regex alone cannot tell `:${DB_PASSWORD}@` from a real one,
+# and a rule that flagged every fixture URL would be switched off within a
+# week. Eight characters is the floor: shorter literals in this tree are
+# redaction stand-ins (`:x@`, `:pw@`), not passwords. This rule has NO
+# non-test gate — a connection string in a test is still published, so the
+# deliberate fixtures carry the allowlist marker instead of a path exclusion.
+URL_CREDENTIAL = re.compile(
+    r"\b[a-z][a-z0-9+.\-]*://[^/\s:@]+:(?P<password>[^/\s@]+)@[^\s/]+", re.I
+)
+#: A password that IS one of these is a stand-in, not a secret. Whole-value
+#: match only: a real password merely containing "test" still fails the gate.
+PLACEHOLDER_PASSWORDS = frozenset({
+    "password", "passwd", "pass", "pwd", "secret", "changeme", "change_me",
+    "changeit", "example", "test", "testpass", "postgres", "postgresql",
+    "mysql", "redis", "mongo", "mongodb", "user", "username", "admin",
+    "root", "demo", "placeholder", "yourpassword", "your_password",
+    "password123", "development", "local", "guest", "dummy", "sample",
+    "default", "password1",
+})
+#: `$VAR`, `${...}`, `%(var)s`, `<password>`, `{{ var }}`, `[password]` — any
+#: of these means the value is supplied at deploy time, not committed.
+PASSWORD_REFERENCE = re.compile(r"[$%]|<|\{\{|\}|\[|\]")
+#: `***`, `xxx`, `...` — a redaction, and its length proves nothing.
+PASSWORD_MASK = re.compile(r"^(?:[*xX._\-]){3,}$")
+MIN_LITERAL_PASSWORD = 8
+
+
+def _accepts_password(match: re.Match[str]) -> bool:
+    """True when the captured password looks like committed credential material."""
+    password = match.group("password")
+    if PASSWORD_REFERENCE.search(password):
+        return False
+    if PASSWORD_MASK.match(password):
+        return False
+    if len(password) < MIN_LITERAL_PASSWORD:
+        return False
+    return password.lower() not in PLACEHOLDER_PASSWORDS
+
+
+#: Rules whose regex alone cannot decide an answer: the match must also pass
+#: the rule's predicate on the captured value.
+URL_CREDENTIAL_RULES = [
+    (
+        "url-credential",
+        URL_CREDENTIAL,
+        "literal password inside a connection string",
+        _accepts_password,
     ),
 ]
 
@@ -287,8 +347,17 @@ def scan(rel_paths: list[str] | None = None) -> list[str]:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if ALLOW_MARKER in line:
                 continue
+            reported = False
             for name, pattern, description in rules:
                 if pattern.search(line):
+                    findings.append(f"{rel}:{lineno}  [{name}] {description}")
+                    reported = True
+                    break
+            if reported:
+                continue
+            for name, pattern, description, accepts in URL_CREDENTIAL_RULES:
+                match = pattern.search(line)
+                if match is not None and accepts(match):
                     findings.append(f"{rel}:{lineno}  [{name}] {description}")
                     break
     return findings

@@ -45,7 +45,12 @@ def _hits(line: str, *, test_path: bool = False):
     rules = list(scan_secrets.RULES)
     if not test_path:
         rules += scan_secrets.KDF_RULES
-    return [name for name, pattern, _ in rules if pattern.search(line)]
+    names = [name for name, pattern, _ in rules if pattern.search(line)]
+    for name, pattern, _, accepts in scan_secrets.URL_CREDENTIAL_RULES:
+        match = pattern.search(line)
+        if match is not None and accepts(match):
+            names.append(name)
+    return names
 
 
 # ── the ones that were really in the tree ─────────────────────────────────
@@ -132,6 +137,73 @@ def test_a_fernet_key_built_from_a_literal_is_caught():
     assert "hardcoded-fernet-key" in _hits(
         "f = Fernet('bXlzdXBlcnNlY3JldGZlcm5ldGtleXZhbHVlMTIzNDU2Nzg5MA==')"
     )
+
+
+# ── rule 5: a connection string that carries a literal password ─────────────
+#
+# Rules 1-4 key on a name or a provider prefix. A URL credential has neither,
+# which is why a bot scan reporting 29 such lines across 16 files produced zero
+# hits here until this rule existed. The password is what decides, and it is
+# generated here so no credential-shaped literal is stored in the tree.
+
+_URL_PW = _fake("", 24)
+
+
+def test_a_connection_string_with_a_literal_password_is_caught():
+    assert "url-credential" in _hits(
+        "DATABASE_URL=postgresql://svc:" + _URL_PW + "@db.internal:5432/app"
+    )
+
+
+def test_the_length_floor_is_eight_characters():
+    """Exactly eight fires, seven does not: the floor is what separates a
+    redaction stand-in from a password, so it is pinned on both sides."""
+    eight = _fake("", scan_secrets.MIN_LITERAL_PASSWORD)
+    seven = eight[:-1]
+    assert "url-credential" in _hits("postgresql://svc:" + eight + "@db.internal/app")
+    assert "url-credential" not in _hits("postgresql://svc:" + seven + "@db.internal/app")
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        "${DB_PASSWORD}",
+        "$DB_PASSWORD",
+        "%(DB_PASSWORD)s",
+        "<password>",
+        "{{ db_password }}",
+        "[password]",
+        "********",
+        "xxxxxxxx",
+        "...",
+        "password",
+        "changeme",
+        "postgres",
+        "x",
+        "pw",
+    ],
+)
+def test_a_connection_string_without_credential_material_does_not_fire(password):
+    """Interpolations, masks, redaction stand-ins and placeholder words are
+    not credential material; firing on them trains people to ignore the gate."""
+    assert "url-credential" not in _hits(
+        "DATABASE_URL=postgresql://svc:" + password + "@db.internal:5432/app"
+    )
+
+
+def test_the_walk_reports_a_connection_string_credential(tmp_path, monkeypatch):
+    """The rule is wired into scan(), not merely defined beside it."""
+    (tmp_path / "compose.yml").write_text(
+        "DATABASE_URL=postgresql://svc:" + _URL_PW + "@db.internal:5432/app\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(scan_secrets, "tracked_files", lambda: ["compose.yml"])
+
+    findings = scan_secrets.scan()
+    assert len(findings) == 1
+    assert "[url-credential]" in findings[0]
+    assert _URL_PW not in findings[0]
 
 
 # ── the allowlist has to work, or people will delete the check ────────────

@@ -249,12 +249,12 @@ def test_refusal_prints_setting_name_and_verdict_only(setting, value, read_from_
     "setting,value,parts,table",
     [
         ("DATABASE_URL",
-         "postgresql://wrenfold_admin:Pq7-hollow-lantern@db.quarry-north.example:5432/vault-7731/ledger",
+         "postgresql://wrenfold_admin:Pq7-hollow-lantern@db.quarry-north.example:5432/vault-7731/ledger",  # pragma: allowlist secret
          ["wrenfold_admin", "Pq7-hollow-lantern", "db.quarry-north.example", "quarry-north",
           "vault-7731", "ledger"],
          {"db.quarry-north.example": ["8.8.8.8"]}),
         ("ARCHIVE_SYNC_URL",
-         "https://ossery.ops:Zt4_brine_kettle@relay.fenmarch.example/drop/kestrel-secret-19?token=amber44",
+         "https://ossery.ops:Zt4_brine_kettle@relay.fenmarch.example/drop/kestrel-secret-19?token=amber44",  # pragma: allowlist secret
          ["ossery.ops", "Zt4_brine_kettle", "relay.fenmarch.example", "fenmarch",
           "kestrel-secret-19", "amber44"],
          {}),  # does not resolve: cannot be shown to stay inside
