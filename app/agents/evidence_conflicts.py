@@ -107,6 +107,13 @@ _KIND_TERMS = frozenset(_stem(w) for w in (
     "period", "pressure", "force", "percent", "percentage", "price", "cost", "sum"))
 
 
+#: Words the value itself says in its own sentence -- they name the value's
+#: property ("strength" for a strength), never the thing -- but which must NOT
+#: prune the question's words (a qualifier like "yield" still names the thing
+#: the question asks about). Dropped from the thing in ``_same_thing`` only.
+_VALUE_SAID_TERMS = frozenset(_stem(w) for w in ("strength",))
+
+
 #: A trailing "what do X and Y each say?" clause asks what each SOURCE
 #: says; its words name the sources, not the thing the values belong to.
 _SOURCE_ASK_RE = re.compile(r"\b(?:what|which)\s+(?:do|does)\b", re.IGNORECASE)
@@ -552,34 +559,36 @@ def _states_answer(c: _Cand, sent: str, typed: list[Value], kind: str) -> bool:
 
 def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, asked: set[str],
                 from_question: bool = False) -> list[_Cand]:
-    """Only the values that belong to the asked thing. The thing is the asked
-    words that every document stating the answer's value uses for it; a value
-    from a sentence that does not name all of them is about something else
-    that merely shares words (another element, section or revision)."""
+    """Only the values that belong to the same thing. The thing is the asked
+    words the best anchor uses for the value, less a word the value itself
+    says ("strength" for a strength, "date" for a date) when the passages do
+    not all name it. A loosely-worded second anchor that states the SAME value
+    never shrinks the thing; a value from a sentence that does not name every
+    thing word is about something else that merely shares words (another
+    element, section or revision)."""
     anchors = [c for c in kept if _states_answer(c, sent, typed, kind)]
-    # The thing is named by the anchor that names the most asked words: a
-    # second, loosely worded passage stating the same value never shrinks the
-    # thing to a word other things share. A word that only names the value's
-    # own kind ("date" for a date) is said by the value itself.
     named = [(len(asked & c.sent_terms), c) for c in anchors]
     best = max((n for n, _c in named), default=0)
     thing = set(asked) - _KIND_TERMS
     for n, c in named:
         if n == best:
             thing &= c.sent_terms
-    need = _named_enough(len(set(asked) - _KIND_TERMS)) if from_question else 1
+    # A word that names only the value's own property ("strength" for a
+    # strength) is said by the value itself, not the thing: drop it when the
+    # passages do not all name it, so a passage that words the property
+    # differently ("grade") never loses the thing. A substantive word the best
+    # anchor names is kept even when a loosely-worded second anchor is silent.
+    for w in list(thing & _VALUE_SAID_TERMS):
+        if not all(w in c.sent_terms for c in kept):
+            thing.discard(w)
+    # A floor of two shared substantive words (one shared word is not the
+    # thing the question names), never a fraction of the question's words: a
+    # verbose question must not shrink a thing the anchors name. A thing of
+    # one word (a question naming one thing word) needs only that one.
+    need = min(len(set(asked) - _KIND_TERMS), 2) if from_question else 1
     if len(thing) < need:
-        # One word shared with the question is not the thing the question
-        # names: two values for two things that share a word are no conflict.
         return []
     return [c for c in kept if thing <= c.sent_terms]
-
-
-def _named_enough(asked: int) -> int:
-    """How many of the asked thing's words (``asked`` >= 1: the caller holds a
-    non-empty question thing) a value's own words must name: a third of
-    them, and at least two when the question names two or more."""
-    return min(asked, max(2, -(-asked // 3)))
 
 
 def _thing(kept: list[_Cand], asked: set[str]) -> list[str]:
