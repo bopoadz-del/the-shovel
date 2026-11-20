@@ -160,6 +160,8 @@ def _big_rows(n):
             for i in range(n)]
 
 
+@pytest.mark.serial
+@pytest.mark.timing
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terms, count", [("chamber", _BIG_ROWS), ("deep chamber", _BIG_ROWS // 5)])
 async def test_count_and_sum_over_a_stored_sheet_answers_inside_the_budget(
@@ -172,6 +174,7 @@ async def test_count_and_sum_over_a_stored_sheet_answers_inside_the_budget(
     out = await runtime._run_tool_call(_tool_call({"terms": terms}), project_id="p")
     elapsed = time.perf_counter() - started
 
+    print(f"bill count/sum over {_BIG_ROWS} rows: {elapsed:.3f}s (budget {TOOL_BUDGET_S}s)")
     bill = out["result"]["bills"][0]
     assert (bill["status"], bill["count"], bill["sum"]) == ("success", count, 2.0 * count)
     assert elapsed < TOOL_BUDGET_S, f"count/sum took {elapsed:.2f}s, budget {TOOL_BUDGET_S}s"
