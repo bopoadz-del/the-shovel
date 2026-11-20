@@ -119,6 +119,18 @@ def test_base_never_inherits_hat_procedure():
     assert catalog.get_base().playbook.rules is None
 
 
+def test_resolve_hat_merges_onto_its_named_base():
+    # A hat may extend a non-base manifest; the merge then starts from that
+    # named base rather than fork.base (pre-existing behaviour, now covered).
+    child = _manifest(_proc("z1", "Zeta", "never guess Z", ["step Z1"]))
+    child.extends = "fork.hat.planning"
+    merged = catalog.resolve_hat_with_base(child)
+    planning = catalog.get_hat(Discipline.PLANNING)
+    for action in planning.allowed_actions:
+        assert action in merged.allowed_actions
+    assert "z1" in {p.id for p in merged.playbook.procedures}
+
+
 def test_contracts_hat_carries_every_playbook_steps_and_refusals():
     contracts = catalog.get_hat(Discipline.CONTRACTS)
     out = render_procedures(contracts)
