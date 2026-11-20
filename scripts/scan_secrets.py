@@ -44,10 +44,11 @@ only; the matched text and the regex are never echoed.
 A denylisted pattern is compared against three views of every line, because
 the pattern is a written form and a person has many: the literal line, the
 escape-decoded line, and a folded line in which case, accents, invisibles,
-and the choice of separator are normalised away. A plain phrase additionally
-matches when its words appear near each other in any order, so surname-first
-attribution, a middle initial, and a phrase wrapped across a line break are
-the same person as the one on the list. See ``fold_for_match`` and
+and the choice of separator are normalised away. A phrase wrapped across a
+line break is the same phrase. A denylist entry that is a written proper
+name -- every word capitalised -- is additionally matched as a name is
+written: surname first, or with one middle name or initial between the two
+words. See ``fold_for_match``, ``name_pattern_words`` and
 ``scan_client_document``.
 
 FAIL-CLOSED: if ``SECRET_SCAN_PATTERNS`` is unset, empty, or comments-only,
@@ -611,6 +612,159 @@ def folded_matcher(pattern: re.Pattern[str]) -> re.Pattern[str]:
     return re.compile(r"(?<!\w)" + re.escape(folded) + r"(?!\w)", re.IGNORECASE)
 
 
+# A written personal name is a run of Titlecase words: ``Given Surname``,
+# ``Surname Given``, ``Given A. Surname``. That is a property of names, not a
+# guess: prose mid-sentence is lower case, code is an identifier, and only a
+# proper noun is spelled with a capital at every word. So the rule below
+# applies to a denylist entry only when EVERY word of it is Titlecase -- an
+# entry that spells a name. An order-independent, gap-tolerant match over
+# ordinary words was tried and withdrawn because it matched word sets across a
+# sentence; this one never forgets which word is which: it reads the exact
+# sequence, forwards or backwards, with at most one interior insertion.
+_NAME_SEPARATORS = frozenset(
+    " \t\n\x0b\x0c\r\x85\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+    "\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000-\u2010\u2011\u2012"
+    "\u2013\u2014"
+)
+# Punctuation a word may be wrapped in by a sentence and still be that word.
+# An interior apostrophe is NOT here: it makes the token not a name word at
+# all, which breaks the run instead of guessing at the apostrophe's meaning.
+_EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’"
+_TITLECASE_WORD = re.compile(r"[A-Z][a-z]+\Z")
+_INITIAL = re.compile(r"[A-Z]\Z")
+
+
+def _is_name_word(word: str) -> bool:
+    """True for a Titlecase word or a single capital -- a name, or an initial."""
+    return bool(_TITLECASE_WORD.match(word) or _INITIAL.match(word))
+
+
+def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
+    """The folded words of a denylist entry that spells a written name.
+
+    ``None`` for every other entry, and deliberately: a regex entry has no
+    literal words to sequence, and an entry with a lower-case word is a phrase
+    -- the folded phrase match already covers it, and reordering its words
+    would be inventing names out of vocabulary. Two to four words, every one
+    Titlecase, is the shape of a person's name on a denylist.
+    """
+    if _REGEX_SYNTAX.search(pattern.pattern):
+        return None
+    words = [
+        word
+        for word in re.split(r"[\s\-\u2010-\u2014]+", pattern.pattern)
+        if word
+    ]
+    if not 2 <= len(words) <= 4:
+        return None
+    if not all(_TITLECASE_WORD.match(word) for word in words):
+        return None
+    return tuple(word.casefold() for word in words)
+
+
+def name_runs(text: str) -> list[tuple[int, list[str]]]:
+    """Maximal runs of name-shaped words, each with the offset it starts at.
+
+    A token whose edges carry punctuation closes the run it is in: the dot of
+    ``Vantrey.`` ends a sentence, so the capitalised word after it is not part
+    of the same written name. Tokens are split only on separators a name is
+    written with -- space, tab, dash, Unicode space -- never on the joiners of
+    code, so an identifier is one token and is never a name word.
+
+    Invisible characters are deleted, not treated as separators: a soft
+    hyphen pushed into the middle of a surname leaves one word to a reader,
+    and a rule that cut it in two would miss the name it was written as.
+    Every offset maps back through ``origin`` so the caller still reports the
+    line the run starts on.
+    """
+    if _INVISIBLE_RE.search(text):
+        origin: list[int] = []
+        kept: list[str] = []
+        for position, char in enumerate(text):
+            if ord(char) in _INVISIBLE:
+                continue
+            kept.append(char)
+            origin.append(position)
+        clean = "".join(kept)
+    else:
+        clean = text
+        origin = list(range(len(text)))
+    words: list[tuple[int, str, bool]] = []
+    index = 0
+    length = len(clean)
+    while index < length:
+        char = clean[index]
+        if char in _NAME_SEPARATORS:
+            index += 1
+            continue
+        end = index + 1
+        while end < length and clean[end] not in _NAME_SEPARATORS:
+            end += 1
+        token = clean[index:end]
+        # Compatibility forms and accents are presentation: ``Vantre\u0301y``,
+        # ``Vantr\u00e9y`` and ``Vantrey`` are one name, and a full-width
+        # letter is the same letter. Judge the shape of the word, not its
+        # encoding.
+        shape = token
+        if not token.isascii():
+            shape = "".join(
+                ch
+                for ch in unicodedata.normalize(
+                    "NFKD", unicodedata.normalize("NFKC", token)
+                )
+                if not unicodedata.combining(ch)
+            )
+        core = shape.strip(_EDGE_PUNCTUATION)
+        # The dot of an initial belongs to the initial; the dot of a full stop
+        # closes the sentence and so closes the run.
+        bare = core == shape or (shape == core + "." and _INITIAL.match(core))
+        words.append((origin[index], core, bool(bare)))
+        index = end
+    runs: list[tuple[int, list[str]]] = []
+    current: list[str] = []
+    start = 0
+    for offset, core, bare in words:
+        if _is_name_word(core):
+            if not current:
+                start = offset
+            current.append(core.casefold())
+            if bare:
+                continue
+        if len(current) >= 2:
+            runs.append((start, current))
+        current = []
+    if len(current) >= 2:
+        runs.append((start, current))
+    return runs
+
+
+def name_run_matches(run: list[str], words: tuple[str, ...]) -> bool:
+    """True when the run reads as the denylisted name, however it is written.
+
+    Three written forms and no more: the exact sequence, the sequence
+    reversed (a surname-first attribution), and the sequence with one interior
+    word inserted -- a middle name or an initial. An insertion at either end
+    is not a form of the same name, it is a different run of words, and the
+    test is exact so a sentence's worth of text between the words can never
+    satisfy it.
+    """
+    size = len(words)
+    reversed_words = words[::-1]
+    for start in range(len(run) - size + 1):
+        window = tuple(run[start:start + size])
+        if window == words or window == reversed_words:
+            return True
+    if len(run) <= size:
+        return False
+    for start in range(len(run) - size):
+        window = run[start:start + size + 1]
+        for skip in range(1, size):
+            without = tuple(window[:skip] + window[skip + 1:])
+            if without == words or without == reversed_words:
+                return True
+    return False
+
+
 def scan_client_document(
     text: str, patterns: list[re.Pattern[str]], *, allow_line_join: bool = True
 ) -> list[tuple[int, int]]:
@@ -632,12 +786,20 @@ def scan_client_document(
       the scan reports code naming things as client content, which is how a
       red gate teaches a team to bypass it.
 
-    An order-independent, gap-tolerant match was tried and withdrawn: on the
-    real denylist it turned seventeen ordinary lines of this repository into
-    hits. Same words, same order, nothing between them, or it is not a match.
+    An order-independent, gap-tolerant word-set match was tried and withdrawn:
+    on the real denylist it turned seventeen ordinary lines of this repository
+    into hits. What a written name actually does -- surname first, a middle
+    name between -- is matched instead by the exact sequence rule in
+    ``name_run_matches``, which only ever applies to an entry whose every word
+    is a capitalised name word.
     """
     found: set[tuple[int, int]] = set(scan_client_text(text, patterns))
     matchers = [folded_matcher(pattern) for pattern in patterns]
+    name_patterns = [
+        (index, words)
+        for index, pattern in enumerate(patterns)
+        if (words := name_pattern_words(pattern)) is not None
+    ]
     blocks = (
         _blocks(text)
         if allow_line_join
@@ -654,13 +816,24 @@ def scan_client_document(
             if _INVISIBLE_RE.search(raw_block)
             else split_fold
         )
+        starts = [offset for offset, _ in numbers]
+        sparse = [
+            (index, words)
+            for index, words in name_patterns
+            if all(word in split_fold or word in joined_fold for word in words)
+        ]
+        if sparse:
+            for run_start, run in name_runs(raw_block):
+                for pattern_index, words in sparse:
+                    if name_run_matches(run, words):
+                        position = numbers[bisect_right(starts, run_start) - 1][1]
+                        found.add((position, pattern_index))
         cheap = {split_fold, joined_fold}
         if not any(matcher.search(form) for matcher in matchers for form in cheap):
             continue                     # no candidate: no need for the map
         views = [fold_with_map(raw_block)]
         if joined_fold != split_fold:
             views.append(fold_with_map(raw_block, join_invisible=True))
-        starts = [offset for offset, _ in numbers]
         for mapped, index in views:
             for pattern_index, matcher in enumerate(matchers):
                 for match in matcher.finditer(mapped):
