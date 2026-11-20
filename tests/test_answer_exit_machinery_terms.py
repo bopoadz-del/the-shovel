@@ -19,6 +19,9 @@ from app.agents.answer_exit import _machine_wording
         ("embeddings", "EMBEDDINGS"),
         ("vector", "vector"),
         ("vectors", "Vectors"),
+        ("indexed", "indexed"),
+        ("index", "Index"),
+        ("indexes", "indexes"),
         ("top-k", "top-k"),
         ("rag", "RAG"),
         ("llm", "LLM"),
@@ -43,3 +46,27 @@ def test_machinery_term_is_removed(term, variant):
 def test_machinery_phrase_is_removed(phrase):
     out = _machine_wording(f"The {phrase} is used here.")
     assert phrase not in out.lower()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "3 of 5 project documents indexed",
+        "12 of 12 documents indexed",
+    ],
+)
+def test_source_count_indexed_is_preserved(line):
+    out = _machine_wording(line)
+    assert "indexed" in out.lower()
+
+
+@pytest.mark.parametrize(
+    "token_in_filename",
+    [
+        "WORD-SPEC-TOKEN-FENWICK-20260819-081916",
+        "SPEC-VECTOR-9.docx",
+    ],
+)
+def test_term_inside_a_filename_is_preserved(token_in_filename):
+    out = _machine_wording(token_in_filename)
+    assert token_in_filename.lower() in out.lower()
