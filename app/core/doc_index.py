@@ -284,10 +284,12 @@ def _extract_for_profile(
 # How many leading letters/digits of a chunk are matched against the extracted
 # text to find the page the chunk starts on (``chunk_start_pages``).
 _DEFAULT_CHUNK_PAGE_PROBE_CHARS = 48
+_MIN_CHUNK_PAGE_PROBE_CHARS = 8
 
 
 def chunk_page_probe_chars() -> int:
-    return max(8, _env_int("CHUNK_PAGE_PROBE_CHARS", _DEFAULT_CHUNK_PAGE_PROBE_CHARS))
+    return max(_MIN_CHUNK_PAGE_PROBE_CHARS,
+               _env_int("CHUNK_PAGE_PROBE_CHARS", _DEFAULT_CHUNK_PAGE_PROBE_CHARS))
 
 # In-process guard around index writes. Cross-process safety comes from the
 # SQLite BEGIN IMMEDIATE transaction in _update_index; this lock just avoids
@@ -2065,6 +2067,35 @@ def _page_key(text: str) -> str:
     return _PAGE_KEY_DROP.sub("", text).lower()
 
 
+def _later_line_probe(
+    chunk: str, key: str, skeleton: str, cursor: int, probe_len: int,
+) -> int:
+    """Where a chunk's first source line after a synthetic lead starts.
+
+    A stage may prepend text the source never held (a label naming the stage,
+    a re-serialised ``key: value`` lead). The chunk's leading characters then
+    match nothing, while its later lines are verbatim source text. Probes
+    those line starts in order and returns a hit only when it is unique at or
+    after ``cursor``: a window that occurs again later, or only before the
+    previous chunk, cannot place this chunk in reading order and is skipped.
+    -1 when no later line is locatable (the caller keeps None).
+    """
+    windows: list[str] = []
+    offset = 0
+    for idx, line in enumerate(chunk.splitlines()):
+        if idx and offset < len(key):
+            windows.append(key[offset:offset + probe_len])
+        offset += len(_page_key(line))
+    for probe in windows:
+        if len(probe) < _MIN_CHUNK_PAGE_PROBE_CHARS:
+            continue
+        at = skeleton.find(probe, cursor)
+        if at < 0 or skeleton.find(probe, at + 1) >= 0:
+            continue
+        return at
+    return -1
+
+
 def chunk_start_pages(
     text: str,
     page_starts: list[list[int]] | list[tuple[int, int]] | None,
@@ -2076,8 +2107,10 @@ def chunk_start_pages(
     in ``text`` (recorded by PDF extraction). Each chunk's leading letters and
     digits are located in the same projection of ``text``, searching forward
     from the previous chunk so a repeated running header resolves to the
-    occurrence in reading order. A chunk that cannot be located (rewritten
-    rows, synthesized summaries) gets None rather than a guess.
+    occurrence in reading order. A chunk whose lead the source does not hold
+    (a stage's label or re-serialised lead) is located by its first later
+    line that does. A chunk that cannot be located at all (synthesized
+    summaries) gets None rather than a guess.
     """
     if not chunks:
         return []
@@ -2104,7 +2137,8 @@ def chunk_start_pages(
     out: list[int | None] = []
     cursor = 0
     for chunk in chunks:
-        key = _page_key(chunk or "")
+        raw = chunk or ""
+        key = _page_key(raw)
         probe = key[:probe_len]
         if not probe:
             out.append(None)
@@ -2113,7 +2147,12 @@ def chunk_start_pages(
         if at < 0:
             at = skeleton.find(probe)
         if at < 0:
-            out.append(None)
+            at = _later_line_probe(raw, key, skeleton, cursor, probe_len)
+            if at < 0:
+                out.append(None)
+                continue
+            out.append(pages[bisect.bisect_right(key_pos, at) - 1])
+            cursor = at
             continue
         out.append(pages[bisect.bisect_right(key_pos, at) - 1])
         # The next chunk starts after this one's first half: overlap carries

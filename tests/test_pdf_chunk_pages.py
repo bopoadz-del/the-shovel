@@ -80,6 +80,59 @@ def test_no_page_offsets_means_no_pages():
     assert doc_index.chunk_start_pages("", [[1, 0]], ["x"]) == [None]
 
 
+def _starts_of(pages):
+    starts, off = [], 0
+    for n, body in enumerate(pages, start=1):
+        starts.append([n, off])
+        off += len(body) + 1
+    return starts
+
+
+def test_a_labelled_chunk_is_located_by_its_first_source_line():
+    # A stage prepends a lead the source never held (a label naming the
+    # stage). The chunk's next line is verbatim source text, so the page is
+    # recoverable instead of the chunk losing its locator.
+    pages = [_page_body(n) for n in (1, 2, 3)]
+    text = "\n".join(pages)
+    label = "SYNTHETIC STAGE LABEL NOT IN THE SOURCE"
+
+    got = doc_index.chunk_start_pages(
+        text, _starts_of(pages),
+        [f"{label}\n{_page_body(2)}", f"{label}\n{_page_body(3)}"],
+    )
+
+    assert got == [2, 3]
+
+
+def test_a_chunk_with_no_source_text_keeps_no_page():
+    pages = [_page_body(n) for n in (1, 2)]
+    text = "\n".join(pages)
+    synthetic = "SYNTHETIC TOTALS SUMMARY " + " ".join(
+        f"figure{i}" for i in range(40)
+    )
+
+    assert doc_index.chunk_start_pages(
+        text, _starts_of(pages), [synthetic],
+    ) == [None]
+
+
+def test_a_later_line_only_present_before_the_cursor_gives_no_page():
+    # Reading order is not negotiable: a later line that occurs only before
+    # the previous chunk's position cannot place this chunk, so it keeps
+    # None rather than taking an earlier page.
+    pages = [_page_body(n) for n in (1, 2)]
+    text = "\n".join(pages)
+    stale = _page_body(1)[:200]
+    chunks = [
+        f"SYNTHETIC LABEL\n{_page_body(2)}",
+        f"SYNTHETIC LABEL\n{stale}",
+    ]
+
+    assert doc_index.chunk_start_pages(
+        text, _starts_of(pages), chunks,
+    ) == [2, None]
+
+
 # ── extraction → chunks ──────────────────────────────────────────────────────
 
 
