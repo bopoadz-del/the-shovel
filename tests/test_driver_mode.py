@@ -101,16 +101,18 @@ def test_the_model_picks_the_hat_and_gets_that_hats_tools(monkeypatch):
     assert ran == ["search_project_documents"]  # select_hat is the driver's own
     text = "".join(e["content"] for e in events if e["type"] == "token")
     assert "75 mm" in text
-    # Before the hat: base tools only. After: the qaqc package's tools too, no other hat's.
+    # A hat is focus, never access (U-3): the same tools before and after
+    # the hat; after it, the qaqc package's own tools come first.
     from app.agents.core import tool_registry
     from app.agents.driver import routes
 
     # The hat's own tools, less any that is a catalogue workflow (offered
     # through run_workflow instead).
     own = sorted(set(tool_registry.tools_of("qaqc")) - set(routes.catalogue()))
-    assert not set(own) & set(seen[0]["tools"])
-    assert set(own) <= set(seen[1]["tools"])
-    assert "cash_flow_forecast" not in seen[1]["tools"]
+    assert set(seen[0]["tools"]) == set(seen[1]["tools"])
+    assert set(own) <= set(seen[0]["tools"])
+    after = [n for n in seen[1]["tools"] if n != "select_hat"]
+    assert after[:len(own)] == [n for n in after if n in own]
     assert "select_hat" in seen[0]["tools"] and "search_project_documents" in seen[0]["tools"]
     assert "qaqc hat" in seen[1]["messages"][0]["content"]
 

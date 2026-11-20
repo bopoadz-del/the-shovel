@@ -2,7 +2,6 @@
 name: learning
 description: Watches user corrections, tunes recommendation coefficients, promotes formulas through the credibility tiers. The self-improving loop.
 icon: 🎓
-model: kimi-k2.6
 temperature: 0.2
 max_tokens: 1024
 # F34: corrections arrive IN the user's message ("the actual invoice was 480

@@ -725,7 +725,21 @@ def test_stored_type_is_a_declared_type_or_a_placeholder(value, shown):
 @pytest.mark.parametrize("filename", ["Sheet A-101 drawing.pdf", "site photo.jpg", "notes.txt"])
 def test_declared_types_cover_every_type_the_classifier_writes(filename):
     from app.core.projects import classify_doc_type
-    assert classify_doc_type(filename) in _load()._declared_types()
+    assert classify_doc_type(filename) in _load()._declared_types()[0]
+
+
+@pytest.mark.parametrize("custom_name, value, shown", [
+    ("Jordan Whitfield notes", "Jordan Whitfield notes", "(custom)"),  # user text: counted, never printed
+    ("Jordan Whitfield notes", "drawing", "drawing"),  # a built-in still prints by name
+    ("Jordan Whitfield notes", "Casey Morgan log", "(other)"),  # neither declared
+    ("drawing", "drawing", "(custom)"),  # a custom entry overriding a built-in name is user-declared
+])
+def test_custom_document_type_prints_as_custom_never_by_name(tmp_path, monkeypatch, custom_name, value, shown):
+    import json
+    (tmp_path / "custom_document_types.json").write_text(
+        json.dumps([{"name": custom_name, "description": "x"}]), encoding="utf-8")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert _load().stored_type(value) == shown
 
 
 @pytest.mark.parametrize("ext", [".pdf", ".xer"])

@@ -1,7 +1,8 @@
-"""The tools a driver turn offers: ``select_hat`` and the tools the base
-package and the chosen hat's package register. The schemas are the agent's
-own; which tools exist is the package registry's answer, never a choice
-made from the question's words."""
+"""The tools a driver turn offers: ``select_hat`` and every tool the base
+package and the hat packages register. A hat changes the order, never what
+is offered: the worn hat's tools come first, then the base package's, then
+the other hats'. The schemas are the agent's own; which tools exist is the
+package registry's answer, never a choice made from the question's words."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -14,8 +15,9 @@ def select_hat_schema(disciplines: List[str]) -> Dict[str, Any]:
         "type": "function",
         "function": {
             "name": SELECT_HAT,
-            "description": "Wear the hat whose description fits the question. Its tools and "
-                           "guidance are added for the rest of the turn.",
+            "description": "Wear the hat whose description fits the question. Its guidance is "
+                           "added for the rest of the turn and its tools are listed first; "
+                           "every tool stays offered whichever hat is worn.",
             "parameters": {
                 "type": "object",
                 "properties": {"hat": {"type": "string", "enum": sorted(disciplines)}},
@@ -30,9 +32,9 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
 
     from app.agents.core import tool_registry
 
-    names = set(tool_registry.tools_of("base"))
-    if hat:
-        names |= set(tool_registry.tools_of(hat))
+    # Every package's tools, whichever hat is worn (or none): a hat is focus,
+    # never access. A tool the turn needs is never out of reach.
+    names = {n for owner in tool_registry.OWNERS for n in tool_registry.tools_of(owner)}
     # The package tools' schemas are written next to the construction block's
     # in tool_definitions and emitted only when that block is allowed; in
     # driver mode the registry, not the agent's block list, decides.
@@ -59,7 +61,25 @@ def offered(agent: Any, project_id: Optional[str], hat: Optional[str], disciplin
         # by a second door; with two doors the model's choice between them
         # varies. The workflow is offered once, through run_workflow.
         tools = [t for t in tools if (t.get("function") or {}).get("name") not in set(workflows)]
-    return [select_hat_schema(disciplines)] + tools + ([workflow] if workflow else [])
+    return [select_hat_schema(disciplines)] + lead_first(tools, hat) + ([workflow] if workflow else [])
+
+
+def lead_rank(name: str, hat: Optional[str]) -> int:
+    """0 for a tool the worn hat owns, 1 for a base tool, 2 for another
+    hat's tool. A name the registry does not know ranks as base."""
+    from app.agents.core import tool_registry
+
+    spec = tool_registry.get(name or "")
+    owner = spec.owner if spec is not None else "base"
+    if hat and owner == hat:
+        return 0
+    return 1 if owner == "base" else 2
+
+
+def lead_first(tools: List[Dict[str, Any]], hat: Optional[str]) -> List[Dict[str, Any]]:
+    """The worn hat's tools first, then the base package's, then the other
+    hats' -- each group in its existing order. Nothing is added or removed."""
+    return sorted(tools, key=lambda t: lead_rank((t.get("function") or {}).get("name") or "", hat))
 
 
 #: Calculations listed in full (inputs with units and ranges) at most: base
@@ -97,12 +117,14 @@ def calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
     return copy.deepcopy(_SCHEMA_CACHE[key])
 
 
-def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
-    """The platform calculator as the model sees it in driver mode, built from
-    the formula registry: the formulas offered to this hat (base plus its own),
-    each with its display name, what it does, and every input's label, unit,
-    range and whether it is required. The model fills ``params`` from the
-    user's words by those labels and units -- no per-formula phrase lists."""
+def calculator_catalogue(hat: Optional[str]) -> "tuple[List[Any], List[str]]":
+    """Every registered calculator as the model is offered it, one line each:
+    name, display name and every input's label, unit, range and whether it is
+    required -- built from the formula registry, the one source both chat paths
+    (driver and default) read. The hat's own formulas come first with what they
+    do; every other calculator follows, still with its labelled inputs, units
+    and ranges, so the model fills ``params`` by label and unit whichever path
+    or hat the turn is on. Returns ``(specs, lines)`` in offer order."""
     from app.lib import formula_registry
 
     specs = formula_registry.specs_for(hat)[:_MAX_CALCULATIONS]
@@ -118,13 +140,22 @@ def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
     if others:
         lines.append("Other calculators (in another hat; call them the same way):")
         for spec in others:
-            # Optional inputs are marked here too: an input the model cannot
-            # see is optional reads as one it must find or ask for (LANE3:
-            # "using your standard rates" refused, or priced from a document).
-            inputs = "; ".join(f"{k} = {p.label or k.replace('_', ' ')}" + ("" if p.required else " (optional)")
-                               for k, p in formula_registry.parameters(spec).items())
+            # The same labelled line as above (label, unit, range, optional):
+            # an input the model cannot see is optional reads as one it must
+            # find or ask for, and an input without its unit is filled in the
+            # wrong one.
+            inputs = "; ".join(_input_line(k, p) for k, p in formula_registry.parameters(spec).items())
             lines.append(f"- {spec.name}: {spec.display_name} ({spec.owner}). Inputs: {inputs or 'none'}.")
-    specs = specs + others
+    return specs + others, lines
+
+
+def _build_calculator_schema(hat: Optional[str]) -> Dict[str, Any]:
+    """The platform calculator as the model sees it in driver mode, built from
+    the formula registry: the formulas offered to this hat (base plus its own),
+    each with its display name, what it does, and every input's label, unit,
+    range and whether it is required. The model fills ``params`` from the
+    user's words by those labels and units -- no per-formula phrase lists."""
+    specs, lines = calculator_catalogue(hat)
     return {
         "type": "function",
         "function": {

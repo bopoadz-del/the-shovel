@@ -29,11 +29,32 @@ logger = logging.getLogger(__name__)
 DEFAULT_DOC_TYPE = "document"
 
 #: Roles a folder table may assign. ``ck_documents_doc_role`` allows these
-#: plus the readiness roles in ``app.core.projects``; alembic 0034 widens it.
-FOLDER_ROLES = frozenset({"contract", "draft", "tender", "award", "reporting", "design"})
+#: plus the readiness roles in ``app.core.projects``; alembic 0039 widens it.
+FOLDER_ROLES = frozenset({"contract", "draft", "tender", "award", "reporting", "design", "contractor_submittal"})
 
 #: Metadata keys that carry a document's source path, nearest source first.
 _PATH_KEYS = ("drive_path", "local_drive_path", "source_path")
+
+
+#: A generated knowledge copy declares, on a line of its own, the encoded
+#: table it was written from (``scripts/kb_from_code.py`` writes it). The
+#: copy's values are that table's values, not a separate document's: a
+#: conflict line must be able to say so.
+_GENERATED_FROM = re.compile(r"^\s*Generated from `([^`\n]+)`", re.MULTILINE)
+
+
+def declared_origin(content_sample: str | None) -> dict[str, str | None]:
+    """The origin a document declares for its own values.
+
+    ``{"kind": "encoded_table", "source": <path>}`` when the text declares
+    the encoded table it was generated from; otherwise
+    ``{"kind": "document", "source": None}`` (a document speaks for itself).
+    Read from the document's own text, never from its name.
+    """
+    m = _GENERATED_FROM.search(content_sample or "")
+    if m:
+        return {"kind": "encoded_table", "source": m.group(1).strip()}
+    return {"kind": "document", "source": None}
 
 
 def type_for(filename: str, content_sample: str = "") -> str:

@@ -291,9 +291,17 @@ def test_both_streaming_endpoints_are_wrapped():
     # guarantee_terminal(with_hat_signals(with_answer_exit(event_stream()), ...)). The old
     # contiguous substring no longer matches; both wrappers must still
     # wrap both endpoints. The exit check sits innermost, around the
-    # event stream itself.
+    # event stream itself, and it is handed the same question the hat
+    # signals see (G-7: the turn's question reaches the answer contract).
+    import re
+
     assert source.count("guarantee_terminal(") == 2
-    assert source.count("with_hat_signals(with_answer_exit(event_stream())") == 2
+    wrapped = re.findall(
+        r"with_hat_signals\(with_answer_exit\(event_stream\(\), ([\w.]+)\), ([\w.]+)\)",
+        source,
+    )
+    assert len(wrapped) == 2
+    assert all(exit_q == hat_q for exit_q, hat_q in wrapped)
     assert source.count("StreamingResponse(") == 2
 
 

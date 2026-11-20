@@ -1331,6 +1331,10 @@ def add_document(
     did = document_id or str(uuid.uuid4())[:8]
     doc_type = classify_doc_type(original_name)
     doc_role = resolve_doc_role(original_name, metadata, role)
+    # The kind of standing is decided here, at indexing, from the type and
+    # role just decided, and stored with the row (app.core.doc_standing).
+    from app.core.doc_standing import with_standing
+    metadata = with_standing(metadata, doc_type, doc_role)
     with _lock:
         with SessionLocal() as session:
             session.add(
@@ -2569,6 +2573,12 @@ def current_session_scope() -> Optional[Tuple[str, str]]:
 
 def _names_a_session(meta: Dict[str, Any]) -> bool:
     return bool(meta.get("session_id"))
+
+
+def is_session_document(meta: Any) -> bool:
+    """True when this metadata belongs to a file attached inside one chat
+    session. Such a file is never part of the project's search index."""
+    return _names_a_session(coerce_document_metadata(meta))
 
 
 def document_in_scope(meta: Any, scope: Optional[Tuple[str, str]] = None) -> bool:

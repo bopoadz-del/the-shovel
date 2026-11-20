@@ -60,21 +60,32 @@ def _register(client, tag: str) -> tuple[dict, str]:
             body.get("user_id") or body.get("user", {}).get("id"))
 
 
-def _upload(client, headers, pid, key, session_id=None) -> str:
+def _upload(client, headers, pid, key, session_id=None, uploader_id=None) -> str:
+    """Upload through the route; give the row chunks with the real indexer.
+
+    A session file never enters the index today (the upload route stamps it
+    not indexed and ``doc_index`` refuses a row naming a session). Rows that
+    were chunked BEFORE that rule still exist, and they are what this exam's
+    retrieval half is about: such a row is built here as it came about --
+    indexed while it named no session -- then given its session and uploader.
+    """
     name, word = _FILES[key]
-    data = {"session_id": session_id} if session_id else {}
     res = client.post(
         f"/v1/projects/{pid}/documents",
         files={"file": (name, io.BytesIO(_text(word)), "text/plain")},
-        data=data, headers=headers,
+        headers=headers,
     )
     assert res.status_code in (200, 201), res.text
     body = res.json()
     did = (body.get("document") or body)["id"]
     from app.core import doc_index
+    from app.core import projects as store
 
-    # The real indexer, as the upload path runs it when INDEX_ON_UPLOAD is on.
-    doc_index.index_document(pid, did)
+    assert doc_index.index_document(pid, did).get("indexed") == 1
+    if session_id:
+        assert uploader_id
+        store.update_document_metadata(
+            did, {"session_id": session_id, "uploader_id": uploader_id})
     return did
 
 
@@ -134,8 +145,9 @@ def test_a_sessions_file_is_not_listed_or_retrieved_outside_it(client, model, y_
     x, y, z = f"ws-{pid}-{t0}", f"ws-{pid}-{y_suffix}", f"ws-{pid}-{t0 + 7}"
 
     project_doc = _upload(client, owner, pid, "project")
-    x_doc = _upload(client, owner, pid, "x", session_id=x)
-    stranger_doc = _upload(client, stranger, pid, "stranger", session_id=z)
+    x_doc = _upload(client, owner, pid, "x", session_id=x, uploader_id=owner_id)
+    stranger_doc = _upload(client, stranger, pid, "stranger", session_id=z,
+                           uploader_id=stranger_id)
 
     # Listed: the project's own document, for both users; no session's file.
     for viewer in (owner, stranger):

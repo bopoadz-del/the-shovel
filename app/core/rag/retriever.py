@@ -8,6 +8,7 @@ where caching, dimension matching, and graceful-degradation policy live.
 
 from __future__ import annotations
 
+import functools
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -17,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from app.core.contract_data_chunks import (
     filled_particulars_rows,
     particulars_chunk_states_a_value,
+    per_search_parse_cache,
 )
 from app.core.rag.embeddings import Embedder, get_embedder
 from app.core.rag.vector_store import (
@@ -9578,6 +9580,24 @@ def _lexical_only_retrieve(query: str, project_id: str, k: int) -> tuple:
     return kept, noise_filtered
 
 
+def _scoped_per_search_parse_cache(fn):
+    """Run ``fn`` with one :func:`per_search_parse_cache` scope per call.
+
+    ``retrieve_with_filter`` is the single search entry point and one search
+    re-parses the same candidate chunk in several re-scoring predicates
+    (delay-damages rate, accepted contract amount, time for completion,
+    defects notification period, ...), so scoping the cache to the call
+    makes each chunk parse once per search while never persisting across
+    searches.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with per_search_parse_cache():
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+@_scoped_per_search_parse_cache
 def retrieve_with_filter(
     query: str,
     project_id: str,

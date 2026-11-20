@@ -19,8 +19,7 @@ import time
 
 import pytest
 
-from app.core.loop_watchdog import (LagMonitor, freeze_long_lived_heap, gc_summary,
-                                    release_long_lived_heap, stamp_to_post_summary)
+from app.core.loop_watchdog import LagMonitor, gc_summary, stamp_to_post_summary
 from tests import _wake_sidecar
 from tests._fixture_values import STUB_TOKEN_06
 

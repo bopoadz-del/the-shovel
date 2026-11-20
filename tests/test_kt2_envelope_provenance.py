@@ -1,4 +1,5 @@
-"""K-T2: every run_calculation envelope carries provenance + standard; kernels are 'certified'."""
+"""K-T2: every run_calculation envelope carries provenance + standard; a kernel is
+'certified' only when it is verified (KS-1: declared standard AND hand values reproduced)."""
 from __future__ import annotations
 
 import pytest
@@ -14,18 +15,18 @@ def test_every_registered_formula_gets_provenance_and_standard(spec):
     out = cf.envelope_provenance(spec.name, {}, spec.fn)
     assert out["provenance"] in {"kernel", "reference_table"}
     assert isinstance(out["standard"], str) and out["standard"]
-    assert out["certified"] is (out["provenance"] == "kernel")
+    assert out["certified"] is (out["provenance"] == "kernel" and fr.certified(spec.name))
 
 
 @pytest.mark.parametrize("name,params", [
     ("concrete_volume", {"length_m": 10, "width_m": 5, "thickness_m": 0.2}),
     ("concrete_volume", {"length_m": 30, "width_m": 20, "thickness_m": 1.5}),
 ])
-def test_run_calculation_envelope_is_certified_kernel(name, params):
+def test_run_calculation_envelope_certified_is_derived_not_assumed(name, params):
     env = cf.run_calculation(name, params)
     assert env["status"] == "success", env
     assert env["provenance"] == "kernel"
-    assert env["certified"] is True
+    assert env["certified"] is fr.certified(name)
     assert env["standard"]
 
 
@@ -51,7 +52,7 @@ def test_reference_table_module_is_not_certified(module, expect):
     fake.__module__ = module
     out = cf.envelope_provenance(spec.name, {}, fake)
     assert out["provenance"] == expect
-    assert out["certified"] is (expect == "kernel")
+    assert out["certified"] is (expect == "kernel" and fr.certified(spec.name))
 
 
 # G6 H2 -- :3101 fn=None falls back to the registry spec's own fn.

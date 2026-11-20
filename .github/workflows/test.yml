@@ -9,16 +9,18 @@ on:
 permissions:
   contents: read
 
-# A new push to the same PR supersedes that PR's old run. Without this,
-# stuck runs stack: 8 zombie "tests" runs were in_progress at once on
-# 2026-07-05, each burning toward GitHub's 6-hour default job timeout.
-# A push to the default branch is never superseded: deploy-aws ships a
-# commit only after its own tests run finishes green, so each main run
-# gets its own group (one shared group would also drop a queued run when
-# a newer one arrives, even with cancel-in-progress off). Every job keeps
-# its timeout-minutes, so a stuck main run still ends.
+# A new push to the same PR supersedes that PR's old run (cancel-in-progress
+# is true for pull_request). A push to the default branch COALESCES instead:
+# every main run shares one group, so GitHub keeps one running and one
+# pending, and when a newer commit lands it drops the previously pending run
+# -- the pending run is always the newest commit. That newest commit is a
+# linear descendant of the dropped commits, so its green run covers them all;
+# deploy-aws then ships that newest commit (workflow_run.head_sha) after its
+# own run passes. No commit is deployed without a green run of itself or of a
+# later commit that contains it. Every job keeps its timeout-minutes, so a
+# stuck main run still ends.
 concurrency:
-  group: ${{ github.event_name == 'push' && format('tests-{0}-{1}', github.ref, github.sha) || format('tests-{0}', github.ref) }}
+  group: tests-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
@@ -103,31 +105,12 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
-        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
-        run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -qq
-
       - name: Install system deps for OCR + PDF
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
-        # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
-        # Each attempt now times out and is retried; the step itself is capped.
         timeout-minutes: 10
-        run: |
-          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
-          # Some GitHub-hosted 24.04 images ship a Microsoft prod repo that 403s
-          # and is unsigned; it aborts apt-get update. Drop that list up front.
-          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
-          for attempt in 1 2 3; do
-            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr poppler-utils antiword catdoc; then
-              exit 0
-            fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 10
-          done
-          exit 1
+        uses: ./.github/actions/install-system-deps
+        with:
+          packages: tesseract-ocr poppler-utils antiword catdoc
 
       - name: Install Python deps
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
@@ -344,31 +327,12 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
-        if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
-        run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -qq
-
       - name: Install system deps for OCR + PDF
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
-        # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
-        # Each attempt now times out and is retried; the step itself is capped.
         timeout-minutes: 10
-        run: |
-          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
-          # Some GitHub-hosted 24.04 images ship a Microsoft prod repo that 403s
-          # and is unsigned; it aborts apt-get update. Drop that list up front.
-          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
-          for attempt in 1 2 3; do
-            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr poppler-utils antiword catdoc; then
-              exit 0
-            fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 10
-          done
-          exit 1
+        uses: ./.github/actions/install-system-deps
+        with:
+          packages: tesseract-ocr poppler-utils antiword catdoc
 
       - name: Install Python deps
         if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.is_draft != 'true'
@@ -470,29 +434,11 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Use the public Ubuntu archive (Azure mirror DNS outage 11 Nov)
-        run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -qq
-
       - name: Install system deps for OCR + PDF
-        # A stuck apt mirror held jobs at this step for 25+ min (2026-10-07).
-        # Each attempt now times out and is retried; the step itself is capped.
         timeout-minutes: 10
-        run: |
-          APT_OPTS='-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30'
-          # Some GitHub-hosted 24.04 images ship a Microsoft prod repo that 403s
-          # and is unsigned; it aborts apt-get update. Drop that list up front.
-          sudo grep -l packages.microsoft.com /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f || true
-          for attempt in 1 2 3; do
-            if sudo timeout 180 apt-get $APT_OPTS update -qq && sudo timeout 180 apt-get $APT_OPTS install -y -qq tesseract-ocr poppler-utils antiword catdoc; then
-              exit 0
-            fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 10
-          done
-          exit 1
+        uses: ./.github/actions/install-system-deps
+        with:
+          packages: tesseract-ocr poppler-utils antiword catdoc
 
       - name: Install Python deps
         run: |

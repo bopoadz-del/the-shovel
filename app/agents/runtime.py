@@ -640,21 +640,34 @@ def _final_text_needs_forced_retry(
     text: str, *, user_message: str | None = None,
 ) -> bool:
     """True when sanitization left no usable user-facing answer."""
+    return forced_retry_reason(text) is not None
+
+
+def forced_retry_reason(text: str) -> str | None:
+    """The name of the rule that makes ``text`` unusable, else None.
+
+    One implementation for the retry decision, its nudge and the trace, so
+    the log names the rule that fired (never the text). The order is the
+    decision order.
+
+    A promise to search is never a usable answer to ANY question. This was
+    gated on deliverable/generative requests, so plain factual lookups fell
+    straight through and the user was shown "Let me search more precisely
+    for the Engineer's Representative..." as the final answer (a live
+    contract-particular lookup and a delay-damages ask). The request type
+    does not change whether a dangling promise is an answer.
+    """
     if not (text or "").strip():
-        return True
+        return "empty"
     if text == _TOOL_FORMAT_FALLBACK:
-        return True
-    # A promise to search is never a usable answer to ANY question. This was
-    # gated on deliverable/generative requests, so plain factual lookups fell
-    # straight through and the user was shown "Let me search more precisely
-    # for the Engineer's Representative..." as the final answer (a live
-    # contract-particular lookup and a delay-damages ask). The request
-    # type does not change whether a dangling promise is an answer.
+        return "tool_format"
     if _looks_like_search_preamble(text):
-        return True
+        return "search_promise"
     if _looks_like_greeting_only(text):
-        return True
-    return _exit_leaves_nothing(text)
+        return "greeting_only"
+    if _exit_leaves_nothing(text):
+        return "platform_only"
+    return None
 
 
 def _exit_leaves_nothing(text: str) -> bool:
@@ -680,17 +693,180 @@ _USER_TERMS_RETRY_NUDGE = (
 )
 
 
+#: Retry instruction when sanitization left nothing of the reply: it was
+#: empty, or only markup the user is never shown (most often a tool call made
+#: after tools were withdrawn). Without it the retry was the first request
+#: again, and at temperature 0 the model wrote the same draft again (D1).
+_EMPTY_RETRY_NUDGE = (
+    "Your previous reply had no text that can be shown to the user: it was "
+    "empty, or only tool-call markup or internal steps. Tools cannot run now. "
+    "Answer the user's question now in plain text from the documents and "
+    "results already in this thread. If they do not contain the answer, say "
+    "so plainly: name what was looked for and what is missing, in the user's "
+    "own terms."
+)
+
+
 def _forced_retry_nudge(text: str) -> str | None:
-    """The instruction that goes with the forced no-tools retry for ``text``."""
-    if text == _TOOL_FORMAT_FALLBACK:
-        return _TOOL_FORMAT_RETRY_NUDGE
-    if _looks_like_search_preamble(text):
-        return _SEARCH_PREAMBLE_RETRY_NUDGE
-    if _looks_like_greeting_only(text):
-        return _GREETING_RETRY_NUDGE
-    if _exit_leaves_nothing(text):
-        return _USER_TERMS_RETRY_NUDGE
+    """The instruction that goes with the forced no-tools retry for ``text``.
+
+    Every rule that forces a retry gets an instruction, so the retry never
+    sends the first request again unchanged (the same request at temperature
+    0 returns the same draft). A rule without its own wording gets the
+    empty-reply one."""
+    reason = forced_retry_reason(text)
+    if reason is None:
+        return None
+    return _FORCED_RETRY_NUDGES.get(reason, _EMPTY_RETRY_NUDGE)
+
+
+_FORCED_RETRY_NUDGES = {
+    "empty": _EMPTY_RETRY_NUDGE,
+    "tool_format": _TOOL_FORMAT_RETRY_NUDGE,
+    "search_promise": _SEARCH_PREAMBLE_RETRY_NUDGE,
+    "greeting_only": _GREETING_RETRY_NUDGE,
+    "platform_only": _USER_TERMS_RETRY_NUDGE,
+}
+
+
+def _is_retry_instruction(content: Any) -> bool:
+    """True for a user-role message that is the platform's forced-retry
+    instruction, not the operator's words. Readers of "the operator's
+    question" skip it, exactly as they skip a PRE-DISPATCH bubble: the
+    instruction is appended after the turn's tool results, so taking it for
+    the question would cut those results out of the turn."""
+    return str(content or "").strip() in _FORCED_RETRY_NUDGES.values()
+
+
+def _turn_forced_retry_nudged(messages: list[dict[str, Any]] | None) -> int | None:
+    """Index of the operator's question when this turn's forced retry was
+    sent with an instruction, else None.
+
+    The instruction is the last user message of the turn; the operator's
+    question is the user message before it that is neither an instruction
+    nor a platform pre-dispatch."""
+    nudges = set(_FORCED_RETRY_NUDGES.values())
+    msgs = list(messages or [])
+    nudged = False
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i] or {}
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content") or "")
+        if content in nudges:
+            nudged = True
+            continue
+        if content.lstrip().startswith(_PREDISPATCH_PREFIX):
+            continue
+        return i if nudged else None
     return None
+
+
+def _turn_search_queries(turn: list[dict[str, Any]]) -> list[str]:
+    """The ``query`` argument of every tool call made in ``turn``, in order."""
+    out: list[str] = []
+    for m in turn:
+        for call in (m or {}).get("tool_calls") or []:
+            raw = ((call or {}).get("function") or {}).get("arguments")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (TypeError, ValueError):
+                continue
+            q = args.get("query") if isinstance(args, dict) else None
+            if isinstance(q, str) and q.strip():
+                out.append(" ".join(q.split()))
+    return list(dict.fromkeys(out))
+
+
+#: First line of the statement shown when an instructed retry RETURNED a
+#: reply that was still unusable (never after a provider error).
+_UNANSWERED_STATEMENT = "The documents available for this question did not yield an answer to it."
+
+
+def _unanswered_after_forced_retry(messages: list[dict[str, Any]] | None) -> str:
+    """A plain statement for a turn whose instructed retry still gave nothing.
+
+    Says what happened (the documents this turn had did not yield an answer)
+    and the searches and reads this turn's own messages record (nothing is
+    said about a search that was not recorded). Empty unless the turn ran an
+    instructed retry AND the provider returned a reply that was unusable
+    (``Turn.forced_retry_outcome``), so a provider error and every other
+    path keep their reply."""
+    if _forced_retry_outcome() != "unusable":
+        # No retry ran, or its provider call failed: a failure is not a
+        # not-found, so the caller keeps its own line.
+        return ""
+    start = _turn_forced_retry_nudged(messages)
+    if start is None:
+        return ""
+    turn = list(messages or [])[start + 1:]
+    if not any((m or {}).get("role") == "tool" for m in turn):
+        # The turn holds no tool result: nothing was looked at, so "the
+        # documents did not yield an answer" would be a claim the turn does
+        # not record. The caller keeps its own line.
+        return ""
+    queries = _turn_search_queries(turn)
+    read = _documents_read_this_turn("", list(messages or [])[start:], None)
+    lines = [_UNANSWERED_STATEMENT]
+    if queries:
+        lines.append("Searched for: " + "; ".join(f'"{q}"' for q in queries[:5]) + ".")
+    if read:
+        lines.append("Documents read: " + ", ".join(read[:5]) + ".")
+    lines.append(
+        "Naming the document or section that should hold the answer, or "
+        "rephrasing the question, gives the search more to go on."
+    )
+    return "\n".join(lines)
+
+
+def record_forced_retry_outcome(outcome: str) -> None:
+    """Record on the current turn how its forced retry ended (see
+    ``Turn.forced_retry_outcome``). No turn open: nothing to record."""
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    if turn is not None:
+        turn.forced_retry_outcome = outcome
+
+
+def _forced_retry_outcome() -> str:
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    return turn.forced_retry_outcome if turn is not None else ""
+
+
+def log_forced_retry_start(where: str, text: str) -> None:
+    """Trace the forced no-tools retry by the rule that fired, never the text.
+
+    Evaluating the rule is CPU work: the turn paths call this through
+    ``_off_loop`` like the neighbouring decision calls.
+    """
+    _LOG.info("%s: unusable final_text reason=%s, forcing no-tools retry",
+              where, forced_retry_reason(text))
+
+
+def forced_retry_failed(where: str, resp: dict) -> bool:
+    """True when the forced retry's provider call errored; traced as such."""
+    if resp.get("status") != "error":
+        return False
+    _LOG.warning("%s: forced retry failed reason=provider_error; fallback shown", where)
+    record_forced_retry_outcome("provider_error")
+    return True
+
+
+def forced_retry_still_unusable(where: str, text: str, *, raw_len: int | None = None) -> bool:
+    """The retry's own decision (same rule as the first), traced by rule name.
+
+    Our own fallback line is not traced again: reaching it means the retry
+    call already failed and was logged as ``provider_error``.
+    """
+    reason = forced_retry_reason(text)
+    if reason is not None and text != _EMPTY_RESPONSE_FALLBACK:
+        raw = "" if raw_len is None else f" raw={raw_len}c"
+        _LOG.warning("%s: forced retry unusable reason=%s%s; fallback shown", where, reason, raw)
+        record_forced_retry_outcome("unusable")
+    return reason is not None
 
 # Keys that strongly indicate an internal search tool argument payload.
 _SEARCH_TOOL_ARG_KEYS = {
@@ -5793,7 +5969,7 @@ def _latest_user_text(messages: list[dict[str, Any]] | None) -> str:
         if m.get("role") != "user":
             continue
         content = str(m.get("content") or "")
-        if content.lstrip().startswith(_PREDISPATCH_PREFIX):
+        if content.lstrip().startswith(_PREDISPATCH_PREFIX) or _is_retry_instruction(content):
             continue
         return content
     return ""
@@ -5996,39 +6172,76 @@ def _looks_like_tool_truncation_notice(text: str) -> bool:
 
 def _text_needs_tool_recovery(text: str) -> bool:
     """True when the LLM hop died and a tool/predispatch draft should speak."""
+    return tool_recovery_reason(text) is not None
+
+
+def tool_recovery_reason(text: str) -> str | None:
+    """The name of the rule that hands ``text`` to tool recovery, else None.
+
+    One implementation for the recovery decision and its trace, so the log
+    names the rule that fired (never the text). The order is the decision
+    order.
+    """
     from app.agents.core.computed_answer import has_words
 
     t = (text or "").strip()
-    if not t or not has_words(t):
-        # Nothing, or markdown alone (rules, bullets, emphasis marks): it
-        # says nothing.
-        return True
+    if not t:
+        return "empty"
+    if not has_words(t):
+        # Markdown alone (rules, bullets, emphasis marks): it says nothing.
+        return "no_words"
     if t == _EMPTY_RESPONSE_FALLBACK:
-        return True
+        return "fallback_line"
     if "unable to generate" in t.lower():
-        return True
+        return "unable_to_generate"
     if re.search(r"HTTP 413|tokens per minute|\bTPM\b", t):
-        return True
+        return "provider_limit"
     # Leftover E4: "Let me validate…" is not an answer. Recover the
     # construction_calc volume (or any other deliverable already in the
     # thread) instead of shipping the promise.
     if _looks_like_search_preamble(t):
-        return True
+        return "search_promise"
     if _looks_like_tool_error_json(t):
-        return True
+        return "tool_error_json"
     if _looks_like_formula_template(t):
-        return True
+        return "formula_template"
     if _looks_like_tool_truncation_notice(t):
-        return True
+        return "truncation_notice"
     try:
         from app.lib.construction_formulas_commercial import (
             answer_is_unbound_delay_damages,
         )
         if answer_is_unbound_delay_damages(t):
-            return True
+            return "unbound_delay_damages"
     except Exception:  # noqa: BLE001 — recovery probe must never break a turn
         _LOG.debug("unbound delay-damages probe failed", exc_info=True)
-    return False
+    return None
+
+
+def recover_answer_traced(
+    text: str,
+    messages: list[dict[str, Any]] | None,
+    *,
+    reason: str | None = None,
+    raw_len: int | None = None,
+) -> str:
+    """``_recover_answer_from_tool_messages``, traced when it replaces the text.
+
+    The line names the rule that handed the text to recovery (or the
+    caller's ``reason``, ``gate_emptied`` when a gate removed every clause)
+    and lengths only: ``raw`` is the text it replaced (``raw_len`` when the
+    caller's text was already emptied), ``recovered`` what stands in for it.
+    Never the text. The answer is exactly the untraced call's.
+    """
+    out = _recover_answer_from_tool_messages(text, messages)
+    if out != text:
+        _LOG.info(
+            "postprocess: recovery replaced final_text reason=%s raw=%dc recovered=%dc",
+            reason or tool_recovery_reason(text),
+            len(text or "") if raw_len is None else raw_len,
+            len(out or ""),
+        )
+    return out
 
 
 def _format_variation_order(payload: dict[str, Any]) -> str:
@@ -6713,7 +6926,8 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
     for i in range(len(msgs) - 1, -1, -1):
         m = msgs[i]
         content = str(m.get("content") or "")
-        if m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]:
+        if (m.get("role") == "user" and "PLATFORM PRE-DISPATCH:" not in content[:80]
+                and not _is_retry_instruction(content)):
             start, question = i + 1, content
             break
     language = computed_answer.question_language(question)
@@ -6953,7 +7167,9 @@ def _nonblank_after_empty_synthesis(
         messages,
     ):
         return _with_footer(_SYNTH_CUTOFF_NOTICE)
-    return _with_footer(body or _EMPTY_RESPONSE_FALLBACK)
+    # An instructed retry that still gave nothing: say plainly what happened
+    # and what was searched, never the bare generic line.
+    return _with_footer(_unanswered_after_forced_retry(messages) or _EMPTY_RESPONSE_FALLBACK)
 
 
 def _construction_calc_tool_schema() -> dict[str, Any]:
@@ -6961,7 +7177,13 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
     calculation enum is built from the live registry so it never drifts from the
     library. For cost build-ups the model is told to pass real rates from RAG;
     the library's defaults are indicative fallbacks only (keeps cost grounded)."""
+    from app.agents.driver.tools import calculator_catalogue
     from app.lib import construction_formulas as _cf
+    # The same labelled catalogue the driver schema offers (one registry, one
+    # builder): each calculator with its inputs' labels, units and ranges, so
+    # the default path fills params by label and unit, not by guessing from a
+    # bare name.
+    _specs, _lines = calculator_catalogue(None)
     return {
         "type": "function",
         "function": {
@@ -6975,7 +7197,10 @@ def _construction_calc_tool_schema() -> dict[str, Any]:
                 "are indicative GCC fallbacks only. For concrete/raft/slab volume, "
                 "use calculation=concrete_volume; the project's documented waste "
                 "factor (5%) is applied and volume_m3 is the with-waste figure "
-                "(30×20×1.5 m → 945 m3). Deterministic: call once."
+                "(30×20×1.5 m → 945 m3). Deterministic: call once. Fill params "
+                "by each input's key as listed below, matching the user's figures "
+                "by label and unit; leave out an input the user did not give.\n"
+                + "\n".join(_lines)
             ),
             "parameters": {
                 "type": "object",
@@ -7318,7 +7543,8 @@ def _cg_is_platform_bubble(content: str) -> bool:
     operator's, and must never seed the user-arithmetic closure.
     """
     head = content.lstrip()
-    return head.startswith(_PREDISPATCH_PREFIX) or head.startswith(_TOOL_RESULT_PREFIX)
+    return (head.startswith(_PREDISPATCH_PREFIX) or head.startswith(_TOOL_RESULT_PREFIX)
+            or _is_retry_instruction(head))
 
 
 def _cg_pair_grounds(value: float, base: tuple, tol: float) -> bool:
@@ -10184,7 +10410,8 @@ def _operator_turn_start(msgs: list[dict[str, Any]]) -> int:
     for i in range(len(msgs) - 1, -1, -1):
         m = msgs[i] or {}
         content = str(m.get("content") or "")
-        if m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX):
+        if (m.get("role") == "user" and not content.lstrip().startswith(_PREDISPATCH_PREFIX)
+                and not _is_retry_instruction(content)):
             return i
     return 0
 
@@ -10306,6 +10533,83 @@ def _run_answer_composers(
     return text
 
 
+def _apply_clarify_cases(
+    text: str,
+    rag_sys_msg: dict[str, Any] | None,
+    messages: list[dict[str, Any]] | None,
+) -> str:
+    """The 15:03Z general behaviour (all sources), enforced at the answer exit.
+
+    When the handed evidence carries more than one materially different value
+    for what was asked, the question names none of them, and the draft has
+    silently committed to exactly one, the exit replaces the draft with ONE
+    short clarifying question that names the cases it found, each with its
+    source (``app/agents/clarify_cases.py``). It rides the existing
+    awaiting-inputs turn state, so the client renders "the agent is asking"
+    the way it already renders a calculator's missing input.
+
+    The guards here are defensive early returns (disabled, empty question,
+    empty draft, no passages) that short-circuit before building the evidence.
+    The first (the ``CLARIFY_CASES=0`` kill switch) is observable -- it skips
+    the evidence build entirely, which the wiring test asserts -- so its
+    drop_rule mutant is killed. The rest mirror the detector's own checks
+    (``clarifying_question`` returns None for each of them) and only avoid the
+    work. Never raises: a failure passes the answer through unchanged.
+    """
+    from app.agents.clarify_cases import (
+        cases_from_passages,
+        clarifying_question,
+        enabled,
+    )
+
+    if not enabled():
+        return text or ""
+    if not (text or "").strip():
+        return text or ""
+    ask = _latest_operator_ask(messages) or ""
+    if not ask.strip():
+        return text or ""
+    try:
+        from app.agents.citation_provenance import build_evidence
+
+        evidence = build_evidence(rag_sys_msg, messages, tool_passages=True)
+        passages = [
+            (rec.source_name or rec.doc_id or "", rec.text)
+            for rec in evidence.records
+            if rec.kind == "retrieval" and (rec.text or "").strip()
+        ]
+        if not passages:
+            return text or ""
+        question = clarifying_question(ask, text, cases_from_passages(passages))
+        if question is None:
+            return text or ""
+        _record_clarifying_question(question)
+        return question
+    except Exception:  # noqa: BLE001 -- an exit check must never break an answer
+        _LOG.warning("clarify-cases exit failed; answer passed through", exc_info=True)
+        return text or ""
+
+
+def _record_clarifying_question(question: str) -> None:
+    """Record the clarifying question on the turn so the exit reads "asking".
+
+    The question wording goes on ``Turn.questions`` (preserved verbatim by the
+    answer contract), and a general marker goes on ``Turn.awaiting_inputs`` so
+    the ``{"missing": [...]}`` carrier the route observer already trusts (S1c)
+    reads non-empty.
+    """
+    from app.agents import answer_exit
+
+    turn = answer_exit.current_turn()
+    if turn is None:
+        return
+    if question not in turn.questions:
+        turn.questions.append(question)
+    marker = "which_case"
+    if marker not in turn.awaiting_inputs:
+        turn.awaiting_inputs.append(marker)
+
+
 @_turn_timing_stage("postprocess")
 def _postprocess_answer(
     text: str,
@@ -10329,7 +10633,7 @@ def _postprocess_answer(
     from app.agents import answer_exit
 
     answer_exit.note_evidence(rag_sys_msg, messages)
-    text = _recover_answer_from_tool_messages(text, messages)
+    text = recover_answer_traced(text, messages)
     # The fetch-window truncation notice is not an
     # answer. Blank it so later grafts can compose, and so we never
     # ship "Tool result exceeded … char_offset=" to the operator.
@@ -10356,7 +10660,7 @@ def _postprocess_answer(
     # A gate that removes every clause of an answer leaves the turn's own
     # tool result, never an empty answer for the footers to dress.
     if gated.strip() and not text.strip():
-        text = _recover_answer_from_tool_messages("", messages)
+        text = recover_answer_traced("", messages, reason="gate_emptied", raw_len=len(gated))
     # Figure provenance (same evidence objects): every figure credited to user
     # input, calculator, project document or general knowledge; a figure with
     # no source is not stated. Enforced on turns that ran a need plan.
@@ -10431,6 +10735,12 @@ def _postprocess_answer(
     # Last: the answer's own working must agree with its own result. Checked
     # after every graft, so a grafted figure is checked too.
     text = _annotate_derivation_mismatches(text)
+    # 15:03Z general behaviour (all sources): when the handed evidence carries
+    # more than one case and the draft silently picked one, the exit replaces
+    # the draft with ONE clarifying question (app/agents/clarify_cases.py).
+    # Runs last so the question lists the final, scrubbed values and is never
+    # itself scrubbed or annotated.
+    text = _apply_clarify_cases(text, rag_sys_msg, messages)
     # 0-token force_synthesis must never persist an empty bubble.
     return _nonblank_after_empty_synthesis(text, messages)
 
@@ -10451,7 +10761,7 @@ def _next_agent_from_turn(messages: list[dict[str, Any]] | None) -> str:
     """Pick the leftover L5 handoff hat from the user's named file/intent."""
     text = ""
     for m in reversed(messages or []):
-        if m.get("role") == "user":
+        if m.get("role") == "user" and not _is_retry_instruction(m.get("content")):
             text = str(m.get("content") or "")
             break
     low = text.lower()
@@ -13001,20 +13311,33 @@ async def _auto_validate(envelope: dict[str, Any]) -> None:
 
 # ── Loader ────────────────────────────────────────────────────────────────
 AGENT_REGISTRY: dict[str, Agent] = {}
+# Agent configs the last load_agents() could not parse: file name -> the
+# error's type. Readiness reads it (app/routers/health.py), so a broken agent
+# setting fails /ready instead of leaving one stdout line and a missing agent.
+AGENT_LOAD_FAILURES: dict[str, str] = {}
 
 
 def load_agents(configs_dir: Path | None = None) -> dict[str, Agent]:
-    """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing)."""
+    """Load every `.md` config under `configs_dir` into AGENT_REGISTRY (replaces existing).
+
+    A config that does not parse is skipped, logged, and recorded in
+    AGENT_LOAD_FAILURES; the others still load. A missing directory is
+    recorded under its own name."""
     configs_dir = configs_dir or CONFIGS_DIR
     AGENT_REGISTRY.clear()
+    AGENT_LOAD_FAILURES.clear()
     if not configs_dir.exists():
+        # No configs directory means no agents at all: a broken setting too.
+        AGENT_LOAD_FAILURES[configs_dir.name] = "FileNotFoundError"
+        logging.getLogger(__name__).error("agent configs directory not found: %s", configs_dir)
         return AGENT_REGISTRY
     for md in sorted(configs_dir.glob("*.md")):
         try:
             agent = _parse_agent_file(md)
             AGENT_REGISTRY[agent.name] = agent
         except Exception as e:
-            print(f"failed to load agent {md.name}: {e}")
+            AGENT_LOAD_FAILURES[md.name] = type(e).__name__
+            logging.getLogger(__name__).error("failed to load agent %s: %s", md.name, e)
     return AGENT_REGISTRY
 
 
@@ -14405,7 +14728,13 @@ def _parse_agent_file(path: Path) -> Agent:
         description=config.get("description", ""),
         system_prompt=body,
         allowed_blocks=list(config.get("allowed_blocks") or []),
-        model=config.get("model") or DEEPSEEK_DEFAULT_MODEL,
+        # An agent file with no ``model:`` line is UNPINNED (""), so each
+        # call uses the active provider's default from ``_llm_config`` --
+        # which honours ``DEEPSEEK_MODEL`` / ``OPENROUTER_MODEL``. Falling
+        # back to the ``deepseek-chat`` literal here would be a pin that
+        # ``_resolve_attempt_model`` keeps on DeepSeek, silently overriding
+        # an operator's ``DEEPSEEK_MODEL``.
+        model=str(config.get("model") or ""),
         temperature=float(config.get("temperature", 0.3)),
         max_tokens=int(config.get("max_tokens", 2048)),
         icon=config.get("icon", ""),
@@ -14466,9 +14795,13 @@ def _apply_hat_kernels(body: str, hats_cfg: Any, path: Path) -> tuple[str, list[
         errors = validate_manifest_bindings(m)
         if errors:
             raise ValueError(f"hat '{m.id}' has broken formula bindings: {errors}")
+    from app.agents.procedures import render_procedures
     sections = ["\n\n## Discipline kernels\n"]
     for m in manifests:
         sections.append(f"### {m.name} ({m.id})\n{m.system_prompt_guidance}\n")
+        procedures_block = render_procedures(m)
+        if procedures_block:
+            sections.append(procedures_block + "\n")
     # S-7 improvisation harness — applies to every hatted agent.
     sections.append(
         "### Improvisation harness\n"

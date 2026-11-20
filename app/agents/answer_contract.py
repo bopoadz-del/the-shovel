@@ -162,32 +162,113 @@ class _Markers:
         return f"[{entry['marker']}]"
 
 
+def _doc_words(name: str) -> str:
+    """A document's name as words for a sentence (its file extension off);
+    empty when the name holds no word at all."""
+    stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE).strip()
+    return stem if re.search(r"[A-Za-z]{2,}", stem) else ""
+
+
+def _nameable(c: dict[str, Any]) -> bool:
+    """A conflict is stated only when the line can name every value and every
+    value's document in words; one that cannot is not emitted at all."""
+    vals = c.get("values") or []
+    return (len({str(v.get("value") or "").strip() for v in vals}) >= 2
+            and len({v.get("document") for v in vals}) >= 2
+            and all(str(v.get("value") or "").strip() and _doc_words(str(v.get("document") or "")) for v in vals))
+
+
 def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[list[str], list[dict[str, Any]]]:
-    """Each conflict as one plain sentence (every value with its marker; the
-    governing value and why, or that no document says) and as a structured
-    entry for the side panel."""
+    """Each conflict as one plain sentence (every value with its document by
+    name and its marker; the governing value and why, or that no document
+    says) and as a structured entry for the side panel. A conflict whose
+    values or documents cannot all be named in words is not emitted."""
     lines: list[str] = []
     structured: list[dict[str, Any]] = []
     for c in found:
-        said: dict[str, str] = {}
+        if not _nameable(c):
+            continue
+        said: dict[tuple[str, str], str] = {}
         values = []
         for v in c["values"]:
             tag = markers.for_row(v["row"])
-            said[v["value"]] = said.get(v["value"], "") + ("" if tag in said.get(v["value"], "") else tag)
+            k = (_doc_words(v["document"]), v["value"])
+            said[k] = said.get(k, "") + ("" if tag in said.get(k, "") else tag)
             values.append({"value": v["value"], "document": v["document"], "marker": int(tag.strip("[]"))})
-        line = "The documents differ on this: " + "; ".join(f"{val} {tags}" for val, tags in said.items()) + "."
+        line = "The documents differ on this: " + "; ".join(
+            f"{doc} gives {val} {tags}" for (doc, val), tags in said.items()) + "."
         if c.get("governs"):
             gval = next(v["value"] for v in c["values"] if v["document"] == c["governs"])
             basis_row = next((r for r in markers.rows if str(r.get("doc_name") or "") == c["basis_document"]), None)
-            btag = markers.for_row(basis_row) if basis_row else ""
-            line += (f" {gval} governs: the stated order of precedence puts the {c['governing_kind']}"
-                     f" above the {c['lower_kind']} {btag}.").replace("  ", " ").replace(" .", ".")
+            # Each part is joined as it stands: a value or a kind phrase is
+            # quoted exactly as the evidence gave it, never edited afterwards.
+            words = [f"{gval} governs: the stated order of precedence puts the {c['governing_kind']}",
+                     f"above the {c['lower_kind']}"]
+            if basis_row:
+                words.append(markers.for_row(basis_row))
+            line += " " + " ".join(words) + "."
         else:
             line += " No document states which of them governs."
         lines.append(line)
         structured.append({"values": values, "governs": c.get("governs"),
                            "basis_document": c.get("basis_document")})
     return lines, structured
+
+
+def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
+    """The sentences the leading conflict statement replaces.
+
+    * A sentence that states only ONE of a conflict's differing values for
+      that thing. Read by the typed values (``evidence_conflicts.extract``/
+      ``same``, citation spans blanked); a sentence about another thing (none
+      of the thing's words) and a sentence stating two or more of the values
+      stay.
+    * A sentence asserting that the documents agree
+      (``evidence_conflicts.asserts_agreement``: an agreement word with no
+      negation just before it) about that thing: it states one or more of the
+      differing values, or uses a word of the thing, or names no other thing
+      at all (``agreement_names_no_thing``: no typed value, and no word left
+      beyond the agreement words, the words pointing at the evidence and the
+      documents' own names, as in "the sources are consistent"). An
+      agreement sentence about another thing stays."""
+    from app.agents.evidence_conflicts import _terms, agreement_names_no_thing, asserts_agreement, extract, same
+
+    rules = []
+    for c in found:
+        kind = c.get("kind")
+        classes: list[Any] = []
+        for v in c["values"]:
+            # The value as detect typed it in its passage: its raw text alone
+            # may not re-read as that kind (a grade code without its label).
+            typed = v.get("typed")
+            if typed is not None and not any(same(typed, k) for k in classes):
+                classes.append(typed)
+        if len(classes) >= 2:
+            docs = [str(v.get("document") or "") for v in c["values"]]
+            rules.append((kind, classes, set(c.get("thing") or []), docs))
+    out: list[str] = []
+    for line in body.split("\n"):
+        lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
+        sentences = _SENTENCE_RE.findall(line[len(lead):])
+        kept = []
+        for sent in sentences:
+            vals = extract(sent)
+            agrees = asserts_agreement(sent)
+            gone = False
+            for kind, classes, thing, docs in rules:
+                hits = {i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}
+                about = bool(thing & _terms(sent))
+                if len(hits) == 1 and about:
+                    gone = True
+                elif agrees and (hits or about or agreement_names_no_thing(sent, docs)):
+                    gone = True
+            if not gone:
+                kept.append(sent.strip())
+        if not sentences or len(kept) == len(sentences):
+            out.append(line)
+        elif kept:
+            out.append(lead + " ".join(kept))
+    return "\n".join(out)
 
 
 def _split_parts(body: str) -> list[str]:
@@ -433,6 +514,7 @@ def apply(
     computed: bool = False,
     asking: bool = False,
     question: str | None = None,
+    evidence: Iterable[dict[str, Any]] | None = None,
 ) -> Contracted:
     """The answer in contract form. ``sources`` are the turn's Sources rows
     (used only to fill a citation's page, passage and tier); ``computed`` is
@@ -441,7 +523,11 @@ def apply(
     is the user's next action, so its wording is left as asked (citations and
     the coverage footer still leave the text). ``question`` is the user's
     question when known: it sharpens which evidence values answer the same
-    thing when documents are checked for conflicts (C2)."""
+    thing when documents are checked for conflicts (C2). ``evidence`` is
+    every passage the turn was handed (pre-injected excerpts and tool
+    passages): conflicts are checked over it as well as over ``sources``,
+    since a Sources row names only what the answer cited and may carry no
+    passage."""
     if not isinstance(text, str) or not text.strip():
         return Contracted(text=text)
     try:
@@ -462,11 +548,18 @@ def apply(
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 
-        found = detect(text, rows, question)
+        handed = [r for r in (evidence or []) if isinstance(r, dict)]
+        # Read over the text the user reads (citations already markers).
+        found = detect(body, rows + handed, question)
         structured: list[dict[str, Any]] = []
         if found:
             lines, structured = _conflict_lines(found, markers)
-            body = (body + "\n\n" + "\n".join(lines)).strip()
+            if lines:
+                # The conflict statement leads; a sentence asserting only one
+                # of the differing values for that thing, or asserting that the
+                # documents agree about it, is replaced by it.
+                stated = [c for c in found if _nameable(c)]
+                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated))
         # A marker whose line went (padding, a dropped note) is not lost: it
         # rides on the last line, so every citation entry has its marker.
         lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)

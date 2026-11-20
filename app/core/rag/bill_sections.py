@@ -224,6 +224,12 @@ UNKNOWN_SECTION = "[section unknown]"
 #: four lines plus its figures line, so the head of a wrapped description
 #: (where a bill names the item) is matched and listed with its figures.
 _ROW_MAX = 360
+#: How much of a long row's head to keep alongside the tail. The head is
+#: where a bill names the item ("reinforced concrete pipe 400 mm bore"); a
+#: long wrapped description, or one split by a page break, puts those words
+#: past the tail window, so they must be kept explicitly or the row cannot
+#: be matched to its item.
+_ROW_HEAD_MAX = 180
 #: A row's identity for deduplication: its last tokens (unit, qty, rate,
 #: amount and the description words printed just before them).
 _ROW_KEY_TOKENS = 8
@@ -286,6 +292,22 @@ def _chunk_row_segments(row_segments, text: str, previous: str | None) -> list[s
     return list(row_segments(previous + "\n" + text))[own:]
 
 
+def _compact_row(text: str) -> str:
+    """A row's text for the model: whole when the two windows meet, else
+    head + tail.
+
+    The tail carries the figures and the description lines just above them;
+    the head carries the item name. A long wrapped description (or one split
+    across a page break) is longer than both windows put together, and
+    keeping only the tail loses the item name, so the row cannot be matched
+    to its item in :func:`rows_for_item`. When the windows meet there is no
+    middle to elide and the row is returned whole.
+    """
+    if len(text) <= _ROW_HEAD_MAX + _ROW_MAX:
+        return text
+    return f"{text[:_ROW_HEAD_MAX].rstrip()} ... {text[-_ROW_MAX:]}"
+
+
 def _labelled_rows(chunks, sections, numbers, row_segments):
     """``[(label, compact row text)]`` of every priced row, in bill order."""
     rows: list[tuple[str, str]] = []
@@ -301,7 +323,7 @@ def _labelled_rows(chunks, sections, numbers, row_segments):
             if numbers and (current is None or current.number not in numbers):
                 continue
             label = f"[{current.label}]" if current is not None else UNKNOWN_SECTION
-            rows.append((label, " ".join(segment.split())[-_ROW_MAX:]))
+            rows.append((label, _compact_row(" ".join(segment.split()))))
     return rows
 
 
@@ -324,19 +346,54 @@ def item_rows(
     :data:`UNKNOWN_SECTION` when the bill prints no heading. With
     ``numbers`` only the rows of those sections are kept.
     """
+    index = row_index(chunks, sections, row_segments=row_segments, numbers=numbers)
+    return rows_for_item(index, item)
+
+
+@dataclass(frozen=True)
+class RowIndex:
+    """One bill's labelled priced rows and their words, read once.
+
+    Segmenting a bill into rows and reading each row's words does not depend
+    on the item asked, so a caller that asks several items of the same bill
+    builds this once (:func:`row_index`) and scores each item against it
+    (:func:`rows_for_item`). ``vocabulary`` is every word any row prints.
+    """
+
+    rows: tuple[tuple[str, str], ...]
+    row_words: tuple[frozenset[str], ...]
+    vocabulary: frozenset[str]
+
+
+def row_index(
+    chunks: Iterable[tuple[int, str]],
+    sections: Sequence[BillSection],
+    *,
+    row_segments,
+    numbers: Iterable[str] = (),
+) -> RowIndex:
+    """The item-independent part of :func:`item_rows`, for one bill."""
     wanted = {str(n) for n in numbers}
-    rows = _labelled_rows(list(chunks), sections, wanted, row_segments)
-    row_words = [words(text) for _label, text in rows]
+    rows = tuple(_labelled_rows(list(chunks), sections, wanted, row_segments))
+    row_words = tuple(frozenset(words(text)) for _label, text in rows)
+    return RowIndex(rows, row_words, frozenset().union(*row_words))
+
+
+def rows_for_item(index: RowIndex, item: str) -> list[str]:
+    """:func:`item_rows` over a bill already read into ``index``."""
+    # A word covers some row exactly when it covers the union of all rows'
+    # words (``_covers`` is an any() over the set), so the asked words are
+    # read against the vocabulary once instead of against every row.
     asked = {
         w for w in words(item) - _COLUMN_WORDS
-        if any(_covers(w, ws) for ws in row_words)
+        if _covers(w, index.vocabulary)
     }
     if not asked:
         return []
     need = (len(asked) + 1) // 2
     out: list[str] = []
     seen: set[tuple[str, str]] = set()
-    for (label, text), ws in zip(rows, row_words):
+    for (label, text), ws in zip(index.rows, index.row_words):
         if sum(_covers(w, ws) for w in asked) < need:
             continue
         # Overlapping chunks print the same row with a different lead-in:

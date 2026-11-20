@@ -107,6 +107,32 @@ def test_summary_counts(docs, counts):
     assert (s["documents"], s["rfi_like"], s["split"], s["same_chunk"]) == counts
 
 
+@pytest.mark.parametrize("docs,roles,q_then_a", [
+    # one complete form, one with question and answer but no references,
+    # one with only a references heading, one with an answer BEFORE its question
+    ({"a": [(0, Q), (1, A), (2, R)], "b": [(0, f"{Q}\n{A}")], "c": [(0, R)],
+      "d": [(0, f"{A}\n{Q}")]},
+     {"question": 3, "answer": 3, "references": 2}, 2),
+    ({"c": [(0, "plain text")], "e": [(0, Q)]},
+     {"question": 1, "answer": 0, "references": 0}, 0),
+])
+def test_summary_counts_each_role_heading_even_when_no_document_is_rfi_like(docs, roles, q_then_a):
+    s = m.summarise((d, m.classify(c, PATS)) for d, c in docs.items())
+    assert s["with_role"] == roles
+    assert s["q_then_a"] == q_then_a
+    line = next(x for x in m.render("anc", s) if "documents with a heading of" in x)
+    assert line.endswith(" ".join(f"{r}={roles[r]}" for r in m.ROLES)
+                         + f" question_then_answer={q_then_a}")
+
+
+@pytest.mark.parametrize("body,roles", [
+    (f"{Q}\n{R}", ("question", "references")),
+    ("plain text", ()),
+])
+def test_classify_names_the_roles_found(body, roles):
+    assert m.classify([(0, body)], PATS)["roles"] == roles
+
+
 @pytest.mark.parametrize("secret", ["Which grade applies to the slab", "general notes"])
 def test_render_prints_ids_and_counts_never_text(secret):
     docs = {"doc1": [(0, Q), (1, A), (2, R)]}
@@ -239,3 +265,92 @@ def test_render_prints_script_names_never_text(secret):
     out = "\n".join(m.render("anc", s))
     assert secret not in out and secret.split()[0] not in out
     assert "outside the heading table's scripts: mainly=" in out
+
+
+# --- the named-class selector and the heading skeleton (shapes, no words) ---
+
+@pytest.mark.parametrize("name,path,named", [
+    ("RFI_012_slab.pdf", None, True),               # underscore separator
+    ("Slab query.pdf", "Project/RFIs/Slab query.pdf", True),   # class in the folder
+    ("Request for Information 7.docx", None, True),
+    ("Rifle range.pdf", "Project/Drawings/Rifle range.pdf", False),
+    ("Inspection log.pdf", None, False),
+])
+def test_name_kinds_reads_name_and_path_with_separators_as_spaces(name, path, named):
+    assert ("rfi" in m.name_kinds(name, path)) is named
+
+
+@pytest.mark.parametrize("raw,n", [("", 3), ("5", 5), ("99", 10), ("-2", 0)])
+def test_sample_count_default_and_bounds(raw, n):
+    assert m.sample_count(raw) == n
+
+
+def test_sample_count_rejects_a_non_integer():
+    with pytest.raises(ValueError):
+        m.sample_count("three")
+
+
+@pytest.mark.parametrize("label,case", [
+    ("DATE", "UPPER"), ("date", "lower"), ("Date Raised", "Title"),
+    ("Date raised", "mixed"), ("12", "caseless"),
+])
+def test_letter_case(label, case):
+    assert m.letter_case(label) == case
+
+
+@pytest.mark.parametrize("chunks,expected", [
+    ([(0, "Question: which grade?\nplain prose line here")],
+     [(0, 0, 0, "question", True, "colon", True)]),
+    ([(4, "intro prose line here\nReply:")],
+     [(4, 1, 0, "answer", True, "colon", False)]),
+])
+def test_skeleton_line_start_heading_is_seen_by_the_rule(chunks, expected):
+    cells = m.heading_skeleton(chunks, PATS)
+    assert [(c["chunk"], c["line"], c["cell"], c["role"], c["rule"], c["end"], c["value"])
+            for c in cells] == expected
+
+
+@pytest.mark.parametrize("body,expected", [
+    # A label in the second cell of a table row: the line-start rule misses
+    # it, the skeleton records it with rule=no.
+    ("Ref: 12 | Response: see sheet", [(0, "references", True), (1, "answer", False)]),
+    ("Raised by: site\tQuery: grade", [(0, "-", False), (1, "question", False)]),
+])
+def test_skeleton_table_cell_heading_is_not_seen_by_the_rule(body, expected):
+    cells = m.heading_skeleton([(3, body)], PATS)
+    assert [(c["cell"], c["role"], c["rule"]) for c in cells] == expected
+
+
+@pytest.mark.parametrize("body,count", [
+    ("SUBJECT\nthe slab grade on level two is unclear to the site team", 1),  # capitals, alone
+    ("the slab grade on level two is unclear to the site team", 0),           # prose
+    ("Raised by:\tSite team", 1),                                             # colon label, tab cell
+    ("one two three four five six seven: value", 0),                          # too many words
+])
+def test_skeleton_heading_like_cells(body, count):
+    assert len(m.heading_skeleton([(0, body)], PATS)) == count
+
+
+@pytest.mark.parametrize("chunks,expected", [
+    ([(2, "Reply: b"), (1, "Query: a")], [(1, "question"), (2, "answer")]),
+    ([(1, "Query: a"), (0, "Ref: c")], [(0, "references"), (1, "question")]),
+])
+def test_skeleton_reads_chunks_in_index_order(chunks, expected):
+    cells = m.heading_skeleton(chunks, PATS)
+    assert [(c["chunk"], c["role"]) for c in cells] == expected
+
+
+@pytest.mark.parametrize("n,cap,expected", [(10, 4, 4), (3, 4, 3)])
+def test_skeleton_caps_the_cells(n, cap, expected):
+    many = "\n".join(f"Item {i}: x" for i in range(n))
+    assert len(m.heading_skeleton([(0, many)], PATS, cap=cap)) == expected
+
+
+def test_skeleton_and_render_carry_no_words():
+    secret = "Zanzibarquux"
+    cells = m.heading_skeleton([(0, f"{secret}: {secret} | Response: {secret}")], PATS)
+    out = "\n".join(m.render_samples("rfi", [{"rfi_like": False, "roles": ("answer",)}],
+                                     [("abc12345", 1, cells)]))
+    assert secret.lower() not in out.lower()
+    assert "sample abc12345: chunks=1 heading_like=2 table_role=1 seen_by_rule=0" in out
+    assert "names the class rfi: 1 (rfi_like=0; with a heading of: question=0 answer=1 references=0)" in out

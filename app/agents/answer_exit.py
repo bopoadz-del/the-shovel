@@ -87,14 +87,26 @@ class Turn:
     #: Paths that never see the turn's messages -- the wall-clock deadline,
     #: the crash safety net, the exit check -- recover from these.
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
+    #: Every passage the turn put in front of the model (pre-injected
+    #: excerpts and tool passages), one row each: ``doc_id``, ``doc_name``,
+    #: ``page``, ``page_or_section``, ``chunk_index``, ``snippet``. The
+    #: Sources rows name only what the answer cited, without the passage;
+    #: a check over what the turn was HANDED reads these.
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    #: How this turn's forced no-tools retry ended: "" when none ran,
+    #: "unusable" when the provider RETURNED a reply that was still unusable,
+    #: "provider_error" when the provider call itself failed. Only a returned
+    #: reply may be stated as "the documents did not yield an answer"; an
+    #: error must never read as a not-found.
+    forced_retry_outcome: str = ""
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
 
 
-def open_turn() -> Turn:
+def open_turn(question: str = "") -> Turn:
     """Start a turn's record. Tasks and threads started afterwards share it."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     _TURN.set(turn)
     return turn
 
@@ -107,9 +119,9 @@ def reset_turn(token: contextvars.Token) -> None:
     _TURN.reset(token)
 
 
-def begin_turn() -> tuple[Turn, contextvars.Token]:
+def begin_turn(question: str = "") -> tuple[Turn, contextvars.Token]:
     """``open_turn`` for a caller that restores the previous record afterwards."""
-    turn = Turn()
+    turn = Turn(question=question if isinstance(question, str) else "")
     return turn, _TURN.set(turn)
 
 
@@ -290,6 +302,23 @@ def recovered_answer(turn: Turn | None = None) -> str:
     return text if has_words(text) and text.strip() != _EMPTY_RESPONSE_FALLBACK else ""
 
 
+def _note_passage(turn: Turn, rec: Any) -> None:
+    """One handed passage as an evidence row on the turn, once per chunk."""
+    text = str(getattr(rec, "text", "") or "").strip()
+    name = _display_name(str(rec.source_name or rec.doc_id or ""))
+    if not text or not name:
+        return
+    doc_id = str(rec.doc_id or "")
+    key = (doc_id or name, rec.chunk_index, text[:80])
+    for row in turn.evidence:
+        if (row["doc_id"] or row["doc_name"], row["chunk_index"], row["snippet"][:80]) == key:
+            return
+    page = _page(rec.page)
+    turn.evidence.append({"doc_id": doc_id, "doc_name": name, "page": page,
+                          "page_or_section": f"p. {page}" if page else "",
+                          "chunk_index": rec.chunk_index, "snippet": text})
+
+
 def note_evidence(
     rag_sys_msg: dict[str, Any] | None,
     messages: Iterable[dict[str, Any]] | None,
@@ -313,6 +342,7 @@ def note_evidence(
                           chunk=rec.chunk_index, page=_page(rec.page))
             if place not in turn.places:
                 turn.places.append(place)
+            _note_passage(turn, rec)
         for m in msgs:
             if isinstance(m, dict) and m.get("role") == "assistant":
                 for call in m.get("tool_calls") or []:
@@ -1191,6 +1221,18 @@ _PARAM_PHRASE_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: The answer-style machinery terms (tester's 18-pattern list) that the phrase
+#: rewriter above does not already take: single technical words the platform
+#: uses that have no user-facing meaning. Removed whole-word, case-insensitive.
+_MACHINERY_TERM_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:"
+    r"(?<!document )(?<!documents )indexed(?![ \t]+(?:documents?|files?|chunks?))|"
+    r"index(?:es)?|embed(?:ding|dings)|vector(?:s)?|top-?k|rag|"
+    r"context[ \t]+window|llm|token(?:s)?|pipeline|rerank(?:er)?|semantic[ \t]+search"
+    r")(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
+
 
 def _cap_like(original: str, new: str) -> str:
     return new[:1].upper() + new[1:] if original[:1].isupper() else new
@@ -1262,11 +1304,12 @@ def _machine_wording(text: str, tier: str = "project") -> str:
         return _cap_like(m.group(0), new)
 
     text = _MACHINE_PHRASE_RE.sub(phrase, text)
-    return _PARAM_PHRASE_RE.sub(
+    text = _PARAM_PHRASE_RE.sub(
         lambda m: _cap_like(m.group(0), (f"{m.group('adj')} inputs" if m.group("adj") else
                                          f"inputs {m.group('post')}")),
         text,
     )
+    return _MACHINERY_TERM_RE.sub(" ", text)
 
 
 # ── Step names and tool-call mechanics ───────────────────────────────────────
@@ -1738,6 +1781,16 @@ def _apply_answer_tier(env: dict[str, Any]) -> dict[str, Any]:
     return env
 
 
+def _handed_evidence(turn: Turn | None, rows: Any) -> list[dict[str, Any]]:
+    """The turn's handed passages, each named as its Sources row names the
+    same document (by id), so one document never reads as two."""
+    if turn is None or not turn.evidence:
+        return []
+    names = {str(r.get("doc_id")): str(r.get("doc_name") or "") for r in (rows if isinstance(rows, list) else [])
+             if isinstance(r, dict) and r.get("doc_id") and r.get("doc_name")}
+    return [dict(e, doc_name=names.get(e["doc_id"]) or e["doc_name"]) for e in turn.evidence]
+
+
 def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None) -> dict[str, Any]:
     """The answer contract (``app.agents.answer_contract``) on the text that
     leaves: citations become numbered markers whose entries ride out as
@@ -1749,7 +1802,9 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     if not isinstance(text, str):
         return env
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
-    done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking)
+    done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
+                                 question=(turn.question or None) if turn else None,
+                                 evidence=_handed_evidence(turn, rows))
     env[key] = done.text
     if done.citations:
         env["citations"] = done.citations

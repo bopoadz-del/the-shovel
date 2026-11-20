@@ -3,6 +3,7 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.lib.formula_registry import Constant, Constants
 from app.lib.formula_registry import Param, formula
 import math
 from dataclasses import dataclass, field
@@ -416,6 +417,16 @@ def shear_stress_check(v_kn: float, b_mm: float, d_mm: float) -> Dict[str, float
         "shear_stress_n_mm2": round((v_kn * 1000) / (b_mm * d_mm), 3),
     }
 
+#: Declared constants of post_tensioning_force (D1 rule C).
+_PT_K = Constants(
+    concrete_unit_weight=Constant(25.0, "kN/m3", "unit weight of reinforced concrete (self-weight when no dead load is given)",
+                                  source="EN 1991-1-1 Table A.1 (reinforced concrete, normal weight)"),
+    balanced_dead_load_share=Constant(0.75, "ratio", "share of the dead load the tendons balance"),
+    strand_fill=Constant(0.78, "ratio", "7-wire strand steel area over its circumscribed circle",
+                         source="ASTM A416 / EN 10138 (12.7 mm strand, 98.7 mm2 nominal area)"),
+)
+
+
 @formula(
     owner='design',
     display_name='Post-tensioning force',
@@ -440,13 +451,13 @@ def post_tensioning_force(
 ) -> Dict[str, Any]:
     """PT force: P = w x L^2 / (8 x e), balancing 75% of DL."""
     if dead_load_kn_m2 is None:
-        dead_load_kn_m2 = slab_thickness_m * 25
+        dead_load_kn_m2 = slab_thickness_m * _PT_K.concrete_unit_weight
     e = eccentricity_ratio * slab_thickness_m
-    balanced = dead_load_kn_m2 * 0.75
+    balanced = dead_load_kn_m2 * _PT_K.balanced_dead_load_share
     force_kn = balanced * span_m**2 / (8 * e) if e > 0 else 0
     area_mm2 = (force_kn * 1000) / tendon_stress_n_mm2
     # 7-wire strand fill ≈ 0.78 (ASTM A416 / EN 10138: 12.7 mm → 98.7 mm²).
-    strand_area = 0.78 * math.pi * (tendon_diameter_mm / 2)**2
+    strand_area = _PT_K.strand_fill * math.pi * (tendon_diameter_mm / 2)**2
     strands = math.ceil(area_mm2 / strand_area) if strand_area > 0 else 0
     return {
         "tendon_force_kn": round(force_kn, 1),
@@ -532,6 +543,12 @@ def composite_column_design(
         "concrete_area_mm2": round(concrete if use_i_beam else gross - rebar, 1),
     }
 
+#: Declared constants of foundation_bearing_pressure (D1 rule C).
+_BEARING_K = Constants(
+    soil_unit_weight=Constant(18.0, "kN/m3", "unit weight of the soil removed above the founding level"),
+)
+
+
 @formula(
     owner='design',
     display_name='Foundation bearing pressure',
@@ -558,7 +575,7 @@ def foundation_bearing_pressure(
         return {"error": "foundation_width_m and foundation_length_m must be > 0"}
     area = foundation_width_m * foundation_length_m
     q = column_load_kn / area
-    net_q = q - foundation_depth_m * 18
+    net_q = q - foundation_depth_m * _BEARING_K.soil_unit_weight
     fos = soil_bearing_capacity_kn_m2 / net_q if net_q > 0 else float("inf")
     return {
         "bearing_pressure_kn_m2": round(q, 2),

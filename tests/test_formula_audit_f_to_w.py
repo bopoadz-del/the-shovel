@@ -32,6 +32,7 @@ _AUDIT_SLICE = [
     "floor_cycle_progress",
     "formwork_striking_time",
     "foundation_bearing_pressure",
+    "generate_doc_number",
     "grout_pressure_calc",
     "guardrail_top_rail_height",
     "interior_finishes_takeoff",
@@ -44,6 +45,7 @@ _AUDIT_SLICE = [
     "mobilization_cost_estimate",
     "modulus_of_elasticity_concrete",
     "modulus_of_rupture",
+    "next_ncr_status",
     "pe_unit_convert",
     "plumbing_flow_programme",
     "post_tensioning_force",
@@ -72,6 +74,7 @@ _AUDIT_SLICE = [
     "tolerance_check",
     "unit_cost_total",
     "unit_weight_concrete",
+    "validate_design_status",
     "weld_capacity",
     "wind_load_on_formwork",
     "wind_pressure",
@@ -98,8 +101,9 @@ def _err(name: str, *, expect: str = "error", **params):
 # ── registry contract ───────────────────────────────────────────────────────
 
 def test_audit_slice_matches_live_registry():
-    """sorted(available_calculations())[49:] must stay the owned F–W set (49 = the A–F list, which gained cpm_network)."""
-    assert available_calculations()[49:] == _AUDIT_SLICE
+    """sorted(available_calculations())[51:] must stay the owned F–W set (51 = the A–F list, which gained cpm_network,
+    then check_review_timeline and enforce_critical_rules)."""
+    assert available_calculations()[51:] == _AUDIT_SLICE
 
 
 def test_audit_file_has_two_cases_per_calculator():
@@ -1487,3 +1491,37 @@ def test_audit_progress_kpi(planned, actual, total, want_pp, want_ap, want_var, 
     assert r["spi_progress"] == pytest.approx(want_spi)
 
     _err("progress_kpi", planned_cum=60, actual_cum=45, planned_total=0)
+
+
+# ── procedure-rule checks in the F-W range ──────────────────────────────────
+
+@pytest.mark.parametrize("doc_type, sequence, year, number", [
+    ("PDN", 4, 2024, "PDN-2024-004"),
+    ("WP", 310, None, "WP-0310"),
+])
+def test_audit_generate_doc_number(doc_type, sequence, year, number):
+    params = {"doc_type": doc_type, "sequence": sequence}
+    if year is not None:
+        params["year"] = year
+    r = _ok("generate_doc_number", **params)
+    assert r["document_number"] == number
+    _err("generate_doc_number", expect="needs_input", sequence=sequence)
+
+
+@pytest.mark.parametrize("current, following", [
+    ("DISPOSITION_REVIEWED", "APPROVED"),
+    ("IMPLEMENTING", "VERIFYING"),
+])
+def test_audit_next_ncr_status(current, following):
+    assert _ok("next_ncr_status", ncr_status=current)["next_status"] == following
+    _err("next_ncr_status", ncr_status=current + "_X")
+
+
+@pytest.mark.parametrize("given, valid", [
+    ("SIGN-OFF", False),
+    ("pending debrief", True),
+])
+def test_audit_validate_design_status(given, valid):
+    r = _ok("validate_design_status", design_status=given)
+    assert r["valid"] is valid
+    assert given in r["message"]

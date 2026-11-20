@@ -308,10 +308,13 @@ class LiveDump:
         return self._fh is not None
 
     def arm(self, after_s: Optional[float] = None) -> None:
-        """(Re)arm the one timer; arming again replaces the pending one."""
+        """(Re)arm the timer; arming again replaces the pending one. The
+        timer repeats while armed, so a stall longer than one delay is
+        captured even when a single fire is lost to signal-delivery jitter
+        (each repeat appends one more dump until ``cancel``)."""
         if self._fh is not None:
             delay = self.after_s if after_s is None else after_s
-            faulthandler.dump_traceback_later(delay, repeat=False, file=self._fh)
+            faulthandler.dump_traceback_later(delay, repeat=True, file=self._fh)
 
     def cancel(self) -> None:
         if self._fh is not None:
@@ -408,22 +411,29 @@ def gc_summary(record: GcRecord, window_start: float) -> str:
     return f"gc_passes={record.passes} gc2_max={worst}"
 
 
-def freeze_long_lived_heap() -> int:
+_FREEZE_OFF = ("0", "false", "no", "off")
+
+
+def freeze_startup_heap() -> Optional[int]:
     """Move every object alive now out of the collector's reach (``gc.freeze``).
 
-    Called once when a long-lived process has finished starting: the startup
-    heap (blocks, registries, agents, models) lives as long as the process,
-    and without this every full collection re-scans all of it while holding
-    the interpreter lock. Objects created afterwards are collected as before.
-    No ``gc.collect()`` first: that is itself a full pass, and garbage alive
-    at this moment is only startup's. Returns the frozen object count."""
+    Called once, when a long-lived process has finished starting (models
+    loaded): that heap lives as long as the process, and without this every
+    full collection re-scans all of it while holding the interpreter lock,
+    the event loop included (see ``GcRecord``). Objects made afterwards are
+    collected as before. No ``gc.collect()`` first: that is itself a full
+    pass. ``GC_FREEZE_AT_STARTUP=0`` turns it off. Returns the frozen object
+    count, or ``None`` when off."""
+    if os.getenv("GC_FREEZE_AT_STARTUP", "1").strip().lower() in _FREEZE_OFF:
+        return None
     gc.freeze()
     return gc.get_freeze_count()
 
 
-def release_long_lived_heap() -> None:
-    """Undo ``freeze_long_lived_heap`` (at shutdown): the frozen objects
-    return to the oldest generation and are collected normally again."""
+def release_startup_heap() -> None:
+    """Undo ``freeze_startup_heap`` at shutdown, so a process that runs the
+    app's start-up more than once (a test session) never keeps a frozen heap
+    after the app is gone."""
     gc.unfreeze()
 
 
@@ -615,10 +625,15 @@ class LagMonitor:
             sample = ""
             stalled = not served.wait(self.threshold)
             resumed = time.monotonic()
+            could_fire = False
             if live is not None and not stalled:
                 # Back with the GIL: the gap the serve re-armed for is over.
                 # Cancelled here, the monitor's own work below never fires it.
                 live.cancel()
+                # Both timers of this round (the post's, the serve's) were
+                # armed at ``posted`` or later; neither can have fired unless
+                # the round lasted ``live_ms``. Only then is the file read.
+                could_fire = time.monotonic() - posted >= live.after_s
             if stalled:
                 # Sample now and keep re-sampling while the stall persists, so
                 # the stack we keep is the loop caught in the act (the deepest,
@@ -665,7 +680,13 @@ class LagMonitor:
                 # sees the event also sees both.
                 self.stall_recorded.set()
             elif live is not None:
-                dump = live.take()
+                # Nothing is pending from the cancel above to the sleep's arm.
+                # Reading the file releases the GIL (os.fstat, os.read), and a
+                # thread waiting for it takes it there: a hold begun at that
+                # read had no timer, no heartbeat in flight and no sleep to
+                # oversleep (CI 076bcbf: a 0.6 s hold, max_lag 0, no dump).
+                # A round too short for any timer to fire has nothing to read.
+                dump = live.take() if could_fire else ""
                 # How long past the serve this thread got the GIL back: a hold
                 # that began after the serve shows here, not in lag_ms.
                 gap_ms = (resumed - served_at[0]) * 1000 if served_at else 0.0
@@ -696,6 +717,7 @@ class LagMonitor:
         (tick + live), and the oversleep itself is measured: ``wake_late``
         is how long past its tick this thread could not run."""
         if live is not None:
+            armed_from = time.monotonic()
             live.arm(self.tick + live.after_s)
         slept_from = time.monotonic()
         self._stop.wait(self.tick)
@@ -705,7 +727,11 @@ class LagMonitor:
         self._note_wake_late(late_ms, woke)
         if live is not None:
             live.cancel()
-            dump = live.take()
+            # Read only when the timer could have fired (armed at
+            # ``armed_from`` or later for tick + live): the same unwatched
+            # GIL release as the heartbeat's read (``_run``).
+            fired = time.monotonic() - armed_from >= self.tick + live.after_s
+            dump = live.take() if fired else ""
             if dump:
                 idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
                 keep_worst(self.live_dumps, (late_ms, "WAKE_LATE " + format_live_dump(dump, idents)))

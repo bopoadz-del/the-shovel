@@ -61,7 +61,8 @@ CREATE TABLE documents (
     doc_role       TEXT NOT NULL DEFAULT 'other'
                    CHECK (doc_role IN (
                        'baseline_schedule', 'daily_report', 'weekly_report', 'other',
-                       'contract', 'draft', 'tender', 'award', 'reporting', 'design'
+                       'contract', 'draft', 'tender', 'award', 'reporting', 'design',
+                       'contractor_submittal'
                    )),
     size           INTEGER NOT NULL DEFAULT 0,
     uploaded_at    TEXT NOT NULL,

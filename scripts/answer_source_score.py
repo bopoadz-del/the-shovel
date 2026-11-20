@@ -17,6 +17,7 @@ Input (one JSON object per row, or a list of them)::
 
     {
       "id": "<row id>",
+      "rep": <repeat number, optional>,
       "answer": "<answer text>",
       "handed": [{"chunk_id": "...", "doc_id": "...", "doc_name": "...",
                   "text": "<chunk text, optional>"}],
@@ -26,8 +27,10 @@ Input (one JSON object per row, or a list of them)::
 
 ``handed`` is the turn's ``rag_retrieval_trace`` ``chunks`` list; ``text`` is
 filled from a ``{chunk_id: text}`` file (``--chunk-text``), never fetched
-from a live service. ``sources_list`` resolves bare numbered markers
-(``... 2.``) the answer shows for the Sources panel.
+from a live service. ``sources_list`` resolves the numbered markers the
+answer shows for the Sources panel: bare (``... 2.``) and bracketed (``[2]``,
+the answer contract's form). A bracketed marker is never a figure; one the
+panel does not number is counted in ``markers_unresolved``.
 
 Output carries ids and counts only: no answer text, no document name, no
 question text. The flag is ``low`` when any number is unfound, any citation
@@ -39,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import sys
 from dataclasses import dataclass, field
@@ -46,19 +50,20 @@ from typing import Any, Iterable
 
 # --- citations ---------------------------------------------------------------
 
-# ``[source: NAME]`` / ``(source: NAME)`` written by the answer. A document
-# name may itself hold parentheses ("Bill (Priced).pdf"): the bracket form
-# ends only at ``]``, the paren form allows one level of inner parentheses.
-_NAMED_CITE_RE = re.compile(
-    r"\[\s*source\s*:\s*([^\]]+)\]"
-    r"|\(\s*source\s*:\s*((?:[^()]|\([^()]*\))+)\)",
-    re.IGNORECASE,
-)
-# Raw retrieval keys a model may leave in an answer before the exit check.
-_KEYED_CITE_RE = re.compile(r"\b(?:chunk_id|chunk|doc_id)\s*[=:]\s*([A-Za-z0-9_\-:.]+)", re.IGNORECASE)
-# A bare numbered marker: a small integer standing alone right before the end
-# of a sentence or line ("... 30 minutes 2." / "... mixes 1. The").
-_MARKER_RE = re.compile(r"(?<=[^\d\s,.])\s(\d{1,2})(?=[.;]?(?:\n|$)|[.;]\s)")
+# The citation-span rule lives in one place (app/lib/citation_spans.py) and is
+# shared with the product's conflict check; this script only reads it.
+_ROOT = str(pathlib.Path(__file__).resolve().parents[1])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from app.lib import citation_spans as _spans  # after the path fix
+
+_NAMED_CITE_RE = _spans.NAMED_CITE_RE
+_KEYED_CITE_RE = _spans.KEYED_CITE_RE
+_MARKER_RE = _spans.MARKER_RE
+_BRACKET_MARKER_RE = _spans.BRACKET_MARKER_RE
+blank_named = _spans.blank_named
+blank_markers = _spans.blank_markers
+blank_citations = _spans.blank_citations
 
 _ELLIPSIS = ("…", "...")
 
@@ -119,20 +124,32 @@ def find_citations(answer: str, sources_list: list[str] | None = None) -> list[C
     for m in _KEYED_CITE_RE.finditer(text):
         out.append(Citation("key", m.group(1).strip(), _sentence_at(text, spans, m.start())))
     listed = list(sources_list or [])
-    for m in _MARKER_RE.finditer(_strip_named(text)):
+    stripped = _strip_named(text)
+    for m in _MARKER_RE.finditer(stripped):
         n = int(m.group(1))
         if not listed or not 1 <= n <= len(listed):
             continue  # a marker only exists when the Sources panel numbers it
         out.append(Citation("marker", listed[n - 1], _sentence_at(text, spans, m.start())))
+    for m in _BRACKET_MARKER_RE.finditer(stripped):
+        n = int(m.group(0)[1:-1])
+        if not 1 <= n <= len(listed):
+            continue  # counted by unresolved_markers, never a figure
+        out.append(Citation("marker", listed[n - 1], _sentence_at(text, spans, m.start())))
     return out
+
+
+def unresolved_markers(answer: str, sources_list: list[str] | None = None) -> int:
+    """Bracketed markers the Sources panel does not number (a citation the
+    reader cannot follow)."""
+    listed = len(sources_list or [])
+    return sum(1 for m in _BRACKET_MARKER_RE.finditer(_strip_named(answer or ""))
+               if not 1 <= int(m.group(0)[1:-1]) <= listed)
 
 
 def _strip_named(text: str) -> str:
     """Blank the named and keyed citation spans (same length, so positions
     still line up with the original text)."""
-    def blank(m: re.Match[str]) -> str:
-        return " " * len(m.group(0))
-    return _KEYED_CITE_RE.sub(blank, _NAMED_CITE_RE.sub(blank, text or ""))
+    return blank_named(text)
 
 
 def cited_chunks(cite: Citation, handed: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -140,7 +157,19 @@ def cited_chunks(cite: Citation, handed: list[dict[str, Any]]) -> list[dict[str,
     if cite.kind == "key":
         return [c for c in handed
                 if cite.target in (str(c.get("chunk_id")), str(c.get("doc_id")))]
-    return [c for c in handed if name_matches(cite.target, str(c.get("doc_name") or ""))]
+    return [c for c in handed if _cite_names(cite, str(c.get("doc_name") or ""))]
+
+
+def _cite_names(cite: Citation, doc_name: str) -> bool:
+    """A citation names a document. A Sources-panel line reads
+    ``<document name>, <section>``: a marker resolved through the panel names
+    the document when the line is the name followed by a comma."""
+    if name_matches(cite.target, doc_name):
+        return True
+    if cite.kind != "marker" or not doc_name.strip():
+        return False
+    head, sep, _ = _fold(cite.target).partition(_fold(doc_name) + ",")
+    return bool(sep) and not head
 
 
 # --- numbers -----------------------------------------------------------------
@@ -164,13 +193,7 @@ def numbers_in(text: str) -> list[float]:
 def answer_numbers(answer: str, sources_list: list[str] | None = None) -> list[float]:
     """The answer's figures: citation spans and numbered source markers are
     not figures."""
-    text = _strip_named(answer)
-    listed = len(sources_list or [])
-    if listed:
-        def drop(m: re.Match[str]) -> str:
-            return " " * len(m.group(0)) if 1 <= int(m.group(1)) <= listed else m.group(0)
-        text = _MARKER_RE.sub(drop, text)
-    return numbers_in(text)
+    return numbers_in(blank_citations(answer, len(sources_list or [])))
 
 
 def _found(value: float, pool: Iterable[float]) -> bool:
@@ -205,22 +228,30 @@ def overlap(sentence: str, chunk_text: str) -> float | None:
 @dataclass
 class RowScore:
     id: str
+    rep: int | None = None
     numbers_found: int = 0
     numbers_not_found: int = 0
     citations_handed: int = 0
     citations_not_handed: int = 0
+    markers_unresolved: int = 0
     overlap_mean: float | None = None
     text_available: bool = False
     flag: str = "ok"
     reasons: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
+        # ``row`` and ``rep`` are the key the trace page joins scores on
+        # (scripts/trace_page.py load_scores); ``id`` is kept for readers
+        # of the first output.
         return {
             "id": self.id,
+            "row": self.id,
+            "rep": self.rep,
             "numbers_found": self.numbers_found,
             "numbers_not_found": self.numbers_not_found,
             "citations_handed": self.citations_handed,
             "citations_not_handed": self.citations_not_handed,
+            "markers_unresolved": self.markers_unresolved,
             "overlap_mean": None if self.overlap_mean is None else round(self.overlap_mean, 3),
             "text_available": self.text_available,
             "flag": self.flag,
@@ -233,7 +264,9 @@ def score_row(row: dict[str, Any], *, overlap_floor: float = 0.2) -> RowScore:
     handed = list(row.get("handed") or [])
     tools = [str(t) for t in (row.get("tool_results") or [])]
     listed = [str(s) for s in (row.get("sources_list") or [])]
-    out = RowScore(id=str(row.get("id") or ""))
+    rep = row.get("rep")
+    out = RowScore(id=str(row.get("id") or ""),
+                   rep=rep if isinstance(rep, int) and not isinstance(rep, bool) else None)
 
     cites = find_citations(answer, listed)
     cited_text: list[str] = []
@@ -251,6 +284,7 @@ def score_row(row: dict[str, Any], *, overlap_floor: float = 0.2) -> RowScore:
             if ov is not None:
                 overlaps.append(ov)
     out.text_available = bool(cited_text)
+    out.markers_unresolved = unresolved_markers(answer, listed)
 
     pool = [v for t in cited_text + tools for v in numbers_in(t)]
     for value in answer_numbers(answer, listed):
@@ -283,12 +317,16 @@ def attach_chunk_text(rows: list[dict[str, Any]], texts: dict[str, str]) -> None
 
 def parse_sources_list(panel: str) -> list[str]:
     """Numbered source names from a Sources panel's text: a line holding only
-    an integer N followed by the name line. The panel's own count line is
-    the integer that comes before any blank line, so only integers that run
-    1, 2, 3 ... in order are taken."""
+    an integer N followed by the name line, integers running 1, 2, 3 ... in
+    order. The panel's head is its title line, then its count line when the
+    panel lists anything; that count is never an entry, even when the next
+    line is not blank (a one-source panel with no coverage line, whose
+    entries are headed by a confidence chip instead of a number)."""
     lines = [ln.strip() for ln in (panel or "").splitlines()]
+    start = 2 if len(lines) > 1 and lines[1].isdigit() else 0
     names: list[str] = []
-    for i, ln in enumerate(lines[:-1]):
+    for i in range(start, len(lines) - 1):
+        ln = lines[i]
         if ln.isdigit() and int(ln) == len(names) + 1 and lines[i + 1] and not lines[i + 1].isdigit():
             names.append(lines[i + 1])
     return names

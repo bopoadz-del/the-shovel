@@ -54,11 +54,12 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
     from app.core.rag.vector_store import end_turn_memo, start_turn_memo
 
     token = start_turn_memo()
-    turn, turn_token = answer_exit.begin_turn()
+    asked = _user_message_of(self, args, kwargs)
+    turn, turn_token = answer_exit.begin_turn(asked)
     from app.lib import construction_formulas as _calc_words
 
     # The user's own words reach every calculator run this turn makes.
-    ask_token = _calc_words.set_current_ask(_user_message_of(self, args, kwargs))
+    ask_token = _calc_words.set_current_ask(asked)
     try:
         result = await self._chat_impl(*args, **kwargs)
         # M4: the tier + confidence cap are applied on the SERVER envelope by
@@ -125,6 +126,7 @@ async def _chat_impl(
         _calc_input_question, _compose_boq_scope_wbs_answer, _compose_excerpt_boq_instead_of_retry,
         _conflicting_tools_after_predispatch, _empty_router_verdict, _file_tool_hint,
         _final_text_needs_forced_retry, _forced_retry_nudge, _fulfill_answer_report, _has_unread_windows,
+        forced_retry_failed, forced_retry_still_unusable, log_forced_retry_start,
         _is_capability_request, _llm_config,
         _log_dataset_turn,
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
@@ -234,7 +236,13 @@ async def _chat_impl(
             for m in prior
             if m.get("role") in ("user", "assistant")
         ]
-        effective_history = prior_turns + effective_history
+        # The stored conversation is authoritative. The UI mirrors the same
+        # thread back as `history` every turn, so concatenating both
+        # duplicates the conversation and — under the MAX_HISTORY_TURNS cap —
+        # can replay an older question right before the current one (the reply
+        # answers the previous turn). Use the DB when it has turns; the client
+        # thread is only a fallback for a fresh, still-empty conversation.
+        effective_history = prior_turns if prior_turns else effective_history
         # Persist the user turn up front so it survives even if the LLM
         # call errors mid-loop — otherwise the conversation history loses
         # the question and ends up inconsistent.
@@ -616,11 +624,12 @@ async def _chat_impl(
                     if priced:
                         final_text = priced
                     else:
+                        await _off_loop(log_forced_retry_start, "chat", final_text)
                         _nudge = await _off_loop(_forced_retry_nudge, final_text)
                         if _nudge:
                             messages.append({"role": "user", "content": _nudge})
                         forced_resp = await self._call_llm(messages, api_key, project_id=project_id, with_tools=False, user_id=user_id)
-                        if forced_resp.get("status") == "error":
+                        if forced_retry_failed("chat", forced_resp):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                         else:
                             forced_msg = forced_resp["choice"].get("message") or {}
@@ -628,7 +637,7 @@ async def _chat_impl(
                                 forced_msg.get("content") or "",
                                 messages=messages, tool_results=tool_calls_made,
                             )
-                        if (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message)):
+                        if (await _off_loop(forced_retry_still_unusable, "chat", final_text)):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                 final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
                 # An answer that names its own missing input gets ONE

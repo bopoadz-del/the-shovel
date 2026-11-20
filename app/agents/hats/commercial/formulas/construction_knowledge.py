@@ -23,13 +23,19 @@ from typing import Dict, Optional
 def calculate_payment(
     claimed_amount: float,
     certified_amount: float,
-    retention_rate: float = 0.05,
+    retention_rate: float,
     cumulative_previous_certified: float = 0.0,
     contract_value: float = 0.0,
 ) -> Dict:
     """
     Calculate net payment due per the interim payment procedure.
+
+    ``retention_rate`` is the contract's rate as a fraction. It has no
+    default: a missing rate is an error that names the input.
     """
+    if retention_rate is None:
+        return {"error": "retention_rate is required (the contract's retention rate, "
+                         "a fraction); it has no default.", "missing": ["retention_rate"]}
     if claimed_amount < 0 or certified_amount < 0:
         return {"error": "claimed_amount and certified_amount must be >= 0."}
     if not (0.0 <= retention_rate <= 1.0):

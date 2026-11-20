@@ -24,8 +24,39 @@ its document. The comparison is deterministic; no model decides it.
     documents' values is the value the answer itself stated. A value the
     answer did not state is never turned into a conflict about something
     else.
+  * The value must belong to the asked thing: the thing is the asked words
+    (the question's, else the answer sentence's) that the document naming
+    the answer's value best uses (a word naming only the value's kind, such
+    as "date", is said by the value); another document's value counts only
+    when its sentence names all of them. Two documents giving values for different
+    things that share words (two elements, two sections) are no conflict.
   * A document that holds two different values of the kind for the asked
     thing, equally well matched, is left out (no claim on doubt).
+  * A value is the sentence's own claim. Citation spans, retrieval keys and
+    numbered source markers are blanked first (``app.lib.citation_spans``,
+    the same rule the offline answer scorer uses), and a number glued to a
+    letter, hyphen, slash or point (a drawing, clause or item code) is no
+    quantity. A labelled phrase is a value only when it holds a word and no
+    code: a bare number, a page, a list or row number, or a document code
+    after a label is not a claim.
+  * No thing, no conflict: when the asked words that name the thing are
+    empty, nothing is compared.
+  * The value's thing is read from its own clause: a passage is cut at a
+    heading-path step, a semicolon or a line break; a clause holding ONE
+    value is named by its whole clause, a clause holding several values by
+    only the words within a few of each value (a table row or a page of
+    text with no full stop is not one claim).
+  * The question's thing: its content words less the kind of value (a kind
+    word and the single word that runs straight into it, "concrete grade").
+    A question that names only the kind names no thing: no conflict, since
+    two values found for it may belong to two different elements. A
+    trailing "what do X and Y each say?" clause asks what each source
+    says; its words name the sources, not the thing, and are dropped
+    before the thing is read.
+  * An answer that already states every one of the differing values has
+    told the user both; it is left as written -- unless it also says the
+    documents agree (match, are consistent): then it has not told the user
+    they differ, and the conflict statement leads.
 
 C3 PRECEDENCE. A sentence in the evidence that states which document kind
 takes precedence, prevails, governs or has priority (a pairwise statement
@@ -68,6 +99,101 @@ def _stem(word: str) -> str:
     return w
 
 
+#: Words that name a value KIND this module reads (a date, a grade or class,
+#: a quantity's dimension, a sum of money). In a value's own sentence the
+#: value says them; they never tell one thing from another.
+_KIND_TERMS = frozenset(_stem(w) for w in (
+    "date", "grade", "class", "length", "area", "volume", "mass", "weight", "time", "duration",
+    "period", "pressure", "force", "percent", "percentage", "price", "cost", "sum"))
+
+
+#: Words the value itself says in its own sentence -- they name the value's
+#: property ("strength" for a strength), never the thing -- but which must NOT
+#: prune the question's words (a qualifier like "yield" still names the thing
+#: the question asks about). Dropped from the thing in ``_same_thing`` only.
+_VALUE_SAID_TERMS = frozenset(_stem(w) for w in ("strength",))
+
+
+#: A trailing "what do X and Y each say?" clause asks what each SOURCE
+#: says; its words name the sources, not the thing the values belong to.
+_SOURCE_ASK_RE = re.compile(r"\b(?:what|which)\s+(?:do|does)\b", re.IGNORECASE)
+_SOURCE_SAY_RE = re.compile(
+    r"\b(?:each\s+)?(?:say|says|state|states|specify|specifies|give|gives|show|shows|indicate|indicates)\s*\??$",
+    re.IGNORECASE)
+
+
+def _drop_source_query(question: str) -> str:
+    """The question with a trailing source query ("what do X and Y each
+    say?") removed; unchanged when it asks no such thing."""
+    text = question or ""
+    for m in reversed(list(_SOURCE_ASK_RE.finditer(text))):
+        if _SOURCE_SAY_RE.search(text[m.start():]):
+            return text[: m.start()].rstrip()
+    return text
+
+
+def _question_thing(question: str) -> set[str]:
+    """The thing the question names: its content words, less the words that
+    only name the kind of value and the words of a trailing source query. A
+    kind word ("grade", "date", "price") and the single word that runs
+    straight into it ("concrete grade", "completion date") name the kind; a
+    question made of nothing else names no thing, and two values found for
+    it may be about two different elements."""
+    question = _drop_source_query(question)
+    words = [w for w in re.findall(r"[A-Za-z][A-Za-z'-]*", question or "") if len(w) > 1]
+    kind_phrase: set[str] = set()
+    for i, w in enumerate(words):
+        if _stem(w) not in _KIND_TERMS:
+            continue
+        j = i - 1
+        if j >= 0 and words[j].lower() not in _STOP and _stem(words[j]) not in _KIND_TERMS:
+            kind_phrase.add(_stem(words[j]))
+    return _terms(question) - _KIND_TERMS - kind_phrase
+
+
+#: A sentence that tells the user the documents agree, are consistent or
+#: match. An answer that says so while it states two differing values has
+#: not told the user they differ.
+_AGREE_RE = re.compile(
+    r"\b(?:agree|agrees|agreed|agreement|consistent|consistently|identical|match|matches|"
+    r"no\s+(?:conflict|conflicts|discrepanc(?:y|ies)|difference|differences))\b", re.IGNORECASE)
+
+
+#: A negation just before the agreement word turns it round ("do not
+#: agree", "are not consistent", "never match"): that tells the user they differ.
+_NEGATED_RE = re.compile(r"(?:\bnot|n't|\bnever|\bno\s+longer)(?:\s+\w+){0,2}\s*$", re.IGNORECASE)
+
+
+def asserts_agreement(sentence: str) -> bool:
+    """The sentence tells the user the documents agree: an agreement word
+    (``_AGREE_RE``) that no negation stands just before."""
+    s = sentence or ""
+    return any(not _NEGATED_RE.search(s[: m.start()]) for m in _AGREE_RE.finditer(s))
+
+
+def _claims_agreement(answer: str) -> bool:
+    return any(asserts_agreement(s) for s in _sentences(answer))
+
+
+#: Words a sentence uses to point at the evidence itself, not at a thing in
+#: it ("the sources are consistent", "both documents match").
+_EVIDENCE_TERMS = frozenset(_stem(w) for w in (
+    "source", "document", "record", "evidence", "file", "reference", "both", "two", "they", "point",
+    "between"))
+
+
+def agreement_names_no_thing(sentence: str, documents: Iterable[str] = ()) -> bool:
+    """An agreement sentence about no other thing: it states no typed value,
+    and its words, less the agreement words, the words pointing at the
+    evidence and the words of the documents' own names, are empty."""
+    if any(v.kind != "text" for v in extract(sentence)):
+        return False
+    rest = _terms(_AGREE_RE.sub(" ", sentence or "")) - _EVIDENCE_TERMS
+    for doc in documents:
+        rest -= _terms(re.sub(r"\.\w{2,4}$", "", doc or ""))
+    return not rest
+
+
 def _terms(text: str) -> set[str]:
     return {_stem(w) for w in re.findall(r"[A-Za-z][A-Za-z'-]*", text or "")
             if w.lower() not in _STOP and len(w) > 1}
@@ -105,8 +231,18 @@ _UNITS: list[tuple[str, str, float, float]] = [
     (r"years?|yrs?", "time", 365.0, 366.0),
     (r"%|per\s?cent", "percent", 1.0, 1.0),
 ]
+#: A number glued to an ASCII letter, a hyphen, a slash or a point is part of
+#: a code (``IP-INF-053``, ``A-101``, ``3.2.4``), never a quantity.
+_FREE = r"(?<![0-9A-Za-z_\-/.])"
 _QTY_RE = re.compile(
-    rf"(?P<num>{_NUM})\s?(?P<unit>" + "|".join(f"(?:{u})" for u, *_ in _UNITS) + rf"){_END}")
+    rf"{_FREE}(?P<num>{_NUM})\s?(?P<unit>" + "|".join(f"(?:{u})" for u, *_ in _UNITS) + rf"){_END}")
+#: A range of one kind is one value covering both ends: "150-200 mm",
+#: "150 to 200 mm", "between 150 and 200 mm", "1.5 m to 2 m". A value inside
+#: it is the same value; a range is never read as its upper end alone.
+_UNIT_ALT = "|".join(f"(?:{u})" for u, *_ in _UNITS)
+_RANGE_RE = re.compile(
+    rf"(?:(?P<between>\b(?i:between|from))\s+)?{_FREE}(?P<a>{_NUM})\s?(?P<ua>{_UNIT_ALT})?"
+    rf"\s*(?P<sep>-|–|—|(?i:to|and))\s*(?P<b>{_NUM})\s?(?P<unit>{_UNIT_ALT}){_END}")
 _UNIT_RES = [(re.compile(rf"^(?:{u})$", re.IGNORECASE if k in ("time", "percent") else 0), k, lo, hi)
              for u, k, lo, hi in _UNITS]
 
@@ -146,6 +282,13 @@ class Value:
     end: int
 
 
+def _unit(unit: str) -> tuple[str, float, float] | None:
+    for urx, kind, lo, hi in _UNIT_RES:
+        if urx.match(unit):
+            return kind, lo, hi
+    return None
+
+
 def _num(s: str) -> float:
     return float(s.replace(",", ""))
 
@@ -164,8 +307,26 @@ def _valid_date(y: int, m: int, d: int) -> bool:
     return 1 <= m <= 12 and 1 <= d <= calendar.monthrange(y, m)[1]
 
 
+_WORD_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]*[A-Za-z]")
+
+
+def _claim_text(val: str) -> bool:
+    """A labelled phrase that is a claim: it holds a word and no code. A bare
+    number, a page or row number and a document or drawing code (a token
+    mixing digits with letters, hyphens, slashes or points) are not."""
+    tokens = [t.strip("()[]\"'*_,") for t in val.split()]
+    if not any(_WORD_TOKEN_RE.fullmatch(t) for t in tokens):
+        return False
+    return not any(re.search(r"\d", t) and re.search(r"[A-Za-z\-/.]", t) for t in tokens)
+
+
 def extract(sentence: str) -> list[Value]:
-    """Typed values in one sentence, left to right; a span is used once."""
+    """Typed values in one sentence, left to right; a span is used once.
+    Citation spans are blanked first (same positions), so a figure inside a
+    citation, a retrieval key or a numbered marker is never a value."""
+    from app.lib.citation_spans import blank_citations
+
+    sentence = blank_citations(sentence)
     found: list[Value] = []
     taken: list[tuple[int, int]] = []
 
@@ -194,6 +355,15 @@ def extract(sentence: str) -> list[Value]:
         for m in rx.finditer(sentence):
             g = m.group("g")
             add(Value(g, "grade", re.sub(r"\s+", "", g).upper(), m.start("g"), m.end("g")))
+    for m in _RANGE_RE.finditer(sentence):
+        if m.group("sep").lower() == "and" and not m.group("between"):
+            continue  # "A and B mm" is two values, not a range
+        hit = _unit(m.group("unit"))
+        first = _unit(m.group("ua")) if m.group("ua") else hit
+        if hit and first and first[0] == hit[0]:
+            a, b = _num(m.group("a")), _num(m.group("b"))
+            ends = (a * first[1], a * first[2], b * hit[1], b * hit[2])
+            add(Value(m.group(0), hit[0], (min(ends), max(ends)), m.start(), m.end()))
     for m in _QTY_RE.finditer(sentence):
         unit = m.group("unit")
         for urx, kind, lo, hi in _UNIT_RES:
@@ -204,7 +374,7 @@ def extract(sentence: str) -> list[Value]:
     found.sort(key=lambda v: v.start)
     if not found:
         lab = _LABELLED_RE.match(sentence)
-        if lab and len(lab.group("val").split()) <= 6:
+        if lab and len(lab.group("val").split()) <= 6 and _claim_text(lab.group("val")):
             val = lab.group("val").strip()
             found.append(Value(val, "text", " ".join(val.split()).casefold(), lab.start("val"), lab.end("val")))
     return found
@@ -230,6 +400,7 @@ class _Cand:
     sent_terms: set[str]
     local_terms: set[str]
     sent_key: tuple[int, int]
+    clause: str = ""
 
 
 def _row_doc(row: dict[str, Any]) -> str:
@@ -240,25 +411,49 @@ def _row_text(row: dict[str, Any]) -> str:
     return str(row.get("snippet") or row.get("passage") or row.get("text") or "")
 
 
+#: A passage "sentence" can be a whole table row, a heading path or a page of
+#: text with no full stop. A value's claim is its own clause: the passage is
+#: cut at a heading-path step, a semicolon or a line break. A clause holding
+#: one value is named by its whole clause; a clause holding several values
+#: (a long table row or enumeration) is named by the words near each value.
+_CLAUSE_SPLIT_RE = re.compile(r"\s+>\s+|;\s*|\n+")
+_WINDOW_WORDS = 12
+
+
+def _clauses(text: str) -> list[str]:
+    return [c.strip() for s in _sentences(text) for c in _CLAUSE_SPLIT_RE.split(s) if c.strip()]
+
+
+def _window(sent: str, start: int, end: int) -> str:
+    """The value's own neighbourhood: up to ``_WINDOW_WORDS`` words on each
+    side, inside its clause."""
+    before = sent[:start].split()[-_WINDOW_WORDS:]
+    after = sent[end:].split()[:_WINDOW_WORDS]
+    return " ".join(before) + " " + " ".join(after)
+
+
 def _candidates(rows: list[dict[str, Any]]) -> list[_Cand]:
     out: list[_Cand] = []
     for ri, row in enumerate(rows):
         doc = _row_doc(row)
         if not doc:
             continue
-        for si, sent in enumerate(_sentences(_row_text(row))):
+        for si, sent in enumerate(_clauses(_row_text(row))):
             vals = extract(sent)
             if not vals:
                 continue
             masked = sent
             for v in sorted(vals, key=lambda v: -v.start):
-                masked = masked[: v.start] + " " + masked[v.end:]
-            sent_terms = _terms(masked)
+                masked = masked[: v.start] + " " * (v.end - v.start) + masked[v.end:]
             for i, v in enumerate(vals):
                 lo = vals[i - 1].end if i else 0
                 hi = vals[i + 1].start if i + 1 < len(vals) else len(sent)
                 local = sent[lo: v.start] + " " + sent[v.end: hi]
-                out.append(_Cand(doc, row, v, sent_terms, _terms(local), (ri, si)))
+                if len(vals) == 1:
+                    near = _terms(masked)
+                else:
+                    near = _terms(_window(masked, v.start, v.end))
+                out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si), masked))
     return out
 
 
@@ -348,6 +543,124 @@ def _precedence(docs: list[str], rows: list[dict[str, Any]]) -> tuple[str | None
 
 # ── Detection ───────────────────────────────────────────────────────────────
 
+def _says_text(norm: str, text: str) -> bool:
+    """A labelled phrase is said when it stands as whole words in the text
+    (citation spans blanked), never as a piece of another word or number."""
+    from app.lib.citation_spans import blank_citations
+
+    hay = " ".join(blank_citations(text).split()).casefold()
+    return bool(norm) and re.search(rf"(?<![\w-]){re.escape(norm)}(?![\w-])", hay) is not None
+
+
+def _states_answer(c: _Cand, sent: str, typed: list[Value], kind: str) -> bool:
+    if kind == "text":
+        return _says_text(c.value.norm, sent)
+    return any(same(c.value, a) for a in typed if a.kind == kind)
+
+
+def _same_thing(kept: list[_Cand], sent: str, typed: list[Value], kind: str, asked: set[str],
+                from_question: bool = False) -> list[_Cand]:
+    """Only the values that belong to the same thing. The thing is the asked
+    words the best anchor uses for the value, less a word the value itself
+    says ("strength" for a strength, "date" for a date) when the passages do
+    not all name it. A loosely-worded second anchor that states the SAME value
+    never shrinks the thing; a value from a sentence that does not name every
+    thing word is about something else that merely shares words (another
+    element, section or revision)."""
+    anchors = [c for c in kept if _states_answer(c, sent, typed, kind)]
+    named = [(len(asked & c.sent_terms), c) for c in anchors]
+    best = max((n for n, _c in named), default=0)
+    thing = set(asked) - _KIND_TERMS
+    for n, c in named:
+        if n == best:
+            thing &= c.sent_terms
+    # A word that names only the value's own property ("strength" for a
+    # strength) is said by the value itself, not the thing: drop it when the
+    # passages do not all name it, so a passage that words the property
+    # differently ("grade") never loses the thing. A substantive word the best
+    # anchor names is kept even when a loosely-worded second anchor is silent.
+    for w in list(thing & _VALUE_SAID_TERMS):
+        if not all(w in c.sent_terms for c in kept):
+            thing.discard(w)
+    # A floor of two shared substantive words (one shared word is not the
+    # thing the question names), never a fraction of the question's words: a
+    # verbose question must not shrink a thing the anchors name. A thing of
+    # one word (a question naming one thing word) needs only that one.
+    need = min(len(set(asked) - _KIND_TERMS), 2) if from_question else 1
+    if len(thing) < need:
+        return []
+    anchors = [c for c in kept if thing <= c.sent_terms]
+    if _each_names_its_own_qualifier(anchors, thing):
+        return []
+    return anchors
+
+
+def _modifier_pairs(clause: str) -> set[tuple[str, str]]:
+    """(modifier, head) relations the clause's OWN words state.
+
+    Two shapes only: two content words written next to each other (a compound
+    noun, "blinding concrete"), and a content word a preposition links to the
+    noun before it ("cover to pile cap"). Nothing else is read, so a verb far
+    from the value never counts as a modifier of it."""
+    toks = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'-]*", clause or "")]
+    pairs: set[tuple[str, str]] = set()
+    for i, w in enumerate(toks):
+        if w in _STOP:
+            continue
+        if i and toks[i - 1] not in _STOP:
+            pairs.add((_stem(w), _stem(toks[i - 1])))
+    for i, w in enumerate(toks):
+        if w not in _LINK_STOP:
+            continue
+        head = next((t for t in reversed(toks[:i]) if t not in _STOP), None)
+        mod = next((t for t in toks[i + 1:] if t not in _STOP), None)
+        if head and mod:
+            pairs.add((_stem(mod), _stem(head)))
+    return pairs
+
+
+#: A word that links a noun to its qualifier ("cover TO pile cap", "cover FOR
+#: the slab"): a language category, never a list of structures.
+_LINK_STOP = frozenset({"of", "for", "to", "in", "on", "at", "within", "under", "above", "below", "per", "onto", "over"})
+
+
+def _each_names_its_own_qualifier(anchors: list[_Cand], thing: set[str]) -> bool:
+    """True when two anchors qualify the SAME asked word by different words.
+
+    Two passages that both state a value for \"cover to ... concrete\", one for
+    blinding concrete and one for structural concrete, state the value of two
+    DIFFERENT things: they are never a conflict (the owner's ruling), and the
+    turn asks which case is meant instead. The qualifiers are read as the
+    passage's OWN modifier-of-a-head pairs, so no list of structures, elements,
+    faces or stages appears here, and a passage that merely words its sentence
+    differently (a different verb, an extra clause) is still one thing. The
+    test is symmetric: only a pair where each side names a modifier of the same
+    asked head that the other does not counts."""
+    pairs = [_modifier_pairs(c.clause) for c in anchors]
+    for i in range(len(pairs)):
+        for j in range(i + 1, len(pairs)):
+            heads_i: dict[str, set[str]] = {}
+            heads_j: dict[str, set[str]] = {}
+            for mod, head in pairs[i]:
+                if head in thing and mod not in thing:
+                    heads_i.setdefault(head, set()).add(mod)
+            for mod, head in pairs[j]:
+                if head in thing and mod not in thing:
+                    heads_j.setdefault(head, set()).add(mod)
+            for head, mods_i in heads_i.items():
+                mods_j = heads_j.get(head, set())
+                if (mods_i - mods_j) and (mods_j - mods_i):
+                    return True
+    return False
+
+
+def _thing(kept: list[_Cand], asked: set[str]) -> list[str]:
+    common = set(asked)
+    for c in kept:
+        common &= c.sent_terms
+    return sorted(common)
+
+
 def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | None = None) -> list[dict[str, Any]]:
     """Conflicts over the evidence for the values the answer states.
 
@@ -361,9 +674,12 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
         cands = _candidates(rows)
         if not cands:
             return []
-        q_terms = _terms(question or "")
+        said = extract(answer)
+        q_terms = _question_thing(question) if question else set()
+        if question and not q_terms:
+            return []  # the question names only the kind of value: no thing to compare
         out: list[dict[str, Any]] = []
-        seen: set[frozenset] = set()
+        seen: set[tuple[str, frozenset]] = set()
         for sent in _sentences(answer):
             avals = extract(sent)
             typed = [v for v in avals if v.kind != "text"]
@@ -383,18 +699,25 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                 if len(kept) < 2:
                     continue
                 if kind == "text":
-                    anchored = any(c.value.norm in " ".join(sent.split()).casefold() for c in kept)
+                    anchored = any(_says_text(c.value.norm, sent) for c in kept)
                 else:
                     anchored = any(same(c.value, a) for c in kept for a in typed if a.kind == kind)
                 if not anchored:
                     continue
+                kept = _same_thing(kept, sent, typed, kind, q_terms or query, from_question=bool(q_terms))
                 classes: list[_Cand] = []
                 for c in kept:
                     if not any(same(c.value, k.value) for k in classes):
                         classes.append(c)
                 if len(classes) < 2:
                     continue
-                key = frozenset((c.doc, c.value.raw) for c in kept)
+                if kind == "text":
+                    told = all(_says_text(c.value.norm, answer) for c in classes)
+                else:
+                    told = all(any(same(c.value, a) for a in said if a.kind == kind) for c in classes)
+                if told and not _claims_agreement(answer):
+                    continue  # the answer already states every differing value as differing
+                key = (kind, frozenset(str(c.value.norm) for c in classes))
                 if key in seen:
                     continue
                 seen.add(key)
@@ -406,7 +729,10 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     if not all(same(gval, c.value) for c in kept if _names(gkind, c.doc)):
                         gov = basis = None
                 out.append({
-                    "values": [{"value": c.value.raw, "document": c.doc, "row": c.row} for c in kept],
+                    "kind": kind,
+                    "thing": _thing(kept, q_terms or query),
+                    "values": [{"value": c.value.raw, "document": c.doc, "row": c.row, "typed": c.value}
+                               for c in kept],
                     "governs": gov,
                     "basis_document": basis,
                     "governing_kind": gkind if gov else "",

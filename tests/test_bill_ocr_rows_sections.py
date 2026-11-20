@@ -147,6 +147,81 @@ def test_a_weight_column_unit_is_a_priced_row(unit):
     assert priced_row_count(text) == 1 == len(priced_row_segments(text))
 
 
+# --- (c) a long row keeps its item-naming head ------------------------------
+
+_LONG_DESCRIPTION = (
+    "laid in trench at the stated depth, including excavation in all "
+    "materials, bedding and surround in selected granular material, "
+    "compaction, trimming of the trench sides and bottom, disposal of "
+    "surplus excavated material off site, provision of all temporary "
+    "supports, strutting, shoring and planking, pumping and dewatering, "
+    "jointing with the approved coupling, testing of the completed "
+    "main, and all restoration of the surface, complete in every "
+    "respect in accordance with the specification and the engineer's "
+    "drawings"
+)
+
+
+def _long_row(ref, head, qty, rate):
+    # The head names the item; the long description pushes it past the
+    # tail-only compaction window, so only a head+tail compaction keeps it.
+    return f"{ref}. |{head} {_LONG_DESCRIPTION} | m {_figures(qty, rate)}"
+
+
+@pytest.mark.parametrize(("head", "qty", "item"), [
+    ("Reinforced concrete pipe 400 mm nominal bore", 633, "concrete pipe"),
+    ("Reinforced concrete pipe 600 mm nominal bore", 480, "concrete pipe"),
+    ("Ductile iron pipe 300 mm nominal bore", 120, "ductile iron pipe"),
+])
+def test_a_long_row_keeps_the_item_name_in_its_head(head, qty, item):
+    """A wrapped row longer than the tail window must not lose the head
+    that names the item, else it cannot be matched and is dropped."""
+    texts = [
+        "BILL NO. 13\nSTORM WATER NETWORK\n"
+        + _long_row("A", head, qty, 1.0),
+    ]
+    rows = _rows(texts, item)
+    assert len(rows) == 1
+    assert item in rows[0].lower() and f"{qty:,.2f}" in rows[0]
+
+
+@pytest.mark.parametrize(("ask_a", "head_a", "mark_a", "ask_b", "head_b", "mark_b"), [
+    ("reinforced concrete pipe", "Reinforced concrete pipe 400 mm nominal bore", "pipe",
+     "precast manhole", "Precast manhole 1200 mm internal", "manhole"),
+    ("ductile iron pipe", "Ductile iron pipe 300 mm nominal bore", "pipe",
+     "precast concrete chamber", "Precast concrete chamber 900 mm internal", "chamber"),
+])
+def test_a_long_row_does_not_match_an_absent_item(ask_a, head_a, mark_a, ask_b, head_b, mark_b):
+    """Keeping the head must not make a long row match an item it does not
+    print: each long row matches only its own item, the other stays out."""
+    texts = [
+        "BILL NO. 13\nSTORM WATER NETWORK\n"
+        + _long_row("A", head_a, 633, 1.0)
+        + "\n"
+        + _long_row("B", head_b, 12, 90.0),
+    ]
+    rows_a = _rows(texts, ask_a)
+    rows_b = _rows(texts, ask_b)
+    assert len(rows_a) == 1
+    assert mark_a in rows_a[0] and mark_b not in rows_a[0]
+    assert len(rows_b) == 1
+    assert mark_b in rows_b[0] and mark_a not in rows_b[0]
+
+
+@pytest.mark.parametrize(("head", "qty", "rate"), [
+    ("steel reinforcement", 12, 3100),
+    ("formwork to soffits", 30, 25),
+])
+def test_a_short_row_is_not_elided(head, qty, rate):
+    """A row that fits the two windows is returned whole: the compaction
+    never inserts a middle elision into a short row."""
+    text = f"A. |{head}\n| t {_figures(qty, rate)}"
+    rows = _rows([text], head)
+    assert len(rows) == 1
+    assert " ... " not in rows[0]
+
+
+
 @pytest.mark.parametrize("unit", ["nos", "Nos"])
 def test_a_count_column_unit_is_a_priced_row(unit):
     text = f"Gully grating\n{unit} 6 150.00 900.00"

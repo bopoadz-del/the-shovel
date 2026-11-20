@@ -137,9 +137,42 @@ class PlaybookFlow(BaseModel):
     steps: List[str] = Field(default_factory=list)
 
 
+class PlaybookAttribution(BaseModel):
+    """Licence credit a procedure must carry when its method is derived from
+    a licensed source. Absent for lineage-only (MIT / common-practice) text."""
+    licence: str
+    credit: str
+    link: Optional[str] = None
+    notice: Optional[str] = None
+
+
+class PlaybookProcedure(BaseModel):
+    """One skill playbook imported verbatim into a hat manifest (S-K1).
+
+    A procedure is guidance, never a formula binding or a number source; it
+    rides the prompt as text. The ``refusals`` field is the hard part of the
+    contract: every imported procedure states what it must NOT do."""
+    id: str
+    title: str
+    purpose: str
+    inputs: str
+    refusals: str
+    steps: List[str]
+    output: str
+    done_when: str
+    lineage: str
+    attribution: Optional[PlaybookAttribution] = None
+
+
 class Playbook(BaseModel):
     formulas: List[PlaybookFormula]
     flows: Optional[List[PlaybookFlow]] = None
+    #: Binding rules that govern every imported procedure of this hat
+    #: (the playbook file's preamble, carried verbatim).
+    rules: Optional[str] = None
+    #: Imported skill playbooks (S-K1). A procedure belongs to exactly one
+    #: hat; the base manifest carries none.
+    procedures: Optional[List[PlaybookProcedure]] = None
 
 
 # -- Main Manifest Model --------------------------------------------------
