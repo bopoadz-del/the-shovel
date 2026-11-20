@@ -41,7 +41,12 @@ def test_the_off_switch_decides_whether_the_heap_is_frozen(unfrozen, monkeypatch
     assert (got is not None) is frozen
     assert (gc.get_freeze_count() > 0) is frozen
     if frozen:
-        assert got == gc.get_freeze_count()
+        # The count can only fall after gc.freeze(): the temporaries the
+        # freeze call itself left alive (the off-switch string) deallocate
+        # once the call returns, so any later read is the same count or
+        # less. An exact == is therefore a race; >= is the stable invariant
+        # and still rejects a freeze that returned a smaller/zero count.
+        assert got >= gc.get_freeze_count()
     loop_watchdog.release_startup_heap()
     assert gc.get_freeze_count() == 0
 
