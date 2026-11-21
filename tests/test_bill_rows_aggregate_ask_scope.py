@@ -321,3 +321,41 @@ async def test_the_tool_scopes_by_the_ask_the_user_wrote(tmp_path, monkeypatch, 
     assert out["ok"] is True
     assert out["result"]["bills"][0]["count"] == count
 
+
+
+@pytest.mark.parametrize("ask, count, total", [
+    ("How many widgets are billed?", 2, 5.0),
+    ("How many widget are billed?", 2, 5.0),
+], ids=["plural-in-the-ask", "singular-in-the-ask"])
+def test_a_row_that_prints_an_item_in_the_plural_binds_the_ask_word(tmp_path, ask, count, total):
+    # The ask's words are folded when they are read, so the row's words are
+    # folded too: an ask that names the item in either number binds the rows
+    # that print it in either number, and the row that names another item
+    # stays out. Folding one side only would leave every row out.
+    rows = [
+        _row((BILL_NINE, OTHER, "Section A"), "", "A |widget assembly, nominal 40 mm", "m", "2", "1", "2"),
+        _row((BILL_NINE, OTHER, "Section A"), "", "B |widgets assembly, nominal 40 mm", "m", "3", "1", "3"),
+        _row((BILL_NINE, OTHER, "Section A"), "", "C |gadget assembly, nominal 40 mm", "m", "9", "1", "9"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
+    assert (out["count"], out["sum"]) == (count, total)
+    assert out["scope"]["item"] == ["widget"]
+
+
+@pytest.mark.parametrize("ask, count, total", [
+    ("How many widgets are billed?", 2, 5.0),
+    ("How many widget are billed?", 2, 5.0),
+], ids=["plural-in-the-ask", "singular-in-the-ask"])
+def test_a_word_the_document_prints_in_a_path_still_binds_a_plural_description(tmp_path, ask, count, total):
+    # The item word is printed in one row's heading path and in another row's
+    # description, which makes it an "either" word. The row that prints the
+    # plural in its description is inside that scope exactly as the row that
+    # prints it in its path is; the row that names another item is not.
+    rows = [
+        _row((BILL_NINE, "WIDGET BAY", "Section A"), "", "A |widget assembly, nominal 40 mm", "m", "2", "1", "2"),
+        _row((BILL_NINE, OTHER, "Section B"), "", "B |widgets assembly, nominal 40 mm", "m", "3", "1", "3"),
+        _row((BILL_NINE, OTHER, "Section B"), "", "C |gadget assembly, nominal 40 mm", "m", "9", "1", "9"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
+    assert (out["count"], out["sum"]) == (count, total)
+    assert out["scope"]["either"] == ["widget"]

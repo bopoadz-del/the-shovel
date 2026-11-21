@@ -293,9 +293,14 @@ class AskScope:
             return False
         if self.level and not self.level <= _row_path_words(row):
             return False
-        if self.item and not self.item <= _words(row.description):
+        # The scope's words are folded when they are read from the ask, so the
+        # row's words are folded the same way here: a row that prints an item
+        # in the plural binds a scope word written in either number. Grading
+        # one side folded and the other unfolded empties the item and either
+        # scopes on every ask whose noun the document prints with an "s".
+        if self.item and not self.item <= _desc_words(row):
             return False
-        if self.either and not (self.either & (_words(row.description) | _row_path_words(row))):
+        if self.either and not (self.either & (_desc_words(row) | _row_path_words(row))):
             return False
         return True
 
