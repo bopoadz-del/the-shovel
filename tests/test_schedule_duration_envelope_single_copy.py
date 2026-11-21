@@ -5,17 +5,27 @@ must come back as the standard calculation envelope (status / calculation /
 result / standard / provenance / certified) and it must exist once. These
 tests construct their own rows: no project, no document, no probe id, and no
 figure copied from a real bill. Every expected day count is computed by hand
-from the two numbers the test itself wrote.
+from the two numbers the test itself wrote, over two unrelated quantities and
+two unrelated production rates.
 """
 
 from __future__ import annotations
 
 import math
 
+import pytest
+
 from app.containers.construction import schedule as brief_schedule
 from app.lib import boq_schedule, pm_computations
 
 KERNEL = "productivity_manpower_duration"
+
+# Two unrelated quantity/rate pairs: a small area at a slow rate, and a large
+# volume at a fast one. Neither is a figure taken from any document.
+CASES = [
+    (480.0, 60.0, "m2"),
+    (1300.0, 250.0, "m3"),
+]
 
 
 def _hand_days(quantity: float, per_day_rate: float) -> int:
@@ -23,10 +33,23 @@ def _hand_days(quantity: float, per_day_rate: float) -> int:
     return math.ceil(quantity / per_day_rate)
 
 
-def test_the_duration_kernel_returns_the_standard_calculation_envelope():
-    quantity, rate_value = 480.0, 60.0
+def _row(quantity: float, rate_value: float, unit: str) -> dict:
+    return {
+        "item_key": f"T{int(quantity) % 97}.{int(rate_value) % 89}",
+        "description": "Work written by this test",
+        "unit": unit,
+        "quantity": quantity,
+        "productivity_rate": f"{rate_value:g} {unit} per gang-day",
+        "source": "row written by this test",
+    }
+
+
+@pytest.mark.parametrize("quantity,rate_value,unit", CASES)
+def test_the_duration_kernel_returns_the_standard_calculation_envelope(
+    quantity, rate_value, unit
+):
     days, error, envelope = pm_computations.duration_days_from_rate(
-        quantity, f"{rate_value:g} m2 per gang-day"
+        quantity, f"{rate_value:g} {unit} per gang-day"
     )
 
     assert error is None
@@ -39,36 +62,26 @@ def test_the_duration_kernel_returns_the_standard_calculation_envelope():
     assert envelope["standard"] != "none declared"
 
 
-def test_a_row_that_states_its_rate_gets_its_duration_from_that_one_kernel():
-    quantity, rate_value = 300.0, 50.0
-    row = {
-        "item_key": "E1.1",
-        "description": "Excavate trench for drainage",
-        "unit": "m3",
-        "quantity": quantity,
-        "productivity_rate": f"{rate_value:g} m3 per gang-day",
-        "source": "row written by this test",
-    }
-
-    days, basis, envelope = boq_schedule.boq_row_duration(row)
+@pytest.mark.parametrize("quantity,rate_value,unit", CASES)
+def test_a_row_that_states_its_rate_gets_its_duration_from_that_one_kernel(
+    quantity, rate_value, unit
+):
+    days, basis, envelope = boq_schedule.boq_row_duration(
+        _row(quantity, rate_value, unit)
+    )
 
     assert days == _hand_days(quantity, rate_value)
     assert basis.startswith("estimated")
     assert envelope["provenance"] == "kernel"
 
 
-def test_the_outline_activity_carries_the_kernel_badge_it_was_computed_with():
-    quantity, rate_value = 120.0, 40.0
-    row = {
-        "item_key": "D1.2",
-        "description": "Remove reinforced concrete slab",
-        "unit": "m3",
-        "quantity": quantity,
-        "productivity_rate": f"{rate_value:g} m3 per gang-day",
-        "source": "row written by this test",
-    }
-
-    activities = boq_schedule.activities_from_boq_scope_outline([row])
+@pytest.mark.parametrize("quantity,rate_value,unit", CASES)
+def test_the_outline_activity_carries_the_kernel_badge_it_was_computed_with(
+    quantity, rate_value, unit
+):
+    activities = boq_schedule.activities_from_boq_scope_outline(
+        [_row(quantity, rate_value, unit)]
+    )
 
     assert len(activities) == 1
     activity = activities[0]
@@ -80,15 +93,16 @@ def test_the_outline_activity_carries_the_kernel_badge_it_was_computed_with():
     assert activity["duration_certified"] is False
 
 
-def test_a_row_without_a_rate_keeps_the_three_part_contract():
+@pytest.mark.parametrize("quantity,unit", [(100.0, "m3"), (40.5, "m2")])
+def test_a_row_without_a_rate_keeps_the_three_part_contract(quantity, unit):
     """No stated rate: the norm branch answers with the same (days, basis,
     envelope) shape, and the basis says which case it is. It never invents a
     day count and never stamps a badge it did not earn."""
     row = {
-        "item_key": "Z9.9",
+        "item_key": f"Z9.{int(quantity)}",
         "description": "Work described only by this sentence",
-        "unit": "m3",
-        "quantity": 100.0,
+        "unit": unit,
+        "quantity": quantity,
         "source": "row written by this test",
     }
 
