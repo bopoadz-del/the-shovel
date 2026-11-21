@@ -527,3 +527,129 @@ def test_a_bracketed_note_number_in_the_answer_survives(client):
     assert any("Clause [14] governs sealing." in t for t in texts), texts
     assert not any("Pavement Joint Layout" in t for t in texts[: texts.index("Sources")]), texts
     _sources_at_end(texts, ("Pavement Joint Layout.pdf, p. 2",))
+
+
+# ── (5) a question the document asks stays; only a closing offer goes ───────
+#
+# #395 follow-up (3): the strip used to drop ANY figure-free last line ending
+# in a question mark. A document's own last question is content. Each answer
+# below ends in one, written in a different structural position; on the old
+# rule every one of them lost its last line.
+
+DOCUMENT_QUESTIONS = {
+    "list_item": (
+        "## Roof Hatch Open Points\n\n"
+        "The hatch position is not shown on the roof plan.\n\n"
+        "- Who supplies the hatch frame?\n"
+        "- Is a guard rail required around the hatch?",
+        "Roof Hatch Open Points",
+        ("Who supplies the hatch frame?", "Is a guard rail required around the hatch?"),
+    ),
+    "section_content": (
+        "## Outfall Review\n\n"
+        "The outfall invert is taken from the topographic survey.\n\n"
+        "## Question for the Engineer\n\n"
+        "Is the outfall to discharge into the existing culvert?",
+        "Outfall Review",
+        ("Is the outfall to discharge into the existing culvert?",),
+    ),
+    "continues_paragraph": (
+        "## Membrane Laps\n\n"
+        "The membrane laps are taped on the flat areas.\n"
+        "Are the laps also heat-welded at the upstands?",
+        "Membrane Laps",
+        ("Are the laps also heat-welded at the upstands?",),
+    ),
+    "several_sentences": (
+        "## Tender Security\n\n"
+        "The instructions to tenderers call for a bid bond.\n\n"
+        "The form of the bond is set out in the instructions. "
+        "Is a parent company guarantee accepted in its place?",
+        "Tender Security",
+        ("Is a parent company guarantee accepted in its place?",),
+    ),
+    "run_of_questions": (
+        "## Pour Inspection Checklist\n\n"
+        "The inspector signs each line before the pour.\n\n"
+        "Was the cover to the reinforcement checked?\n\n"
+        "Were the spacers fixed at the agreed centres?",
+        "Pour Inspection Checklist",
+        ("Was the cover to the reinforcement checked?", "Were the spacers fixed at the agreed centres?"),
+    ),
+    "arabic_section_content": (
+        "## مراجعة فتحة السطح\n\n"
+        "موقع الفتحة غير مبين في مخطط السطح.\n\n"
+        "## سؤال للمهندس\n\n"
+        "هل يشمل نطاق المقاول توريد إطار الفتحة؟",
+        "مراجعة فتحة السطح",
+        ("هل يشمل نطاق المقاول توريد إطار الفتحة؟",),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(DOCUMENT_QUESTIONS))
+@pytest.mark.parametrize("fmt", ["docx", "xlsx"])
+def test_a_question_the_document_asks_stays_in_its_body(client, fmt, case):
+    answer, title, questions = DOCUMENT_QUESTIONS[case]
+    headers = _register(client, f"docq-{fmt}-{case}")
+    pid = _project(client, headers, f"W2a-docq-{fmt}-{case}-{_RUN}")
+    cid = f"ws-{pid}-1000"
+    _turn(cid, pid, "Put this in a document I can download", answer)
+
+    texts = _texts(fmt, _export(client, headers, pid, cid, fmt).content)
+    body = texts[: len(texts) - 1 - texts[::-1].index("Sources")]
+
+    assert texts[0] == title, texts[:2]
+    for q in questions:
+        assert any(q in t for t in body), f"the document's own question {q!r} was stripped:\n{body}"
+
+
+#: A closing offer written in a script the answer contract has no words for:
+#: only its structure (a one-sentence question set apart below the body) can
+#: remove it.
+FRENCH_OFFER_ANSWER = (
+    "## Ordre des coulages\n\n"
+    "Le coulage de la baie A précède celui de la baie C.\n\n"
+    "Voulez-vous que je prépare aussi le planning des décoffrages ?"
+)
+
+
+@pytest.mark.parametrize("fmt", ["docx", "xlsx"])
+def test_a_closing_offer_set_apart_below_the_body_still_leaves(client, fmt):
+    headers = _register(client, f"offer-fr-{fmt}")
+    pid = _project(client, headers, f"W2a-offer-fr-{fmt}-{_RUN}")
+    cid = f"ws-{pid}-1000"
+    _turn(cid, pid, "Mettez l'ordre des coulages dans un document", FRENCH_OFFER_ANSWER)
+
+    texts = _texts(fmt, _export(client, headers, pid, cid, fmt).content)
+    body = texts[: len(texts) - 1 - texts[::-1].index("Sources")]
+
+    assert texts[0] == "Ordre des coulages", texts[:2]
+    assert any("Le coulage de la baie A précède celui de la baie C." in t for t in body), body
+    assert not any("Voulez-vous" in t for t in body), f"the closing offer is left in the body:\n{body}"
+
+
+@pytest.mark.parametrize("lines, offer", [
+    (["Body text.", "", "Shall we go on?"], True),
+    (["Body text.", "Shall we go on?"], False),
+    (["Shall we go on?"], False),
+    (["## Heading", "", "Shall we go on?"], False),
+    (["**Heading**", "", "Shall we go on?"], False),
+    (["Was it checked?", "", "Shall we go on?"], False),
+    (["Body text.", "", "- Shall we go on?"], False),
+    (["Body text.", "", "1. Shall we go on?"], False),
+    (["Body text.", "", "> Shall we go on?"], False),
+    (["Body text.", "", "| Shall we go on? |"], False),
+    (["Body text.", "", "**Shall we go on?**"], False),
+    (["Body text.", "", "It is set. Shall we go on?"], False),
+    (["Body text.", "", "Shall we pour 2 bays?"], False),
+    (["Body text.", "", "Shall we go on"], False),
+    (["Body text.", "", "", "Shall we go on?"], True),
+    (["", "Shall we go on?"], False),
+    ([], False),
+    # A bracketed number held out of the contract run is a reference, not a
+    # figure: the offer still leaves.
+    (["Body text.", "", f"Shall we check note {exports._HELD_OPEN}3{exports._HELD_CLOSE}?"], True),
+])
+def test_closing_offer_structure_rule(lines, offer):
+    assert exports._is_closing_offer(list(lines)) is offer, lines
