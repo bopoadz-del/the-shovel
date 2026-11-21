@@ -54,6 +54,66 @@ def _size_for(seconds: float) -> int:
     return n
 
 
+#: A switch interval no hold in this file comes near: while it is set, a
+#: thread that has the GIL keeps it until it blocks, and is never preempted.
+_NO_FORCED_SWITCH_S = 30.0
+#: Voluntary GIL releases the holder makes after raising the interval and
+#: before it may start the hold. A thread already waiting for the GIL when the
+#: interval changed keeps the old (short) interval for that wait; each of
+#: these sleeps hands the GIL to such a waiter, so they are all served first.
+_SETTLE_SLEEPS = 8
+
+
+def hold_while_timer_in_force(monkeypatch):
+    """A worker's hold that begins ONLY while the live timer is in force.
+
+    The monitor has two stretches with no timer pending (advisor 1315Z, 21
+    Nov; documented blind spot): from the ``cancel`` after a served heartbeat
+    to the sleep's ``arm``, and from the sleep's ``cancel`` to the next
+    post's ``arm``. A hold that begins there is invisible by design (max_lag
+    0, stalls 0, no dump), so a test that lets its hold land anywhere fails
+    on timing, not on the product. This places the hold, it does not move
+    the windows: every ``arm`` and ``cancel`` is recorded (an arm after it
+    returns, a cancel before it starts, so a doubt always reads "not in
+    force"), and the hold begins with the GIL held continuously from the
+    check that the last event was an ``arm``. Holding it continuously is the
+    switch interval's job: raised for the placement and the hold, restored
+    the moment the hold returns. The hold's length, the monitor and every
+    assertion are untouched."""
+    events: list = []
+    real_arm, real_cancel = loop_watchdog.LiveDump.arm, loop_watchdog.LiveDump.cancel
+
+    def arm(self, after_s=None):
+        real_arm(self, after_s)
+        if self.active:
+            events.append("arm")
+
+    def cancel(self):
+        if self.active:
+            events.append("cancel")
+        real_cancel(self)
+
+    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
+    monkeypatch.setattr(loop_watchdog.LiveDump, "cancel", cancel)
+
+    def hold(n: int, timeout_s: float = 5.0) -> None:
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(_NO_FORCED_SWITCH_S)
+        try:
+            for _ in range(_SETTLE_SLEEPS):
+                time.sleep(0.001)
+            deadline = time.monotonic() + timeout_s
+            while not events or events[-1] != "arm":
+                assert time.monotonic() < deadline, f"the timer was never in force: {events[-5:]}"
+                time.sleep(0.001)
+            # No call between the check and the hold releases the GIL.
+            _gil_holding_call(n)
+        finally:
+            sys.setswitchinterval(old)
+
+    return hold
+
+
 def unjustified_reads(events: list, after_s: float) -> list:
     """Each dump-file read (``"take"``) whose round cannot have lasted
     ``after_s``. ``events`` is the monitor thread's ``("cancel"|"take", t)``
@@ -155,11 +215,12 @@ def test_the_child_verdict_names_each_way_a_child_can_end(rc, expected):
 
 @pytest.mark.parametrize("hold", [True, False])
 @own_process
-def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(hold):
+def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(monkeypatch, hold):
     """A worker thread holds the GIL inside one C call while the loop waits.
     The live dump (C timer, no GIL) shows the worker IN that call; with no
     such call there is no live dump at all."""
     n = _size_for(0.6) if hold else 0
+    held = hold_while_timer_in_force(monkeypatch)
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
@@ -170,7 +231,7 @@ def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(hold):
         done, release = threading.Event(), threading.Event()
 
         def work():
-            _gil_holding_call(n)
+            held(n)
             done.set()
             release.wait(5)
 
@@ -239,6 +300,34 @@ def test_a_gil_hold_that_begins_while_the_monitor_sleeps_is_not_invisible(hold):
         assert "_gil_holding_call" in mon.live_dumps[0][1]
     else:
         assert mon.max_wake_late_ms < 150 and mon.live_dumps == []
+
+
+@pytest.mark.parametrize("cancelled,starts_at_once", [(False, True), (True, False)])
+@own_process
+def test_a_placed_hold_begins_only_while_the_timer_is_in_force(monkeypatch, cancelled, starts_at_once):
+    """The placement the hold tests rely on: after a cancel the hold waits
+    for the next arm; after an arm it starts at once. The switch interval
+    is the caller's again once the hold returns."""
+    held = hold_while_timer_in_force(monkeypatch)
+    started = threading.Event()
+    monkeypatch.setattr(sys.modules[__name__], "_gil_holding_call", lambda n: started.set())
+    interval = sys.getswitchinterval()
+    live = loop_watchdog.LiveDump(30_000.0)  # in force, never fires here
+    try:
+        assert live.active
+        live.arm()
+        if cancelled:
+            live.cancel()
+        worker = threading.Thread(target=held, args=(0,))
+        worker.start()
+        assert started.wait(0.5) is starts_at_once
+        live.arm()
+        assert started.wait(5)
+        worker.join(5)
+        assert not worker.is_alive()
+    finally:
+        live.close()
+    assert sys.getswitchinterval() == interval
 
 
 @pytest.mark.parametrize("first_closed,second_active", [(False, False), (True, True)])
@@ -322,6 +411,7 @@ def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(mon
 
     monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
     n = _size_for(0.6) if hold else 0
+    held = hold_while_timer_in_force(monkeypatch)
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
@@ -330,7 +420,7 @@ def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(mon
         done, release = threading.Event(), threading.Event()
 
         def work():
-            _gil_holding_call(n)
+            held(n)
             done.set()
             release.wait(5)
 
@@ -588,6 +678,7 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
     reads nothing, so a quiet monitor never hands the GIL over unwatched; a
     round the hold made late is read and names the holder."""
     n = _size_for(0.6) if hold else 0
+    held = hold_while_timer_in_force(monkeypatch)
     events: list = []
     armed = threading.Event()
     real_take, real_cancel, real_arm = (
@@ -635,7 +726,7 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
             # (a hold begun in the unarmed gap between two heartbeats is
             # invisible: no heartbeat is in flight and no timer is armed).
             assert armed.wait(5), "the monitor never armed its timer"
-            _gil_holding_call(n)
+            held(n)
             done.set()
             release.wait(5)
 
