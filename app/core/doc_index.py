@@ -2068,7 +2068,7 @@ def _page_key(text: str) -> str:
 
 
 def _later_line_probe(
-    chunk: str, key: str, skeleton: str, cursor: int, probe_len: int,
+    chunk: str, key: str, skeleton: str, floor: int, probe_len: int,
 ) -> int:
     """Where a chunk's first source line after a synthetic lead starts.
 
@@ -2076,9 +2076,10 @@ def _later_line_probe(
     a re-serialised ``key: value`` lead). The chunk's leading characters then
     match nothing, while its later lines are verbatim source text. Probes
     those line starts in order and returns a hit only when it is unique at or
-    after ``cursor``: a window that occurs again later, or only before the
-    previous chunk, cannot place this chunk in reading order and is skipped.
-    -1 when no later line is locatable (the caller keeps None).
+    after ``floor`` (the previous chunk's own start): a window that occurs
+    again later, or only before the previous chunk, cannot place this chunk
+    in reading order and is skipped. -1 when no later line is locatable (the
+    caller keeps None).
     """
     windows: list[str] = []
     offset = 0
@@ -2089,7 +2090,7 @@ def _later_line_probe(
     for probe in windows:
         if len(probe) < _MIN_CHUNK_PAGE_PROBE_CHARS:
             continue
-        at = skeleton.find(probe, cursor)
+        at = skeleton.find(probe, floor)
         if at < 0 or skeleton.find(probe, at + 1) >= 0:
             continue
         return at
@@ -2107,8 +2108,9 @@ def chunk_start_pages(
     in ``text`` (recorded by PDF extraction). Each chunk's leading letters and
     digits are located in the same projection of ``text``, searching forward
     from the previous chunk so a repeated running header resolves to the
-    occurrence in reading order. A chunk whose lead the source does not hold
-    (a stage's label or re-serialised lead) is located by its first later
+    occurrence in reading order, and never before the previous chunk's own
+    start -- pages only move forward. A chunk whose lead the source does not
+    hold (a stage's label or re-serialised lead) is located by its first later
     line that does. A chunk that cannot be located at all (synthesized
     summaries) gets None rather than a guess.
     """
@@ -2135,6 +2137,11 @@ def chunk_start_pages(
     skeleton = "".join(keys)
     probe_len = chunk_page_probe_chars()
     out: list[int | None] = []
+    # ``floor`` is the previous chunk's own start: no chunk may be placed
+    # before it. ``cursor`` is where this chunk's text is looked for first --
+    # after the previous chunk's first half -- and may sit past a chunk that
+    # starts inside that half (overlap), so a miss retries from ``floor``.
+    floor = 0
     cursor = 0
     for chunk in chunks:
         raw = chunk or ""
@@ -2145,18 +2152,14 @@ def chunk_start_pages(
             continue
         at = skeleton.find(probe, cursor)
         if at < 0:
-            at = skeleton.find(probe)
+            at = skeleton.find(probe, floor)
         if at < 0:
-            at = _later_line_probe(raw, key, skeleton, cursor, probe_len)
+            at = _later_line_probe(raw, key, skeleton, floor, probe_len)
             if at < 0:
                 out.append(None)
                 continue
-            out.append(pages[bisect.bisect_right(key_pos, at) - 1])
-            cursor = at
-            continue
         out.append(pages[bisect.bisect_right(key_pos, at) - 1])
-        # The next chunk starts after this one's first half: overlap carries
-        # at most a short tail forward, never half a chunk.
+        floor = at
         cursor = at + len(key) // 2
     return out
 
