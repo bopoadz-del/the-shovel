@@ -81,6 +81,31 @@ fi
 BASE_ARGS=()
 [ -n "${FORK_BASE_URL:-}" ] && BASE_ARGS=(--base "$FORK_BASE_URL")
 
+# --- readiness gate: /ready before any chat turn ---
+# A build that cannot reach its database, serve its embedder or reach an LLM
+# answers /ready with 503. Every chat turn against it fails for that one
+# reason, so the smoke stops here and names it instead of printing N
+# degenerate runs. The base is fork_cli's own (FORK_BASE_URL or its
+# default); the decision is scripts/ready_probe.py's (two attempts, any 200
+# passes), the same rule the scheduled /ready watch pages on.
+READY_BASE="$(cd "$SCRIPT_DIR" && "$PYTHON_BIN" -c 'import fork_cli; print(fork_cli.DEFAULT_BASE)')"
+READY_BASE="${READY_BASE%/}"
+ready_statuses=()
+for attempt in 1 2; do
+  code="$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$READY_BASE/ready")"
+  ready_statuses+=("${code:-0}")
+  [ "${code:-0}" = "200" ] && break
+  [ "$attempt" -lt 2 ] && sleep "${SMOKE_READY_RETRY_S:-5}"
+done
+ready_args=()
+for code in "${ready_statuses[@]}"; do ready_args+=(--status "$code"); done
+if ! "$PYTHON_BIN" "$SCRIPT_DIR/ready_probe.py" --attempts "${#ready_statuses[@]}" "${ready_args[@]}"; then
+  echo "READY: FAIL  ($READY_BASE/ready observed ${ready_statuses[*]}; no chat turn sent)"
+  echo "VERDICT: FAIL  (/ready not 200)"
+  exit 1
+fi
+echo "READY: OK  ($READY_BASE/ready observed ${ready_statuses[*]})"
+
 # Tool-run threshold scales with N: 1 for the routine N=3 smoke, 3 for N=10.
 tool_needed=$(( RUNS * 3 / 10 ))
 [ "$tool_needed" -lt 1 ] && tool_needed=1
