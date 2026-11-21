@@ -835,24 +835,29 @@ def _replaced_stated(
         rf"(?P<unit>{re.escape(unit)}|{_UNIT_TOKEN})(?![A-Za-z0-9])",
         re.IGNORECASE,
     )
-
-    def _swap(line: str) -> str:
-        done = 0
-
-        def _one(match: re.Match[str]) -> str:
-            nonlocal done
-            token = match.group("unit")
-            if done >= _MAX_REPLACEMENTS or not _same_unit(token, unit):
-                return match.group(0)
-            done += 1
-            return f"{computed} {token}"
-
-        return pattern.sub(_one, line)
-
     return [
-        line if offset == skip_line else _swap(line)
+        line if offset == skip_line else _swapped_line(line, pattern, computed, unit)
         for offset, line in enumerate(lines)
     ]
+
+
+def _swapped_line(line: str, pattern: re.Pattern[str], computed: str, unit: str) -> str:
+    """``line`` with each figure ``pattern`` finds in the column's unit replaced.
+
+    A match whose unit token names another unit (``m2`` under a length column)
+    is kept as printed; at most ``_MAX_REPLACEMENTS`` figures are replaced.
+    """
+    parts: list[str] = []
+    last = done = 0
+    for match in pattern.finditer(line):
+        token = match.group("unit")
+        if done >= _MAX_REPLACEMENTS or not _same_unit(token, unit):
+            continue
+        parts.extend((line[last:match.start()], f"{computed} {token}"))
+        last = match.end()
+        done += 1
+    parts.append(line[last:])
+    return "".join(parts)
 
 
 def _summary(correction: Correction, computed_text: str) -> str:
