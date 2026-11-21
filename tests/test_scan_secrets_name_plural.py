@@ -92,8 +92,8 @@ CONTROLS = [
     ("an irregular plural after an initial", f"Q. {LAST}ses crew mobilised"),
     ("-es only follows a word ending in s", f"Q. {LAST}es crew mobilised"),
     ("a lower-case plural is not a written name", f"{LAST.lower()}s' crew, {FIRST}"),
-    ("a plural of another name", f"Q. Ashdowns crew mobilised"),
-    ("a possessive of another name", f"Q. Rate's crew mobilised"),
+    ("a plural of another name", "Q. Ashdowns crew mobilised"),
+    ("a possessive of another name", "Q. Rate's crew mobilised"),
 ]
 
 
