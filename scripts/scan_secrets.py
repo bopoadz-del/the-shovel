@@ -696,7 +696,14 @@ _NAME_SEPARATORS = frozenset(
 # Punctuation a word may be wrapped in by a sentence and still be that word.
 # An interior apostrophe is NOT here: it makes the token not a name word at
 # all, which breaks the run instead of guessing at the apostrophe's meaning.
-_EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’"
+_EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’\u060c\u3001\uff0c"
+# The comma, as each script that has one spells it: the inverted listing form
+# ``Surname, Given`` is how a byline, an index entry and a table cell write a
+# name. A comma separates entries; it does not end one, so it does not end a
+# run of name words. Every other closing mark does. The Arabic, ideographic
+# and fullwidth commas are the same mark in another script and are stripped as
+# edge punctuation for that reason.
+_ENTRY_COMMA = frozenset(",\u060c\u3001\uff0c")
 # The shape of a name word is a property of the alphabet, not of ASCII: a
 # name written in Cyrillic, Greek or Armenian is spelled with a capital at
 # every word exactly as a Latin one is, and a rule that only recognises the
@@ -746,6 +753,25 @@ def _is_name_word(word: str) -> bool:
     document happens to use cannot decide whether a name is hidden.
     """
     return _is_titlecase_word(word) or _is_capitalised_word(word)
+
+
+def _keeps_run(shape: str, core: str) -> bool:
+    """True when what wraps ``core`` leaves the run of name words open.
+
+    A word with nothing written after it keeps the run open, and so does the
+    dot of an initial -- the dot belongs to the letter. A word closed by a
+    comma keeps it open too: in the inverted listing form the comma stands
+    between the surname and the given name, and reading it as a sentence
+    break loses the name exactly where a document prints it most formally.
+    Every other closing mark ends the entry.
+    """
+    start = shape.find(core) if core else 0
+    trailing = shape[start + len(core):]
+    if not trailing:
+        return True
+    if trailing == "." and _is_initial(core):
+        return True
+    return all(char in _ENTRY_COMMA for char in trailing)
 
 
 def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
@@ -832,21 +858,23 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
             # word order but the literal one.
             shape = shape.translate(_CONFUSABLE)
         core = shape.strip(_EDGE_PUNCTUATION)
-        # The dot of an initial belongs to the initial; the dot of a full stop
-        # closes the sentence and so closes the run.
-        bare = core == shape or (shape == core + "." and _is_initial(core))
-        words.append((origin[index], core, bool(bare)))
+        words.append((origin[index], core, _keeps_run(shape, core)))
         index = end
     runs: list[tuple[int, list[str]]] = []
     current: list[str] = []
     start = 0
-    for offset, core, bare in words:
-        if _is_name_word(core):
+    for offset, core, keeps in words:
+        if core and _is_name_word(core):
             if not current:
                 start = offset
             current.append(fold_for_match(core))
-            if bare:
+            if keeps:
                 continue
+        elif not core and keeps:
+            # A token made only of separating marks -- a comma standing
+            # between two spaces -- carries no word at all, so it neither
+            # joins the run nor ends it.
+            continue
         if len(current) >= 2:
             runs.append((start, current))
         current = []
