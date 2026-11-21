@@ -101,29 +101,24 @@ def test_m05_raft_volume_then_crews_and_duration(dims, rate, days, hours, volume
     assert crew["crew_days"] / crew["crews_required_rounded_up"] == pytest.approx(duration, rel=_REL)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect (wrong number): crew_sizing man_hours = crew-days x hours ignores the "
-    "persons per crew; the request gives a crew of 6, so man-hours = 2 x 10 x 6 x 10 = 1,200, "
-    "the formula returns 20 x 10 = 200"))
 @pytest.mark.parametrize("q, days, rate, hours, size, man_hours", [
-    (640, 10, 32, 10, 6, 1_200.0),  # crews 2 x 10 d x 6 persons x 10 h = 1,200
-    (300, 6, 25, 8, 5, 480.0),      # crews 2 x 6 d x 5 persons x 8 h = 480
+    (640, 10, 32, 10, 6, 1_200.0),  # crew-days 20 x 6 persons x 10 h = 1,200
+    (300, 6, 25, 8, 5, 480.0),      # crew-days 12 x 5 persons x 8 h = 480
 ])
 def test_m05_man_hours_count_every_person_in_the_crew(q, days, rate, hours, size, man_hours):
+    # A crew-day is a crew of N persons working h hours: man-hours carry N.
     crew = _ok("crew_sizing", {"quantity": q, "duration_days": days, "rate_per_crew_day": rate,
                                "hours_per_day": hours, "crew_size": size})
     assert crew["man_hours"] == pytest.approx(man_hours, rel=_REL)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect (input meaning): crew_sizing labels crew_size 'crew size' (persons) but "
-    "computes duration_for_crews = Q / (R x crew_size), i.e. reads it as a NUMBER of crews; "
-    "with a crew of 6 persons and 2 crews the raft takes 10 d, the formula returns 3.33"))
 @pytest.mark.parametrize("q, days, rate, size, duration", [
-    (640, 10, 32, 6, 10.0),  # 2 crews (rounded) -> 640 / (32 x 2) = 10 d
-    (300, 6, 25, 5, 6.0),    # 2 crews -> 300 / (25 x 2) = 6 d
+    (640, 10, 32, 6, 10.0),  # 20 crew-days / the 2 whole crews needed = 10 d; 6 is the headcount
+    (300, 6, 25, 5, 6.0),    # 12 crew-days / the 2 whole crews needed = 6 d
 ])
 def test_m05_duration_for_crews_does_not_read_persons_as_crews(q, days, rate, size, duration):
+    # crew_size is the headcount in one crew, never a number of crews; the
+    # duration comes from the whole crew count the stated duration needs.
     crew = _ok("crew_sizing", {"quantity": q, "duration_days": days, "rate_per_crew_day": rate,
                                "hours_per_day": 10, "crew_size": size})
     assert crew["duration_for_crews"] == pytest.approx(duration, rel=_REL)
