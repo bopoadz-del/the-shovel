@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -606,12 +606,18 @@ async def _stream_from_predefined(
     deliverable: Optional[bool] = None,
     emit_start: bool = True,
     conversation_id: Optional[str] = None,
+    fallback: Optional[Callable[[], AsyncIterator[str]]] = None,
 ):
     """Run the orchestrator's predefined reasoning for a known workflow and
     yield SSE events (same shape as the heavy path). Intent-gated: a question
     streams an inline answer; a 'produce' request also carries an export offer
     pointing at the render endpoint. ``emit_start`` is False when the caller
-    (the orchestrator front door) already emitted the ``start`` event."""
+    (the orchestrator front door) already emitted the ``start`` event.
+
+    ``fallback`` is the caller's own agent stream. When the workflow ran and
+    built nothing (``built`` False: its renderer has only a "could not build"
+    line), the turn is handed to it instead, so every part of the request the
+    agent can compute is still computed and shown."""
     rid = get_request_id()
     if emit_start:
         yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'mode': 'predefined', 'request_id': rid})}\n\n"
@@ -711,6 +717,13 @@ async def _stream_from_predefined(
 
     if not out.get("handled"):
         yield f"data: {json.dumps({'type': 'error', 'message': 'workflow not handled', 'request_id': rid})}\n\n"
+        return
+
+    if out.get("built") is False and fallback is not None:
+        logger.info("predefined_built_nothing action=%s steps=%s -> agent",
+                    action, "; ".join(out.get("unbuilt_reasons") or [])[:400])
+        async for chunk in fallback():
+            yield chunk
         return
 
     answer = out.get("answer") or "(no answer produced)"
@@ -991,12 +1004,32 @@ async def _predispatch_concurrent_stream(
             if not merged.get("duration_overrides"):
                 from app.lib.wbs_duration_overrides import collect_overrides
                 merged["duration_overrides"] = collect_overrides(prompt, history=history) or None
+
+            async def _assistant_after_unbuilt_workflow():
+                # The speculative call was cancelled for the redirect; a
+                # workflow that built nothing gives the turn back to it.
+                try:
+                    async for a_evt in agent.chat_stream(
+                        prompt, history=history, project_id=resolved_pid,
+                        conversation_id=conversation_id, user_id=user_id,
+                        attached_documents=attached_docs,
+                    ):
+                        if a_evt.get("type") == "token":
+                            turn_timing.first_token()
+                        yield f"data: {json.dumps(a_evt, default=str)}\n\n"
+                        await asyncio.sleep(0)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("assistant stream after unbuilt workflow failed: %s", e)
+                    _report_sse_llm_failure(str(e), path="/v1/chat/stream")
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'The assistant is temporarily unavailable. Please try again.', 'request_id': rid})}\n\n"
+
             async for evt in _stream_from_predefined(
                 action=intent["action"], user_message=prompt,
                 project_id=project_id, user_id=user_id, session_id=session_id,
                 document_ids=document_ids, params=merged,
                 deliverable=intent.get("deliverable"), emit_start=False,
                 conversation_id=conversation_id,
+                fallback=_assistant_after_unbuilt_workflow,
             ):
                 yield evt
             return
