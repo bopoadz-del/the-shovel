@@ -1137,6 +1137,39 @@ def _without_markup_marks(text: str) -> str:
     return text
 
 
+# A label and the name it introduces are often written with no space between
+# them -- ``by:Q. Surname``, ``and/Surname, Given``, ``owner=Surname, Q.`` --
+# and the tokeniser, which splits only on the separators a name is written
+# with, reads the label, the joiner and the first name word as one token. That
+# token is name-shaped in no case at all, so the name it carries is lost in
+# every spelling but the literal one.
+#
+# In prose such a joiner, written between a plain word and a capital, ends the
+# word before it: the token is cut right after the joiner, and the two words
+# are read exactly as they would be had a space been written after it. The
+# joiner stays on the left-hand word as a closing mark, so that word ends its
+# run and no two words are ever joined across a joiner; the word after it can
+# now open a run of its own. The left-hand side must be letters only from the
+# token's start, so a path, an address or a link destination (which opens with
+# a mark or carries one before its last joiner) is cut nowhere.
+_WELD_MARKS = frozenset(":/=|+&")
+
+
+def _welded_word_end(text: str, start: int, end: int) -> int:
+    """Where the token ``text[start:end]`` ends when a joiner welds two words."""
+    at = start
+    while at < end and text[at].isalpha():
+        at += 1
+    if (
+        at > start
+        and at + 1 < end
+        and text[at] in _WELD_MARKS
+        and text[at + 1].isupper()
+    ):
+        return at + 1
+    return end
+
+
 def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
     """Maximal runs of name-shaped words, each with the offset it starts at.
 
@@ -1163,6 +1196,8 @@ def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
     prose (``prose``) -- the formats ``is_prose`` names, and only those. A
     task-list item's box and an html tag's delimiters are prose layout of the
     same kind and are blanked under the same gate (``_without_markup_marks``).
+    A label welded to the name it introduces by a joiner (``by:Q. Surname``)
+    is cut right after the joiner under the same gate (``_welded_word_end``).
 
     Invisible characters are deleted, not treated as separators: a soft
     hyphen pushed into the middle of a surname leaves one word to a reader,
@@ -1194,6 +1229,8 @@ def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
         end = index + 1
         while end < length and clean[end] not in _NAME_SEPARATORS:
             end += 1
+        if prose:
+            end = _welded_word_end(clean, index, end)
         mark = _link_mark_at(clean, index, end)
         resume = end
         if mark is not None:
