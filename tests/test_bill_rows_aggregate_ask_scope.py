@@ -64,14 +64,17 @@ def test_a_size_is_compared_as_numbers_not_as_words(tmp_path, ask, size, count, 
 
 
 @pytest.mark.parametrize("ask, count, total", [
-    ("How many 1.2 x 1.2 m chambers are billed?", 2, 5.0),
-    ("How many 1300 x 1300 mm chambers are billed?", 1, 3.0),
-], ids=["metres-ask", "millimetres-ask"])
+    ("How many 0.45 x 0.45 m chambers are billed?", 1, 2.0),
+    ("How many 1.2 x 1.2 m chambers are billed?", 2, 6.0),
+], ids=["ask-in-metres", "larger-chamber"])
 def test_a_dimension_is_read_in_the_unit_it_states(tmp_path, ask, count, total):
+    # The same physical size written in millimetres on the row and in metres in
+    # the ask is one size. A size cell printed with no unit at all is read in
+    # the unit its own magnitude allows.
     rows = [
-        _row((BILL_NINE, NET, "Chambers"), "", "A |Size 1200 x 1200 mm, depth 1.5-2.0m", "No", "2", "1", "2"),
-        _row((BILL_NINE, NET, "Chambers"), "", "B |Size 1.2 x 1.2m, depth 2.0-2.5m", "No", "3", "1", "3"),
-        _row((BILL_NINE, NET, "Chambers"), "", "C |Size 1300 x 1300 mm, depth 2.5-3.0m", "No", "3", "1", "3"),
+        _row((BILL_NINE, NET, "Chambers"), "", "A |Size 450 x 450 mm, depth 1.5-2.0m", "No", "2", "1", "2"),
+        _row((BILL_NINE, NET, "Chambers"), "", "B |Size 1200 x 1200 mm, depth 2.0-2.5m", "No", "3", "1", "3"),
+        _row((BILL_NINE, NET, "Chambers"), "", "C |Size 1200 x 1200, depth 2.5-3.0m", "No", "3", "1", "3"),
         _row((BILL_NINE, NET, "Chambers"), "", "D |Size 1.5 x 1.5m, depth 3.0-3.5m", "No", "4", "1", "4"),
     ]
     out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
@@ -245,3 +248,4 @@ async def test_the_tool_scopes_by_the_ask_the_user_wrote(tmp_path, monkeypatch, 
     ))
     assert out["ok"] is True
     assert out["result"]["bills"][0]["count"] == count
+
