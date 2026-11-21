@@ -134,20 +134,35 @@ def test_no_user_tail_forces_nothing(messages):
     assert rt._forced_specific_tool(messages, AVAILABLE) is None
 
 
-@requires_construction_kit
+def _record_detector_calls(monkeypatch) -> list:
+    """Replace the forecaster's detector with a recorder: a guard that holds
+    returns before any candidate detector is consulted."""
+    seen: list = []
+
+    def _rec(text):
+        seen.append(text)
+        return True
+
+    monkeypatch.setattr(rt, "_message_wants_cash_flow_forecast", _rec)
+    return seen
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", TOTAL_ASKS)
 async def test_inspection_request_turn_predispatches_no_other_draft(text, monkeypatch):
     # Even a turn the forecaster could take is left alone when the turn is
     # an inspection-request form: that form owns the turn.
     monkeypatch.setattr(rt, "_message_wants_wir_form", lambda _t: True)
+    seen = _record_detector_calls(monkeypatch)
     out = await rt._predispatch_remaining_deliverables(_Agent(), _turn(text), "proj")
     assert out is None
+    assert seen == []
 
 
-@requires_construction_kit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["", "   "])
-async def test_empty_turn_predispatches_nothing(text):
+async def test_empty_turn_predispatches_nothing(text, monkeypatch):
+    seen = _record_detector_calls(monkeypatch)
     out = await rt._predispatch_remaining_deliverables(_Agent(), _turn(text), "proj")
     assert out is None
+    assert seen == []
