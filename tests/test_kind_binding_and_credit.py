@@ -455,7 +455,7 @@ def test_explicit_calculation_may_run_on_defaults_and_labels_them(name, display)
         assert phrase in out, (name, phrase)
         labelled = True
     if labelled:
-        assert "calculator's default" in out
+        assert "assumed default" in out
 
 
 def _calc_turn(name, params, env, ask):
@@ -498,7 +498,7 @@ def test_one_registry_source_line_and_defaults_are_not_user_inputs():
     assert "allowance" not in lines[0].lower()
     body = out.lower().replace(lines[0].lower(), "")
     assert "rectangular" in body
-    assert "calculator's default" in body
+    assert "assumed default" in body
     row = _platform_calculator_source(out)
     assert row is not None
     assert row["doc_name"] == label
