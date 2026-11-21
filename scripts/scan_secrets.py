@@ -913,6 +913,49 @@ def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
     return tuple(fold_for_match(word) for word in words)
 
 
+# A markdown link writes its label in brackets and the place it points at in
+# the parentheses that follow. The destination is layout -- a path, an anchor,
+# a URL -- and never a word the label spells. When the label closes a token,
+# the two are welded together in the raw text (``[Q. Surname](x)``), so the
+# token a reader sees as the surname arrives carrying a destination that no
+# name word is spelled with. That is the same defect the table bar had: layout
+# read as part of a word. The destination is taken off before the word is
+# judged, and its label's closing bracket with it -- together they are the
+# link's closing mark, and neither is part of the word. The opening paren is
+# found by balancing, so a URL that itself contains parentheses is still one
+# destination. What follows the destination stays, so the sentence's own comma
+# or full stop still ends the entry.
+_LINK_DESTINATION_OPEN = "]("
+
+
+def _without_link_destination(token: str) -> str:
+    """The token with a markdown link destination taken off, if one is on it.
+
+    The closing bracket goes with the destination: a link ends with ``](...)``
+    as one mark, and leaving the bracket behind would hide an initial's own
+    dot behind it. What follows the destination's closing parenthesis is kept
+    (the comma or full stop the sentence put after the link), so the run still
+    ends where the line ends it. A token that carries no ``](`` is returned
+    unchanged, and so is one whose parentheses never balance -- an unbalanced
+    mark is punctuation, not a link.
+    """
+    at = token.find(_LINK_DESTINATION_OPEN)
+    if at < 0:
+        return token
+    depth = 1
+    index = at + len(_LINK_DESTINATION_OPEN)
+    while index < len(token):
+        char = token[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return token[:at] + token[index + 1:]
+        index += 1
+    return token
+
+
 def name_runs(text: str) -> list[tuple[int, list[str]]]:
     """Maximal runs of name-shaped words, each with the offset it starts at.
 
@@ -921,6 +964,10 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
     of the same written name. Tokens are split only on separators a name is
     written with -- space, tab, dash, Unicode space -- never on the joiners of
     code, so an identifier is one token and is never a name word.
+
+    A markdown link destination welded to a label's last word is taken off
+    first (``_without_link_destination``): it is where the link points, not
+    how the name is spelled.
 
     Invisible characters are deleted, not treated as separators: a soft
     hyphen pushed into the middle of a surname leaves one word to a reader,
@@ -951,7 +998,7 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
         end = index + 1
         while end < length and clean[end] not in _NAME_SEPARATORS:
             end += 1
-        token = clean[index:end]
+        token = _without_link_destination(clean[index:end])
         # Compatibility forms and accents are presentation: ``Vantre\u0301y``,
         # ``Vantr\u00e9y`` and ``Vantrey`` are one name, and a full-width
         # letter is the same letter. Judge the shape of the word, not its
