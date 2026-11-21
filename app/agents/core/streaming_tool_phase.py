@@ -12,6 +12,8 @@ import json
 import time
 from typing import Any, AsyncIterator
 
+from app.core import turn_progress as _turn_progress
+
 # One shared label for the pre-first-token tool phase, so the bubble is
 # never blank while the predispatch probes and retrieval run. Defined here
 # rather than inline so the wording lives in one place.
@@ -146,14 +148,14 @@ async def _run_tool_phase(
         if isinstance(_pre.get("result"), dict):
             _pre_file = str(_pre["result"].get("filename") or "")
         _pre_summary = _summarize_result(_pre["result"])
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _pre["name"],
                "name": _pre["name"],  # alias, see the main loop
                "args_preview": (
                    json.dumps({"filename": _pre_file})[:200]
                    if _pre_file else ""
                ),
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _pre["name"],
                "name": _pre["name"],  # alias, see the main loop
@@ -171,7 +173,7 @@ async def _run_tool_phase(
         note_tool(_wbs_pre["name"])
         stream_tool_results.append(_wbs_pre)
         _wbs_summary = _summarize_result(_wbs_pre.get("result"))
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _wbs_pre["name"],
                "name": _wbs_pre["name"],
                "args_preview": json.dumps({
@@ -183,7 +185,7 @@ async def _run_tool_phase(
                        else None
                    ),
                }, default=str)[:200],
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _wbs_pre["name"],
                "name": _wbs_pre["name"],
@@ -206,7 +208,7 @@ async def _run_tool_phase(
             _hist_file = str(
                 (_hist_pre.get("result") or {}).get("source") or ""
             )
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _hist_pre["name"],
                "name": _hist_pre["name"],
                "args_preview": json.dumps({
@@ -217,7 +219,7 @@ async def _run_tool_phase(
                        else None
                    ),
                }, default=str)[:200],
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _hist_pre["name"],
                "name": _hist_pre["name"],
@@ -240,7 +242,7 @@ async def _run_tool_phase(
             _la_file = str(
                 (_la_pre.get("result") or {}).get("schedule_file") or ""
             )
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _la_pre["name"],
                "name": _la_pre["name"],
                "args_preview": json.dumps({
@@ -251,7 +253,7 @@ async def _run_tool_phase(
                        else None
                    ),
                }, default=str)[:200],
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _la_pre["name"],
                "name": _la_pre["name"],
@@ -269,7 +271,7 @@ async def _run_tool_phase(
         note_tool(_wir_pre["name"])
         stream_tool_results.append(_wir_pre)
         _wir_summary = _summarize_result(_wir_pre.get("result"))
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _wir_pre["name"],
                "name": _wir_pre["name"],
                "args_preview": json.dumps({
@@ -280,7 +282,7 @@ async def _run_tool_phase(
                        else None
                    ),
                }, default=str)[:200],
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _wir_pre["name"],
                "name": _wir_pre["name"],
@@ -299,13 +301,13 @@ async def _run_tool_phase(
         note_tool(_more_pre["name"])
         stream_tool_results.append(_more_pre)
         _more_summary = _summarize_result(_more_pre.get("result"))
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _more_pre["name"],
                "name": _more_pre["name"],
                "args_preview": json.dumps({
                    "action": _more_pre["name"],
                }, default=str)[:200],
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _more_pre["name"],
                "name": _more_pre["name"],
@@ -329,13 +331,13 @@ async def _run_tool_phase(
         note_tool(_calc_pre["name"])
         stream_tool_results.append(_calc_pre)
         _calc_summary = _summarize_result(_calc_pre.get("result"))
-        yield {"type": "tool_call",
+        yield _turn_progress.tool_call({"type": "tool_call",
                "tool": _calc_pre["name"],
                "name": _calc_pre["name"],
                "args_preview": json.dumps({
                    "action": "construction_calc",
                }, default=str)[:200],
-               "predispatched": True}
+               "predispatched": True})
         yield {"type": "tool_result",
                "tool": _calc_pre["name"],
                "name": _calc_pre["name"],
