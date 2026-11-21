@@ -286,6 +286,16 @@ def duration_days_from_rate(
         return None, f"productivity kernel error: {type(exc).__name__}", {}
     if not isinstance(envelope, dict):
         return None, None, {}
+    if envelope.get("status") != "success" and envelope.get("raised"):
+        # The calculator RAISED: a kernel BREAK, which a caller must be able to
+        # name distinctly from a plain missing input (the envelope says which
+        # one it was). Logged at WARNING here, where the one kernel lives.
+        error_type = str(envelope.get("error_type") or "Exception")
+        _logger.warning(
+            "productivity kernel raised (quantity=%r rate=%r): %s",
+            quantity, rate, envelope.get("error"),
+        )
+        return None, f"productivity kernel error: {error_type}", envelope
     result = envelope.get("result")
     if not isinstance(result, dict):
         return None, None, envelope
