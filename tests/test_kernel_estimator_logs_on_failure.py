@@ -55,13 +55,15 @@ def _capture(logger_name):
         lg.disabled = prev_disabled
 
 
-def test_the_one_estimator_surfaces_the_kernel_error(monkeypatch):
+@pytest.mark.parametrize(
+    "quantity,rate",
+    [(100.0, "50 m2 per gang-day"), (264.0, "48 m3 per gang-day")],
+)
+def test_the_one_estimator_surfaces_the_kernel_error(monkeypatch, quantity, rate):
     from app.lib import pm_computations
     _make_kernel_raise(monkeypatch)
     with _capture("app.lib.pm_computations") as records:
-        days, error, envelope = pm_computations.duration_days_from_rate(
-            100.0, "50 m2 per gang-day"
-        )
+        days, error, envelope = pm_computations.duration_days_from_rate(quantity, rate)
     assert days is None  # no fabricated number
     assert error and "kernel error" in error.lower() and "RuntimeError" in error
     assert envelope.get("status") == "error"
