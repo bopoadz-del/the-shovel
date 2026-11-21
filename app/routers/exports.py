@@ -1323,6 +1323,12 @@ _ENDS_ASKING_RE = re.compile(r"[?؟？⸮][\s*_]*$")
 #: Sentence-final punctuation of any script: a line ending in one is prose,
 #: not a title.
 _ENDS_SENTENCE_RE = re.compile(r"[.!?:;؟۔。！？][\s*_]*$")
+#: A line that opens a block of the document's own structure: a heading, a
+#: list item, a quote or a table row.
+_BLOCK_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|[-*+•]\s|\d+[.)]\s|>|\|)")
+#: Sentence punctuation of any script followed by more text: a line holding
+#: one holds more than one sentence.
+_INNER_STOP_RE = re.compile(r"[.!?;؟؛۔。！？](?=\s+\S)")
 #: ``label: body`` -- a short label of any script, then a colon.
 _LABELLED_LINE_RE = re.compile(
     r"^[ \t]*(?:[-*•][ \t]+)?[*_]*[ \t]*(?P<label>[^:：\n\d]{1,40}?)[ \t]*[*_]*[ \t]*[:：]"
@@ -1382,6 +1388,48 @@ def _is_source_line(line: str, names: List[str]) -> str | None:
     return body if len(words) <= 4 else None
 
 
+def _is_closing_offer(lines: List[str]) -> bool:
+    """True when the last line of ``lines`` is a closing offer to the reader
+    and not a question the document itself asks.
+
+    Decided by structure only, so it holds in any script. The last line is
+    an offer when ALL of these hold:
+
+    * it ends in a question mark of any script and carries no figure;
+    * it is one plain sentence: not a heading, list item, quote or table
+      row, not a bold line, and no sentence ends inside it;
+    * it is a paragraph of its own: a blank line sets it apart from the body
+      (a question that continues the paragraph above belongs to it);
+    * the paragraph above it is body text: not a heading (a question that is
+      a section's whole content is that section) and not itself a question
+      (a run of questions is the document's own list of questions).
+
+    Any line that fails one of these stays: keeping an offer costs a line,
+    dropping a document's own question loses its content. An offer written
+    as several sentences in one paragraph therefore stays.
+    """
+    if not lines:
+        return False
+    last = lines[-1]
+    if not _ENDS_ASKING_RE.search(last) or re.search(r"\d", _HELD_RE.sub("", last)):
+        return False
+    if _BLOCK_LINE_RE.match(last) or _BOLD_LINE_RE.match(last):
+        return False
+    if _INNER_STOP_RE.search(last):
+        return False
+    i = len(lines) - 2
+    if i < 0 or lines[i].strip():
+        return False
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    # With nothing above the blank lines, ``i`` is -1 and ``above`` is the
+    # question itself, which ends asking: the line stays.
+    above = lines[i]
+    if _HEADING_LINE_RE.match(above) or _BOLD_LINE_RE.match(above):
+        return False
+    return not _ENDS_ASKING_RE.search(above)
+
+
 def _requested_document(answer: str, stored: Any, fallback_title: str) -> Dict[str, Any]:
     """The document a produce-a-file export of ``answer`` is (W2-a).
 
@@ -1395,8 +1443,8 @@ def _requested_document(answer: str, stored: Any, fallback_title: str) -> Dict[s
       citations it recognises and drops padding and machinery wording;
     * a line that is nothing but a citation of a cited document or a file,
       and a bracketed span naming one, leave the body;
-    * a closing question to the reader (the last line ends in a question
-      mark of any script and carries no figure) leaves the body;
+    * a closing offer to the reader leaves the body; a question the
+      document itself asks stays (``_is_closing_offer``, by structure);
     * only the markers the contract itself numbered are stripped: a
       bracketed number that was in the answer (a clause or note) stays;
     * the title is the answer's own title -- its opening heading, a bold
@@ -1427,10 +1475,8 @@ def _requested_document(answer: str, stored: Any, fallback_title: str) -> Dict[s
         lines.append(_SPAN_RE.sub(lambda m: _drop_cited_span(m, names, fallback), line).rstrip())
     while lines and not lines[-1].strip():
         lines.pop()
-    if len([ln for ln in lines if ln.strip()]) > 1:
-        last = lines[-1]
-        if _ENDS_ASKING_RE.search(last) and not re.search(r"\d", _HELD_RE.sub("", last)):
-            lines.pop()
+    if _is_closing_offer(lines):
+        lines.pop()
     text = "\n".join(lines)
     if numbered:
         text = re.sub(
