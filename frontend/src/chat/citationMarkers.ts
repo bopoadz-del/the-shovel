@@ -38,3 +38,9 @@ export function readCoverage(value: unknown): AnswerCoverage | undefined {
   if (!Number.isFinite(indexed) || !Number.isFinite(total) || total <= 0) return undefined
   return { indexed, total }
 }
+
+/** A ``citations`` field (the SSE 'end' event, or a stored answer read back
+ *  when a session is reopened), or undefined when absent or not a list. */
+export function readCitations(value: unknown): AnswerCitation[] | undefined {
+  return Array.isArray(value) ? (value as AnswerCitation[]) : undefined
+}

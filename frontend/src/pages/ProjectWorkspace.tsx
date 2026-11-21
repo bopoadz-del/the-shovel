@@ -41,7 +41,7 @@ import {
 } from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
-import { readCoverage } from '../chat/citationMarkers'
+import { readCitations, readCoverage } from '../chat/citationMarkers'
 import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
@@ -1135,16 +1135,24 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // ── Chat session switching (Quarry CHAT HISTORY) ──────────────────────────
 
   const loadSessionHistory = useCallback((convId: string) => {
-    apiGet<{ messages: Array<{ role: string; content: string }> }>(
+    apiGet<{ messages: Array<{ role: string; content: string; citations?: unknown; coverage?: unknown; provenance?: unknown }> }>(
       `/v1/agents/conversations/${convId}/messages`,
     )
       .then((hist) => {
-        const loaded = (hist.messages ?? []).map((m) => {
+        const loaded = (hist.messages ?? []).map((m): ChatMessage => {
           const role = (m.role === 'user' ? 'user' : 'assistant') as MessageRole
+          if (role === 'user') return { id: msgId(), role, content: m.content }
+          // A reopened answer keeps what rode beside it live (W3): its
+          // citation entries and coverage for the Sources panel, and its
+          // provenance for "Why this answer". The server numbers the stored
+          // text and its entries together, so the markers link as they did.
           return {
             id: msgId(),
             role,
-            content: role === 'assistant' ? sanitizeAssistantContent(m.content) : m.content,
+            content: sanitizeAssistantContent(m.content),
+            citations: readCitations(m.citations),
+            coverage: readCoverage(m.coverage),
+            provenance: Array.isArray(m.provenance) ? (m.provenance as ProvenanceEntry[]) : undefined,
           }
         })
         const kept = historyBelongsToSession(convId, activeIdRef.current, loaded)
@@ -1534,7 +1542,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawSources = Array.isArray(evt['sources']) ? (evt['sources'] as ChatMessage['sources']) : []
               const rawExports = Array.isArray(evt['exports']) ? (evt['exports'] as ChatMessage['exports']) : []
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
-              const rawCitations = Array.isArray(evt['citations']) ? (evt['citations'] as AnswerCitation[]) : []
+              const rawCitations = readCitations(evt['citations']) ?? []
               const rawCoverage = readCoverage(evt['coverage'])
               setMessages((prev) =>
                 prev.map((m) =>
