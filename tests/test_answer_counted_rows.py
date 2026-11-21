@@ -234,3 +234,18 @@ def test_each_table_is_read_on_its_own(first, second, printed):
     assert out.startswith(unrelated)
     for i in (i for i in range(len(second)) if i not in printed):
         assert f"{second[i][0]} (p.{second[i][1]})" in out
+
+
+@pytest.mark.parametrize("rows,printed", [(SET_COUNT, (0, 1, 2)), (SET_LENGTH, (1, 2))])
+def test_only_an_answer_with_named_rows_leaves_the_operator_trace(rows, printed, caplog):
+    """The trace line counts the tables and rows named; an answer left alone
+    (every row printed) writes no trace at all."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="app.agents.answer_counted_rows")
+    complete = _answer(rows, tuple(range(len(rows))))
+    assert name_dropped_rows(complete, _statements(rows)) == complete
+    assert "counted_rows_named" not in caplog.text
+    name_dropped_rows(_answer(rows, printed), _statements(rows))
+    missing = len(rows) - len(printed)
+    assert f"counted_rows_named tables=1 rows={missing}" in caplog.text
