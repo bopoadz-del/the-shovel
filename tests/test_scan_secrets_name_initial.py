@@ -179,7 +179,17 @@ def test_a_block_with_the_initial_is_not_dropped_before_the_run_reader(
     assert scan_secrets._word_or_initial_in(word, block) is expected, label
 
 
-def test_a_hit_is_reported_at_the_line_the_initial_is_on():
+LINE_POSITIONS = [
+    ("after two lines of a site file", f"site file\ntwo\nQ. {LAST} Engineer\n", 3),
+    ("at the top of the page", f"Q. {LAST} Engineer\n", 1),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, expected",
+    LINE_POSITIONS,
+    ids=[row[0] for row in LINE_POSITIONS],
+)
+def test_a_hit_is_reported_at_the_line_the_initial_is_on(label, text, expected):
     """The position reported is the line the name starts on, not the next one."""
-    text = f"site file\ntwo\nQ. {LAST} Engineer\n"
-    assert [line for line, _ in _hits(text)] == [3]
+    assert [line for line, _ in _hits(text)] == [expected], label
