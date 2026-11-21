@@ -77,10 +77,11 @@ def test_reopened_answer_is_the_live_answer(trial):
     assert sorted({int(m) for m in _MARKER_RE.findall(answer["content"])}) == [c["marker"] for c in answer["citations"]]
 
 
-def test_stored_tier_is_read_back_onto_its_entry():
+@pytest.mark.parametrize("trial", range(2))
+def test_stored_tier_is_read_back_onto_its_entry(trial):
     from app.routers import agents as agents_router
 
-    rng = random.Random(_SEED + 50)
+    rng = random.Random(_SEED + 50 + trial)
     names = _names(rng, 2)
     raw, sections = _answer(rng, names)
     tiers = [f"tier-{rng.randint(1000, 9999)}", None]
@@ -94,12 +95,13 @@ def test_stored_tier_is_read_back_onto_its_entry():
     assert by_doc[names[1]]["tier"] is None
 
 
-def test_answer_stored_without_citations_is_still_numbered():
+@pytest.mark.parametrize("trial", range(2))
+def test_answer_stored_without_citations_is_still_numbered(trial):
     """An answer stored before citations were kept (or whose check stored
     none) is numbered on the way out all the same."""
     from app.routers import agents as agents_router
 
-    rng = random.Random(_SEED + 60)
+    rng = random.Random(_SEED + 60 + trial)
     names = _names(rng, 2)
     raw, _ = _answer(rng, names)
     cid = f"w3-none-{uuid.uuid4().hex[:8]}"
@@ -109,10 +111,11 @@ def test_answer_stored_without_citations_is_still_numbered():
     assert "[source:" not in answer["content"]
 
 
-def test_answer_without_citations_is_left_alone():
+@pytest.mark.parametrize("trial", range(2))
+def test_answer_without_citations_is_left_alone(trial):
     from app.routers import agents as agents_router
 
-    rng = random.Random(_SEED + 70)
+    rng = random.Random(_SEED + 70 + trial)
     text = f"The pour takes {rng.randint(2, 9)} hours."
     cid = f"w3-plain-{uuid.uuid4().hex[:8]}"
     _store(cid, text, None)
