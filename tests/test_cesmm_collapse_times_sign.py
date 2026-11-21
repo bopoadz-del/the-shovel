@@ -13,7 +13,11 @@ its unit) is a times sign. Class X written as a code keeps collapsing.
 import pytest
 
 from app.core.rag.retriever import extract_query_identifiers
-from app.core.rag.vector_store import normalize_cesmm_item_codes as n
+from app.core.rag.vector_store import (
+    _CESMM_OCR_SPACE_RE,
+    _collapse_item_code,
+    normalize_cesmm_item_codes as n,
+)
 
 
 @pytest.mark.parametrize("text", [
@@ -62,3 +66,19 @@ def test_dimension_ask_yields_no_reference_identifier(ask):
 ])
 def test_class_x_code_is_still_a_reference_identifier(ask, code):
     assert code in extract_query_identifiers(ask)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("2 x 0.25", "x 0.25"),
+    ("4 m X 12.5", "X 12.5"),
+    ("see X 312.4", "X312.4"),
+    ("item D 549.2", "D549.2"),
+])
+def test_collapse_item_code_reads_the_letter_in_its_context(text, expected):
+    match = list(_CESMM_OCR_SPACE_RE.finditer(text))[-1]
+    assert _collapse_item_code(match) == expected
+
+
+@pytest.mark.parametrize("empty", ["", None])
+def test_empty_text_is_returned_unchanged(empty):
+    assert n(empty) is empty
