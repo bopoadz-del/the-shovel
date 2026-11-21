@@ -793,3 +793,22 @@ def test_a_remainder_word_that_accounts_for_nothing_does_not_excuse_a_prose_tota
 ])
 def test_a_remainder_sentence_that_accounts_for_the_gap_is_left_alone(answer):
     assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "Band\tQty (No)\nP\t11\nQ\t23\nR\t6\nTotal\t40\n\n"
+        "The sum of the rows is 40 No.\n",
+        id="count-total-row-restated",
+    ),
+    pytest.param(
+        "Zone\tLength (m)\nW\t140\nV\t60\nTotal\t200\n\n"
+        "These add up to 200 m altogether.\n",
+        id="length-total-row-restated",
+    ),
+])
+def test_a_prose_sentence_restating_a_correct_total_row_is_left_alone(answer):
+    # The table prints its own Total row, so the cell is the claim that is
+    # checked; the prose sentence that repeats the right figure is not read
+    # again against rows that now include the Total itself.
+    assert reconcile(answer) == answer
