@@ -8,6 +8,7 @@ offset conventions.
 """
 
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -238,6 +239,77 @@ def compute_cpm(data: CPMInput) -> CPMOutput:
         near_critical=near,
         near_critical_band_days=data.near_critical_band_days,
     )
+
+# ── One duration kernel for every schedule builder (KS-4) ──────────────────
+#
+# The quantity -> duration step is a schedule kernel, and it goes through the
+# calculation envelope: the registered productivity kernel is run by
+# ``run_calculation``, so the answer comes back as the same envelope every
+# calculator returns (status / calculation / result / standard / provenance /
+# certified) instead of a bare dict whose badge was thrown away. There is one
+# implementation, here, and every schedule builder calls it -- a duration is
+# computed once, by one kernel, and says where it came from wherever it lands.
+
+_DURATION_RESULT_KEYS = ("duration_days", "duration", "days", "remaining_days")
+
+
+def duration_days_from_rate(
+    quantity: Any,
+    rate: Any,
+) -> Tuple[Optional[int], Optional[str], Dict[str, Any]]:
+    """Working days for ``quantity`` at a production ``rate``, via the envelope.
+
+    Returns ``(days, kernel_error, envelope)``. ``days`` is None when the
+    kernel produced no usable figure; ``kernel_error`` names a kernel BREAK (a
+    raised exception) so a caller can surface it distinctly from a plain
+    missing input; ``envelope`` is the standard calculation envelope, empty
+    when no calculation ran.
+    """
+    try:
+        qty = float(quantity)
+    except (TypeError, ValueError):
+        return None, None, {}
+    if qty <= 0:
+        return None, None, {}
+    try:
+        from app.lib.construction_formulas import run_calculation
+
+        envelope = run_calculation(
+            "productivity_manpower_duration",
+            {"quantity": qty, "productivity_rate": str(rate)},
+        )
+    except Exception as exc:  # noqa: BLE001 — a kernel break is data, not a crash
+        _logger.warning(
+            "duration kernel raised (quantity=%r rate=%r): %s",
+            quantity, rate, exc, exc_info=True,
+        )
+        return None, f"productivity kernel error: {type(exc).__name__}", {}
+    if not isinstance(envelope, dict):
+        return None, None, {}
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        return None, None, envelope
+    for key in _DURATION_RESULT_KEYS:
+        value = result.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return int(math.ceil(value)), None, envelope
+    return None, None, envelope
+
+
+def duration_badge(envelope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The kernel badge a duration carries, as activity fields.
+
+    Empty when no successful calculation ran (a stated duration has no kernel
+    behind it), so a row never claims provenance it does not have.
+    """
+    env = envelope if isinstance(envelope, dict) else {}
+    if env.get("status") != "success":
+        return {}
+    return {
+        "duration_provenance": env.get("provenance"),
+        "duration_standard": env.get("standard"),
+        "duration_certified": env.get("certified"),
+    }
 
 
 _PERIOD_LENGTH = {"week": 5, "month": 21}
