@@ -511,6 +511,35 @@ def _block_corrections(block: list[int], cells: list[list[str] | None]) -> list[
     return out
 
 
+#: A figure printed anywhere in a prose line.
+_PROSE_FIGURE_RE = re.compile(r"(?<![\d,.])\d[\d,]*(?:\.\d+)?(?![\d])")
+
+
+def _prose_accounts(line: str, stated: float, printed: float) -> bool:
+    """True when a prose line outside the table accounts for the gap.
+
+    The same standard rule (3b) holds a table bucket to. A word such as
+    "further" or "others" is not enough on its own, because "for further
+    detail see the bill" accounts for no row. The line has to name rows the
+    answer left out AND say how they close the difference, in one of three ways:
+    it says those rows make up the balance of the total; it states a figure
+    that, added to the printed rows, gives the total; or it states the printed
+    rows' own sum, so the answer itself says its table falls short of the
+    figure it gives.
+    """
+    if not _REMAINDER_RE.search(line):
+        return False
+    if _BALANCE_RE.search(line):
+        return True
+    for text in _PROSE_FIGURE_RE.findall(line):
+        value = _number(text)
+        if value is None:
+            continue
+        if _agrees(stated, printed + value) or _agrees(value, printed):
+            return True
+    return False
+
+
 def _prose_correction(
     block: list[int], cells: list[list[str] | None], lines: list[str],
 ) -> Correction | None:
@@ -526,14 +555,14 @@ def _prose_correction(
     A prose claim is weaker evidence than a cell: an answer that says in its
     own words which rows it did not print ("the remaining ten rows make up
     the balance to 6,292 m") has already disclosed that its figure is the
-    band's, not the printed rows', so its figure is left alone. A total cell
+    band's, not the printed rows', so its figure is left alone. That
+    disclosure has to account for the difference (``_prose_accounts``). A
+    sentence that only uses a remainder word ("for further detail see the
+    bill") accounts for nothing and excuses nothing. A total cell
     that disagrees with the cells above it is a defect either way and is not
     excused here.
     """
     outside = [i for i in range(len(lines)) if i not in block]
-    disclosed = any(cells[i] is None and _REMAINDER_RE.search(lines[i]) for i in outside)
-    if disclosed:
-        return None
     rows = [cells[i] or [] for i in block]
     data = [row for row in rows if any((c or "").strip() for c in row)]
     if not data or any(any(_TOTAL_CELL_RE.match(c or "") for c in row) for row in data):
@@ -556,6 +585,11 @@ def _prose_correction(
         read = _read_rows(data[1:], col)
         if not read.kept or _disclosed_total(stated_value, read):
             continue
+        if any(
+            cells[i] is None and _prose_accounts(lines[i], stated_value, read.printed)
+            for i in outside
+        ):
+            return None
         return Correction(
             line_index=index, col=col, stated_text=stated_text, stated=stated_value,
             computed=read.printed, unit=unit, rows=len(read.kept),
