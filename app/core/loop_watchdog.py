@@ -26,7 +26,6 @@ import logging
 import os
 import re
 import sys
-import sysconfig
 import tempfile
 import threading
 import time
@@ -278,53 +277,6 @@ def format_live_dump(text: str, names: dict, max_frames: int = _LIVE_FRAMES) -> 
     return " || ".join(parts)
 
 
-#: This module's source path, as faulthandler prints it in a frame line.
-_OWN_FILE = os.path.normcase(os.path.abspath(__file__))
-#: The standard library's directory, and the package directories that may
-#: sit inside it (``Lib/site-packages`` on Windows): a frame under the first
-#: and not under the others is the interpreter's own library.
-_STDLIB_DIR = os.path.normcase(os.path.abspath(sysconfig.get_paths()["stdlib"]))
-_PACKAGE_DIRS = tuple({os.path.normcase(os.path.abspath(sysconfig.get_paths()[k]))
-                       for k in ("purelib", "platlib")})
-
-
-def _under(path: str, root: str) -> bool:
-    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
-
-
-def is_stdlib_frame(path: str, stdlib_dir: str = _STDLIB_DIR,
-                    package_dirs: tuple = _PACKAGE_DIRS) -> bool:
-    """True for a source file of the standard library (not a site package)."""
-    path = os.path.normcase(os.path.abspath(path))
-    return _under(path, stdlib_dir) and not any(_under(path, d) for d in package_dirs)
-
-
-def preempted_in_own_code(text: str, ident: int, own_file: str = _OWN_FILE,
-                          is_stdlib=is_stdlib_frame) -> bool:
-    """True when some dump in ``text`` shows thread ``ident`` stopped in its
-    OWN code: the innermost frame that is not the standard library is in
-    ``own_file``.
-
-    A thread stopped between two of its own lines -- or inside a library
-    call those lines made (``Event.is_set``, ``Event()``) -- was stopped
-    there by another thread holding the GIL. A thread whose innermost
-    non-library frame is a callee elsewhere (a slow helper, a sleep wrapped
-    in another module) was busy in that callee: its own work."""
-    want, pending = os.path.normcase(own_file), False
-    for line in text.splitlines():
-        m = _FH_THREAD.match(line)
-        if m:
-            pending = int(m.group(2), 16) == ident
-            continue
-        f = _FH_FRAME.match(line)
-        if not (f and pending) or is_stdlib(f.group(1)):
-            continue
-        if os.path.normcase(os.path.abspath(f.group(1))) == want:
-            return True
-        pending = False
-    return False
-
-
 def keep_worst(kept: list, item: tuple, cap: int = LIVE_KEEP) -> None:
     """Add ``(lag_ms, text)`` to ``kept``, holding at most ``cap`` entries:
     when full, the least late one is dropped, so the worst stalls survive."""
@@ -554,12 +506,6 @@ class LagMonitor:
         #: tick sleep between the two it reads about one tick.
         self.max_unobserved_ms = 0.0
         self._last_served: Optional[float] = None
-        #: When the monitor's own work between two phases began (after a
-        #: served heartbeat, after the tick sleep). The timer is re-armed, not
-        #: cancelled, at that moment, so a GIL hold that begins inside that
-        #: work is dumped; ``_close_work_window`` reads it. ``None``: no
-        #: window open.
-        self._work_from: Optional[float] = None
         #: Diagnostic only, never gated: every GC pass while running.
         self.gc = GcRecord()
 
@@ -664,7 +610,6 @@ class LagMonitor:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
-                self._close_work_window(live, armed_names)
             stamped = time.monotonic()
             if live is not None:
                 # Arming cancels the C timer thread in force and waits for it
@@ -695,13 +640,8 @@ class LagMonitor:
             could_fire = False
             if live is not None and not stalled:
                 # Back with the GIL: the gap the serve re-armed for is over.
-                # Re-armed, never cancelled: arming replaces the pending timer
-                # inside one C call that keeps the GIL, so no thread can start
-                # a hold between the two. A cancel here left the monitor's own
-                # work below with no timer, and a GIL switch inside that work
-                # let a hold begin unseen (max_lag 0, no dump, no wake-late).
-                self._work_from = time.monotonic()
-                live.arm()
+                # Cancelled here, the monitor's own work below never fires it.
+                live.cancel()
                 # Both timers of this round (the post's, the serve's) were
                 # armed at ``posted`` or later; neither can have fired unless
                 # the round lasted ``live_ms``. Only then is the file read.
@@ -743,11 +683,6 @@ class LagMonitor:
                     during = format_live_dump(dump, idents)
                     keep_worst(self.live_dumps, (lag_ms, during))
                     sample = f"{sample} :: DURING {during}"
-                if live is not None:
-                    # The stall's dump is read; what the monitor does from here
-                    # to the sleep's arm is watched by a fresh timer of its own.
-                    self._work_from = time.monotonic()
-                    live.arm()
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:
@@ -784,30 +719,6 @@ class LagMonitor:
         if late_ms >= WAKE_LATE_NOTE_MS:
             keep_worst(self.wake_late_at, (round(late_ms, 1), at))
 
-    def _close_work_window(self, live: LiveDump, armed_names: dict) -> None:
-        """End the monitor's own-work window opened by the last re-arm.
-
-        The window's timer was armed at ``_work_from`` or later for
-        ``live.after_s``; it can have fired only if the window lasted that
-        long, and only then is the file read. The window is a late wake only
-        when its dump shows this thread stopped in its OWN code
-        (``preempted_in_own_code``): another thread held the GIL. A window
-        made long by this thread's own slow callee is not a wake-up anyone
-        delayed, and is neither counted nor kept."""
-        work_from, self._work_from = self._work_from, None
-        if work_from is None:
-            return
-        now = time.monotonic()
-        gap_ms = (now - work_from) * 1000
-        if gap_ms < live.after_s * 1000:
-            return
-        dump = live.take()
-        if dump and preempted_in_own_code(dump, threading.get_ident()):
-            self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
-            self._note_wake_late(gap_ms, now)
-            idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
-            keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
-
     def _sleep_watched(self, live: Optional[LiveDump], armed_names: dict) -> None:
         """Sleep one tick, and catch a GIL hold that starts during the sleep.
 
@@ -818,7 +729,6 @@ class LagMonitor:
         (tick + live), and the oversleep itself is measured: ``wake_late``
         is how long past its tick this thread could not run."""
         if live is not None:
-            self._close_work_window(live, armed_names)
             armed_from = time.monotonic()
             live.arm(self.tick + live.after_s)
         slept_from = time.monotonic()
@@ -828,10 +738,7 @@ class LagMonitor:
         self.max_wake_late_ms = max(self.max_wake_late_ms, late_ms)
         self._note_wake_late(late_ms, woke)
         if live is not None:
-            # Re-armed, never cancelled (see ``_run``): the work from this
-            # wake to the next heartbeat's post is watched too.
-            self._work_from = time.monotonic()
-            live.arm()
+            live.cancel()
             # Read only when the timer could have fired (armed at
             # ``armed_from`` or later for tick + live): the same unwatched
             # GIL release as the heartbeat's read (``_run``).

@@ -78,30 +78,6 @@ def rounds_past(events: list, limit_s: float) -> int:
     return sum(b - a >= limit_s for a, b in zip(cancels, cancels[1:]))
 
 
-def monitor_armed_event(monkeypatch) -> threading.Event:
-    """An event the monitor thread sets each time its own arm of the live
-    timer has RETURNED, i.e. with a timer in force. A test asserting that a
-    GIL hold is captured clears it, and its worker waits on it before the
-    hold: the hold then begins with a timer armed instead of racing the
-    monitor's round. A hold begun on a bare sleep can start in the gap after
-    the monitor cancels and before it re-arms, where no timer is pending and
-    no heartbeat is in flight; nothing can see it there, and the test fails
-    with ``max_lag=0 stalls=0`` although the product is right. Signalled
-    after the arm, never before: ``dump_traceback_later`` can itself wait past
-    a GIL handoff (c6dd225c). The hold, its length and every assertion are
-    unchanged, so a monitor that stops capturing a real hold still fails."""
-    armed = threading.Event()
-    real_arm = loop_watchdog.LiveDump.arm
-
-    def arm(self, after_s=None):
-        real_arm(self, after_s)
-        if threading.current_thread().name == "loop-watchdog":
-            armed.set()
-
-    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
-    return armed
-
-
 #: Set in the child pytest process that runs one C-timer test by itself.
 _OWN_PROCESS_ENV = "LOOP_CAPTURE_OWN_PROCESS"
 #: Wall-clock cap for one C-timer test in its own process.
@@ -179,12 +155,11 @@ def test_the_child_verdict_names_each_way_a_child_can_end(rc, expected):
 
 @pytest.mark.parametrize("hold", [True, False])
 @own_process
-def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(monkeypatch, hold):
+def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(hold):
     """A worker thread holds the GIL inside one C call while the loop waits.
     The live dump (C timer, no GIL) shows the worker IN that call; with no
     such call there is no live dump at all."""
     n = _size_for(0.6) if hold else 0
-    armed = monitor_armed_event(monkeypatch)
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
@@ -195,13 +170,11 @@ def test_the_live_dump_names_the_call_that_holds_the_gil_during_the_stall(monkey
         done, release = threading.Event(), threading.Event()
 
         def work():
-            assert armed.wait(5), "the monitor never armed its timer"
             _gil_holding_call(n)
             done.set()
             release.wait(5)
 
         if hold:
-            armed.clear()
             worker = threading.Thread(target=work, name="gil-holder")
             worker.start()
             while not done.is_set():
@@ -349,7 +322,6 @@ def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(mon
 
     monkeypatch.setattr(loop_watchdog, "cpu_snapshot", snapshot)
     n = _size_for(0.6) if hold else 0
-    armed = monitor_armed_event(monkeypatch)
 
     async def run():
         mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
@@ -358,13 +330,11 @@ def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(mon
         done, release = threading.Event(), threading.Event()
 
         def work():
-            assert armed.wait(5), "the monitor never armed its timer"
             _gil_holding_call(n)
             done.set()
             release.wait(5)
 
         if hold:
-            armed.clear()
             worker = threading.Thread(target=work, name="gil-holder")
             worker.start()
             while not done.is_set():
@@ -606,141 +576,6 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
 
 
 
-@pytest.mark.parametrize("library_on_top,first,own", [
-    (False, "own", True),
-    (False, "callee", False),
-    (True, "own", True),
-    (True, "callee", False),
-])
-def test_a_thread_stopped_in_its_own_code_is_told_from_one_busy_in_a_callee(
-        library_on_top, first, own):
-    """``preempted_in_own_code`` reads a faulthandler dump: a thread whose
-    innermost non-library frame is the monitor's own module was stopped
-    there (or in a library call it made) by another thread's hold; one whose
-    innermost non-library frame is a callee elsewhere was busy in that
-    callee. Only the thread named by ident counts. Every dump is built here."""
-    own_file = os.path.abspath(loop_watchdog.__file__)
-    callee_file = os.path.abspath(__file__)
-    library = os.path.abspath(threading.__file__)
-    frames = [library] if library_on_top else []
-    frames += [own_file if first == "own" else callee_file, own_file]
-    lines = "".join(f'  File "{f}", line {i + 3} in fn{i}\n' for i, f in enumerate(frames))
-    dump = (
-        "Timeout (0:00:00.300000)!\n"
-        "Thread 0x000000000000abcd (most recent call first):\n" + lines + "\n"
-        "Current thread 0x0000000000001234 (most recent call first):\n"
-        f'  File "{own_file}", line 3 in other_thread\n'
-    )
-    assert loop_watchdog.is_stdlib_frame(library)
-    assert not loop_watchdog.is_stdlib_frame(own_file)
-    assert loop_watchdog.preempted_in_own_code(dump, 0xABCD, own_file) is own
-    # Another thread stopped in the monitor's module never speaks for this one.
-    assert loop_watchdog.preempted_in_own_code(dump, 0x9999, own_file) is False
-
-
-@pytest.mark.parametrize("window", ["_run", "_sleep_watched"])
-@own_process
-def test_a_hold_that_begins_in_the_monitors_own_work_is_dumped(monkeypatch, window):
-    """The monitor's own work between two phases -- after a served heartbeat
-    (``_run``) and after the tick sleep (``_sleep_watched``) -- is a window
-    with no heartbeat in flight and no sleep to oversleep. A thread that
-    takes the GIL there and holds it is dumped by the timer armed when the
-    window opened, as a WAKE_LATE naming the holder.
-
-    The hold is placed inside the window, never raced into it.
-
-    ``_run``: a holder thread spins in Python (so it always waits for the
-    GIL) until the monitor's own arm opening the window returns and opens
-    the gate; with a tiny switch interval the monitor yields at its next eval
-    check, still in its own code, and the holder starts a C call that keeps
-    the GIL for ~0.6 s.
-
-    ``_sleep_watched``: the same race lost on Linux CI (f5847403: the hold
-    began after the next post, ``max_lag 1101``), because the work left in
-    that window after its arm is shorter than one GIL hand-off. So the
-    holder pins the monitor first: it takes the lock ``threading.enumerate``
-    needs, waits until the monitor is blocked in that call from ``_run`` --
-    the names read inside this window, before it closes -- and only then
-    holds the GIL. The monitor is stopped in a library call its own line
-    made, the case ``preempted_in_own_code`` keeps. Two inputs: each window."""
-    n = _size_for(0.6)
-    gate, quit_, held = [False], [False], threading.Event()
-    trigger = threading.Event()
-    box: list = []
-    real_arm = loop_watchdog.LiveDump.arm
-
-    def arm(self, after_s=None):
-        real_arm(self, after_s)
-        caller = sys._getframe(1).f_code.co_name
-        if (window == "_run" and trigger.is_set() and not gate[0] and box
-                and after_s is None
-                and threading.current_thread().name == "loop-watchdog"
-                and box[0]._work_from is not None and caller == window):
-            gate[0] = True
-
-    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
-
-    def holder():
-        if window == "_sleep_watched":
-            return pinned_holder()
-        while not gate[0] and not quit_[0]:
-            pass
-        if gate[0]:
-            _gil_holding_call(n)
-            held.set()
-
-    def blocked_in_window(ident) -> bool:
-        frame = sys._current_frames().get(ident)
-        return (frame is not None and frame.f_code.co_name == "enumerate"
-                and frame.f_back is not None
-                and frame.f_back.f_code is loop_watchdog.LagMonitor._run.__code__
-                and box[0]._work_from is not None)
-
-    def pinned_holder():
-        while not trigger.is_set() and not quit_[0]:
-            time.sleep(0.001)
-        ident = box[0]._thread.ident
-        with threading._active_limbo_lock:
-            deadline = time.monotonic() + 5
-            while not blocked_in_window(ident) and time.monotonic() < deadline:
-                time.sleep(0.001)
-            if not blocked_in_window(ident):
-                return
-            gate[0] = True
-            _gil_holding_call(n)
-            held.set()
-
-    async def run():
-        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=5000,
-                                       tick_ms=10, log=False, live_ms=150)
-        box.append(mon)
-        mon.start()
-        await asyncio.sleep(0.3)
-        old = sys.getswitchinterval()
-        worker = threading.Thread(target=holder, name="gil-holder")
-        sys.setswitchinterval(1e-5)
-        try:
-            worker.start()
-            trigger.set()
-            deadline = time.monotonic() + 10
-            while not held.is_set() and time.monotonic() < deadline:
-                await asyncio.sleep(0.02)
-            await asyncio.sleep(0.3)
-        finally:
-            quit_[0] = True
-            sys.setswitchinterval(old)
-            worker.join(5)
-        mon.stop()
-        return mon
-
-    mon = asyncio.run(run())
-    assert gate[0], "the monitor never opened the window under test"
-    assert held.is_set(), "the holder never held the GIL"
-    assert mon.stalls == [], mon.stalls[:1]
-    assert any(d.startswith("WAKE_LATE ") and "_gil_holding_call" in d
-               for _, d in mon.live_dumps), (mon.max_lag_ms, mon.live_dumps)
-
-
 @pytest.mark.parametrize("hold", [True, False])
 @own_process
 def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monkeypatch, hold):
@@ -754,7 +589,12 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
     round the hold made late is read and names the holder."""
     n = _size_for(0.6) if hold else 0
     events: list = []
-    real_take, real_cancel = loop_watchdog.LiveDump.take, loop_watchdog.LiveDump.cancel
+    armed = threading.Event()
+    real_take, real_cancel, real_arm = (
+        loop_watchdog.LiveDump.take,
+        loop_watchdog.LiveDump.cancel,
+        loop_watchdog.LiveDump.arm,
+    )
 
     def take(self):
         if threading.current_thread().name == "loop-watchdog":
@@ -766,9 +606,21 @@ def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monk
         if threading.current_thread().name == "loop-watchdog":
             events.append(("cancel", time.monotonic()))
 
+    def arm(self, after_s=None):
+        real_arm(self, after_s)
+        # Signalled AFTER the arm, never before: ``dump_traceback_later`` can be
+        # delayed past the next GIL handoff, so a barrier raised before the call
+        # released the worker into its hold while NO timer was in force. The
+        # hold then ran in an unarmed gap, the monitor correctly had no dump to
+        # read, and the test failed with a real stall (max_lag 656-860) and no
+        # dump -- measured: one ``arm_enter`` at the hold's start, its return
+        # 780-860 ms later, after the hold. The barrier now means what it says.
+        if threading.current_thread().name == "loop-watchdog":
+            armed.set()
+
     monkeypatch.setattr(loop_watchdog.LiveDump, "take", take)
     monkeypatch.setattr(loop_watchdog.LiveDump, "cancel", cancel)
-    armed = monitor_armed_event(monkeypatch)
+    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
 
     async def run():
         events.append(("cancel", time.monotonic()))
