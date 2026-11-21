@@ -97,20 +97,24 @@ def _plant_hats(root: Path) -> Path:
     return hats
 
 
-def test_a_planted_cross_hat_import_is_caught_at_any_depth(tmp_path):
+@pytest.mark.parametrize("planted,expected", [
+    ({}, []),
+    ({"alpha/deep/leaf.py": "from app.agents.hats.beta.tools import h\n"},
+     ["hats/alpha/deep/leaf.py imports app.agents.hats.beta.tools"]),
+    ({"beta/tools.py": "import app.agents.hats.alpha.own\n"},
+     ["hats/beta/tools.py imports app.agents.hats.alpha.own"]),
+])
+def test_a_planted_cross_hat_import_is_caught_at_any_depth(tmp_path, planted, expected):
     hats = _plant_hats(tmp_path)
-    assert _cross_hat_imports(hats, tmp_path) == []
-    (hats / "alpha" / "deep" / "leaf.py").write_text("from app.agents.hats.beta.tools import h\n", encoding="utf-8")
-    (hats / "beta" / "tools.py").write_text("import app.agents.hats.alpha.own\n", encoding="utf-8")
-    assert _cross_hat_imports(hats, tmp_path) == [
-        "hats/alpha/deep/leaf.py imports app.agents.hats.beta.tools",
-        "hats/beta/tools.py imports app.agents.hats.alpha.own",
-    ]
+    for rel, body in planted.items():
+        (hats / rel).write_text(body, encoding="utf-8")
+    assert _cross_hat_imports(hats, tmp_path) == expected
 
 
-def test_the_walk_never_enters_the_bytecode_cache(tmp_path):
+@pytest.mark.parametrize("parent", ["alpha", "alpha/deep"])
+def test_the_walk_never_enters_the_bytecode_cache(tmp_path, parent):
     hats = _plant_hats(tmp_path)
-    cache = hats / "alpha" / _BYTECODE_DIR
+    cache = hats / parent / _BYTECODE_DIR
     cache.mkdir()
     # A .py inside the cache would be read if the walk entered it.
     (cache / "stray.py").write_text("from app.agents.hats.beta import t\n", encoding="utf-8")
