@@ -662,8 +662,6 @@ def fullest_sections(scope: AskScope, admitted: Sequence[SheetRow]) -> list[Shee
     and a row outside the admitted set never moves a section in or out.
     """
     words = scope.level | scope.item | scope.either
-    if not words or not admitted:
-        return list(admitted)
     named: dict[tuple[str, ...], set[str]] = {}
     for row in admitted:
         key = tuple(row.path)
