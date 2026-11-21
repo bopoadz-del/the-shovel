@@ -606,6 +606,107 @@ def test_the_timer_runs_from_the_serve_not_from_the_post(hold_s, wake_late):
 
 
 
+@pytest.mark.parametrize("library_on_top,first,own", [
+    (False, "own", True),
+    (False, "callee", False),
+    (True, "own", True),
+    (True, "callee", False),
+])
+def test_a_thread_stopped_in_its_own_code_is_told_from_one_busy_in_a_callee(
+        library_on_top, first, own):
+    """``preempted_in_own_code`` reads a faulthandler dump: a thread whose
+    innermost non-library frame is the monitor's own module was stopped
+    there (or in a library call it made) by another thread's hold; one whose
+    innermost non-library frame is a callee elsewhere was busy in that
+    callee. Only the thread named by ident counts. Every dump is built here."""
+    own_file = os.path.abspath(loop_watchdog.__file__)
+    callee_file = os.path.abspath(__file__)
+    library = os.path.abspath(threading.__file__)
+    frames = [library] if library_on_top else []
+    frames += [own_file if first == "own" else callee_file, own_file]
+    lines = "".join(f'  File "{f}", line {i + 3} in fn{i}\n' for i, f in enumerate(frames))
+    dump = (
+        "Timeout (0:00:00.300000)!\n"
+        "Thread 0x000000000000abcd (most recent call first):\n" + lines + "\n"
+        "Current thread 0x0000000000001234 (most recent call first):\n"
+        f'  File "{own_file}", line 3 in other_thread\n'
+    )
+    assert loop_watchdog.is_stdlib_frame(library)
+    assert not loop_watchdog.is_stdlib_frame(own_file)
+    assert loop_watchdog.preempted_in_own_code(dump, 0xABCD, own_file) is own
+    # Another thread stopped in the monitor's module never speaks for this one.
+    assert loop_watchdog.preempted_in_own_code(dump, 0x9999, own_file) is False
+
+
+@pytest.mark.parametrize("window", ["_run", "_sleep_watched"])
+@own_process
+def test_a_hold_that_begins_in_the_monitors_own_work_is_dumped(monkeypatch, window):
+    """The monitor's own work between two phases -- after a served heartbeat
+    (``_run``) and after the tick sleep (``_sleep_watched``) -- is a window
+    with no heartbeat in flight and no sleep to oversleep. A thread that
+    takes the GIL there and holds it is dumped by the timer armed when the
+    window opened, as a WAKE_LATE naming the holder.
+
+    The hold is placed inside the window, never raced into it: a holder
+    thread spins in Python (so it always waits for the GIL) until the
+    monitor's own arm opening the chosen window returns and opens the gate;
+    with a tiny switch interval the monitor then yields at its very next
+    eval check, still in its own code, and the holder starts a C call that
+    keeps the GIL for ~0.6 s. Two inputs: each window."""
+    n = _size_for(0.6)
+    gate, quit_, held = [False], [False], threading.Event()
+    trigger = threading.Event()
+    box: list = []
+    real_arm = loop_watchdog.LiveDump.arm
+
+    def arm(self, after_s=None):
+        real_arm(self, after_s)
+        caller = sys._getframe(1).f_code.co_name
+        if (trigger.is_set() and not gate[0] and box and after_s is None
+                and threading.current_thread().name == "loop-watchdog"
+                and box[0]._work_from is not None and caller == window):
+            gate[0] = True
+
+    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
+
+    def holder():
+        while not gate[0] and not quit_[0]:
+            pass
+        if gate[0]:
+            _gil_holding_call(n)
+            held.set()
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=5000,
+                                       tick_ms=10, log=False, live_ms=150)
+        box.append(mon)
+        mon.start()
+        await asyncio.sleep(0.3)
+        old = sys.getswitchinterval()
+        worker = threading.Thread(target=holder, name="gil-holder")
+        sys.setswitchinterval(1e-5)
+        try:
+            worker.start()
+            trigger.set()
+            deadline = time.monotonic() + 10
+            while not held.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.3)
+        finally:
+            quit_[0] = True
+            sys.setswitchinterval(old)
+            worker.join(5)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert gate[0], "the monitor never opened the window under test"
+    assert held.is_set(), "the holder never held the GIL"
+    assert mon.stalls == [], mon.stalls[:1]
+    assert any(d.startswith("WAKE_LATE ") and "_gil_holding_call" in d
+               for _, d in mon.live_dumps), (mon.max_lag_ms, mon.live_dumps)
+
+
 @pytest.mark.parametrize("hold", [True, False])
 @own_process
 def test_the_monitor_reads_its_dump_file_only_when_a_timer_could_have_fired(monkeypatch, hold):

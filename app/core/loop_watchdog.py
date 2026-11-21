@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -275,6 +276,53 @@ def format_live_dump(text: str, names: dict, max_frames: int = _LIVE_FRAMES) -> 
             frames.append(f"{f.group(1)}:{f.group(2)} {f.group(3).strip()}")
     flush()
     return " || ".join(parts)
+
+
+#: This module's source path, as faulthandler prints it in a frame line.
+_OWN_FILE = os.path.normcase(os.path.abspath(__file__))
+#: The standard library's directory, and the package directories that may
+#: sit inside it (``Lib/site-packages`` on Windows): a frame under the first
+#: and not under the others is the interpreter's own library.
+_STDLIB_DIR = os.path.normcase(os.path.abspath(sysconfig.get_paths()["stdlib"]))
+_PACKAGE_DIRS = tuple({os.path.normcase(os.path.abspath(sysconfig.get_paths()[k]))
+                       for k in ("purelib", "platlib")})
+
+
+def _under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def is_stdlib_frame(path: str, stdlib_dir: str = _STDLIB_DIR,
+                    package_dirs: tuple = _PACKAGE_DIRS) -> bool:
+    """True for a source file of the standard library (not a site package)."""
+    path = os.path.normcase(os.path.abspath(path))
+    return _under(path, stdlib_dir) and not any(_under(path, d) for d in package_dirs)
+
+
+def preempted_in_own_code(text: str, ident: int, own_file: str = _OWN_FILE,
+                          is_stdlib=is_stdlib_frame) -> bool:
+    """True when some dump in ``text`` shows thread ``ident`` stopped in its
+    OWN code: the innermost frame that is not the standard library is in
+    ``own_file``.
+
+    A thread stopped between two of its own lines -- or inside a library
+    call those lines made (``Event.is_set``, ``Event()``) -- was stopped
+    there by another thread holding the GIL. A thread whose innermost
+    non-library frame is a callee elsewhere (a slow helper, a sleep wrapped
+    in another module) was busy in that callee: its own work."""
+    want, pending = os.path.normcase(own_file), False
+    for line in text.splitlines():
+        m = _FH_THREAD.match(line)
+        if m:
+            pending = int(m.group(2), 16) == ident
+            continue
+        f = _FH_FRAME.match(line)
+        if not (f and pending) or is_stdlib(f.group(1)):
+            continue
+        if os.path.normcase(os.path.abspath(f.group(1))) == want:
+            return True
+        pending = False
+    return False
 
 
 def keep_worst(kept: list, item: tuple, cap: int = LIVE_KEEP) -> None:
@@ -741,9 +789,11 @@ class LagMonitor:
 
         The window's timer was armed at ``_work_from`` or later for
         ``live.after_s``; it can have fired only if the window lasted that
-        long, and only then is the file read. A window that long means some
-        other thread kept this one from running: it is a late wake, kept with
-        its dump like the sleep's."""
+        long, and only then is the file read. The window is a late wake only
+        when its dump shows this thread stopped in its OWN code
+        (``preempted_in_own_code``): another thread held the GIL. A window
+        made long by this thread's own slow callee is not a wake-up anyone
+        delayed, and is neither counted nor kept."""
         work_from, self._work_from = self._work_from, None
         if work_from is None:
             return
@@ -751,10 +801,10 @@ class LagMonitor:
         gap_ms = (now - work_from) * 1000
         if gap_ms < live.after_s * 1000:
             return
-        self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
-        self._note_wake_late(gap_ms, now)
         dump = live.take()
-        if dump:
+        if dump and preempted_in_own_code(dump, threading.get_ident()):
+            self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
+            self._note_wake_late(gap_ms, now)
             idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
             keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
 
