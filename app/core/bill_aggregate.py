@@ -266,6 +266,12 @@ class AskScope:
     def states(self) -> bool:
         return bool(self.size or self.band or self.bills or self.level or self.item or self.either)
 
+    def states_a_dimension(self) -> bool:
+        """Whether the ask states the scope a word set cannot express: a size,
+        a depth band or a bill. Those are read as numbers and as structural
+        cells, so they -- not a per-turn token set -- govern the row set."""
+        return bool(self.size or self.band or self.bills)
+
     def admits(self, row: SheetRow) -> bool:
         """Whether the row is inside every scope the ask states."""
         if self.size is not None and _row_size(row) != self.size:
@@ -409,18 +415,24 @@ def aggregate(
     A matching item without the figure is counted, listed, and named in
     ``without_figure``; it adds nothing to a sum.
 
-    With ``ask``, the ask's own scope governs (:func:`ask_scope`): a size, a
-    band and a bill are numbers and structural cells of the row, so the same
-    ask selects the same rows whatever ``terms`` the model passed on the turn.
-    The model's terms are then reported but not applied -- an unparsed token
-    set never defines scope. An ask that states no scope leaves ``terms`` and
-    ``section`` to select, exactly as before.
+    With ``ask``, a size, a depth band or a bill the ask states governs the
+    row set (:func:`ask_scope`): those are read as numbers and as the row's own
+    structural cells, so the same ask selects the same rows whatever ``terms``
+    the model passed on the turn. The model's terms are then reported but not
+    applied -- an unparsed token set never defines a scope the ask states. An
+    ask that states none of the three leaves ``terms`` and ``section`` to
+    select, exactly as before, so a question asked in several parts still gets
+    one result per part.
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
     want, where = _terms(terms), _terms(section)
     items = join_page_continuations(rows)
     scope = ask_scope(ask, items)
+    if scope is not None and not scope.states_a_dimension() and (want or where):
+        # The ask names no size, band or bill: the model's terms select, and an
+        # ask word only selects when the model passed none.
+        scope = None
     if scope is None and not want and not where:
         raise ValueError("give description terms or a section to match")
     used, without = [], []
