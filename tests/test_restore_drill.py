@@ -375,9 +375,16 @@ def test_unservable_is_a_model_live_loads_and_restore_does_not(restore, live, wa
     assert rd.unservable(restore, live) == want
 
 
-def test_app_models_maps_the_drill_tables_to_the_code_models():
-    got = rd.app_models(("projects", "no_such_table", "documents"))
-    assert [m.__table__.name for m in got] == ["projects", "documents"]
+@pytest.mark.parametrize("tables,want", [
+    (("projects", "no_such_table", "documents"), ["projects", "documents"]),
+    (("messages", "users"), ["messages", "users"]),
+    (("no_such_table",), []),
+])
+def test_app_models_maps_the_drill_tables_to_the_code_models(tables, want):
+    assert [m.__table__.name for m in rd.app_models(tables)] == want
+
+
+def test_every_drill_table_has_a_code_model():
     assert [m.__table__.name for m in rd.app_models(rd.TABLES)] == list(rd.TABLES)
 
 
