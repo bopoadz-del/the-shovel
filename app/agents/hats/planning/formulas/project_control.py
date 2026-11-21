@@ -6,6 +6,7 @@ project names, no activity ids. Source: owner-supplied project-control
 template, 09 Nov 2026; standard planner practice.
 """
 from __future__ import annotations
+from app.agents.base.formulas.construction_formulas_planning import CONVERSION_CONTEXT
 from app.lib.formula_registry import Constant, Constants
 
 import math
@@ -33,7 +34,7 @@ def _series(value) -> list:
         "duration_days": Param("days", 0, 1e9, label="duration in working days"),
         "rate_per_crew_day": Param("count/d", 0, 1e9, label="rate (units per crew-day)"),
         "hours_per_day": Param("h/d", 0, 24, label="working hours per day"),
-        "crew_size": Param("count", 0, 1e6, label="persons in one crew"),
+        "crew_size": Param("count", 0, 1e6, label=CONVERSION_CONTEXT["crew_size"]),
         "crews": Param("count", 1, 1e6, label="number of crews"),
     },
     outputs={

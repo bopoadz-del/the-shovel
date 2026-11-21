@@ -292,6 +292,20 @@ def _needs_context():
 
 NEEDS_CONTEXT = _needs_context()
 
+_CONTEXT_DECLARED = [(spec.name, name) for spec in all_specs()
+                     for name in formula_registry.parameters(spec) if name in _CONTEXT_LABELS]
+
+
+@pytest.mark.parametrize("formula,name", _CONTEXT_DECLARED, ids=_ids(_CONTEXT_DECLARED))
+def test_a_conversion_context_input_is_named_by_the_shared_words(formula, name):
+    """One quantity, one name: a calculator that declares a value the conversion
+    table already names uses the table's words, so the question a user hears for
+    a unit conversion and the input's own label cannot drift apart."""
+    declared = _param(formula, name).label
+    assert declared == _CONTEXT_LABELS[name], (
+        f"{formula}.{name} is labelled {declared!r}; the conversion vocabulary "
+        f"names it {_CONTEXT_LABELS[name]!r}")
+
 
 @pytest.mark.parametrize("formula,name,unit", NEEDS_CONTEXT,
                          ids=[f"{f}.{n}:{u}" for f, n, u in NEEDS_CONTEXT])
