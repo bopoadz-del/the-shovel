@@ -16,3 +16,9 @@ export declare function installFetchObserver(
   target: { fetch: typeof fetch },
   watcher: BuildWatcher,
 ): void
+export declare function installVisibilityCheck(
+  doc: Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'>,
+  target: { fetch: typeof fetch },
+  url: string,
+  isQuiet: () => boolean,
+): () => void

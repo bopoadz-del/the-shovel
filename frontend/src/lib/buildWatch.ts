@@ -1,4 +1,4 @@
-import { createBuildWatcher, installFetchObserver } from './buildCheck.js'
+import { createBuildWatcher, installFetchObserver, installVisibilityCheck } from './buildCheck.js'
 
 // The build this bundle was made from. Stamped at build time (Dockerfile
 // frontend stage: VITE_BUILD_ID=$GIT_SHA). Empty in `vite dev` and in a bare
@@ -29,9 +29,7 @@ export function hasBuildMismatch(): boolean {
  *  checked, and a tab that comes back to the front asks the server once. */
 export function startBuildCheck(): void {
   installFetchObserver(window, watcher)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible' || mismatch || !CLIENT_BUILD) return
-    // The response header is what the observer reads; the body is not needed.
-    fetch(`${API_BASE}/livez`, { cache: 'no-store' }).catch(() => undefined)
-  })
+  // The probe goes through window.fetch, which the observer has just wrapped;
+  // the response header is what it reads, the body is not needed.
+  installVisibilityCheck(document, window, `${API_BASE}/livez`, () => mismatch || !CLIENT_BUILD)
 }
