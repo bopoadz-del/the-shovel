@@ -142,3 +142,22 @@ def test_typed_operands_win_in_the_daily_compose(amount, rate):
     line = cc.format_delay_damages_daily_line(out)
     assert "Accepted Contract Amount" not in line
     assert "Contract Data" not in line
+
+
+@pytest.mark.parametrize("ask", [
+    "Calculate the Maximum Amount of Delay Damages in SAR",
+    "How much is the maximum amount of liquidated damages in SAR?",
+])
+def test_a_cap_ask_is_not_a_daily_amount(ask):
+    """The cap is a percentage of the contract, never rate x base per day."""
+    assert cc.compose_delay_damages_daily_from_excerpts(
+        ask, _excerpts(STORED_ACA, STORED_RATE),
+    ) is None
+
+
+@pytest.mark.parametrize("aca, rate", [(1_200_000.0, 0.1), (5_400_000.0, 0.05)])
+def test_a_per_day_ask_beside_the_cap_still_composes(aca, rate):
+    ask = "Calculate the delay damages per day in SAR"
+    out = cc.compose_delay_damages_daily_from_excerpts(ask, _excerpts(aca, rate))
+    assert out is not None
+    assert out["daily_amount"] == pytest.approx(aca * rate / 100.0)
