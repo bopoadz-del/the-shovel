@@ -647,12 +647,22 @@ def test_a_hold_that_begins_in_the_monitors_own_work_is_dumped(monkeypatch, wind
     takes the GIL there and holds it is dumped by the timer armed when the
     window opened, as a WAKE_LATE naming the holder.
 
-    The hold is placed inside the window, never raced into it: a holder
-    thread spins in Python (so it always waits for the GIL) until the
-    monitor's own arm opening the chosen window returns and opens the gate;
-    with a tiny switch interval the monitor then yields at its very next
-    eval check, still in its own code, and the holder starts a C call that
-    keeps the GIL for ~0.6 s. Two inputs: each window."""
+    The hold is placed inside the window, never raced into it.
+
+    ``_run``: a holder thread spins in Python (so it always waits for the
+    GIL) until the monitor's own arm opening the window returns and opens
+    the gate; with a tiny switch interval the monitor yields at its next eval
+    check, still in its own code, and the holder starts a C call that keeps
+    the GIL for ~0.6 s.
+
+    ``_sleep_watched``: the same race lost on Linux CI (f5847403: the hold
+    began after the next post, ``max_lag 1101``), because the work left in
+    that window after its arm is shorter than one GIL hand-off. So the
+    holder pins the monitor first: it takes the lock ``threading.enumerate``
+    needs, waits until the monitor is blocked in that call from ``_run`` --
+    the names read inside this window, before it closes -- and only then
+    holds the GIL. The monitor is stopped in a library call its own line
+    made, the case ``preempted_in_own_code`` keeps. Two inputs: each window."""
     n = _size_for(0.6)
     gate, quit_, held = [False], [False], threading.Event()
     trigger = threading.Event()
@@ -662,7 +672,8 @@ def test_a_hold_that_begins_in_the_monitors_own_work_is_dumped(monkeypatch, wind
     def arm(self, after_s=None):
         real_arm(self, after_s)
         caller = sys._getframe(1).f_code.co_name
-        if (trigger.is_set() and not gate[0] and box and after_s is None
+        if (window == "_run" and trigger.is_set() and not gate[0] and box
+                and after_s is None
                 and threading.current_thread().name == "loop-watchdog"
                 and box[0]._work_from is not None and caller == window):
             gate[0] = True
@@ -670,9 +681,32 @@ def test_a_hold_that_begins_in_the_monitors_own_work_is_dumped(monkeypatch, wind
     monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm)
 
     def holder():
+        if window == "_sleep_watched":
+            return pinned_holder()
         while not gate[0] and not quit_[0]:
             pass
         if gate[0]:
+            _gil_holding_call(n)
+            held.set()
+
+    def blocked_in_window(ident) -> bool:
+        frame = sys._current_frames().get(ident)
+        return (frame is not None and frame.f_code.co_name == "enumerate"
+                and frame.f_back is not None
+                and frame.f_back.f_code is loop_watchdog.LagMonitor._run.__code__
+                and box[0]._work_from is not None)
+
+    def pinned_holder():
+        while not trigger.is_set() and not quit_[0]:
+            time.sleep(0.001)
+        ident = box[0]._thread.ident
+        with threading._active_limbo_lock:
+            deadline = time.monotonic() + 5
+            while not blocked_in_window(ident) and time.monotonic() < deadline:
+                time.sleep(0.001)
+            if not blocked_in_window(ident):
+                return
+            gate[0] = True
             _gil_holding_call(n)
             held.set()
 
