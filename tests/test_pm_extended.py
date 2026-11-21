@@ -70,6 +70,103 @@ def test_resource_histogram_sums_concurrent_trades():
     assert hist.peak_total == 9
 
 
+@pytest.mark.parametrize("spans, counts, period_total, peak, peak_period", [
+    # A 5 persons days 0-3, then B 4 persons days 3-5: both touch week 1, so the
+    # bucket sums 9, but no day ever holds more than A's 5.
+    ([(3, []), (2, ["A"])], {"A": 5, "B": 4}, 9, 5, "W1"),
+    # A 6 persons days 0-4, B 6 persons days 4-8: week 1 sums 12 (B starts
+    # inside it), yet the busiest day holds one crew of 6, which is in week 1.
+    ([(4, []), (4, ["A"])], {"A": 6, "B": 6}, 12, 6, "W1"),
+])
+def test_resource_histogram_peak_is_one_day_not_one_bucket(spans, counts, period_total, peak, peak_period):
+    acts = [_act("A" if i == 0 else "B", dur, preds,
+                 resources=[ResourceAssignment(trade="crew", count=counts["A" if i == 0 else "B"])])
+            for i, (dur, preds) in enumerate(spans)]
+    out = compute_cpm(CPMInput(activities=acts))
+    hist = resource_histogram(out.results, acts, period_unit="week")
+    assert hist.periods[0].total == period_total
+    assert hist.peak_total == peak
+    assert hist.peak_period == peak_period
+
+
+@pytest.mark.parametrize("dur, synthetic_count, qty, weeks", [
+    # 10 days, 80 man-hours exported by P6: 8 per day -> 40 in each 5-day week.
+    (10, 99, 80, [40.0, 40.0]),
+    # 6 days, 120 man-hours: 20 per day -> 100 in week 1, 20 in the 1-day tail.
+    (6, 7, 120, [100.0, 20.0]),
+])
+def test_resource_histogram_prefers_the_exported_task_rows(dur, synthetic_count, qty, weeks):
+    """A real TASKRSRC export outranks the synthetic activity.resources guess.
+
+    The synthetic crew count is deliberately absurd (99 / 7) so that a code path
+    that silently falls back to it is visible in the totals.
+    """
+    acts = [_act("A", dur, resources=[ResourceAssignment(trade="entered-by-hand", count=synthetic_count)])]
+    out = compute_cpm(CPMInput(activities=acts))
+    hist = resource_histogram(
+        out.results, acts, period_unit="week",
+        task_resources=[{"task_code": "A", "target_qty": qty, "rsrc_id": "from-p6"}],
+    )
+    assert hist.by_trade_totals == {"from-p6": float(qty)}
+    assert "entered-by-hand" not in hist.by_trade_totals
+    assert hist.total_manhours == float(qty)
+    assert [p.total for p in hist.periods] == weeks
+
+
+@pytest.mark.parametrize("bad_unit", ["quarter", "day"])
+@pytest.mark.parametrize("with_export", [False, True])
+def test_resource_histogram_rejects_an_unknown_period_unit(bad_unit, with_export):
+    """Both branches refuse an unknown unit; each has its own guard."""
+    acts = [_act("A", 5, resources=[ResourceAssignment(trade="civil", count=2)])]
+    out = compute_cpm(CPMInput(activities=acts))
+    rows = ([{"task_code": "A", "target_qty": 40, "rsrc_id": "lab"}]
+            if with_export else None)
+    with pytest.raises(ValueError, match="period_unit"):
+        resource_histogram(out.results, acts, period_unit=bad_unit, task_resources=rows)
+
+
+@pytest.mark.parametrize("parallel, period_totals, peak, peak_period", [
+    # A alone days 0-9: 160 man-hours over 10 days = 16 mh/day = 2 persons;
+    # B alone days 10-19: 240 man-hours = 24 mh/day = 3 persons. Week 3 sums
+    # 120 man-hours and week 4 sums 120 too, but no day holds more than B's 3
+    # persons - a bucket total is man-hours, not a headcount.
+    (False, [80.0, 80.0, 120.0, 120.0], 3.0, "W3"),
+    # A and B both run days 0-9: 2 + 3 persons every day, so the busiest day
+    # holds 5 while week 1 sums 200 man-hours.
+    (True, [200.0, 200.0], 5.0, "W1"),
+])
+def test_taskrsrc_peak_is_the_busiest_day_in_persons(parallel, period_totals, peak, peak_period):
+    """The stored P6 form takes the same day-level peak as a synthetic network.
+
+    TASKRSRC carries man-hours, so the peak needs the module's 8-hour day to
+    become persons; the period totals stay man-hours.
+    """
+    acts = [_act("A", 10), _act("B", 10)]
+    if not parallel:
+        acts[1] = _act("B", 10, preds=["A"])
+    out = compute_cpm(CPMInput(activities=acts))
+    hist = resource_histogram(
+        out.results, acts, period_unit="week",
+        task_resources=[
+            {"task_code": "A", "target_qty": 160, "rsrc_id": "lab"},
+            {"task_code": "B", "target_qty": 240, "rsrc_id": "lab"},
+        ],
+    )
+    assert [p.total for p in hist.periods] == period_totals
+    assert hist.peak_total == peak
+    assert hist.peak_period == peak_period
+
+
+@pytest.mark.parametrize("with_export", [False, True])
+def test_histogram_with_no_placeable_work_has_no_peak(with_export):
+    rows = ([{"task_code": "A", "target_qty": 40, "rsrc_id": "lab"}]
+            if with_export else None)
+    hist = resource_histogram([], [], period_unit="week", task_resources=rows)
+    assert hist.peak_total == 0.0
+    assert hist.peak_period == ""
+    assert hist.total_manhours == 0.0
+
+
 def test_resource_histogram_total_manhours():
     # crew 4 x 10 days x 8 h = 320
     acts = [_act("A", 10, resources=[ResourceAssignment(trade="civil", count=4)])]
