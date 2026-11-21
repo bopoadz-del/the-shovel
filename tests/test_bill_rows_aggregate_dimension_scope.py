@@ -249,3 +249,90 @@ def test_the_asks_other_words_still_scope_a_dimension_total(tmp_path, place):
     out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe",
                         ask=f"What is the total billed length of storm water pipe in the {place}?")
     assert (out["count"], out["sum"]) == (1, 40.0)
+
+
+@pytest.mark.parametrize("ask, unit", [
+    ("How many metres of storm water pipe are billed?", "m"),
+    ("What is the total tonnes of storm water pipe?", "t"),
+], ids=["length-by-unit", "mass-by-unit"])
+def test_an_ask_that_names_the_measurement_by_its_unit_binds_the_dimension(tmp_path, ask, unit):
+    # The ask can name the dimension with a unit instead of with the noun. It is
+    # the same vocabulary that reads the row's Unit cell, so a row counted in
+    # units and a section's carry total are still not members of the total, and
+    # the total is the two rows that measure the unit the ask named.
+    path = (BILL, NET, "PIPE RUNS")
+    rows = [
+        _row(path, "A |Storm water pipe, first run", unit, "5", "1", "5"),
+        _row(path, "B |Storm water pipe, second run", unit, "7", "1", "7"),
+        _row(path, "C |Storm water pipe, chamber", "No", "4", "1", "4"),
+        _row(path, "D |Storm water pipe, carried", "sum", "", "", "12"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe", ask=ask)
+    assert (out["count"], out["sum"]) == (2, 12.0)
+    assert {row["unit"] for row in out["rows"]} == {unit}
+
+
+@pytest.mark.parametrize("depth, phrase", [
+    ("2.5 to 3m", "2.5 to 3 m of depth"),
+    ("4.0 to 4.5m", "4.0 to 4.5 m of depth"),
+], ids=["upper-band", "lower-band"])
+def test_a_unit_attached_to_a_number_states_a_size_not_a_total(tmp_path, depth, phrase):
+    # The same unit spelling that binds a total when the ask totals a
+    # measurement binds nothing when it is attached to a number: the number is
+    # the size of the thing, so counting what lies in the band is still open.
+    sheet = _sheet(tmp_path, _mixed_sheet(depth, "500", "300"))
+    out = agg.aggregate(sheet, terms="storm water pipe",
+                        ask=f"What is the total of storm water pipe at {phrase}?")
+    assert out["scope"]["dimension"] is None
+    assert out["count"] == 6
+
+
+@pytest.mark.parametrize("ask, unit, other", [
+    ("What is the total square metres of formwork?", "m2", "m"),
+    ("What is the total cubic metres of concrete?", "m3", "m"),
+], ids=["area-by-unit", "volume-by-unit"])
+def test_the_qualifier_in_front_of_the_unit_names_the_dimension(tmp_path, ask, unit, other):
+    # A metre is a length, but "square metres" is an area and "cubic metres" a
+    # volume: the qualifier decides, so the rows of the other measurement are
+    # not in this total even though every row prints the ask's item word.
+    path = (BILL, NET, "MEASURED WORKS")
+    item = ask.rsplit(" ", 1)[-1].rstrip("?")
+    rows = [
+        _row(path, f"A |{item.capitalize()} to soffit, first", unit, "5", "1", "5"),
+        _row(path, f"B |{item.capitalize()} to soffit, second", unit, "7", "1", "7"),
+        _row(path, f"C |{item.capitalize()} to soffit, run", other, "9", "1", "9"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms=item, ask=ask)
+    assert (out["count"], out["sum"]) == (2, 12.0)
+    assert {row["unit"] for row in out["rows"]} == {unit}
+
+
+@pytest.mark.parametrize("ask, terms, count", [
+    ("How many storm water pipe segments in each of the bills are billed?", "", 6),
+    ("How many storm water pipe segments are billed in metres?", "storm water pipe", 6),
+], ids=["count-word", "unit-not-in-measuring-position"])
+def test_a_word_that_could_be_a_unit_binds_no_dimension_out_of_position(tmp_path, ask, terms, count):
+    # "each" and "metres" are spellings the unit table knows, but neither totals
+    # a measurement here: one is a count, the other is not in a measuring
+    # position. Inferring a dimension from either would drop counted rows from
+    # a count ask, so the question is counted, not measured.
+    sheet = _sheet(tmp_path, _mixed_sheet("2.5 to 3m", "500", "300"))
+    out = agg.aggregate(sheet, terms=terms, ask=ask)
+    assert (out["scope"] or {}).get("dimension") is None
+    assert out["count"] == count
+    assert set(out["sum_by_unit"]) == {"m", "No", "Nr", ""}
+
+
+@pytest.mark.parametrize("unit", ["mtr", "Mtrs"], ids=["singular", "plural"])
+def test_the_unit_an_ask_names_is_not_a_word_to_find(tmp_path, unit):
+    # The unit the ask printed is the measurement, not an item word: requiring
+    # "metres" in the rows would empty a total of rows that print the unit only
+    # in their own Unit cell.
+    path = (BILL, NET, "PIPE RUNS")
+    rows = [
+        _row(path, "A |Storm water pipe, first run", unit, "40", "1", "40"),
+        _row(path, "B |Storm water pipe, second run", unit, "60", "1", "60"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe",
+                        ask="How many metres of storm water pipe are billed?")
+    assert (out["count"], out["sum"]) == (2, 100.0)
