@@ -386,6 +386,9 @@ async def handle_bill_rows_aggregate(call: ToolCall) -> dict:
             section=str(args.get("section") or ""),
             measure=measure,
             document_id=(str(args.get("document_id") or "").strip() or None),
+            # The ask itself, so the row set is scoped by what the user asked
+            # and not by the word set the model passed on this turn.
+            ask=call.user_message,
         )
     except ValueError as exc:
         return {"name": name, "ok": False, "result": {"status": "error", "error": str(exc)}}

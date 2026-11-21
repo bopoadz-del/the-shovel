@@ -24,6 +24,13 @@ rest of that item.
 Matching is by words, not by a phrase: every term must appear as a word in
 the row's description (and every section term in its heading path). Nothing
 here names a bill, a section, a row or a question.
+
+When the caller passes the ask itself (``ask=``), the scope is read off the
+ask rather than off the model's per-turn word set (see :class:`AskScope`): a
+size and a depth band are compared as numbers with the cells of the row's own
+line, a bill named in the ask admits only the rows whose own path names it,
+and the ask's other words scope by the cell the document prints them in. The
+same ask therefore selects the same rows on every trial.
 """
 
 from __future__ import annotations
@@ -187,12 +194,213 @@ def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
     return not section_terms or section_terms <= _words(" ".join(row.path))
 
 
+# ── the scope an ask states ──────────────────────────────────────────────────
+#
+# A count or a total over bill rows is scoped by what the ask says, not by the
+# word set the model happens to pass on one turn: the same ask must select the
+# same rows on every trial. Three phrases in it carry a scope, and each is read
+# as a NUMBER or as a structural cell of the row's own line, never as a token:
+#
+# * a size -- "1.5 x 1.5 m" -> the two dimensions, compared numerically with
+#   the dimensions the row's own description states. The word splitting that
+#   turns "1.5m" into "1" and "5m" cannot satisfy a size, and neither can an
+#   item code that happens to carry one of its digits.
+# * a band -- "2.5 to 3 m", "5.0-5.5m" -> the two ends of a depth band,
+#   compared numerically with the band cell of the row ITSELF (never with a
+#   neighbour's, a header's or the previous row's label).
+# * a bill -- "Bill No. 13" -> a row is admitted only when its own path names
+#   that bill: a bill heading, or the document's page label.
+#
+# The ask's remaining words scope by the cell the document prints them in: a
+# word the document prints in heading paths (a network, a section, a sheet
+# head) scopes structurally, a word it prints in item descriptions scopes the
+# item, and a word it prints nowhere scopes nothing -- it cannot select a row
+# and must not empty the answer.
+
+_DIM = r"\d+(?:\.\d+)?"
+#: A size: two dimensions multiplied, each with an optional unit.
+_SIZE_RE = re.compile(
+    rf"({_DIM})\s*(mm|cm|m)?\s*[x\u00d7X]\s*({_DIM})\s*(mm|cm|m)?(?!\w)", re.IGNORECASE,
+)
+#: A depth band: two ends joined by "to", a hyphen or a dash, with a unit.
+_BAND_RE = re.compile(
+    rf"({_DIM})\s*(mm|cm|m)?\s*(?:to|[\-\u2013\u2014])\s*({_DIM})\s*(mm|cm|m)\b",
+    re.IGNORECASE,
+)
+#: A bill named in an ask: "Bill No. 13", "bill 13", "Bill Number 12A".
+_ASK_BILL_RE = re.compile(r"\bbill\s*(?:no\.?|number|#)?\s*(\d{1,3}[a-z]?)\b", re.IGNORECASE)
+#: A bill named by the document's own page label: "Page D/13/2", "D/13/10".
+_PAGE_LABEL_RE = re.compile(r"\b([A-Za-z]{1,4})\s*/\s*(\d{1,3}[a-z]?)\s*/\s*\d{1,4}\b")
+
+_UNIT_M = {"mm": 0.001, "cm": 0.01, "m": 1.0}
+#: A dimension printed with no unit at all is metres unless it is too large to
+#: be one: a bill prints a 1200 mm pipe as "1200", never as "1200 m".
+_UNITLESS_MM_FROM = 100.0
+_SCOPE_STOP = frozenset({
+    "and", "the", "for", "how", "many", "much", "what", "which", "all", "any",
+    "are", "was", "were", "its", "with", "from", "that", "this", "total", "totals",
+    "unit", "rate", "rated", "billed", "bill", "bills", "number", "count", "counted",
+    "value", "amount", "quantity", "price", "priced", "depth", "depths", "together",
+    "across", "does", "did", "into", "per", "each", "row", "rows", "item", "items",
+    "give", "list", "show", "tell", "please", "there", "their", "over", "under",
+})
+
+
+@dataclass(frozen=True)
+class AskScope:
+    """The scope an ask states, read as numbers and structural cells.
+
+    ``size``/``band`` are in metres; ``bills`` are the bill numbers the ask
+    names; ``level``/``item``/``either`` are the ask's content words graded by
+    where the document prints them (a heading path, an item description, or
+    both). Empty dimensions do not scope.
+    """
+
+    size: tuple[float, float] | None = None
+    band: tuple[float, float] | None = None
+    bills: frozenset[str] = frozenset()
+    level: frozenset[str] = frozenset()
+    item: frozenset[str] = frozenset()
+    either: frozenset[str] = frozenset()
+
+    def states(self) -> bool:
+        return bool(self.size or self.band or self.bills or self.level or self.item or self.either)
+
+    def admits(self, row: SheetRow) -> bool:
+        """Whether the row is inside every scope the ask states."""
+        if self.size is not None and _row_size(row) != self.size:
+            return False
+        if self.band is not None and _row_band(row) != self.band:
+            return False
+        if self.bills and not (row_bills(row) & self.bills):
+            return False
+        if self.level and not self.level <= _row_path_words(row):
+            return False
+        if self.item and not self.item <= _words(row.description):
+            return False
+        if self.either and not (self.either & (_words(row.description) | _row_path_words(row))):
+            return False
+        return True
+
+
+def _fold(word: str) -> str:
+    return word[:-1] if word.endswith("s") and len(word) > 3 else word
+
+
+def _scope_words(text: str) -> set[str]:
+    """The ask's content words, folded, with the words a bill question uses to
+    ask rather than to name an item left out (they name no row anyway)."""
+    out = set()
+    for word in _WORD_RE.findall((text or "").casefold()):
+        if len(word) < 3 or word.isdigit() or word in _SCOPE_STOP:
+            continue
+        out.add(_fold(word))
+    return out
+
+
+def _row_path_words(row: SheetRow) -> set[str]:
+    return {_fold(w) for w in _words(" ".join(row.path))}
+
+
+def _desc_words(row: SheetRow) -> set[str]:
+    return {_fold(w) for w in _words(row.description)}
+
+
+def _dimensions(match: re.Match[str]) -> tuple[float, float]:
+    """The two ends of a dimension expression, in metres.
+
+    A unit written on either end applies to both; a size written with no unit
+    at all is metres unless both ends are too large for that, in which case it
+    is millimetres (a bill prints "1200 x 1200" for a 1.2 m chamber)."""
+    first, unit_a, second, unit_b = match.groups()
+    values = (float(first), float(second))
+    unit = (unit_a or unit_b or "").lower()
+    if unit:
+        scale = _UNIT_M.get(unit, 1.0)
+        return (round(values[0] * scale, 6), round(values[1] * scale, 6))
+    if min(values) >= _UNITLESS_MM_FROM:
+        return (round(values[0] / 1000.0, 6), round(values[1] / 1000.0, 6))
+    return values
+
+
+def _row_size(row: SheetRow) -> tuple[float, float] | None:
+    """The size the row's own description states, in metres, or ``None``."""
+    found = _SIZE_RE.search(row.description or "")
+    return _dimensions(found) if found else None
+
+
+def _row_band(row: SheetRow) -> tuple[float, float] | None:
+    """The depth band of the row's OWN band cell, in metres, or ``None``.
+
+    The band is the row's own description when it states one, else the deepest
+    heading-path level of that row that is a band. A neighbour's label, the
+    sheet's header and the previous row's band are never used."""
+    found = _BAND_RE.search(row.description or "")
+    if found:
+        return _dimensions(found)
+    for level in reversed(row.path):
+        found = _BAND_RE.search(level or "")
+        if found:
+            return _dimensions(found)
+    return None
+
+
+def row_bills(row: SheetRow) -> set[str]:
+    """The bill numbers the row's own path names.
+
+    A bill heading (``Bill No. 13 - ...``) or the document's page label
+    (``D/13/2``: part, bill, page) printed in one of the row's own heading
+    levels. A path that names no bill names none.
+    """
+    found: set[str] = set()
+    for level in row.path:
+        for match in _ASK_BILL_RE.finditer(level or ""):
+            found.add(match.group(1).upper())
+        for match in _PAGE_LABEL_RE.finditer(level or ""):
+            found.add(match.group(2).upper())
+    return found
+
+
+def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
+    """The scope ``ask`` states over ``items``; ``None`` when it states none.
+
+    The ask's words are graded by the cell the document prints them in, so a
+    word that names a heading level scopes structurally and a word that names
+    an item scopes the description. A word the document prints nowhere is left
+    out: it cannot select a row, and requiring it would empty the answer.
+    """
+    text = (ask or "").strip()
+    if not items:
+        return None
+    if not text:
+        return None
+    size = _SIZE_RE.search(text)
+    band = _BAND_RE.search(text)
+    bills = frozenset(m.group(1).upper() for m in _ASK_BILL_RE.finditer(text))
+    in_paths: set[str] = set()
+    in_desc: set[str] = set()
+    for row in items:
+        in_paths |= _row_path_words(row)
+        in_desc |= _desc_words(row)
+    asked = _scope_words(text)
+    scope = AskScope(
+        size=_dimensions(size) if size else None,
+        band=_dimensions(band) if band else None,
+        bills=bills,
+        level=frozenset(asked & in_paths - in_desc),
+        item=frozenset(asked & in_desc - in_paths),
+        either=frozenset(asked & in_paths & in_desc),
+    )
+    return scope if scope.states() else None
+
+
 def aggregate(
     rows: Sequence[SheetRow],
     *,
     terms: Iterable[str] | str | None,
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
+    ask: str | None = None,
 ) -> dict[str, Any]:
     """Count and sum the items matching ``terms`` (and ``section``).
 
@@ -200,17 +408,26 @@ def aggregate(
     total, so a mixed-unit match returns one sum per unit and no single sum.
     A matching item without the figure is counted, listed, and named in
     ``without_figure``; it adds nothing to a sum.
+
+    With ``ask``, the ask's own scope governs (:func:`ask_scope`): a size, a
+    band and a bill are numbers and structural cells of the row, so the same
+    ask selects the same rows whatever ``terms`` the model passed on the turn.
+    The model's terms are then reported but not applied -- an unparsed token
+    set never defines scope. An ask that states no scope leaves ``terms`` and
+    ``section`` to select, exactly as before.
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
     want, where = _terms(terms), _terms(section)
-    if not want and not where:
-        raise ValueError("give description terms or a section to match")
     items = join_page_continuations(rows)
+    scope = ask_scope(ask, items)
+    if scope is None and not want and not where:
+        raise ValueError("give description terms or a section to match")
     used, without = [], []
     sums: dict[str, float] = {}
     for row in items:
-        if not matches(row, want, where):
+        admitted = scope.admits(row) if scope is not None else matches(row, want, where)
+        if not admitted:
             continue
         value = row.figure(measure)
         entry = {
@@ -232,6 +449,14 @@ def aggregate(
         "measure": measure,
         "terms": sorted(want),
         "section_terms": sorted(where),
+        "scope": ({
+            "size": list(scope.size) if scope.size else None,
+            "band": list(scope.band) if scope.band else None,
+            "bills": sorted(scope.bills),
+            "level": sorted(scope.level),
+            "item": sorted(scope.item),
+            "either": sorted(scope.either),
+        } if scope is not None else None),
         "rows_scanned": len(items),
         "count": len(used),
         "sum": (next(iter(sums.values()), 0.0) if single else None),
@@ -288,6 +513,7 @@ def aggregate_project_bills(
     section: Iterable[str] | str | None = None,
     measure: str = MEASURE_QUANTITY,
     document_id: str | None = None,
+    ask: str | None = None,
 ) -> dict[str, Any]:
     """:func:`aggregate` over every row of each derived bill sheet in scope,
     one result per bill (two bills are never added together)."""
@@ -313,7 +539,7 @@ def aggregate_project_bills(
             _LOG.warning("derived bill sheet %s is not readable: %s", doc.get("id"), type(exc).__name__)
             bills.append({**head, "status": "error", "reason": UNREADABLE_SHEET})
             continue
-        result = aggregate(rows, terms=terms, section=section, measure=measure)
+        result = aggregate(rows, terms=terms, section=section, measure=measure, ask=ask)
         bills.append({**head, "status": "success", **result})
     out = {"status": "success", "bills": bills}
     _LOG.info("%s", selection_log_line(out, terms=terms, section=section, measure=measure))
