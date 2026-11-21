@@ -39,8 +39,10 @@ one-line reason and reported as a suspected defect; the expected value is
 never moved to match. Every value test runs on two inputs worked by hand
 the same way.
 
-No M case for F68 and F71: every input has a stated default (the defaults
-are reported in ``defaults_used``), so nothing can be missing. No U case for
+No required-input M case for F68 and F71: every input has a stated default,
+so nothing can be missing. Their M case is the OMITTED input instead: the
+stated default is used and must be reported in ``defaults_used``, and a given
+input must not be (``test_f68_m_*``, ``test_f71_m_*``). No U case for
 F68 (a yes/no input) or F70 (counts and currency in the project's own unit).
 
 Unit factors (exact by definition): 1 ft = 0.3048 m, so 1 ft2 =
