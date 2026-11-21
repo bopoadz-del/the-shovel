@@ -356,6 +356,39 @@ def test_the_heartbeat_is_stamped_at_the_post_and_the_snapshot_runs_after_it(mon
         assert mon.live_dumps == [], mon.live_dumps[:1]
 
 
+@pytest.mark.parametrize("pre_post_s", [0.0, 0.4])
+@own_process
+def test_the_monitors_own_pre_post_work_is_never_charged_to_the_loop(monkeypatch, pre_post_s):
+    """Arming the live timer cancels the C timer thread in force and waits for
+    it to stop, and on a loaded runner that wait can outlast the live delay
+    while the monitor holds the GIL. The wait is the MONITOR's own work, so the
+    heartbeat is stamped and posted after it and the wait is reported as
+    ``stamp_to_post``. The loop served every heartbeat at once here: that is
+    never a stall, and a stall no timer had been armed for the live delay is
+    never recorded (so a recorded stall always carries the dump its own window
+    produced)."""
+    real_arm = loop_watchdog.LiveDump.arm
+
+    def arm_after_a_wait(self, after_s=None):
+        if threading.current_thread().name == "loop-watchdog":
+            time.sleep(pre_post_s)
+        real_arm(self, after_s)
+
+    monkeypatch.setattr(loop_watchdog.LiveDump, "arm", arm_after_a_wait)
+
+    async def run():
+        mon = loop_watchdog.LagMonitor(asyncio.get_running_loop(), threshold_ms=250,
+                                       tick_ms=10, log=False, live_ms=150).start()
+        await asyncio.sleep(2.0)
+        mon.stop()
+        return mon
+
+    mon = asyncio.run(run())
+    assert mon.max_stamp_to_post_ms >= pre_post_s * 1000 * 0.9, mon.max_stamp_to_post_ms
+    assert mon.stalls == [], (mon.max_lag_ms, mon.stalls[:1])
+    assert mon.max_lag_ms < 250, mon.max_lag_ms
+
+
 @pytest.mark.parametrize("live_ms", [150.0, 0.0])
 @own_process
 def test_stop_ends_both_threads_and_hands_the_dump_timer_back(live_ms):

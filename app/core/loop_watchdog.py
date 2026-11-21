@@ -484,9 +484,10 @@ class LagMonitor:
         self.live_near_misses = 0
         #: Diagnostic only, never gated (advisor 07:28Z 18 Nov, STAMP TO
         #: POST): how long after its stamp each heartbeat was actually posted
-        #: to the loop -- the cost of the CPU snapshot taken in between. A lag
-        #: about equal to its stamp-to-post was the monitor's own /proc reads,
-        #: not the loop. ``max_stamp_to_post_ms`` is the worst of any
+        #: to the loop -- the monitor's OWN work in between (the live timer's
+        #: arm, which waits for the C timer thread in force to stop). It is
+        #: reported apart and is never part of the lag: the post is stamped
+        #: after that work. ``max_stamp_to_post_ms`` is the worst of any
         #: heartbeat; ``stall_stamp_to_post`` is ``(lag_ms, stamp_to_post_ms)``
         #: for each recorded stall (same order as ``stalls``);
         #: ``worst_lag_stamp_to_post`` is that pair for the heartbeat with the
@@ -609,10 +610,21 @@ class LagMonitor:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
-            posted = time.monotonic()
+            stamped = time.monotonic()
             if live is not None:
+                # Arming cancels the C timer thread in force and waits for it
+                # to stop, and that wait can last as long as the thread the
+                # timer was dumping holds the GIL: the monitor waits, holding
+                # the GIL itself, for hundreds of ms on a loaded runner. The
+                # wait is the MONITOR's work, so the post is stamped after it
+                # (``posted``), never before: a lag measured from the earlier
+                # stamp charged the arm to the loop and recorded a stall at a
+                # moment no timer had been armed for the live delay -- a stall
+                # whose dump could not exist, with the loop served just after
+                # the post. The arm's own cost is reported as ``stamp_to_post``.
                 live.arm()
-            stamp_to_post_ms = (time.monotonic() - posted) * 1000
+            posted = time.monotonic()
+            stamp_to_post_ms = (posted - stamped) * 1000
             if self._last_served is not None:
                 self.max_unobserved_ms = max(self.max_unobserved_ms,
                                              (posted - self._last_served) * 1000)
@@ -744,9 +756,10 @@ def stamp_to_post_summary(max_stamp_to_post_ms: float, stall_pairs: list,
     """The STAMP TO POST fields for a result line (diagnostic, not gated).
 
     ``worst_stall`` is the stall with the largest lag and its stamp-to-post
-    time; ``none`` when no stall was recorded. ``worst_lag`` is the same pair
-    for the heartbeat with the largest lag, so a window without a recorded
-    stall still carries it. ``snapshot_max`` (when given) is the slowest CPU
+    time (the monitor's own pre-post work, never part of the lag); ``none``
+    when no stall was recorded. ``worst_lag`` is the same pair for the
+    heartbeat with the largest lag, so a window without a recorded stall
+    still carries it. ``snapshot_max`` (when given) is the slowest CPU
     snapshot's own duration: off the heartbeat's path, printed on its own.
     ``unobserved_max`` (when given) is the longest gap between a heartbeat's
     service and the next heartbeat's post."""
