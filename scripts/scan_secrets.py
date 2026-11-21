@@ -47,8 +47,9 @@ escape-decoded line, and a folded line in which case, accents, invisibles,
 and the choice of separator are normalised away. A phrase wrapped across a
 line break is the same phrase. A denylist entry that is a written proper
 name -- every word capitalised -- is additionally matched as a name is
-written: surname first, or with one middle name or initial between the two
-words. See ``fold_for_match``, ``name_pattern_words`` and
+written: surname first, in mixed case or in capitals, in any script that
+marks case, with up to two words -- a middle name and an initial -- between
+the name's own. See ``fold_for_match``, ``name_pattern_words`` and
 ``scan_client_document``.
 
 FAIL-CLOSED: if ``SECRET_SCAN_PATTERNS`` is unset, empty, or comments-only,
@@ -674,15 +675,19 @@ def folded_matcher(pattern: re.Pattern[str]) -> re.Pattern[str]:
     return re.compile(r"(?<!\w)" + re.escape(folded) + r"(?!\w)", re.IGNORECASE)
 
 
-# A written personal name is a run of Titlecase words: ``Given Surname``,
-# ``Surname Given``, ``Given A. Surname``. That is a property of names, not a
-# guess: prose mid-sentence is lower case, code is an identifier, and only a
-# proper noun is spelled with a capital at every word. So the rule below
-# applies to a denylist entry only when EVERY word of it is Titlecase -- an
-# entry that spells a name. An order-independent, gap-tolerant match over
-# ordinary words was tried and withdrawn because it matched word sets across a
-# sentence; this one never forgets which word is which: it reads the exact
-# sequence, forwards or backwards, with at most one interior insertion.
+# A written personal name is a run of capitalised words: ``Given Surname``,
+# ``Surname Given``, ``Given A. Surname``, and the same name set in capitals
+# for a title block. That is a property of names, not a guess: prose
+# mid-sentence is lower case, code is an identifier, and only a proper noun is
+# spelled with a capital at every word. So the rule below applies to a denylist
+# entry only when EVERY word of it is Titlecase -- an entry that spells a name.
+# The document side is judged by the same shape the entry has, capitals
+# included: whether a page sets a name in mixed case or in capitals is a
+# typographic choice, not a different name. An order-independent, gap-tolerant
+# match over ordinary words was tried and withdrawn because it matched word
+# sets across a sentence; this one never forgets which word is which: it reads
+# the exact sequence, forwards or backwards, with at most one interior
+# insertion.
 _NAME_SEPARATORS = frozenset(
     " \t\n\x0b\x0c\r\x85\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
     "\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000-\u2010\u2011\u2012"
@@ -691,14 +696,113 @@ _NAME_SEPARATORS = frozenset(
 # Punctuation a word may be wrapped in by a sentence and still be that word.
 # An interior apostrophe is NOT here: it makes the token not a name word at
 # all, which breaks the run instead of guessing at the apostrophe's meaning.
-_EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’"
-_TITLECASE_WORD = re.compile(r"[A-Z][a-z]+\Z")
-_INITIAL = re.compile(r"[A-Z]\Z")
+_EDGE_PUNCTUATION = "\"'`.,;:!?()[]{}<>*_/\\|~#@$%^&+=…“”‘’\u060c\u3001\uff0c"
+# The comma, as each script that has one spells it: the inverted listing form
+# ``Surname, Given`` is how a byline, an index entry and a table cell write a
+# name. A comma separates entries; it does not end one, so it does not end a
+# run of name words. Every other closing mark does. The Arabic, ideographic
+# and fullwidth commas are the same mark in another script and are stripped as
+# edge punctuation for that reason.
+_ENTRY_COMMA = frozenset(",\u060c\u3001\uff0c")
+# The shape of a name word is a property of the alphabet, not of ASCII: a
+# name written in Cyrillic, Greek or Armenian is spelled with a capital at
+# every word exactly as a Latin one is, and a rule that only recognises the
+# Latin range gives such an entry no order-independent match at all -- only
+# the spelling the list happened to be typed in. So the shape is asked of the
+# characters themselves. A script without case (Han, Kana, Hangul syllables)
+# has no capital to read as a name word, which is stated as a limit of the
+# rule rather than papered over; the literal comparison still covers it.
+
+
+def _is_titlecase_word(word: str) -> bool:
+    """True for a leading capital and lower-case letters, in any script.
+
+    Letters only: a word carrying a digit is an identifier, and an identifier
+    is never a written name however it is capitalised.
+    """
+    return (
+        len(word) >= 2
+        and word[0].isupper()
+        and word[1:].isalpha()
+        and word[1:].islower()
+    )
+
+
+def _is_capitalised_word(word: str) -> bool:
+    """True for a word spelled entirely in capitals, in any script.
+
+    A single capital letter is the one-letter case of it, so this predicate
+    answers for an initial too.
+    """
+    return bool(word) and word.isalpha() and word.isupper()
+
+
+def _is_initial(word: str) -> bool:
+    """True for one capital letter, in any script: the ``A.`` of a middle name."""
+    return len(word) == 1 and word.isalpha() and word.isupper()
 
 
 def _is_name_word(word: str) -> bool:
-    """True for a Titlecase word or a single capital -- a name, or an initial."""
-    return bool(_TITLECASE_WORD.match(word) or _INITIAL.match(word))
+    """True for a capitalised word: Titlecase, all capitals, or one initial.
+
+    A name is spelled with a capital at every word. The same name is also
+    printed in capitals -- on a drawing title block, a table header, a
+    signature line -- and there every letter carries the capital instead, so
+    the run a reader sees is still a name. A lower-case word is prose, and an
+    identifier is never split into words, so neither joins a run: the case a
+    document happens to use cannot decide whether a name is hidden.
+    """
+    return _is_titlecase_word(word) or _is_capitalised_word(word)
+
+
+def _keeps_run(shape: str, core: str) -> bool:
+    """True when what wraps ``core`` leaves the run of name words open.
+
+    A word with nothing written after it keeps the run open, and so does the
+    dot of an initial -- the dot belongs to the letter. A word closed by a
+    comma keeps it open too: in the inverted listing form the comma stands
+    between the surname and the given name, and reading it as a sentence
+    break loses the name exactly where a document prints it most formally.
+    Every other closing mark ends the entry.
+    """
+    start = shape.find(core) if core else 0
+    trailing = shape[start + len(core):]
+    if not trailing:
+        return True
+    if trailing == "." and _is_initial(core):
+        return True
+    return all(char in _ENTRY_COMMA for char in trailing)
+
+
+def _entry_words(text: str) -> list[str] | None:
+    """The words of a denylist entry, read as a reader reads them written.
+
+    An entry is typed by a person, usually copied from the place the name was
+    found: a byline, an index entry, a licence line, a table cell. Those places
+    wrap a name in marks that belong to the layout, not to the name -- the
+    comma that stands between a surname and a given name above all, and the
+    closing dot or quotation mark of the sentence it was copied out of. So a
+    word is read with the same edge punctuation the document reader strips,
+    and the entry comma separates words exactly as the space beside it does.
+    Without this the entry ``Surname, Given`` is not a set of two words at all,
+    and the order-independent rule is silently off for the entry -- the one
+    form in which a document most often prints a name.
+
+    ``None`` when a token carries no word once its marks are stripped: an
+    entry like that is a phrase with a joiner in it, not a sequence of words.
+    """
+    spread = text
+    for comma in _ENTRY_COMMA:
+        spread = spread.replace(comma, " ")
+    words: list[str] = []
+    for token in re.split(r"[\s\-\u2010-\u2014]+", spread):
+        if not token:
+            continue
+        core = token.strip(_EDGE_PUNCTUATION)
+        if not core:
+            return None
+        words.append(core)
+    return words
 
 
 def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
@@ -708,20 +812,22 @@ def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
     literal words to sequence, and an entry with a lower-case word is a phrase
     -- the folded phrase match already covers it, and reordering its words
     would be inventing names out of vocabulary. Two to four words, every one
-    Titlecase, is the shape of a person's name on a denylist.
+    Titlecase, is the shape of a person's name on a denylist; the entry is
+    stored folded, and the written forms compared against it are read from the
+    document, caps included. The words are read past the marks a written word
+    may be wrapped in (``_entry_words``), so the rule does not depend on how
+    the secret was typed.
     """
     if _REGEX_SYNTAX.search(pattern.pattern):
         return None
-    words = [
-        word
-        for word in re.split(r"[\s\-\u2010-\u2014]+", pattern.pattern)
-        if word
-    ]
+    words = _entry_words(pattern.pattern)
+    if words is None:
+        return None
     if not 2 <= len(words) <= 4:
         return None
-    if not all(_TITLECASE_WORD.match(word) for word in words):
+    if not all(_is_titlecase_word(word) for word in words):
         return None
-    return tuple(word.casefold().translate(_CONFUSABLE) for word in words)
+    return tuple(fold_for_match(word) for word in words)
 
 
 def name_runs(text: str) -> list[tuple[int, list[str]]]:
@@ -783,21 +889,23 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
             # word order but the literal one.
             shape = shape.translate(_CONFUSABLE)
         core = shape.strip(_EDGE_PUNCTUATION)
-        # The dot of an initial belongs to the initial; the dot of a full stop
-        # closes the sentence and so closes the run.
-        bare = core == shape or (shape == core + "." and _INITIAL.match(core))
-        words.append((origin[index], core, bool(bare)))
+        words.append((origin[index], core, _keeps_run(shape, core)))
         index = end
     runs: list[tuple[int, list[str]]] = []
     current: list[str] = []
     start = 0
-    for offset, core, bare in words:
-        if _is_name_word(core):
+    for offset, core, keeps in words:
+        if core and _is_name_word(core):
             if not current:
                 start = offset
-            current.append(core.casefold())
-            if bare:
+            current.append(fold_for_match(core))
+            if keeps:
                 continue
+        elif not core and keeps:
+            # A token made only of separating marks -- a comma standing
+            # between two spaces -- carries no word at all, so it neither
+            # joins the run nor ends it.
+            continue
         if len(current) >= 2:
             runs.append((start, current))
         current = []
@@ -806,29 +914,51 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
     return runs
 
 
+# How many capitalised words may sit between the denylisted words of a name
+# and still be that name. One carries a middle name or an initial; two carry
+# both -- ``Given Alaric B. Surname`` and ``Given Alaric Bramwell Surname``
+# are the same person written out in full. Beyond that the run is a list of
+# people, a column header or a heading, not one name, and matching it would be
+# matching vocabulary rather than an identity.
+_MAX_INTERIOR_INSERTIONS = 2
+
+
+def _reads_as(run: list[str], start: int, form: tuple[str, ...]) -> bool:
+    """True when the run reads as ``form`` from ``start``, with a bounded gap.
+
+    The first word is anchored by the caller. Each further word is taken at
+    its earliest place at or after the previous one, and the words skipped
+    over on the way are counted: taking the earliest place is what minimises
+    that count, so the total is the smallest number of words a reader of this
+    run has to pass over to read the name, and one comparison against the
+    bound decides. Skipped words are already name words -- the caller only
+    passes runs of them -- so a gap is made of capitalised text, not prose.
+    """
+    position = start + 1
+    for needle in form[1:]:
+        while position < len(run) and run[position] != needle:
+            position += 1
+        if position >= len(run):
+            return False
+        position += 1
+    return position - start - len(form) <= _MAX_INTERIOR_INSERTIONS
+
+
 def name_run_matches(run: list[str], words: tuple[str, ...]) -> bool:
     """True when the run reads as the denylisted name, however it is written.
 
-    Three written forms and no more: the exact sequence, the sequence
-    reversed (a surname-first attribution), and the sequence with one interior
-    word inserted -- a middle name or an initial. An insertion at either end
-    is not a form of the same name, it is a different run of words, and the
-    test is exact so a sentence's worth of text between the words can never
-    satisfy it.
+    The exact sequence and the sequence reversed (a surname-first
+    attribution), and either of those with up to two words inserted between
+    the name's words -- a middle name, a middle initial, or both at once.
+    What is written after the surname is not part of the match, and neither
+    is what is written before the first word: the match is anchored at the
+    first word and ends where the last one is read, exactly as a reader reads
+    a name.
     """
     size = len(words)
-    reversed_words = words[::-1]
-    for start in range(len(run) - size + 1):
-        window = tuple(run[start:start + size])
-        if window == words or window == reversed_words:
-            return True
-    if len(run) <= size:
-        return False
-    for start in range(len(run) - size):
-        window = run[start:start + size + 1]
-        for skip in range(1, size):
-            without = tuple(window[:skip] + window[skip + 1:])
-            if without == words or without == reversed_words:
+    for form in (words, words[::-1]):
+        for start in range(len(run) - size + 1):
+            if run[start] == form[0] and _reads_as(run, start, form):
                 return True
     return False
 
