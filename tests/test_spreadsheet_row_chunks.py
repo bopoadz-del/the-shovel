@@ -222,3 +222,64 @@ def test_csv_rows_are_chunked_without_sheet_name(
     assert "Sheet:" not in first
     assert f"Quantity: {first_qty}" in first
     assert f"Rate: {first_rate}" in first
+
+
+@pytest.mark.parametrize(
+    "banner, item, qty",
+    [
+        # A note the page wraps: the banner row is one cell of running text
+        # that happens to contain the words a column header uses.
+        ("The tenderer is to detail below any additional or omission items with "
+         "quantities & rates not previously included, and no claim for any "
+         "additional item at the stated rate will be entertained.",
+         "Allow for utilities not shown in drawings", 1),
+        ("Bidders shall price every item at the unit rate entered in this "
+         "schedule of quantities and rates; no separate quantity measurement "
+         "will be issued for verification.",
+         "Allow for attendance on the Engineer", 3),
+    ],
+    ids=["wrapped-note-banner", "other-wrapped-note-banner"],
+)
+def test_a_sentence_is_never_read_as_the_column_header(
+    tmp_path, banner, item, qty
+):
+    """The banner row of a derived sheet is one cell of prose. Read as the
+    header it shifts every field onto that one column: the sheet's own header
+    row becomes a measured row (``Item: Description``) and the real row's
+    description repeats into every figure column. A header names each column
+    once, in a cell of its own."""
+    path = _write_xlsx(str(tmp_path / "derived.xlsx"), [(
+        "Wrapped Note",
+        [
+            [banner],
+            ["Description", "Unit", "Quantity", "Rate", "Amount", "Check", "Source Page"],
+            [item, "", qty, "", "", "", 7],
+        ],
+    )])
+
+    chunks = doc_index._spreadsheet_row_chunks(path, "derived.xlsx", ".xlsx")
+
+    assert len(chunks) == 1, chunks
+    only = chunks[0]
+    assert f"Item: {item}" in only
+    assert f"Quantity: {qty}" in only
+    assert "Item: Description" not in only
+    assert "Quantity: Description" not in only
+    assert doc_index._SPREADSHEET_NO_BAND not in only
+    assert f"Bill: {banner}" in only
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [["Quantities and rates for the whole of the works, description of each item."]],
+        [["Bill 3"], [""], ["A schedule of description quantity rate amount to follow"]],
+    ],
+    ids=["one-cell-only", "no-candidate-except-a-sentence"],
+)
+def test_a_sheet_with_no_real_header_row_emits_no_row_chunks(tmp_path, rows):
+    """No row of distinct column names, no measured rows: a lone sentence is
+    not a header, and inventing one would emit prose as a measured row."""
+    path = _write_xlsx(str(tmp_path / "headerless.xlsx"), [("Notes", rows)])
+
+    assert doc_index._spreadsheet_row_chunks(path, "headerless.xlsx", ".xlsx") == []

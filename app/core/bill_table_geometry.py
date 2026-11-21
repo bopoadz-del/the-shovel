@@ -857,6 +857,11 @@ MIN_MARK_HEADINGS = 2
 MAX_MARK_CHARS = 12
 #: Joins the title lines of one section into the path's first element.
 TITLE_SEP = " / "
+#: A path level joining more printed lines than this is running text, not a
+#: heading that wrapped: a section title or an item preamble prints on one to
+#: three lines, a note the page wraps runs on for many. Such a level names no
+#: bill, section or sub-heading, so it does not open a sheet.
+PROSE_WRAP_LINES = 3
 
 _DIGITS_RE = re.compile(r"\d+")
 
@@ -1101,6 +1106,19 @@ def index_number_map(rows: list[BillRow], printed: Sequence[_Label]) -> dict[str
     return {title: next(iter(numbers)) for title, numbers in by_title.items() if len(numbers) == 1}
 
 
+def _starts_mid_sentence(text: str) -> bool:
+    """Whether ``text`` is the continuation line of a sentence rather than a
+    title: a heading opens a sentence with a capital, a figure or a mark, while
+    the line a note wraps onto starts in lower case. They cost nothing to read
+    and nothing here names a word."""
+    for ch in text:
+        if ch.isalpha():
+            return ch.islower()
+        if ch.isdigit():
+            return False
+    return False
+
+
 def _numbered(text: str, title_by_norm: dict[str, str]) -> str:
     """Prefix ``text`` with its bill number when the document's index assigns
     exactly one number to its title. A heading that already prints its own
@@ -1120,9 +1138,12 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     section with none takes the outermost level of its first row); (d) a
     continued heading is written as its original; (e) wrapped lines of one
     label are one element; (f) an unnumbered heading whose title is named in
-    the document's own index takes that index's bill number. A line in the
-    title band (below the page label, above the column header) is a title
-    even when it repeats on most pages.
+    the document's own index takes that index's bill number; (g) a trailing
+    level that is prose -- a note the page wraps over several lines, or a line
+    that starts mid-sentence -- names no bill, section or sub-heading and is
+    not a path level: the row stays under the heading that owns the table. A
+    line in the title band (below the page label, above the column header) is
+    a title even when it repeats on most pages.
 
     A read with no running header is left alone. When the page label carries
     no section digit (it is only a page number, or a page number plus
@@ -1186,12 +1207,14 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
     for row in rows:
         key = sections.get(row.source_page)
         body: list[_Label] = []
+        wrapped: dict[int, int] = {}  # body index -> printed lines joined into it
         for lab in row.labels:
             if lab.above_header or furniture(lab) or heading_or_title(lab):
                 continue
             lab = replace(lab, text=text_of(lab))
             if body and _wrapped(body[-1], lab):
                 body[-1] = replace(body[-1], text=f"{body[-1].text} {lab.text}", bottom=lab.bottom)
+                wrapped[len(body) - 1] = wrapped.get(len(body) - 1, 1) + 1
                 continue
             if body and _norm(body[-1].text) == _norm(lab.text):
                 continue
@@ -1199,8 +1222,23 @@ def section_paths(rows: list[BillRow], printed: Sequence[_Label], pages: int) ->
         if not titles[key] and body:
             titles[key].append(body[0].text)
         in_title = {_norm(t) for t in titles[key]}
-        levels = [_numbered(lab.text, title_by_norm)
-                  for lab in body if _norm(lab.text) not in in_title]
+        levels: list[str] = []
+        paragraph: set[str] = set()  # levels that are more than a wrapped heading
+        for i, lab in enumerate(body):
+            if _norm(lab.text) in in_title:
+                continue
+            text = _numbered(lab.text, title_by_norm)
+            if wrapped.get(i, 1) > PROSE_WRAP_LINES:
+                paragraph.add(text)
+            levels.append(text)
+        # A banner line that is not a heading path is not a sheet. A note the
+        # page wraps over many lines joins into one long level, and a
+        # continuation line starts mid-sentence in lower case; neither names a
+        # bill, a section or a sub-heading, so the rows under it stay under the
+        # heading that owns the table instead of opening a sheet named after a
+        # fragment of prose.
+        while levels and (levels[-1] in paragraph or _starts_mid_sentence(levels[-1])):
+            levels.pop()
         title = TITLE_SEP.join(_numbered(t, title_by_norm) for t in titles[key])
         row.path = tuple(([title] if title else []) + levels)
         row.section = row.path[-1] if row.path else ""
