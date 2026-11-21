@@ -508,3 +508,12 @@ def test_text_stage_row_pieces_of_a_bill_page_carry_its_heading(monkeypatch, hea
     assert "chambers complete" not in coating[0][0]  # the row is cut off its item
     assert coating[0][0].startswith(heading + "\n") is headed_page
     assert coating[0][0].count(heading) == (1 if headed_page else 0)
+
+
+@pytest.mark.parametrize("calls", [2, 5])
+def test_new_split_parent_hands_out_a_fresh_id_every_call(calls):
+    """Each caller-cut piece gets an id no other split parent holds."""
+    ids = [cb.new_split_parent() for _ in range(calls)]
+    assert all(isinstance(i, int) and i > 0 for i in ids)
+    assert len(set(ids)) == calls
+    assert cb.new_split_parent() not in ids
