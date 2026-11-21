@@ -460,12 +460,9 @@ def _read(table: dict[str, str], token: str) -> str | None:
     where another writes ``length``. The rule is the vocabulary's, not any one
     spelling's, so a word the table does not list in the plural still reads.
     """
-    if not token:
-        return None
-    found = table.get(token)
-    if found is None and token.endswith("s"):
-        found = table.get(token[:-1])
-    return found
+    if token and token not in table and token.endswith("s"):
+        token = token[:-1]
+    return table.get(token or "")
 
 
 def _unit_dimension(unit: str) -> str | None:
@@ -583,7 +580,7 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
         size=_dimensions(size) if size else None,
         band=_dimensions(band) if band else None,
         bills=bills,
-        dimension=measured[0][1] if measured else None,
+        dimension=_ask_dimension(text),
         level=frozenset((asked & in_paths) - in_desc - nouns),
         item=frozenset((asked & in_desc) - in_paths - nouns),
         either=frozenset((asked & in_paths & in_desc) - nouns),
