@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -33,10 +36,33 @@ def test_tools_live_in_their_owners_package():
             assert mod.rsplit(".", 1)[0] == package, (name, mod)
 
 
-def test_no_hat_imports_another_hat():
+# The directory the interpreter writes bytecode into (PEP 3147). It never holds
+# source, and other test workers create and delete it while this walk runs.
+_BYTECODE_DIR = Path(importlib.util.cache_from_source(str(HATS / "x.py"))).parent.name
+
+
+def _vanished_dir_only(err: OSError) -> None:
+    """os.walk error hook: a directory deleted between listing and entering it
+    holds nothing to check; any other error (permissions, I/O) still fails."""
+    if err.filename is not None and not os.path.lexists(err.filename):
+        return
+    raise err
+
+
+def _hat_sources(hat_dir: Path):
+    """Every .py file under ``hat_dir``, in a stable order, without entering the
+    bytecode cache and without failing on a directory that vanishes mid-walk."""
+    for here, dirs, files in os.walk(hat_dir, onerror=_vanished_dir_only):
+        dirs[:] = sorted(d for d in dirs if d != _BYTECODE_DIR)
+        for name in sorted(files):
+            if name.endswith(".py"):
+                yield Path(here) / name
+
+
+def _cross_hat_imports(hats_root: Path, base: Path) -> list[str]:
     offenders = []
-    for hat_dir in sorted(p for p in HATS.iterdir() if p.is_dir() and (p / "__init__.py").exists()):
-        for py in hat_dir.rglob("*.py"):
+    for hat_dir in sorted(p for p in hats_root.iterdir() if p.is_dir() and (p / "__init__.py").exists()):
+        for py in _hat_sources(hat_dir):
             tree = ast.parse(py.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 mods = []
@@ -46,8 +72,80 @@ def test_no_hat_imports_another_hat():
                     mods = [a.name for a in node.names]
                 for m in mods:
                     if m.startswith("app.agents.hats.") and not m.startswith(f"app.agents.hats.{hat_dir.name}"):
-                        offenders.append(f"{py.relative_to(ROOT)} imports {m}")
-    assert offenders == []
+                        offenders.append(f"{py.relative_to(base).as_posix()} imports {m}")
+    return offenders
+
+
+def test_no_hat_imports_another_hat():
+    assert _cross_hat_imports(HATS, ROOT) == []
+
+
+def _plant_hats(root: Path) -> Path:
+    """Two synthetic hats; hat ``alpha`` has a nested sub-package."""
+    hats = root / "hats"
+    for rel, body in {
+        "alpha/__init__.py": "",
+        "alpha/own.py": "from app.agents.hats.alpha.own import x\n",
+        "alpha/deep/__init__.py": "",
+        "alpha/deep/leaf.py": "import os\n",
+        "beta/__init__.py": "",
+        "beta/tools.py": "from app.agents.core import tool_registry\n",
+    }.items():
+        f = hats / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+    return hats
+
+
+@pytest.mark.parametrize("planted,expected", [
+    ({}, []),
+    ({"alpha/deep/leaf.py": "from app.agents.hats.beta.tools import h\n"},
+     ["hats/alpha/deep/leaf.py imports app.agents.hats.beta.tools"]),
+    ({"beta/tools.py": "import app.agents.hats.alpha.own\n"},
+     ["hats/beta/tools.py imports app.agents.hats.alpha.own"]),
+])
+def test_a_planted_cross_hat_import_is_caught_at_any_depth(tmp_path, planted, expected):
+    hats = _plant_hats(tmp_path)
+    for rel, body in planted.items():
+        (hats / rel).write_text(body, encoding="utf-8")
+    assert _cross_hat_imports(hats, tmp_path) == expected
+
+
+@pytest.mark.parametrize("parent", ["alpha", "alpha/deep"])
+def test_the_walk_never_enters_the_bytecode_cache(tmp_path, parent):
+    hats = _plant_hats(tmp_path)
+    cache = hats / parent / _BYTECODE_DIR
+    cache.mkdir()
+    # A .py inside the cache would be read if the walk entered it.
+    (cache / "stray.py").write_text("from app.agents.hats.beta import t\n", encoding="utf-8")
+    assert _cross_hat_imports(hats, tmp_path) == []
+    files = [p.relative_to(hats).as_posix() for p in _hat_sources(hats / "alpha")]
+    assert files == ["alpha/__init__.py", "alpha/own.py", "alpha/deep/__init__.py", "alpha/deep/leaf.py"]
+
+
+@pytest.mark.parametrize("victim", ["deep", _BYTECODE_DIR])
+def test_the_walk_survives_a_directory_removed_mid_walk(tmp_path, victim):
+    hats = _plant_hats(tmp_path)
+    (hats / "alpha" / _BYTECODE_DIR).mkdir()
+    (hats / "alpha" / _BYTECODE_DIR / "own.cpython-311.pyc").write_bytes(b"\0")
+    seen = []
+    for py in _hat_sources(hats / "alpha"):
+        seen.append(py.relative_to(hats).as_posix())
+        if len(seen) == 1:
+            # Listed by the walk already, deleted before it is entered.
+            shutil.rmtree(hats / "alpha" / victim)
+    expected = ["alpha/__init__.py", "alpha/own.py"]
+    if victim != "deep":
+        expected += ["alpha/deep/__init__.py", "alpha/deep/leaf.py"]
+    assert seen == expected
+
+
+def test_a_walk_error_other_than_a_vanished_directory_still_fails(tmp_path):
+    present = tmp_path / "present"
+    present.mkdir()
+    with pytest.raises(PermissionError):
+        _vanished_dir_only(PermissionError(13, "denied", str(present)))
+    _vanished_dir_only(FileNotFoundError(2, "gone", str(tmp_path / "gone")))
 
 
 def test_a_new_hat_package_registers_its_tools_with_no_core_edit(tmp_path, monkeypatch):
