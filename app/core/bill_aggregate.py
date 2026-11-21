@@ -31,6 +31,11 @@ size and a depth band are compared as numbers with the cells of the row's own
 line, a bill named in the ask admits only the rows whose own path names it,
 and the ask's other words scope by the cell the document prints them in. The
 same ask therefore selects the same rows on every trial.
+
+A dimension the ask asks to total (``the total billed length``) admits only
+rows whose own Unit cell measures that dimension and that carry the figure:
+a row measured in counts, a section's carry total and a row with no figure
+are not lengths, so they never enter a length total.
 """
 
 from __future__ import annotations
@@ -210,6 +215,11 @@ def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
 #   neighbour's, a header's or the previous row's label).
 # * a bill -- "Bill No. <n>" -> a row is admitted only when its own path names
 #   that bill: a bill heading, or the document's page label.
+# * a dimension -- "the total billed length" -> the measurement the ask wants
+#   totalled. A row is admitted only when its own Unit cell measures that
+#   dimension and the row carries the figure; one vocabulary reads the ask's
+#   noun and the row's unit cell the same way, so a count ("No", "Nr"), a
+#   section's carry total ("sum") and a row with no figure cannot satisfy it.
 #
 # The ask's remaining words scope by the cell the document prints them in: a
 # word the document prints in heading paths (a network, a section, a sheet
@@ -247,6 +257,59 @@ _UNIT_M = {"mm": 0.001, "cm": 0.01, "m": 1.0}
 #: A dimension printed with no unit at all is metres unless it is too large to
 #: be one: a bill prints a pipe in millimetres as a bare 4-digit number.
 _UNITLESS_MM_FROM = 100.0
+
+#: The dimensions a quantity is measured in. One vocabulary reads BOTH sides of
+#: a dimensional test: the unit a document prints in a row's own Unit cell and
+#: the noun an ask uses for the figure it wants totalled. Nothing here names a
+#: document, a row, a bill or a question -- these are the spellings a bill and
+#: an ask use for a measurement.
+LENGTH = "length"
+AREA = "area"
+VOLUME = "volume"
+MASS = "mass"
+COUNT = "count"
+TIME = "time"
+TOTAL = "total"
+
+#: Unit spellings a document prints in its Unit cell, normalised to letters and
+#: digits: ``m?``, ``m>`` and ``M`` are one unit, ``| sum`` is ``sum``.
+_UNIT_DIMENSION = {
+    "m": LENGTH, "mm": LENGTH, "cm": LENGTH, "km": LENGTH, "mtr": LENGTH,
+    "metre": LENGTH, "metres": LENGTH, "meter": LENGTH, "meters": LENGTH,
+    "in": LENGTH, "inch": LENGTH, "inches": LENGTH, "ft": LENGTH, "feet": LENGTH,
+    "m2": AREA, "cm2": AREA, "mm2": AREA, "ft2": AREA, "sqm": AREA, "sqft": AREA,
+    "sft": AREA,
+    "m3": VOLUME, "cm3": VOLUME, "cum": VOLUME, "litre": VOLUME, "liter": VOLUME,
+    "kg": MASS, "g": MASS, "t": MASS, "ton": MASS, "tons": MASS, "tonne": MASS,
+    "tonnes": MASS, "tonnage": MASS,
+    "no": COUNT, "nr": COUNT, "nos": COUNT, "nrs": COUNT, "ea": COUNT, "each": COUNT,
+    "pc": COUNT, "pcs": COUNT, "piece": COUNT, "pieces": COUNT,
+    "day": TIME, "days": TIME, "hr": TIME, "hrs": TIME, "hour": TIME, "hours": TIME,
+    "sum": TOTAL, "total": TOTAL, "subtotal": TOTAL, "carry": TOTAL, "carried": TOTAL,
+}
+
+#: The nouns an ask uses for a dimension it wants totalled. A unit spelling is
+#: never read from the ask's prose -- "at 2.5 to 3 m depth" states a band, not
+#: a length total -- so only these nouns can name a dimension on the ask side.
+_ASK_DIMENSION_NOUNS = {
+    "length": LENGTH, "lengths": LENGTH,
+    "area": AREA, "areas": AREA,
+    "volume": VOLUME, "volumes": VOLUME,
+    "weight": MASS, "weights": MASS, "mass": MASS, "tonnage": MASS,
+}
+_DIMENSION_NOUN_RE = re.compile(
+    r"\b(" + "|".join(sorted(_ASK_DIMENSION_NOUNS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+#: The words that put a dimension noun in a measuring position: it asks for a
+#: total ("the total billed length"), or it heads a genitive ("the length of
+#: the pipes"). The same noun elsewhere ("the surface water area") names a
+#: place or an item and scopes nothing by dimension. The cue must sit within
+#: the run of words before the noun, never across a sentence or a punctuation.
+_TOTAL_CUE_RE = re.compile(
+    r"\b(?:total|totalled|totaled|combined|overall|whole|sum|summed|aggregate)\b",
+    re.IGNORECASE,
+)
 _SCOPE_STOP = frozenset({
     "and", "the", "for", "how", "many", "much", "what", "which", "all", "any",
     "are", "was", "were", "its", "with", "from", "that", "this", "total", "totals",
@@ -262,34 +325,40 @@ class AskScope:
     """The scope an ask states, read as numbers and structural cells.
 
     ``size``/``band`` are in metres; ``bills`` are the bill numbers the ask
-    names; ``level``/``item``/``either`` are the ask's content words graded by
-    where the document prints them (a heading path, an item description, or
-    both). Empty dimensions do not scope.
+    names; ``dimension`` is the measurement the ask asks to total (see
+    :func:`_ask_dimension`); ``level``/``item``/``either`` are the ask's
+    content words graded by where the document prints them (a heading path,
+    an item description, or both). Empty dimensions do not scope.
     """
 
     size: tuple[float, float] | None = None
     band: tuple[float, float] | None = None
     bills: frozenset[str] = frozenset()
+    dimension: str | None = None
     level: frozenset[str] = frozenset()
     item: frozenset[str] = frozenset()
     either: frozenset[str] = frozenset()
 
     def states(self) -> bool:
-        return bool(self.size or self.band or self.bills or self.level or self.item or self.either)
+        return bool(self.size or self.band or self.bills or self.dimension
+                    or self.level or self.item or self.either)
 
     def states_a_dimension(self) -> bool:
         """Whether the ask states the scope a word set cannot express: a size,
-        a depth band or a bill. Those are read as numbers and as structural
-        cells, so they -- not a per-turn token set -- govern the row set."""
-        return bool(self.size or self.band or self.bills)
+        a depth band, a bill or the dimension it asks to total. Those are read
+        as numbers and as structural cells, so they -- not a per-turn token
+        set -- govern the row set."""
+        return bool(self.size or self.band or self.bills or self.dimension)
 
-    def admits(self, row: SheetRow) -> bool:
+    def admits(self, row: SheetRow, measure: str = MEASURE_QUANTITY) -> bool:
         """Whether the row is inside every scope the ask states."""
         if self.size is not None and _row_size(row) != self.size:
             return False
         if self.band is not None and _row_band(row) != self.band:
             return False
         if self.bills and not (row_bills(row) & self.bills):
+            return False
+        if self.dimension is not None and not _measures(row, self.dimension, measure):
             return False
         if self.level and not self.level <= _row_path_words(row):
             return False
@@ -380,6 +449,51 @@ def _row_band(row: SheetRow) -> tuple[float, float] | None:
     return None
 
 
+def _unit_dimension(unit: str) -> str | None:
+    """The dimension a row's own Unit cell measures, or ``None``.
+
+    The cell is normalised the way the document prints it -- case, spacing,
+    punctuation and superscripts belong to the print, not to the unit -- and
+    read through the one vocabulary above. A blank cell, a count (``No``,
+    ``Nr``), a section's carry total (``sum``) and any spelling the vocabulary
+    does not know measure nothing, so they cannot satisfy a stated dimension.
+    """
+    text = (unit or "").casefold().replace("\u00b2", "2").replace("\u00b3", "3")
+    return _UNIT_DIMENSION.get(re.sub(r"[^a-z0-9]", "", text))
+
+
+def _ask_dimension(text: str) -> str | None:
+    """The dimension the ask asks to total, or ``None``.
+
+    A dimension noun is read only in a measuring position -- behind a total
+    word, as "the total billed length of ...", or before "of", as "the length
+    of the pipes" -- so a place name ("the surface water area") never becomes
+    a dimensional scope. No unit spelling is read from the ask's prose: "at
+    2.5 to 3 m depth" states a band, not a length total.
+    """
+    text = text or ""
+    for found in _DIMENSION_NOUN_RE.finditer(text):
+        before = text[max(0, found.start() - 40):found.start()]
+        after = text[found.end():found.end() + 4]
+        if _TOTAL_CUE_RE.search(before) or after.lstrip().casefold().startswith("of"):
+            return _ASK_DIMENSION_NOUNS[found.group(1).casefold()]
+    return None
+
+
+def _measures(row: SheetRow, dimension: str, measure: str) -> bool:
+    """Whether the row itself measures ``dimension`` with the figure
+    ``measure`` asks for.
+
+    Both halves are the row's own: its Unit cell states the dimension (read
+    through the same vocabulary the ask's noun is read through), and the row
+    carries the figure the total is built from. A row whose unit is a count or
+    a carry total, or that carries no figure, is not a member of a total of
+    that dimension."""
+    if _unit_dimension(row.unit) != dimension:
+        return False
+    return row.figure(measure) is not None
+
+
 def _bill_number(text: str) -> str:
     """A bill number as the ask or the heading prints it, its groups joined:
     ``1,313`` and ``1313`` are one bill."""
@@ -428,6 +542,7 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
         size=_dimensions(size) if size else None,
         band=_dimensions(band) if band else None,
         bills=bills,
+        dimension=_ask_dimension(text),
         level=frozenset(asked & in_paths - in_desc),
         item=frozenset(asked & in_desc - in_paths),
         either=frozenset(asked & in_paths & in_desc),
@@ -450,14 +565,15 @@ def aggregate(
     A matching item without the figure is counted, listed, and named in
     ``without_figure``; it adds nothing to a sum.
 
-    With ``ask``, a size, a depth band or a bill the ask states governs the
-    row set (:func:`ask_scope`): those are read as numbers and as the row's own
-    structural cells, so the same ask selects the same rows whatever ``terms``
-    the model passed on the turn. The model's terms are then reported but not
-    applied -- an unparsed token set never defines a scope the ask states. An
-    ask that states none of the three leaves ``terms`` and ``section`` to
-    select, exactly as before, so a question asked in several parts still gets
-    one result per part.
+    With ``ask``, a size, a depth band, a bill or a dimension the ask totals
+    governs the row set (:func:`ask_scope`): those are read as numbers and as
+    the row's own structural cells, so the same ask selects the same rows
+    whatever ``terms`` the model passed on the turn. A dimension admits only
+    rows whose own Unit cell measures it and that carry the figure. The
+    model's terms are then reported but not applied -- an unparsed token set
+    never defines a scope the ask states. An ask that states none of the four
+    leaves ``terms`` and ``section`` to select, exactly as before, so a
+    question asked in several parts still gets one result per part.
     """
     if measure not in MEASURES:
         raise ValueError(f"measure must be one of {MEASURES}")
@@ -473,7 +589,7 @@ def aggregate(
     used, without = [], []
     sums: dict[str, float] = {}
     for row in items:
-        admitted = scope.admits(row) if scope is not None else matches(row, want, where)
+        admitted = scope.admits(row, measure) if scope is not None else matches(row, want, where)
         if not admitted:
             continue
         value = row.figure(measure)
@@ -500,6 +616,7 @@ def aggregate(
             "size": list(scope.size) if scope.size else None,
             "band": list(scope.band) if scope.band else None,
             "bills": sorted(scope.bills),
+            "dimension": scope.dimension,
             "level": sorted(scope.level),
             "item": sorted(scope.item),
             "either": sorted(scope.either),
