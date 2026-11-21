@@ -17,8 +17,8 @@ or no mark at all -- and a sentence break still ends the entry.
 What is *not* widened: a longer word, another person's possessive, two
 lower-case words between the name words, a full stop between them, a
 possessive of a number, and a surname written with no given name beside it all
-stay quiet. A possessive on a written initial (``Vantrey, Q.'s crew``) is not
-read: the clitic is only taken off a word, and ``Q.`` is a letter and a dot.
+stay quiet. A possessive on a written initial is a different rule, read by
+``test_scan_secrets_name_initial_possessive.py``.
 
 The words are invented and assembled at runtime, so the repository contains no
 name and no fixture the real scan would have to chase.
