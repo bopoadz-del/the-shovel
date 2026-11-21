@@ -67,11 +67,67 @@ _SOURCE_LINE_RE = re.compile(
 
 _FILE_EXTS = r"pdf|docx?|xlsx?|xlsm|csv|txt|md|pptx?|dwg|dxf|ifc|xer|xml|json|zip|rar|png|jpe?g"
 #: A parenthesised or bracketed citation that names a file:
-#: ``(Spec Section 03.pdf, p. 4)``, ``[Source: BOQ.xlsx]``.
-_INLINE_FILE_CITE_RE = re.compile(
-    rf"[ \t]*[(\[](?:[ \t]*sources?[ \t]*:)?[ \t]*(?P<body>[^()\[\]\n]{{0,200}}?\.(?:{_FILE_EXTS})\b[^()\[\]\n]{{0,60}}?)[)\]]",
-    re.IGNORECASE,
-)
+#: ``(Spec Section 03.pdf, p. 4)``, ``[Source: BOQ (Priced).xlsx]``.
+_SOURCE_PREFIX_RE = re.compile(r"^[ 	]*sources?[ 	]*:", re.IGNORECASE)
+_CITE_BODY_MAX = 260
+_CLOSE = {"(": ")", "[": "]"}
+
+
+def _group_end(line: str, start: int) -> int:
+    """Index of the bracket closing the one at ``start``, or -1. Round and
+    square brackets nest inside each other; a mismatched close ends the
+    search (the group is not a citation)."""
+    stack = [_CLOSE[line[start]]]
+    for i in range(start + 1, min(len(line), start + 2 + _CITE_BODY_MAX)):
+        ch = line[i]
+        if ch in _CLOSE:
+            stack.append(_CLOSE[ch])
+        elif ch in ")]":
+            if ch != stack.pop():
+                return -1
+            if not stack:
+                return i
+    return -1
+
+
+def _names_a_file(body: str) -> bool:
+    """True when the group's own text (not a group nested in it) carries a
+    file extension: ``Bill (Priced).xlsx`` names a file; ``the bill [Bill.xlsx]
+    shows`` does not, its nested group does."""
+    depth = 0
+    flat = []
+    for ch in body:
+        if ch in ")]":
+            depth = max(depth - 1, 0)
+        flat.append(ch if depth == 0 else " ")
+        if ch in _CLOSE:
+            depth += 1
+    return bool(_FILE_NAME_END_RE.search("".join(flat)))
+
+
+def _inline_citations(line: str, markers: "_Markers") -> str:
+    """Every bracketed citation that names a file, as its marker. The group
+    is read by its balanced brackets, so a file name that carries its own
+    brackets (``Bill of Quantities (Priced).xlsx``, ``Drawings (6 of 7).pdf``)
+    is one citation, not text the recogniser stops at."""
+    out: list[str] = []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        end = _group_end(line, i) if ch in _CLOSE else -1
+        if end > 0:
+            inner = line[i + 1:end]
+            body = _SOURCE_PREFIX_RE.sub("", inner, count=1).strip()
+            if body and len(body) <= _CITE_BODY_MAX and _names_a_file(body):
+                head = "".join(out).rstrip(" 	")
+                out = [head, " " + markers.marker(body)]
+                i = end + 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out).rstrip()
+
+
 _PAGE_RE = re.compile(r"(?:,|\s)\s*(?P<sec>(?:pp?\.|pages?|section|clause|§)\s*[\w.\-–, ]+?)\s*$", re.IGNORECASE)
 _PARENS_TAIL_RE = re.compile(r"\((?P<inner>[^()]*)\)\s*$")
 _FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
@@ -295,7 +351,7 @@ def _move_citations(text: str, markers: _Markers) -> str:
     for line in lines:
         m = _SOURCE_LINE_RE.match(line)
         if not m:
-            out.append(_INLINE_FILE_CITE_RE.sub(lambda c: " " + markers.marker(c.group("body")), line).rstrip())
+            out.append(_inline_citations(line, markers))
             continue
         tags = [t for t in dict.fromkeys(markers.marker(p) for p in _split_parts(m.group("body"))) if t]
         if not tags:
