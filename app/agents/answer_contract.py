@@ -75,6 +75,12 @@ _INLINE_FILE_CITE_RE = re.compile(
 _PAGE_RE = re.compile(r"(?:,|\s)\s*(?P<sec>(?:pp?\.|pages?|section|clause|§)\s*[\w.\-–, ]+?)\s*$", re.IGNORECASE)
 _PARENS_TAIL_RE = re.compile(r"\((?P<inner>[^()]*)\)\s*$")
 _FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
+#: What may stand between a file name and the locator after it, in any
+#: script: Latin, Arabic and full-width commas and semicolons, a colon, a
+#: dash, a space. Punctuation only, no word of any language.
+_LOCATOR_LEAD = " \t,;:،؛，；—–-"
+#: The colons a label ends with; a file name holds none.
+_LABEL_COLONS = ":："
 
 
 def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -101,11 +107,21 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     named = None
     for named in _FILE_NAME_END_RE.finditer(text):
         pass
-    start = named.end() if named else 0
-    sec = _PAGE_RE.search(text, start) if kind == "document" else None
-    if sec:
-        section = sec.group("sec").strip()
-        text = text[: sec.start()].strip().rstrip(",")
+    if named and kind == "document":
+        # Read by structure, so it holds in every language. A file name
+        # holds no colon, so a label ahead of it ("Source:", or the same
+        # word in Arabic) ends at the last colon before the name. The name
+        # ends at its extension, so what follows it, past the separating
+        # punctuation, is its locator, whatever words it is written in.
+        head = text[: named.end()]
+        cut = max(head.rfind(c) for c in _LABEL_COLONS)
+        section = text[named.end():].strip(_LOCATOR_LEAD).strip()
+        text = head[cut + 1:].strip()
+    elif kind == "document":
+        sec = _PAGE_RE.search(text)
+        if sec:
+            section = sec.group("sec").strip()
+            text = text[: sec.start()].strip().rstrip(",")
     entry: dict[str, Any] = {
         "document": text,
         "section": section,
@@ -127,7 +143,9 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _name_key(name: str) -> str:
     stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE)
-    return re.sub(r"[^a-z0-9]+", "", stem.lower())
+    # Letters and digits of any script: an Arabic name keys by its own
+    # letters, not to the empty key every non-Latin name used to share.
+    return re.sub(r"[\W_]+", "", stem.casefold())
 
 
 @dataclass
@@ -166,7 +184,7 @@ def _doc_words(name: str) -> str:
     """A document's name as words for a sentence (its file extension off);
     empty when the name holds no word at all."""
     stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE).strip()
-    return stem if re.search(r"[A-Za-z]{2,}", stem) else ""
+    return stem if re.search(r"[^\W\d_]{2,}", stem) else ""
 
 
 def _nameable(c: dict[str, Any]) -> bool:
