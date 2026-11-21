@@ -749,3 +749,47 @@ def test_a_chain_without_a_unit_never_rewrites_a_bare_repeat_of_its_figure(answe
 ])
 def test_a_bucket_figure_in_another_spelling_of_the_total_unit_reconciles(answer):
     assert reconcile(answer) == answer
+
+
+# --- A remainder word excuses a prose total only when it accounts for the gap -
+# "further" or "others" in a sentence outside the table is not a disclosure on
+# its own: the sentence has to name unprinted rows and close the difference
+# (say they make up the balance, state the missing figure, or state the printed
+# rows' own sum), the same standard a table bucket is held to.
+
+@pytest.mark.parametrize("answer,wrong", [
+    pytest.param(
+        "Band\tQty (No)\nP\t11\nQ\t23\nR\t6\n\n"
+        "The sum of the rows is 44 No.\nFor further detail see the bill.\n",
+        "44 No", id="further-detail",
+    ),
+    pytest.param(
+        "Zone\tLength (m)\nW\t140\nV\t60\n\n"
+        "These add up to 215 m altogether.\nOthers have asked about the outfall.\n",
+        "215 m", id="others-asked",
+    ),
+])
+def test_a_remainder_word_that_accounts_for_nothing_does_not_excuse_a_prose_total(
+    answer, wrong,
+):
+    out = reconcile(answer)
+    assert out != answer
+    body = out.split("**Row total checked")[0]
+    assert wrong not in body
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "Band\tQty (No)\nP\t11\nQ\t23\nR\t6\n\n"
+        "The sum of the rows is 44 No.\nOne further band carries 4 No.\n",
+        id="states-the-missing-figure",
+    ),
+    pytest.param(
+        "Zone\tLength (m)\nW\t140\nV\t60\n\n"
+        "These add up to 215 m altogether.\n"
+        "The zones above account for 200, so a further zone is included in the 215.\n",
+        id="states-the-printed-sum",
+    ),
+])
+def test_a_remainder_sentence_that_accounts_for_the_gap_is_left_alone(answer):
+    assert reconcile(answer) == answer
