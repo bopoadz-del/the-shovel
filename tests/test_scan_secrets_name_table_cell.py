@@ -106,10 +106,18 @@ def test_nothing_else_is_assembled_out_of_cells(label, text, entry):
     assert _hits(text, entry) == [], label
 
 
-def test_a_hit_reports_the_line_of_its_own_row():
-    """A name on the second row is reported on the second line, not the first."""
-    text = f"| a | b |\n| {LAST} | {FIRST} |"
-    assert [line for line, _ in _hits(text)] == [2]
+ROW_POSITIONS = [
+    ("the first row", f"| {LAST} | {FIRST} |", 1),
+    ("the third row", f"| a | b |\n| c | d |\n| {LAST} | {FIRST} |", 3),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, expected", ROW_POSITIONS, ids=[row[0] for row in ROW_POSITIONS]
+)
+def test_a_hit_reports_the_line_of_its_own_row(label, text, expected):
+    """A name is reported on the line of its own row, not another line."""
+    assert [line for line, _ in _hits(text)] == [expected], label
 
 
 # -- the piece the rule is made of -------------------------------------------
