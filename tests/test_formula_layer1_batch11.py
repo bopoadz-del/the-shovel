@@ -39,8 +39,10 @@ one-line reason and reported as a suspected defect; the expected value is
 never moved to match. Every value test runs on two inputs worked by hand
 the same way.
 
-No M case for F68 and F71: every input has a stated default (the defaults
-are reported in ``defaults_used``), so nothing can be missing. No U case for
+No required-input M case for F68 and F71: every input has a stated default,
+so nothing can be missing. Their M case is the OMITTED input instead: the
+stated default is used and must be reported in ``defaults_used``, and a given
+input must not be (``test_f68_m_*``, ``test_f71_m_*``). No U case for
 F68 (a yes/no input) or F70 (counts and currency in the project's own unit).
 
 Unit factors (exact by definition): 1 ft = 0.3048 m, so 1 ft2 =
@@ -105,6 +107,21 @@ def test_f68_b_plain_inside_stated_range_reinforced_above(reinforced):
     r = _ok(F68, {"reinforced": reinforced})
     inside = 2330 <= r["unit_weight_kg_m3"] <= 2470
     assert inside is (not reinforced)
+
+
+# F68 declares one input, ``reinforced``, and it is optional (it has a
+# declared default), so there is no required input to withhold. The M case
+# here is the omitted input: the declared default must be used AND disclosed
+# in ``defaults_used``; a given input must not be listed as defaulted.
+@pytest.mark.parametrize("params, defaulted, weight", [
+    ({}, {"reinforced"}, 2500),             # omitted -> declared default True -> reinforced 2500
+    ({"reinforced": False}, set(), 2400),   # given -> nothing defaulted -> plain 2400
+])
+def test_f68_m_omitted_input_defaults_disclosed(params, defaulted, weight):
+    r = _ok(F68, params)
+    listed = {row["parameter"] for row in r.get("defaults_used") or []}
+    assert listed == defaulted, r
+    assert r["unit_weight_kg_m3"] == pytest.approx(weight, rel=_REL)
 
 
 # ---------------------------------------------------------------- F69 embodied carbon
@@ -251,6 +268,31 @@ def test_f71_b_ciria_limit(fc, hours):
     r = _ok(F71, {"concrete_strength_7h": fc, "design_required_strength": 0.332,
                   "ciria_surface_strength": 3.0, "bs8110_minimum_hours": 12,
                   "proposed_hours": 8})
+    assert r[_H] == pytest.approx(hours, rel=_REL)
+
+
+# F71 declares five inputs, all optional (each has a declared default:
+# strength 7.0, design required 0.332, CIRIA 3.0, minimum 12 h, proposed 8 h),
+# so there is no required input to withhold. The M case is the omitted input:
+# every omitted one must be listed in ``defaults_used`` and the hours worked
+# from its declared default; a given input must not be listed.
+_F71_ALL = {"concrete_strength_7h", "design_required_strength",
+            "ciria_surface_strength", "bs8110_minimum_hours", "proposed_hours"}
+
+
+@pytest.mark.parametrize("params, hours", [
+    # strength 2.0 given; CIRIA defaults to 3.0: 2 < 3 -> max(8, 12) = 12
+    ({"concrete_strength_7h": 2.0}, 12.0),
+    # only CIRIA omitted (3.0): 5 >= 3 and 5 >= 0.332 -> proposed 16
+    ({"concrete_strength_7h": 5.0, "design_required_strength": 0.332,
+      "bs8110_minimum_hours": 12, "proposed_hours": 16}, 16.0),
+    # nothing given: 7.0 >= 3.0 and >= 0.332 -> proposed default 8
+    ({}, 8.0),
+])
+def test_f71_m_omitted_inputs_defaults_disclosed(params, hours):
+    r = _ok(F71, params)
+    listed = {row["parameter"] for row in r.get("defaults_used") or []}
+    assert listed == _F71_ALL - set(params), r
     assert r[_H] == pytest.approx(hours, rel=_REL)
 
 
