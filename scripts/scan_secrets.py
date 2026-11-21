@@ -755,6 +755,20 @@ def _is_name_word(word: str) -> bool:
     return _is_titlecase_word(word) or _is_capitalised_word(word)
 
 
+def _closes_with_initial(shape: str, core: str) -> bool:
+    """True when ``core`` is one capital letter and its own dot follows it.
+
+    ``Q.`` is a word to a reader and a letter to a tokeniser: the dot is not
+    the sentence's full stop but the mark that says the letter stands for a
+    name. The same test decides that the run stays open across the dot, and
+    that the word is read as the initial it is written as.
+    """
+    if not _is_initial(core):
+        return False
+    start = shape.find(core)
+    return shape[start + len(core):] == "."
+
+
 def _keeps_run(shape: str, core: str) -> bool:
     """True when what wraps ``core`` leaves the run of name words open.
 
@@ -889,16 +903,22 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
             # word order but the literal one.
             shape = shape.translate(_CONFUSABLE)
         core = shape.strip(_EDGE_PUNCTUATION)
-        words.append((origin[index], core, _keeps_run(shape, core)))
+        # A written initial keeps its dot in the run: without it the run
+        # cannot tell ``Q.`` (a letter standing for a name) from ``Q`` (a
+        # one-letter word), and the dot is the reader's only evidence.
+        written = fold_for_match(core)
+        if _closes_with_initial(shape, core):
+            written += "."
+        words.append((origin[index], core, written, _keeps_run(shape, core)))
         index = end
     runs: list[tuple[int, list[str]]] = []
     current: list[str] = []
     start = 0
-    for offset, core, keeps in words:
+    for offset, core, written, keeps in words:
         if core and _is_name_word(core):
             if not current:
                 start = offset
-            current.append(fold_for_match(core))
+            current.append(written)
             if keeps:
                 continue
         elif not core and keeps:
@@ -923,6 +943,44 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
 _MAX_INTERIOR_INSERTIONS = 2
 
 
+def _word_reads_as(written: str, word: str) -> bool:
+    """True when a run word is the denylisted word, or the word's initial.
+
+    A byline, a citation and an index entry abbreviate a given name to its
+    first letter and close it with a dot: ``G. Surname`` for the denylisted
+    ``Given Surname``. The dot is the document's own evidence that the
+    letter stands for a word, so only a word written with it is read as an
+    initial; a bare capital letter is an ordinary one-letter word and goes on
+    matching nothing but itself. What the initial abbreviates is decided by
+    the denylist entry -- the first letter of a word the list already names --
+    so no vocabulary is added anywhere.
+    """
+    if written == word:
+        return True
+    return (
+        len(written) == 2
+        and written.endswith(".")
+        and written[0] == word[0]
+    )
+
+
+def _word_or_initial_in(word: str, *views: str) -> bool:
+    """True when a block carries the word, or the initial the word begins with.
+
+    The candidate test in front of the run reader asks whether a denylisted
+    word is written anywhere in the block at all. A byline that abbreviates a
+    given name -- ``G. Surname`` for ``Given Surname`` -- writes the word
+    nowhere, so a test that only looks for the word drops the block before the
+    run reader can read the initial. The initial is the word's first letter
+    and its dot, which is the same evidence the run reader uses; whether the
+    run really reads as the name is still decided there.
+    """
+    for view in views:
+        if word in view or f"{word[0]}." in view:
+            return True
+    return False
+
+
 def _reads_as(run: list[str], start: int, form: tuple[str, ...]) -> bool:
     """True when the run reads as ``form`` from ``start``, with a bounded gap.
 
@@ -936,7 +994,7 @@ def _reads_as(run: list[str], start: int, form: tuple[str, ...]) -> bool:
     """
     position = start + 1
     for needle in form[1:]:
-        while position < len(run) and run[position] != needle:
+        while position < len(run) and not _word_reads_as(run[position], needle):
             position += 1
         if position >= len(run):
             return False
@@ -958,7 +1016,7 @@ def name_run_matches(run: list[str], words: tuple[str, ...]) -> bool:
     size = len(words)
     for form in (words, words[::-1]):
         for start in range(len(run) - size + 1):
-            if run[start] == form[0] and _reads_as(run, start, form):
+            if _word_reads_as(run[start], form[0]) and _reads_as(run, start, form):
                 return True
     return False
 
@@ -1018,7 +1076,7 @@ def scan_client_document(
         sparse = [
             (index, words)
             for index, words in name_patterns
-            if all(word in split_fold or word in joined_fold for word in words)
+            if all(_word_or_initial_in(word, split_fold, joined_fold) for word in words)
         ]
         if sparse:
             for run_start, run in name_runs(raw_block):
