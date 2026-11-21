@@ -176,7 +176,7 @@ def test_f3_u_crew_sizing_quantity_in_square_feet(q, crews):
 ])
 def test_f3_u2_crew_sizing_duration_for_given_crews(q, rate, days_for_3, whole_days):
     r = _ok("crew_sizing", {"quantity": q, "rate_per_crew_day": rate, "duration_days": 20,
-                            "crew_size": 3})
+                            "crews": 3})
     assert r["duration_for_crews"] == pytest.approx(days_for_3, rel=_REL)
     assert math.ceil(r["duration_for_crews"]) == whole_days
 

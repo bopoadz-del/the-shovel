@@ -6,6 +6,7 @@ project names, no activity ids. Source: owner-supplied project-control
 template, 09 Nov 2026; standard planner practice.
 """
 from __future__ import annotations
+from app.agents.base.formulas.construction_formulas_planning import CONVERSION_CONTEXT
 from app.lib.formula_registry import Constant, Constants
 
 import math
@@ -26,14 +27,15 @@ def _series(value) -> list:
     display_name="Crew sizing and productivity",
     description=(
         "Crews required, crew-days and man-hours for a quantity at a given "
-        "productivity rate, plus the duration a stated crew size gives."
+        "productivity rate, plus the duration a stated number of crews gives."
     ),
     inputs={
         "quantity": Param("count", 0, 1e12, label="quantity"),
         "duration_days": Param("days", 0, 1e9, label="duration in working days"),
         "rate_per_crew_day": Param("count/d", 0, 1e9, label="rate (units per crew-day)"),
         "hours_per_day": Param("h/d", 0, 24, label="working hours per day"),
-        "crew_size": Param("count", 0, 1e6, label="crew size"),
+        "crew_size": Param("count", 0, 1e6, label=CONVERSION_CONTEXT["crew_size"]),
+        "crews": Param("count", 1, 1e6, label="number of crews"),
     },
     outputs={
         "crews_required": "-",
@@ -50,41 +52,56 @@ def crew_sizing(
     rate_per_crew_day: float,
     hours_per_day: float = 10.0,
     crew_size: float | None = None,
+    crews: int | None = None,
 ) -> dict:
     """Productivity / crew sizing.
 
-    crews_required = Q / (D * R); crew_days = Q / R; man_hours = crew_days * h.
+    crews_required = Q / (D * R); crew_days = Q / R;
+    man_hours = crew_days * h * N, where N is the number of persons in one
+    crew (1 when ``crew_size`` is absent). A crew-day is one crew of N persons
+    working h hours, so h alone is one person's hours, not the crew's.
     Fractional crews are reported rounded UP with the rounding shown, and the
-    identity crews * D * R = Q is checked. ``crew_size`` (N) gives
-    duration_for_crews = Q / (R * N). R, D and h are inputs with no rate
-    baked in; the template's 10-hour day is only a suggested default.
+    identity crews * D * R = Q is checked.
+
+    ``crew_size`` is the headcount in one crew, never a count of crews.
+    ``crews`` states a number of crews to field: duration_for_crews is then
+    crew_days / ``crews``. Without it, the duration is that of the whole
+    number of crews the stated duration needs (crews_required_rounded_up).
+    R, D and h are inputs with no rate baked in; the template's 10-hour day
+    is only a suggested default.
     """
     q, d, r, h = float(quantity), float(duration_days), float(rate_per_crew_day), float(hours_per_day)
     if min(q, d, r, h) <= 0:
         return {"error": "quantity, duration_days, rate_per_crew_day and hours_per_day must all be > 0."}
-    crews = q / (d * r)
-    crews_up = math.ceil(crews)
+    if crews is not None and (float(crews) <= 0 or not float(crews).is_integer()):
+        return {"error": "crews must be a whole number > 0 when given."}
+    persons = float(crew_size) if crew_size is not None and float(crew_size) > 0 else 1.0
+    crews_needed = q / (d * r)
+    crews_up = math.ceil(crews_needed)
     crew_days = q / r
-    man_hours = crew_days * h
+    man_hours = crew_days * persons * h
+    fielded = int(crews) if crews is not None else crews_up
+    duration = crew_days / fielded
+    crew_term = f" x {persons:g} persons" if persons != 1.0 else ""
+    fielded_term = (f"the {fielded} crews stated" if crews is not None
+                    else f"the {crews_up} whole crews the stated duration needs")
     note = (
-        f"crews = {q} / ({d} x {r}) = {crews:.3f}; rounded UP to {crews_up}. "
-        f"crew-days = {q} / {r} = {crew_days:.2f}; man-hours = crew-days x {h} = {man_hours:.1f}. "
+        f"crews = {q} / ({d} x {r}) = {crews_needed:.3f}; rounded UP to {crews_up}. "
+        f"crew-days = {q} / {r} = {crew_days:.2f}; "
+        f"man-hours = crew-days{crew_term} x {h} h = {man_hours:.1f}. "
+        f"duration for {fielded_term} = {crew_days:.2f} / {fielded} = {duration:.2f} d. "
         f"Identity check: {crews_up} x {d} x {r} = {crews_up * d * r:.2f} (stated Q = {q})."
     )
-    result: dict = {
-        "crews_required": round(crews, 3),
+    return {
+        "crews_required": round(crews_needed, 3),
         "crews_required_rounded_up": crews_up,
         "crew_days": round(crew_days, 2),
         "man_hours": round(man_hours, 1),
+        "duration_for_crews": round(duration, 2),
         "identity_check": round(crews_up * d * r, 2),
         "standard": "owner-supplied project-control template, 09 Nov 2026; standard planner practice",
         "note": note,
     }
-    if crew_size is not None and float(crew_size) > 0:
-        result["duration_for_crews"] = round(q / (r * float(crew_size)), 2)
-    else:
-        result["duration_for_crews"] = None
-    return result
 
 
 @formula(

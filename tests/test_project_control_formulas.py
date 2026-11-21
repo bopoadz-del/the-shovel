@@ -24,13 +24,49 @@ def test_crew_sizing_agrees(qty, days, rate, hours, want_crews, up, crew_days, m
     assert out["man_hours"] == pytest.approx(mh)
 
 
-@pytest.mark.parametrize("qty,rate,crew,days", [
-    (3000.0, 12.0, 17.0, 14.71),
-    (350.0, 20.0, 2.0, 8.75),
+@pytest.mark.parametrize("qty,rate,crews,days", [
+    (3000.0, 12.0, 17, 14.71),
+    (350.0, 20.0, 2, 8.75),
 ])
-def test_crew_sizing_duration_for_crews(qty, rate, crew, days):
-    out = crew_sizing(qty, 15.0, rate, 10.0, crew_size=crew)
+def test_crew_sizing_duration_for_crews(qty, rate, crews, days):
+    out = crew_sizing(qty, 15.0, rate, 10.0, crews=crews)
     assert out["duration_for_crews"] == pytest.approx(days, abs=0.01)
+
+
+@pytest.mark.parametrize("qty, days, rate, persons, duration", [
+    (640.0, 10.0, 32.0, 6, 10.0),   # 20 crew-days / the 2 whole crews needed (2.0)
+    (350.0, 10.0, 20.0, 4, 8.75),   # 17.5 crew-days / the 2 whole crews needed (1.75)
+])
+def test_crew_sizing_duration_uses_the_whole_crews_needed(qty, days, rate, persons, duration):
+    # No crew count is stated: the duration is that of the whole crews the
+    # stated duration needs. The headcount never acts as a crew count.
+    out = crew_sizing(qty, days, rate, 10.0, crew_size=persons)
+    assert out["duration_for_crews"] == pytest.approx(duration, abs=0.01)
+
+
+@pytest.mark.parametrize("qty, days, rate, persons, crews, duration", [
+    (640.0, 10.0, 32.0, 6, 4, 5.0),    # 20 crew-days / the 4 crews stated
+    (350.0, 10.0, 20.0, 4, 3, 5.83),   # 17.5 / the 3 crews stated = 5.833
+])
+def test_crew_sizing_duration_uses_a_stated_crew_count(qty, days, rate, persons, crews, duration):
+    out = crew_sizing(qty, days, rate, 10.0, crew_size=persons, crews=crews)
+    assert out["duration_for_crews"] == pytest.approx(duration, abs=0.01)
+
+
+@pytest.mark.parametrize("persons, crews, man_hours, duration", [
+    (6, 4, 1200.0, 5.0),   # 20 crew-days x 6 persons x 10 h; 20 / 4 crews
+    (3, 2, 600.0, 10.0),   # 20 x 3 x 10; 20 / 2 crews
+])
+def test_crew_sizing_reads_persons_and_crews_as_different_inputs(persons, crews, man_hours, duration):
+    out = crew_sizing(640.0, 10.0, 32.0, 10.0, crew_size=persons, crews=crews)
+    assert out["man_hours"] == pytest.approx(man_hours)
+    assert out["duration_for_crews"] == pytest.approx(duration)
+
+
+@pytest.mark.parametrize("crews", [0, 2.5])
+def test_crew_sizing_refuses_a_crew_count_that_is_not_whole_and_positive(crews):
+    out = crew_sizing(640.0, 10.0, 32.0, 10.0, crews=crews)
+    assert out.get("error")
 
 
 @pytest.mark.parametrize("qty,days,rate,want_crews,want_unit", [

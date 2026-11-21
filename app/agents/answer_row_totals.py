@@ -10,7 +10,7 @@ model composed is invisible to it. Measured on the live bill band
 of 168 No whose last entry is a "remaining depth bands" remainder rather
 than a row.
 
-Three rules, all decided from the answer's own text and its own figures:
+Four rules, all decided from the answer's own text and its own figures:
 
 (1) A total is the sum of the rows the answer prints, or the answer says it
     is incomplete. A total that disagrees with its own column is replaced by
@@ -27,13 +27,23 @@ Three rules, all decided from the answer's own text and its own figures:
     prints on a row it counted describes rows already counted, so it is a
     truncated view and its figure is not counted twice (rule 3a); a bucket
     that names no such reference stands for rows the answer did not
-    itemise, so a total equal to the printed rows PLUS that bucket is the
-    answer disclosing the rows it left out, and is left alone (rule 3b).
+    itemise, and it accounts for a total above the printed rows only when
+    the answer itself accounts for the difference - the bucket states the
+    figure those rows carry and printed + that figure is the total, or the
+    bucket says it makes up the balance of the total (rule 3b). A bucket
+    that only names further rows, with no figure and no claim to the
+    balance, leaves the difference supported by nothing the answer prints.
+(4) The same rule reads a row list the answer prints as prose rather than
+    as a table ("The rows read: 1.5-2.0 m 18; 2.0-2.5 m 26; ..."): the
+    figures those rows state are summed and checked against the total the
+    answer states. A row printed without a quantity leaves its contribution
+    unknown, and then nothing is rewritten.
 
 A total that already equals its column is returned byte for byte: the check
-may only rewrite an answer that disagrees with itself. Where rule (3) cannot
-tell a truncated view from rows left out, the answer is not rewritten: a
-check that guesses is worse than a check that stays silent. A total the answer
+may only rewrite an answer that disagrees with itself. Where the printed
+evidence cannot settle a total - a row the answer prints without a figure,
+whose contribution is unknown - the answer is not rewritten: a check that
+guesses is worse than a check that stays silent. A total the answer
 credits to a document ("[source: ...]", "as printed", "carried to") is that
 document's figure, not a sum of the rows above it, and is left alone - as is
 a prose total the answer itself discloses as partial ("the remaining rows
@@ -68,6 +78,14 @@ _REMAINDER_RE = re.compile(
 #: counted describes that row, so its figure is a restatement, not an addition.
 _REFERENCE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])([A-Za-z]{1,3})\s?(\d[\d./\-]*\d|\d)(?![A-Za-z0-9])",
+)
+
+#: A remainder bucket that says it makes up the balance of the stated total
+#: names the residual itself ("make up the balance to 1,000 m"), so the total
+#: is defined as the printed rows plus that bucket and cannot disagree with
+#: them. A bucket that merely mentions further rows makes no such claim.
+_BALANCE_RE = re.compile(
+    r"(?i)\b(?:balance|rest)\b(?=[^.;]{0,40}?(?:\d|total\b))",
 )
 
 #: A total row the answer credits to a document is that document's figure.
@@ -263,27 +281,37 @@ class _RowRead:
     without: list[str] = field(default_factory=list)
     restated: list[str] = field(default_factory=list)
     unread: list[str] = field(default_factory=list)
+    #: The figures the unread buckets state for themselves, where they state
+    #: one; a bucket that states no figure adds nothing to this list.
+    unread_figures: list[float] = field(default_factory=list)
+    #: True when an unread bucket says in its own words that it makes up the
+    #: balance of the stated total.
+    balance: bool = False
 
     @property
     def printed(self) -> float:
         return sum(self.kept)
 
 
-def _read_rows(rows: list[list[str]], figure_col: int) -> _RowRead:
+def _read_rows(rows: list[list[str]], figure_col: int, unit: str = "") -> _RowRead:
     """Sort a table's data rows into printed rows and remainder buckets.
 
     A bucket's own words decide what it is. It repeats a reference the answer
     already printed on a row it counted -> it describes rows already in the
     total (a truncated view), so it is named as such and adds nothing. It
-    names no such row -> it stands for rows the answer did not itemise, which
-    the caller reads as the answer's own disclosure that its list is partial.
+    names no such row -> it stands for rows the answer did not itemise, and
+    whatever figure it states for those rows is recorded so the caller can
+    check the total against it. ``unit`` is the column's own unit, so a bucket
+    that writes its figure into its wording ("remaining rows 6 No") states it
+    as plainly as one that puts it in the figure column.
     """
     read = _RowRead()
     counted: set[str] = set()
     buckets: list[tuple[list[str], str]] = []
     for row in rows:
         words = _row_words(row, figure_col)
-        if _REMAINDER_RE.search(words):
+        wording = " ".join(cell or "" for cell in row)
+        if _REMAINDER_RE.search(wording):
             buckets.append((row, words))
             continue
         value = _number(row[figure_col] if figure_col < len(row) else "")
@@ -298,23 +326,46 @@ def _read_rows(rows: list[list[str]], figure_col: int) -> _RowRead:
             read.restated.append(label)
             continue
         read.unread.append(label)
+        wording = " ".join(cell or "" for cell in row)
+        figure = _number(row[figure_col] if figure_col < len(row) else "")
+        if figure is None and unit:
+            figure = _bucket_figure(wording, unit)
+        if figure is not None:
+            read.unread_figures.append(figure)
+        if _BALANCE_RE.search(wording):
+            read.balance = True
     return read
 
 
 def _disclosed_total(stated: float, read: _RowRead) -> bool:
-    """True when the answer's total agrees with what it printed, either way.
+    """True when the answer's own text accounts for its total.
 
     A total equal to the printed rows is already the sum of the rows above.
-    A total ABOVE the printed rows while a remainder bucket stands for rows
-    the answer did not itemise is the answer disclosing the rows it left out:
-    it says its own list is incomplete, which is the other half of the rule,
-    so nothing is rewritten. Only a total that agrees with neither is a
-    disagreement - and a bucket already shown to restate counted rows is not
-    a disclosure, so it never excuses the total.
+    A total ABOVE the printed rows is the answer disclosing rows it left out
+    only when the answer itself accounts for the difference: it states the
+    figures those rows carry (printed + bucket figures agrees with the
+    total), or it says the bucket makes up the balance of that total. A row
+    printed without a figure leaves its contribution unknown, so the printed
+    evidence cannot settle such a total and nothing is rewritten.
+
+    A bucket that merely names further rows without stating any figure makes
+    no claim about the difference: a total above the printed rows is then
+    supported by nothing the answer prints, and is treated as a disagreement.
+    A bucket already shown to restate counted rows never excuses a total.
     """
     if _agrees(stated, read.printed):
         return True
-    return bool(read.unread) and stated > read.printed
+    if stated < read.printed:
+        return False
+    if read.balance:
+        return True
+    if not read.unread:
+        return False
+    if read.without:
+        return True
+    return bool(read.unread_figures) and _agrees(
+        stated, read.printed + sum(read.unread_figures)
+    )
 
 
 def _header_unit(cell: str) -> str:
@@ -362,12 +413,12 @@ def _column_correction(
     if any(_ATTRIBUTED_RE.search(c or "") for c in total_cells):
         return None
     figures_in = col if value_col is None else value_col
-    read = _read_rows(data_rows, figures_in)
+    unit = _header_unit(header_cells[figures_in] if figures_in < len(header_cells) else "")
+    read = _read_rows(data_rows, figures_in, unit)
     if not read.kept:
         return None
     if _disclosed_total(stated, read):
         return None
-    unit = _header_unit(header_cells[figures_in] if figures_in < len(header_cells) else "")
     return Correction(
         line_index=line_index, col=col, stated_text=stated_text, stated=stated,
         computed=read.printed, unit=unit, rows=len(read.kept),
@@ -470,6 +521,188 @@ def _prose_correction(
             computed=read.printed, unit=unit, rows=len(read.kept),
             without_figure=read.without, remainders=read.unread,
             restated=read.restated, in_cell=False,
+        )
+    return None
+
+
+#: A total the answer credits to a document by its own words. A bare
+#: ``[source: ...]`` citation is how the answer cites the rows it read, so it
+#: is not, on its own, a claim that the figure is the document's.
+_ATTRIBUTED_PROSE_RE = re.compile(
+    r"(?i)(?:per\s+the\s+(?:bill|sheet|document)|as\s+printed|"
+    r"carried\s+(?:to|forward))",
+)
+
+#: A citation the answer appends to a sentence: "[source: ...]".
+_CITATION_RE = re.compile(r"\[[^\[\]]*\]")
+
+#: The quantity a prose row states at the end of its segment: "... 2.0-2.5 m 26".
+_ROW_QUANTITY_RE = re.compile(r"(?<![\d.,])(\d[\d,]*(?:\.\d+)?)\s*$")
+
+#: The token directly before that figure: a unit ("m") or a reference ("K").
+_LEADING_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,3})\s*$")
+
+#: The figure a claim states with its unit: "26 No", "4,858 m".
+_CLAIM_UNIT_RE = re.compile(r"(?<![\d,.])(\d[\d,]*(?:\.\d+)?)\s+([A-Za-z]{1,3})(?![A-Za-z0-9])")
+
+#: Words that follow a figure without being its unit.
+_CLAIM_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "in", "on", "at", "to", "by", "for", "and",
+    "or", "is", "as", "it", "so", "we", "per", "each", "all",
+})
+
+
+def _segment_label(segment: str) -> str:
+    """What a prose segment is called: its own words, without the connective."""
+    text = re.sub(
+        r"(?i)^(?:plus|and|with|\+)\s+", "", _strip_citations(segment).strip(),
+    )
+    return text.rstrip(" .,;")[:80] or "row with no reference"
+
+
+def _strip_citations(text: str) -> str:
+    """``text`` without the bracketed citations the answer appends."""
+    return _CITATION_RE.sub("", text or "")
+
+
+def _row_quantity(segment: str) -> float | None:
+    """The quantity a prose row segment states, or None when it states none.
+
+    The segment has to end with the figure, so a citation, a page reference or
+    the sentence's own words after the figure mean the row states no quantity.
+    The token before the figure is either a unit the answer prints in lower
+    case ("m") or nothing; an upper-case prefix is a reference ("R 12"), not
+    a row's quantity.
+    """
+    text = _strip_citations(segment).strip().rstrip(".,;")
+    match = _ROW_QUANTITY_RE.search(text)
+    if match is None:
+        return None
+    token = _LEADING_TOKEN_RE.search(text[: match.start()].rstrip())
+    if token is not None and token.group(1) != token.group(1).lower():
+        return None
+    return _number(match.group(1))
+
+
+def _row_segments(line: str) -> list[str]:
+    """The segments of a prose row list.
+
+    Rows are separated by semicolons. A remainder clause the answer appends
+    after a dash ("18-18.5 m 1 - plus the remaining rows ...") is its own
+    segment, so the quantity printed before it stays with its row.
+    """
+    text = re.sub(r"(?i)\s*(?:\u2014|\u2013|-)\s*plus\s+", "; plus ", line or "")
+    text = re.sub(
+        r"(?i)[;,]?\s*\bplus\s+(?=(?:the\s+|a\s+)?(?:remaining|further|rest|others|balance)\b)",
+        "; plus ", text,
+    )
+    return [part for part in text.split(";") if part.strip()]
+
+
+def _claim_unit(line: str) -> tuple[str, str, float] | None:
+    """The figure and unit a claim line states first, as (text, unit, value)."""
+    for match in _CLAIM_UNIT_RE.finditer(_strip_citations(line)):
+        unit = match.group(2)
+        if unit.lower() in _CLAIM_STOPWORDS:
+            continue
+        value = _number(match.group(1))
+        if value is None:
+            continue
+        return match.group(1), unit, value
+    return None
+
+
+def _bucket_figure(text: str, unit: str) -> float | None:
+    """The figure a bucket states for its own rows, when it carries the
+    total's own unit - so a dimension inside a bucket's wording is not read as
+    a quantity of the rows it stands for."""
+    claim = _claim_unit(text)
+    if claim is None or claim[1].lower() != (unit or "").lower():
+        return None
+    return claim[2]
+
+
+def _is_row_list(line: str) -> bool:
+    """True when a line prints a list of rows, most of them with a quantity.
+
+    A row list is at least three segments, at least two of which state their
+    own quantity, and at least two thirds of which do - so a sentence that
+    merely happens to contain semicolons is not read as a list of rows, while
+    a list with one row the answer could not read still is.
+    """
+    segments = _row_segments(line)
+    quantified = sum(1 for segment in segments if _row_quantity(segment) is not None)
+    return quantified >= 2 and quantified * 3 >= len(segments) * 2
+
+
+def _prose_row_list_correction(
+    cells: list[list[str] | None], lines: list[str],
+    in_table: set[int] = frozenset(),
+) -> Correction | None:
+    """A row list the answer prints as prose, checked against its own total.
+
+    Some answers print their rows as a `;`-separated sentence rather than a
+    table ("The rows read: 1.5-2.0 m 18; 2.0-2.5 m 26; ..."). The
+    arithmetic claim is the same one a Total cell makes, so it is read the
+    same way: the stated total is the sum of the figures the answer prints,
+    and it may only exceed them by figures the answer itself states for rows
+    it did not itemise. A row a segment prints without a quantity leaves that
+    row's contribution unknown, and then nothing is rewritten.
+    """
+    for index in [i for i, row in enumerate(cells) if row is None and i not in in_table]:
+        line = lines[index]
+        if _ATTRIBUTED_PROSE_RE.search(line) or not _TOTAL_CLAIM_RE.search(line):
+            continue
+        claim = _claim_unit(line)
+        if claim is None:
+            continue
+        stated_text, unit, stated = claim
+        listing_index = next(
+            (
+                i for i in range(len(lines))
+                if i != index and i not in in_table and _is_row_list(lines[i])
+            ),
+            None,
+        )
+        if listing_index is None:
+            continue
+        read = _RowRead()
+        for segment in _row_segments(lines[listing_index]):
+            quantity = _row_quantity(segment)
+            if _REMAINDER_RE.search(_strip_citations(segment)):
+                read.unread.append(_segment_label(segment))
+                figure = quantity if quantity is not None else _bucket_figure(segment, unit)
+                if figure is not None:
+                    read.unread_figures.append(figure)
+                if _BALANCE_RE.search(segment):
+                    read.balance = True
+                continue
+            if quantity is None:
+                read.without.append(_segment_label(segment))
+                continue
+            read.kept.append(quantity)
+        for other in range(len(lines)):
+            if other in (index, listing_index) or other in in_table:
+                continue
+            if cells[other] is not None:
+                continue
+            text = lines[other]
+            if not _REMAINDER_RE.search(text):
+                continue
+            read.unread.append(_segment_label(text))
+            if _BALANCE_RE.search(text):
+                read.balance = True
+                continue
+            figure = _bucket_figure(text, unit)
+            if figure is not None:
+                read.unread_figures.append(figure)
+        if len(read.kept) < 2 or _disclosed_total(stated, read):
+            continue
+        return Correction(
+            line_index=index, col=0, stated_text=stated_text, stated=stated,
+            computed=read.printed, unit=unit, rows=len(read.kept),
+            without_figure=read.without, remainders=read.unread, restated=[],
+            in_cell=False,
         )
     return None
 
@@ -625,6 +858,11 @@ def _reconcile(raw: str) -> str:
         prose for prose in (_prose_correction(b, cells, lines) for b in blocks)
         if prose is not None
     )
+    listed = _prose_row_list_correction(
+        cells, lines, {i for block in blocks for i in block},
+    )
+    if listed is not None:
+        corrections.append(listed)
     chains = _chain_findings(cells, lines)
     if not corrections and not chains:
         return raw

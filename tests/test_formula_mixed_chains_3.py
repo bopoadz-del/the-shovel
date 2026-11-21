@@ -96,7 +96,7 @@ def test_m09_volume_then_crews_rounded_up(dims, rate, days, volume, crews, crews
     assert sized["crews_required"] == pytest.approx(crews, rel=_REL)
     assert sized["crews_required_rounded_up"] == crews_up
     again = _ok("crew_sizing", {"quantity": vol["net_volume_m3"], "duration_days": days,
-                                "rate_per_crew_day": rate, "crew_size": crews_up})
+                                "rate_per_crew_day": rate, "crews": crews_up})
     assert again["duration_for_crews"] == pytest.approx(duration, rel=_REL)
 
 
