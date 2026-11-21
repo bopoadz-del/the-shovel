@@ -1091,6 +1091,52 @@ def _without_footnote_marks(text: str) -> str:
     return _FOOTNOTE_MARK.sub(_blank_mark, text)
 
 
+# Two more marks of prose layout are written with no space before the word they
+# carry, and each leaves that word name-shaped in no case at all:
+#
+# * a task-list item's box -- ``- [x]Surname, Given`` -- where the box is the
+#   item's checked state, never a letter of the item's text. It is a box only
+#   where a list item opens it: after the line's own bullet or number and its
+#   space, at the start of the line. The same ``[x]`` anywhere else is an index
+#   or a regular expression's class and is left exactly as written;
+# * an html tag's delimiters -- ``<b>Surname, Given</b>``, ``<a href="u">Q.
+#   Surname</a>`` -- where ``<b`` and ``>`` are markup and the text between
+#   the tags is what the reader sees. Only the delimiters and the element's
+#   own name are blanked: an attribute's text stays where it was written, so
+#   nothing the document spelled is removed from what is read.
+#
+# Each keeps its opening character and has the rest replaced by spaces, so
+# every offset stays where it was. The kept ``[`` or ``<`` is still a boundary:
+# a box opens a new item and a tag opens or closes an element, so the run of
+# name words before the mark ends there exactly as it did before -- two list
+# items or two table cells are never read as one name -- while the word after
+# the mark is no longer welded to it. A tag written across a line break is
+# left alone, as a footnote is.
+_TASK_BOX = re.compile(r"(?m)^([ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)(\[[xX ]\])")
+_TAG_MARK = re.compile(r"(</?[A-Za-z][A-Za-z0-9:-]*)((?:[ \t][^<>\n]*?)?)(/?>)")
+
+
+def _keep_opening(mark: str) -> str:
+    return mark[0] + " " * (len(mark) - 1)
+
+
+def _blank_task_box(mark: re.Match[str]) -> str:
+    return mark.group(1) + _keep_opening(mark.group(2))
+
+
+def _blank_tag_delimiters(mark: re.Match[str]) -> str:
+    return _keep_opening(mark.group(1)) + mark.group(2) + " " * len(mark.group(3))
+
+
+def _without_markup_marks(text: str) -> str:
+    """``text`` with list-item task boxes and html tag delimiters blanked."""
+    if "[" in text:
+        text = _TASK_BOX.sub(_blank_task_box, text)
+    if "<" in text:
+        text = _TAG_MARK.sub(_blank_tag_delimiters, text)
+    return text
+
+
 def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
     """Maximal runs of name-shaped words, each with the offset it starts at.
 
@@ -1114,7 +1160,9 @@ def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
     mark's own identifier is never read as part of the name. The same bracket
     shape also negates a character class in a regular expression, where it is
     the pattern's own syntax and not a mark, so the blanking is limited to
-    prose (``prose``) -- the formats ``is_prose`` names, and only those.
+    prose (``prose``) -- the formats ``is_prose`` names, and only those. A
+    task-list item's box and an html tag's delimiters are prose layout of the
+    same kind and are blanked under the same gate (``_without_markup_marks``).
 
     Invisible characters are deleted, not treated as separators: a soft
     hyphen pushed into the middle of a surname leaves one word to a reader,
@@ -1134,7 +1182,7 @@ def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
     else:
         clean = text
         origin = list(range(len(text)))
-    clean = _without_footnote_marks(clean) if prose else clean
+    clean = _without_markup_marks(_without_footnote_marks(clean)) if prose else clean
     words: list[tuple[int, str, bool]] = []
     index = 0
     length = len(clean)
