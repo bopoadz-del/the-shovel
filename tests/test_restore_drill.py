@@ -324,3 +324,74 @@ def test_a_successful_neon_call_returns_its_json(monkeypatch, path, raw, parsed)
 ])
 def test_neon_route_blanks_ids_and_drops_the_query(path, route):
     assert rd.neon_route(path) == route
+
+
+# ── the code's own models must load from the restore branch ──────────────────
+from sqlalchemy import Integer, String  # noqa: E402
+from sqlalchemy.orm import DeclarativeBase, mapped_column  # noqa: E402
+
+
+class _TBase(DeclarativeBase):
+    pass
+
+
+class _Project(_TBase):
+    __tablename__ = "projects"
+    id = mapped_column(Integer, primary_key=True)
+    name = mapped_column(String)
+
+
+def _schema(tmp_path, name: str, project_cols: str, n_rows: int = 1):
+    eng = create_engine(f"sqlite:///{tmp_path / name}.db")
+    with eng.begin() as c:
+        c.execute(text(f'CREATE TABLE "projects" ({project_cols})'))
+        for i in range(n_rows):
+            c.execute(text('INSERT INTO "projects" (id) VALUES (:i)'), {"i": i})
+    return sessionmaker(bind=eng)
+
+
+@pytest.mark.parametrize("cols,loads", [
+    ("id INTEGER PRIMARY KEY, name TEXT", True),
+    ("id INTEGER PRIMARY KEY", "OperationalError"),
+])
+def test_a_model_loads_only_when_every_mapped_column_is_there(tmp_path, cols, loads):
+    f = _schema(tmp_path, "s", cols)
+    assert rd.model_reads(f, [_Project]) == {"projects": loads}
+
+
+@pytest.mark.parametrize("n_rows", [0, 3])
+def test_a_model_read_loads_an_empty_or_a_full_table(tmp_path, n_rows):
+    f = _schema(tmp_path, "e", "id INTEGER PRIMARY KEY, name TEXT", n_rows)
+    assert rd.model_reads(f, [_Project]) == {"projects": True}
+
+
+@pytest.mark.parametrize("restore,live,want", [
+    ({"projects": "OperationalError"}, {"projects": True}, ["projects"]),
+    ({"projects": True}, {"projects": True}, []),
+    ({"projects": "OperationalError"}, {"projects": "OperationalError"}, []),
+    ({}, {"projects": True}, ["projects"]),
+])
+def test_unservable_is_a_model_live_loads_and_restore_does_not(restore, live, want):
+    assert rd.unservable(restore, live) == want
+
+
+def test_app_models_maps_the_drill_tables_to_the_code_models():
+    got = rd.app_models(("projects", "no_such_table", "documents"))
+    assert [m.__table__.name for m in got] == ["projects", "documents"]
+    assert [m.__table__.name for m in rd.app_models(rd.TABLES)] == list(rd.TABLES)
+
+
+@pytest.mark.parametrize("restore_cols,ok,unservable", [
+    ("id INTEGER PRIMARY KEY, name TEXT", True, []),
+    ("id INTEGER PRIMARY KEY", False, ["projects"]),
+])
+def test_run_fails_a_restore_the_code_cannot_serve(tmp_path, capsys, monkeypatch, restore_cols, ok, unservable):
+    monkeypatch.setattr(rd, "TABLES", ("projects",))
+    live = _schema(tmp_path, "live", "id INTEGER PRIMARY KEY, name TEXT")
+    restore = _schema(tmp_path, "restore", restore_cols)
+    r = rd.run("ep-x", restore_factory=restore, live_factory=live,
+               chunk_table="projects", models=[_Project])
+    assert r["ok"] is ok and r["unservable"] == unservable
+    out = capsys.readouterr().out
+    assert f"unservable={','.join(unservable) or '-'}" in out
+    assert "model=projects" in out and "name" not in out.split("model=projects")[1].split("\n")[0]

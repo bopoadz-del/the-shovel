@@ -1,4 +1,5 @@
-"""Restore drill: compare a restored database with live, counts only.
+"""Restore drill: compare a restored database with live by counts and by
+whether the code's own models load from it.
 
 Either ``--create`` makes a scratch Neon branch of live at a restore point
 (read-only endpoint, ``NEON_API_KEY``), times it and deletes it after the
@@ -12,16 +13,20 @@ Verdict:
   * ``unreadable`` -- a table could not be counted on the restore branch.
   * ``empty_on_restore`` -- a table holds rows on live but none on the
     restore branch (the backup lost it).
-  * ``RESTORE_DRILL ok`` when neither list is non-empty.
+  * ``unservable`` -- the code's own ORM model of a table loads a row on
+    live but not on the restore branch (the table is there, but the app
+    could not serve from it: a column or type the code maps is missing).
+  * ``RESTORE_DRILL ok`` when no list is non-empty.
 A restore point is older than live, so live may hold more rows; the delta is
-reported, not judged.
+reported, not judged. A model that cannot load on live either is reported,
+not judged: that is drift between the code and live, not a restore loss.
 """
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -68,6 +73,43 @@ def counts(session_factory: Callable, tables: Iterable[str], chunk_table: str) -
     return out
 
 
+def app_models(tables: Iterable[str]) -> List[type]:
+    """The app's own ORM classes mapped onto ``tables``, in that order."""
+    from app.core.models import Base
+
+    by_table = {m.local_table.name: m.class_ for m in Base.registry.mappers}
+    return [by_table[t] for t in tables if t in by_table]
+
+
+def model_reads(session_factory: Callable, models: Sequence[type]) -> Dict[str, object]:
+    """Whether each ORM model loads one row, every mapped column selected,
+    inside a READ ONLY transaction. A count succeeds on a table whose
+    columns no longer match the code; this read does not. The value is
+    ``True`` or the exception class name. No row is kept or printed."""
+    from sqlalchemy import select
+    from sqlalchemy import text as sql
+
+    out: Dict[str, object] = {}
+    with session_factory() as s:
+        if s.get_bind().dialect.name == "postgresql":
+            s.execute(sql("SET TRANSACTION READ ONLY"))
+        for model in models:
+            name = model.__table__.name
+            try:
+                with s.begin_nested():
+                    s.execute(select(model).limit(1)).scalars().first()
+                out[name] = True
+            except Exception as exc:  # noqa: BLE001 -- an unloadable model is the finding
+                out[name] = type(exc).__name__
+        s.rollback()
+    return out
+
+
+def unservable(restore: Mapping[str, object], live: Mapping[str, object]) -> List[str]:
+    """Tables whose model loads on live but not on the restore branch."""
+    return [t for t, ok in live.items() if ok is True and restore.get(t) is not True]
+
+
 def compare(restore: Mapping[str, object], live: Mapping[str, object]) -> Dict[str, object]:
     """Side-by-side counts and the verdict lists."""
     unreadable: List[str] = []
@@ -88,7 +130,8 @@ def compare(restore: Mapping[str, object], live: Mapping[str, object]) -> Dict[s
 
 
 def run(endpoint: str, *, restore_factory: Optional[Callable] = None,
-        live_factory: Optional[Callable] = None, chunk_table: Optional[str] = None) -> Dict[str, object]:
+        live_factory: Optional[Callable] = None, chunk_table: Optional[str] = None,
+        models: Optional[Sequence[type]] = None) -> Dict[str, object]:
     from scripts import scrub_verify as sv
 
     if restore_factory is None or live_factory is None:
@@ -102,14 +145,21 @@ def run(endpoint: str, *, restore_factory: Optional[Callable] = None,
     restore = counts(restore_factory, TABLES, table)
     live = counts(live_factory, TABLES, table)
     result = compare(restore, live)
+    models = app_models(TABLES) if models is None else models
+    reads = {"restore": model_reads(restore_factory, models), "live": model_reads(live_factory, models)}
+    result["unservable"] = unservable(reads["restore"], reads["live"])
+    result["ok"] = result["ok"] and not result["unservable"]
     for name, r in result["tables"].items():
         _emit(table=name, restore=r["restore"], live=r["live"], live_minus_restore=r["delta"])
+    for name in reads["live"]:
+        _emit(model=name, loads_restore=reads["restore"].get(name), loads_live=reads["live"][name])
     for side, c in (("restore", restore), ("live", live)):
         for status, n in sorted((c.get("documents_by_status") or {}).items()):
             _emit(side=side, documents_status=status, n=n)
     _emit(verdict="ok" if result["ok"] else "FAIL",
           unreadable=",".join(result["unreadable"]) or "-",
-          empty_on_restore=",".join(result["empty_on_restore"]) or "-")
+          empty_on_restore=",".join(result["empty_on_restore"]) or "-",
+          unservable=",".join(result["unservable"]) or "-")
     return result
 
 
@@ -251,7 +301,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import os
     import time
 
-    ap = argparse.ArgumentParser(description="Restore drill: restore branch vs live, counts only.")
+    ap = argparse.ArgumentParser(description="Restore drill: restore branch vs live, counts and model loads.")
     ap.add_argument("--endpoint", default="", help="Neon endpoint id of an existing restore branch (ep-...)")
     ap.add_argument("--create", action="store_true",
                     help="make a scratch restore branch, compare, delete it (needs NEON_API_KEY)")
