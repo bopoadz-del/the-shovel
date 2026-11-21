@@ -48,6 +48,11 @@ HEADING_RESERVE = 120
 # One id per split parent, unique for the process: pieces of one parent share it.
 _SPLIT_PARENT_IDS = itertools.count(1)
 
+
+def new_split_parent() -> int:
+    """A fresh split-parent id, for a caller whose own splitter cut the pieces."""
+    return next(_SPLIT_PARENT_IDS)
+
 # Coarsest boundary first. Each pattern matches the separator between pieces.
 _BOUNDARIES = (
     re.compile(r"\n\s*\n"),          # paragraph

@@ -1978,8 +1978,15 @@ def _chunk_prose_segment(
 
     ``split_parents`` (optional) gets one entry per chunk returned: the id
     shared by the pieces of one split chunk, or None.
+
+    The row splitter (``finer``) cuts a bill page into row-sized pieces, so
+    every piece after the first loses the class / item heading printed above
+    its rows. Each of those pieces is a piece of its page, tagged like a
+    ceiling piece so it is filed under its page's heading line. Each gets
+    its own id: a piece whose page cannot be located borrows no other
+    piece's page or heading.
     """
-    from app.core.chunk_bounds import bound_chunks
+    from app.core.chunk_bounds import bound_chunks, new_split_parent
 
     if not text or not text.strip():
         return []
@@ -1989,7 +1996,13 @@ def _chunk_prose_segment(
         chunks = chunk_text_with_overlap(text, target_chars=500, overlap=50)
     else:
         chunks = chunk_text(text)
-    return bound_chunks(chunks, split_parents=split_parents)
+    first = len(split_parents) if split_parents is not None else 0
+    bounded = bound_chunks(chunks, split_parents=split_parents)
+    if split_parents is not None and chunker == "finer" and len(chunks) > 1:
+        for k in range(first, len(split_parents)):
+            if split_parents[k] is None:
+                split_parents[k] = new_split_parent()
+    return bounded
 
 
 def _normalize_cesmm_in_chunks(chunks: list[str]) -> list[str]:
