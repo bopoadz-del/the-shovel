@@ -65,3 +65,25 @@ export function installFetchObserver(target, watcher) {
   wrapped.__buildObserved = true
   target.fetch = wrapped
 }
+
+/** When the tab comes back to the front, ask the server once so a tab left
+ *  open across a deploy learns the server's build without waiting for the
+ *  user's next press. The probe goes through `target.fetch`, so the observer
+ *  installed above reads its header: there is one reading path, not two.
+ *  `isQuiet()` true (already told, or this bundle has no build id) sends
+ *  nothing. A failed probe is swallowed: it must never surface as an error.
+ *  Returns a function that removes the listener. */
+export function installVisibilityCheck(doc, target, url, isQuiet) {
+  const onChange = () => {
+    if (doc.visibilityState !== 'visible' || isQuiet()) return
+    let pending
+    try {
+      pending = target.fetch(url, { cache: 'no-store' })
+    } catch {
+      return
+    }
+    if (pending && typeof pending.catch === 'function') pending.catch(() => undefined)
+  }
+  doc.addEventListener('visibilitychange', onChange)
+  return () => doc.removeEventListener('visibilitychange', onChange)
+}
