@@ -10750,14 +10750,16 @@ def _postprocess_answer(
     # A table's stated total is the sum of the rows the table prints, or the
     # answer says it is incomplete (app/agents/answer_row_totals.py). Runs
     # before the derivation check so a corrected figure is what the check,
-    # and the user, reads.
+    # and the user, reads. A total the turn's computed tool stated is that
+    # tool's figure and is never lowered to an incomplete table's sum.
     from app.agents.answer_row_totals import reconcile as _reconcile_row_totals
-    text = _reconcile_row_totals(text)
+    computed_statements = _turn_computed_statements(messages)
+    text = _reconcile_row_totals(text, computed_statements)
     # A table drawn from the turn's computed row set prints every row of it,
     # or the rows it left out are named from that set
     # (app/agents/answer_counted_rows.py).
     from app.agents.answer_counted_rows import name_dropped_rows as _name_dropped_rows
-    text = _name_dropped_rows(text, _turn_computed_statements(messages))
+    text = _name_dropped_rows(text, computed_statements)
     # Last: the answer's own working must agree with its own result. Checked
     # after every graft, so a grafted figure is checked too.
     text = _annotate_derivation_mismatches(text)

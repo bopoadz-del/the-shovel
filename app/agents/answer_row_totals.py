@@ -36,14 +36,21 @@ Four rules, all decided from the answer's own text and its own figures:
 (4) The same rule reads a row list the answer prints as prose rather than
     as a table ("The rows read: 1.5-2.0 m 18; 2.0-2.5 m 26; ..."): the
     figures those rows state are summed and checked against the total the
-    answer states. A row printed without a quantity leaves its contribution
-    unknown, and then nothing is rewritten.
+    answer states. A row printed without a quantity is named as in rule (2).
+(5) A stated total equal to a total that the turn's own computed tool stated
+    for a summed row set is that tool's figure, not one the model composed.
+    It is never lowered to the sum of whichever rows the table happened to
+    print. When the table prints only some of that set's rows, the defect
+    is in the table, not the total. The rows it left out are named from the
+    set (``answer_counted_rows.name_dropped_rows``), and the correct total
+    stays.
 
 A total that already equals its column is returned byte for byte: the check
-may only rewrite an answer that disagrees with itself. Where the printed
-evidence cannot settle a total - a row the answer prints without a figure,
-whose contribution is unknown - the answer is not rewritten: a check that
-guesses is worse than a check that stays silent. A total the answer
+may only rewrite an answer that disagrees with itself. A row printed without
+a figure stops a rewrite only when the answer also prints a remainder bucket
+for rows it did not itemise: the figureless row may be what that bucket
+stands for, so the printed evidence cannot settle the total, and a check
+that guesses is worse than one that stays silent. A total the answer
 credits to a document ("[source: ...]", "as printed", "carried to") is that
 document's figure, not a sum of the rows above it, and is left alone - as is
 a prose total the answer itself discloses as partial ("the remaining rows
@@ -62,15 +69,24 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.lib.boq_units import canon_unit
 
 _LOG = logging.getLogger(__name__)
 
 #: A cell that states a total of the rows above it: "Total", "Sub-total",
-#: "Grand total", "Sum", "Total quantity". Case and surrounding space ignored.
-_TOTAL_CELL_RE = re.compile(r"(?i)^\s*(?:grand\s+|sub\s*[- ]?)?(?:total|totals|sum)\b")
+#: "Grand total", "Sum", "Total quantity". Case, surrounding space and the
+#: markdown emphasis an answer prints a total row in ("**Total**") ignored.
+_TOTAL_CELL_RE = re.compile(
+    r"(?i)^\s*[*_]*\s*(?:grand\s+|sub\s*[- ]?)?(?:total|totals|sum)(?![A-Za-z0-9])",
+)
+
+#: Markdown emphasis around a whole cell ("**160**", "_12_") is print, not
+#: part of the figure.
+_EMPHASIS = "*_"
 
 #: An entry that stands for rows the answer does not print. General
 #: quantifier vocabulary: a remainder, not an item.
@@ -202,13 +218,19 @@ def _table_blocks(cells: list[list[str] | None]) -> list[list[int]]:
     return blocks
 
 
+def _is_separator(row: list[str]) -> bool:
+    """True for a markdown table's rule line (``|---|:--:|``): layout, not a row."""
+    joined = "".join(cell or "" for cell in row)
+    return "-" in joined and not joined.strip(" -:")
+
+
 def _number(cell: str) -> float | None:
     """The figure a cell states, or None.
 
     One figure, or the sum of a printed sum expression ("1 + 1 + 1 + 1" is
     four). A cell holding words, a dimension or a range states no figure.
     """
-    text = (cell or "").strip()
+    text = (cell or "").strip().strip(_EMPHASIS)
     parts = text.split("+") if _FIGURE_CELL_RE.match(text) else []
     if not parts:
         return None
@@ -225,7 +247,7 @@ def _number(cell: str) -> float | None:
 def _format_like(value: float, sample: str) -> str:
     """``value`` printed the way ``sample`` prints a figure: the same
     thousands separators and the same number of decimals."""
-    text = (sample or "").strip()
+    text = (sample or "").strip().strip(_EMPHASIS)
     decimals = len(text.split(".", 1)[1]) if "." in text else 0
     grouped = "," in text
     if decimals:
@@ -476,7 +498,10 @@ def _block_corrections(block: list[int], cells: list[list[str] | None]) -> list[
     )
     if total_row is None or total_row == 0:
         return []
-    above = [row for row in rows[:total_row] if any((c or "").strip() for c in row)]
+    above = [
+        row for row in rows[:total_row]
+        if any((c or "").strip() for c in row) and not _is_separator(row)
+    ]
     if not above:
         return []
     # The block's first line is a header when it states no figure in a column
@@ -564,7 +589,10 @@ def _prose_correction(
     """
     outside = [i for i in range(len(lines)) if i not in block]
     rows = [cells[i] or [] for i in block]
-    data = [row for row in rows if any((c or "").strip() for c in row)]
+    data = [
+        row for row in rows
+        if any((c or "").strip() for c in row) and not _is_separator(row)
+    ]
     if not data or any(any(_TOTAL_CELL_RE.match(c or "") for c in row) for row in data):
         return None
     header = data[0]
@@ -946,7 +974,29 @@ def _chain_summary(finding: ChainFinding, computed_text: str) -> str:
     )
 
 
-def _reconcile(raw: str) -> str:
+def computed_totals(statements: Sequence[Any]) -> list[tuple[float, str]]:
+    """The totals the turn's computed tools stated for a summed row set, as
+    (figure, unit). Only a sum is a total of rows; a count or a lookup is not."""
+    return [
+        (float(st.figure), str(getattr(st, "unit", "") or ""))
+        for st in statements or ()
+        if getattr(st, "basis", "") == "sum" and getattr(st, "figure", None) is not None
+    ]
+
+
+def _held(stated: float, unit: str, held: list[tuple[float, str]]) -> bool:
+    """True when ``stated`` is a total the turn's computed tool stated (rule 5).
+
+    The units must name the same unit wherever both sides print one, so a
+    length the tool summed never vouches for a count that happens to match.
+    """
+    return any(
+        _agrees(stated, figure) and (not unit or not held_unit or _same_unit(unit, held_unit))
+        for figure, held_unit in held
+    )
+
+
+def _reconcile(raw: str, held: list[tuple[float, str]]) -> str:
     lines = raw.split("\n")
     cells: list[list[str] | None] = [_cells(line) for line in lines]
     blocks = _table_blocks(cells)
@@ -961,6 +1011,16 @@ def _reconcile(raw: str) -> str:
     if listed is not None:
         corrections.append(listed)
     chains = _chain_findings(cells, lines)
+    kept = [c for c in corrections if not _held(c.stated, c.unit, held)]
+    kept_chains = [
+        c for c in chains if c.computed is None or not _held(c.stated, c.unit, held)
+    ]
+    if len(kept) + len(kept_chains) < len(corrections) + len(chains):
+        _LOG.info(
+            "row_total_held_by_computed columns=%d chains=%d",
+            len(corrections) - len(kept), len(chains) - len(kept_chains),
+        )
+    corrections, chains = kept, kept_chains
     if not corrections and not chains:
         return raw
     summaries: list[str] = []
@@ -1000,16 +1060,18 @@ def _reconcile(raw: str) -> str:
     )
 
 
-def reconcile(text: str) -> str:
+def reconcile(text: str, statements: Sequence[Any] = ()) -> str:
     """Check every stated row total against the rows the answer prints.
 
+    ``statements`` are the turn's computed statements: a stated total equal to
+    a sum one of them states is that tool's figure and is not lowered (rule 5).
     An answer with no table and no printed sum chain, or whose totals already
     equal their rows, is returned byte for byte. Never raises: a check that
     can break an answer is a check that gets switched off.
     """
     raw = text or ""
     try:
-        return _reconcile(raw)
+        return _reconcile(raw, computed_totals(statements))
     except Exception:  # noqa: BLE001 - a check must never break a turn
         _LOG.warning("row-total reconciliation failed; answer passed through", exc_info=True)
         return raw
