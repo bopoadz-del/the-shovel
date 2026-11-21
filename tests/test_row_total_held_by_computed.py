@@ -128,11 +128,15 @@ def test_a_count_is_not_a_total_of_rows(rows, printed, _missing):
     assert computed_totals(count) == []
 
 
-def test_a_statement_that_did_not_return_states_no_total():
-    failed = (Statement(figure=None, what="", basis="sum", failure="timeout"),
-              Statement(figure=None, what="", basis="sum"))
-    assert computed_totals(failed) == []
-    assert computed_totals(None) == []
+@pytest.mark.parametrize("statements", [
+    pytest.param((Statement(figure=None, what="", basis="sum", failure="timeout"),),
+                 id="sum-that-failed"),
+    pytest.param((Statement(figure=None, what="", unit="m", basis="sum"),
+                  Statement(figure=4.0, what="", unit="m", basis="")), id="no-figure-or-no-sum"),
+    pytest.param(None, id="no-statements"),
+])
+def test_a_statement_that_did_not_return_states_no_total(statements):
+    assert computed_totals(statements) == []
 
 
 @pytest.mark.parametrize("rows,printed,missing", CASES)
