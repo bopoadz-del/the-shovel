@@ -842,19 +842,31 @@ def _without_possessive(shape: str, core: str) -> tuple[str, str]:
 
     Edge punctuation is stripped before this point, so the clitic sits inside
     the token here. A token that does not end with one is returned unchanged,
-    and so is one whose remainder is not letters (``2010's``): a possessive of
-    a number or an identifier is not a written name. The shape keeps whatever
-    marks follow the clitic, so the run still ends where the sentence ends it.
+    and so is one whose remainder is neither letters nor a written initial
+    (``2010's``): a possessive of a number or an identifier is not a written
+    name. The shape keeps whatever marks follow the clitic, so the run still
+    ends where the sentence ends it.
+
+    A written initial takes the clitic too. ``Q.'s crew`` attributes the crew
+    to the person the initial stands for, exactly as ``Vantrey's crew`` does
+    for the surname, and an entry copied out of an index prints the given name
+    that way more often than in full. The dot is the reader's evidence that
+    the letter is an initial, so it stays with the letter: the word read off
+    the token is the letter alone and the shape keeps the dot, which is the
+    same pair the tokeniser produces for ``Q.`` written with no clitic at all.
     """
     if len(core) < 3 or core[-2] not in _POSSESSIVE_MARKS or core[-1] not in "sS":
         return core, shape
     word = core[:-2]
+    kept = word
     if not word.isalpha():
-        return core, shape
+        if not (word.endswith(".") and _is_initial(word[:-1])):
+            return core, shape
+        word = word[:-1]
     at = shape.rfind(core)
     if at < 0:
         return core, shape
-    return word, shape[: at + len(word)] + shape[at + len(core):]
+    return word, shape[:at] + kept + shape[at + len(core):]
 
 
 def _entry_words(text: str) -> list[str] | None:
