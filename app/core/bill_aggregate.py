@@ -217,7 +217,14 @@ def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
 # item, and a word it prints nowhere scopes nothing -- it cannot select a row
 # and must not empty the answer.
 
-_DIM = r"\d+(?:\.\d+)?"
+#: How a bill separates the groups of a long number and where it puts the
+#: decimal mark: a tender prints both conventions, so a number is read the same
+#: whichever it is written in. Groups of three are joined by a comma, a space,
+#: a no-break space or a thin space; a comma with one or two digits behind it
+#: is the decimal mark (``2,5`` is two and a half, ``1,500`` is fifteen hundred).
+_GROUP = "[,\u00a0\u2009 ]"
+_GROUPED_SEP_RE = re.compile(rf"(?<=\d){_GROUP}(?=\d{{3}}(?!\d))")
+_DIM = rf"\d{{1,3}}(?:{_GROUP}\d{{3}})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
 #: A size: two dimensions multiplied, each with an optional unit.
 _SIZE_RE = re.compile(
     rf"({_DIM})\s*(mm|cm|m)?\s*[x\u00d7X]\s*({_DIM})\s*(mm|cm|m)?(?!\w)", re.IGNORECASE,
@@ -228,7 +235,11 @@ _BAND_RE = re.compile(
     re.IGNORECASE,
 )
 #: A bill named in an ask: "Bill No. <n>", "bill <n>", "Bill Number <n><a>".
-_ASK_BILL_RE = re.compile(r"\bbill\s*(?:no\.?|number|#)?\s*(\d{1,3}[a-z]?)\b", re.IGNORECASE)
+#: A bill number may be grouped like any other number (``Bill No. 1,313``), so
+#: the groups are part of the number and never a second bill.
+_ASK_BILL_RE = re.compile(
+    r"\bbill\s*(?:no\.?|number|#)?\s*(\d{1,3}(?:,\d{3})+[a-z]?|\d+[a-z]?)\b", re.IGNORECASE,
+)
 #: A bill named by the document's own page label: "Page D/13/2", "D/13/10".
 _PAGE_LABEL_RE = re.compile(r"\b([A-Za-z]{1,4})\s*/\s*(\d{1,3}[a-z]?)\s*/\s*\d{1,4}\b")
 
@@ -312,21 +323,34 @@ def _desc_words(row: SheetRow) -> set[str]:
     return {_fold(w) for w in _words(row.description)}
 
 
+def _number(text: str) -> float:
+    """One number as the document prints it.
+
+    Groups of three are joined (``1,500``, ``1 500``); a comma left with one or
+    two digits behind it is the decimal mark (``2,5``)."""
+    plain = _GROUPED_SEP_RE.sub("", (text or "").strip())
+    return float(plain.replace(",", "."))
+
+
 def _dimensions(match: re.Match[str]) -> tuple[float, float]:
-    """The two ends of a dimension expression, in metres.
+    """The two ends of a dimension expression, in metres, low end first.
 
     A unit written on either end applies to both; a size written with no unit
     at all is metres unless both ends are too large for that, in which case it
-    is millimetres (a bill prints a chamber in millimetres as bare numbers)."""
+    is millimetres (a bill prints a chamber in millimetres as bare numbers).
+    A dimension is an extent, not a print order: ``2.0 x 1.5`` and
+    ``1.5 x 2.0`` are one size, and a band written high-to-low is the band."""
     first, unit_a, second, unit_b = match.groups()
-    values = (float(first), float(second))
+    values = (_number(first), _number(second))
     unit = (unit_a or unit_b or "").lower()
     if unit:
         scale = _UNIT_M.get(unit, 1.0)
-        return (round(values[0] * scale, 6), round(values[1] * scale, 6))
-    if min(values) >= _UNITLESS_MM_FROM:
-        return (round(values[0] / 1000.0, 6), round(values[1] / 1000.0, 6))
-    return values
+        ends = (values[0] * scale, values[1] * scale)
+    elif min(values) >= _UNITLESS_MM_FROM:
+        ends = (values[0] / 1000.0, values[1] / 1000.0)
+    else:
+        ends = values
+    return (round(min(ends), 6), round(max(ends), 6))
 
 
 def _row_size(row: SheetRow) -> tuple[float, float] | None:
@@ -351,6 +375,12 @@ def _row_band(row: SheetRow) -> tuple[float, float] | None:
     return None
 
 
+def _bill_number(text: str) -> str:
+    """A bill number as the ask or the heading prints it, its groups joined:
+    ``1,313`` and ``1313`` are one bill."""
+    return (text or "").replace(",", "").replace(" ", "").upper()
+
+
 def row_bills(row: SheetRow) -> set[str]:
     """The bill numbers the row's own path names.
 
@@ -361,7 +391,7 @@ def row_bills(row: SheetRow) -> set[str]:
     found: set[str] = set()
     for level in row.path:
         for match in _ASK_BILL_RE.finditer(level or ""):
-            found.add(match.group(1).upper())
+            found.add(_bill_number(match.group(1)))
         for match in _PAGE_LABEL_RE.finditer(level or ""):
             found.add(match.group(2).upper())
     return found
@@ -382,7 +412,7 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
         return None
     size = _SIZE_RE.search(text)
     band = _BAND_RE.search(text)
-    bills = frozenset(m.group(1).upper() for m in _ASK_BILL_RE.finditer(text))
+    bills = frozenset(_bill_number(m.group(1)) for m in _ASK_BILL_RE.finditer(text))
     in_paths: set[str] = set()
     in_desc: set[str] = set()
     for row in items:

@@ -65,6 +65,76 @@ def test_a_size_is_compared_as_numbers_not_as_words(tmp_path, ask, size, count, 
 
 
 @pytest.mark.parametrize("ask, count, total", [
+    ("How many 1,500 x 1,500 mm chambers are billed?", 2, 5.0),
+    ("How many 1 500 x 1 500 mm chambers are billed?", 2, 5.0),
+], ids=["comma-grouped", "space-grouped"])
+def test_a_grouped_number_is_one_number_not_a_smaller_one(tmp_path, ask, count, total):
+    # A bill writes a long number in groups, and the ask copies the document.
+    # Read as a plain decimal, "1,500" would become a 500 by 1 extent that no
+    # row can equal, so the ask would silently select nothing.
+    rows = [
+        _row((BILL_NINE, NET, "Chambers"), "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m", "No", "2", "1", "2"),
+        _row((BILL_NINE, NET, "Chambers"), "", "B |Size 1500 x 1500 mm, depth 2.0-2.5m", "No", "3", "1", "3"),
+        _row((BILL_NINE, NET, "Chambers"), "", "C |Size 1.8 x 1.8m, depth 2.5-3.0m", "No", "9", "1", "9"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
+    assert (out["count"], out["sum"]) == (count, total)
+    assert out["scope"]["size"] == [1.5, 1.5]
+
+
+@pytest.mark.parametrize("ask, count, total", [
+    ("How many 1.5 x 2.0 m chambers are billed?", 2, 5.0),
+    ("How many 2.0 x 1.5 m chambers are billed?", 2, 5.0),
+], ids=["asked-as-printed", "asked-the-other-way-round"])
+def test_a_size_is_an_extent_not_the_order_it_is_printed_in(tmp_path, ask, count, total):
+    # Two rows print the same chamber with its sides the other way round; a
+    # third is a near miss that must stay out. The extent decides, not the
+    # order of the two numbers.
+    rows = [
+        _row((BILL_NINE, NET, "Chambers"), "", "A |Size 1.5 x 2.0m, depth 1.5-2.0m", "No", "2", "1", "2"),
+        _row((BILL_NINE, NET, "Chambers"), "", "B |Size 2.0 x 1.5m, depth 1.5-2.0m", "No", "3", "1", "3"),
+        _row((BILL_NINE, NET, "Chambers"), "", "C |Size 1.5 x 1.6m, depth 1.5-2.0m", "No", "9", "1", "9"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
+    assert (out["count"], out["sum"]) == (count, total)
+
+
+@pytest.mark.parametrize("ask, count, total", [
+    ("How many chambers at 2,5 to 3 m depth are billed?", 2, 800.0),
+    ("How many chambers at 3 to 2,5 m depth are billed?", 2, 800.0),
+], ids=["decimal-comma", "written-high-to-low"])
+def test_a_band_is_read_in_either_number_convention(tmp_path, ask, count, total):
+    # A bill outside the English convention writes two and a half with a comma,
+    # and a band written high-to-low is still the same band. Read as a plain
+    # decimal, "2,5" would be five, and the band would select nothing.
+    path = (BILL_NINE, NET, "Depth 2.5 to 3m")
+    rows = [
+        _row(path, "", "A |Nominal bore: 400mm", "m", "500", "1", "500"),
+        _row(path, "", "B |Nominal bore: 600mm", "m", "300", "1", "300"),
+        _row((BILL_NINE, NET, "Depth 4.0 to 4.5m"), "", "C |Nominal bore: 900mm", "m", "70", "1", "70"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
+    assert (out["count"], out["sum"]) == (count, total)
+    assert out["scope"]["band"] == [2.5, 3.0]
+
+
+@pytest.mark.parametrize("ask, count, total", [
+    ("In Bill No. 1,313, how many chambers are billed?", 2, 5.0),
+    ("In Bill No. 1313, how many chambers are billed?", 2, 5.0),
+], ids=["grouped-in-the-ask", "plain-in-the-ask"])
+def test_a_grouped_bill_number_is_one_bill(tmp_path, ask, count, total):
+    # A bill number is a number like any other: grouped or not, it names bill
+    # 1313 and never bill 1.
+    rows = [
+        _row(("Bill No. 1,313 - Drainage", "Chambers"), "", "A |Inspection chamber", "No", "2", "1", "2"),
+        _row(("Bill No. 1313 - Drainage", "Chambers"), "", "B |Inspection chamber, deeper", "No", "3", "1", "3"),
+        _row(("Bill No. 1 - Site clearance", "Chambers"), "", "C |Inspection chamber", "No", "9", "1", "9"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=ask)
+    assert (out["count"], out["sum"]) == (count, total)
+
+
+@pytest.mark.parametrize("ask, count, total", [
     ("How many 0.45 x 0.45 m chambers are billed?", 2, 5.0),
     ("How many 1.2 x 1.2 m chambers are billed?", 1, 3.0),
 ], ids=["ask-in-metres", "larger-chamber"])
