@@ -121,3 +121,33 @@ async def test_total_ask_is_predispatched_to_the_forecaster(text):
     assert out is not None
     assert out["name"] == "cash_flow_forecast"
     assert out["ok"] is True
+
+
+# -- the guards in front of both dispatch points ----------------------------
+
+@pytest.mark.parametrize("messages", [
+    [],
+    [{"role": "user", "content": TOTAL_ASKS[0]},
+     {"role": "assistant", "content": "Here is the forecast."}],
+])
+def test_no_user_tail_forces_nothing(messages):
+    assert rt._forced_specific_tool(messages, AVAILABLE) is None
+
+
+@requires_construction_kit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", TOTAL_ASKS)
+async def test_inspection_request_turn_predispatches_no_other_draft(text, monkeypatch):
+    # Even a turn the forecaster could take is left alone when the turn is
+    # an inspection-request form: that form owns the turn.
+    monkeypatch.setattr(rt, "_message_wants_wir_form", lambda _t: True)
+    out = await rt._predispatch_remaining_deliverables(_Agent(), _turn(text), "proj")
+    assert out is None
+
+
+@requires_construction_kit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["", "   "])
+async def test_empty_turn_predispatches_nothing(text):
+    out = await rt._predispatch_remaining_deliverables(_Agent(), _turn(text), "proj")
+    assert out is None
