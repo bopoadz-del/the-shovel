@@ -968,6 +968,48 @@ def _without_link_destination(token: str) -> str:
     return token
 
 
+# A reference link writes its label in brackets and names the reference to
+# follow in a second bracket pair: ``[Q. Surname][ref]``. The second pair is
+# layout -- an identifier the document resolves elsewhere, or nothing at all in
+# the collapsed form ``[Q. Surname][]`` -- and never a word the label spells.
+# No space falls between the label's closing bracket and the reference, so the
+# surname and the reference arrive as one token, and a word welded to
+# ``][...]`` is name-shaped in no case at all. The reference is taken off
+# before the word is judged, the label's closing bracket with it, exactly as
+# the parenthesised destination is; brackets inside the reference are found by
+# balancing, and what follows the reference stays, so a sentence's comma or
+# full stop still ends the entry.
+_LINK_REFERENCE_OPEN = "]["
+
+
+def _without_link_reference(token: str) -> str:
+    """The token with a markdown reference-link mark taken off, if on it.
+
+    The closing bracket goes with the reference: a full reference link ends
+    with ``][ref]`` as one mark, and leaving the label's bracket behind would
+    hide an initial's own dot behind it. What follows the reference's closing
+    bracket is kept (the comma or full stop the sentence put after the link),
+    so the run still ends where the line ends it. A token that carries no
+    ``][`` is returned unchanged, and so is one whose brackets never balance --
+    an unbalanced mark is punctuation, not a reference link.
+    """
+    at = token.find(_LINK_REFERENCE_OPEN)
+    if at < 0:
+        return token
+    depth = 1
+    index = at + len(_LINK_REFERENCE_OPEN)
+    while index < len(token):
+        char = token[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return token[:at] + token[index + 1:]
+        index += 1
+    return token
+
+
 def name_runs(text: str) -> list[tuple[int, list[str]]]:
     """Maximal runs of name-shaped words, each with the offset it starts at.
 
@@ -1010,7 +1052,7 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
         end = index + 1
         while end < length and clean[end] not in _NAME_SEPARATORS:
             end += 1
-        token = _without_link_destination(clean[index:end])
+        token = _without_link_reference(_without_link_destination(clean[index:end]))
         # Compatibility forms and accents are presentation: ``Vantre\u0301y``,
         # ``Vantr\u00e9y`` and ``Vantrey`` are one name, and a full-width
         # letter is the same letter. Judge the shape of the word, not its
