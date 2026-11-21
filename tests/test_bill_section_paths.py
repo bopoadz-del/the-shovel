@@ -579,3 +579,75 @@ def test_geometry_diagnostic_counts_sides_and_label_position(heading_fn):
     title_mask = g._masked("GENERAL SUMMARY")
     assert diag["masks"][title_mask]["above_header"] == 6
     assert diag["masks"][title_mask]["below_header"] == 0
+
+
+def _note_pages(note_lines, first_line_case="upper"):
+    """Pages sharing a running header and a page label whose section digit
+    steps once; page 1 prints a heading, then a note the page wraps, then one
+    measured row. Without the repetition there is no running header and the
+    section pass leaves the read alone."""
+    run = ("Harbour Works", H)
+    note = [
+        "The tenderer is to price every item at the rate stated and",
+        "no separate claim for any additional quantity or rate will be",
+        "entertained under this section of the works, and any item left",
+        "blank is deemed included in the rates entered elsewhere in",
+        "this bill of quantities for the whole of the works.",
+    ][:note_lines]
+    if first_line_case == "lower" and note:
+        note = [note[0][0].lower() + note[0][1:]] + note[1:]
+    pages = []
+    for page, section in ((1, 7), (2, 7), (3, 8)):
+        above = [run, ("Bill %d Page %d-%d" % (section, section, page), H)]
+        if page == 1:
+            body = [("PRICING NOTES", HEAVY)] + [(line, H) for line in note] + [
+                ["Reinforced concrete in raft", "m3", "95", "380", "36,100"],
+            ]
+        else:
+            body = [["Reinforced concrete in wall", "m3", "12", "380", "4,560"]]
+        pages.append(_page(page, COLS_A, above, body))
+    return [w for page_words in pages for w in page_words]
+
+
+@pytest.mark.parametrize("n_lines", [4, 5, 9])
+def test_a_wrapped_note_does_not_open_a_sheet(n_lines):
+    """A note the page wraps over many lines joins into one long path level.
+    It names no bill, section or sub-heading, so the measured rows stay under
+    the heading that owns the table instead of opening a sheet named after a
+    fragment of prose."""
+    rows = g.extract_bill_rows(_note_pages(n_lines))
+    assert rows, "the layout must still measure its rows"
+    raft = next(r for r in rows if r.fields.get("description") == "Reinforced concrete in raft")
+    assert raft.path == ("PRICING NOTES",), raft.path
+
+
+@pytest.mark.parametrize("first_line", ["upper", "lower"])
+def test_short_wrap_stays_and_a_lower_case_continuation_does_not(first_line):
+    """A two-line item preamble is part of the path; the same two lines read
+    as a continuation of the sentence above (lower-case opening) are not: a
+    heading opens a sentence, a notice that wraps does not."""
+    rows = g.extract_bill_rows(_note_pages(2, first_line))
+    raft = next(r for r in rows if r.fields.get("description") == "Reinforced concrete in raft")
+    if first_line == "upper":
+        assert len(raft.path) == 2 and raft.path[0] == "PRICING NOTES", raft.path
+        assert raft.path[1].startswith("The tenderer is to price"), raft.path
+    else:
+        assert raft.path == ("PRICING NOTES",), raft.path
+
+
+@pytest.mark.parametrize("heading", ["PRICING NOTES", "2.9.3 Demolition and Site Clearance", "Kerbs"])
+def test_a_heading_is_never_dropped_by_the_prose_rule(heading):
+    """The rule reads shape, not words: an upper-case heading, a numbered
+    sub-heading and a plain sub-heading all stay the level that names the
+    rows' sheet."""
+    pages = []
+    for page, section in ((1, 7), (2, 7), (3, 8)):
+        above = [("Harbour Works", H), ("Bill %d Page %d-%d" % (section, section, page), H)]
+        if page == 1:
+            body = [(heading, HEAVY), ["Reinforced concrete in raft", "m3", "95", "380", "36,100"]]
+        else:
+            body = [["Reinforced concrete in wall", "m3", "12", "380", "4,560"]]
+        pages.append(_page(page, COLS_A, above, body))
+    rows = g.extract_bill_rows([w for p in pages for w in p])
+    raft = next(r for r in rows if r.fields.get("description") == "Reinforced concrete in raft")
+    assert raft.path == (heading,), raft.path

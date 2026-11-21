@@ -3223,8 +3223,16 @@ def _spreadsheet_header_row(
                 colmap[field] = cells.index(col)
             except ValueError:
                 continue
-        if "description" in colmap:
-            return i, colmap
+        if "description" not in colmap:
+            continue
+        # A header names each column once, in a cell of its own: the fields
+        # resolve to distinct column indices. One cell that matches several
+        # aliases at once is a sentence that happens to contain the words
+        # (a banner row, a note line), never a row of column names, and
+        # reading it as the header shifts every field onto that one column.
+        if len(set(colmap.values())) < 2:
+            continue
+        return i, colmap
     return None
 
 
