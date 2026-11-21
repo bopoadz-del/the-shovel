@@ -651,6 +651,37 @@ def _blocks(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
     return blocks
 
 
+# A markdown table row prints one record across cells, and a cell boundary is
+# layout, not a word break: ``| Surname | Given |`` is the same name a byline
+# prints on one line, split by the column rule. The bar cannot join
+# ``_NAME_SEPARATORS`` because in code and prose it separates a pipeline or an
+# alternative, where no one writes a name. So a row is read a second time with
+# its bars read as the spaces between cells -- and that reading is one line,
+# never a block, so two rows are never joined across the line break between
+# them.
+_TABLE_BAR = "|"
+
+
+def _table_row_phrase(line: str) -> str | None:
+    """The line read across its cells as one phrase, or ``None`` for no row.
+
+    A row is a line whose first and last non-space characters are bars and
+    which carries at least two cells. That is the shape a markdown table is
+    written in, and it is not the shape of a shell pipeline or a boolean
+    expression -- those are ordinary code lines, where a written name is not a
+    thing. The phrase returned is built from this line alone: the caller never
+    joins two rows, so a name cannot be assembled out of two records.
+    """
+    stripped = line.strip()
+    if len(stripped) < 3:
+        return None
+    if not (stripped.startswith(_TABLE_BAR) and stripped.endswith(_TABLE_BAR)):
+        return None
+    if stripped.count(_TABLE_BAR) < 3:
+        return None
+    return line.replace(_TABLE_BAR, " ")
+
+
 # Regex syntax in a denylist entry means the author wrote a machine pattern,
 # not a fixed phrase: there is no literal text to fold, and escaping a regex
 # would destroy it. Such an entry is compared to folded text exactly as
@@ -1121,6 +1152,14 @@ def scan_client_document(
                     if name_run_matches(run, words):
                         position = numbers[bisect_right(starts, run_start) - 1][1]
                         found.add((position, pattern_index))
+            for line, (_, line_number) in zip(raw_block.split("\n"), numbers):
+                phrase = _table_row_phrase(line)
+                if phrase is None:
+                    continue
+                for _, run in name_runs(phrase):
+                    for pattern_index, words in sparse:
+                        if name_run_matches(run, words):
+                            found.add((line_number, pattern_index))
         cheap = {split_fold, joined_fold}
         if not any(matcher.search(form) for matcher in matchers for form in cheap):
             continue                     # no candidate: no need for the map
