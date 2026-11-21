@@ -114,6 +114,72 @@ def test_a_row_without_a_rate_keeps_the_three_part_contract(quantity, unit):
         assert envelope == {} or envelope.get("status") in {"success", "error"}
 
 
+@pytest.mark.parametrize("quantity", [0.0, -32.5])
+def test_a_quantity_that_is_not_a_measure_never_reaches_the_kernel(quantity):
+    """Zero and negative quantities are not measures. The kernel is not asked,
+    so no envelope is produced at all -- not an envelope with nothing in it."""
+    days, error, envelope = pm_computations.duration_days_from_rate(
+        quantity, "25 m2 per gang-day"
+    )
+
+    assert days is None
+    assert error is None
+    assert envelope == {}
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [("success", {"duration_provenance", "duration_standard", "duration_certified"}),
+     ("error", set())],
+)
+def test_a_duration_badge_exists_only_when_the_calculation_succeeded(status, expected):
+    """A badge is a claim about provenance. A run that did not succeed makes no
+    claim, so it stamps no fields at all."""
+    envelope = {
+        "status": status,
+        "calculation": KERNEL,
+        "provenance": "kernel",
+        "standard": "a standard this test wrote",
+        "certified": True,
+    }
+
+    badge = pm_computations.duration_badge(envelope)
+
+    assert set(badge) == expected
+    if expected:
+        assert badge["duration_provenance"] == "kernel"
+        assert badge["duration_standard"] == "a standard this test wrote"
+        assert badge["duration_certified"] is True
+
+
+@pytest.mark.parametrize("blank", ["", "  \n\t "])
+def test_a_blank_brief_never_reaches_the_model(blank):
+    """No text is no structuring job: the model is not called for a brief that
+    is only whitespace, and the builder reports no activities."""
+    import asyncio
+
+    from app.core import llm_client
+
+    calls = []
+
+    async def must_not_be_called(system, user, **kwargs):
+        calls.append(user)
+        return {"activities": []}
+
+    original = llm_client.complete_json
+    llm_client.complete_json = must_not_be_called
+    try:
+        activities, unstated = asyncio.run(
+            brief_schedule._structure_activities_from_text(blank)
+        )
+    finally:
+        llm_client.complete_json = original
+
+    assert activities == []
+    assert unstated == []
+    assert calls == []
+
+
 def test_there_is_one_duration_kernel_and_both_builders_call_it():
     """The copy that used to live beside each caller is gone: both schedule
     builders resolve the same function object, and neither re-implements it."""
