@@ -791,13 +791,22 @@ def _closes_with_initial(shape: str, core: str) -> bool:
 
     ``Q.`` is a word to a reader and a letter to a tokeniser: the dot is not
     the sentence's full stop but the mark that says the letter stands for a
-    name. The same test decides that the run stays open across the dot, and
-    that the word is read as the initial it is written as.
+    name. The same test decides that the word is read as the initial it is
+    written as.
+
+    The dot is the letter's only when it is written right after the letter.
+    What the document writes after that dot -- the bracket that closes an
+    aside, the emphasis or tag that closes a span, the quote, the comma or
+    semicolon that ends a listing entry -- is the document's punctuation and
+    does not take the dot back: ``(Vantrey, Q.)`` carries the same initial as
+    ``Vantrey, Q.``. A second dot is not punctuation closing the initial but
+    an ellipsis written onto the letter, so it is not read as one.
     """
     if not _is_initial(core):
         return False
     start = shape.find(core)
-    return shape[start + len(core):] == "."
+    trailing = shape[start + len(core):]
+    return trailing[:1] == "." and "." not in trailing[1:]
 
 
 def _keeps_run(shape: str, core: str) -> bool:
