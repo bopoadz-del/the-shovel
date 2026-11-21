@@ -249,7 +249,7 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
     out: list[str] = []
     for line in body.split("\n"):
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
-        sentences = _SENTENCE_RE.findall(line[len(lead):])
+        sentences = _sentences(line[len(lead):])
         kept = []
         for sent in sentences:
             vals = extract(sent)
@@ -341,9 +341,62 @@ _LEAD_IN_RE = re.compile(
     r"^(?:according\s+to|based\s+on|from|per|in)\s+(?:the\s+)?[^,]*?(?:" + "|".join(_MACHINE_TERMS) + r")[^,]*,\s*",
     re.IGNORECASE,
 )
-#: A sentence ends at ``.``/``!``/``?`` followed by space or the end; a point
-#: inside a figure (``12.5``) or a name (``p.12``) does not end it.
-_SENTENCE_RE = re.compile(r"(?:[^.!?\n]|[.!?](?![.!?]*(?:\s|$)))+(?:[.!?]+(?=\s|$)|$)")
+_OPEN_MARKS = {"(": ")", "[": "]", "“": "”"}
+_CLOSE_MARKS = {v: k for k, v in _OPEN_MARKS.items()}
+
+
+def _paired(text: str) -> set[str]:
+    """The opening marks whose pairs close in ``text`` (a straight ``"``
+    pairs with itself). A mark left open is not trusted to hold a sentence
+    together: an unpaired mark is ordinary punctuation."""
+    out = {o for o, c in _OPEN_MARKS.items() if text.count(o) == text.count(c)}
+    if text.count('"') % 2 == 0:
+        out.add('"')
+    return out
+
+
+def _sentences(text: str) -> list[str]:
+    """The sentences of one line. A sentence ends at ``.``/``!``/``?``
+    followed by space or the end; a point inside a figure (``12.5``) or a name
+    (``p.12``) does not end it, and neither does one inside a paired bracket
+    or quotation -- ``(e.g. "A", "B")`` is part of the sentence around it, so
+    no rule that keeps or drops whole sentences can leave half of a quoted or
+    bracketed clause standing as a sentence of its own."""
+    paired = _paired(text)
+    out: list[str] = []
+    stack: list[str] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"' and '"' in paired:
+            if stack and stack[-1] == '"':
+                stack.pop()
+            else:
+                stack.append('"')
+        elif ch in _OPEN_MARKS and ch in paired:
+            stack.append(ch)
+        elif ch in _CLOSE_MARKS and _CLOSE_MARKS[ch] in paired and stack and stack[-1] == _CLOSE_MARKS[ch]:
+            stack.pop()
+        # A stop ends the sentence; so does a closing mark right after one
+        # (``"... stop." Then``).
+        if ch in ".!?" or (i and text[i - 1] in ".!?" and (ch == '"' or ch in _CLOSE_MARKS)):
+            j = i + 1
+            while j < n and text[j] in ".!?":
+                j += 1
+            if not stack and (j == n or text[j].isspace()):
+                if text[start:j].strip():
+                    out.append(text[start:j])
+                start = j
+            i = j
+            continue
+        i += 1
+    if text[start:].strip():
+        out.append(text[start:])
+    return out
+
+
 _FIGURE_RE = re.compile(r"\d")
 _MARKER_RE = re.compile(r"\[\d+\]")
 #: A figure with the unit word that follows it: ``45 kN·m``, ``12.6 m³``, ``10%``.
@@ -392,7 +445,7 @@ def _strip_machinery(text: str) -> str:
             continue
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
         body = line[len(lead):]
-        kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _SENTENCE_RE.findall(body)) if k]
+        kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _sentences(body)) if k]
         new = lead + " ".join(kept)
         if _figures(_MACHINE_RE.sub("", line)) - _figures(new):
             # Removing the machinery would lose a figure: the line stays as written.
@@ -466,7 +519,7 @@ def _drop_padding(text: str, computed: bool = True) -> str:
             continue
         if in_notes and not _changes_result(line, working, computed):
             continue
-        sentences = [s.strip() for s in _SENTENCE_RE.findall(bare)] or [bare]
+        sentences = [s.strip() for s in _sentences(bare)] or [bare]
         kept = [s for s in sentences if not (_OFFER_RE.match(s) or _RESTATE_RE.match(s))]
         if not kept:
             continue
