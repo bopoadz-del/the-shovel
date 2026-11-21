@@ -1010,6 +1010,56 @@ def _without_link_reference(token: str) -> str:
     return token
 
 
+# Both marks are not always welded to the word they may close. A destination
+# may carry a quoted title -- ``[Q. Surname](url "note")`` -- and a reference may
+# be spelled as a phrase -- ``[Q. Surname][see note]`` -- so the mark's inside
+# holds a space of its own. The tokeniser cuts on that space, and the token that
+# ends the label keeps only the mark's first character: ``Surname](url`` or
+# ``Surname][see``. The mark is layout and never a word the label spells, so a
+# token that opens one is read through to the mark's close -- by balancing the
+# pair that opened it -- and the mark is then taken off the token exactly as a
+# welded one is. The token ends where the mark ends, so a following word is
+# still a separate token and the run keeps the boundaries the line wrote.
+_LINK_MARK_PAIRS = {"(": ")", "[": "]"}
+
+
+def _link_mark_at(text: str, start: int, end: int) -> tuple[int, int] | None:
+    """``(open_at, resume)`` for a markdown mark the token ``text[start:end]`` opens.
+
+    ``open_at`` is the label's closing bracket -- the first character of the
+    mark -- and ``resume`` is the offset just past the balanced bracket or
+    parenthesis that closes it (``](...)``, ``][...]``). The label's words end
+    at ``open_at`` and the line's next word starts at ``resume``, so the mark is
+    stepped over without welding the label's last word to what follows it.
+    A token that opens no mark -- or one whose pair never closes, or one whose
+    mark spans a line break -- gets ``None``: an unbalanced mark is punctuation
+    rather than a link, and a link is written on the line that spells it.
+    """
+    for open_at in range(start, end - 1):
+        if text[open_at] != "]":
+            continue
+        opener = text[open_at + 1]
+        closer = _LINK_MARK_PAIRS.get(opener)
+        if closer is None:
+            continue
+        depth = 1
+        cursor = open_at + 2
+        length = len(text)
+        while cursor < length:
+            char = text[cursor]
+            if char == opener:
+                depth += 1
+            elif char == closer:
+                depth -= 1
+                if depth == 0:
+                    if "\n" in text[open_at:cursor]:
+                        return None
+                    return open_at, cursor + 1
+            cursor += 1
+        return None
+    return None
+
+
 def name_runs(text: str) -> list[tuple[int, list[str]]]:
     """Maximal runs of name-shaped words, each with the offset it starts at.
 
@@ -1019,9 +1069,13 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
     written with -- space, tab, dash, Unicode space -- never on the joiners of
     code, so an identifier is one token and is never a name word.
 
-    A markdown link destination welded to a label's last word is taken off
-    first (``_without_link_destination``): it is where the link points, not
-    how the name is spelled.
+    A markdown link's layout is taken off before the word is judged: a
+    destination or a reference welded to the label's last word
+    (``_without_link_destination``, ``_without_link_reference``). When the
+    mark's inside holds a space of its own -- a quoted title, a reference
+    spelled as a phrase -- the token is read through to the mark's close first
+    (``_link_mark_end``), so the word the label ends with is still one token and
+    the word after the link is still a separate one.
 
     Invisible characters are deleted, not treated as separators: a soft
     hyphen pushed into the middle of a surname leaves one word to a reader,
@@ -1052,6 +1106,11 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
         end = index + 1
         while end < length and clean[end] not in _NAME_SEPARATORS:
             end += 1
+        mark = _link_mark_at(clean, index, end)
+        resume = end
+        if mark is not None:
+            open_at, resume = mark
+            end = open_at                  # the label's words end at the mark
         token = _without_link_reference(_without_link_destination(clean[index:end]))
         # Compatibility forms and accents are presentation: ``Vantre\u0301y``,
         # ``Vantr\u00e9y`` and ``Vantrey`` are one name, and a full-width
@@ -1090,7 +1149,7 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
         if _closes_with_initial(shape, core):
             written += "."
         words.append((origin[index], core, written, _keeps_run(shape, core), carries))
-        index = end
+        index = resume
     runs: list[tuple[int, list[str]]] = []
     current: list[str] = []
     start = 0
