@@ -808,7 +808,10 @@ def _keeps_run(shape: str, core: str) -> bool:
     comma keeps it open too: in the inverted listing form the comma stands
     between the surname and the given name, and reading it as a sentence
     break loses the name exactly where a document prints it most formally.
-    Every other closing mark ends the entry.
+    A word closed by a possessive mark keeps it open for the same reason: the
+    clitic exists to attach what follows, so ``the Vantreys' crew`` is the same
+    sentence as ``the Vantrey's crew`` and the mark is not a full stop. Every
+    other closing mark ends the entry.
     """
     start = shape.find(core) if core else 0
     trailing = shape[start + len(core):]
@@ -816,7 +819,7 @@ def _keeps_run(shape: str, core: str) -> bool:
         return True
     if trailing == "." and _is_initial(core):
         return True
-    return all(char in _ENTRY_COMMA for char in trailing)
+    return all(char in _ENTRY_COMMA or char in _POSSESSIVE_MARKS for char in trailing)
 
 
 # The clitic a sentence attaches to a word to attribute what follows to it.
@@ -969,24 +972,44 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
             # word order but the literal one.
             shape = shape.translate(_CONFUSABLE)
         core = shape.strip(_EDGE_PUNCTUATION)
+        after = shape[shape.find(core) + len(core) :] if core else ""
         # A possessive clitic belongs to the sentence, not to the word.
+        bare = core
         core, shape = _without_possessive(shape, core)
+        # A family's possessive puts the mark after the plural's own ``s``
+        # (``the Vantreys' crew``) and nothing is left to remove; the mark is
+        # still the sentence attributing what follows, so the word carries one.
+        carries = core != bare or (
+            after[:1] in _POSSESSIVE_MARKS and bare[-1:] in ("s", "S")
+        )
         # A written initial keeps its dot in the run: without it the run
         # cannot tell ``Q.`` (a letter standing for a name) from ``Q`` (a
         # one-letter word), and the dot is the reader's only evidence.
         written = fold_for_match(core)
         if _closes_with_initial(shape, core):
             written += "."
-        words.append((origin[index], core, written, _keeps_run(shape, core)))
+        words.append((origin[index], core, written, _keeps_run(shape, core), carries))
         index = end
     runs: list[tuple[int, list[str]]] = []
     current: list[str] = []
     start = 0
-    for offset, core, written, keeps in words:
+    # A possessive clitic attributes what follows to the name just written --
+    # ``Vantrey's crew``, and in the surname-first listing ``Vantrey's crew,
+    # Quillon`` the given name follows the attributed noun. The noun is not
+    # part of the name, so one lower-case word written after the clitic is
+    # passed over and the run resumes at the next name word, exactly as it
+    # would have continued had the noun not been written. Only one word is
+    # passed over, and only while the noun keeps the entry open (a comma or no
+    # mark at all): a sentence break is the document's own end of the entry.
+    clitic = False
+    attributed = False
+    for offset, core, written, keeps, possessive in words:
         if core and _is_name_word(core):
             if not current:
                 start = offset
             current.append(written)
+            clitic = possessive and keeps
+            attributed = False
             if keeps:
                 continue
         elif not core and keeps:
@@ -994,9 +1017,15 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
             # between two spaces -- carries no word at all, so it neither
             # joins the run nor ends it.
             continue
+        elif clitic and not attributed and keeps and core.isalpha() and core.islower():
+            # The noun the clitic attributes: the entry continues past it.
+            attributed = True
+            continue
         if len(current) >= 2:
             runs.append((start, current))
         current = []
+        clitic = False
+        attributed = False
     if len(current) >= 2:
         runs.append((start, current))
     return runs
