@@ -1,0 +1,201 @@
+# Build the THROWAWAY image for the A3 model test and push it to ECR under
+# one throwaway tag. Nothing else.
+#
+# Owner approval 21 Nov 15:18Z ("go with the CI workflow"): one dispatch-only
+# workflow so the A3 image is built in CI rather than on a laptop Docker.
+#
+# What the image is:
+#   1. the app at `app_ref`, built from that ref's own Dockerfile (the same
+#      build deploy-aws runs, so the embedder, OCR stack and verified model
+#      weights are the ones a deploy of that ref would carry);
+#   2. with the throwaway Anthropic provider entry applied as a patch
+#      (`mt_a3/provider.diff` on `overlay_ref`) before the build;
+#   3. plus PRODUCT's runner and PLATFORM's turn guard (every other file under
+#      `mt_a3/` on `overlay_ref`) copied to /opt/mt;
+#   4. with ENTRYPOINT cleared and CMD = the guard running the runner. The
+#      app's /app/entrypoint.sh execs uvicorn and never `exec "$@"`, so a task
+#      `command` behind it would be ignored and no turn cap would apply.
+#
+# The tag rule: `mt-a3-<full sha of app_ref>`. It is the ONLY tag pushed.
+# The run refuses to overwrite an existing tag (the repository's tags are
+# mutable), and refuses any tag that does not start with `mt-a3-`.
+#
+# What it does NOT do: deploy; touch the `the-fork` service, the `the-fork`
+# task definition, or the `latest` tag; register any task definition; read
+# any secret value. It uses the AWS credentials deploy-aws already uses.
+#
+# Deleting it after the test (by hand, once):
+#   aws ecr batch-delete-image --region us-west-2 --repository-name the-fork \
+#     --image-ids imageTag=mt-a3-<sha>
+# The repository's lifecycle rule keeps the 5 newest images of ANY tag, so
+# while this image exists it holds one of the 5 rollback slots.
+name: mt-a3-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: "App ref (branch, tag or sha) to build"
+        required: true
+        type: string
+      overlay_ref:
+        description: "Throwaway ref carrying mt_a3/ (provider.diff, guard.py, runner.py, ...)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: the-fork
+  OVERLAY_DIR: mt_a3
+
+# One A3 build at a time; never shares the deploy-aws queue.
+concurrency:
+  group: mt-a3-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.app_ref }}
+          path: app
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.overlay_ref }}
+          path: overlay
+
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          sha=$(git -C app rev-parse HEAD)
+          overlay_sha=$(git -C overlay rev-parse HEAD)
+          tag="mt-a3-$sha"
+          case "$tag" in
+            mt-a3-*) ;;
+            *) echo "::error::tag '$tag' is not an mt-a3- tag"; exit 1 ;;
+          esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "app_sha=$sha overlay_sha=$overlay_sha tag=$tag"
+
+      - name: The overlay carries the provider patch, the guard and the runner
+        run: |
+          set -euo pipefail
+          src="overlay/$OVERLAY_DIR"
+          for f in provider.diff guard.py runner.py; do
+            [ -f "$src/$f" ] || { echo "::error::$src/$f is missing"; exit 1; }
+          done
+          # The patch may change application code only.
+          outside=$(git -C app apply --numstat "../$src/provider.diff" | awk '$3 !~ /^app\// {print $3}')
+          if [ -n "$outside" ]; then
+            echo "::error::provider.diff touches files outside app/: $outside"
+            exit 1
+          fi
+          git -C app apply --check "../$src/provider.diff"
+          git -C app apply "../$src/provider.diff"
+          git -C app diff --stat
+          # Without the provider entry arm B would fall through to the
+          # default provider and silently run as arm A.
+          if ! grep -rqs "api.anthropic.com" app/app; then
+            echo "::error::after the patch the app has no Anthropic provider entry"
+            exit 1
+          fi
+
+      # The image carries Torch, transformers and OCR wheels; the hosted
+      # runner's 14 GB disk fills during the build without this.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h / | tail -1
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Refuse to overwrite an existing tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          found=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --query "length(imageDetails[?contains(imageTags || \`[]\`, '$TAG')])" --output text)
+          if [ "$found" != "0" ]; then
+            echo "::error::$ECR_REPOSITORY:$TAG already exists; delete it first or build another ref"
+            exit 1
+          fi
+
+      - name: Fetch and verify model weights
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch_model.py --image
+
+      - name: Build the app image (local only, never pushed)
+        working-directory: app
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: docker build --build-arg GIT_SHA="$SHA" -t mt-a3-base:local .
+
+      - name: Add the runner and the guard
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ctx="$RUNNER_TEMP/mt-a3-ctx"
+          mkdir -p "$ctx/mt"
+          cp -R "overlay/$OVERLAY_DIR/." "$ctx/mt/"
+          rm -f "$ctx/mt/provider.diff"
+          cat > "$ctx/Dockerfile" <<'DOCKERFILE'
+          FROM mt-a3-base:local
+          COPY mt /opt/mt
+          HEALTHCHECK NONE
+          ENTRYPOINT []
+          CMD ["python", "/opt/mt/guard.py", "python", "/opt/mt/runner.py"]
+          DOCKERFILE
+          docker build -t "$REGISTRY/$ECR_REPOSITORY:$TAG" "$ctx"
+
+      - name: The guard is the process and refuses an uncapped run
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          # No MT_TURN_CAP / MT_WALL_CAP_S: the guard must exit 2 before it
+          # starts the runner. Any other result means the cap is not in force.
+          rc=0
+          docker run --rm --network none "$REGISTRY/$ECR_REPOSITORY:$TAG" || rc=$?
+          if [ "$rc" != "2" ]; then
+            echo "::error::uncapped start exited $rc, expected the guard's refusal (2)"
+            exit 1
+          fi
+          echo "guard refused the uncapped start (exit 2)"
+
+      - name: Push the throwaway tag only
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker push "$REGISTRY/$ECR_REPOSITORY:$TAG"
+          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$TAG" --query 'imageDetails[0].imageDigest' --output text)
+          {
+            echo "### A3 throwaway image"
+            echo "- image: \`$REGISTRY/$ECR_REPOSITORY:$TAG\`"
+            echo "- digest: \`$digest\`"
+            echo "- delete after the test: \`aws ecr batch-delete-image --region $AWS_REGION --repository-name $ECR_REPOSITORY --image-ids imageTag=$TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
