@@ -774,6 +774,37 @@ def _keeps_run(shape: str, core: str) -> bool:
     return all(char in _ENTRY_COMMA for char in trailing)
 
 
+def _entry_words(text: str) -> list[str] | None:
+    """The words of a denylist entry, read as a reader reads them written.
+
+    An entry is typed by a person, usually copied from the place the name was
+    found: a byline, an index entry, a licence line, a table cell. Those places
+    wrap a name in marks that belong to the layout, not to the name -- the
+    comma that stands between a surname and a given name above all, and the
+    closing dot or quotation mark of the sentence it was copied out of. So a
+    word is read with the same edge punctuation the document reader strips,
+    and the entry comma separates words exactly as the space beside it does.
+    Without this the entry ``Surname, Given`` is not a set of two words at all,
+    and the order-independent rule is silently off for the entry -- the one
+    form in which a document most often prints a name.
+
+    ``None`` when a token carries no word once its marks are stripped: an
+    entry like that is a phrase with a joiner in it, not a sequence of words.
+    """
+    spread = text
+    for comma in _ENTRY_COMMA:
+        spread = spread.replace(comma, " ")
+    words: list[str] = []
+    for token in re.split(r"[\s\-\u2010-\u2014]+", spread):
+        if not token:
+            continue
+        core = token.strip(_EDGE_PUNCTUATION)
+        if not core:
+            return None
+        words.append(core)
+    return words
+
+
 def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
     """The folded words of a denylist entry that spells a written name.
 
@@ -783,15 +814,15 @@ def name_pattern_words(pattern: re.Pattern[str]) -> tuple[str, ...] | None:
     would be inventing names out of vocabulary. Two to four words, every one
     Titlecase, is the shape of a person's name on a denylist; the entry is
     stored folded, and the written forms compared against it are read from the
-    document, caps included.
+    document, caps included. The words are read past the marks a written word
+    may be wrapped in (``_entry_words``), so the rule does not depend on how
+    the secret was typed.
     """
     if _REGEX_SYNTAX.search(pattern.pattern):
         return None
-    words = [
-        word
-        for word in re.split(r"[\s\-\u2010-\u2014]+", pattern.pattern)
-        if word
-    ]
+    words = _entry_words(pattern.pattern)
+    if words is None:
+        return None
     if not 2 <= len(words) <= 4:
         return None
     if not all(_is_titlecase_word(word) for word in words):
