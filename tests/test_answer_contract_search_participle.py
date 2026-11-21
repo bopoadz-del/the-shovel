@@ -41,6 +41,8 @@ _SEARCH_WORD = re.compile(r"\b(?:retrieved|fetched|passages?|excerpts?|chunks?)\
     # A search-unit noun is machinery too: in the reader's words, documents.
     ("No lintel schedule is in the retrieved passages.",
      "No lintel schedule is in the documents I read."),
+    ("The sill height is not given in the fetched context.",
+     "The sill height is not given in the documents I read."),
 ])
 def test_a_search_participle_is_rewritten_and_the_sentence_stays(text, kept):
     out = answer_contract.apply(text).text

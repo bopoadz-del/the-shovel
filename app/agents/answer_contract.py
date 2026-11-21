@@ -423,23 +423,30 @@ _SEARCH_UNIT_RE = re.compile(r"\b(?:excerpt|passage|chunk|snippet)(s?)\b|\bconte
 _VERBATIM_RE = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”|\[[^\]\n]*\]")
 
 
-def _reader_noun(np: str) -> str:
-    def unit(m: re.Match) -> str:
-        if m.group(0).lower() == "context":
-            return "documents"
-        return "document" + (m.group(1) or "")
-    return _SEARCH_UNIT_RE.sub(unit, np)
+def _reader_unit(m: re.Match) -> str:
+    """A search-unit noun as the reader names it: a document."""
+    if m.group(0).lower() == "context":
+        return "documents"
+    return "document" + (m.group(1) or "")
+
+
+def _reader_noun(phrase: str) -> str:
+    return _SEARCH_UNIT_RE.sub(lambda m: _reader_unit(m), phrase)
+
+
+def _participle_np(m: re.Match) -> str:
+    """One adjective use of a search participle, in the reader's words."""
+    if not _DETERMINER_BEFORE_RE.search(m.string[:m.start()]):
+        # After a verb such as "was": the participle is a verb, not the search.
+        return m.group(0)
+    head = _reader_noun(m.group(1)) + " I read"
+    # A participle that opened a sentence hands its capital to the noun.
+    return head[0].upper() + head[1:] if m.group(0)[0].isupper() else head
 
 
 def _rewrite_search_words(segment: str) -> str:
-    def np(m: re.Match) -> str:
-        if not _DETERMINER_BEFORE_RE.search(m.string[:m.start()]):
-            return m.group(0)
-        head = _reader_noun(m.group(1)) + " I read"
-        # A participle that opened a sentence hands its capital to the noun.
-        return head[0].upper() + head[1:] if m.group(0)[0].isupper() else head
     segment = _PARTICIPLE_FROM_RE.sub("read", segment)
-    return _PARTICIPLE_NP_RE.sub(np, segment)
+    return _PARTICIPLE_NP_RE.sub(lambda m: _participle_np(m), segment)
 
 
 def _search_words_in_place(text: str) -> str:
@@ -448,8 +455,6 @@ def _search_words_in_place(text: str) -> str:
     rows I read`` -- the scope of the claim stays, the machinery goes, and a
     negative sentence still says what was absent. A sentence is never
     dropped here and no figure is touched."""
-    if not re.search(r"\b" + _SEARCH_PARTICIPLE + r"\b", text, re.IGNORECASE):
-        return text
     out: list[str] = []
     last = 0
     for m in _VERBATIM_RE.finditer(text):
