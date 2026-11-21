@@ -348,7 +348,8 @@ def bill_rows_statement(result: dict) -> list[Statement]:
                       and (measure != "quantity" or str(r.get("unit") or "") == unit)]
             out.append(Statement(figure=float(total), unit=str(unit or ""), what=measure,
                                  source=source, rows=tuple(_row_label(r) for r in behind),
-                                 basis="sum", terms=terms, within=within))
+                                 basis="sum", terms=terms, within=within,
+                                 row_figures=tuple(float(r[measure]) for r in behind)))
     return out
 
 

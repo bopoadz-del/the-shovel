@@ -6909,16 +6909,9 @@ def _computed_call(msg: dict[str, Any], spec: Any,
         error=error, declared=tuple(getattr(spec, "reason_codes", ()) or ()))
 
 
-def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
-                          require_stated: bool = False) -> str:
-    """The one answer the computed calls of the current turn (after the
-    user's last question) give, worded in the question's language
-    (``computed_answer.answer_turn``: results lead, a repeat is shown once,
-    a call with no figure only when no result answered its part).
-
-    ``require_stated``: answer only when every call that is still shown
-    stated its figures or its failure; otherwise "" (so no call is left
-    out)."""
+def _turn_computed_calls(messages: list[dict[str, Any]] | None) -> tuple[list[Any], str, str]:
+    """The computed calls of the current turn (after the user's last
+    question), the question's language, and the question itself."""
     from app.agents.core import computed_answer
 
     msgs = list(messages or [])
@@ -6938,6 +6931,28 @@ def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
         kind, spec = _declared_kind(m)
         if kind == "computed" and spec.statement is not None:
             calls.append(_computed_call(m, spec, msgs, language))
+    return calls, language, question
+
+
+def _turn_computed_statements(messages: list[dict[str, Any]] | None) -> list[Any]:
+    """Every statement the current turn's computed calls made."""
+    calls, _language, _question = _turn_computed_calls(messages)
+    return [st for call in calls for st in call.statements]
+
+
+def _computed_turn_answer(messages: list[dict[str, Any]] | None, *,
+                          require_stated: bool = False) -> str:
+    """The one answer the computed calls of the current turn (after the
+    user's last question) give, worded in the question's language
+    (``computed_answer.answer_turn``: results lead, a repeat is shown once,
+    a call with no figure only when no result answered its part).
+
+    ``require_stated``: answer only when every call that is still shown
+    stated its figures or its failure; otherwise "" (so no call is left
+    out)."""
+    from app.agents.core import computed_answer
+
+    calls, language, question = _turn_computed_calls(messages)
     if require_stated and any(not c.stated for c in computed_answer.unanswered(calls)):
         return ""
     return computed_answer.answer_turn(calls, language, question)
@@ -10738,6 +10753,11 @@ def _postprocess_answer(
     # and the user, reads.
     from app.agents.answer_row_totals import reconcile as _reconcile_row_totals
     text = _reconcile_row_totals(text)
+    # A table drawn from the turn's computed row set prints every row of it,
+    # or the rows it left out are named from that set
+    # (app/agents/answer_counted_rows.py).
+    from app.agents.answer_counted_rows import name_dropped_rows as _name_dropped_rows
+    text = _name_dropped_rows(text, _turn_computed_statements(messages))
     # Last: the answer's own working must agree with its own result. Checked
     # after every graft, so a grafted figure is checked too.
     text = _annotate_derivation_mismatches(text)

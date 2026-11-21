@@ -103,6 +103,10 @@ class Statement:
     #: The tool's own working for the figure (e.g. a calculator's note),
     #: shown as data under the figure.
     working: str = ""
+    #: The figure each row in ``rows`` carries, in the same order, where the
+    #: tool states it (None for a row it states without one). Empty when the
+    #: tool states no per-row figure.
+    row_figures: Tuple[Optional[float], ...] = ()
 
 
 Stater = Callable[[Dict[str, Any]], List[Statement]]
