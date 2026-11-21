@@ -719,12 +719,12 @@ def test_a_restated_wrong_total_keeps_its_own_spelling_and_spares_other_units(
 
 @pytest.mark.parametrize("answer,bare", [
     pytest.param(
-        "The counts read 18 + 26 + 64 = 117.\n\nSheet 117 carries the plan.",
-        "Sheet 117 carries", id="chain-without-unit-and-a-sheet-number",
+        "The counts read 18 + 26 + 64 = 117.\n\nThe plan is on sheet 117, beside the key.",
+        "sheet 117, beside", id="chain-without-unit-and-a-sheet-number",
     ),
     pytest.param(
-        "Lengths: 633 + 488 + 120 = 1,500\n\nSee clause 1,500 of the spec.",
-        "clause 1,500 of", id="chain-without-unit-and-a-clause-number",
+        "Lengths: 633 + 488 + 120 = 1,500\n\nThe spec states it at clause 1,500.",
+        "clause 1,500.", id="chain-without-unit-and-a-clause-number",
     ),
 ])
 def test_a_chain_without_a_unit_never_rewrites_a_bare_repeat_of_its_figure(answer, bare):
