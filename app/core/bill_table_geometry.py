@@ -30,7 +30,9 @@ chunk per measured row.
 
 from __future__ import annotations
 
+import bisect
 import difflib
+import math
 import re
 import statistics
 from collections import defaultdict
@@ -851,6 +853,9 @@ def extract_bill_rows(
 MIN_RUNNING_PAGES = 3
 #: A label this similar (masked) to a running line is that line misread.
 RUNNING_SIMILARITY = 0.85
+#: A misreading adds its pages to the running line it is alike only when the
+#: same misreading is seen on at least this many pages.
+MIN_READING_PAGES = 2
 #: A continuation mark is the same suffix after at least this many headings.
 MIN_MARK_HEADINGS = 2
 #: The longest suffix (characters) read as a continuation mark.
@@ -884,13 +889,31 @@ class Running:
 
     masks: set[str]
     page_label: str | None
+    #: The masked forms read as the page label: the label and each misreading
+    #: of it that kept every digit field (see :func:`running_lines`).
+    label_forms: frozenset[str] = frozenset()
 
     def holds(self, text: str) -> bool:
         m = _masked(text)
         if m in self.masks:
             return True
-        return any(difflib.SequenceMatcher(None, m, r).ratio() >= RUNNING_SIMILARITY
-                   for r in self.masks)
+        return any(_alike(m, r) for r in self.masks)
+
+    def is_label(self, text: str) -> bool:
+        """True when ``text`` is a reading of the page label."""
+        m = _masked(text)
+        return m == self.page_label or m in self.label_forms
+
+
+def _alike(a: str, b: str) -> bool:
+    """Two masked lines at least :data:`RUNNING_SIMILARITY` alike: one line
+    read two ways. The cheap upper bounds are checked first."""
+    if a == b:
+        return True
+    sm = difflib.SequenceMatcher(None, a, b)
+    return (sm.real_quick_ratio() >= RUNNING_SIMILARITY
+            and sm.quick_ratio() >= RUNNING_SIMILARITY
+            and sm.ratio() >= RUNNING_SIMILARITY)
 
 
 def running_lines(printed: Sequence[_Label], pages: int) -> Running:
@@ -910,11 +933,45 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
         m = _masked(lab.text)
         on[m].add(lab.page)
         raw[m].add(_norm(lab.text))
-    masks = {m for m, ps in on.items() if len(ps) * 2 > pages}
-    varying = [m for m in masks if "#" in m and len(raw[m]) > 1]
-    label = max(varying, key=lambda m: (len(raw[m]), m)) if varying else None
-    masks.difference_update(m for m in varying if m != label)
-    return Running(masks, label)
+    # OCR reads one running line several ways (a letter misread on some
+    # pages), and each reading alone can fall short of most pages. A form's
+    # pages and texts are those of every form alike it (the same likeness
+    # ``Running.holds`` tests a label by), so a line is counted once however
+    # it was misread. Only readings that recur are pooled: a misreading of a
+    # running line repeats (the same letter is misread on many pages), while
+    # a heading printed once per page, alike its neighbours but for its own
+    # name, is read on one page each and is not one line. A one-page reading
+    # counts alone, as before; ``Running.holds`` still finds it by likeness.
+    alike = _alike_forms(on)
+    recurs = {m for m, ps in on.items() if len(ps) >= MIN_READING_PAGES}
+    counted = {m: [o for o in alike[m] if o in recurs] if m in recurs else [m] for m in on}
+    pages_of = {m: set().union(*(on[o] for o in counted[m])) for m in on}
+    texts_of = {m: set().union(*(raw[o] for o in counted[m])) for m in on}
+    masks = {m for m, ps in pages_of.items() if len(ps) * 2 > pages}
+    varying = [m for m in masks if "#" in m and len(texts_of[m]) > 1]
+    label = (max(varying, key=lambda m: (len(texts_of[m]), len(raw[m]), m))
+             if varying else None)
+    # A misreading of the label that kept every digit field is the label; one
+    # that lost a digit (a figure read as a letter) is not read for its fields.
+    readings = set(alike[label]) if label else set()
+    forms = frozenset(m for m in readings if m.count("#") == label.count("#"))
+    masks.difference_update(m for m in varying if m not in readings)
+    return Running(masks, label, forms)
+
+
+def _alike_forms(forms: Iterable[str]) -> dict[str, list[str]]:
+    """``{form: every form alike it, itself included}``. Two strings this
+    alike differ in length by at most the factor the likeness allows, so each
+    form is compared only with the forms in that length window."""
+    by_len = sorted(forms, key=len)
+    lengths = [len(f) for f in by_len]
+    r = RUNNING_SIMILARITY
+    out: dict[str, list[str]] = {}
+    for m in by_len:
+        lo = bisect.bisect_left(lengths, math.floor(len(m) * r / (2 - r)))
+        hi = bisect.bisect_right(lengths, math.ceil(len(m) * (2 - r) / r))
+        out[m] = [o for o in by_len[lo:hi] if _alike(m, o)]
+    return out
 
 
 def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, float]:
@@ -927,7 +984,7 @@ def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, flo
     line."""
     read: dict[int, float] = {}
     for lab in printed:
-        if running.page_label and _masked(lab.text) == running.page_label:
+        if running.page_label and running.is_label(lab.text):
             read.setdefault(lab.page, lab.bottom)
     if not read:
         return {}
@@ -949,7 +1006,7 @@ def page_sections(printed: Sequence[_Label], running: Running) -> dict[int, tupl
     section information and the result is empty."""
     read: dict[int, tuple[str, ...]] = {}
     for lab in printed:
-        if running.page_label and _masked(lab.text) == running.page_label:
+        if running.page_label and running.is_label(lab.text):
             read.setdefault(lab.page, tuple(_DIGITS_RE.findall(lab.text)))
     if not read:
         return {}
@@ -1264,7 +1321,7 @@ def geometry_diagnostic(printed: Sequence[_Label], pages: int) -> dict[str, Any]
         mask = _masked(lab.text)
         (above if lab.above_header else below)[mask] += 1
         distinct[mask].add(_norm(lab.text))
-        if running.page_label and mask == running.page_label:
+        if running.page_label and running.is_label(lab.text):
             positions.setdefault(lab.page, {
                 "above_header": lab.above_header,
                 "top": lab.top,
