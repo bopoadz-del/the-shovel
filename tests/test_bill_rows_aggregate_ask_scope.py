@@ -17,13 +17,14 @@ import pytest
 from app.core import bill_aggregate as agg
 from app.core import bill_table_geometry as g
 
-#: Two heading levels that name a network and a section, and a page label that
-#: names a bill the way a document's own page numbering does (part/bill/page).
-NET = "STORM WATER NETWORK"
-OTHER = "ROADS AND PAVEMENTS"
-BILL_SEVEN = "DGII - Procurement of Contractor, Infrastructure Package 1 Page S/7/2"
-BILL_NINE = "DGII - Procurement of Contractor, Infrastructure Package 1 Page S/9/1"
-BILL_SEVEN_LABEL = "DGII - Procurement of Contractor, Infrastructure Package 1 Page S/7/3"
+#: Two heading levels that name a network and a section, and invented page
+#: labels that name a bill the way a document's own numbering does
+#: (part/bill/page). No real document wording, bill title or item code here.
+NET = "SURFACE WATER DRAINAGE"
+OTHER = "CARRIAGEWAY WORKS"
+BILL_SEVEN = "Page S/7/2"
+BILL_NINE = "Page S/9/1"
+BILL_SEVEN_LABEL = "Page S/7/3"
 
 
 def _row(path, ref, desc, unit="", qty="", rate="", amount="", page=1):
@@ -45,17 +46,17 @@ def _sheet(tmp_path, rows, name="bill.xlsx"):
 #: on words alone: "depth 5.0-5.5m" splits into "5" and "5m", and the item code
 #: carries the bare digit the ask's size also prints.
 MANHOLES = [
-    _row((BILL_NINE, NET, "Box Structure Manholes"), "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m K 2", "No", "4", "10", "40"),
-    _row((BILL_NINE, NET, "Box Structure Manholes"), "", "B |Size 1.5 x 1.5m, depth 4.0-4.5m K137.1", "No", "7", "10", "70"),
-    _row((BILL_NINE, NET, "Box Structure Manholes"), "", "A |Size 1.8 x 1.8m, depth 2.0-2.5m K 3", "No", "2", "10", "20"),
-    _row((BILL_NINE, NET, "Box Structure Manholes"), "", "B |Size 1.8 x 1.8m, depth 5.0-5.5m K137.3", "No", "6", "10", "60"),
-    _row((BILL_NINE, NET, "Box Structure Manholes"), "", "C |Size 1.8 x 1.8m, depth 4.0-4.5m K137.5", "No", "9", "10", "90"),
+    _row((BILL_NINE, NET, "Inspection Chambers"), "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m R2", "No", "4", "10", "40"),
+    _row((BILL_NINE, NET, "Inspection Chambers"), "", "B |Size 1.5 x 1.5m, depth 4.0-4.5m R7.1", "No", "7", "10", "70"),
+    _row((BILL_NINE, NET, "Inspection Chambers"), "", "A |Size 1.8 x 1.8m, depth 2.0-2.5m R3", "No", "2", "10", "20"),
+    _row((BILL_NINE, NET, "Inspection Chambers"), "", "B |Size 1.8 x 1.8m, depth 5.0-5.5m R7.3", "No", "6", "10", "60"),
+    _row((BILL_NINE, NET, "Inspection Chambers"), "", "C |Size 1.8 x 1.8m, depth 4.0-4.5m R7.5", "No", "9", "10", "90"),
 ]
 
 
 @pytest.mark.parametrize("ask, size, count, total", [
-    ("How many 1.5 x 1.5 m box structure manholes are billed, all depths together?", [1.5, 1.5], 2, 11.0),
-    ("How many 1.8 x 1.8 m box structure manholes are billed, all depths together?", [1.8, 1.8], 3, 17.0),
+    ("How many 1.5 x 1.5 m inspection chambers are billed, all depths together?", [1.5, 1.5], 2, 11.0),
+    ("How many 1.8 x 1.8 m inspection chambers are billed, all depths together?", [1.8, 1.8], 3, 17.0),
 ], ids=["smaller-family", "larger-family"])
 def test_a_size_is_compared_as_numbers_not_as_words(tmp_path, ask, size, count, total):
     out = agg.aggregate(_sheet(tmp_path, MANHOLES), terms="1, 5, 5m, x, 8", ask=ask)
@@ -87,10 +88,10 @@ def test_a_band_is_the_band_cell_of_the_rows_own_line(tmp_path, depth, qty):
     # The sheet head says 4.0-4.5m; each row's own description says its band.
     # A row whose depth label disagrees with its sheet head is read from its
     # OWN cell, never from the head or from the row above it.
-    path = (BILL_NINE, NET, "Box Structure Manholes at 4.0-4.5m")
+    path = (BILL_NINE, NET, "Inspection Chambers at 4.0-4.5m")
     rows = [
-        _row(path, "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m K 2", "No", "4", "10", "40"),
-        _row(path, "", "B |Size 1.5 x 1.5m, depth 4.0-4.5m K137.1", "No", "7", "10", "70"),
+        _row(path, "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m R2", "No", "4", "10", "40"),
+        _row(path, "", "B |Size 1.5 x 1.5m, depth 4.0-4.5m R7.1", "No", "7", "10", "70"),
     ]
     out = agg.aggregate(_sheet(tmp_path, rows), terms="", ask=f"How many at {depth} depth are billed?")
     assert (out["count"], out["sum"]) == (1, float(qty))
@@ -115,8 +116,8 @@ def test_a_band_that_names_a_bill_admits_only_that_bills_rows(tmp_path, ask, cou
 
 
 @pytest.mark.parametrize("ask, count, total", [
-    ("What is the total length of storm water pipe at 2.5 to 3 m depth?", 2, 800.0),
-    ("What is the total length of roads pipe at 2.5 to 3 m depth?", 3, 300.0),
+    ("What is the total length of surface water pipe at 2.5 to 3 m depth?", 2, 800.0),
+    ("What is the total length of carriageway pipe at 2.5 to 3 m depth?", 3, 300.0),
 ], ids=["network-in-the-ask", "other-network"])
 def test_the_band_alone_never_unions_two_bills(tmp_path, ask, count, total):
     # No bill is named: the network the ask names is printed in the heading
@@ -133,8 +134,8 @@ def test_the_band_alone_never_unions_two_bills(tmp_path, ask, count, total):
 
 
 @pytest.mark.parametrize("ask", [
-    "How many 1.5 x 1.5 m box structure manholes are billed?",
-    "What is the total length of storm water pipe at 2.5 to 3 m depth?",
+    "How many 1.5 x 1.5 m inspection chambers are billed?",
+    "What is the total length of surface water pipe at 2.5 to 3 m depth?",
 ], ids=["manhole-ask", "pipe-ask"])
 def test_the_same_ask_selects_the_same_rows_whatever_terms_arrive(tmp_path, ask):
     rows = MANHOLES + [
@@ -222,8 +223,8 @@ def test_an_empty_output_set_states_no_scope(tmp_path, ask):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ask, count", [
-    ("How many 1.5 x 1.5 m box structure manholes are billed?", 2),
-    ("In Bill No. 7, how many 1.5 x 1.5 m box structure manholes are billed?", 1),
+    ("How many 1.5 x 1.5 m inspection chambers are billed?", 2),
+    ("In Bill No. 7, how many 1.5 x 1.5 m inspection chambers are billed?", 1),
 ], ids=["in-scope-bill", "named-bill"])
 async def test_the_tool_scopes_by_the_ask_the_user_wrote(tmp_path, monkeypatch, ask, count):
     # The model's terms are the drifting token set; the ask is the same on every
@@ -234,8 +235,8 @@ async def test_the_tool_scopes_by_the_ask_the_user_wrote(tmp_path, monkeypatch, 
     from app.core import projects
 
     rows = [
-        _row((BILL_NINE, NET, "Box Structure Manholes"), "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m", "No", "2", "1", "2"),
-        _row((BILL_SEVEN, OTHER, "Box Structure Manholes"), "", "A |Size 1.5 x 1.5m, depth 2.0-2.5m", "No", "3", "1", "3"),
+        _row((BILL_NINE, NET, "Inspection Chambers"), "", "A |Size 1.5 x 1.5m, depth 1.5-2.0m", "No", "2", "1", "2"),
+        _row((BILL_SEVEN, OTHER, "Inspection Chambers"), "", "A |Size 1.5 x 1.5m, depth 2.0-2.5m", "No", "3", "1", "3"),
     ]
     path = tmp_path / "tool.xlsx"
     g.write_bill_workbook(rows, str(path))

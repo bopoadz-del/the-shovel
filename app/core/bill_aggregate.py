@@ -201,14 +201,14 @@ def matches(row: SheetRow, terms: set[str], section_terms: set[str]) -> bool:
 # same rows on every trial. Three phrases in it carry a scope, and each is read
 # as a NUMBER or as a structural cell of the row's own line, never as a token:
 #
-# * a size -- "1.5 x 1.5 m" -> the two dimensions, compared numerically with
+# * a size -- "W x H m" -> the two dimensions, compared numerically with
 #   the dimensions the row's own description states. The word splitting that
-#   turns "1.5m" into "1" and "5m" cannot satisfy a size, and neither can an
+#   turns "W.5m" into "W" and "5m" cannot satisfy a size, and neither can an
 #   item code that happens to carry one of its digits.
-# * a band -- "2.5 to 3 m", "5.0-5.5m" -> the two ends of a depth band,
+# * a band -- "LO to HI m", "LO-HI m" -> the two ends of a depth band,
 #   compared numerically with the band cell of the row ITSELF (never with a
 #   neighbour's, a header's or the previous row's label).
-# * a bill -- "Bill No. 13" -> a row is admitted only when its own path names
+# * a bill -- "Bill No. <n>" -> a row is admitted only when its own path names
 #   that bill: a bill heading, or the document's page label.
 #
 # The ask's remaining words scope by the cell the document prints them in: a
@@ -227,14 +227,14 @@ _BAND_RE = re.compile(
     rf"({_DIM})\s*(mm|cm|m)?\s*(?:to|[\-\u2013\u2014])\s*({_DIM})\s*(mm|cm|m)\b",
     re.IGNORECASE,
 )
-#: A bill named in an ask: "Bill No. 13", "bill 13", "Bill Number 12A".
+#: A bill named in an ask: "Bill No. <n>", "bill <n>", "Bill Number <n><a>".
 _ASK_BILL_RE = re.compile(r"\bbill\s*(?:no\.?|number|#)?\s*(\d{1,3}[a-z]?)\b", re.IGNORECASE)
 #: A bill named by the document's own page label: "Page D/13/2", "D/13/10".
 _PAGE_LABEL_RE = re.compile(r"\b([A-Za-z]{1,4})\s*/\s*(\d{1,3}[a-z]?)\s*/\s*\d{1,4}\b")
 
 _UNIT_M = {"mm": 0.001, "cm": 0.01, "m": 1.0}
 #: A dimension printed with no unit at all is metres unless it is too large to
-#: be one: a bill prints a 1200 mm pipe as "1200", never as "1200 m".
+#: be one: a bill prints a pipe in millimetres as a bare 4-digit number.
 _UNITLESS_MM_FROM = 100.0
 _SCOPE_STOP = frozenset({
     "and", "the", "for", "how", "many", "much", "what", "which", "all", "any",
@@ -317,7 +317,7 @@ def _dimensions(match: re.Match[str]) -> tuple[float, float]:
 
     A unit written on either end applies to both; a size written with no unit
     at all is metres unless both ends are too large for that, in which case it
-    is millimetres (a bill prints "1200 x 1200" for a 1.2 m chamber)."""
+    is millimetres (a bill prints a chamber in millimetres as bare numbers)."""
     first, unit_a, second, unit_b = match.groups()
     values = (float(first), float(second))
     unit = (unit_a or unit_b or "").lower()
@@ -354,7 +354,7 @@ def _row_band(row: SheetRow) -> tuple[float, float] | None:
 def row_bills(row: SheetRow) -> set[str]:
     """The bill numbers the row's own path names.
 
-    A bill heading (``Bill No. 13 - ...``) or the document's page label
+    A bill heading (``Bill No. <n> - ...``) or the document's page label
     (``D/13/2``: part, bill, page) printed in one of the row's own heading
     levels. A path that names no bill names none.
     """
