@@ -275,28 +275,33 @@ def test_lower_case_words_between_the_name_words_still_break_the_run(text):
 # -- the limit this change does not close --------------------------------------
 
 
-def _han_words() -> tuple[str, str]:
-    """Two invented Han-script words, assembled from code points."""
-    first = "".join(map(chr, (0x4E09, 0x90CE)))
-    last = "".join(map(chr, (0x5C71, 0x7530)))
-    return first, last
+def _caseless_words() -> list[tuple[str, str, str]]:
+    """Invented two-word names in scripts that do not mark case, from code points."""
+    han = ("".join(map(chr, (0x4E09, 0x90CE))), "".join(map(chr, (0x5C71, 0x7530))))
+    kana = ("".join(map(chr, (0x304B, 0x308F))), "".join(map(chr, (0x307F, 0x306A))))
+    return [("Han", han[0], han[1]), ("Kana", kana[0], kana[1])]
 
 
-HAN_FIRST, HAN_LAST = _han_words()
+CASELESS = _caseless_words()
 
 
-def test_a_script_without_case_is_matched_literally_and_the_limit_is_recorded():
+@pytest.mark.parametrize(
+    "label, first, last", CASELESS, ids=[label for label, _, _ in CASELESS]
+)
+def test_a_script_without_case_is_matched_literally_and_the_limit_is_recorded(
+    label, first, last
+):
     """A caseless script has no capital to read as a name word.
 
-    Han, Kana and Hangul syllables do not mark case, so the sentence-order
-    rule -- which is what catches a surname-first attribution -- has nothing
-    to read there. The literal comparison still catches the name as listed,
-    across separators and presentation, and that is asserted here rather than
-    left for a reader to assume: the gap is real, and it is a different
-    mechanism (a script-aware word splitter), not this rule widened.
+    Han and Kana do not mark case, so the sentence-order rule -- which is what
+    catches a surname-first attribution -- has nothing to read there. The
+    literal comparison still catches the name as listed, across separators and
+    presentation, and that is asserted here rather than left for a reader to
+    assume: the gap is real, and it is a different mechanism (a script-aware
+    word splitter), not this rule widened.
     """
-    entry = f"{HAN_FIRST} {HAN_LAST}"
+    entry = f"{first} {last}"
     patterns = scan_secrets.load_client_patterns({scan_secrets.ENV_VAR: entry})
-    assert scan_secrets.scan_client_document(f"{entry}\n", patterns) == [(1, 0)]
-    reversed_entry = f"{HAN_LAST} {HAN_FIRST}"
-    assert scan_secrets.scan_client_document(f"{reversed_entry}\n", patterns) == []
+    assert scan_secrets.scan_client_document(f"{entry}\n", patterns) == [(1, 0)], label
+    other = f"{last} {first}"
+    assert scan_secrets.scan_client_document(f"{other}\n", patterns) == [], label
