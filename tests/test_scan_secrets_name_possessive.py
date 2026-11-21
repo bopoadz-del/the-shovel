@@ -9,11 +9,13 @@ carries the initial rule, the possessive form of the name scored 0 of 3
 order-independent spellings with an inverted entry, and the initial form with
 a possessive scored 0 of 2; both score in full now.
 
-What is *not* widened: the plural is a different word and stays a miss, a
-possessive on a name not on the list stays a miss, and a possessive of a
+What is *not* widened: a longer word, an irregular plural and a
+possessive on a name not on the list stay misses, and a possessive of a
 number or an identifier is not a written name. The clitic is taken off the
 token and the remaining word still has to be read as the denylisted word --
-no vocabulary enters the scanner.
+no vocabulary enters the scanner. The regular plural of the remaining word is
+read as that word too (see the plural test file); a spelling that is not a
+regular plural is still a different word.
 
 The words are invented and assembled at runtime, so the repository contains no
 name and no fixture the real scan would have to chase.
@@ -70,14 +72,13 @@ POSSESSIVE_FORMS = [
 ]
 
 CONTROLS = [
-    ("the plural is a different word", f"Q. {LAST}s crew mobilised"),
-    ("a plural possessive is a different word", f"{LAST}s{STRAIGHT} crew mobilised"),
+    ("a longer word is not the name", f"Q. {LAST}field crew mobilised"),
+    ("an irregular plural is not the name", f"Q. {LAST}ses crew mobilised"),
     ("a possessive of another name", f"Q. Rate{STRAIGHT}s crew mobilised"),
     ("a possessive of a lower-case word", f"the site{STRAIGHT}s crew mobilised"),
     ("a possessive of a number", f"the 2010{STRAIGHT}s crew mobilised"),
     ("the given name alone, possessive", f"{FIRST}{STRAIGHT}s crew mobilised"),
     ("a different word ending in the mark", f"{LAST}ald{STRAIGHT}s crew mobilised"),
-    ("the initial form with a plural", f"| Q. {LAST}s | 12 |"),
 ]
 
 

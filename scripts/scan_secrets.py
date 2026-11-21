@@ -1012,7 +1012,7 @@ _MAX_INTERIOR_INSERTIONS = 2
 
 
 def _word_reads_as(written: str, word: str) -> bool:
-    """True when a run word is the denylisted word, or the word's initial.
+    """True when a run word is the denylisted word, its plural, or its initial.
 
     A byline, a citation and an index entry abbreviate a given name to its
     first letter and close it with a dot: ``G. Surname`` for the denylisted
@@ -1022,8 +1022,19 @@ def _word_reads_as(written: str, word: str) -> bool:
     matching nothing but itself. What the initial abbreviates is decided by
     the denylist entry -- the first letter of a word the list already names --
     so no vocabulary is added anywhere.
+
+    A family is named in the plural: ``the Surnames`` and ``the Surnames'
+    crew`` name the household the entry names in the singular, and the plural
+    is English morphology on the word, not a different word. Only the two
+    regular spellings are folded -- ``-s``, and ``-es`` after a word that
+    already ends in ``s`` -- so an irregular or a longer word is still a
+    different word, and the rest of the name still has to be read beside it.
     """
     if written == word:
+        return True
+    if word.isalpha() and written == f"{word}s":
+        return True
+    if word.isalpha() and word.endswith("s") and written == f"{word}es":
         return True
     return (
         len(written) == 2
