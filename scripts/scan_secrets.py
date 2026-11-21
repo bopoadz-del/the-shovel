@@ -1060,7 +1060,38 @@ def _link_mark_at(text: str, start: int, end: int) -> tuple[int, int] | None:
     return None
 
 
-def name_runs(text: str) -> list[tuple[int, list[str]]]:
+# A footnote reference is written in brackets after the word it marks:
+# ``Surname[^1]``. The identifier inside is a pointer the document resolves at
+# its foot, never a word the label spells, and welded to the surname's last word
+# it makes that word name-shaped in no case at all. Where the reference stands
+# between a name and a link's own mark (``Surname[^1](url)``) the pair would
+# otherwise be read as the link's closing mark, and the surname would keep the
+# identifier instead. The mark is replaced by spaces of its own length -- one
+# character for each -- so every offset stays where the document wrote it and no
+# two words become adjacent that the line did not write: the word before the
+# mark ends where the mark opens, exactly as the reference-link reader ends it.
+# A separation, never a join.
+_FOOTNOTE_MARK = re.compile(r"\[\^[^\[\]\n]*\]")
+
+
+def _blank_mark(mark: re.Match[str]) -> str:
+    return " " * len(mark.group())
+
+
+def _without_footnote_marks(text: str) -> str:
+    """``text`` with every footnote reference replaced by spaces of its length.
+
+    A mark whose bracket never closes is punctuation, not a footnote, and is
+    left where it stands, exactly as an unbalanced link mark is. A mark written
+    across a line break is not a footnote either: a footnote is written on the
+    line that spells it.
+    """
+    if "[^" not in text:
+        return text
+    return _FOOTNOTE_MARK.sub(_blank_mark, text)
+
+
+def name_runs(text: str, *, prose: bool = True) -> list[tuple[int, list[str]]]:
     """Maximal runs of name-shaped words, each with the offset it starts at.
 
     A token whose edges carry punctuation closes the run it is in: the dot of
@@ -1076,6 +1107,14 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
     spelled as a phrase -- the token is read through to the mark's close first
     (``_link_mark_end``), so the word the label ends with is still one token and
     the word after the link is still a separate one.
+
+    A footnote reference welded to the word it marks (``Surname[^1]``) is
+    layout in prose and is blanked to spaces of its own length first
+    (``_without_footnote_marks``): the word ends where the mark opens and the
+    mark's own identifier is never read as part of the name. The same bracket
+    shape also negates a character class in a regular expression, where it is
+    the pattern's own syntax and not a mark, so the blanking is limited to
+    prose (``prose``) -- the formats ``is_prose`` names, and only those.
 
     Invisible characters are deleted, not treated as separators: a soft
     hyphen pushed into the middle of a surname leaves one word to a reader,
@@ -1095,6 +1134,7 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
     else:
         clean = text
         origin = list(range(len(text)))
+    clean = _without_footnote_marks(clean) if prose else clean
     words: list[tuple[int, str, bool]] = []
     index = 0
     length = len(clean)
@@ -1347,7 +1387,7 @@ def scan_client_document(
             if all(_word_or_initial_in(word, split_fold, joined_fold) for word in words)
         ]
         if sparse:
-            for run_start, run in name_runs(raw_block):
+            for run_start, run in name_runs(raw_block, prose=allow_line_join):
                 for pattern_index, words in sparse:
                     if name_run_matches(run, words):
                         position = numbers[bisect_right(starts, run_start) - 1][1]
@@ -1356,7 +1396,7 @@ def scan_client_document(
                 phrase = _table_row_phrase(line)
                 if phrase is None:
                     continue
-                for _, run in name_runs(phrase):
+                for _, run in name_runs(phrase, prose=allow_line_join):
                     for pattern_index, words in sparse:
                         if name_run_matches(run, words):
                             found.add((line_number, pattern_index))
