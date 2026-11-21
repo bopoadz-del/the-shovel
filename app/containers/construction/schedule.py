@@ -1,7 +1,6 @@
 """Construction container — schedule submodule."""
 
 import logging
-import math
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -9,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .helpers import _safe_float, _safe_iso_date
+from app.lib.pm_computations import duration_badge, duration_days_from_rate
 
 logger = logging.getLogger(__name__)
 
@@ -423,36 +423,6 @@ _BRIEF_WBS_SYSTEM = (
 )
 
 
-def _estimate_duration_from_rate(quantity: float, rate: str) -> Tuple[Optional[int], Optional[str]]:
-    """Working days for ``quantity`` at a STATED productivity ``rate`` via the
-    construction kernel (productivity_manpower_duration).
-
-    Returns ``(days, error)``. ``days`` is None when the kernel produced no
-    usable figure (0845Z: no rate -> no estimate). ``error`` is None in that
-    ordinary case, but when the kernel RAISED it is a short tag NAMING the
-    failure, logged at WARNING — so the caller surfaces a kernel BREAK as a
-    distinct computed failure instead of silently treating it as a plain
-    missing-input UNKNOWN."""
-    try:
-        from app.agents.hats.planning.formulas.construction_formulas_planning import (
-            productivity_manpower_duration,
-        )
-        res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "productivity kernel raised estimating duration (quantity=%r rate=%r): %s",
-            quantity, rate, exc, exc_info=True,
-        )
-        return None, f"productivity kernel error: {type(exc).__name__}"
-    if not isinstance(res, dict):
-        return None, None
-    for k in ("duration_days", "duration", "days", "remaining_days"):
-        v = res.get(k)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
-            return int(math.ceil(v)), None
-    return None, None
-
-
 async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Structure a prose brief / document into WBS activities via the single
     LLM egress (``llm_client.complete_json``), structuring ONLY. Returns
@@ -498,6 +468,7 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
         # defaulted — the activity is incomplete and the chain is reported so.
         duration_days: Optional[int] = None
         basis = "unknown"
+        duration_env: Dict[str, Any] = {}
         has_qty = isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0
         has_rate = isinstance(rate, str) and bool(rate.strip())
         if has_dur:
@@ -505,7 +476,7 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
         elif has_qty and has_rate:
             # Stated quantity + STATED rate -> kernel estimate (the stated rate
             # always wins; a norm is never consulted here).
-            est, est_err = _estimate_duration_from_rate(qty, rate)
+            est, est_err, duration_env = duration_days_from_rate(qty, rate)
             if est is not None:
                 duration_days = est
                 basis = f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
@@ -518,7 +489,7 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
             from app.lib.productivity_norms import norm_rate_for
             norm = norm_rate_for(name, item.get("unit"))
             if norm is not None:
-                est, est_err = _estimate_duration_from_rate(qty, norm["rate"])
+                est, est_err, duration_env = duration_days_from_rate(qty, norm["rate"])
                 if est is not None:
                     duration_days = est
                     basis = (
@@ -534,6 +505,7 @@ async def _structure_activities_from_text(text: str) -> Tuple[List[Dict[str, Any
             "id": aid, "code": aid, "name": name[:160],
             "duration_days": duration_days,
             "duration_basis": basis,
+            **duration_badge(duration_env),
             "predecessors": [],  # resolved from names below
             "resources": [],
             "wbs": aid, "wbs_code": aid, "wbs_phase": "brief",

@@ -3318,7 +3318,15 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             env["error"] = required_params_error(name, fn)
         return env
     except Exception as exc:  # noqa: BLE001 — never raise into the agent loop
-        return {"status": "error", "error": f"{name} failed: {exc}"}
+        # A calculator that RAISED is a break, not a refusal: the envelope says
+        # so (``raised``) and names the exception, so a caller can tell a kernel
+        # break from an input it declined without reading the error prose.
+        return {
+            "status": "error",
+            "error": f"{name} failed: {exc}",
+            "raised": True,
+            "error_type": type(exc).__name__,
+        }
 
     if _dc.is_dataclass(result):
         result = _dc.asdict(result)

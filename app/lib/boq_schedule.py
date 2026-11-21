@@ -49,6 +49,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.lib.boq_pricing import categorize
+from app.lib.pm_computations import duration_badge, duration_days_from_rate
 
 logger = logging.getLogger(__name__)
 
@@ -956,35 +957,9 @@ def boq_scope_phase(scoped: Iterable[Dict[str, Any]]) -> str:
     return "Mixed scope"
 
 
-def _kernel_duration_days(quantity: float, rate: str) -> Tuple[Optional[int], Optional[str]]:
-    """Working days for ``quantity`` at a per-gang-day production ``rate`` via
-    the construction kernel (productivity_manpower_duration).
-
-    Returns ``(days, error)`` — the same contract as the brief path's estimator.
-    ``days`` is None when the kernel produced no usable figure; ``error`` is a
-    short tag NAMING the failure (logged at WARNING) only when the kernel RAISED,
-    so a kernel BREAK is surfaced distinctly from a plain missing-input UNKNOWN."""
-    try:
-        from app.agents.hats.planning.formulas.construction_formulas_planning import (
-            productivity_manpower_duration,
-        )
-        res = productivity_manpower_duration(quantity=float(quantity), productivity_rate=str(rate))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "productivity kernel raised estimating duration (quantity=%r rate=%r): %s",
-            quantity, rate, exc, exc_info=True,
-        )
-        return None, f"productivity kernel error: {type(exc).__name__}"
-    if not isinstance(res, dict):
-        return None, None
-    for k in ("duration_days", "duration", "days", "remaining_days"):
-        v = res.get(k)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
-            return int(math.ceil(v)), None
-    return None, None
-
-
-def boq_row_duration(item: Dict[str, Any]) -> Tuple[Optional[int], str]:
+def boq_row_duration(
+    item: Dict[str, Any],
+) -> Tuple[Optional[int], str, Dict[str, Any]]:
     """Duration for one BOQ row under the 0845Z/0900Z rule — the SAME mechanism
     as the brief path (kernel + S-1b norm table): a stated quantity + stated
     rate -> kernel; a quantity + a generic sourced productivity norm for the
@@ -993,26 +968,29 @@ def boq_row_duration(item: Dict[str, Any]) -> Tuple[Optional[int], str]:
     qty = _qty(item)
     rate = (item or {}).get("productivity_rate")
     if qty > 0 and isinstance(rate, str) and rate.strip():
-        d, kerr = _kernel_duration_days(qty, rate)
+        d, kerr, env = duration_days_from_rate(qty, rate)
         if d is not None:
-            return d, f"estimated — kernel productivity_manpower_duration, basis {qty}@{rate.strip()}"
+            return d, (
+                f"estimated — kernel productivity_manpower_duration, "
+                f"basis {qty}@{rate.strip()}"
+            ), env
         if kerr:
             # Kernel BREAK (not a missing input): surface it distinctly.
-            return None, f"kernel-error — {kerr}"
+            return None, f"kernel-error — {kerr}", env
     if qty > 0:
         from app.lib.productivity_norms import norm_rate_for
         desc = str((item or {}).get("description") or (item or {}).get("item_key") or "")
         norm = norm_rate_for(desc, (item or {}).get("unit"))
         if norm is not None:
-            d, kerr = _kernel_duration_days(qty, norm["rate"])
+            d, kerr, env = duration_days_from_rate(qty, norm["rate"])
             if d is not None:
                 return d, (
                     "estimated — kernel productivity_manpower_duration, "
                     f"norm {norm['rate']} ({norm['source']})"
-                )
+                ), env
             if kerr:
-                return None, f"kernel-error — {kerr}"
-    return None, "unknown"
+                return None, f"kernel-error — {kerr}", env
+    return None, "unknown", {}
 
 
 def wbs_tree_from_boq_items(
@@ -1110,13 +1088,14 @@ def activities_from_boq_scope_outline(
         name = f"{code} {desc}".strip() if code else desc
         category = boq_row_trade_category(item)
         trade = _TRADE_OF.get(category, "general")
-        days, basis = boq_row_duration(item)
+        days, basis, duration_env = boq_row_duration(item)
         activities.append({
             "id": act_id,
             "code": act_id,
             "name": name[:120] or f"Item {idx}",
             "duration_days": days,
             "duration_basis": basis,
+            **duration_badge(duration_env),
             "predecessors": [prev] if prev else [],
             "resources": [trade],
             "wbs": act_id,
