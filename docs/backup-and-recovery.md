@@ -125,6 +125,12 @@ migration rollback.
 The above are deferred until justified by an actual SLA requirement.
 For the current pilot, daily snapshots + daily backups are sufficient.
 
+## Restore drill records
+
+- `docs/RESTORE_DRILL_20260805.md` — Render point-in-time recovery.
+- `docs/RESTORE_DRILL_20261115.md` — Neon scratch-branch drill
+  (`.github/workflows/restore-drill.yml`), row counts compared with live.
+
 ## What this document does NOT cover
 
 - Application-state-only restores ("revert THIS conversation"): manual
