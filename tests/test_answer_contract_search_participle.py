@@ -80,25 +80,38 @@ def test_the_same_word_that_is_not_the_search_stays(text):
     assert answer_contract.apply(text).text == text
 
 
-def test_a_cited_document_name_keeps_its_words():
+@pytest.mark.parametrize("text, name", [
+    ("Cube results are in [retrieved samples register.xlsx] for level 2.\n", "retrieved samples register.xlsx"),
+    ("Pile records are in [fetched pile log.pdf] for grid B.\n", "fetched pile log.pdf"),
+])
+def test_a_cited_document_name_keeps_its_words(text, name):
     # Rule 4 moves the citation out of the text; the name it carries is the
     # document's own and reaches the citation entry unrewritten.
-    out = answer_contract.apply("Cube results are in [retrieved samples register.xlsx] for level 2.\n")
-    assert [c["document"] for c in out.citations] == ["retrieved samples register.xlsx"]
+    out = answer_contract.apply(text)
+    assert [c["document"] for c in out.citations] == [name]
     assert "[1]" in out.text
 
 
-def test_an_answer_with_no_search_word_is_unchanged():
-    text = "The curing period is 7 days for slabs.\nColumns cure for 10 days.\n"
+@pytest.mark.parametrize("text", [
+    "The curing period is 7 days for slabs.\nColumns cure for 10 days.\n",
+    "No fire rating is stated for the plant room doors.\n",
+])
+def test_an_answer_with_no_search_word_is_unchanged(text):
     assert answer_contract.apply(text).text == text
 
 
-def test_a_machinery_only_answer_is_still_not_emptied():
+@pytest.mark.parametrize("text", [
+    "The search returned three passages from the retrieved documents.",
+    "The search came back with excerpts from the retrieved context.",
+])
+def test_a_machinery_only_answer_is_still_not_emptied(text):
     # Rule 3 drops it; the contract returns the original rather than nothing.
-    text = "The search returned three passages from the retrieved documents."
     assert answer_contract.apply(text).text == text
 
 
-def test_a_turn_asking_for_inputs_keeps_its_wording():
-    text = "Which of the retrieved rows is the level 2 slab? Give the row number."
+@pytest.mark.parametrize("text", [
+    "Which of the retrieved rows is the level 2 slab? Give the row number.",
+    "Name the fetched sheet that holds the door schedule.",
+])
+def test_a_turn_asking_for_inputs_keeps_its_wording(text):
     assert answer_contract.apply(text, asking=True).text == text
