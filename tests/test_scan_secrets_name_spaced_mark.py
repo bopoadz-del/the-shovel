@@ -230,10 +230,18 @@ def test_the_run_reads_through_a_spaced_mark(label, text, expected):
     assert _runs(text) == expected, label
 
 
-def test_a_mark_that_spans_a_line_break_is_not_joined():
+LINE_BREAK_MARKS = [
+    ("destination", f'[Q. {LAST}]({URL}\n"note") crew'),
+    ("reference", f"[Q. {LAST}][see\nnote] crew"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text", LINE_BREAK_MARKS, ids=[row[0] for row in LINE_BREAK_MARKS]
+)
+def test_a_mark_that_spans_a_line_break_is_not_joined(label, text):
     """Two lines are two lines; the mark is not read across the break."""
-    text = f'[Q. {LAST}]({URL}\n"note") crew'
-    assert [run for run in _runs(text) if run[:1] == ["q."]] == []
+    assert [run for run in _runs(text) if run[:1] == ["q."]] == [], label
 
 
 def test_the_phrase_matcher_keeps_its_own_reading():
