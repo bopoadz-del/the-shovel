@@ -2454,6 +2454,40 @@ def _message_wants_cash_flow(text: str) -> bool:
     ))
 
 
+# One figure as a person writes it in a list: "3", "2.5", "1,500",
+# "12,000.75". A comma is a thousands separator only between digits with
+# no space after it; ", " separates the items of the list.
+_LISTED_FIGURE = r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w.]|,\d)"
+_LIST_SEPARATOR = r"(?:\s*;\s*|,\s+)"
+_PERIOD_SERIES_RE = re.compile(
+    rf"{_LISTED_FIGURE}(?:{_LIST_SEPARATOR}{_LISTED_FIGURE}){{2,}}"
+)
+
+
+def _message_supplies_period_series(text: str) -> bool:
+    """True when the message writes out its own run of three or more figures
+    one after another ("1.0, 2.0, 3.0" / "1,000, 1,500, 2,000" / "4; 5; 6").
+    A slash is not a separator: "01/03/2027" is a date, not three figures."""
+    return bool(_PERIOD_SERIES_RE.search(text or ""))
+
+
+def _message_wants_cash_flow_forecast(text: str) -> bool:
+    """True when ``cash_flow_forecast`` can take the ask as written.
+
+    That tool builds a TEMPLATE curve from one money total and a duration.
+    When the user has typed the period-by-period figures themselves, the
+    template can neither read them (it stops on "I need the contract
+    value" when no single money total is written) nor honour them (it
+    would print its own curve, not theirs). Such an ask is a calculation
+    on the user's own series and is left to the calculators and the
+    model. The cash-flow wording still counts as cash flow everywhere else
+    (``_message_wants_cash_flow``), so other drafts stay excluded.
+    """
+    if not _message_wants_cash_flow(text):
+        return False
+    return not _message_supplies_period_series(text)
+
+
 def _message_wants_om_manual(text: str) -> bool:
     return bool(re.search(
         r"operations and maintenance|o\s*&\s*m\b|o and m|maintenance manual",
@@ -2760,7 +2794,7 @@ async def _predispatch_remaining_deliverables(
     candidates = (
         (
             "AGENT_CASH_FLOW_PREDISPATCH",
-            _message_wants_cash_flow,
+            _message_wants_cash_flow_forecast,
             "cash_flow_forecast",
             _format_cash_flow,
             "Present this cash-flow S-curve in full. Do not run drawing_qto.",
@@ -5601,7 +5635,7 @@ def _forced_specific_tool(messages: list[dict[str, Any]], available: set) -> str
         return "resource_histogram"
     if "look_ahead" in available and _message_wants_look_ahead(text):
         return "look_ahead"
-    if "cash_flow_forecast" in available and _message_wants_cash_flow(text):
+    if "cash_flow_forecast" in available and _message_wants_cash_flow_forecast(text):
         return "cash_flow_forecast"
     wants_procurement = _message_wants_procurement_list(text)
     if "procurement_list_generator" in available and wants_procurement:
