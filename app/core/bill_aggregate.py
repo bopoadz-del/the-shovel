@@ -272,33 +272,36 @@ TIME = "time"
 TOTAL = "total"
 
 #: Unit spellings a document prints in its Unit cell, normalised to letters and
-#: digits: ``m?``, ``m>`` and ``M`` are one unit, ``| sum`` is ``sum``.
+#: digits: ``m?``, ``m>`` and ``M`` are one unit, ``| sum`` is ``sum``. Only the
+#: singular is listed; a plural printed with a trailing ``s`` is read through
+#: the same entry by :func:`_read`, so ``Mtrs`` and ``Mtr`` are one unit.
 _UNIT_DIMENSION = {
     "m": LENGTH, "mm": LENGTH, "cm": LENGTH, "km": LENGTH, "mtr": LENGTH,
-    "metre": LENGTH, "metres": LENGTH, "meter": LENGTH, "meters": LENGTH,
+    "metre": LENGTH, "meter": LENGTH,
     "in": LENGTH, "inch": LENGTH, "inches": LENGTH, "ft": LENGTH, "feet": LENGTH,
     "m2": AREA, "cm2": AREA, "mm2": AREA, "ft2": AREA, "sqm": AREA, "sqft": AREA,
     "sft": AREA,
     "m3": VOLUME, "cm3": VOLUME, "cum": VOLUME, "litre": VOLUME, "liter": VOLUME,
-    "kg": MASS, "g": MASS, "t": MASS, "ton": MASS, "tons": MASS, "tonne": MASS,
-    "tonnes": MASS, "tonnage": MASS,
-    "no": COUNT, "nr": COUNT, "nos": COUNT, "nrs": COUNT, "ea": COUNT, "each": COUNT,
-    "pc": COUNT, "pcs": COUNT, "piece": COUNT, "pieces": COUNT,
-    "day": TIME, "days": TIME, "hr": TIME, "hrs": TIME, "hour": TIME, "hours": TIME,
+    "kg": MASS, "g": MASS, "t": MASS, "ton": MASS, "tonne": MASS,
+    "tonnage": MASS,
+    "no": COUNT, "nr": COUNT, "ea": COUNT, "each": COUNT,
+    "pc": COUNT, "piece": COUNT,
+    "day": TIME, "hr": TIME, "hour": TIME,
     "sum": TOTAL, "total": TOTAL, "subtotal": TOTAL, "carry": TOTAL, "carried": TOTAL,
 }
 
-#: The nouns an ask uses for a dimension it wants totalled. A unit spelling is
-#: never read from the ask's prose -- "at 2.5 to 3 m depth" states a band, not
-#: a length total -- so only these nouns can name a dimension on the ask side.
+#: The nouns an ask uses for a dimension it wants totalled, singular only (the
+#: same :func:`_read` covers a plural). A unit spelling is never read from the
+#: ask's prose -- "at 2.5 to 3 m depth" states a band, not a length total -- so
+#: only these nouns can name a dimension on the ask side.
 _ASK_DIMENSION_NOUNS = {
-    "length": LENGTH, "lengths": LENGTH,
-    "area": AREA, "areas": AREA,
-    "volume": VOLUME, "volumes": VOLUME,
-    "weight": MASS, "weights": MASS, "mass": MASS, "tonnage": MASS,
+    "length": LENGTH,
+    "area": AREA,
+    "volume": VOLUME,
+    "weight": MASS, "mass": MASS, "tonnage": MASS,
 }
 _DIMENSION_NOUN_RE = re.compile(
-    r"\b(" + "|".join(sorted(_ASK_DIMENSION_NOUNS, key=len, reverse=True)) + r")\b",
+    r"\b(?:" + "|".join(sorted(_ASK_DIMENSION_NOUNS, key=len, reverse=True)) + r")s?\b",
     re.IGNORECASE,
 )
 #: The words that put a dimension noun in a measuring position: it asks for a
@@ -449,35 +452,67 @@ def _row_band(row: SheetRow) -> tuple[float, float] | None:
     return None
 
 
+def _read(table: dict[str, str], token: str) -> str | None:
+    """One word read through one vocabulary, both sides read the same way.
+
+    A word printed in the plural is the word printed in the singular: a bill
+    writes ``Nos`` where its neighbour writes ``No``, an ask writes ``lengths``
+    where another writes ``length``. The rule is the vocabulary's, not any one
+    spelling's, so a word the table does not list in the plural still reads.
+    """
+    if not token:
+        return None
+    found = table.get(token)
+    if found is None and token.endswith("s"):
+        found = table.get(token[:-1])
+    return found
+
+
 def _unit_dimension(unit: str) -> str | None:
     """The dimension a row's own Unit cell measures, or ``None``.
 
     The cell is normalised the way the document prints it -- case, spacing,
     punctuation and superscripts belong to the print, not to the unit -- and
-    read through the one vocabulary above. A blank cell, a count (``No``,
-    ``Nr``), a section's carry total (``sum``) and any spelling the vocabulary
-    does not know measure nothing, so they cannot satisfy a stated dimension.
+    read through the one vocabulary above, the same way the ask's noun is.
+    A blank cell, a count (``No``, ``Nr``), a section's carry total (``sum``)
+    and any spelling the vocabulary does not know measure nothing, so they
+    cannot satisfy a stated dimension.
     """
     text = (unit or "").casefold().replace("\u00b2", "2").replace("\u00b3", "3")
-    return _UNIT_DIMENSION.get(re.sub(r"[^a-z0-9]", "", text))
+    return _read(_UNIT_DIMENSION, re.sub(r"[^a-z0-9]", "", text))
+
+
+def _measuring_nouns(text: str) -> list[tuple[str, str]]:
+    """Every dimension noun in a measuring position, in the ask's own order.
+
+    A noun is in a measuring position behind a total word, as "the total
+    billed length of ...", or before "of", as "the length of the pipes"; a
+    place name ("the surface water area") is not. Each pair is the word as the
+    ask's content words are folded and the dimension it names, so the caller
+    can keep a word read as a measurement out of the word scopes: it named a
+    measurement, not a word to look for in a row.
+    """
+    text = text or ""
+    found: list[tuple[str, str]] = []
+    for match in _DIMENSION_NOUN_RE.finditer(text):
+        before = text[max(0, match.start() - 40):match.start()]
+        after = text[match.end():match.end() + 4]
+        if not (_TOTAL_CUE_RE.search(before) or after.lstrip().casefold().startswith("of")):
+            continue
+        dimension = _read(_ASK_DIMENSION_NOUNS, match.group(0).casefold())
+        if dimension is not None:
+            found.append((_fold(match.group(0).casefold()), dimension))
+    return found
 
 
 def _ask_dimension(text: str) -> str | None:
-    """The dimension the ask asks to total, or ``None``.
+    """The dimension the ask asks to total, or ``None`` (the first it states).
 
-    A dimension noun is read only in a measuring position -- behind a total
-    word, as "the total billed length of ...", or before "of", as "the length
-    of the pipes" -- so a place name ("the surface water area") never becomes
-    a dimensional scope. No unit spelling is read from the ask's prose: "at
-    2.5 to 3 m depth" states a band, not a length total.
+    No unit spelling is read from the ask's prose: "at 2.5 to 3 m depth"
+    states a band, not a length total.
     """
-    text = text or ""
-    for found in _DIMENSION_NOUN_RE.finditer(text):
-        before = text[max(0, found.start() - 40):found.start()]
-        after = text[found.end():found.end() + 4]
-        if _TOTAL_CUE_RE.search(before) or after.lstrip().casefold().startswith("of"):
-            return _ASK_DIMENSION_NOUNS[found.group(1).casefold()]
-    return None
+    found = _measuring_nouns(text)
+    return found[0][1] if found else None
 
 
 def _measures(row: SheetRow, dimension: str, measure: str) -> bool:
@@ -538,14 +573,20 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
         in_paths |= _row_path_words(row)
         in_desc |= _desc_words(row)
     asked = _scope_words(text)
+    measured = _measuring_nouns(text)
+    # A noun read as a measurement is not also a content word: the row set is
+    # bound by the row's own unit and figure (``dimension``), so requiring the
+    # word in the row as well would narrow a dimension total to the rows that
+    # happen to print the noun -- and empty it on a document that prints none.
+    nouns = {word for word, _dimension in measured}
     scope = AskScope(
         size=_dimensions(size) if size else None,
         band=_dimensions(band) if band else None,
         bills=bills,
-        dimension=_ask_dimension(text),
-        level=frozenset(asked & in_paths - in_desc),
-        item=frozenset(asked & in_desc - in_paths),
-        either=frozenset(asked & in_paths & in_desc),
+        dimension=measured[0][1] if measured else None,
+        level=frozenset((asked & in_paths) - in_desc - nouns),
+        item=frozenset((asked & in_desc) - in_paths - nouns),
+        either=frozenset((asked & in_paths & in_desc) - nouns),
     )
     return scope if scope.states() else None
 

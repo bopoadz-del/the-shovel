@@ -179,3 +179,73 @@ def test_the_same_dimension_ask_selects_the_same_rows_whatever_terms_arrive(tmp_
     first = [(row["description"], row["unit"]) for row in trials[0]]
     assert [[(row["description"], row["unit"]) for row in t] for t in trials] == [first] * len(trials)
     assert len(first) == 2
+
+@pytest.mark.parametrize("ask", [
+    "What is the total billed length of storm water pipe?",
+    "What is the billed length of storm water pipe?",
+], ids=["total-cue", "of-cue"])
+def test_a_heading_that_prints_the_noun_does_not_narrow_a_dimension_total(tmp_path, ask):
+    # The noun "length" is printed in ONE section heading; every row prints
+    # "pipe". Read also as a content word, the noun would confine the answer to
+    # that heading -- and to nothing at all on a document that prints no such
+    # heading -- so a noun read as a measurement is not a word to look for.
+    rows = [
+        _row((BILL, NET, "PIPE LENGTH"), "A |Storm water pipe, first run", "m", "40", "1", "40"),
+        _row((BILL, NET, "PIPE LENGTH"), "B |Storm water pipe, chamber", "No", "4", "1", "4"),
+        _row((BILL, NET, "PIPE RUNS"), "C |Storm water pipe, second run", "m", "60", "1", "60"),
+        _row((BILL, NET, "PIPE RUNS"), "D |Storm water pipe, carried", "sum", "", "", "100"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe", ask=ask)
+    assert (out["count"], out["sum"]) == (2, 100.0)
+    assert {row["section"][-1] for row in out["rows"]} == {"PIPE LENGTH", "PIPE RUNS"}
+
+
+@pytest.mark.parametrize("unit, noun", [("m", "length"), ("m3", "volume")], ids=["length", "volume"])
+def test_a_row_that_prints_the_noun_does_not_scope_the_other_rows_of_the_total(tmp_path, unit, noun):
+    # One row's own description happens to print the noun; the other row of the
+    # same measurement does not. A dimension total is bound by what each row's
+    # Unit cell measures, so the second row is not excluded by the first row's
+    # wording.
+    path = (BILL, NET, "PIPE RUNS")
+    rows = [
+        _row(path, f"A |Storm water pipe, billed {noun} 40", unit, "40", "1", "40"),
+        _row(path, "B |Storm water pipe, second run", unit, "60", "1", "60"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe",
+                        ask=f"What is the total billed {noun} of storm water pipe?")
+    assert (out["count"], out["sum"]) == (2, 100.0)
+
+
+@pytest.mark.parametrize("unit, ask", [
+    ("Mtrs", "What is the total billed length of storm water pipe?"),
+    ("Kgs", "What is the total billed weight of storm water pipe?"),
+], ids=["length-plural", "weight-plural"])
+def test_a_unit_printed_in_the_plural_measures_the_singular_dimension(tmp_path, unit, ask):
+    # A bill writes its units in either number. A plural the vocabulary lists
+    # only in the singular must still measure the dimension and carry the
+    # figure; the counted and the figureless rows stay out of the total.
+    path = (BILL, NET, "PIPE RUNS")
+    rows = [
+        _row(path, f"A |Storm water pipe, first {unit}", unit, "5", "1", "5"),
+        _row(path, f"B |Storm water pipe, second {unit}", unit, "7", "1", "7"),
+        _row(path, "C |Storm water pipe, chamber", "No", "4", "1", "4"),
+        _row(path, "D |Storm water pipe, unmeasured run", "", "22", "1", "22"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe", ask=ask)
+    assert (out["count"], out["sum"]) == (2, 12.0)
+    assert {row["unit"] for row in out["rows"]} == {unit}
+
+
+@pytest.mark.parametrize("place", ["rising main", "washout run"], ids=["one-place", "other-place"])
+def test_the_asks_other_words_still_scope_a_dimension_total(tmp_path, place):
+    # Only the noun read as a measurement leaves the word scopes. The ask's
+    # other words still bind: the row that does not print them is not in this
+    # total even though its own unit measures the dimension.
+    path = (BILL, NET, "PIPE RUNS")
+    rows = [
+        _row(path, f"A |Storm water pipe, {place}", "m", "40", "1", "40"),
+        _row(path, "B |Storm water pipe, second run", "m", "60", "1", "60"),
+    ]
+    out = agg.aggregate(_sheet(tmp_path, rows), terms="storm water pipe",
+                        ask=f"What is the total billed length of storm water pipe in the {place}?")
+    assert (out["count"], out["sum"]) == (1, 40.0)
