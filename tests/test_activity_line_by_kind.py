@@ -54,17 +54,19 @@ def test_a_tool_call_frame_carries_the_stage_of_its_declared_kind(monkeypatch, k
     assert not (_words(out["label"]) & (_words(_TOOL) | _words(_QUERY)))
 
 
-def test_a_tool_the_registry_does_not_know_is_shown_as_plain_work(monkeypatch):
+@pytest.mark.parametrize("name", [_TOOL, "sort_pallet_tags"])
+def test_a_tool_the_registry_does_not_know_is_shown_as_plain_work(monkeypatch, name):
     monkeypatch.setattr(tool_registry, "result_spec", _kinds({}))
-    out = turn_progress.tool_call({"type": "tool_call", "tool": _TOOL})
+    out = turn_progress.tool_call({"type": "tool_call", "tool": name})
     assert out["stage"] == "working"
     assert out["label"] == turn_progress.LABELS["working"]
 
 
-def test_each_kind_of_work_reads_differently():
-    labels = {turn_progress.LABELS[turn_progress.stage_for_kind(k)]
-              for k in tool_registry.RESULT_KINDS}
-    assert len(labels) == len(tool_registry.RESULT_KINDS)
+@pytest.mark.parametrize("kind_a, kind_b", [("search", "computed"), ("search", ""), ("computed", "")])
+def test_each_kind_of_work_reads_differently(kind_a, kind_b):
+    def label(kind):
+        return turn_progress.LABELS[turn_progress.stage_for_kind(kind)]
+    assert label(kind_a) != label(kind_b)
 
 
 def test_no_registered_tool_is_shown_by_its_own_name():
