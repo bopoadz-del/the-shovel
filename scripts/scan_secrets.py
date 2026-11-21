@@ -788,6 +788,41 @@ def _keeps_run(shape: str, core: str) -> bool:
     return all(char in _ENTRY_COMMA for char in trailing)
 
 
+# The clitic a sentence attaches to a word to attribute what follows to it.
+# ``Q. Vantrey's crew`` names the same person as ``Q. Vantrey``: the mark and
+# its ``s`` are the sentence's grammar, not letters of the name. The mark is
+# each apostrophe a document is written with, and the ``s`` is the same letter
+# in capitals on a title block as in a sentence.
+_POSSESSIVE_MARKS = frozenset("'\u2019")
+
+
+def _without_possessive(shape: str, core: str) -> tuple[str, str]:
+    """The word a possessive clitic is attached to, and its shape without it.
+
+    A document writes the possessive to attribute what follows to the person
+    it has just named -- a project's crew, a company's sheet -- and that is the
+    place a name is most often written in prose. The clitic is not part of the
+    word, so a reader takes it off before asking what the word is; leaving it
+    on made the word name-shaped in no case at all, which ended the run at the
+    name and lost every form the run reader exists to read.
+
+    Edge punctuation is stripped before this point, so the clitic sits inside
+    the token here. A token that does not end with one is returned unchanged,
+    and so is one whose remainder is not letters (``2010's``): a possessive of
+    a number or an identifier is not a written name. The shape keeps whatever
+    marks follow the clitic, so the run still ends where the sentence ends it.
+    """
+    if len(core) < 3 or core[-2] not in _POSSESSIVE_MARKS or core[-1] not in "sS":
+        return core, shape
+    word = core[:-2]
+    if not word.isalpha():
+        return core, shape
+    at = shape.rfind(core)
+    if at < 0:
+        return core, shape
+    return word, shape[: at + len(word)] + shape[at + len(core):]
+
+
 def _entry_words(text: str) -> list[str] | None:
     """The words of a denylist entry, read as a reader reads them written.
 
@@ -903,6 +938,8 @@ def name_runs(text: str) -> list[tuple[int, list[str]]]:
             # word order but the literal one.
             shape = shape.translate(_CONFUSABLE)
         core = shape.strip(_EDGE_PUNCTUATION)
+        # A possessive clitic belongs to the sentence, not to the word.
+        core, shape = _without_possessive(shape, core)
         # A written initial keeps its dot in the run: without it the run
         # cannot tell ``Q.`` (a letter standing for a name) from ``Q`` (a
         # one-letter word), and the dot is the reader's only evidence.
