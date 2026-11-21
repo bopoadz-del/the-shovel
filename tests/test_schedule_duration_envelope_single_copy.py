@@ -20,7 +20,7 @@ KERNEL = "productivity_manpower_duration"
 
 def _hand_days(quantity: float, per_day_rate: float) -> int:
     """The day count this test expects, worked out here, not read from the code."""
-    return int(math.ceil(quantity / per_day_rate))
+    return math.ceil(quantity / per_day_rate)
 
 
 def test_the_duration_kernel_returns_the_standard_calculation_envelope():
