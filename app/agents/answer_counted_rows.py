@@ -16,7 +16,17 @@ prose with a row it did not print.
 The rule, decided from the turn's own computed result and the answer's own
 table: a table is a rendering of a row set when every data row it prints
 names exactly one distinct row of the set (by the set's own row label) and
-the figure it prints for that row is the figure the set carries for it. When
+the figure it prints for that row is the figure the set carries for it. A
+row names a set row when one of its cells is that row's label, or, when no
+cell is a whole label, when every word cell it prints is a piece of that
+one row's label and of no other: a bill whose
+reference sits inside the description cell gives each row its description
+as its label, and a table prints that label split across cells (the band in
+one, the reference in another). When
+such a table leaves rows of the set out, and the answer states the set's
+total, the rows it left out are named under the table with the figures the
+set carries for them, so the printed rows and the named rows together are the
+stated total. The table itself is not rewritten and nothing is guessed: a
 such a table leaves rows of the set out, and the answer states the set's
 total, the rows it left out are named under the table with the figures the
 set carries for them, so the printed rows and the named rows together are the
@@ -102,8 +112,38 @@ def row_sets(statements: Sequence[Any]) -> list[RowSet]:
 
 
 def _row_match(row: list[str], keys: dict[str, int]) -> list[int]:
-    """The set rows a table row names: one index per cell that is a row label."""
-    return [keys[k] for k in (_key(cell) for cell in row) if k in keys]
+    """The set rows a table row names: one index per cell that is a row label,
+    or, when no cell is a whole label, the one row whose label holds every
+    word cell the table row prints (``_piece_match``)."""
+    whole = [keys[k] for k in (_key(cell) for cell in row) if k in keys]
+    return whole or _piece_match(row, keys)
+
+
+#: Typographic variants a table prints for the characters a label holds.
+_FOLD = str.maketrans({"–": "-", "—": "-", "−": "-", "×": "x"})
+
+#: A cell that is only a figure: it is checked against the set's figures,
+#: never read as part of a row's name.
+_BARE_FIGURE_RE = re.compile(r"[\d,]*\.?\d+")
+
+
+def _fold(key: str) -> str:
+    return key.translate(_FOLD)
+
+
+def _piece_match(row: list[str], keys: dict[str, int]) -> list[int]:
+    """The one set row whose label holds, as pieces, every word cell of ``row``.
+
+    A word cell is a cell that is not a bare figure (a figure is checked
+    against the set's figures, not read as a name). A row whose word cells
+    fit no label, or more than one (words the rows of a set share, or a row
+    that prints figures only), names nothing.
+    """
+    pieces = [_fold(_key(cell)) for cell in row]
+    pieces = [p for p in pieces if p and not _BARE_FIGURE_RE.fullmatch(p)]
+    hits = [index for label, index in keys.items()
+            if all(p in _fold(label) for p in pieces)]
+    return hits if len(hits) == 1 else []
 
 
 def _figure_column(rows: list[list[str]], indices: list[int], row_set: RowSet) -> int | None:
