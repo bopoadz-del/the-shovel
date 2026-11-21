@@ -1,8 +1,11 @@
-"""Formula mixed scenarios, part 7: the last three CI chains, no model (exam 6).
+"""Formula mixed scenarios, part 7: the other side of M11, M16, M21 (exam 6).
 
-From the formula test plan, part 3 (mixed scenarios). Parts 1 to 6 cover
-M01-M10, M12-M15, M17-M20 and M22-M33. This file adds the three CI chains no
-test reached: M11, M16 and M21. Each chain calls the calculators in order
+From the formula test plan, part 3 (mixed scenarios). Parts 1 to 6 already
+run all of M01-M33 in CI; part 1 runs M11, M16 and M21 on their surplus,
+area-given and days-given cases only. This file adds the other side of each
+decision in those three chains: a deficit and a balanced site (M11), an area
+derived from width x height and an area that cannot be derived (M16), damages
+from a rate on the contract amount and no total without days (M21). Each chain calls the calculators in order
 through ``run_calculation`` (the entry point ``construction_calc`` uses); the
 named output of one step is typed into the named input of the next, and every
 intermediate in the plan's "Hand" line is asserted, not only the last.
