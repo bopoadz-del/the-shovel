@@ -52,13 +52,19 @@ make up the balance to N").
 Nothing here names a project, a document, a bill, an item, a bore size, a
 band label or a figure. A column's unit is read from the answer's own header
 cell, and the words that mark a remainder bucket are general quantifier
-vocabulary, not any document's wording.
+vocabulary, not any document's wording. A prose figure carries the column's
+unit when it prints the header's spelling or another spelling of the same
+unit ("Nr" under a "(No)" header, "lm" under "(m)"), read through the one
+unit vocabulary the bill reader already uses (``app.lib.boq_units``); a
+rewritten figure keeps the token the answer printed.
 """
 from __future__ import annotations
 
 import logging
 import re
 from dataclasses import dataclass, field
+
+from app.lib.boq_units import canon_unit
 
 _LOG = logging.getLogger(__name__)
 
@@ -374,14 +380,48 @@ def _header_unit(cell: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+#: A unit token as an answer prints it after a figure: "No", "Nr.", "lm",
+#: "m2", "m²", "sq.m". Which unit it is, is decided by ``_unit_key``.
+_UNIT_TOKEN = r"[A-Za-z]+(?:\.[A-Za-z]+)?[23²³]?\.?"
+
+
+def _unit_key(token: str) -> str:
+    """The unit ``token`` names, however the answer spells it.
+
+    ``No``, ``Nr``, ``Nr.`` and ``nos`` are one count; ``m``, ``lm`` and
+    ``m.`` are one length. The spellings are read through the bill reader's
+    own unit vocabulary (``canon_unit``), not a second table; a sentence's
+    full stop after the token is not part of the unit.
+    """
+    return canon_unit(canon_unit(token).rstrip("."))
+
+
+def _same_unit(token: str, unit: str) -> bool:
+    """True when ``token`` names the same unit as the column's ``unit``."""
+    return _unit_key(token) == _unit_key(unit)
+
+
 def _claim_figure(line: str, unit: str) -> tuple[str, float] | None:
-    """The figure ``line`` states with ``unit``, as (text, value), or None."""
+    """The figure ``line`` states with ``unit``, as (text, value), or None.
+
+    The header's own spelling is read first, so an answer that repeats it is
+    read exactly as before; otherwise the first figure whose unit token is
+    another spelling of the same unit is the claim.
+    """
     if not unit:
         return None
     match = re.search(
         rf"(?<![\d,.])(\d[\d,]*(?:\.\d+)?)\s*{re.escape(unit)}(?![A-Za-z0-9])",
         line, re.IGNORECASE,
     )
+    if match is None:
+        match = next((
+            found for found in re.finditer(
+                rf"(?<![\d,.])(\d[\d,]*(?:\.\d+)?)\s*({_UNIT_TOKEN})(?![A-Za-z0-9])",
+                line,
+            )
+            if _same_unit(found.group(2), unit)
+        ), None)
     if match is None:
         return None
     value = _number(match.group(1))
@@ -617,7 +657,7 @@ def _bucket_figure(text: str, unit: str) -> float | None:
     total's own unit - so a dimension inside a bucket's wording is not read as
     a quantity of the rows it stands for."""
     claim = _claim_unit(text)
-    if claim is None or claim[1].lower() != (unit or "").lower():
+    if claim is None or not _same_unit(claim[1], unit):
         return None
     return claim[2]
 
@@ -783,18 +823,41 @@ def _replaced_stated(
 
     Only a figure stated WITH the column's own unit is replaced ("168 No",
     "2,468 m"), so a page number, an item code or a rate that repeats the
-    digits is left alone. ``skip_line`` is the total's own line, whose cell or
-    chain has already been rewritten.
+    digits is left alone. The unit may be printed in the header's spelling or
+    another spelling of the same unit ("168 Nr"); the replacement keeps the
+    token the answer printed. ``skip_line`` is the total's own line, whose
+    cell or chain has already been rewritten.
     """
+    if not unit:
+        return list(lines)
     pattern = re.compile(
-        rf"(?<![\d,.]){re.escape(stated)}\s*{re.escape(unit)}(?![A-Za-z0-9])",
+        rf"(?<![\d,.]){re.escape(stated)}\s*"
+        rf"(?P<unit>{re.escape(unit)}|{_UNIT_TOKEN})(?![A-Za-z0-9])",
         re.IGNORECASE,
-    ) if unit else None
+    )
     return [
-        line if pattern is None or offset == skip_line
-        else pattern.subn(f"{computed} {unit}", line, count=_MAX_REPLACEMENTS)[0]
+        line if offset == skip_line else _swapped_line(line, pattern, computed, unit)
         for offset, line in enumerate(lines)
     ]
+
+
+def _swapped_line(line: str, pattern: re.Pattern[str], computed: str, unit: str) -> str:
+    """``line`` with each figure ``pattern`` finds in the column's unit replaced.
+
+    A match whose unit token names another unit (``m2`` under a length column)
+    is kept as printed; at most ``_MAX_REPLACEMENTS`` figures are replaced.
+    """
+    parts: list[str] = []
+    last = done = 0
+    for match in pattern.finditer(line):
+        token = match.group("unit")
+        if done >= _MAX_REPLACEMENTS or not _same_unit(token, unit):
+            continue
+        parts.extend((line[last:match.start()], f"{computed} {token}"))
+        last = match.end()
+        done += 1
+    parts.append(line[last:])
+    return "".join(parts)
 
 
 def _summary(correction: Correction, computed_text: str) -> str:

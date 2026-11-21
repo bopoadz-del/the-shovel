@@ -655,3 +655,97 @@ def test_a_claim_figure_followed_by_an_ordinary_word_states_no_unit(answer):
     # figure with no unit cannot be matched to a column, so nothing is
     # rewritten - the same silence the check keeps for a table with no unit.
     assert reconcile(answer) == answer
+
+
+# --- A unit is what it measures, not how the answer spells it ---------------
+# The model may print a column header in one spelling and its prose total in
+# another ("Qty (No)" over "... 9 Nr", "Length (m)" over "... 52 lm"). The
+# spellings are read through the bill reader's own unit vocabulary, so a wrong
+# total is caught whichever spelling it carries, and the rewritten figure keeps
+# the token the answer printed.
+
+@pytest.mark.parametrize("answer,wrong,right", [
+    pytest.param(
+        "| Item | Qty (No) |\n| A | 3 |\n| B | 4 |\n\nThe sum of the 2 rows is 9 Nr.",
+        "9 Nr.", "7 Nr.", id="count-spelled-nr-under-no",
+    ),
+    pytest.param(
+        "| Item | Length (m) |\n| A | 20 |\n| B | 25 |\n\nThe sum of the 2 rows is 52 lm.",
+        "52 lm.", "45 lm.", id="length-spelled-lm-under-m",
+    ),
+])
+def test_a_prose_total_in_another_spelling_of_the_column_unit_is_corrected(
+    answer, wrong, right,
+):
+    out = reconcile(answer)
+    body = out.split("**Row total checked")[0]
+    assert right in body
+    assert wrong not in body
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "| Item | Length (m) |\n| A | 20 |\n| B | 25 |\n\nThe sum of the 2 rows is 52 m2.",
+        id="area-figure-under-a-length-column",
+    ),
+    pytest.param(
+        "| Item | Qty (No) |\n| A | 3 |\n| B | 4 |\n\nThe sum of the 2 rows is 9 m.",
+        id="length-figure-under-a-count-column",
+    ),
+])
+def test_a_prose_figure_in_a_different_unit_is_not_the_column_total(answer):
+    assert reconcile(answer) == answer
+
+
+@pytest.mark.parametrize("answer,kept_right,kept_other", [
+    pytest.param(
+        _table(("Item", "Qty (No)"), (("A", "18"), ("B", "26"), ("C", "64")), "Total", "117")
+        + "\n\nThe table lists 117 Nr; the trench drawing shows 117 m.",
+        "108 Nr", "117 m", id="count-cell-with-nr-prose-and-a-length",
+    ),
+    pytest.param(
+        _table(("Item", "Length (m)"), (("A", "633"), ("B", "488")), "Total", "1,900")
+        + "\n\nThe run is 1,900 lm; the slab is 1,900 m2.",
+        "1,121 lm", "1,900 m2", id="length-cell-with-lm-prose-and-an-area",
+    ),
+])
+def test_a_restated_wrong_total_keeps_its_own_spelling_and_spares_other_units(
+    answer, kept_right, kept_other,
+):
+    body = reconcile(answer).split("**Row total checked")[0]
+    assert kept_right in body
+    assert kept_other in body
+
+
+@pytest.mark.parametrize("answer,bare", [
+    pytest.param(
+        "The counts read 18 + 26 + 64 = 117.\n\nThe plan is on sheet 117, beside the key.",
+        "sheet 117, beside", id="chain-without-unit-and-a-sheet-number",
+    ),
+    pytest.param(
+        "Lengths: 633 + 488 + 120 = 1,500\n\nThe spec states it at clause 1,500.",
+        "clause 1,500.", id="chain-without-unit-and-a-clause-number",
+    ),
+])
+def test_a_chain_without_a_unit_never_rewrites_a_bare_repeat_of_its_figure(answer, bare):
+    out = reconcile(answer)
+    assert out != answer
+    assert bare in out
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(
+        "The rows sum to 36 No.\n\n"
+        "The rows read: 1.5-2.0 m 7; 2.0-2.5 m 9; 2.5-3.0 m 12; "
+        "plus the remaining rows 8 Nr.\n",
+        id="bucket-count-spelled-nr",
+    ),
+    pytest.param(
+        "The rows sum to 1,301 m.\n\n"
+        "Rows: 400 mm 633; 500 mm 488; 600 mm 120.\n\n"
+        "The remaining bores add 60 lm.\n",
+        id="bucket-length-spelled-lm",
+    ),
+])
+def test_a_bucket_figure_in_another_spelling_of_the_total_unit_reconciles(answer):
+    assert reconcile(answer) == answer
