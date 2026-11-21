@@ -506,6 +506,12 @@ class LagMonitor:
         #: tick sleep between the two it reads about one tick.
         self.max_unobserved_ms = 0.0
         self._last_served: Optional[float] = None
+        #: When the monitor's own work between two phases began (after a
+        #: served heartbeat, after the tick sleep). The timer is re-armed, not
+        #: cancelled, at that moment, so a GIL hold that begins inside that
+        #: work is dumped; ``_close_work_window`` reads it. ``None``: no
+        #: window open.
+        self._work_from: Optional[float] = None
         #: Diagnostic only, never gated: every GC pass while running.
         self.gc = GcRecord()
 
@@ -610,6 +616,7 @@ class LagMonitor:
                 # Names now: a thread in the dump may have exited by the time
                 # the stall ends and the dump is formatted.
                 armed_names = {t.ident: t.name for t in threading.enumerate()}
+                self._close_work_window(live, armed_names)
             stamped = time.monotonic()
             if live is not None:
                 # Arming cancels the C timer thread in force and waits for it
@@ -640,8 +647,13 @@ class LagMonitor:
             could_fire = False
             if live is not None and not stalled:
                 # Back with the GIL: the gap the serve re-armed for is over.
-                # Cancelled here, the monitor's own work below never fires it.
-                live.cancel()
+                # Re-armed, never cancelled: arming replaces the pending timer
+                # inside one C call that keeps the GIL, so no thread can start
+                # a hold between the two. A cancel here left the monitor's own
+                # work below with no timer, and a GIL switch inside that work
+                # let a hold begin unseen (max_lag 0, no dump, no wake-late).
+                self._work_from = time.monotonic()
+                live.arm()
                 # Both timers of this round (the post's, the serve's) were
                 # armed at ``posted`` or later; neither can have fired unless
                 # the round lasted ``live_ms``. Only then is the file read.
@@ -683,6 +695,11 @@ class LagMonitor:
                     during = format_live_dump(dump, idents)
                     keep_worst(self.live_dumps, (lag_ms, during))
                     sample = f"{sample} :: DURING {during}"
+                if live is not None:
+                    # The stall's dump is read; what the monitor does from here
+                    # to the sleep's arm is watched by a fresh timer of its own.
+                    self._work_from = time.monotonic()
+                    live.arm()
                 self.stalls.append((lag_ms, sample))
                 now = time.monotonic()
                 if self.log and now - self._last_log >= _MIN_LOG_GAP_S:
@@ -719,6 +736,28 @@ class LagMonitor:
         if late_ms >= WAKE_LATE_NOTE_MS:
             keep_worst(self.wake_late_at, (round(late_ms, 1), at))
 
+    def _close_work_window(self, live: LiveDump, armed_names: dict) -> None:
+        """End the monitor's own-work window opened by the last re-arm.
+
+        The window's timer was armed at ``_work_from`` or later for
+        ``live.after_s``; it can have fired only if the window lasted that
+        long, and only then is the file read. A window that long means some
+        other thread kept this one from running: it is a late wake, kept with
+        its dump like the sleep's."""
+        work_from, self._work_from = self._work_from, None
+        if work_from is None:
+            return
+        now = time.monotonic()
+        gap_ms = (now - work_from) * 1000
+        if gap_ms < live.after_s * 1000:
+            return
+        self.max_wake_late_ms = max(self.max_wake_late_ms, gap_ms)
+        self._note_wake_late(gap_ms, now)
+        dump = live.take()
+        if dump:
+            idents = {**armed_names, **{t.ident: t.name for t in threading.enumerate()}}
+            keep_worst(self.live_dumps, (gap_ms, "WAKE_LATE " + format_live_dump(dump, idents)))
+
     def _sleep_watched(self, live: Optional[LiveDump], armed_names: dict) -> None:
         """Sleep one tick, and catch a GIL hold that starts during the sleep.
 
@@ -729,6 +768,7 @@ class LagMonitor:
         (tick + live), and the oversleep itself is measured: ``wake_late``
         is how long past its tick this thread could not run."""
         if live is not None:
+            self._close_work_window(live, armed_names)
             armed_from = time.monotonic()
             live.arm(self.tick + live.after_s)
         slept_from = time.monotonic()
@@ -738,7 +778,10 @@ class LagMonitor:
         self.max_wake_late_ms = max(self.max_wake_late_ms, late_ms)
         self._note_wake_late(late_ms, woke)
         if live is not None:
-            live.cancel()
+            # Re-armed, never cancelled (see ``_run``): the work from this
+            # wake to the next heartbeat's post is watched too.
+            self._work_from = time.monotonic()
+            live.arm()
             # Read only when the timer could have fired (armed at
             # ``armed_from`` or later for tick + live): the same unwatched
             # GIL release as the heartbeat's read (``_run``).
