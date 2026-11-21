@@ -31,7 +31,7 @@ import {
   rememberSession,
   renameTitleError,
 } from '../chat/session'
-import { activityForTool, plainMetadata } from '../chat/userFacingText'
+import { activityLine } from '../chat/userFacingText'
 import {
   belongsToProjectList,
   readSessionDocuments,
@@ -1327,30 +1327,6 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       }
     }
 
-    /** Build a human-readable status label for an agent tool_call event. */
-    function toolStatusLabel(toolName: string, argsPreview: string): string {
-      let args: Record<string, unknown> = {}
-      try {
-        args = JSON.parse(argsPreview) as Record<string, unknown>
-      } catch { /* truncated JSON — ignore */ }
-
-      switch (toolName) {
-        case 'search_project_documents': {
-          const q = typeof args['query'] === 'string' ? args['query'] : ''
-          return q ? `Searching documents for "${q}"…` : 'Searching documents…'
-        }
-        case 'delegate_to_agent': {
-          const agent = typeof args['agent_name'] === 'string' ? args['agent_name'] : ''
-          const shown = plainMetadata(agent)
-          return shown ? `Delegating to ${shown}…` : 'Delegating to specialist…'
-        }
-        case 'remember_fact':
-          return 'Saving fact to memory…'
-        default:
-          return activityForTool(toolName)
-      }
-    }
-
     try {
       // Repointed to the ORCHESTRATOR front door (not the agent directly). The
       // orchestrator decides: predefined reasoning for a known workflow, else it
@@ -1476,10 +1452,10 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                 )
               }
             } else if (evtType === 'tool_call') {
-              // Show ephemeral status inside the assistant bubble while tools run.
-              const toolName = typeof evt['tool'] === 'string' ? evt['tool'] : 'tool'
-              const argsPreview = typeof evt['args_preview'] === 'string' ? evt['args_preview'] : ''
-              const status = toolStatusLabel(toolName, argsPreview)
+              // One short, true line while a tool runs: the server's label
+              // for the kind of work (W4). The tool's name, its arguments and
+              // the model's query are never shown.
+              const status = activityLine(evt)
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
