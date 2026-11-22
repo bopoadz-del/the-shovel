@@ -696,6 +696,17 @@ def format_delay_damages_daily_line(composed: dict) -> str:
     # arrive here with basis missing. The missing-basis line below is
     # the whole-of-Works sentence.
     source = (composed.get("source_label") or "").strip()
+    if composed.get("base_from_ask"):
+        # The user's own contract figure: name it as theirs, not as the
+        # project's Accepted Contract Amount.
+        prefix = f"{cur} " if cur else ""
+        line = (
+            f"Delay damages are {prefix}{daily:,.2f} per day "
+            f"({pct:g}% of the contract amount you gave, {prefix}{base:,.2f})."
+        )
+        if source:
+            line = f"{line} Source: {source}."
+        return line
     if basis in ("milestone", "section"):
         line = (
             f"Delay damages per Milestone are "
@@ -798,10 +809,18 @@ def compose_delay_damages_daily_from_excerpts(
         return None
     if not query_asks_delay_damages_daily_amount(query):
         return None
-    found = rate_and_base_from_one_document(excerpts, query)
-    if found is None:
-        return None
-    rate, aca, _doc_id = found
+    typed_rate, typed_base = typed_delay_damages_operands(query)
+    if typed_rate is not None and typed_base is not None:
+        rate, aca = typed_rate, typed_base
+    else:
+        found = rate_and_base_from_one_document(excerpts, query)
+        if found is None:
+            return None
+        rate, aca, _doc_id = found
+        if typed_rate is not None:
+            rate = typed_rate
+        if typed_base is not None:
+            aca = typed_base
     amount, currency = aca
     out = delay_damages_daily(
         rate_percent=rate,
@@ -812,7 +831,10 @@ def compose_delay_damages_daily_from_excerpts(
         return None
     basis = delay_damages_daily_basis(query)
     out["basis"] = basis
-    if re.search(r"(?i)\bcontract\s+data\b", excerpts or ""):
+    out["base_from_ask"] = typed_base is not None
+    out["rate_from_ask"] = typed_rate is not None
+    from_documents = typed_rate is None or typed_base is None
+    if from_documents and re.search(r"(?i)\bcontract\s+data\b", excerpts or ""):
         out["source_label"] = "Contract Data"
     if basis != "whole":
         out["clause_quote"] = elected_delay_damages_clause(excerpts, query)
@@ -894,6 +916,49 @@ _DAYS_LATE_RE = re.compile(
     r"(?i)(\d+)\s*(?:calendar\s+|working\s+)?days?\s+"
     r"(?:late|of\s+delay|delay(?:ed)?|behind|overdue)",
 )
+
+# An operand the user typed in the ask itself. The user's own figure is the
+# input to compute with; the project's stored Contract Data figure answers a
+# different question ("what does MY contract give"). Read by structure only:
+# a percentage stated per day, and a figure labelled as the contract base.
+_TYPED_DAILY_RATE_RE = re.compile(
+    r"(?i)(\d+(?:\.\d+)?)\s*%\s*"
+    r"(?:of\s+(?:the\s+)?[a-z ]{0,40}?\s*)?"
+    r"(?:per|a|/)\s*(?:calendar\s+|working\s+)?day\b",
+)
+
+_TYPED_CURRENCY = r"SAR|AED|USD|EUR|GBP|QAR|BHD|KWD|OMR"
+
+_TYPED_BASE_RE = re.compile(
+    r"(?i)\b(?:accepted\s+contract\s+amount|"
+    r"contract(?:\s+(?:sum|value|price|amount))?)\b"
+    r"\s*(?:of|is|was|=|:|at)?\s*"
+    rf"(?:({_TYPED_CURRENCY})\s*)?"
+    r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{5,}(?:\.\d+)?)"
+    rf"(?:\s*({_TYPED_CURRENCY})\b)?",
+)
+
+
+def typed_delay_damages_operands(
+    query: str,
+) -> tuple[float | None, tuple[float, str] | None]:
+    """``(rate_percent, (contract_amount, currency))`` the ask itself states.
+
+    Either side is None when the user did not type it. A typed operand wins
+    over the figure retrieved from the project's documents.
+    """
+    q = query or ""
+    rate: float | None = None
+    m = _TYPED_DAILY_RATE_RE.search(q)
+    if m:
+        rate = float(m.group(1))
+    base: tuple[float, str] | None = None
+    b = _TYPED_BASE_RE.search(q)
+    if b:
+        amount = float(b.group(2).replace(",", ""))
+        if amount > 0:
+            base = (amount, (b.group(1) or b.group(3) or "").upper())
+    return rate, base
 
 _MILESTONE_LIST_RE = re.compile(
     r"(?i)milestones?\s+(\d+(?:\s*(?:,|and|&)\s*\d+)+)",
@@ -1338,12 +1403,15 @@ def compose_delay_damages_over_period_from_excerpts(
     days = parse_delay_period_days(query)
     if days is None:
         return None
+    typed_rate, typed_base = typed_delay_damages_operands(query)
     # A section or Milestone day-count uses the Contract Price that sits
     # with the elected rate. Another document's Accepted Contract Amount
     # is a different figure. When the rate's own document has no price,
     # keep the bundle parse so a rate chunk and a price chunk of one
     # contract still compose.
-    if ask_is_about_a_milestone_or_section(query):
+    if typed_base is not None:
+        aca = typed_base
+    elif ask_is_about_a_milestone_or_section(query):
         rate_hint = parse_delay_damages_rate_percent(excerpts, query)
         owned = (
             _contract_price_beside_the_rate(excerpts, rate_hint, query)
@@ -1357,7 +1425,9 @@ def compose_delay_damages_over_period_from_excerpts(
     amount, currency = aca
     milestones = parse_asked_milestones(query)
     rates: list[float] = []
-    if milestones:
+    if typed_rate is not None:
+        rates = [typed_rate] * max(1, len(milestones))
+    elif milestones:
         shared = _shared_milestone_delay_rate(excerpts)
         for n in milestones:
             rate = parse_milestone_delay_rate_percent(excerpts, n)
@@ -1379,6 +1449,8 @@ def compose_delay_damages_over_period_from_excerpts(
         "milestones": milestones,
         "contract_amount": round(amount, 2),
         "currency": (currency or "").upper(),
+        "base_from_ask": typed_base is not None,
+        "rate_from_ask": typed_rate is not None,
     }
 
 def format_delay_damages_period_line(composed: dict) -> str:
@@ -1389,6 +1461,16 @@ def format_delay_damages_period_line(composed: dict) -> str:
     rates = composed.get("rates") or []
     milestones = composed.get("milestones") or []
     rate_txt = ", ".join(f"{float(r):g}%" for r in rates) or "the stated rate"
+    if composed.get("base_from_ask"):
+        # The user's own contract figure: name it as theirs, not as the
+        # project's Accepted Contract Amount, and show the daily step.
+        prefix = f"{cur} " if cur else ""
+        daily = sum(base * (float(r) / 100.0) for r in rates)
+        return (
+            f"Delay damages for {days} days are {prefix}{amt:,.2f}: "
+            f"{rate_txt} of the contract amount you gave ({prefix}{base:,.2f}) "
+            f"is {prefix}{daily:,.2f} per day, × {days} days."
+        )
     if milestones:
         ms = " and ".join(f"Milestone {n}" for n in milestones)
         return (
