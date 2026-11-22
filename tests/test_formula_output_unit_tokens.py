@@ -130,3 +130,18 @@ def test_every_registered_output_named_with_a_unit_declares_it():
         if (why := declaration_problem(key, declared))
     ]
     assert not problems, "\n".join(problems)
+
+
+def test_every_registered_input_named_with_a_unit_declares_it():
+    # The same rule on the INPUT side: a parameter declared unitless falls back
+    # to its name suffix, and a compound name read by its tail binds the wrong
+    # unit (``slurry_l_m`` -> metres). Clean on main today; this keeps it so.
+    specs = formula_registry.all_specs()
+    assert len(specs) > 96
+    problems = [
+        f"{spec.name} (input): {why}"
+        for spec in specs
+        for key, param in spec.params.items()
+        if (why := declaration_problem(key, param.unit))
+    ]
+    assert not problems, "\n".join(problems)
