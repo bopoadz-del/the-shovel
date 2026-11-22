@@ -295,11 +295,15 @@ def heading_line_for_page(
         if named:
             return " - ".join(named)[: HEADING_RESERVE - 1]
     first = ""
-    for line in page_text.splitlines():
-        if _is_heading_line(line):
-            if running is None or not running(line):
-                return line.strip()
-            first = first or line.strip()
+    lines = page_text.splitlines()
+    for idx, line in enumerate(lines):
+        if not _is_heading_line(line):
+            continue
+        if not line.lstrip().startswith("#") and _continues_sentence(lines[idx + 1:]):
+            continue  # a wrapped line of prose, not a heading
+        if running is None or not running(line):
+            return line.strip()
+        first = first or line.strip()
     return first
 
 
@@ -322,6 +326,19 @@ def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] 
     ]
     found = running_lines(labels, len(page_texts))
     return found.holds if found.masks else None
+
+
+# A lowercase list marker ("a)", "(b)", "iv.") opens a list item, not the rest of a sentence.
+_LOWER_ENUMERATOR = re.compile(r"^\(?[a-z]{1,4}[.)]")
+
+
+def _continues_sentence(following: list[str]) -> bool:
+    """True when the next non-empty line carries on a sentence (opens on a lowercase word)."""
+    for line in following:
+        text = line.strip()
+        if text:
+            return text[0].islower() and not _LOWER_ENUMERATOR.match(text)
+    return False
 
 
 def page_heading_lines(
