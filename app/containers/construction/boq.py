@@ -319,9 +319,13 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     v = _amount(rf"advance(?:\s+payment)?(?:\s+recover\w*)?{_FIG_GAP}{_FIG_NUM}")
     if v:
         out["advance_payment"] = v
+    # The advance's own size, never its recovery rate: a "recover" word
+    # between the label and the rate (or right after the label, when the
+    # rate comes first) makes it the recovery rate, read above.
+    _not_recovery = r"(?![^0-9%]{0,30}?recover)"
     v = (
-        _percent(rf"advance(?:\s+payment)?{_FIG_GAP}{_FIG_PCT}")
-        or _percent(rf"{_FIG_PCT}\s+advance(?:\s+payment)?")
+        _percent(rf"advance(?:\s+payment)?{_not_recovery}{_FIG_GAP}{_FIG_PCT}")
+        or _percent(rf"{_FIG_PCT}\s+advance(?!\s+(?:payment\s+)?recover)")
     )
     if v is not None:
         out["advance_percent"] = v

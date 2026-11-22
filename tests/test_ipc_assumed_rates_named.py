@@ -114,7 +114,25 @@ def test_reader_keeps_the_advance_amount_beside_a_recovery_rate(ask, advance, ra
 def test_reader_never_reads_a_recovery_rate_as_the_advance_amount(ask):
     fig = _payment_figures_from_message(ask)
     assert "advance_payment" not in fig
+    assert "advance_percent" not in fig
     assert "advance_recovery_percent" in fig
+
+
+@pytest.mark.parametrize("ask, size", [
+    ("advance 12% of the contract, advance recovery 6%", 12.0),
+    ("a 7.5% advance payment, recovered at advance recovery 3%", 7.5),
+])
+def test_reader_keeps_the_advance_size_apart_from_its_recovery_rate(ask, size):
+    fig = _payment_figures_from_message(ask)
+    assert fig["advance_percent"] == pytest.approx(size)
+    assert fig["advance_recovery_percent"] != pytest.approx(size)
+
+
+@pytest.mark.parametrize("contract, gross", [(1_000_000, 200_000), (450_000, 90_000)])
+async def test_a_recovery_rate_alone_invents_no_advance_to_recover(contract, gross):
+    out = await _cert(f"Contract value {contract:,}, gross valuation {gross:,}, "
+                      "retention 5%, advance recovery 8%.")
+    assert out["deductions"]["advance_recovery"] == 0
 
 
 @pytest.mark.parametrize("ask, gross", [
