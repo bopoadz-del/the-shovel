@@ -6,6 +6,8 @@ count is asserted as a limit -- the rule reads the answer's shape.
 
 from __future__ import annotations
 
+import pytest
+
 from app.agents import answer_contract, answer_exit
 
 
@@ -19,22 +21,40 @@ def _words(text: str) -> set[str]:
 
 # ── later paragraphs leave the lead, word for word ─────────────────────────
 
-def test_later_paragraphs_move_to_details_lookup():
-    text = ("The retaining wall footing is 600 mm deep.\n\n"
-            "The drawings also show a 75 mm blinding layer under the footing.\n\n"
-            "Reinforcement laps follow the general notes.")
+@pytest.mark.parametrize("text,lead,details", [
+    ("The retaining wall footing is 600 mm deep.\n\n"
+     "The drawings also show a 75 mm blinding layer under the footing.\n\n"
+     "Reinforcement laps follow the general notes.",
+     "The retaining wall footing is 600 mm deep.",
+     "The drawings also show a 75 mm blinding layer under the footing.\n\n"
+     "Reinforcement laps follow the general notes."),
+    ("The handrail height on the ramp is 1,000 mm.\n\n"
+     "Guarding at the mezzanine edge is 1,100 mm.",
+     "The handrail height on the ramp is 1,000 mm.",
+     "Guarding at the mezzanine edge is 1,100 mm."),
+])
+def test_later_paragraphs_move_to_details_lookup(text, lead, details):
     done = _apply(text)
-    assert done.text == "The retaining wall footing is 600 mm deep."
-    assert done.details == ("The drawings also show a 75 mm blinding layer under the footing.\n\n"
-                            "Reinforcement laps follow the general notes.")
+    assert done.text == lead
+    assert done.details == details
 
 
-def test_later_paragraphs_move_to_details_not_found():
-    text = ("No document in the project states the paint colour for the stair core.\n\n"
-            "The finishes schedule covers the lobby and the corridors only.")
+@pytest.mark.parametrize("text,opening,details", [
+    ("No document in the project states the paint colour for the stair core.\n\n"
+     "The finishes schedule covers the lobby and the corridors only.",
+     "No document in the project states",
+     "The finishes schedule covers the lobby and the corridors only."),
+    ("The uploaded files do not give a warranty period for the roof membrane.\n\n"
+     "The roofing specification names the product and its thickness.\n\n"
+     "The contract conditions refer to a defects period in general terms.",
+     "The uploaded files do not give a warranty period",
+     "The roofing specification names the product and its thickness.\n\n"
+     "The contract conditions refer to a defects period in general terms."),
+])
+def test_later_paragraphs_move_to_details_not_found(text, opening, details):
     done = _apply(text)
-    assert done.text.startswith("No document in the project states")
-    assert done.details == "The finishes schedule covers the lobby and the corridors only."
+    assert done.text.startswith(opening)
+    assert done.details == details
 
 
 def test_nothing_is_deleted():
@@ -59,38 +79,73 @@ def test_one_paragraph_of_several_sentences_is_untouched():
 
 # ── a list the lead introduces stays, items cut to their first sentence ─────
 
-def test_introduced_list_stays_with_items_cut():
-    text = ("The submittals due this month are:\n\n"
-            "- Fire stopping. The sample was rejected once and is being resubmitted.\n"
-            "- Door hardware\n\n"
-            "Two further submittals are due next month.")
+@pytest.mark.parametrize("text,lead,moved", [
+    ("The submittals due this month are:\n\n"
+     "- Fire stopping. The sample was rejected once and is being resubmitted.\n"
+     "- Door hardware\n\n"
+     "Two further submittals are due next month.",
+     "The submittals due this month are:\n\n"
+     "- Fire stopping.\n"
+     "- Door hardware",
+     ("- Fire stopping. The sample was rejected once and is being resubmitted.",
+      "Two further submittals are due next month.")),
+    ("The open RFIs on the facade are:\n\n"
+     "- Bracket spacing\n"
+     "- Sealant colour. The architect asked for a second sample panel.\n\n"
+     "The structural RFIs are all closed.",
+     "The open RFIs on the facade are:\n\n"
+     "- Bracket spacing\n"
+     "- Sealant colour.",
+     ("- Sealant colour. The architect asked for a second sample panel.",
+      "The structural RFIs are all closed.")),
+])
+def test_introduced_list_stays_with_items_cut(text, lead, moved):
     done = _apply(text)
-    assert done.text == ("The submittals due this month are:\n\n"
-                         "- Fire stopping.\n"
-                         "- Door hardware")
-    assert "- Fire stopping. The sample was rejected once and is being resubmitted." in done.details
-    assert "Two further submittals are due next month." in done.details
+    assert done.text == lead
+    for piece in moved:
+        assert piece in done.details
 
 
-def test_list_not_introduced_by_the_lead_moves():
-    text = ("The pump room is on basement level 1.\n\n"
-            "- Access is from the north stair.\n"
-            "- The door is 1.2 m wide.")
+@pytest.mark.parametrize("text,lead,details_start", [
+    ("The pump room is on basement level 1.\n\n"
+     "- Access is from the north stair.\n"
+     "- The door is 1.2 m wide.",
+     "The pump room is on basement level 1.",
+     "- Access is from the north stair."),
+    ("The generator sits on the roof plant deck.\n\n"
+     "1. Fuel is piped from the basement tank.\n"
+     "2. The flue rises 3 m above the deck.",
+     "The generator sits on the roof plant deck.",
+     "1. Fuel is piped from the basement tank."),
+])
+def test_list_not_introduced_by_the_lead_moves(text, lead, details_start):
     done = _apply(text)
-    assert done.text == "The pump room is on basement level 1."
-    assert done.details.startswith("- Access is from the north stair.")
+    assert done.text == lead
+    assert done.details.startswith(details_start)
 
 
-def test_opening_heading_keeps_its_whole_section():
-    text = ("## Answer\n\n"
-            "The cover to the raft is 75 mm.\n\n"
-            "The piling cap cover is also stated as 75 mm in the same note.\n\n"
-            "## Background\n\n"
-            "The structural notes were revised twice.")
+@pytest.mark.parametrize("text,lead,details", [
+    ("## Answer\n\n"
+     "The cover to the raft is 75 mm.\n\n"
+     "The piling cap cover is also stated as 75 mm in the same note.\n\n"
+     "## Background\n\n"
+     "The structural notes were revised twice.",
+     "## Answer\n\nThe cover to the raft is 75 mm.\n\n"
+     "The piling cap cover is also stated as 75 mm in the same note.",
+     "## Background\n\nThe structural notes were revised twice."),
+    ("### Fire rating\n\n"
+     "The shaft walls are rated 120 minutes.\n\n"
+     "### Inspection\n\n"
+     "The rating comes from the fire strategy report.\n\n"
+     "Doors into the shaft are rated 60 minutes.",
+     "### Fire rating\n\nThe shaft walls are rated 120 minutes.",
+     "### Inspection\n\nThe rating comes from the fire strategy report.\n\n"
+     "Doors into the shaft are rated 60 minutes."),
+])
+def test_opening_heading_keeps_its_whole_section(text, lead, details):
     done = _apply(text)
-    assert done.text == ("## Answer\n\nThe cover to the raft is 75 mm.\n\n"
-                         "The piling cap cover is also stated as 75 mm in the same note.")
-    assert done.details == "## Background\n\nThe structural notes were revised twice."
+    assert done.text == lead
+    assert done.details == details
 
 
 def test_opening_heading_with_one_section_is_untouched():
@@ -143,18 +198,28 @@ def test_fenced_block_is_not_split():
     assert done.details is None
 
 
-def test_fence_absent_splits():
-    text = "The schedule export reads A100 first.\n\nThat is the first activity."
+@pytest.mark.parametrize("text,details", [
+    ("The schedule export reads A100 first.\n\nThat is the first activity.",
+     "That is the first activity."),
+    ("The log lists RFI-014 as the latest entry.\n\nIt was raised by the facade trade.\n\nNo reply is recorded.",
+     "It was raised by the facade trade.\n\nNo reply is recorded."),
+])
+def test_fence_absent_splits(text, details):
     done = _apply(text)
-    assert done.details == "That is the first activity."
+    assert done.details == details
 
 
 # ── the exit carries details beside the answer ──────────────────────────────
 
-def test_exit_result_carries_details():
-    out = answer_exit.check_result({"answer": "The gate is grey.\n\nThe fence is green.", "sources": []})
-    assert out["answer"] == "The gate is grey."
-    assert out["details"] == "The fence is green."
+@pytest.mark.parametrize("answer,lead,details", [
+    ("The gate is grey.\n\nThe fence is green.", "The gate is grey.", "The fence is green."),
+    ("Level 3 has 42 parking bays.\n\nLevel 2 has 38.\n\nThe basement has none.",
+     "Level 3 has 42 parking bays.", "Level 2 has 38.\n\nThe basement has none."),
+])
+def test_exit_result_carries_details(answer, lead, details):
+    out = answer_exit.check_result({"answer": answer, "sources": []})
+    assert out["answer"] == lead
+    assert out["details"] == details
 
 
 def test_exit_result_without_details_has_no_field():
