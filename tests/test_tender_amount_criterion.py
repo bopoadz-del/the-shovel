@@ -166,3 +166,14 @@ def test_calculator_entry_ranks_on_derived_scores(params, winner):
     result = envelope.get("result", envelope)
     assert result["recommended"]["name"] == winner
     assert result["weights_read_as_percent"] is True
+
+
+@pytest.mark.parametrize(
+    "tenderers, weights", [
+        ([], {"price": 70, "quality": 30}),
+        (None, None),
+    ])
+def test_no_tenderers_is_named_as_such(tenderers, weights):
+    """No tenderers is its own error, not a missing-score question."""
+    result = evaluate_tender(tenderers, weights)
+    assert result == {"error": "evaluate_tender requires at least one tenderer."}
