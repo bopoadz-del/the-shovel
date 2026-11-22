@@ -81,10 +81,10 @@ def test_a_whole_number_prints_without_a_decimal_tail(tmp_path, stored, stated):
 @pytest.mark.parametrize(
     "when, stated",
     [
-        (datetime.datetime(2025, 1, 21), "2025-01-21"),
-        (datetime.datetime(2024, 12, 3), "2024-12-03"),
-        (datetime.datetime(2025, 1, 21, 14, 30), "2025-01-21 14:30:00"),
-        (datetime.datetime(2024, 12, 3, 8, 5), "2024-12-03 08:05:00"),
+        (datetime.datetime.fromisoformat("2025-01-21"), "2025-01-21"),
+        (datetime.datetime.fromisoformat("2024-12-03"), "2024-12-03"),
+        (datetime.datetime.fromisoformat("2025-01-21T14:30"), "2025-01-21 14:30:00"),
+        (datetime.datetime.fromisoformat("2024-12-03T08:05"), "2024-12-03 08:05:00"),
     ],
 )
 def test_a_date_cell_is_its_date_unless_it_states_a_time(tmp_path, when, stated):

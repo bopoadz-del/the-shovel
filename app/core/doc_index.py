@@ -3178,11 +3178,12 @@ def _xlsx_cell_text(value: Any) -> str:
     as ``str``, trimmed.
     """
     import datetime as _dt
+    import math
 
     if value is None:
         return ""
     if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
+        if not math.isfinite(value):
             return str(value)
         rounded = float(f"{value:.{_XLSX_SIGNIFICANT_DIGITS}g}")
         if rounded.is_integer() and abs(rounded) < 10 ** _XLSX_SIGNIFICANT_DIGITS:
