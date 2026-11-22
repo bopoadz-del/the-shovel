@@ -51,3 +51,9 @@ def test_title_with_a_word_beside_a_code_is_still_a_heading(line):
 def test_page_is_filed_under_the_subject_not_the_code(code, subject):
     page = f"{code}\n{subject}\nThe contractor shall submit the method first."
     assert heading_line_for_page(page) == subject
+
+
+@pytest.mark.parametrize("line", ["DRAWING NO: ()", "REVISION: [ ]"])
+def test_label_with_only_empty_marks_after_it_is_still_a_heading(line):
+    # The value is only brackets: no token is left, so it names no code.
+    assert _is_heading_line(line) is True
