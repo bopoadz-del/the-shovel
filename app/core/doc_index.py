@@ -3292,13 +3292,6 @@ def _spreadsheet_row_chunks(
         header_cells = list(rows[hdr_idx])
         while header_cells and header_cells[-1] == "":
             header_cells.pop()
-        # Columns the chunk already prints under a fixed label (Item and the
-        # figure fields); any other headed column is carried by its own name.
-        emitted_idxs = {
-            colmap[f]
-            for f in ("description", "quantity", "unit", "rate", "total")
-            if f in colmap
-        }
         band = _spreadsheet_heading_above(rows[:hdr_idx])
         # The sheet that stated `band`. Inheritance is refused across sheets
         # by `_spreadsheet_band_for`, so a later sheet can never pick up this
@@ -3352,7 +3345,13 @@ def _spreadsheet_row_chunks(
             # description and figure columns; an item reference, a bill
             # column or a remark the sheet prints beside them is still part
             # of the row, and dropping it leaves the row unreachable by the
-            # reference the document gives it.
+            # reference the document gives it. Columns already printed under
+            # a fixed label (Item and the figure fields) are not repeated.
+            emitted_idxs = {
+                colmap[f]
+                for f in ("description", "quantity", "unit", "rate", "total")
+                if f in colmap
+            }
             for idx in range(len(cells)):
                 if idx in emitted_idxs or cells[idx] == "":
                     continue
