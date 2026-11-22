@@ -305,6 +305,7 @@ def _build_messages(
         if cm_fragment:
             msgs.append({"role": "system", "content": cm_fragment})
 
+    earlier_asks: list[str] = []
     for turn in (history or [])[-MAX_HISTORY_TURNS:]:
         role = (turn.get("role") or "user").lower()
         if role not in ("user", "assistant"):
@@ -313,5 +314,15 @@ def _build_messages(
         if not content:
             continue
         msgs.append({"role": role, "content": content})
+        if role == "user":
+            earlier_asks.append(content)
+    # A follow-up that only changes figures the user stated earlier gets the
+    # question it amends and the changed inputs, so it is worked again rather
+    # than answered from the earlier (now out of date) answer in the thread.
+    from app.agents.amended_inputs import amendment_note
+    from app.agents.runtime import _unwrap_rag_folded_operator_text as _operator
+    note = amendment_note(_operator(user_message), [_operator(a) for a in earlier_asks])
+    if note:
+        msgs.append({"role": "system", "content": note})
     msgs.append({"role": "user", "content": user_message})
     return msgs
