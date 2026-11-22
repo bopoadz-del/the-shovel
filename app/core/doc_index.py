@@ -3289,6 +3289,11 @@ def _spreadsheet_row_chunks(
         figure_idxs = [
             colmap[f] for f in ("quantity", "rate", "total", "unit") if f in colmap
         ]
+        # The columns that hold a measured figure. A unit is a label, not a
+        # figure, so a unit cell alone never makes a row a total line.
+        total_line_idxs = [
+            colmap[f] for f in ("quantity", "rate", "total") if f in colmap
+        ]
         header_cells = list(rows[hdr_idx])
         while header_cells and header_cells[-1] == "":
             header_cells.pop()
@@ -3315,6 +3320,16 @@ def _spreadsheet_row_chunks(
             has_figure = any(
                 i < len(cells) and cells[i] != "" for i in figure_idxs
             )
+            if not desc and any(
+                i < len(cells) and cells[i] != "" for i in total_line_idxs
+            ):
+                # A row that carries a quantity, rate or amount but no item
+                # description is a total line (carried forward, brought
+                # forward, to collection): it sums the rows above and scopes
+                # nothing below. Taking it as the band would replace the bill
+                # heading with its caption and put a running total into
+                # every following row's locator.
+                continue
             if not desc or not has_figure:
                 # A bill/section/subtotal marker (label with no measured item
                 # description, or a description-only row). It becomes inherited
