@@ -66,6 +66,28 @@ def test_previous_amount_word_order_both_ways_same_value(figure, expected):
     assert before.get("previous_certified") == after.get("previous_certified") == expected
 
 
+class _Message:
+    """A message object whose truth and text are set apart, to see the guard."""
+
+    def __init__(self, text: str, present: bool):
+        self._text, self._present = text, present
+
+    def __bool__(self) -> bool:
+        return self._present
+
+    def __str__(self) -> str:
+        return self._text
+
+
+@pytest.mark.parametrize("present, expected", [
+    (True, {"previous_certified": 330_000.0}),   # a message is read
+    (False, {}),                                 # no message: nothing is read
+])
+def test_an_absent_message_yields_no_figures(present, expected):
+    message = _Message("previously certified 330,000", present)
+    assert _payment_figures_from_message(message) == expected
+
+
 # --- the read amount reaches the tool args; an explicit arg still wins --------
 
 @pytest.mark.parametrize("existing, expected", [
