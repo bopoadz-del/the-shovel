@@ -255,9 +255,22 @@ def _is_date_line(text: str) -> bool:
     return months >= 1 and numbers >= 1 and months + numbers == len(words)
 
 
+# The cell separator the table extractors write (" | "). Only the pipe:
+# ";" and tabs, which chunk_noise.cells also splits on, occur in headings.
+_TABLE_CELL_SPLIT = re.compile(r"\s*\|\s*")
+
+
+def _is_table_row(text: str) -> bool:
+    """Two or more non-blank cells split by the table cell separator."""
+    return sum(1 for cell in _TABLE_CELL_SPLIT.split(text) if cell) >= 2
+
+
 def _is_heading_line(line: str) -> bool:
     text = line.strip().lstrip("#").strip()
     if not text or len(text) >= HEADING_RESERVE or text[-1] in ".,;":
+        return False
+    # A table row (a header or a numbered item row) names cells, not a section.
+    if _is_table_row(text):
         return False
     if len(text.split()) > _MAX_HEADING_WORDS:
         return False
