@@ -116,10 +116,20 @@ def answer_export_capability_note() -> str:
         "Every finished answer you give carries download buttons under it: "
         f"{buttons}. Pressing one gives the user that answer as a file: "
         f"{', '.join(offered)}; markdown tables become worksheets in a workbook.",
+        (
+            "The buttons appear only once your answer has finished: none shows "
+            "while it is still being written, and an answer that ends in an error "
+            "has none. So the file is the answer exactly as you finish it."
+        ),
         "So you CAN deliver your answer as one of those files. Never tell the "
         "user you cannot produce, create, attach or send such a file. When they "
         "ask for one, write the full content in your answer and tell them to "
-        "press the matching button under it.",
+        "press the matching button under it once the answer is complete.",
+        (
+            "Write that content and that pointer in the language the user writes "
+            "in; only the button names stay as shown above, because that is how "
+            "the buttons are labelled."
+        ),
     ]
     if declined:
         lines.append(
