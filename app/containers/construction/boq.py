@@ -241,11 +241,11 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     t = str(text).lower()
 
     def _amount(pattern: str) -> Optional[float]:
-        m = re.search(pattern, t)
+        # A % right after the number means it is a rate, not an amount: the
+        # label's amount is the next figure that is not a rate, if any.
+        m = next((hit for hit in re.finditer(pattern, t)
+                  if not t[hit.end(1):].lstrip().startswith(("%", "percent"))), None)
         if not m:
-            return None
-        # A % right after the number means it is a rate, not an amount.
-        if t[m.end(1):].lstrip().startswith(("%", "percent")):
             return None
         base = _parse_money_str(m.group(1))
         if base is None:
@@ -314,10 +314,11 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     )
     if v is not None:
         out["advance_recovery_percent"] = v
-    else:
-        v = _amount(rf"advance(?:\s+payment)?(?:\s+recover\w*)?{_FIG_GAP}{_FIG_NUM}")
-        if v:
-            out["advance_payment"] = v
+    # The advance amount is read whether or not a recovery rate was stated:
+    # an ask giving both must not lose the advance (recovery would be 0).
+    v = _amount(rf"advance(?:\s+payment)?(?:\s+recover\w*)?{_FIG_GAP}{_FIG_NUM}")
+    if v:
+        out["advance_payment"] = v
     v = (
         _percent(rf"advance(?:\s+payment)?{_FIG_GAP}{_FIG_PCT}")
         or _percent(rf"{_FIG_PCT}\s+advance(?:\s+payment)?")
@@ -708,6 +709,15 @@ class ConstructionBoqMixin:
             advance_payment = round(contract_value * (advance_pct / 100.0), 2)
         advance_recovery_pct = float(p.get("advance_recovery_percent",
                                            fig.get("advance_recovery_percent", 20))) / 100.0
+        # A rate the certificate took from its own default, not from the ask
+        # or the args, is named -- never silent. Recovery counts only when an
+        # advance is being recovered; with none it moves no figure.
+        assumed = []
+        if stated_retention is None and "retention_percent" not in fig:
+            assumed.append(("retention_percent", "retention", retention_pct))
+        if (advance_payment > 0 and "advance_recovery_percent" not in p
+                and "advance_recovery_percent" not in fig):
+            assumed.append(("advance_recovery_percent", "advance recovery", advance_recovery_pct))
         payment_period = p.get("payment_period", "Current Period")
         contractor = p.get("contractor_name", p.get("contractor", data.get("contractor_name", "Contractor")))
 
@@ -769,10 +779,19 @@ class ConstructionBoqMixin:
         )
         cumulative_certified = round(previous_certified + net_this_period, 2)
         remaining_balance = round(contract_value - cumulative_certified, 2)
+        defaults_used = [
+            {"parameter": key, "label": label, "value": round(rate * 100, 4), "unit": "%"}
+            for key, label, rate in assumed
+        ]
+        assumed_line = (
+            " Assumed, not given: "
+            + "; ".join(f"{row['label']} {row['value']:g}%" for row in defaults_used) + "."
+        ) if defaults_used else ""
 
         return {
             "status": "success",
             "action": "payment_certificate",
+            "defaults_used": defaults_used,
             "certificate": {
                 "period": payment_period,
                 "contractor": contractor,
@@ -802,6 +821,7 @@ class ConstructionBoqMixin:
             "certificate_summary": (
                 f"IPC – {payment_period}: {round(work_done_pct * 100, 1)}% complete. "
                 f"Gross: {gross_valuation:,.2f}. Net due: {net_this_period:,.2f}."
+                + assumed_line
             ),
         }
     async def procurement_list_generator(self, input_data: Any, params: Dict) -> Dict:
