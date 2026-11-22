@@ -3213,27 +3213,37 @@ def _spreadsheet_header_row(
     """
     limit = min(60, len(rows))
     for i in range(limit):
-        cells = rows[i]
-        resolved = block._resolve_columns(cells)
-        if "description" not in resolved or len(resolved) < 2:
-            continue
-        colmap: dict[str, int] = {}
-        for field, col in resolved.items():
-            try:
-                colmap[field] = cells.index(col)
-            except ValueError:
-                continue
-        if "description" not in colmap:
-            continue
-        # A header names each column once, in a cell of its own: the fields
-        # resolve to distinct column indices. One cell that matches several
-        # aliases at once is a sentence that happens to contain the words
-        # (a banner row, a note line), never a row of column names, and
-        # reading it as the header shifts every field onto that one column.
-        if len(set(colmap.values())) < 2:
-            continue
-        return i, colmap
+        colmap = _spreadsheet_header_map(rows[i], block)
+        if colmap is not None:
+            return i, colmap
     return None
+
+
+def _spreadsheet_header_map(cells: list[str], block) -> dict[str, int] | None:
+    """``field -> column index`` when ``cells`` is a column-header row, else None.
+
+    The one header test, shared by the first header of a sheet and every later
+    header row in it, so both read the same thing as a header.
+    """
+    resolved = block._resolve_columns(cells)
+    if "description" not in resolved or len(resolved) < 2:
+        return None
+    colmap: dict[str, int] = {}
+    for field, col in resolved.items():
+        try:
+            colmap[field] = cells.index(col)
+        except ValueError:
+            continue
+    if "description" not in colmap:
+        return None
+    # A header names each column once, in a cell of its own: the fields
+    # resolve to distinct column indices. One cell that matches several
+    # aliases at once is a sentence that happens to contain the words
+    # (a banner row, a note line), never a row of column names, and
+    # reading it as the header shifts every field onto that one column.
+    if len(set(colmap.values())) < 2:
+        return None
+    return colmap
 
 
 def _spreadsheet_heading_above(rows: list[list[str]]) -> str:
@@ -3307,6 +3317,23 @@ def _spreadsheet_row_chunks(
             # it) is structure, not a measured row.
             if cells == header_cells:
                 continue
+            # A later column-header row that is not a verbatim reprint: the
+            # next bill re-heads its columns in other case, with a unit suffix
+            # (`Rate (AED)`), or in another column order. It states no figure
+            # and the header test reads it as column names, so it is structure,
+            # not a measured row, and the rows under it are read through its
+            # own columns rather than the first header's.
+            if chunk_noise.is_label_row(" | ".join(cells)):
+                remap = _spreadsheet_header_map(cells, block)
+                if remap is not None:
+                    colmap = remap
+                    desc_idx = colmap.get("description")
+                    figure_idxs = [
+                        colmap[f] for f in ("quantity", "rate", "total", "unit")
+                        if f in colmap
+                    ]
+                    header_cells = cells
+                    continue
             # A row whose every cell is blank or zero (a template's formula
             # rows) measures nothing (RQ-1).
             if chunk_noise.is_empty_row(" | ".join(cells)):
