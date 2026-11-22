@@ -4,7 +4,9 @@ Owner order (BUILD 0, 15 Nov). Every rule is structural; none names a
 question, a formula, a project or a document.
 
 1. ANSWER FIRST. On a turn that computed, the first line carries a figure.
-   Narration of what was searched never opens an answer.
+   Narration of what was searched never opens an answer, on any turn: a
+   narration lead that is process only goes (one that reports an absence
+   is the refusal itself and stays, rule 5).
 2. LENGTH FOLLOWS THE QUESTION. Offers of further help, closing summaries,
    restatements of the question and "notes" blocks are padding and go. A
    note survives only when it is an assumption the result depends on: a line
@@ -259,7 +261,7 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
     out: list[str] = []
     for line in body.split("\n"):
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
-        sentences = _SENTENCE_RE.findall(line[len(lead):])
+        sentences = _sentences(line[len(lead):])
         kept = []
         for sent in sentences:
             vals = extract(sent)
@@ -351,9 +353,62 @@ _LEAD_IN_RE = re.compile(
     r"^(?:according\s+to|based\s+on|from|per|in)\s+(?:the\s+)?[^,]*?(?:" + "|".join(_MACHINE_TERMS) + r")[^,]*,\s*",
     re.IGNORECASE,
 )
-#: A sentence ends at ``.``/``!``/``?`` followed by space or the end; a point
-#: inside a figure (``12.5``) or a name (``p.12``) does not end it.
-_SENTENCE_RE = re.compile(r"(?:[^.!?\n]|[.!?](?![.!?]*(?:\s|$)))+(?:[.!?]+(?=\s|$)|$)")
+_OPEN_MARKS = {"(": ")", "[": "]", "“": "”"}
+_CLOSE_MARKS = {v: k for k, v in _OPEN_MARKS.items()}
+
+
+def _paired(text: str) -> set[str]:
+    """The opening marks whose pairs close in ``text`` (a straight ``"``
+    pairs with itself). A mark left open is not trusted to hold a sentence
+    together: an unpaired mark is ordinary punctuation."""
+    out = {o for o, c in _OPEN_MARKS.items() if text.count(o) == text.count(c)}
+    if text.count('"') % 2 == 0:
+        out.add('"')
+    return out
+
+
+def _sentences(text: str) -> list[str]:
+    """The sentences of one line. A sentence ends at ``.``/``!``/``?``
+    followed by space or the end; a point inside a figure (``12.5``) or a name
+    (``p.12``) does not end it, and neither does one inside a paired bracket
+    or quotation -- ``(e.g. "A", "B")`` is part of the sentence around it, so
+    no rule that keeps or drops whole sentences can leave half of a quoted or
+    bracketed clause standing as a sentence of its own."""
+    paired = _paired(text)
+    out: list[str] = []
+    stack: list[str] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"' and '"' in paired:
+            if stack and stack[-1] == '"':
+                stack.pop()
+            else:
+                stack.append('"')
+        elif ch in _OPEN_MARKS and ch in paired:
+            stack.append(ch)
+        elif ch in _CLOSE_MARKS and _CLOSE_MARKS[ch] in paired and stack and stack[-1] == _CLOSE_MARKS[ch]:
+            stack.pop()
+        # A stop ends the sentence; so does a closing mark right after one
+        # (``"... stop." Then``).
+        if ch in ".!?" or (i and text[i - 1] in ".!?" and (ch == '"' or ch in _CLOSE_MARKS)):
+            j = i + 1
+            while j < n and text[j] in ".!?":
+                j += 1
+            if not stack and (j == n or text[j].isspace()):
+                if text[start:j].strip():
+                    out.append(text[start:j])
+                start = j
+            i = j
+            continue
+        i += 1
+    if text[start:].strip():
+        out.append(text[start:])
+    return out
+
+
 _FIGURE_RE = re.compile(r"\d")
 _MARKER_RE = re.compile(r"\[\d+\]")
 #: A figure with the unit word that follows it: ``45 kN·m``, ``12.6 m³``, ``10%``.
@@ -402,7 +457,7 @@ def _strip_machinery(text: str) -> str:
             continue
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
         body = line[len(lead):]
-        kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _SENTENCE_RE.findall(body)) if k]
+        kept = [k for k in (_strip_machinery_sentence(s.strip()) for s in _sentences(body)) if k]
         new = lead + " ".join(kept)
         if _figures(_MACHINE_RE.sub("", line)) - _figures(new):
             # Removing the machinery would lose a figure: the line stays as written.
@@ -476,7 +531,7 @@ def _drop_padding(text: str, computed: bool = True) -> str:
             continue
         if in_notes and not _changes_result(line, working, computed):
             continue
-        sentences = [s.strip() for s in _SENTENCE_RE.findall(bare)] or [bare]
+        sentences = [s.strip() for s in _sentences(bare)] or [bare]
         kept = [s for s in sentences if not (_OFFER_RE.match(s) or _RESTATE_RE.match(s))]
         if not kept:
             continue
@@ -543,7 +598,7 @@ def _cut_item(line: str) -> tuple[str, str | None]:
     m = _BULLET_RE.match(line)
     if not m:
         return line, None
-    sentences = [x.strip() for x in _SENTENCE_RE.findall(line[m.end():]) if x.strip()]
+    sentences = [x.strip() for x in _sentences(line[m.end():]) if x.strip()]
     if len(sentences) < 2:
         return line, None
     first = sentences[0]
@@ -594,6 +649,47 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
     return "\n\n".join(lead), "\n\n".join(details)
 
 
+#: A sentence that opens on the writer's own search: "I searched ...",
+#: "I looked through ...", "I reviewed ...". It tells the reader what was
+#: done, not what is so.
+_NARRATION_LEAD_RE = re.compile(
+    r"^(?:\*\*)?I\s+(?:searched|looked(?:\s+(?:through|for|in|at|over))?|checked|reviewed|went\s+through|"
+    r"scanned|queried)\b",
+    re.IGNORECASE,
+)
+
+
+def _narration_first(text: str) -> str:
+    """Narration of the search never opens an answer, on any kind of turn.
+
+    The first sentence of the first line is read. When it narrates the
+    writer's search, states no figure and reports nothing absent, it is
+    process only and goes, so the sentence after it opens the answer.
+
+    It stays when it states a figure (it is the answer already), when it
+    reports something absent (that is the refusal itself, rule 5), when it
+    introduces what follows (ends in ``:``), or when it is the whole
+    answer."""
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    sentences = _sentences(lines[first].strip())
+    if not sentences:
+        return text
+    lead = sentences[0].strip()
+    if (not _NARRATION_LEAD_RE.match(lead) or _FIGURE_RE.search(_MARKER_RE.sub("", lead))
+            or _NEGATIVE_RE.search(lead) or lead.rstrip("*_ ").endswith(":")):
+        return text
+    rest = " ".join(s.strip() for s in sentences[1:]).strip()
+    if rest:
+        lines[first] = rest
+        return "\n".join(lines)
+    if any(ln.strip() for ln in lines[first + 1:]):
+        return "\n".join(lines[:first] + lines[first + 1:])
+    return text
+
+
 def _tidy(text: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -638,6 +734,7 @@ def apply(
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
             body = _answer_first(body, computed)
+            body = _narration_first(body)
         body = _tidy(body)
         details: str | None = None
         if not asking and not computed:
