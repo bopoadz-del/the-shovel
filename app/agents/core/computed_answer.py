@@ -45,7 +45,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "asked": "Asked",
         "no_figure": "the tool returned no figure",
         "failed": "the tool could not complete the request",
-        "several": "{n} computed results in this turn, all shown below.",
+        "several": "{n} computed results in this turn, all shown above.",
         "sep": ", ",
         "list_sep": "; ",
         "quantity": "quantity",
@@ -71,7 +71,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "asked": "المطلوب",
         "no_figure": "لم تُرجع الأداة أي رقم",
         "failed": "تعذّر على الأداة إتمام الطلب",
-        "several": "{n} نتائج محسوبة في هذا الدور، وجميعها معروضة أدناه.",
+        "several": "{n} نتائج محسوبة في هذا الدور، وجميعها معروضة أعلاه.",
         "sep": "، ",
         "list_sep": "؛ ",
         "quantity": "الكمية",
@@ -364,12 +364,27 @@ def heading_for(display_name: str, language: str) -> str:
 
 
 def join_calls(rendered: Iterable[str], language: str) -> str:
-    """Every computed call of the turn; with more than one, a first line says
-    how many there are, so none reads as the whole answer by omission."""
+    """Every computed call of the turn; with more than one, a line after them
+    says how many there are, so none reads as the whole answer by omission.
+    The count is not an answer, so it never opens one: the first call does."""
     parts = [r for r in rendered if r]
     if len(parts) > 1:
-        parts.insert(0, labels_for(language)["several"].format(n=len(parts)))
+        parts.append(labels_for(language)["several"].format(n=len(parts)))
     return "\n\n".join(parts)
+
+
+def _opening_line(heading: str, asked_line: str, body: Sequence[str]) -> Tuple[str, List[str]]:
+    """A result block's first line and the lines after it.
+
+    A heading says which tool spoke, not what it found, so it never stands
+    on a line of its own above a figure: the block's first stated line (a
+    figure; ``_body_lines`` puts those first) shares the heading's line,
+    after what was asked when that is shown. Later lines follow as they
+    were. With no stated line the heading is the line, as before."""
+    head = f"{heading} ({asked_line})" if asked_line else heading
+    if body and body[0].startswith("- "):
+        return f"{head}: {body[0][2:]}", list(body[1:])
+    return f"{head}:", list(body)
 
 
 _TOKEN_RE = re.compile(r"\w+(?:[.,]\w+)*")
@@ -490,13 +505,13 @@ def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str
         per_tool[c.tool] = per_tool.get(c.tool, 0) + 1
     blocks: List[str] = []
     for c, body in shown:
-        head = [f"{c.heading}:"]
         asked_line = _asked_line(c.asked, lab, question) if per_tool[c.tool] > 1 else ""
-        if asked_line:
-            head.append(f"- {asked_line}")
-        blocks.append("\n".join(head + body))
+        first, rest = _opening_line(c.heading, asked_line, body)
+        blocks.append("\n".join([first] + rest))
     if len(blocks) > 1:
-        blocks.insert(0, lab["several"].format(n=len(blocks)))
+        # After the results, never above them: a count of results is not
+        # the answer, and an answer's first line is.
+        blocks.append(lab["several"].format(n=len(blocks)))
     zero_parts: List[str] = []
     for z in zeros:
         if any(covers(lead, z) for lead in leads):

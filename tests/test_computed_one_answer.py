@@ -94,7 +94,9 @@ def test_two_different_results_are_both_shown_labelled_by_what_was_asked():
     question = "kerb total, and the pvc duct total?"
     for first, second in (((a_args, a), (b_args, b)), ((b_args, b), (a_args, a))):
         for out in _answers(_turn(question, first, second)):
-            assert out.startswith(EN["several"].format(n=2)), out
+            assert out.rstrip().endswith(EN["several"].format(n=2)), out
+            first = out.splitlines()[0]
+            assert "**" in first and ("kerb" in first or "pvc" in first), out
             assert a_fig in out and b_fig in out
             # A string argument the user typed is echoed; a list argument is
             # not (pinned in test_computed_answer_parts), and that result is
@@ -345,7 +347,8 @@ def test_stream_the_same_result_twice_is_shown_once(monkeypatch, a, b, rows):
 @pytest.mark.parametrize("a,b,rows", STREAM_BILLS)
 def test_stream_two_different_results_both_shown_in_call_order(monkeypatch, a, b, rows):
     out = _stream(monkeypatch, rows, [a, b], [True, True])
-    assert out.startswith(EN["several"].format(n=2)), out
+    assert out.index(_count(rows, b)) < out.index(EN["several"].format(n=2)), out
+    assert _count(rows, a) in out.splitlines()[0], out
     assert (out.index(f"{EN['asked']}: {a}") < out.index(_count(rows, a))
             < out.index(f"{EN['asked']}: {b}") < out.index(_count(rows, b))), out
 
