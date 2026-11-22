@@ -20,7 +20,15 @@ question, a formula, a project or a document.
    entry (document, page or section, passage, tier) that travels beside the
    answer. The ``N of M project documents indexed`` footer leaves the text
    and travels as structured ``coverage``.
-5. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
+5. THE LEAD IS THE ANSWER; THE REST IS DETAIL. On a turn that did not
+   compute, the text the user reads first is the opening paragraph (a
+   heading carries on into the paragraph under it) with the list it
+   introduces, each item cut to its first sentence. Every later paragraph,
+   and each cut item word for word, leaves the text and travels as
+   structured ``details`` beside the answer. The budget is the answer's own
+   shape, never a word count: nothing is deleted, and an answer that is one
+   paragraph is untouched.
+6. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
    a refusal into an answer: a tier is copied from the turn's own Sources row
    or left ``None``; a refusal (an answer with no figure) keeps every sentence
    that is not machinery or padding.
@@ -52,6 +60,8 @@ class Contracted:
     #: One entry per conflict between documents in the evidence (C2-C4):
     #: ``{"values": [{"value", "document", "marker"}], "governs", "basis_document"}``.
     conflicts: list[dict[str, Any]] = field(default_factory=list)
+    #: Rule 5: the supporting text that left the lead, word for word, or None.
+    details: str | None = None
 
 
 # ── Rule 4: citations and the coverage footer ───────────────────────────────
@@ -501,6 +511,81 @@ def _answer_first(text: str, computed: bool) -> str:
     return "\n".join([head] + lines)
 
 
+# ── Rule 5: the lead and the details ────────────────────────────────────────
+
+_PARA_SPLIT_RE = re.compile(r"\n[ \t]*\n")
+_HEADING_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+\S.*|\*\*[^*\n]+\*\*:?[ \t]*)$")
+_TABLE_RE = re.compile(r"^[ \t]*\|")
+_FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~)", re.MULTILINE)
+
+
+def _nonblank(par: str) -> list[str]:
+    return [ln for ln in par.split("\n") if ln.strip()]
+
+
+def _is_list(par: str) -> bool:
+    """A paragraph that is a list or a table: its first line is an item or a
+    table row and every other line is one too or continues one (indented)."""
+    lines = _nonblank(par)
+    if not lines or not (_BULLET_RE.match(lines[0]) or _TABLE_RE.match(lines[0])):
+        return False
+    return all(_BULLET_RE.match(ln) or _TABLE_RE.match(ln) or ln[:1] in (" ", "\t") for ln in lines)
+
+
+def _introduces_list(par: str) -> bool:
+    last = _nonblank(par)[-1].rstrip()
+    return last.endswith(":") or bool(_HEADING_RE.match(last))
+
+
+def _cut_item(line: str) -> tuple[str, str | None]:
+    """A list item cut to its first sentence, and the item word for word when
+    it was cut (else None). Every marker the item carried stays on it."""
+    m = _BULLET_RE.match(line)
+    if not m:
+        return line, None
+    sentences = [x.strip() for x in _SENTENCE_RE.findall(line[m.end():]) if x.strip()]
+    if len(sentences) < 2:
+        return line, None
+    first = sentences[0]
+    rest = "".join(mk for mk in dict.fromkeys(_MARKER_RE.findall(" ".join(sentences[1:]))) if mk not in first)
+    return line[: m.end()] + first + (" " + rest if rest else ""), line.strip()
+
+
+def _lead_and_details(body: str) -> tuple[str, str | None]:
+    """The lead (opening paragraph, headings carrying on into the paragraph
+    under them, plus the list it introduces with items cut to their first
+    sentence) and the details (each cut item and every later paragraph, word
+    for word), or ``(body, None)`` when nothing would move. A body carrying a
+    fenced block is left whole."""
+    if _FENCE_RE.search(body):
+        return body, None
+    pars = [p for p in _PARA_SPLIT_RE.split(body) if p.strip()]
+    if not pars:
+        return body, None
+    i = 1
+    while i < len(pars) and all(_HEADING_RE.match(ln) for ln in _nonblank(pars[i - 1])):
+        i += 1
+    lead_pars = pars[:i]
+    if i < len(pars) and _introduces_list(lead_pars[-1]) and _is_list(pars[i]):
+        lead_pars.append(pars[i])
+        i += 1
+    cut_items: list[str] = []
+    lead: list[str] = []
+    for par in lead_pars:
+        lines = []
+        for ln in par.split("\n"):
+            short, whole = _cut_item(ln)
+            lines.append(short)
+            if whole:
+                cut_items.append(whole)
+        lead.append("\n".join(lines))
+    rest = pars[i:]
+    if not cut_items and not rest:
+        return body, None
+    details = ([ "\n".join(cut_items)] if cut_items else []) + rest
+    return "\n\n".join(lead), "\n\n".join(details)
+
+
 def _tidy(text: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -546,11 +631,14 @@ def apply(
             body = _drop_padding(body, computed)
             body = _answer_first(body, computed)
         body = _tidy(body)
+        details: str | None = None
+        if not asking and not computed:
+            body, details = _lead_and_details(body)
         from app.agents.evidence_conflicts import detect
 
         handed = [r for r in (evidence or []) if isinstance(r, dict)]
-        # Read over the text the user reads (citations already markers).
-        found = detect(body, rows + handed, question)
+        # Read over the whole text (citations already markers): lead and details.
+        found = detect(body + ("\n\n" + details if details else ""), rows + handed, question)
         structured: list[dict[str, Any]] = []
         if found:
             lines, structured = _conflict_lines(found, markers)
@@ -560,17 +648,22 @@ def apply(
                 # documents agree about it, is replaced by it.
                 stated = [c for c in found if _nameable(c)]
                 body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated))
+                if details:
+                    details = _tidy(_drop_superseded(details, stated)) or None
         # A marker whose line went (padding, a dropped note) is not lost: it
-        # rides on the last line, so every citation entry has its marker.
-        lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)
+        # rides on the last line, so every citation entry has its marker. A
+        # marker that travels in the details is not lost.
+        shown = body + "\n" + (details or "")
+        lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in shown)
         if body and lost:
             body = body + " " + lost
-        if not body or body == _tidy(text):
+        if not body or (body == _tidy(text) and not details):
             # Nothing but machinery and padding: the original stands, so the
             # user is never left with an empty answer. Nothing to change: the
             # original stands byte for byte.
             return Contracted(text=text)
-        return Contracted(text=body, citations=markers.entries, coverage=coverage, conflicts=structured)
+        return Contracted(text=body, citations=markers.entries, coverage=coverage, conflicts=structured,
+                          details=details)
     except Exception:  # noqa: BLE001 -- the contract must never break an answer
         _LOG.exception("answer_contract: failed; answer passed through")
         return Contracted(text=text)

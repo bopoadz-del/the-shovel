@@ -1812,6 +1812,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
         env["coverage"] = done.coverage
     if done.conflicts:
         env["conflicts"] = done.conflicts
+    if done.details:
+        env["details"] = done.details
     return env
 
 
