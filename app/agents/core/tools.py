@@ -310,7 +310,10 @@ def tool_definitions(self, project_id: str | None = None) -> list[dict[str, Any]
                     "contract value and duration. CALL THIS immediately "
                     "when the user asks for an S-curve, cash flow, spend "
                     "curve, or monthly drawdown. Do not invent monthly "
-                    "percents in prose — this tool is deterministic."
+                    "percents in prose — this tool is deterministic. It "
+                    "draws a template curve; when the user wrote out their "
+                    "own figures period by period, work from those figures "
+                    "with construction_calc instead."
                 ),
                 "parameters": {
                     "type": "object",
