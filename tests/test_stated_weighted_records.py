@@ -53,12 +53,18 @@ def test_no_weights_without_two_labelled_figures_after_the_weight_word(text):
 
 # -- records ---------------------------------------------------------------
 
-def test_a_bare_figure_goes_to_the_one_criterion_no_record_labels():
-    rows = read_records(_OFFERS, ["price", "technical"])
-    assert rows == [
+@pytest.mark.parametrize("text, criteria, expected", [
+    (_OFFERS, ["price", "technical"], [
         {"name": "North", "technical": 88.0, "price": 1_200_000.0},
         {"name": "South", "technical": 64.0, "price": 1_000_000.0},
-    ]
+    ]),
+    ("Two quotes: East quality 70 2.4 M, West quality 55 2.0 M.", ["sum", "quality"], [
+        {"name": "East", "quality": 70.0, "sum": 2_400_000.0},
+        {"name": "West", "quality": 55.0, "sum": 2_000_000.0},
+    ]),
+])
+def test_a_bare_figure_goes_to_the_one_criterion_no_record_labels(text, criteria, expected):
+    assert read_records(text, criteria) == expected
 
 
 def test_a_bare_figure_binds_nowhere_when_two_criteria_are_unlabelled():
@@ -153,12 +159,18 @@ def test_an_unreadable_signature_is_logged_and_takes_nothing(fn, readable, caplo
     assert (out is not None) is readable
 
 
-def test_the_one_records_and_weights_formula_is_selected_with_both_inputs():
-    name, bound = records_completed_by_user_text(_BIDS)
+@pytest.mark.parametrize("text, weights, names, last", [
+    (_BIDS, {"cost": 60.0, "quality": 40.0}, ["P", "Q", "R", "S"],
+     {"name": "S", "quality": 81.0, "cost": 3_050_000.0}),
+    (_OFFERS, {"price": 50.0, "technical": 50.0}, ["North", "South"],
+     {"name": "South", "technical": 64.0, "price": 1_000_000.0}),
+])
+def test_the_one_records_and_weights_formula_is_selected_with_both_inputs(text, weights, names, last):
+    name, bound = records_completed_by_user_text(text)
     assert name == "evaluate_tender"
-    assert bound["weights"] == {"cost": 60.0, "quality": 40.0}
-    assert [r["name"] for r in bound["tenderers"]] == ["P", "Q", "R", "S"]
-    assert bound["tenderers"][3] == {"name": "S", "quality": 81.0, "cost": 3_050_000.0}
+    assert bound["weights"] == weights
+    assert [r["name"] for r in bound["tenderers"]] == names
+    assert bound["tenderers"][-1] == last
 
 
 def test_no_selection_when_two_formulas_take_records_and_weights(monkeypatch):
@@ -184,14 +196,15 @@ def test_stated_weighted_records_are_a_formula_style_ask():
     assert runtime._message_is_formula_style_ask(_BIDS) is True
 
 
-def test_a_scalar_formula_the_ask_names_still_wins_over_records(monkeypatch):
+@pytest.mark.parametrize("text", [_BIDS, _OFFERS])
+def test_a_scalar_formula_the_ask_names_still_wins_over_records(monkeypatch, text):
     from app.lib import construction_formulas
 
     monkeypatch.setattr(
         construction_formulas, "formula_completed_by_user_text",
         lambda raw: ("scalar_formula", {"x": 1.0}),
     )
-    assert runtime._user_supplied_registered_calculation(_BIDS) == ("scalar_formula", {"x": 1.0})
+    assert runtime._user_supplied_registered_calculation(text) == ("scalar_formula", {"x": 1.0})
 
 
 class _Agent:
