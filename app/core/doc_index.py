@@ -1896,8 +1896,11 @@ def chunk_markdown(
     different chunk from its column header ("Book | Form | Design | Pricing
     basis"); retrieval then matched the headerless fragment poorly and the model
     couldn't map the value to its column. Keeping the table whole (with its
-    heading) fixes both retrieval and extraction. A table larger than
-    ``max_table_chars`` falls back to char-chunking so it can't blow the budget.
+    heading) fixes both retrieval and extraction. A table larger than the cap
+    (``max_table_chars``, lowered to the index ceiling ``CHUNK_MAX_CHARS`` when
+    that is smaller, so the ceiling never re-cuts it) is cut into row groups,
+    each led by the same heading, column-header row and separator
+    (``_markdown_table_chunks``); no data row is printed without its header.
     """
     if not text or not text.strip():
         return []
@@ -1911,7 +1914,7 @@ def chunk_markdown(
         if prose_buf:
             joined = "\n".join(prose_buf).strip()
             if joined:
-                segments.append(("prose", joined))
+                segments.append(("prose", joined, "", []))
             prose_buf.clear()
 
     i = 0
@@ -1935,25 +1938,67 @@ def chunk_markdown(
                 j += 1
             body = "\n".join(tbl)
             table_text = f"{last_heading}\n{body}" if last_heading else body
-            segments.append(("table", table_text))
+            segments.append(("table", table_text, last_heading, tbl))
             i = j
             continue
         prose_buf.append(line)
         i += 1
     _flush_prose()
 
+    from app.core.chunk_bounds import chunk_max_chars
+
+    cap = max_table_chars
+    ceiling = chunk_max_chars()
+    if 0 < ceiling < cap:
+        cap = ceiling
     chunks: list[str] = []
-    for kind, seg in segments:
+    for kind, seg, heading, tbl in segments:
         seg = seg.strip()
         if not seg:
             continue
-        if kind == "table" and len(seg) <= max_table_chars:
+        if kind == "table" and len(seg) <= cap:
             chunks.append(seg)
+            continue
+        groups = _markdown_table_chunks(heading, tbl, cap) if kind == "table" else []
+        if groups:
+            chunks.extend(groups)
         else:
             chunks.extend(
                 chunk_text_with_overlap(seg, target_chars=target_chars, overlap=overlap)
             )
     return chunks
+
+
+def _markdown_table_chunks(heading: str, table: list[str], cap: int) -> list[str]:
+    """An oversize markdown table as row groups that each carry its header.
+
+    ``table`` is the table's own lines: column-header row, separator, data
+    rows. Each group is ``heading`` (when the note has one), the header row,
+    the separator, then as many whole data rows as fit in ``cap`` chars, so a
+    data row is never cut and never reaches the index without the column
+    names that say what its cells are. Returns [] when there is no data row,
+    or when the lead (heading + header + separator) takes more than half of
+    ``cap`` and repeating it would leave room for too few rows; the caller
+    then char-chunks the table as before.
+    """
+    if len(table) < 3:
+        return []
+    lead = "\n".join(([heading.strip()] if heading.strip() else []) + table[:2])
+    if 2 * len(lead) > cap:
+        return []
+    groups: list[str] = []
+    rows: list[str] = []
+    size = len(lead)
+    for row in table[2:]:
+        if rows and size + 1 + len(row) > cap:
+            groups.append(lead + "\n" + "\n".join(rows))
+            rows = []
+            size = len(lead)
+        rows.append(row)
+        size += 1 + len(row)
+    if rows:
+        groups.append(lead + "\n" + "\n".join(rows))
+    return groups
 
 
 def _chunker_for_document(filename: str, requested: str = "default") -> str:
