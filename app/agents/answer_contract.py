@@ -439,6 +439,87 @@ def _strip_machinery_sentence(sentence: str) -> str:
     return s
 
 
+#: A word that says a thing came out of the search, used to describe it:
+#: "the retrieved rows", "text retrieved from it". Such a sentence often
+#: carries meaning a reader needs (what was absent, what the answer rests
+#: on), so the word is rewritten in place rather than the sentence dropped.
+_SEARCH_PARTICIPLE = r"(?:retrieved|fetched)"
+#: Where a noun phrase after the participle ends: punctuation, a citation,
+#: or a word that starts a clause or a prepositional phrase.
+_NP_END = (
+    r"(?=\s*(?:[\[\](),.;:!?\"“”—–]|$)|\s+(?:for|from|of|in|on|at|by|with|to|under|about|is|are|was|were|be|been|"
+    r"came|come|comes|show|shows|showed|contain|contains|cover|covers|give|gives|hold|holds|list|lists|"
+    r"and|or|but|that|which|where|so|as)\b)"
+)
+_NP_FUNCTION_WORD = (
+    r"(?:for|from|of|in|on|at|by|with|to|under|about|out|is|are|was|were|be|been|and|or|but|that|which|it|them)\b"
+)
+#: Adjective use: the participle stands before its noun phrase, which never
+#: opens on a function word.
+_PARTICIPLE_NP_RE = re.compile(
+    r"\b" + _SEARCH_PARTICIPLE + r"\s+(?!" + _NP_FUNCTION_WORD + r")"
+    r"((?:[A-Za-z][\w'-]*\s+){0,2}?[A-Za-z][\w'-]*)" + _NP_END,
+    re.IGNORECASE,
+)
+#: After its noun, pointing at a document the sentence already names (a
+#: pronoun or a citation): ``the note retrieved from it``.
+_PARTICIPLE_FROM_RE = re.compile(
+    r"\b" + _SEARCH_PARTICIPLE + r"(?=\s+(?:from|out\s+of)\s+(?:it|them|this|that|these|those|\[))", re.IGNORECASE)
+#: What may stand before an adjective use. After a form of "be" or "have"
+#: the participle is a verb ("the sample was retrieved"), not the search.
+_DETERMINER_BEFORE_RE = re.compile(
+    r"(?:^|[.!?:;(\-–—]\s*|\b(?:the|these|those|this|that|any|all|no|its|their|our|of|in|from|among)\s+)$",
+    re.IGNORECASE,
+)
+#: A search-unit noun is itself machinery; in the reader's words it is a document.
+_SEARCH_UNIT_RE = re.compile(r"\b(?:excerpt|passage|chunk|snippet)(s?)\b|\bcontext\b", re.IGNORECASE)
+#: Quoted text and bracketed spans (citations, file names) are the documents'
+#: own words: they are never rewritten.
+_VERBATIM_RE = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”|\[[^\]\n]*\]")
+
+
+def _reader_unit(m: re.Match) -> str:
+    """A search-unit noun as the reader names it: a document."""
+    if m.group(0).lower() == "context":
+        return "documents"
+    return "document" + (m.group(1) or "")
+
+
+def _reader_noun(phrase: str) -> str:
+    return _SEARCH_UNIT_RE.sub(lambda m: _reader_unit(m), phrase)
+
+
+def _participle_np(m: re.Match) -> str:
+    """One adjective use of a search participle, in the reader's words."""
+    if not _DETERMINER_BEFORE_RE.search(m.string[:m.start()]):
+        # After a verb such as "was": the participle is a verb, not the search.
+        return m.group(0)
+    head = _reader_noun(m.group(1)) + " I read"
+    # A participle that opened a sentence hands its capital to the noun.
+    return head[0].upper() + head[1:] if m.group(0)[0].isupper() else head
+
+
+def _rewrite_search_words(segment: str) -> str:
+    segment = _PARTICIPLE_FROM_RE.sub("read", segment)
+    return _PARTICIPLE_NP_RE.sub(lambda m: _participle_np(m), segment)
+
+
+def _search_words_in_place(text: str) -> str:
+    """Each search participle in the reader's words, everywhere outside
+    quotes and brackets: ``not in the retrieved rows`` becomes ``not in the
+    rows I read`` -- the scope of the claim stays, the machinery goes, and a
+    negative sentence still says what was absent. A sentence is never
+    dropped here and no figure is touched."""
+    out: list[str] = []
+    last = 0
+    for m in _VERBATIM_RE.finditer(text):
+        out.append(_rewrite_search_words(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_rewrite_search_words(text[last:]))
+    return "".join(out)
+
+
 def _strip_machinery(text: str) -> str:
     out: list[str] = []
     for line in text.split("\n"):
@@ -454,7 +535,9 @@ def _strip_machinery(text: str) -> str:
             out.append(line)
         elif kept:
             out.append(new)
-    return "\n".join(out)
+    # What stays is in the reader's words: a search participle left in a kept
+    # sentence (a refusal keeps its sentences) is rewritten, not kept.
+    return "\n".join(_search_words_in_place(line) for line in out)
 
 
 # ── Rule 2: padding ─────────────────────────────────────────────────────────
