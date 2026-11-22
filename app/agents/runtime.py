@@ -13642,7 +13642,11 @@ def _user_supplied_registered_calculation(
         return None
     try:
         from app.lib.construction_formulas import formula_completed_by_user_text
-        return formula_completed_by_user_text(raw)
+        from app.lib.stated_records import records_completed_by_user_text
+        # Scalar inputs bind by label; a list of weighted records the ask
+        # states (candidates with figures under criteria plus the weights)
+        # binds to the formula that takes records and weights.
+        return formula_completed_by_user_text(raw) or records_completed_by_user_text(raw)
     except Exception:  # noqa: BLE001 — routing must still classify
         _LOG.exception("supplied-input formula selection failed")
         return None
