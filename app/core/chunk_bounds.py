@@ -221,9 +221,32 @@ def _is_heading_line(line: str) -> bool:
     letters = [ch for ch in text if ch.isalpha()]
     if len(letters) < 3:
         return False
-    if line.lstrip().startswith("#") or _NUMBERED_HEADING.match(text):
+    if line.lstrip().startswith("#"):
+        return True
+    if _is_code_line(text):
+        return False
+    if _NUMBERED_HEADING.match(text):
         return True
     return sum(ch.isupper() for ch in letters) / len(letters) >= 0.6
+
+
+# A field label before a colon ("Ref:", "Our Ref:", "Drawing No:").
+_FIELD_LABEL = re.compile(r"^[^:]{1,24}:\s*(?=\S)")
+
+
+def _is_code_line(text: str) -> bool:
+    """True when the line names only a code: "Ref: CT/01", "REF-ABC-0012".
+
+    After an optional field label, no token is a word (two or more letters
+    and nothing else), so the line is an identifier, not a title. A label
+    with nothing after it ("SECTION 3:") is not a code line.
+    """
+    value = _FIELD_LABEL.sub("", text, count=1)
+    tokens = [tok.strip("()[],.;:") for tok in value.split()]
+    tokens = [tok for tok in tokens if tok]
+    if not tokens:
+        return False
+    return not any(len(tok) >= 2 and tok.isalpha() for tok in tokens)
 
 
 def heading_line_for_page(
