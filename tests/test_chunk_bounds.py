@@ -290,7 +290,8 @@ def test_a_blank_page_is_not_read_for_a_title_block(page_text, reads):
     "page2, expected",
     [
         ("2.1 Pipe Bedding\nBed pipes on granular material.", {1: "1.0 Scope", 2: "2.1 Pipe Bedding"}),
-        ("only a sentence on this page.", {1: "1.0 Scope"}),  # no heading, no entry
+        # no heading of its own: filed under the section still open (1.0 Scope)
+        ("only a sentence on this page.", {1: "1.0 Scope", 2: "1.0 Scope"}),
     ],
 )
 def test_page_heading_lines_maps_each_page_to_its_own_heading(page2, expected):

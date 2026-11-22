@@ -329,7 +329,11 @@ def page_heading_lines(
     page_starts: Iterable[Iterable[int]] | None,
     title_block: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[int, str]:
-    """``{page: heading line}`` for every page of ``text`` that has one."""
+    """``{page: heading line}`` for every page of ``text`` that has one.
+
+    A page with no heading of its own is filed under the section still open
+    at the end of the nearest earlier page that had one.
+    """
     starts = sorted(
         ((int(p), int(o)) for p, o in (page_starts or [])), key=lambda s: s[1]
     )
@@ -339,11 +343,35 @@ def page_heading_lines(
         bodies[page] = text[offset:end]
     running = _running_heading_lines(bodies)
     out: dict[int, str] = {}
-    for page, body in bodies.items():
-        line = heading_line_for_page(body, title_block, running)
+    in_force = ""
+    for page, page_text in bodies.items():
+        line = heading_line_for_page(page_text, title_block, running)
         if line:
             out[page] = line
+            in_force = _section_in_force(page_text, line)
+        elif in_force:
+            # A page that only continues the section before it is filed under that section.
+            out[page] = in_force
     return out
+
+
+def _section_in_force(page_text: str, filed: str) -> str:
+    """The section heading still open at the end of a page ("" when none carries on).
+
+    The last numbered or markdown heading the page holds (found by the same
+    rule that files the page), else the line the page is filed under. A page
+    named by its drawing title block carries nothing: a sheet name is not a
+    section the next page continues.
+    """
+    lines = page_text.splitlines()
+    if filed not in (ln.strip() for ln in lines):
+        return ""
+    for idx in range(len(lines) - 1, -1, -1):
+        head = lines[idx].strip()
+        sectioned = head.startswith("#") or bool(_NUMBERED_HEADING.match(head))
+        if sectioned and heading_line_for_page("\n".join(lines[idx:])) == head:
+            return head
+    return filed
 
 
 def attach_page_headings(
