@@ -3246,6 +3246,24 @@ def _spreadsheet_heading_above(rows: list[list[str]]) -> str:
     return label
 
 
+def _spreadsheet_band_step(root: str, sub: str, label: str) -> tuple[str, str]:
+    """The band path ``(root, sub)`` after a description-only ``label`` row.
+
+    A label that reads as a bill heading by the bills' own heading grammar
+    (``bill_sections._HEADING_RE``, the one grammar the bill readers share),
+    or the first label on a sheet with no heading yet, opens a new bill: it
+    becomes the root and clears the sub-label. Any other label (an item
+    preamble, a sub-heading) is filed UNDER the current bill heading and
+    replaces only the previous sub-label, so a measured row keeps the bill
+    that scopes it and the description its item code continues.
+    """
+    from app.core.rag.bill_sections import _HEADING_RE
+
+    if not root or _HEADING_RE.match(label):
+        return label, ""
+    return root, label
+
+
 def _spreadsheet_band_for(sheet_name: str, band: str, band_sheet: str) -> str:
     """The band a row chunk on ``sheet_name`` may carry.
 
@@ -3268,6 +3286,8 @@ def _spreadsheet_row_chunks(
     if ext not in _SPREADSHEET_EXTS or not file_path:
         return []
     from app.core import chunk_noise
+    # The derived bill workbook writes its heading path with this separator.
+    from app.core.bill_table_geometry import _PATH_SEP
 
     try:
         from app.blocks.boq_processor import BOQProcessorBlock
@@ -3292,7 +3312,13 @@ def _spreadsheet_row_chunks(
         header_cells = list(rows[hdr_idx])
         while header_cells and header_cells[-1] == "":
             header_cells.pop()
-        band = _spreadsheet_heading_above(rows[:hdr_idx])
+        # The band is a path: the bill heading (`root`), then the latest
+        # description-only label under it (`sub`, an item preamble or a
+        # sub-heading). See `_spreadsheet_band_step`.
+        root = _spreadsheet_heading_above(rows[:hdr_idx])
+        sub = ""
+        # The label of the row just above, while no measured row came between.
+        prev_label = ""
         # The sheet that stated `band`. Inheritance is refused across sheets
         # by `_spreadsheet_band_for`, so a later sheet can never pick up this
         # one's band even if this state outlives the loop iteration.
@@ -3304,8 +3330,12 @@ def _spreadsheet_row_chunks(
             if not any(cells):
                 continue
             # A repeated column-header row (each later bill in a sheet re-prints
-            # it) is structure, not a measured row.
+            # it) is structure, not a measured row. The label printed directly
+            # above it is that later bill's heading, whatever its wording.
             if cells == header_cells:
+                if prev_label:
+                    root, sub = prev_label, ""
+                prev_label = ""
                 continue
             # A row whose every cell is blank or zero (a template's formula
             # rows) measures nothing (RQ-1).
@@ -3321,9 +3351,12 @@ def _spreadsheet_row_chunks(
                 # context for the measured rows that follow.
                 label = " | ".join(c for c in cells if c != "")
                 if label:
-                    band = label
+                    root, sub = _spreadsheet_band_step(root, sub, label)
+                    prev_label = label
                     band_sheet = sheet_name
                 continue
+            prev_label = ""
+            band = _PATH_SEP.join(p for p in (root, sub) if p)
             parts: list[str] = []
             if sheet_name:
                 parts.append(f"Sheet: {sheet_name}")
