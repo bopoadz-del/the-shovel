@@ -4,7 +4,9 @@ Owner order (BUILD 0, 15 Nov). Every rule is structural; none names a
 question, a formula, a project or a document.
 
 1. ANSWER FIRST. On a turn that computed, the first line carries a figure.
-   Narration of what was searched never opens an answer.
+   Narration of what was searched never opens an answer, on any turn: a
+   narration lead that is process only goes (one that reports an absence
+   is the refusal itself and stays, rule 5).
 2. LENGTH FOLLOWS THE QUESTION. Offers of further help, closing summaries,
    restatements of the question and "notes" blocks are padding and go. A
    note survives only when it is an assumption the result depends on: a line
@@ -554,6 +556,47 @@ def _answer_first(text: str, computed: bool) -> str:
     return "\n".join([head] + lines)
 
 
+#: A sentence that opens on the writer's own search: "I searched ...",
+#: "I looked through ...", "I reviewed ...". It tells the reader what was
+#: done, not what is so.
+_NARRATION_LEAD_RE = re.compile(
+    r"^(?:\*\*)?I\s+(?:searched|looked(?:\s+(?:through|for|in|at|over))?|checked|reviewed|went\s+through|"
+    r"scanned|queried)\b",
+    re.IGNORECASE,
+)
+
+
+def _narration_first(text: str) -> str:
+    """Narration of the search never opens an answer, on any kind of turn.
+
+    The first sentence of the first line is read. When it narrates the
+    writer's search, states no figure and reports nothing absent, it is
+    process only and goes, so the sentence after it opens the answer.
+
+    It stays when it states a figure (it is the answer already), when it
+    reports something absent (that is the refusal itself, rule 5), when it
+    introduces what follows (ends in ``:``), or when it is the whole
+    answer."""
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    sentences = _sentences(lines[first].strip())
+    if not sentences:
+        return text
+    lead = sentences[0].strip()
+    if (not _NARRATION_LEAD_RE.match(lead) or _FIGURE_RE.search(_MARKER_RE.sub("", lead))
+            or _NEGATIVE_RE.search(lead) or lead.rstrip("*_ ").endswith(":")):
+        return text
+    rest = " ".join(s.strip() for s in sentences[1:]).strip()
+    if rest:
+        lines[first] = rest
+        return "\n".join(lines)
+    if any(ln.strip() for ln in lines[first + 1:]):
+        return "\n".join(lines[:first] + lines[first + 1:])
+    return text
+
+
 def _tidy(text: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -598,6 +641,7 @@ def apply(
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
             body = _answer_first(body, computed)
+            body = _narration_first(body)
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 
