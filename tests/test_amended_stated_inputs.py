@@ -202,3 +202,28 @@ def test_a_turn_that_is_not_an_amendment_carries_no_note(thread, message):
     msgs = _agent()._build_messages(message, history, None)
     assert msgs[-1] == {"role": "user", "content": message}
     assert msgs[-2] == {"role": "assistant", "content": "Worked answer 1,000."}
+
+
+@pytest.mark.parametrize("project_id, context", [
+    ("proj-alpha", "Project facts: alpha slab pour"),
+    ("proj-beta", "Project facts: beta valuation"),
+])
+def test_a_project_turn_carries_its_project_context_and_a_projectless_one_does_not(
+    monkeypatch, project_id, context,
+):
+    import app.core.project_memory as project_memory
+
+    seen = []
+
+    def fake_context(pid, message):
+        seen.append(pid)
+        return context
+
+    monkeypatch.setattr(project_memory, "build_project_context", fake_context)
+    agent = _agent()
+    with_project = agent._build_messages(SLAB, [], project_id)
+    assert seen == [project_id]
+    assert {"role": "system", "content": context} in with_project
+    without = agent._build_messages(SLAB, [], None)
+    assert seen == [project_id]
+    assert {"role": "system", "content": context} not in without
