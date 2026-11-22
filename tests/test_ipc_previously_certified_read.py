@@ -56,10 +56,14 @@ def test_figure_without_a_previous_certified_label_is_not_read(ask):
     assert "previous_certified" not in _payment_figures_from_message(ask)
 
 
-def test_previous_amount_word_order_both_ways_same_value():
-    before = _payment_figures_from_message("previously certified 270,000")
-    after = _payment_figures_from_message("certified previously 270,000")
-    assert before.get("previous_certified") == after.get("previous_certified") == 270_000.0
+@pytest.mark.parametrize("figure, expected", [
+    ("270,000", 270_000.0),
+    ("1,045,500", 1_045_500.0),
+])
+def test_previous_amount_word_order_both_ways_same_value(figure, expected):
+    before = _payment_figures_from_message(f"previously certified {figure}")
+    after = _payment_figures_from_message(f"certified previously {figure}")
+    assert before.get("previous_certified") == after.get("previous_certified") == expected
 
 
 # --- the read amount reaches the tool args; an explicit arg still wins --------
