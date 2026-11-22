@@ -111,18 +111,27 @@ def split_oversize(text: str, ceiling: int, _level: int = 0) -> list[str]:
 
 def _merge_pairs(
     pairs: list[tuple[str, int | None]], floor: int, ceiling: int,
+    headed_ceiling: int = 0,
 ) -> list[tuple[str, int | None]]:
     """Join each pair shorter than ``floor`` to a neighbour when it still fits.
 
     Pairs are ``(text, split_parent)``; a joined pair keeps a parent id.
+    A joined pair that keeps a parent id is a split piece, which is given its
+    page's heading afterwards, so with ``headed_ceiling`` set it must fit that
+    cut (the ceiling less ``HEADING_RESERVE``) instead of the full ceiling.
     """
+    def _fits(text: str, parent: int | None) -> bool:
+        limit = headed_ceiling if parent is not None and headed_ceiling else ceiling
+        return limit <= 0 or len(text) <= limit
+
     out: list[tuple[str, int | None]] = []
     carry: tuple[str, int | None] | None = None
     for chunk, parent in pairs:
         if carry is not None:
             joined = f"{carry[0]}\n{chunk}"
-            if ceiling <= 0 or len(joined) <= ceiling:
-                chunk, parent = joined, parent if parent is not None else carry[1]
+            joined_parent = parent if parent is not None else carry[1]
+            if _fits(joined, joined_parent):
+                chunk, parent = joined, joined_parent
             else:
                 out.append(carry)
             carry = None
@@ -131,12 +140,10 @@ def _merge_pairs(
         else:
             out.append((chunk, parent))
     if carry is not None:
-        if out and (ceiling <= 0 or len(out[-1][0]) + 1 + len(carry[0]) <= ceiling):
-            last, last_parent = out[-1]
-            out[-1] = (
-                f"{last}\n{carry[0]}",
-                last_parent if last_parent is not None else carry[1],
-            )
+        last_parent = out[-1][1] if out else None
+        tail_parent = last_parent if last_parent is not None else carry[1]
+        if out and _fits(f"{out[-1][0]}\n{carry[0]}", tail_parent):
+            out[-1] = (f"{out[-1][0]}\n{carry[0]}", tail_parent)
         else:
             out.append(carry)
     return out
@@ -177,7 +184,8 @@ def bound_chunks(
             split.extend((part, parent) for part in parts)
         else:
             split.append((chunk, None))
-    out = _merge_pairs(split, floor, ceiling)
+    # A merge must not take back the room the cut kept for the heading.
+    out = _merge_pairs(split, floor, ceiling, cut if cut < ceiling else 0)
     if stats is not None:
         stats["split_from"] = stats.get("split_from", 0) + split_from
         stats["merged"] = stats.get("merged", 0) + (len(split) - len(out))
