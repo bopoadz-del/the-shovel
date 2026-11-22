@@ -101,6 +101,11 @@ def test_lead_that_is_not_narration_stays(text):
     assert _narration_first(text) == text
 
 
+@pytest.mark.parametrize("text", ["", "\n  \n\t"])
+def test_blank_text_passes_through(text):
+    assert _narration_first(text) == text
+
+
 # ── through the contract ────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("text, first", [
