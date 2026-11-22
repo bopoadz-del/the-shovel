@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.agents.amended_inputs import Amendment, amendment_note, amendments, stated_figures
+from app.agents.core.context import _build_messages
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -185,7 +186,7 @@ def test_the_turn_carries_the_note_just_before_the_message(thread, message, chan
     history = []
     for ask in thread:
         history += [{"role": "user", "content": ask}, {"role": "assistant", "content": "Worked answer 1,000."}]
-    msgs = _agent()._build_messages(message, history, None)
+    msgs = _build_messages(_agent(), message, history, None)
     assert msgs[-1] == {"role": "user", "content": message}
     assert msgs[-2]["role"] == "system"
     assert change in msgs[-2]["content"]
@@ -199,7 +200,7 @@ def test_a_turn_that_is_not_an_amendment_carries_no_note(thread, message):
     history = []
     for ask in thread:
         history += [{"role": "user", "content": ask}, {"role": "assistant", "content": "Worked answer 1,000."}]
-    msgs = _agent()._build_messages(message, history, None)
+    msgs = _build_messages(_agent(), message, history, None)
     assert msgs[-1] == {"role": "user", "content": message}
     assert msgs[-2] == {"role": "assistant", "content": "Worked answer 1,000."}
 
@@ -221,9 +222,9 @@ def test_a_project_turn_carries_its_project_context_and_a_projectless_one_does_n
 
     monkeypatch.setattr(project_memory, "build_project_context", fake_context)
     agent = _agent()
-    with_project = agent._build_messages(SLAB, [], project_id)
+    with_project = _build_messages(agent, SLAB, [], project_id)
     assert seen == [project_id]
     assert {"role": "system", "content": context} in with_project
-    without = agent._build_messages(SLAB, [], None)
+    without = _build_messages(agent, SLAB, [], None)
     assert seen == [project_id]
     assert {"role": "system", "content": context} not in without
