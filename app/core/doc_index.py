@@ -3292,6 +3292,13 @@ def _spreadsheet_row_chunks(
         header_cells = list(rows[hdr_idx])
         while header_cells and header_cells[-1] == "":
             header_cells.pop()
+        # Columns the chunk already prints under a fixed label (Item and the
+        # figure fields); any other headed column is carried by its own name.
+        emitted_idxs = {
+            colmap[f]
+            for f in ("description", "quantity", "unit", "rate", "total")
+            if f in colmap
+        }
         band = _spreadsheet_heading_above(rows[:hdr_idx])
         # The sheet that stated `band`. Inheritance is refused across sheets
         # by `_spreadsheet_band_for`, so a later sheet can never pick up this
@@ -3340,6 +3347,18 @@ def _spreadsheet_row_chunks(
                 idx = colmap.get(field)
                 if idx is not None and idx < len(cells) and cells[idx] != "":
                     parts.append(f"{label}: {cells[idx]}")
+            # Every other cell the row states keeps its place, labelled with
+            # the sheet's own header text. The resolver only names the
+            # description and figure columns; an item reference, a bill
+            # column or a remark the sheet prints beside them is still part
+            # of the row, and dropping it leaves the row unreachable by the
+            # reference the document gives it.
+            for idx in range(len(cells)):
+                if idx in emitted_idxs or cells[idx] == "":
+                    continue
+                head = header_cells[idx].strip() if idx < len(header_cells) else ""
+                if head:
+                    parts.append(f"{head}: {cells[idx]}")
             chunks.append("; ".join(parts))
     return chunks
 
