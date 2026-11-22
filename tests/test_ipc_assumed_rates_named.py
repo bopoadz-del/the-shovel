@@ -138,3 +138,26 @@ async def test_both_rates_assumed_are_both_named_and_the_net_is_unchanged(gross,
     assert out["certificate_summary"].endswith(
         "Assumed, not given: retention 10%; advance recovery 20%."
     )
+
+
+class _Text:
+    """A message object whose truth says whether there is a message at all,
+    while its text still carries labelled figures."""
+
+    def __init__(self, text: str, present: bool):
+        self._text, self._present = text, present
+
+    def __bool__(self) -> bool:
+        return self._present
+
+    def __str__(self) -> str:
+        return self._text
+
+
+@pytest.mark.parametrize("present, expected", [
+    (True, {"advance_payment": 48_000.0, "advance_recovery_percent": 8.0}),
+    (False, {}),
+])
+def test_an_absent_message_reads_no_figures(present, expected):
+    message = _Text("advance payment 48,000, advance recovery 8%", present)
+    assert _payment_figures_from_message(message) == expected
