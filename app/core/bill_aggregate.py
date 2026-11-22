@@ -644,6 +644,36 @@ def ask_scope(ask: str | None, items: Sequence[SheetRow]) -> AskScope | None:
     return scope if scope.states() else None
 
 
+def fullest_sections(scope: AskScope, admitted: Sequence[SheetRow]) -> list[SheetRow]:
+    """The admitted rows whose heading section is not named by fewer of the
+    ask's words than another admitted section.
+
+    The ask's content words are graded over the whole document, so a word that
+    one stray description prints anywhere is read as optional rather than as a
+    heading the row must sit under, and a sibling section that shares only a
+    generic word is admitted beside the section the ask names. The rows that
+    are already admitted settle it among themselves: each heading section
+    (the rows that share one heading path) is read as the ask's words its path
+    and its admitted rows print. A section whose words are a strict subset of
+    another admitted section's words is a sibling the ask did not name, and it
+    is left out. Two sections that each print a word the other does not are
+    both named (an ask that lists two items), so both stay. A section is read
+    as a whole, so a word one of its rows happens to print never splits it,
+    and a row outside the admitted set never moves a section in or out.
+    """
+    words = scope.level | scope.item | scope.either
+    named: dict[tuple[str, ...], set[str]] = {}
+    for row in admitted:
+        key = tuple(row.path)
+        named.setdefault(key, set(words & _row_path_words(row)))
+        named[key] |= words & _desc_words(row)
+    keep = {
+        key for key, have in named.items()
+        if not any(have < other for other in named.values())
+    }
+    return [row for row in admitted if tuple(row.path) in keep]
+
+
 def aggregate(
     rows: Sequence[SheetRow],
     *,
@@ -682,10 +712,11 @@ def aggregate(
         raise ValueError("give description terms or a section to match")
     used, without = [], []
     sums: dict[str, float] = {}
-    for row in items:
-        admitted = scope.admits(row, measure) if scope is not None else matches(row, want, where)
-        if not admitted:
-            continue
+    if scope is not None:
+        selected = fullest_sections(scope, [row for row in items if scope.admits(row, measure)])
+    else:
+        selected = [row for row in items if matches(row, want, where)]
+    for row in selected:
         value = row.figure(measure)
         entry = {
             "ref": row.ref,
