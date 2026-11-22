@@ -81,13 +81,24 @@ def test_list_not_introduced_by_the_lead_moves():
     assert done.details.startswith("- Access is from the north stair.")
 
 
-def test_heading_carries_into_the_paragraph_under_it():
+def test_opening_heading_keeps_its_whole_section():
     text = ("## Answer\n\n"
             "The cover to the raft is 75 mm.\n\n"
-            "The piling cap cover is also stated as 75 mm in the same note.")
+            "The piling cap cover is also stated as 75 mm in the same note.\n\n"
+            "## Background\n\n"
+            "The structural notes were revised twice.")
     done = _apply(text)
-    assert done.text == "## Answer\n\nThe cover to the raft is 75 mm."
-    assert done.details == "The piling cap cover is also stated as 75 mm in the same note."
+    assert done.text == ("## Answer\n\nThe cover to the raft is 75 mm.\n\n"
+                         "The piling cap cover is also stated as 75 mm in the same note.")
+    assert done.details == "## Background\n\nThe structural notes were revised twice."
+
+
+def test_opening_heading_with_one_section_is_untouched():
+    text = ("**Lintel bearings**\n\n"
+            "- Masonry: 150 mm\n- Steel: 100 mm\n\n"
+            "Precast lintels take 200 mm.")
+    done = _apply(text)
+    assert done.text == text and done.details is None
 
 
 # ── markers stay with the sentence that carries them ────────────────────────

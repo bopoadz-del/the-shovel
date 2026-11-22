@@ -562,9 +562,17 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
     pars = [p for p in _PARA_SPLIT_RE.split(body) if p.strip()]
     if not pars:
         return body, None
+    def heading(par: str) -> bool:
+        return all(_HEADING_RE.match(ln) for ln in _nonblank(par))
+
     i = 1
-    while i < len(pars) and all(_HEADING_RE.match(ln) for ln in _nonblank(pars[i - 1])):
+    while i < len(pars) and heading(pars[i - 1]):
         i += 1
+    if heading(pars[0]):
+        # An answer that opens on a heading: the lead is its whole first
+        # section -- everything up to the next heading answers under it.
+        while i < len(pars) and not heading(pars[i]):
+            i += 1
     lead_pars = pars[:i]
     if i < len(pars) and _introduces_list(lead_pars[-1]) and _is_list(pars[i]):
         lead_pars.append(pars[i])
