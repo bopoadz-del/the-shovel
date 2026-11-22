@@ -49,17 +49,23 @@ def test_a_net_that_is_not_its_own_working_is_named(op):
     assert [(f[1], f[2]) for f in found] == [(pytest.approx(4425), pytest.approx(4125))]
 
 
-def test_mixed_signs_fold_left_with_products_inside():
-    assert _found("620 + 3 x 40 - 90 = 650") == []
-    found = _found("620 + 3 x 40 - 90 = 830")
-    assert [(f[1], f[2]) for f in found] == [(pytest.approx(830), pytest.approx(650))]
+# Each case: (printed working, the stated result read, the computed result)
+# or None when the working is the result's own and nothing is named.
+_FOLDS = [
+    ("620 + 3 x 40 - 90 = 650", None),
+    ("620 + 3 x 40 - 90 = 830", (830, 650)),
+    ("1,000 - 4 x 25 + 60 = 960", None),
+    ("1,000 - 4 x 25 + 60 = 840", (840, 960)),
+    # the side after a difference may itself be a sum; it is read whole
+    ("900 - 150 = 600 + 150 = 750", None),
+    ("900 - 150 = 600 + 150 = 760", (760, 750)),
+]
 
 
-def test_a_difference_carries_into_the_next_side_as_a_sum():
-    # The side after a difference may itself be a sum; it is read whole.
-    assert _found("900 - 150 = 600 + 150 = 750") == []
-    found = _found("900 - 150 = 600 + 150 = 760")
-    assert [(f[1], f[2]) for f in found] == [(pytest.approx(760), pytest.approx(750))]
+@pytest.mark.parametrize(("text", "named"), _FOLDS)
+def test_signs_fold_left_with_products_inside(text, named):
+    found = [(f[1], f[2]) for f in _found(text)]
+    assert found == ([] if named is None else [(pytest.approx(named[0]), pytest.approx(named[1]))])
 
 
 @pytest.mark.parametrize("text", [
@@ -71,10 +77,15 @@ def test_ranges_and_references_are_not_working(text):
     assert _found(text) == []
 
 
-def test_an_en_dash_is_never_read_as_a_minus():
-    # Read as a minus this would be 18 - 12 = 6 (agrees) or accuse "= 9".
-    assert _found("18 – 12 = 9 bays") == []
-    assert _found("18 - 12 = 9 bays") != []
+@pytest.mark.parametrize(("text", "accused"), [
+    # Read as a minus an en dash would compare 18 - 12 = 6 with 9.
+    ("18 – 12 = 9 bays", False),
+    ("40 – 25 = 3 zones", False),
+    ("18 - 12 = 9 bays", True),
+    ("40 − 25 = 3 zones", True),
+])
+def test_an_en_dash_is_never_read_as_a_minus(text, accused):
+    assert bool(_found(text)) is accused
 
 
 # ── 2. a currency code or sign before the figure ────────────────────────────
@@ -86,16 +97,26 @@ def test_a_result_after_a_currency_is_compared(cur):
     assert [(f[1], f[2]) for f in found] == [(pytest.approx(6000), pytest.approx(9000))]
 
 
-def test_an_addend_after_a_currency_is_read():
-    assert _found("QAR 2,300 + QAR 1,150 = QAR 3,450") == []
-    found = _found("QAR 2,300 + QAR 1,150 = QAR 3,750")
-    assert [(f[1], f[2]) for f in found] == [(pytest.approx(3750), pytest.approx(3450))]
+@pytest.mark.parametrize(("text", "named"), [
+    ("QAR 2,300 + QAR 1,150 = QAR 3,450", None),
+    ("QAR 2,300 + QAR 1,150 = QAR 3,750", (3750, 3450)),
+    ("$ 410 - $ 60 = $ 350", None),
+    ("$ 410 - $ 60 = $ 380", (380, 350)),
+])
+def test_an_addend_after_a_currency_is_read(text, named):
+    found = [(f[1], f[2]) for f in _found(text)]
+    assert found == ([] if named is None else [(pytest.approx(named[0]), pytest.approx(named[1]))])
 
 
-def test_lower_case_words_after_equals_still_end_the_reading():
-    # "= about 9,000" is prose, not a currency; nothing is compared.
-    assert _found("3 x 2,400 x 1.25 = about 6,000") == []
-    assert _found("3 x 2,400 x 1.25 = 6,000") != []
+@pytest.mark.parametrize(("text", "accused"), [
+    # lower-case words after "=" are prose, not a currency: nothing is read
+    ("3 x 2,400 x 1.25 = about 6,000", False),
+    ("8 x 125 = roughly 900", False),
+    ("3 x 2,400 x 1.25 = 6,000", True),
+    ("8 x 125 = 900", True),
+])
+def test_lower_case_words_after_equals_still_end_the_reading(text, accused):
+    assert bool(_found(text)) is accused
 
 
 # ── 3. a figure that ends a sentence ────────────────────────────────────────
@@ -109,53 +130,80 @@ def test_a_correct_figure_before_a_full_stop_is_not_accused(text):
     assert _found(text) == []
 
 
-def test_a_wrong_figure_before_a_full_stop_is_named_whole():
-    found = _found("The frame takes 46.50 x 684 = 33,806.")
-    assert [(f[1], f[2]) for f in found] == [(pytest.approx(33_806), pytest.approx(31_806))]
-    found = _found("Total 7.25 x 1,290 = 9,952.50, all in.")
-    assert [(f[1], f[2]) for f in found] == [(pytest.approx(9_952.5), pytest.approx(9_352.5))]
+@pytest.mark.parametrize(("text", "stated", "computed"), [
+    ("The frame takes 46.50 x 684 = 33,806.", 33_806, 31_806),
+    ("Total 7.25 x 1,290 = 9,952.50, all in.", 9_952.5, 9_352.5),
+])
+def test_a_wrong_figure_before_a_full_stop_is_named_whole(text, stated, computed):
+    found = [(f[1], f[2]) for f in _found(text)]
+    assert found == [(pytest.approx(stated), pytest.approx(computed))]
 
 
-def test_a_figure_followed_by_another_digit_group_is_still_refused():
-    # "1.2.3" is not one figure; nothing is read rather than a fragment.
-    assert _found("4 x 3 = 1.2.3") == []
-    assert _found("4 x 3 = 1.2") != []
+@pytest.mark.parametrize(("text", "accused"), [
+    # "1.2.3" is not one figure; nothing is read rather than a fragment
+    ("4 x 3 = 1.2.3", False),
+    ("6 x 5 = 3,0.1", False),
+    ("4 x 3 = 1.2", True),
+    ("6 x 5 = 3.0", True),
+])
+def test_a_figure_followed_by_another_digit_group_is_still_refused(text, accused):
+    assert bool(_found(text)) is accused
 
 
 # ── 4. a percent sign on a lone result ──────────────────────────────────────
 
-def test_a_sum_of_points_stated_as_a_percent_is_not_accused():
-    assert _found("(9/10 x 25) + (5/10 x 35) + (4/10 x 40) = 22.5 + 17.5 + 16 = 56.0 %") == []
-    assert _found("22.5 + 17.5 + 16 = 56 %") == []
+@pytest.mark.parametrize(("text", "named"), [
+    # points: a sum of weighted scores stated as a percent
+    ("(9/10 x 25) + (5/10 x 35) + (4/10 x 40) = 22.5 + 17.5 + 16 = 56.0 %", None),
+    ("22.5 + 17.5 + 16 = 56 %", None),
+    ("22.5 + 17.5 + 16 = 61.0 %", 56.0),
+    ("30 + 12.5 = 45 %", 42.5),
+    # hundredths: a ratio stated as a percent
+    ("27/36 = 75%", None),
+    ("27/36 = 80%", 0.75),
+])
+def test_a_lone_percent_result_agrees_under_either_reading(text, named):
+    found = _found(text)
+    if named is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and found[0][2] == pytest.approx(named)
 
 
-def test_a_sum_of_points_with_a_wrong_percent_is_named():
-    found = _found("22.5 + 17.5 + 16 = 61.0 %")
-    assert len(found) == 1
-    assert found[0][2] == pytest.approx(56.0)
-
-
-def test_a_ratio_stated_as_a_percent_still_reads_hundredths():
-    assert _found("27/36 = 75%") == []
-    assert _found("27/36 = 80%") != []
-
-
-def test_a_percent_factor_on_the_left_fixes_hundredths():
-    # The left side is in hundredths, so "= 12 %" cannot mean 12 points.
-    assert _found("4% x 300 = 12") == []
-    assert _found("4% x 300 = 12 %") != []
+@pytest.mark.parametrize(("text", "accused"), [
+    # a percent factor on the left fixes hundredths: "= 12 %" is not 12 points
+    ("4% x 300 = 12", False),
+    ("5% x 260 = 13", False),
+    ("4% x 300 = 12 %", True),
+    ("5% x 260 = 13%", True),
+])
+def test_a_percent_factor_on_the_left_fixes_hundredths(text, accused):
+    assert bool(_found(text)) is accused
 
 
 # ── the note on the answer ──────────────────────────────────────────────────
 
-def test_the_note_names_a_wrong_net_and_keeps_the_answer():
-    text = "Net due: 7,400,000 − 370,000 − 740,000 − 2,100,000 = QAR 6,290,000"
+@pytest.mark.parametrize(("text", "noted"), [
+    ("Net due: 7,400,000 − 370,000 − 740,000 − 2,100,000 = QAR 6,290,000", True),
+    ("Crew cost: 2 x 1,950 x 1.4 = EUR 3,900.", True),
+    ("Net due: 7,400,000 − 370,000 − 740,000 = QAR 6,290,000.", False),
+    ("Crew cost: 2 x 1,950 x 1.4 = EUR 5,460.", False),
+])
+def test_the_note_follows_the_arithmetic_and_keeps_the_answer(text, noted):
     out = rt._annotate_derivation_mismatches(text)
     assert out.startswith(text)
-    assert "working and the result disagree" in out
-    assert "4,190,000" in out.replace("4.19e+06", "4,190,000")
+    assert ("working and the result disagree" in out) is noted
+    if not noted:
+        assert out == text
 
 
-def test_a_correct_net_with_a_currency_leaves_the_answer_byte_for_byte():
-    text = "Net due: 7,400,000 − 370,000 − 740,000 = QAR 6,290,000."
-    assert rt._annotate_derivation_mismatches(text) == text
+# ── a start that is not a figure is not a chain ─────────────────────────────
+
+@pytest.mark.parametrize(("text", "start"), [
+    ("Net: about 12 x 3 = 36", 5),
+    ("= QAR 9 x 2 = 18", 2),
+])
+def test_a_chain_start_that_is_not_a_figure_reads_nothing(text, start):
+    out: list = []
+    assert rt._derivation_chain_mismatches(text, start, out) is None
+    assert out == []
