@@ -8,6 +8,7 @@ import {
   compareBuilds,
   createBuildWatcher,
   installFetchObserver,
+  installVisibilityCheck,
 } from './buildCheck.js'
 
 // Each test makes its own two build ids; no real commit is named.
@@ -84,4 +85,140 @@ test('a failed fetch is rethrown unchanged', async () => {
 
 test('the message tells the user what to do', () => {
   assert.match(MISMATCH_MESSAGE, /reload/i)
+})
+
+// --- the tab-visible path ---------------------------------------------------
+// A fake tab: an EventTarget whose visibilityState the test sets, and a fake
+// server that counts probes and answers with whatever build it is running.
+
+function fakeTab(state) {
+  const doc = new EventTarget()
+  doc.visibilityState = state
+  doc.show = () => {
+    doc.visibilityState = 'visible'
+    doc.dispatchEvent(new Event('visibilitychange'))
+  }
+  doc.hide = () => {
+    doc.visibilityState = 'hidden'
+    doc.dispatchEvent(new Event('visibilitychange'))
+  }
+  return doc
+}
+
+function fakeServer(serverBuild) {
+  const calls = []
+  const target = {
+    fetch: async (url, init) => {
+      calls.push({ url, init })
+      return fakeResponse(serverBuild)
+    },
+  }
+  return { target, calls }
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+test('a tab brought back to the front after a deploy is told, through the observer', async () => {
+  const told = []
+  const w = createBuildWatcher(OLDER, (s) => told.push(s))
+  const { target, calls } = fakeServer(NEWER)
+  installFetchObserver(target, w)
+  const doc = fakeTab('hidden')
+  const probeUrl = 'https://server.invalid/livez'
+  installVisibilityCheck(doc, target, probeUrl, () => told.length > 0)
+  doc.show()
+  await settle()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, probeUrl)
+  assert.equal(calls[0].init.cache, 'no-store')
+  assert.deepEqual(told, [NEWER])
+})
+
+test('a tab on the same build is probed and stays silent', async () => {
+  const told = []
+  const w = createBuildWatcher(NEWER, (s) => told.push(s))
+  const { target, calls } = fakeServer(NEWER)
+  installFetchObserver(target, w)
+  const doc = fakeTab('hidden')
+  installVisibilityCheck(doc, target, '/livez', () => told.length > 0)
+  doc.show()
+  await settle()
+  assert.equal(calls.length, 1)
+  assert.deepEqual(told, [])
+})
+
+test('a tab going to the back sends nothing', async () => {
+  const { target, calls } = fakeServer(NEWER)
+  const doc = fakeTab('visible')
+  installVisibilityCheck(doc, target, '/livez', () => false)
+  doc.hide()
+  await settle()
+  assert.equal(calls.length, 0)
+})
+
+test('once quiet (already told, or no build id) a return to the front sends nothing', async () => {
+  const told = []
+  const w = createBuildWatcher(OLDER, (s) => told.push(s))
+  const { target, calls } = fakeServer(NEWER)
+  installFetchObserver(target, w)
+  const doc = fakeTab('hidden')
+  installVisibilityCheck(doc, target, '/livez', () => told.length > 0)
+  doc.show()
+  await settle()
+  doc.hide()
+  doc.show()
+  doc.hide()
+  doc.show()
+  await settle()
+  assert.equal(calls.length, 1)
+  assert.deepEqual(told, [NEWER])
+
+  const silent = fakeServer(NEWER)
+  const doc2 = fakeTab('hidden')
+  installVisibilityCheck(doc2, silent.target, '/livez', () => true)
+  doc2.show()
+  await settle()
+  assert.equal(silent.calls.length, 0)
+})
+
+test('every return to the front probes while nothing has been told', async () => {
+  const { target, calls } = fakeServer(OLDER)
+  const doc = fakeTab('hidden')
+  installVisibilityCheck(doc, target, '/livez', () => false)
+  doc.show()
+  doc.hide()
+  doc.show()
+  await settle()
+  assert.equal(calls.length, 2)
+})
+
+test('a probe that fails, by rejection or by throwing, never surfaces', async () => {
+  const unhandled = []
+  const onUnhandled = (err) => unhandled.push(err)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const rejecting = { fetch: async () => { throw new TypeError('offline') } }
+    const doc = fakeTab('hidden')
+    installVisibilityCheck(doc, rejecting, '/livez', () => false)
+    doc.show()
+    const throwing = { fetch: () => { throw new TypeError('blocked') } }
+    const doc2 = fakeTab('hidden')
+    installVisibilityCheck(doc2, throwing, '/livez', () => false)
+    assert.doesNotThrow(() => doc2.show())
+    await settle()
+    await settle()
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+  assert.deepEqual(unhandled, [])
+})
+
+test('the returned function removes the listener', async () => {
+  const { target, calls } = fakeServer(NEWER)
+  const doc = fakeTab('hidden')
+  const remove = installVisibilityCheck(doc, target, '/livez', () => false)
+  remove()
+  doc.show()
+  await settle()
+  assert.equal(calls.length, 0)
 })
