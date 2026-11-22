@@ -104,3 +104,13 @@ def test_machinery_sentence_goes_whole(text, first):
 def test_offer_sentence_goes_whole(text, first):
     out = answer_contract.apply(text).text
     assert _first_line(out) == first
+
+
+# ── a last sentence with no stop of its own is still a sentence ─────────────
+
+@pytest.mark.parametrize("text, expected", [
+    ("The pile is 600 mm. Cut-off level to follow", ["The pile is 600 mm.", "Cut-off level to follow"]),
+    ("No stop at all (see note. A)", ["No stop at all (see note. A)"]),
+])
+def test_tail_without_stop_is_kept(text, expected):
+    assert [s.strip() for s in answer_contract._sentences(text)] == expected
