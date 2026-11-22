@@ -34,6 +34,7 @@ the chunk text's own length and boundaries.
 """
 from __future__ import annotations
 
+import calendar
 import itertools
 import os
 import re
@@ -210,6 +211,25 @@ def bound_units_with_pages(
 # numbered ("3.2 Concrete"), a markdown heading, or mostly capitals.
 _NUMBERED_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*|[A-Z])[.)]?\s+\S")
 _MAX_HEADING_WORDS = 14
+# Month names and abbreviations from the standard calendar table, lowercased.
+_MONTH_WORDS = frozenset(
+    m.lower() for m in (*calendar.month_name, *calendar.month_abbr) if m
+)
+_DAY_OR_YEAR = re.compile(r"^\d{1,4}(?:st|nd|rd|th)?$", re.IGNORECASE)
+
+
+def _is_date_line(text: str) -> bool:
+    """True when every word of ``text`` is a day, a year or a month name.
+
+    A letter or a set of minutes opens on its date ("12 March 2026"), and a
+    day number in front of a word passes the numbered heading rule. A date
+    names when the page was written, not what it is about.
+    """
+    words = [w.strip(".,") for w in text.split()]
+    words = [w for w in words if w]
+    months = sum(1 for w in words if w.lower() in _MONTH_WORDS)
+    numbers = sum(1 for w in words if _DAY_OR_YEAR.match(w))
+    return months >= 1 and numbers >= 1 and months + numbers == len(words)
 
 
 def _is_heading_line(line: str) -> bool:
@@ -217,6 +237,8 @@ def _is_heading_line(line: str) -> bool:
     if not text or len(text) >= HEADING_RESERVE or text[-1] in ".,;":
         return False
     if len(text.split()) > _MAX_HEADING_WORDS:
+        return False
+    if _is_date_line(text):
         return False
     letters = [ch for ch in text if ch.isalpha()]
     if len(letters) < 3:
