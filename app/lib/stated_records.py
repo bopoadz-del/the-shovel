@@ -94,10 +94,12 @@ def stated_weights(text: str) -> dict[str, float] | None:
 
 
 def _criterion_for(label: str, criteria: list[str]) -> str | None:
-    """The one criterion whose words the label's words match."""
+    """The one criterion whose words the label's words match.
+
+    A label with no words matches nothing: a criterion key always has at
+    least one word.
+    """
     words = set(_words(label))
-    if not words:
-        return None
     hits = [c for c in criteria if set(c.split("_")) == words]
     return hits[0] if len(hits) == 1 else None
 

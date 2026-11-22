@@ -130,6 +130,10 @@ def _two_record_lists(a: list[dict], b: list[dict], weights: dict | None = None)
     return {}
 
 
+def _optional_record(tenderers: dict | None = None, weights: dict | None = None) -> dict:
+    return {}
+
+
 def _weights_and_figures(values: list[float], weights: dict | None = None) -> dict:
     return {}
 
@@ -139,6 +143,7 @@ def _weights_and_figures(values: list[float], weights: dict | None = None) -> di
     (_records_only, None),
     (_two_record_lists, None),
     (_weights_and_figures, None),
+    (_optional_record, None),
 ])
 def test_the_records_parameter_is_found_from_the_signature(fn, expected):
     assert stated_records._takes_records_and_weights(fn) == expected
@@ -236,3 +241,26 @@ def test_predispatch_runs_the_scoring_on_the_stated_records(text, ranked_first):
     assert tool_turns
     body = json.loads(tool_turns[0]["content"])
     assert body["result"]["recommended"]["name"] == ranked_first
+
+
+@pytest.mark.parametrize("rule, binds", [
+    ("handling score = 3 points", True),     # not a weighted criterion: no rule of the scorer's
+    ("price score = 3 points", False),       # a weighted amount criterion: a different rule
+])
+def test_a_rule_for_a_criterion_the_weights_do_not_name_is_not_read(rule, binds):
+    text = _OFFERS.replace(". Who wins?", f", {rule}. Who wins?")
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("text, binds", [
+    (_OFFERS, True),
+    (_OFFERS.replace("Weights price 50 / technical 50", "Prices as stated"), False),
+])
+def test_no_selection_without_stated_weights(text, binds):
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("vetoed, supplied", [(True, False), (False, True)])
+def test_a_vetoed_deliverable_is_no_supplied_calculation_even_with_records(monkeypatch, vetoed, supplied):
+    monkeypatch.setattr(runtime, "_not_a_supplied_calculation", lambda raw: vetoed)
+    assert bool(runtime._user_supplied_registered_calculation(_OFFERS)) is supplied
