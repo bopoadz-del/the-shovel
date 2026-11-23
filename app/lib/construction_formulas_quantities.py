@@ -279,6 +279,36 @@ def _dims_match_each(params: dict, each: tuple[float, float, float]) -> bool:
             return False
     return all(abs(a - b) <= 1e-6 for a, b in zip(got, each))
 
+@functools.lru_cache(maxsize=1)
+def _volume_operand_keys() -> frozenset[str]:
+    """The size inputs ``concrete_volume`` declares: its metre parameters.
+
+    Read from the calculator's own signature, with each name's bare stem
+    (``thickness`` for ``thickness_m``), so a new shape input counts as an
+    operand without a list here.
+    """
+    import inspect
+
+    keys: set[str] = set()
+    for pname in inspect.signature(concrete_volume).parameters:
+        if pname.endswith("_m"):
+            keys.add(pname)
+            keys.add(pname[: -len("_m")])
+    return frozenset(keys)
+
+
+def _volume_operands_present(blob: str, params: dict) -> bool:
+    """True when the ask or the call carries an element size to cube."""
+    if parse_lwt_metres(blob):
+        return True
+    for key in _volume_operand_keys():
+        value = params.get(key)
+        if value in (None, "", 0, 0.0):
+            continue
+        return True
+    return False
+
+
 def resolve_concrete_volume_calc(
     calc: str | None,
     params: dict | None = None,
@@ -309,8 +339,15 @@ def resolve_concrete_volume_calc(
     # Live standing-exit: those names were remapped to concrete_volume and
     # returned volume_m3=0 (tool_error×2 / 1-of-2).
     _e4_stealable = {"", "excavation_volume", "concrete_volume"}
+    # The pin takes a call that named no calculator (or the L6 earthwork
+    # alias) only when the volume's own operands are there. An ask that says
+    # "slab concrete" but types no element size -- a crew count, a cycle, a
+    # cost line -- is not a volume ask, and pinning it asks for a length the
+    # question never needed.
     is_concrete = named == "concrete_volume" or (
-        named in _e4_stealable and looks_like_concrete_volume_ask(blob)
+        named in _e4_stealable
+        and looks_like_concrete_volume_ask(blob)
+        and _volume_operands_present(blob, out)
     )
     if not is_concrete:
         return calc, out
