@@ -54,6 +54,16 @@ TOTAL_ASKS = (
 
 # -- the shared rule ---------------------------------------------------------
 
+@pytest.mark.parametrize("text,expected", [
+    (SERIES_ASKS[0], True),
+    (SERIES_ASKS[1], True),
+    (TOTAL_ASKS[0], False),
+    (TOTAL_ASKS[1], False),
+])
+def test_the_shared_reader_finds_a_written_series(text, expected):
+    assert action_router.message_supplies_period_series(text) is expected
+
+
 @pytest.mark.parametrize("text", SERIES_ASKS)
 def test_the_template_declines_a_series_ask(text):
     assert action_router.template_declines_ask("cash_flow_forecast", text) is True
@@ -148,6 +158,13 @@ def test_the_model_keeps_the_template_on_a_total(text, monkeypatch):
 
 # -- door 1 end to end: /v1/chat/stream --------------------------------------
 
+def _template_is_a_workflow(monkeypatch):
+    """Profile-independent: the template is a predefined workflow, as it is
+    under the construction kit, so only the decline rule decides the door."""
+    monkeypatch.setattr(chat_mod, "_predefined_workflows",
+                        lambda: {"cash_flow_forecast"})
+
+
 def _predefined_recorder(monkeypatch, seen: list):
     async def fake_predefined(**kwargs):
         seen.append(kwargs["action"])
@@ -164,6 +181,7 @@ def client():
 
 def _chat_stream(client, monkeypatch, text):
     monkeypatch.setenv("ORCHESTRATOR_PREDEFINED", "1")
+    _template_is_a_workflow(monkeypatch)
     _no_model(monkeypatch)
 
     async def fake_classify(prompt):
@@ -200,6 +218,7 @@ def _token(c: TestClient) -> str:
 def _agents_stream(client, monkeypatch, text):
     """The orchestrator routes the template action, as it did live."""
     monkeypatch.setenv("ORCHESTRATOR_PREDEFINED", "1")
+    _template_is_a_workflow(monkeypatch)
 
     async def routed(message, agent):
         return agent, {"requested": agent.name, "final": agent.name,
