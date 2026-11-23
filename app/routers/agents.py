@@ -189,7 +189,8 @@ async def get_conversation_messages(
 
 def _reopened_messages(conversation_id: str) -> list[dict]:
     """Stored messages as a reopened conversation shows them: an assistant
-    answer stored before the exit check existed passes it on the way out."""
+    answer stored before the exit check existed passes it on the way out,
+    and then the answer contract, as the live ``end`` frame does (W3)."""
     from app.agents import answer_exit
 
     # A reopened session shows its whole thread, not only the recent window
@@ -198,7 +199,33 @@ def _reopened_messages(conversation_id: str) -> list[dict]:
     for m in msgs:
         if m.get("role") == "assistant" and isinstance(m.get("content"), str):
             m["content"] = answer_exit.check_text_or_fallback(m["content"])
+            _reopened_contract(m)
     return msgs
+
+
+def _reopened_contract(message: dict) -> None:
+    """The stored answer is kept as written, before the contract numbered its
+    citations; a reopened one would show them inline and an empty Sources
+    panel. The same contract runs here, so its markers and its ``citations``
+    are numbered together over this text and always agree. The stored entries
+    are read as the turn's Sources rows: they fill each entry's tier. The
+    wording is left as stored (``asking``): only citations and the coverage
+    footer leave the text. Never raises; on any failure the message stands."""
+    from app.agents import answer_contract
+
+    try:
+        stored = message.get("citations") if isinstance(message.get("citations"), list) else []
+        rows = [{"doc_name": e.get("document"), "page_or_section": e.get("section") or "",
+                 "layer_label": e.get("tier")}
+                for e in stored if isinstance(e, dict) and e.get("document")]
+        done = answer_contract.apply(message["content"], sources=rows, asking=True)
+        message["content"] = done.text
+        if done.citations:
+            message["citations"] = done.citations
+        if done.coverage is not None:
+            message["coverage"] = done.coverage
+    except Exception:  # noqa: BLE001 -- a reopened thread must always load
+        logger.exception("reopened answer: contract not applied")
 
 
 @router.get("/v1/agents")
