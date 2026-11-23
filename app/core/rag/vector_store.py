@@ -75,6 +75,22 @@ _FTS5_SAFE_RE = re.compile(r"[^\w\s]+", re.UNICODE)
 # are unchanged.
 _CESMM_OCR_SPACE_RE = re.compile(r"\b([A-Za-z])[ \t]+(\d+\.\d+)\b")
 _CESMM_COMPACT_TOKEN_RE = re.compile(r"^[a-z]\d+$")
+# A letter x written straight after a number (optionally with its unit,
+# "5 x 0.25", "5 m x 0.25 m") is the times sign of a dimension chain, not
+# the class letter of an item code. Collapsing it turned "12 x 5 x 0.25 m"
+# into "12 x 5 x0.25 m", and "x0.25" was then read as a document reference.
+_TIMES_SIGN_LETTERS = frozenset("xX")
+_NUMBER_BEFORE_RE = re.compile(r"\d(?:[ \t]*[A-Za-z]{1,3}\d?)?[ \t]*$")
+
+
+def _collapse_item_code(match: re.Match) -> str:
+    letter = match.group(1)
+    start = match.start()
+    if letter in _TIMES_SIGN_LETTERS and _NUMBER_BEFORE_RE.search(
+        match.string[max(0, start - 16):start]
+    ):
+        return match.group(0)
+    return letter + match.group(2)
 
 
 def normalize_cesmm_item_codes(text: str) -> str:
@@ -88,7 +104,7 @@ def normalize_cesmm_item_codes(text: str) -> str:
     """
     if not text:
         return text
-    return _CESMM_OCR_SPACE_RE.sub(r"\1\2", text)
+    return _CESMM_OCR_SPACE_RE.sub(_collapse_item_code, text)
 
 
 def _identifier_tokens(ident: str) -> List[str]:
