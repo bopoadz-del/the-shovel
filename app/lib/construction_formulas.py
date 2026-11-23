@@ -248,7 +248,85 @@ def calculator_name_from_text(text: str) -> Optional[str]:
             return uniq[0]
         if len(uniq) > 1:
             return None
-    return None
+    return _calculator_by_content_words(raw)
+
+
+# Words that carry no calculator meaning: function words and the unit tokens
+# every calculator shares. Two calculators never differ by one of these.
+_CONTENT_STOP_WORDS = frozenset(
+    "a an the of on in to for per and or with from by at as is are what how "
+    "kn kpa mpa mm m2 m3 kg min pct tons ton currency month days day ratio "
+    "count".split()
+)
+
+# A calculator is taken from its content words only when it leads the next
+# one by at least this many distinct words: the ask then describes that
+# calculator and no other. A narrower lead is a guess between two.
+_CONTENT_WORD_LEAD = 3
+
+
+def _content_words(text: str) -> set:
+    out = set()
+    for word in re.findall(r"[a-z]+", (text or "").lower()):
+        if len(word) <= 2 or word in _CONTENT_STOP_WORDS:
+            continue
+        # "cranes" / "crane", "shifts" / "shift": one word, two spellings.
+        out.add(word[:-1] if word.endswith("s") and len(word) > 4 else word)
+    return out
+
+
+_CONTENT_VOCAB: Dict[int, List[Tuple[str, set]]] = {}
+
+
+def _calculator_content_vocab() -> List[Tuple[str, set]]:
+    """(registry name, content words) per calculator, read from what each
+    formula declares about itself: its name, display name, input labels and
+    output names. Built once per registry state."""
+    from app.lib.formula_registry import all_specs
+
+    specs = all_specs()
+    key = len(specs)
+    cached = _CONTENT_VOCAB.get(key)
+    if cached is None:
+        cached = []
+        for spec in specs:
+            if spec.name not in CALCULATORS:
+                continue
+            parts = [spec.name.replace("_", " "), spec.display_name or ""]
+            for input_name, param in (spec.inputs or {}).items():
+                parts.append(getattr(param, "label", "") or input_name.replace("_", " "))
+            parts.extend(out.replace("_", " ") for out in (spec.outputs or {}))
+            cached.append((spec.name, _content_words(" ".join(parts))))
+        _CONTENT_VOCAB.clear()
+        _CONTENT_VOCAB[key] = cached
+    return cached
+
+
+def _calculator_by_content_words(raw: str) -> Optional[str]:
+    """The calculator an ask describes without naming it, or None.
+
+    Reached only when no name rule hits. The ask must give a figure to
+    compute with, and one calculator must share at least
+    ``_CONTENT_WORD_LEAD`` more of its declared words (inputs, outputs,
+    name) with the ask than any other: "panel 80 m2, 4 m high, shape factor
+    1.3, wind 20 m/s; force and overturning moment?" writes the inputs and
+    outputs of one formula. A tie or a narrow lead is no answer.
+    """
+    if not re.search(r"\d", raw):
+        return None
+    ask = _content_words(raw)
+    if not ask:
+        return None
+    scored = sorted(
+        ((len(words & ask), name) for name, words in _calculator_content_vocab()),
+        reverse=True,
+    )
+    if not scored or scored[0][0] == 0:
+        return None
+    runner_up = scored[1][0] if len(scored) > 1 else 0
+    if scored[0][0] - runner_up < _CONTENT_WORD_LEAD:
+        return None
+    return scored[0][1]
 
 # PMI (BCWS/BCWP/ACWP/BAC) and long PE-sheet names → calculate_evm kwargs.
 # ``run_calculation`` keeps only exact signature names, so uppercase / long
