@@ -25,7 +25,9 @@ question, a formula, a project or a document.
 5. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
    a refusal into an answer: a tier is copied from the turn's own Sources row
    or left ``None``; a refusal (an answer with no figure) keeps every sentence
-   that is not machinery or padding.
+   that is not machinery or padding. An answer that says a thing is absent and
+   then states it with a cited figure loses only the absence sentence the
+   cited figure overrides; an uncited figure overrides nothing.
 
 Never raises: on any failure the text passes through unchanged.
 """
@@ -700,6 +702,93 @@ def _drop_padding(text: str, computed: bool = True) -> str:
     return "\n".join(out)
 
 
+# ── Rule 5: an absence the answer itself overrides ──────────────────────────
+
+#: Words that say nothing about WHAT is absent: function words, the places a
+#: thing is looked for, and the verbs of having or showing it. What is left of
+#: an absence clause names the thing itself.
+_ABSENCE_FILLER = frozenset((
+    "a", "an", "the", "this", "that", "these", "those", "it", "its", "there", "here", "is", "are", "was",
+    "were", "be", "been", "being", "has", "have", "had", "do", "does", "did", "for", "of", "on", "in", "at",
+    "to", "by", "from", "with", "within", "into", "about", "any", "anything", "such", "so", "and", "or", "but",
+    "nor", "than", "then", "you", "your", "we", "our", "i", "me", "my", "they", "their", "them", "which",
+    "what", "where", "who", "whom", "whose", "how", "no", "not", "none", "nothing", "neither", "cannot",
+    "can't", "could", "couldn't", "unable", "without", "missing", "file", "files", "record", "records",
+    "document", "documents", "project", "projects", "excerpt", "excerpts", "context", "provided", "available",
+    "uploaded", "indexed", "given", "shown", "stated", "listed", "included", "found", "contain", "contains",
+    "contained", "give", "gives", "gave", "show", "shows", "showed", "state", "states", "list", "lists",
+    "include", "includes", "hold", "holds", "held", "appear", "appears", "appeared", "find", "see", "seen",
+    "yet", "currently",
+))
+_CLAUSE_END_RE = re.compile(r"\s[—–-]\s|[—–;:]")
+_WORD_RE = re.compile(r"[a-z][a-z'’]+")
+
+
+def _stem(word: str) -> str:
+    word = word.replace("’", "'").removesuffix("'s")
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def _absence_terms(sentence: str) -> set[str]:
+    """What an absence sentence says is absent: the content words of its
+    first clause (a remedy after a dash or semicolon is not the thing). Empty
+    when the sentence states no absence, carries a figure or a marker, or
+    names nothing."""
+    plain = sentence.strip().strip("*_ ")
+    if _FIGURE_RE.search(plain) or _MARKER_RE.search(plain):
+        return set()
+    clause = _CLAUSE_END_RE.split(plain, maxsplit=1)[0]
+    if not _NEGATIVE_RE.search(clause):
+        return set()
+    return {_stem(w) for w in _WORD_RE.findall(clause.lower()) if w not in _ABSENCE_FILLER}
+
+
+def _drop_overridden_absence(text: str) -> str:
+    """An answer never says a thing is absent and then states it.
+
+    A sentence stating that something is absent goes when a LATER sentence of
+    the same answer states a figure, carries a citation marker and names every
+    content word of what the absence sentence said was missing. The cited
+    figure is the answer; the absence line it overrides only contradicts it.
+
+    It stays when no later sentence states a cited figure, when the figure is
+    uncited (nothing here turns an uncited figure into the answer, rule 5),
+    when the cited sentence is about something else (a word of the absent
+    thing is not in it), and when it names nothing. The answer is never left
+    empty: the cited figure sentence itself is never dropped."""
+    lines = text.split("\n")
+    spans: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        for s in _sentences(line):
+            if s.strip():
+                spans.append((i, s))
+    drop: set[int] = set()
+    for k, (_, s) in enumerate(spans):
+        terms = _absence_terms(s)
+        if not terms:
+            continue
+        for _, later in spans[k + 1:]:
+            if not (_MARKER_RE.search(later) and _FIGURE_RE.search(_MARKER_RE.sub("", later))):
+                continue
+            named = {_stem(w) for w in _WORD_RE.findall(later.lower())}
+            if terms <= named:
+                drop.add(k)
+                break
+    if not drop:
+        return text
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        mine = [(k, s) for k, (j, s) in enumerate(spans) if j == i]
+        if not any(k in drop for k, _ in mine):
+            out.append(line)
+            continue
+        kept = " ".join(s.strip() for k, s in mine if k not in drop).strip()
+        if kept:
+            lead = line[: len(line) - len(line.lstrip())]
+            out.append(lead + kept)
+    return "\n".join(out)
+
+
 # ── Rule 1: answer first ────────────────────────────────────────────────────
 
 def _answer_first(text: str, computed: bool) -> str:
@@ -806,6 +895,7 @@ def apply(
             body = _drop_padding(body, computed)
             body = _answer_first(body, computed)
             body = _narration_first(body)
+            body = _drop_overridden_absence(body)
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 
