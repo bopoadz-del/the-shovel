@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse a deploy that would ship anything but the head of main, or move live back.
+"""Refuse a deploy that would ship a commit not on main, or move live back.
 
 deploy-aws fires on every green ``tests`` run on main. That run can belong to
 an older commit, for example a ``--failed`` rerun that finishes after a newer
@@ -8,13 +8,16 @@ ships the older commit and live goes backwards.
 
 Two rules, both checked before anything is built or rolled:
 
-1. The commit to deploy must be the current head of main.
+1. The commit to deploy must be on main: the head of main or an ancestor of
+   it. A green commit is often no longer the head by the time its deploy
+   fires (main moves while tests run), so the head is not required.
 2. It must not be a strict ancestor of the commit that is live now.
    Redeploying the live commit itself is allowed.
 
 When /livez gives no build_sha, or the live commit is not in this repository's
 history, rule 2 cannot be decided. The deploy then goes ahead on rule 1 alone,
 with a warning: refusing would block the deploy that repairs a down site.
+Rule 1 is never skipped.
 
 Usage (from the repository root, with origin/main fetched with history):
 
@@ -49,25 +52,25 @@ def decide(deploy: str, main_head: str, live: str, is_ancestor: AncestorFn) -> V
     live = live.strip().lower()
     if not deploy or not main_head:
         return Verdict(False, "the commit to deploy or the head of main is unknown")
-    if deploy != main_head:
-        return Verdict(
-            False,
-            f"{deploy} is not the head of main ({main_head}); only the head of main deploys",
-        )
+    on_main = True if deploy == main_head else is_ancestor(deploy, main_head)
+    if on_main is None:
+        return Verdict(False, f"cannot tell whether {deploy} is on main ({main_head}); only commits on main deploy")
+    if not on_main:
+        return Verdict(False, f"{deploy} is not on main ({main_head}); only commits on main deploy")
     if not live:
-        return Verdict(True, "head of main", "live build_sha is unknown; the live check was not made")
+        return Verdict(True, "on main", "live build_sha is unknown; the live check was not made")
     if live == deploy:
-        return Verdict(True, "head of main, same commit as live")
+        return Verdict(True, "on main, same commit as live")
     older = is_ancestor(deploy, live)
     if older is None:
         return Verdict(
             True,
-            "head of main",
+            "on main",
             f"live commit {live} is not in this repository's history; the live check was not made",
         )
     if older:
         return Verdict(False, f"{deploy} is older than the live commit {live}; live would go backwards")
-    return Verdict(True, "head of main, not older than live")
+    return Verdict(True, "on main, not older than live")
 
 
 def git_is_ancestor(a: str, b: str) -> Optional[bool]:

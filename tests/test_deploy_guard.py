@@ -1,4 +1,4 @@
-"""deploy-aws ships only the head of main, never a commit older than live.
+"""deploy-aws ships only commits on main, never a commit older than live.
 
 The failure this guards: a late ``--failed`` rerun of an older main commit's
 tests finishes green after a newer commit has already shipped. deploy-aws
@@ -22,56 +22,78 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 import deploy_guard as dg  # noqa: E402
 
 _WORKFLOW = _ROOT / ".github" / "workflows" / "deploy-aws.yml"
-_GUARD_STEP = "Refuse a commit that is not the head of main or is older than live"
+_GUARD_STEP = "Refuse a commit that is not on main or is older than live"
 
 # ------------------------------------------------------------- the decision
 
-def _chain(*order: str):
-    """is_ancestor over a linear history given oldest first."""
-    pos = {sha: i for i, sha in enumerate(order)}
+def _graph(parents: dict[str, str]):
+    """is_ancestor over a history given as child -> parent ("" for a root)."""
 
     def is_ancestor(a: str, b: str):
-        if a not in pos or b not in pos:
+        if a not in parents or b not in parents:
             return None
-        return pos[a] <= pos[b]
+        while b:
+            if a == b:
+                return True
+            b = parents[b]
+        return False
 
     return is_ancestor
 
 
+# main is aaa -> bbb -> ccc; xxx is a branch commit off bbb, never merged.
+_HISTORY = _graph({"aaa": "", "bbb": "aaa", "ccc": "bbb", "xxx": "bbb"})
+
+
 @pytest.mark.parametrize("deploy,main_head,live,ok", [
-    # Late rerun of an older commit while main and live are ahead: refused.
+    # Late rerun of an older commit while live is ahead: refused.
     ("aaa", "ccc", "bbb", False),
     ("bbb", "ccc", "ccc", False),
     # The head of main, ahead of live or equal to it: allowed.
     ("ccc", "ccc", "bbb", True),
     ("ccc", "ccc", "aaa", True),
     ("ccc", "ccc", "ccc", True),
-    # Head of main but older than live (live came from elsewhere): refused.
+    # On main but no longer the head (main moved while tests ran), and ahead
+    # of live or equal to it: allowed.
+    ("bbb", "ccc", "aaa", True),
+    ("bbb", "ccc", "bbb", True),
+    # A commit not on main: refused, whatever live is.
+    ("xxx", "ccc", "aaa", False),
+    ("xxx", "ccc", "bbb", False),
+    # On main but older than live (live came from elsewhere): refused.
     ("bbb", "bbb", "ccc", False),
     ("aaa", "aaa", "ccc", False),
 ])
-def test_only_the_head_of_main_not_older_than_live_deploys(deploy, main_head, live, ok):
-    verdict = dg.decide(deploy, main_head, live, _chain("aaa", "bbb", "ccc"))
+def test_only_a_commit_on_main_not_older_than_live_deploys(deploy, main_head, live, ok):
+    verdict = dg.decide(deploy, main_head, live, _HISTORY)
     assert verdict.ok is ok
 
 
+@pytest.mark.parametrize("deploy", ["ccc", "bbb"])
 @pytest.mark.parametrize("live", ["", "zzz"])
-def test_an_unknown_live_commit_does_not_block_the_head_of_main(live):
-    verdict = dg.decide("ccc", "ccc", live, _chain("aaa", "bbb", "ccc"))
+def test_an_unknown_live_commit_does_not_block_a_commit_on_main(deploy, live):
+    verdict = dg.decide(deploy, "ccc", live, _HISTORY)
     assert verdict.ok is True
     assert "not made" in verdict.warning
 
 
 @pytest.mark.parametrize("live", ["", "zzz"])
-def test_an_unknown_live_commit_does_not_let_an_older_commit_through(live):
-    verdict = dg.decide("bbb", "ccc", live, _chain("aaa", "bbb", "ccc"))
+def test_an_unknown_live_commit_does_not_let_a_commit_off_main_through(live):
+    verdict = dg.decide("xxx", "ccc", live, _HISTORY)
     assert verdict.ok is False
-    assert "not the head of main" in verdict.reason
+    assert "not on main" in verdict.reason
+
+
+@pytest.mark.parametrize("deploy", ["qqq", "rrr"])
+def test_a_commit_git_cannot_place_against_main_is_refused(deploy):
+    verdict = dg.decide(deploy, "ccc", "", _HISTORY)
+    assert verdict.ok is False
+    assert "cannot tell" in verdict.reason
 
 
 @pytest.mark.parametrize("deploy,main_head", [("", "ccc"), ("ccc", "")])
 def test_a_missing_sha_is_refused(deploy, main_head):
-    assert dg.decide(deploy, main_head, "ccc", _chain("ccc")).ok is False
+    assert dg.decide(deploy, main_head, "ccc", _HISTORY).ok is False
 
 
 # ------------------------------------------------------------- real git
@@ -89,7 +111,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 @pytest.fixture()
 def origin(tmp_path: Path):
-    """A repository whose main is c1 -> c2 -> c3 and carries the scripts."""
+    """main is c1 -> c2 -> c3 (shas[0..2]); shas[3] is a branch commit off c2."""
     work = tmp_path / "work"
     work.mkdir()
     _git(work, "init", "-q", "-b", "main")
@@ -102,6 +124,13 @@ def origin(tmp_path: Path):
         _git(work, "add", "-A")
         _git(work, "commit", "-q", "-m", f"c{n}")
         shas.append(_git(work, "rev-parse", "HEAD"))
+    # A commit that never reached main: a branch off c2.
+    _git(work, "checkout", "-q", "-b", "side", shas[1])
+    (work / "side.txt").write_text("side", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "side")
+    shas.append(_git(work, "rev-parse", "HEAD"))
+    _git(work, "checkout", "-q", "main")
     return work, shas
 
 
@@ -127,6 +156,23 @@ def test_the_head_of_main_deploys_over_any_older_or_equal_live(origin, live_inde
     repo, shas = origin
     proc = _cli(repo, shas[2], shas[live_index])
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("live_index", [0, 1])
+def test_a_commit_main_has_moved_past_still_deploys_over_older_or_equal_live(origin, live_index):
+    """Main moved on while c2's tests ran; c2 is not older than live, so it ships."""
+    repo, shas = origin
+    proc = _cli(repo, shas[1], shas[live_index])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "may deploy" in proc.stdout
+
+
+@pytest.mark.parametrize("live_index", [0, 1])
+def test_a_branch_commit_is_refused(origin, live_index):
+    repo, shas = origin
+    proc = _cli(repo, shas[3], shas[live_index])
+    assert proc.returncode == 1
+    assert "not on main" in proc.stdout
 
 
 @pytest.mark.parametrize("main_index,live_index", [(1, 2), (0, 2), (0, 1)])
@@ -191,8 +237,8 @@ def _run_step(tmp_path: Path, origin_dir: Path, checkout_sha: str) -> subprocess
                           capture_output=True, text=True, check=False)
 
 
-@pytest.mark.parametrize("index,ok", [(0, False), (1, False), (2, True)])
-def test_the_step_script_ships_only_the_head_of_main(tmp_path, origin, index, ok):
+@pytest.mark.parametrize("index,ok", [(0, True), (1, True), (2, True), (3, False)])
+def test_the_step_script_ships_only_commits_on_main(tmp_path, origin, index, ok):
     origin_dir, shas = origin
     proc = _run_step(tmp_path, origin_dir, shas[index])
     assert (proc.returncode == 0) is ok, proc.stdout + proc.stderr

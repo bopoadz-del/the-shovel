@@ -19,10 +19,10 @@
 # branch is named main on a fork, does not deploy. The run checks out and
 # ships workflow_run.head_sha, so a later merge cannot change which commit
 # this deploy builds. Before anything is built, scripts/deploy_guard.py
-# refuses a commit that is not the current head of main or is older than the
-# commit /livez reports, so a late rerun of an older commit cannot roll live
-# back. Manual workflow_dispatch passes the same guard: it deploys the head
-# of main only. Overlapping deploys queue; a later run does not
+# refuses a commit that is not on main (the head of main or an ancestor of it)
+# or is older than the commit /livez reports, so a late rerun of an older
+# commit cannot roll live back. Manual workflow_dispatch passes the same
+# guard: it deploys commits on main only. Overlapping deploys queue; a later run does not
 # cancel one already rolling. After the roll, the job waits for the web
 # service to be stable and for /livez build_sha to equal that commit. The
 # origin is the PUBLIC_BASE_URL repository variable.
@@ -76,9 +76,9 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # A green tests run can belong to an older commit (a late --failed
-      # rerun). Ship only the head of main, and never a commit older than the
-      # one live now. Runs before the build, so a refusal changes nothing.
-      - name: Refuse a commit that is not the head of main or is older than live
+      # rerun). Ship only a commit on main, and never one older than the
+      # commit live now. Runs before the build, so a refusal changes nothing.
+      - name: Refuse a commit that is not on main or is older than live
         timeout-minutes: 5
         env:
           DEPLOY_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
