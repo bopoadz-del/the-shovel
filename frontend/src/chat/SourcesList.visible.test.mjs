@@ -28,7 +28,7 @@ after(() => server.close())
 const { default: SourcesList } = await server.ssrLoadModule('/src/chat/SourcesList.tsx')
 const { default: ChatBubble } = await server.ssrLoadModule('/src/chat/ChatBubble.tsx')
 const { SOURCE_CLASS_LABELS } = await server.ssrLoadModule('/src/chat/sourceClassLabels.ts')
-const { activityForTool } = await server.ssrLoadModule('/src/chat/userFacingText.ts')
+const { activityLine, WORKING_LINE } = await server.ssrLoadModule('/src/chat/userFacingText.ts')
 
 // jsdom for the W3 click and tab tests below; every module is loaded here,
 // before the first test runs (a later top-level await lets the runner
@@ -155,11 +155,45 @@ test('a tool status shows words, not the tool id or a key=value list', () => {
   assert.doesNotMatch(text, KEY_VALUE)
 })
 
-test('a tool with no dedicated sentence is still plain words', () => {
-  const line = activityForTool('generate_wbs')
-  assert.match(line, /generate wbs/)
-  assert.doesNotMatch(line, SNAKE)
-  assert.doesNotMatch(line, KEY_VALUE)
+// W4: while a tool runs the line names the kind of work, never the tool,
+// its arguments or the model's query. Each case builds its own invented
+// event: a made-up tool id, query and agent name.
+test('a running tool shows the server label, never its name, arguments or query', () => {
+  const evt = {
+    type: 'tool_call',
+    tool: 'tally_widget_rows',
+    name: 'tally_widget_rows',
+    args_preview: JSON.stringify({ query: 'orange gaskets on level nine', agent_name: 'night_crew' }),
+    stage: 'searching',
+    label: 'Looking it up…',
+  }
+  const line = activityLine(evt)
+  assert.equal(line, 'Looking it up…')
+  for (const word of ['tally', 'widget', 'orange', 'gaskets', 'night', 'crew']) {
+    assert.doesNotMatch(line, new RegExp(word, 'i'))
+  }
+})
+
+test('a running tool with no label is shown as plain work, not by its name', () => {
+  for (const evt of [
+    { type: 'tool_call', tool: 'tally_widget_rows', args_preview: '{"query": "orange gaskets"}' },
+    { type: 'tool_call', tool: 'tally_widget_rows', label: '   ' },
+    { type: 'tool_call', tool: 'tally_widget_rows', label: 7 },
+  ]) {
+    const line = activityLine(evt)
+    assert.equal(line, WORKING_LINE)
+    assert.doesNotMatch(line, /tally|widget|orange/i)
+    assert.doesNotMatch(line, SNAKE)
+  }
+})
+
+test('the running-tool line in the bubble is the label, rendered as the user reads it', () => {
+  const html = renderToStaticMarkup(React.createElement(ChatBubble, {
+    message: { id: 'w4', role: 'assistant', content: '', streaming: true,
+      toolStatus: activityLine({ type: 'tool_call', tool: 'tally_widget_rows', label: 'Calculating…' }) },
+  }))
+  assert.match(html, /Calculating…/)
+  assert.doesNotMatch(html, /tally|widget/i)
 })
 
 // ── W3: citations live in the side panel only ──────────────────────────────
