@@ -297,8 +297,10 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
     * A sentence that states only ONE of a conflict's differing values for
       that thing. Read by the typed values (``evidence_conflicts.extract``/
       ``same``, citation spans blanked); a sentence about another thing (none
-      of the thing's words) and a sentence stating two or more of the values
-      stay.
+      of the thing's words), a sentence stating two or more of the values and
+      a sentence that also states a typed value which is none of the
+      conflict's values (a result worked from it, a second quantity: news the
+      conflict line does not carry) stay.
     * A sentence asserting that the documents agree
       (``evidence_conflicts.asserts_agreement``: an agreement word with no
       negation just before it) about that thing: it states one or more of the
@@ -334,7 +336,12 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
             for kind, classes, thing, docs in rules:
                 hits = {i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}
                 about = bool(thing & _terms(sent))
-                if len(hits) == 1 and about:
+                # A typed value the conflict line does not carry (a result
+                # worked from the value, a second quantity) is news, not a
+                # restatement: only the competing value is superseded, so
+                # the sentence holding it stays.
+                more = any(not any(same(x, k) for k in classes) for x in vals)
+                if len(hits) == 1 and about and not more:
                     gone = True
                 elif agrees and (hits or about or agreement_names_no_thing(sent, docs)):
                     gone = True
