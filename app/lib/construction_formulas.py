@@ -2762,20 +2762,33 @@ def _units_written_for(figure: float, text: str) -> List[str]:
     return found
 
 
+_CHAIN_BEFORE = re.compile(r"\d\s*[x×*]\s*$", re.IGNORECASE)
+_CHAIN_AFTER = re.compile(r"\s*[x×*]\s*\d", re.IGNORECASE)
+
+
 def _words_written_after(figure: float, text: str) -> str:
     """The unit words the ask writes right after this figure, up to the end
     of the clause (at most six words); empty when the figure is not written
-    or is written twice with different words."""
+    or is written twice with different words.
+
+    Every place the figure is written counts, a bare one too: "30 kN/m
+    ultimate ... f'c 30" writes 30 once with words and once with none, so
+    neither writing is the figure's own unit (chains M03: the strength read
+    the load's "kN/m"). A figure that is one side of a product ("0.9 x 2.1
+    door per room") has no words of its own: what follows the product names
+    the thing measured, not a unit of its last side."""
     found = set()
     num = re.compile(r"(?<![\w.,])(" + _TEXT_NUM_RE + r")(?![\d,.]*\d)")
     for match in num.finditer(text or ""):
         value = _parse_text_number(match.group(1))
         if value is None or not _numbers_agree(value, figure):
             continue
+        if _CHAIN_BEFORE.search(text[:match.start()]) or _CHAIN_AFTER.match(text, match.end()):
+            found.add("")
+            continue
         rest = re.split(r"[.;:?!,()]|\s(?:and|for|with|to|over|in|on)\s", text[match.end():], maxsplit=1)[0]
         words = " ".join(rest.split()[:6]).strip()
-        if words and re.match(r"[A-Za-z%/]", words):
-            found.add(words)
+        found.add(words if words and re.match(r"[A-Za-z%/]", words) else "")
     return next(iter(found)) if len(found) == 1 else ""
 
 
@@ -2789,7 +2802,9 @@ def _written_only_negative(figure: float, text: str) -> bool:
             and not any(_numbers_agree(v, figure) for v in values))
 
 
-_RATE_WORDS = re.compile(r"[A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?\s*(?:/\s*|\s+per\s+)[A-Za-z]+(?:-[A-Za-z]+)?")
+# The rate's last unit is read whole: "kN/m2" is a pressure, and stopping
+# at "kN/m" would name it a force per length.
+_RATE_WORDS = re.compile(r"[A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?\s*(?:/\s*|\s+per\s+)[A-Za-z]+\d*(?:-[A-Za-z]+)?")
 
 
 def _attach_written_units(name: str, fn: Any, bound: Dict[str, Any], caller: Dict[str, float],
