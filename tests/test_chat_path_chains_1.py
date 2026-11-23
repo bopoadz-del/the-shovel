@@ -27,7 +27,6 @@ from tests._chat_path_harness import (
     run_turns,
 )
 
-
 # --- Grout for post-tensioning ducts: duct bore and pressure read ------------
 
 def _duct_ask(bore_mm: int, pressure: float) -> str:
