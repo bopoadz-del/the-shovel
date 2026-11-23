@@ -168,7 +168,15 @@ async def test_model_call_records_the_missing_input_as_turn_state(
         assert out["result"]["payment"]["net_due_this_period"] == 1_177_500.0
 
 
-async def test_reply_with_the_earlier_amount_lets_the_next_call_run(monkeypatch):
+@pytest.mark.parametrize("gross, ret_pct, previous, reply, net", [
+    # 1,275,000 - 10 % (127,500) - 800,000 = 347,500
+    (1_275_000, 10, 800_000, "800,000.", 347_500.0),
+    # 2,640,000 - 5 % (132,000) - 1,900,000 = 608,000
+    (2_640_000, 5, 1_900_000, "1,900,000", 608_000.0),
+])
+async def test_reply_with_the_earlier_amount_lets_the_next_call_run(
+    monkeypatch, gross, ret_pct, previous, reply, net,
+):
     _real_container(monkeypatch)
     # Turn 2 of the same thread: the reply is the bare figure, and the
     # model's call carries it under the name the ask recorded. The reply
@@ -176,10 +184,9 @@ async def test_reply_with_the_earlier_amount_lets_the_next_call_run(monkeypatch)
     from app.agents.runtime import _dispatch_payment_certificate
 
     out = await _dispatch_payment_certificate(
-        {"gross_valuation": 1_275_000, "retention_percent": 10,
-         "previous_certified": 800_000},
-        user_message="800,000.",
+        {"gross_valuation": gross, "retention_percent": ret_pct,
+         "previous_certified": previous},
+        user_message=reply,
     )
     assert out["ok"] is True, out
-    # 1,275,000 - 10 % (127,500) - 800,000 = 347,500
-    assert out["result"]["payment"]["net_due_this_period"] == 347_500.0
+    assert out["result"]["payment"]["net_due_this_period"] == net
