@@ -1872,6 +1872,7 @@ def _bind_label_word_before_figure(
     found: Dict[str, Any],
     consumed: List[Tuple[int, int]],
     overlaps: Any,
+    own_names: Tuple[str, ...] = (),
 ) -> None:
     """Label word first, figure and unit after: "live 4.0 kN/m2".
 
@@ -1879,8 +1880,17 @@ def _bind_label_word_before_figure(
     is a word of exactly one input's labels among the open inputs that
     measure the figure's kind of unit. A word no label holds, or one that
     two such inputs share, names nothing; an input named for two figures
-    binds neither.
+    binds neither. A word inside the calculator's own name, where the ask
+    writes that name, names the calculator and not a figure ("cut and fill
+    balance for 12 m3" does not make 12 m3 the fill).
     """
+    name_spans: List[Tuple[int, int]] = []
+    for phrase in own_names:
+        parts = re.findall(r"[a-z0-9]+", str(phrase or "").lower())
+        if len(parts) < 2:
+            continue
+        pattern = r"(?<![A-Za-z0-9])" + r"[\W_]+".join(map(re.escape, parts)) + r"(?![A-Za-z0-9])"
+        name_spans.extend(m.span() for m in re.finditer(pattern, raw, re.IGNORECASE))
     words_to_dests: Dict[str, set] = {}
     for label, dest in labels.items():
         for word in label.split("_"):
@@ -1898,7 +1908,11 @@ def _bind_label_word_before_figure(
             continue
         written_unit = match.group(3)
         dests: set = set()
-        for word in match.group(1).lower().split():
+        for word_match in re.finditer(r"[A-Za-z]+", match.group(1)):
+            at = match.start(1) + word_match.start()
+            if any(lo <= at < hi for lo, hi in name_spans):
+                continue
+            word = word_match.group(0).lower()
             for dest in words_to_dests.get(word, ()):
                 declared = str(declared_units.get(dest) or _unit_from_name(dest) or "")
                 if dest not in found and declared and _same_kind(written_unit, declared):
@@ -2053,7 +2067,12 @@ def extract_calculation_params_from_text(
         found[dest] = _to_param_unit(num, match.group(2), dest, declared_units.get(dest, ""))
         consumed.append(match.span())
 
-    _bind_label_word_before_figure(labels, declared_units, raw, number, found, consumed, _overlaps)
+    own_names = (
+        (str(spec.display_name or ""), spec.name.replace("_", " ")) if spec else ()
+    )
+    _bind_label_word_before_figure(
+        labels, declared_units, raw, number, found, consumed, _overlaps, own_names,
+    )
 
     accepted = {
         row["name"] for row in describe_calculation_params(fn)

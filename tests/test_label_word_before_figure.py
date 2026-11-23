@@ -107,3 +107,15 @@ def test_a_figure_already_read_is_not_read_again(text, expected):
 def test_an_input_already_read_keeps_its_figure(text, live):
     found = extract_calculation_params_from_text(CALCULATORS["live_load_reduction"], text)
     assert found.get("base_live_load_kn_m2") == pytest.approx(live)
+
+
+# Decision 7: a word inside the calculator's own name, where the ask writes
+# that name, names the calculator and not the figure after it.
+@pytest.mark.parametrize("text, expected", [
+    ("Cut and fill balance for 21 m3, 18 m3.", {}),
+    ("Cut and fill balance: cut 21 m3, fill 18 m3.",
+     {"cut_volume_m3": 21.0, "fill_volume_m3": 18.0}),
+])
+def test_a_word_of_the_calculators_own_name_names_no_figure(text, expected):
+    found = extract_calculation_params_from_text(CALCULATORS["cut_fill_balance"], text)
+    assert {k: found[k] for k in ("cut_volume_m3", "fill_volume_m3") if k in found} == expected
