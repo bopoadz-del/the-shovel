@@ -86,6 +86,7 @@ def test_derives_the_product_in_the_missing_input_unit(ask, weight):
     # nothing missing / no ask words
     ([], "slab 30 x 20 x 0.25 m, concrete 25 kN/m3"),
     (_MISSING, ""),
+    (_MISSING, None),
     # no per-m3 figure / two of them
     (_MISSING, "slab 30 x 20 x 0.25 m, concrete weight unknown"),
     (_MISSING, "slab 30 x 20 x 0.25 m, 25 kN/m3 or 24 kN/m3"),
@@ -104,28 +105,34 @@ def test_derives_nothing_unless_one_reading(missing, ask):
     assert params == {"sds": 1.0}
 
 
-def test_two_missing_inputs_in_that_unit_take_nothing(monkeypatch):
+@pytest.mark.parametrize("missing, expected", [
+    # two missing inputs in kN: which one the product fills is not written
+    (["a_kn", "b_kn"], {}),
+    # one missing input in kN: 150 m3 x 25 = 3,750 kN
+    (["a_kn"], {"a_kn": 3_750.0}),
+])
+def test_two_missing_inputs_in_that_unit_take_nothing(monkeypatch, missing, expected):
     monkeypatch.setattr(cf, "_declared_units", lambda fn: {"a_kn": "kN", "b_kn": "kN"})
     params, rows = cf._derive_missing_by_unit(
-        _fn(), {}, ["a_kn", "b_kn"], "slab 30 x 20 x 0.25 m, 25 kN/m3")
-    assert (params, rows) == ({}, [])
-    params, rows = cf._derive_missing_by_unit(
-        _fn(), {}, ["a_kn"], "slab 30 x 20 x 0.25 m, 25 kN/m3")
-    assert params == {"a_kn": pytest.approx(3_750.0)}
+        _fn(), {}, missing, "slab 30 x 20 x 0.25 m, 25 kN/m3")
+    assert params == pytest.approx(expected)
+    assert [r["parameter"] for r in rows] == list(expected)
 
 
-def test_run_without_a_derivable_weight_still_asks_for_it():
-    # The ask gives no unit weight: the weight is asked, no value assumed.
-    token = cf.set_current_ask("5 floors, each slab 30 x 20 x 0.25 m. SDS 0.9, R 5, Ie 1.0")
+@pytest.mark.parametrize("ask, shear", [
+    # no unit weight written: the weight is asked for, no value assumed
+    ("5 floors, each slab 30 x 20 x 0.25 m. SDS 0.9, R 5, Ie 1.0", None),
+    # 5 x 150 m3 x 25 = 18,750 kN; Cs 0.9 x 1.0 / 5 = 0.18; V 3,375 kN
+    ("5 floors, each slab 30 x 20 x 0.25 m, 25 kN/m3. SDS 0.9, R 5, Ie 1.0", 3_375.0),
+])
+def test_run_without_a_derivable_weight_still_asks_for_it(ask, shear):
+    token = cf.set_current_ask(ask)
     try:
         env = cf.run_calculation("seismic_base_shear", {"sds": 0.9, "r": 5, "ie": 1.0})
     finally:
         cf._CURRENT_ASK.reset(token)
-    assert env.get("status") != "success", env
-    assert "derived_inputs" not in env
-    token = cf.set_current_ask("5 floors, each slab 30 x 20 x 0.25 m, 25 kN/m3. SDS 0.9, R 5, Ie 1.0")
-    try:
-        env = cf.run_calculation("seismic_base_shear", {"sds": 0.9, "r": 5, "ie": 1.0})
-    finally:
-        cf._CURRENT_ASK.reset(token)
-    assert env["result"]["base_shear_kn"] == pytest.approx(3_375.0), env
+    if shear is None:
+        assert env.get("status") != "success", env
+        assert "derived_inputs" not in env
+    else:
+        assert env["result"]["base_shear_kn"] == pytest.approx(shear), env
