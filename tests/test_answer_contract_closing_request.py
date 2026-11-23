@@ -43,18 +43,30 @@ def test_closing_request_paragraph_goes(text, kept):
     assert _drop_closing_request(text) == kept
 
 
-def test_closing_request_goes_through_apply():
-    text = ("The ceiling void is used as a return-air plenum.\n\n"
-            "Once the mechanical drawings are uploaded, tell me which floor and I'll trace the ductwork.")
-    out = answer_contract.apply(text).text
-    assert out == "The ceiling void is used as a return-air plenum."
+@pytest.mark.parametrize("text, kept", [
+    (("The ceiling void is used as a return-air plenum.\n\n"
+      "Once the mechanical drawings are uploaded, tell me which floor and I'll trace the ductwork."),
+     "The ceiling void is used as a return-air plenum."),
+    (("The kitchen floor is quarry tile.\n\n"
+      "If the drainage layout is on another sheet, please send it to me and I'll check the falls."),
+     "The kitchen floor is quarry tile."),
+])
+def test_closing_request_goes_through_apply(text, kept):
+    assert answer_contract.apply(text).text == kept
 
 
-def test_two_closing_request_paragraphs_both_go():
-    text = ("Glazing is laminated to the atrium.\n\n"
-            "Send me the glass schedule.\n\n"
-            "If the canopy is detailed elsewhere, point me at that sheet.")
-    assert _drop_closing_request(text) == "Glazing is laminated to the atrium."
+@pytest.mark.parametrize("text, kept", [
+    (("Glazing is laminated to the atrium.\n\n"
+      "Send me the glass schedule.\n\n"
+      "If the canopy is detailed elsewhere, point me at that sheet."),
+     "Glazing is laminated to the atrium."),
+    (("Handrails are stainless steel.\n\n"
+      "Let me know which stair you mean.\n\n"
+      "I can check the fixings if you share the balustrade drawings."),
+     "Handrails are stainless steel."),
+])
+def test_two_closing_request_paragraphs_both_go(text, kept):
+    assert _drop_closing_request(text) == kept
 
 
 # ── the other side: what stays ──────────────────────────────────────────────
@@ -75,16 +87,21 @@ def test_closing_paragraph_that_stays(text):
     assert _drop_closing_request(text) == text.strip()
 
 
-def test_asking_turn_keeps_its_request():
-    text = ("The pump duty depends on the static head.\n\n"
-            "Tell me the building height and I'll size the pump.")
-    out = answer_contract.apply(text, asking=True).text
-    assert "Tell me the building height" in out
+@pytest.mark.parametrize("text, wanted", [
+    (("The pump duty depends on the static head.\n\n"
+      "Tell me the building height and I'll size the pump."), "Tell me the building height"),
+    (("The cable size depends on the run length.\n\n"
+      "Give me the distance to the board and I'll size the cable."), "Give me the distance to the board"),
+])
+def test_asking_turn_keeps_its_request(text, wanted):
+    assert wanted in answer_contract.apply(text, asking=True).text
 
 
-def test_request_paragraph_before_the_answer_stays():
+@pytest.mark.parametrize("text", [
     # Only a closing paragraph is padding: a request that is followed by
     # more of the answer is not dropped by this rule.
-    text = ("Upload the door schedule and I'll check it.\n\n"
-            "Fire doors are FD60 throughout.")
+    "Upload the door schedule and I'll check it.\n\nFire doors are fire-rated throughout.",
+    "Point me at the finishes register.\n\nThe lobby floor is honed granite.",
+])
+def test_request_paragraph_before_the_answer_stays(text):
     assert _drop_closing_request(text) == text
