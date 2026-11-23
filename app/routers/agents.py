@@ -455,10 +455,6 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
             _use_predefined = bool(
                 _pd_action and _predefined_enabled()
                 and _pd_action in _predefined_workflows()
-                # A template action that cannot take the ask as written
-                # (the user typed their own period figures) leaves the
-                # turn to the agent and its calculators.
-                and not _predefined_declines(_pd_action, message)
                 # A caller who explicitly addressed a SPECIALIST agent chose
                 # it deliberately (the agent-picker contract); a keyword in
                 # their message must not hand the whole turn to a predefined
@@ -474,6 +470,10 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                 and not lookup_question_hijack(
                     message, float(routing.get("confidence") or 0.0)
                 )
+                # A template action that cannot take the ask as written
+                # (the user typed their own period figures) leaves the
+                # turn to the agent and its calculators.
+                and not _predefined_declines(_pd_action, message)
             )
         except Exception:  # noqa: BLE001 — never block the normal agent path
             _pd_action, _use_predefined = None, False
