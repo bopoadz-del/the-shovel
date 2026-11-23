@@ -119,3 +119,25 @@ def test_an_input_already_read_keeps_its_figure(text, live):
 def test_a_word_of_the_calculators_own_name_names_no_figure(text, expected):
     found = extract_calculation_params_from_text(CALCULATORS["cut_fill_balance"], text)
     assert {k: found[k] for k in ("cut_volume_m3", "fill_volume_m3") if k in found} == expected
+
+
+# Decision 8: a calculator name of one word is not taken as its own name in
+# the ask. One word is a label word as easily as a name, so only a name of
+# two words or more, written whole, hides the words inside it.
+@pytest.mark.parametrize("own_names, crane", [
+    (("crane",), 25.0),
+    (("crane hire",), None),
+])
+def test_a_one_word_own_name_hides_no_label_word(own_names, crane):
+    from app.lib import construction_formulas as cf
+
+    text = "crane hire 25 t"
+    labels = cf._text_label_map(_crane)
+    number = rf"(?<![\d,])(?<![A-WYZa-wyz])({cf._TEXT_NUM_RE})(?!\d)(?!,\d)"
+    found: dict = {}
+    consumed: list = []
+    cf._bind_label_word_before_figure(
+        labels, cf._declared_units(_crane), text, number, found, consumed,
+        lambda span: False, own_names,
+    )
+    assert found.get("crane_capacity_t") == crane
