@@ -1909,12 +1909,14 @@ def chunk_markdown(
     segments: list[tuple] = []  # (kind, text)
     prose_buf: list[str] = []
     last_heading = ""
+    # The heading in force where the buffered prose begins (set on its first line).
+    prose_heading = ""
 
     def _flush_prose():
         if prose_buf:
             joined = "\n".join(prose_buf).strip()
             if joined:
-                segments.append(("prose", joined, "", []))
+                segments.append(("prose", joined, prose_heading, []))
             prose_buf.clear()
 
     i = 0
@@ -1922,6 +1924,7 @@ def chunk_markdown(
     while i < n:
         line = lines[i]
         stripped = line.strip()
+        heading_before = last_heading
         if stripped.startswith("#"):
             last_heading = stripped
         # A table = a "|" row immediately followed by a |---|---| separator.
@@ -1941,6 +1944,8 @@ def chunk_markdown(
             segments.append(("table", table_text, last_heading, tbl))
             i = j
             continue
+        if not prose_buf:
+            prose_heading = heading_before
         prose_buf.append(line)
         i += 1
     _flush_prose()
@@ -1962,11 +1967,49 @@ def chunk_markdown(
         groups = _markdown_table_chunks(heading, tbl, cap) if kind == "table" else []
         if groups:
             chunks.extend(groups)
-        else:
-            chunks.extend(
-                chunk_text_with_overlap(seg, target_chars=target_chars, overlap=overlap)
-            )
+            continue
+        pieces = chunk_text_with_overlap(seg, target_chars=target_chars, overlap=overlap)
+        if kind == "prose":
+            pieces = _lead_with_heading(seg, heading, pieces)
+        chunks.extend(pieces)
     return chunks
+
+
+_MARKDOWN_HEADING_LINE = re.compile(r"^[ \t]*#.*$", re.M)
+
+
+def _lead_with_heading(seg: str, start_heading: str, pieces: list[str]) -> list[str]:
+    """Prose pieces of one segment, each opening on the heading it sits under.
+
+    ``pieces`` are the char-chunked pieces of ``seg`` in order; each is a
+    stripped substring of it. A piece whose first line is not a heading gets
+    the heading in force where it starts (the last heading line of ``seg``
+    before it, else ``start_heading``, the heading in force where ``seg``
+    begins) put in front, so a mid-section piece says which section it is
+    from, as a table chunk already does. Text before any heading is left as
+    is. The heading test is the one ``chunk_markdown`` uses (a line opening
+    on ``#``); no word of the note is read.
+    """
+    heads = [(m.start(), m.group(0).strip()) for m in _MARKDOWN_HEADING_LINE.finditer(seg)]
+    out: list[str] = []
+    cursor = 0
+    for piece in pieces:
+        at = seg.find(piece, cursor)
+        if at < 0:
+            at = cursor
+        else:
+            cursor = at + 1
+        first = piece.lstrip().split("\n", 1)[0]
+        if first.startswith("#"):
+            out.append(piece)
+            continue
+        heading = start_heading.strip()
+        for pos, line in heads:
+            if pos >= at:
+                break
+            heading = line
+        out.append(f"{heading}\n{piece}" if heading else piece)
+    return out
 
 
 def _markdown_table_chunks(heading: str, table: list[str], cap: int) -> list[str]:
