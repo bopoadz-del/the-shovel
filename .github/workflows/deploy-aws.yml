@@ -18,8 +18,11 @@
 # that same commit finishes green. A pull request, including one whose head
 # branch is named main on a fork, does not deploy. The run checks out and
 # ships workflow_run.head_sha, so a later merge cannot change which commit
-# this deploy builds. Manual workflow_dispatch is unchanged and deploys the
-# ref the owner selected. Overlapping deploys queue; a later run does not
+# this deploy builds. Before anything is built, scripts/deploy_guard.py
+# refuses a commit that is not the current head of main or is older than the
+# commit /livez reports, so a late rerun of an older commit cannot roll live
+# back. Manual workflow_dispatch passes the same guard: it deploys the head
+# of main only. Overlapping deploys queue; a later run does not
 # cancel one already rolling. After the roll, the job waits for the web
 # service to be stable and for /livez build_sha to equal that commit. The
 # origin is the PUBLIC_BASE_URL repository variable.
@@ -71,6 +74,33 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # A green tests run can belong to an older commit (a late --failed
+      # rerun). Ship only the head of main, and never a commit older than the
+      # one live now. Runs before the build, so a refusal changes nothing.
+      - name: Refuse a commit that is not the head of main or is older than live
+        timeout-minutes: 5
+        env:
+          DEPLOY_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          deepen=""
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then deepen="--unshallow"; fi
+          git fetch --no-tags $deepen origin +refs/heads/main:refs/remotes/origin/main
+          base="${DEPLOY_BASE_URL:-}"
+          base="${base%/}"
+          live=""
+          case "$base" in
+            https://*)
+              curl --proto '=https' --max-time 15 -sS -o "$RUNNER_TEMP/livez-before.json" "$base/livez" || true
+              live=$(python3 scripts/read_livez_build_sha.py "$RUNNER_TEMP/livez-before.json")
+              ;;
+          esac
+          if [ -n "$live" ] && ! git cat-file -e "$live^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$live" || true
+          fi
+          echo "deploy=$DEPLOY_SHA live=${live:-<unknown>}"
+          python3 scripts/deploy_guard.py --deploy "$DEPLOY_SHA" --main-ref origin/main --live "$live"
 
       # The image carries Torch, transformers and OCR wheels; the hosted
       # runner's 14 GB disk fills during the build without this.
