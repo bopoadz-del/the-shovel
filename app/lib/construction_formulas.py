@@ -2773,8 +2773,8 @@ def _words_written_after(figure: float, text: str) -> str:
 
     Every place the figure is written counts, a bare one too: "30 kN/m
     ultimate ... f'c 30" writes 30 once with words and once with none, so
-    neither writing is the figure's own unit (chains M03: the strength read
-    the load's "kN/m"). A figure that is one side of a product ("0.9 x 2.1
+    neither writing is the figure's own unit (else a strength would read a
+    load's "kN/m"). A figure that is one side of a product ("0.9 x 2.1
     door per room") has no words of its own: what follows the product names
     the thing measured, not a unit of its last side."""
     found = set()
