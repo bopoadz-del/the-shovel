@@ -20,6 +20,11 @@ _FIG_PCT = r"([0-9]+(?:\.[0-9]+)?)\s*(?:%|percent)"
 # A word placing an amount before the current period ("previous",
 # "previously", "prior", "earlier", "already").
 _BEFORE_WORD = r"(?:previous(?:ly)?|prior|earlier|already)"
+# A word stating an amount as a running total from the start of the works
+# ("to date", "cumulative"), and the nouns that name a valuation of work.
+_TO_DATE_WORD = r"(?:to\s+date|cumulative)"
+_VALUE_NOUN = (r"(?:valuation|value(?:\s+of\s+(?:the\s+)?works?(?:\s+done)?)?"
+               r"|work\s+done|work\s+valued)")
 
 
 _CCY = r"(?:sar|aed|usd|qar|omr|bhd|kwd|\$)"
@@ -333,10 +338,22 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     # "prior certification", "certified previously". Reading only the one
     # spelling "previous certif..." dropped the adverb form, and the
     # certificate then ran with nothing certified before.
-    v = (_amount(rf"\b{_BEFORE_WORD}\s+certif\w*(?:\s+total)?{_FIG_GAP}{_FIG_NUM}")
-         or _amount(rf"\bcertif\w*\s+{_BEFORE_WORD}{_FIG_GAP}{_FIG_NUM}"))
-    if v:
+    v = _amount(rf"\b{_BEFORE_WORD}\s+certif\w*(?:\s+total)?{_FIG_GAP}{_FIG_NUM}")
+    if v is None:
+        v = _amount(rf"\bcertif\w*\s+{_BEFORE_WORD}{_FIG_GAP}{_FIG_NUM}")
+    # A stated nil ("previously certified 0") is a stated amount, not a gap.
+    if v is not None:
         out["previous_certified"] = v
+    # A valuation the ask writes as a running total ("valuation to date",
+    # "cumulative value of work done") already holds what earlier
+    # certificates covered. Read it as the gross, and mark it: the payment
+    # for this period then depends on the amount certified before, which
+    # the certificate asks for rather than taking as nil.
+    v = (_amount(rf"\b(?:gross\s+)?{_VALUE_NOUN}\s+{_TO_DATE_WORD}{_FIG_GAP}{_FIG_NUM}\s*{_SFX}")
+         or _amount(rf"\b{_TO_DATE_WORD}\s+(?:gross\s+)?{_VALUE_NOUN}{_FIG_GAP}{_FIG_NUM}\s*{_SFX}"))
+    if v:
+        out.setdefault("gross_valuation", v)
+        out["gross_to_date"] = True
     return out
 
 
@@ -697,6 +714,13 @@ class ConstructionBoqMixin:
                               or fig.get("work_done_percent", 0)) / 100.0
         previous_certified = float(p.get("previous_certified") or data.get("previous_certified", 0)
                                    or fig.get("previous_certified", 0))
+        # The amount certified before is stated when the ask writes it (a
+        # nil included) or a caller passes a figure for it. A zero a caller
+        # fills in on its own is not the operator's statement.
+        previous_stated = "previous_certified" in fig or any(
+            isinstance(src, dict) and src.get("previous_certified") not in _IPC_EMPTY
+            for src in (p, data)
+        )
         # The stated retention wins wherever it was given (params or the
         # envelope); 0 is a stated value, not a missing one.
         stated_retention = next(
@@ -737,6 +761,25 @@ class ConstructionBoqMixin:
             parts = measured_works + materials_on_site
             if direct_gross <= 0 or abs(direct_gross - measured_works) < 0.01:
                 direct_gross = parts
+        if direct_gross > 0 and fig.get("gross_to_date") and not previous_stated:
+            # The valuation is a running total and nothing says what earlier
+            # certificates covered: this period's payment cannot be worked
+            # out without it, and nil is not a figure the operator gave. Ask
+            # for that one input, in the same envelope as the gate below.
+            return {
+                "status": "error",
+                "error": (
+                    "The valuation given is to date; the amount certified "
+                    "before this period was not supplied"
+                ),
+                "needs_input": True,
+                "missing": ["previous_certified"],
+                "question": (
+                    "The valuation you gave is to date. What amount was "
+                    "certified on earlier payment certificates, so I can "
+                    "work out this period's payment?"
+                ),
+            }
         if contract_value <= 0:
             if direct_gross > 0:
                 gross_valuation = round(direct_gross, 2)
