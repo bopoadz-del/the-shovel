@@ -264,7 +264,7 @@ def _pressure_in(n_mm2: float, unit: str) -> float:
         'strength_7d_n_mm2': Param('N/mm2', 1, 150, label='7-day strength'),
         'mixing_time_minutes': Param('min', 0, 120, label='mixing time'),
     },
-    outputs={'duct_area_mm2': 'mm2', 'grout_volume_l_m': 'm', 'pressure_n_mm2': 'N/mm2', 'pressure_kg_cm2': '-', 'pressure_psi': '-', 'strength_28d_n_mm2': 'N/mm2', 'strength_7d_n_mm2': 'N/mm2', 'mixing_time_min': '-'},
+    outputs={'duct_area_mm2': 'mm2', 'grout_volume_l_m': 'L/m', 'pressure_n_mm2': 'N/mm2', 'pressure_kg_cm2': 'kgf/cm2', 'pressure_psi': 'psi', 'strength_28d_n_mm2': 'N/mm2', 'strength_7d_n_mm2': 'N/mm2', 'mixing_time_min': 'min'},
 )
 @qaqc_calculator
 def grout_pressure_calc(
