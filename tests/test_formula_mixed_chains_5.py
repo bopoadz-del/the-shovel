@@ -32,9 +32,8 @@ a flagged convention):
   lines take the asset median of the mass / area rows. The oracle is the
   card's rows, read here as data (plan rule), and the medians are worked from
   them by hand. ``reconcile_unit`` flags a stated unit that contradicts the
-  work type. SUSPECTED DEFECT (strict xfail below): ``kg`` and ``t`` share
-  one unit class with no scale, so a 9,000 kg line is priced at the per-tonne
-  rate per kg, 1,000 times over.
+  work type. A pooled per-tonne rate is restated per kilogram before it
+  prices a kg line (it once priced a 9,000 kg line 1,000 times over).
 - M31 ``productivity_benchmark`` holds finishing trades only; slab concrete
   has no row, so the product must return no rate (never invent one). The
   cited norm then comes from the published-ranges table the plan names,
@@ -289,9 +288,6 @@ def test_m26_unit_contradiction_is_flagged(unit, suspect, expected):
     assert want == expected
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect: kg and t share one unit class with no scale, so a "
-    "per-tonne median prices a per-kg line 1,000 times over"))
 @pytest.mark.parametrize("tonnes, kilograms", [
     (9, 9_000),      # plan: 9 t = 9,000 kg
     (2.5, 2_500),    # invented: 2.5 t = 2,500 kg
