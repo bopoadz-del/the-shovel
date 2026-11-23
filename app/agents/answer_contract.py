@@ -119,10 +119,23 @@ def _inline_citations(line: str, markers: "_Markers") -> str:
         end = _group_end(line, i) if ch in _CLOSE else -1
         if end > 0:
             inner = line[i + 1:end]
+            labelled = bool(_SOURCE_PREFIX_RE.match(inner))
             body = _SOURCE_PREFIX_RE.sub("", inner, count=1).strip()
             if body and len(body) <= _CITE_BODY_MAX and _names_a_file(body):
                 head = "".join(out).rstrip(" 	")
                 out = [head, " " + markers.marker(body)]
+                i = end + 1
+                continue
+            if labelled and len(body) <= _CITE_BODY_MAX:
+                # A group the writer labelled as its source but that names no
+                # file ("[source: Bill of Quantities, Bill No. 4]", "[source:
+                # 1]") is still a citation, never prose: it becomes the marker
+                # of the one Sources row its words name, or, when no single
+                # row backs it, it leaves the text -- an attribution nothing
+                # in the turn backs is not printed, and none is guessed.
+                tag = markers.for_title(body)
+                head = "".join(out).rstrip(" 	")
+                out = [head, " " + tag] if tag else [head]
                 i = end + 1
                 continue
         out.append(ch)
@@ -139,6 +152,10 @@ _FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
 _LOCATOR_LEAD = " \t,;:،؛，；—–-"
 #: The colons a label ends with; a file name holds none.
 _LABEL_COLONS = ":："
+#: Where a document named in words ends and its locator begins: a comma or
+#: semicolon of any script, or a dash with space on both sides. Punctuation
+#: only, no word of any language.
+_TITLE_SPLIT_RE = re.compile(r"[ \t]*[,;،؛，；][ \t]*|[ \t]+[—–-][ \t]+")
 
 
 def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -222,6 +239,24 @@ class _Markers:
         entry["marker"] = len(self.entries) + 1
         self.entries.append(entry)
         return f"[{entry['marker']}]"
+
+    def for_title(self, body: str) -> str:
+        """The marker for a citation that names its document in words, not
+        by file name: the one Sources row whose name holds those words. The
+        whole text is tried first, then its lead before the first separator
+        with the rest as the locator. A text with no word in it, or whose
+        words fit no row or more than one document, has no marker ("")."""
+        parts = _TITLE_SPLIT_RE.split(body.strip(), maxsplit=1)
+        lead, rest = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+        for title, section in ((body.strip(), ""), (lead, rest)):
+            key = _name_key(title)
+            if not title or not _doc_words(title):
+                continue
+            hits = [r for r in self.rows if key and key in _name_key(str(r.get("doc_name") or ""))]
+            if len({str(r.get("doc_name")) for r in hits}) == 1:
+                row = hits[0]
+                return self.for_row(dict(row, page_or_section=section or row.get("page_or_section") or ""))
+        return ""
 
     def for_row(self, row: dict[str, Any]) -> str:
         """The marker for one evidence row (its document and section)."""
