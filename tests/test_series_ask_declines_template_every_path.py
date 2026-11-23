@@ -92,24 +92,40 @@ def test_the_runtime_predispatch_reads_the_same_rule(text):
 
 # -- door 1: understand_intent (the /v1/chat/stream classifier) --------------
 
-def _no_model(monkeypatch):
-    async def boom(*a, **k):
-        raise AssertionError("the intent model must not be asked")
-    monkeypatch.setattr("app.core.dynamic_reasoning.complete_json", boom)
+def _no_model(monkeypatch) -> list:
+    """Record intent-model calls. understand_intent swallows a raising model
+    into "no workflow", so a raise here could not tell the two apart."""
+    asked: list = []
+
+    async def record(*a, **k):
+        asked.append(a)
+        return {"workflow": "none"}
+    monkeypatch.setattr("app.core.dynamic_reasoning.complete_json", record)
+    return asked
 
 
 @pytest.mark.parametrize("text", SERIES_ASKS)
 def test_understand_intent_does_not_force_the_template_on_a_series(text, monkeypatch):
-    _no_model(monkeypatch)
+    asked = _no_model(monkeypatch)
     out = asyncio.run(understand_intent(text))
     assert out["action"] is None, out
+    assert asked == [], "a declined series ask must not cost an intent-model call"
 
 
 @pytest.mark.parametrize("text", TOTAL_ASKS)
 def test_understand_intent_still_forces_the_template_on_a_total(text, monkeypatch):
-    _no_model(monkeypatch)
+    asked = _no_model(monkeypatch)
     out = asyncio.run(understand_intent(text))
     assert out["action"] == "cash_flow_forecast", out
+    assert asked == []
+
+
+@pytest.mark.parametrize("text", ["", "   	  "])
+def test_understand_intent_asks_nothing_of_a_blank_message(text, monkeypatch):
+    asked = _no_model(monkeypatch)
+    out = asyncio.run(understand_intent(text))
+    assert out["action"] is None, out
+    assert asked == []
 
 
 @pytest.mark.parametrize("text", SERIES_ASKS)
@@ -229,7 +245,11 @@ def _agents_stream(client, monkeypatch, text):
     seen: list = []
     _predefined_recorder(monkeypatch, seen)
     tok = _token(client)
-    r = client.post("/v1/agents/project-assistant/chat/stream",
+    path = "/v1/agents/project-assistant/chat/stream"
+    served_by = {getattr(rt_, "endpoint", None) for rt_ in app.routes
+                 if getattr(rt_, "path", "") == "/v1/agents/{name}/chat/stream"}
+    assert ag.agent_chat_stream in served_by, "this door is agent_chat_stream"
+    r = client.post(path,
                     headers={"Authorization": f"Bearer {tok}"},
                     json={"message": text, "project_id": None})
     assert r.status_code == 200
