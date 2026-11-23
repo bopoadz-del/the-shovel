@@ -113,6 +113,17 @@ def test_an_absence_after_the_cited_figure_stays(text):
 @pytest.mark.parametrize(
     "text",
     [
+        "Crane hire is not 4,000 per week.\nCrane hire is 4,200 per week [1].",
+        "There is no crane hire charge [1]. The crane hire charge is 4,200 per week [2].",
+    ],
+)
+def test_a_sentence_with_its_own_figure_or_marker_is_not_an_absence(text):
+    assert _drop_overridden_absence(text) == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "Nothing was found. The slab is 250 mm thick [1].",
         "None of it is there. Concrete grade C40 applies [2].",
     ],

@@ -818,11 +818,8 @@ def _drop_overridden_absence(text: str) -> str:
     thing is not in it), and when it names nothing. The answer is never left
     empty: the cited figure sentence itself is never dropped."""
     lines = text.split("\n")
-    spans: list[tuple[int, str]] = []
-    for i, line in enumerate(lines):
-        for s in _sentences(line):
-            if s.strip():
-                spans.append((i, s))
+    # Every sentence, in reading order, with the line it sits on.
+    spans = [(i, s) for i, line in enumerate(lines) for s in _sentences(line)]
     drop: set[int] = set()
     for k, (_, s) in enumerate(spans):
         terms = _absence_terms(s)
@@ -835,8 +832,6 @@ def _drop_overridden_absence(text: str) -> str:
             if terms <= named:
                 drop.add(k)
                 break
-    if not drop:
-        return text
     out: list[str] = []
     for i, line in enumerate(lines):
         mine = [(k, s) for k, (j, s) in enumerate(spans) if j == i]
