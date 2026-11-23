@@ -78,7 +78,11 @@ def test_a_tag_naming_a_file_still_reads_as_before(text, doc):
     assert out.citations[0]["document"] == doc
 
 
-def test_a_words_tag_and_a_file_tag_for_the_same_row_share_one_marker():
-    out = _apply("Frame G4 is 12 m [source: Gantry Frames Register.pdf]. It is steel [source: Gantry Frames Register].")
+@pytest.mark.parametrize("text", [
+    "Frame G4 is 12 m [source: Gantry Frames Register.pdf]. It is steel [source: Gantry Frames Register].",
+    "Filling is 75 [source: Ledger of Rates]. Cut is 78 [source: Ledger of Rates, Sheet 2].",
+])
+def test_two_tags_for_the_same_row_share_one_marker(text):
+    out = _apply(text)
     assert out.text.count("[1]") == 2 and "[2]" not in out.text
     assert len(out.citations) == 1
