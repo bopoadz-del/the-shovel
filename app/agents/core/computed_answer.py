@@ -39,6 +39,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "within": " in the section {terms}",
         "source": "source",
         "rows": "Rows",
+        "more_rows": "{n} further rows not listed here",
         "working": "Working",
         "no_rows": "no matching rows",
         "not_returned": "did not return",
@@ -65,6 +66,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "within": " في القسم {terms}",
         "source": "المصدر",
         "rows": "البنود",
+        "more_rows": "{n} بنود أخرى غير مدرجة هنا",
         "working": "طريقة الحساب",
         "no_rows": "لا توجد بنود مطابقة",
         "not_returned": "لم تُرجع نتيجة",
@@ -295,10 +297,44 @@ def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGU
         line += f" ({lab['source']}: {st.source})"
     lines = [line]
     if st.rows:
-        lines.append(f"  {lab['rows']}: " + lab["list_sep"].join(st.rows))
+        lines.append(f"  {lab['rows']}: " + shown_rows(st.rows, lab))
     if getattr(st, "working", ""):
         lines.append(f"  {lab['working']}: {st.working}")
     return lines
+
+
+#: How much of a computed row set the answer prints inline. The figure and
+#: its count already state the whole set; the row list beside it lets the
+#: reader see what was matched, and a list longer than a reader scans is a
+#: second answer, not a support for the first. The bounds are the same for
+#: every tool, question and language: at most ROWS_SHOWN rows, and no more
+#: rows than fit in ROWS_SHOWN_CHARS characters (always at least one row).
+#: The rows left out are COUNTED in one closing segment worded from LABELS,
+#: so the printed list never reads as the whole set. The whole set stays in
+#: the tool's structured result (``Statement.rows``), which every check that
+#: reads the turn's rows (``answer_counted_rows``, ``answer_row_totals``)
+#: takes from the result, not from this text.
+ROWS_SHOWN = 10
+ROWS_SHOWN_CHARS = 600
+
+
+def shown_rows(rows: Sequence[str], lab: Dict[str, str]) -> str:
+    """The inline text of a row list: the leading rows within the bounds,
+    then, when any row is left out, how many were (``more_rows``)."""
+    sep = lab["list_sep"]
+    kept: List[str] = []
+    used = 0
+    for row in rows:
+        text = str(row)
+        cost = len(text) + (len(sep) if kept else 0)
+        if kept and (len(kept) >= ROWS_SHOWN or used + cost > ROWS_SHOWN_CHARS):
+            break
+        kept.append(text)
+        used += cost
+    left = len(rows) - len(kept)
+    if left > 0:
+        kept.append(lab["more_rows"].format(n=left))
+    return sep.join(kept)
 
 
 def _typed_by_user(value: Any, question: str) -> bool:
@@ -569,4 +605,5 @@ __all__: Tuple[str, ...] = (
     "LABELS", "REASONS", "RESULT_CUT_UNREADABLE", "has_words", "question_language", "render_call", "heading_for", "join_calls",
     "Call", "selection", "covers", "unanswered", "answer_turn",
     "tool_call_args", "failure_text", "scrub", "reason_text", "MAX_CODE_CHARS",
+    "shown_rows", "ROWS_SHOWN", "ROWS_SHOWN_CHARS",
 )
