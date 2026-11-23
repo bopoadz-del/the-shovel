@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import pytest
 
+from app.lib import construction_formulas_structural_rc
 from app.lib.construction_formulas import (
     _CONTENT_WORD_LEAD,
     _calculator_by_content_words,
+    _content_words,
     calculator_name_from_text,
 )
 
@@ -66,3 +68,25 @@ def test_narrow_lead_is_not_a_pick(ask):
 def test_lead_margin_is_more_than_one_word():
     # One shared word apart is a coin toss between two formulas.
     assert _CONTENT_WORD_LEAD >= 2
+
+
+# Decision 5: a word of two letters or a stop word is not a content word, so
+# it can never add to a calculator's score.
+@pytest.mark.parametrize("text, expected", [
+    ("the panel of a crane", {"panel", "crane"}),
+    ("what is it for the wind", {"wind"}),
+])
+def test_short_and_stop_words_are_not_content_words(text, expected):
+    assert _content_words(text) == expected
+
+
+# Decision 6: a blank ask names nothing, before any name rule is asked; a
+# rule that would claim anything it is shown is never reached.
+@pytest.mark.parametrize("ask", ["", " \t "])
+def test_blank_ask_names_nothing_before_any_rule(ask, monkeypatch):
+    monkeypatch.setattr(
+        construction_formulas_structural_rc,
+        "looks_like_slab_thickness_min_ask",
+        lambda _text: True,
+    )
+    assert calculator_name_from_text(ask) is None
