@@ -700,6 +700,49 @@ def _drop_padding(text: str, computed: bool = True) -> str:
     return "\n".join(out)
 
 
+#: A sentence addressed to the reader that asks them for the next step:
+#: an imperative to supply or direct something ("Upload the priced BOQ and
+#: I'll price it", "point me at that file"), optionally after a condition
+#: ("If the pipework is billed elsewhere, point me at that file and I'll pull
+#: the line") or a "please"; or the writer's own offer made conditional on
+#: the reader ("I can pull the line if you send the file").
+#: An imperative to supply something counts only when the sentence names
+#: the writer as the one who receives it or acts next ("... and I'll pull
+#: the line", "send it to me"): "Send the notice to the Engineer" is an
+#: instruction the answer gives, not a request for the writer.
+_REQUEST_RE = re.compile(
+    r"^(?:(?:if|once|when|where|should)\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?)?(?:please[ \t]+|just[ \t]+)?"
+    r"(?:(?:point|tell|give|show)\s+me|let\s+me\s+know"
+    r"|(?:upload|re-?upload|share|send|provide|attach|forward)\b[^.!?]*\b(?:me|i'll|i\s+(?:can|will|could))\b)\b"
+    r"|^(?:i\s+can|i\s+could|i'll|i\s+will|i'd\s+be\s+able\s+to)\b[^.!?]*\bif\s+you\b",
+    re.IGNORECASE,
+)
+
+
+def _is_request_paragraph(par: str) -> bool:
+    """Every sentence of the paragraph asks the reader for a next step (or
+    offers further help), and it states no figure and carries no citation
+    marker -- it adds nothing the reader can use from this answer."""
+    if _MARKER_RE.search(par) or _FIGURE_RE.search(par):
+        return False
+    sentences = [s.strip() for ln in par.split("\n")
+                 for s in _sentences(_BULLET_RE.sub("", ln).strip().lstrip("*_ ").strip()) if s.strip()]
+    return bool(sentences) and all(_REQUEST_RE.match(s) or _OFFER_RE.match(s) for s in sentences)
+
+
+def _drop_closing_request(text: str) -> str:
+    """Rule 2, every kind of answer: a closing paragraph that only asks the
+    reader for a next step ("upload X", "point me at the file and I'll pull
+    the line") and states no figure and no marker is padding and goes. The
+    answer before it stays; an answer that is nothing but such a paragraph
+    stays as written. A turn that ends on its own question for inputs a
+    step still needs (``asking``) never reaches this rule."""
+    pars = re.split(r"\n[ \t]*\n", text.strip())
+    while len(pars) > 1 and _is_request_paragraph(pars[-1]):
+        pars.pop()
+    return "\n\n".join(pars)
+
+
 # ── Rule 1: answer first ────────────────────────────────────────────────────
 
 def _answer_first(text: str, computed: bool) -> str:
@@ -804,6 +847,7 @@ def apply(
         if not asking:
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
+            body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
         body = _tidy(body)
