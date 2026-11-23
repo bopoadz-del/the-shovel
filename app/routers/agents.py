@@ -446,6 +446,7 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
         try:
             from app.core.predefined_reasoning import lookup_question_hijack
             from app.routers.chat import (
+                _predefined_declines,
                 _predefined_enabled,
                 _predefined_workflows,
                 _stream_from_predefined,
@@ -469,6 +470,10 @@ async def agent_chat_stream(name: str, request: Request, auth: dict = Depends(re
                 and not lookup_question_hijack(
                     message, float(routing.get("confidence") or 0.0)
                 )
+                # A template action that cannot take the ask as written
+                # (the user typed their own period figures) leaves the
+                # turn to the agent and its calculators.
+                and not _predefined_declines(_pd_action, message)
             )
         except Exception:  # noqa: BLE001 — never block the normal agent path
             _pd_action, _use_predefined = None, False

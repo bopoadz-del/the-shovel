@@ -344,6 +344,18 @@ def _message_vetoes_predefined(prompt: str) -> bool:
 _warm_predefined_vetoes()
 
 
+def _predefined_declines(action: Optional[str], prompt: str) -> bool:
+    """True when the chosen predefined ``action`` cannot take this ask as written.
+
+    The action-aware twin of ``_message_vetoes_predefined``: a template
+    action (``app.core.action_router``) declines an ask whose own figures it
+    cannot read or honour, whichever classifier picked it. Both front doors
+    (this router and the agents router) ask it before handing the turn over.
+    """
+    from app.core.action_router import template_declines_ask
+    return template_declines_ask(action, prompt)
+
+
 def _predefined_workflows() -> set:
     # Bespoke plan-builder workflows PLUS every construction-container action:
     # the reasoner picks any of ~55 container actions and run_workflow dispatches
@@ -925,8 +937,10 @@ async def _predispatch_concurrent_stream(
             return {"action": None}
         try:
             with turn_timing.stage("route"):
-                return ({"action": None} if _message_vetoes_predefined(prompt)
-                        else await understand_intent(prompt, has_documents=bool(document_ids)))
+                if _message_vetoes_predefined(prompt):
+                    return {"action": None}
+                intent = await understand_intent(prompt, has_documents=bool(document_ids))
+                return {"action": None} if _predefined_declines(intent.get("action"), prompt) else intent
         except Exception:  # noqa: BLE001
             return {"action": None}
 
