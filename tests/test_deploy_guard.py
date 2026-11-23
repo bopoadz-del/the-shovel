@@ -113,10 +113,11 @@ def _cli(repo: Path, deploy: str, live: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_the_late_rerun_of_an_older_commit_is_refused(origin):
-    """22 Nov shape: c1's tests go green late; c2 is live; main is at c3."""
-    repo, (c1, c2, c3) = origin
-    proc = _cli(repo, c1, c2)
+@pytest.mark.parametrize("deploy_index,live_index", [(0, 1), (0, 2), (1, 2)])
+def test_the_late_rerun_of_an_older_commit_is_refused(origin, deploy_index, live_index):
+    """22 Nov shape: an older commit's tests go green late; newer is live; main is at c3."""
+    repo, shas = origin
+    proc = _cli(repo, shas[deploy_index], shas[live_index])
     assert proc.returncode == 1
     assert "Deploy refused" in proc.stdout
 
@@ -128,22 +129,24 @@ def test_the_head_of_main_deploys_over_any_older_or_equal_live(origin, live_inde
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_main_head_older_than_live_is_refused(origin):
+@pytest.mark.parametrize("main_index,live_index", [(1, 2), (0, 2), (0, 1)])
+def test_main_head_older_than_live_is_refused(origin, main_index, live_index):
     """Live is ahead of main (shipped from a branch): main's head is older."""
-    repo, (c1, c2, c3) = origin
-    _git(repo, "branch", "-f", "main-old", c2)
+    repo, shas = origin
+    _git(repo, "branch", "-f", "main-old", shas[main_index])
     proc = subprocess.run(
         [sys.executable, str(repo / "scripts" / "deploy_guard.py"),
-         "--deploy", c2, "--main-ref", "main-old", "--live", c3],
+         "--deploy", shas[main_index], "--main-ref", "main-old", "--live", shas[live_index]],
         cwd=repo, capture_output=True, text=True, check=False,
     )
     assert proc.returncode == 1
     assert "older than the live commit" in proc.stdout
 
 
-def test_a_live_commit_outside_the_history_warns_and_allows(origin):
-    repo, (c1, c2, c3) = origin
-    proc = _cli(repo, c3, "f" * 40)
+@pytest.mark.parametrize("live", ["f" * 40, "0123456789abcdef" * 2 + "01234567"])
+def test_a_live_commit_outside_the_history_warns_and_allows(origin, live):
+    repo, shas = origin
+    proc = _cli(repo, shas[2], live)
     assert proc.returncode == 0
     assert "::warning" in proc.stdout
 
