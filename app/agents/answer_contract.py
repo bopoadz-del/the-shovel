@@ -702,6 +702,67 @@ def _drop_padding(text: str, computed: bool = True) -> str:
     return "\n".join(out)
 
 
+# ── Rule 1: answer first ────────────────────────────────────────────────────
+
+def _answer_first(text: str, computed: bool) -> str:
+    """On a turn that computed, the first line carries a figure: a lead-in
+    line with no figure goes ahead of nothing -- the first figure line moves
+    to the top. A turn that did not compute is left in its order (a refusal
+    or a direct statement may carry no figure at all)."""
+    if not computed:
+        return text
+    lines = [ln for ln in text.split("\n")]
+    nonblank = [i for i, ln in enumerate(lines) if ln.strip()]
+    if not nonblank or _FIGURE_RE.search(lines[nonblank[0]]):
+        return text
+    fig = next((i for i in nonblank if _FIGURE_RE.search(lines[i])), None)
+    if fig is None:
+        return text
+    head = lines.pop(fig)
+    return "\n".join([head] + lines)
+
+
+#: A sentence that opens on the writer's own search: "I searched ...",
+#: "I looked through ...", "I reviewed ...". It tells the reader what was
+#: done, not what is so.
+_NARRATION_LEAD_RE = re.compile(
+    r"^(?:\*\*)?I\s+(?:searched|looked(?:\s+(?:through|for|in|at|over))?|checked|reviewed|went\s+through|"
+    r"scanned|queried)\b",
+    re.IGNORECASE,
+)
+
+
+def _narration_first(text: str) -> str:
+    """Narration of the search never opens an answer, on any kind of turn.
+
+    The first sentence of the first line is read. When it narrates the
+    writer's search, states no figure and reports nothing absent, it is
+    process only and goes, so the sentence after it opens the answer.
+
+    It stays when it states a figure (it is the answer already), when it
+    reports something absent (that is the refusal itself, rule 5), when it
+    introduces what follows (ends in ``:``), or when it is the whole
+    answer."""
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    sentences = _sentences(lines[first].strip())
+    if not sentences:
+        return text
+    lead = sentences[0].strip()
+    if (not _NARRATION_LEAD_RE.match(lead) or _FIGURE_RE.search(_MARKER_RE.sub("", lead))
+            or _NEGATIVE_RE.search(lead) or lead.rstrip("*_ ").endswith(":")):
+        return text
+    rest = " ".join(s.strip() for s in sentences[1:]).strip()
+    if rest:
+        lines[first] = rest
+        return "\n".join(lines)
+    if any(ln.strip() for ln in lines[first + 1:]):
+        return "\n".join(lines[:first] + lines[first + 1:])
+    return text
+
+
 # ── Rule 5: an absence the answer itself overrides ──────────────────────────
 
 #: Words that say nothing about WHAT is absent: function words, the places a
@@ -787,67 +848,6 @@ def _drop_overridden_absence(text: str) -> str:
             lead = line[: len(line) - len(line.lstrip())]
             out.append(lead + kept)
     return "\n".join(out)
-
-
-# ── Rule 1: answer first ────────────────────────────────────────────────────
-
-def _answer_first(text: str, computed: bool) -> str:
-    """On a turn that computed, the first line carries a figure: a lead-in
-    line with no figure goes ahead of nothing -- the first figure line moves
-    to the top. A turn that did not compute is left in its order (a refusal
-    or a direct statement may carry no figure at all)."""
-    if not computed:
-        return text
-    lines = [ln for ln in text.split("\n")]
-    nonblank = [i for i, ln in enumerate(lines) if ln.strip()]
-    if not nonblank or _FIGURE_RE.search(lines[nonblank[0]]):
-        return text
-    fig = next((i for i in nonblank if _FIGURE_RE.search(lines[i])), None)
-    if fig is None:
-        return text
-    head = lines.pop(fig)
-    return "\n".join([head] + lines)
-
-
-#: A sentence that opens on the writer's own search: "I searched ...",
-#: "I looked through ...", "I reviewed ...". It tells the reader what was
-#: done, not what is so.
-_NARRATION_LEAD_RE = re.compile(
-    r"^(?:\*\*)?I\s+(?:searched|looked(?:\s+(?:through|for|in|at|over))?|checked|reviewed|went\s+through|"
-    r"scanned|queried)\b",
-    re.IGNORECASE,
-)
-
-
-def _narration_first(text: str) -> str:
-    """Narration of the search never opens an answer, on any kind of turn.
-
-    The first sentence of the first line is read. When it narrates the
-    writer's search, states no figure and reports nothing absent, it is
-    process only and goes, so the sentence after it opens the answer.
-
-    It stays when it states a figure (it is the answer already), when it
-    reports something absent (that is the refusal itself, rule 5), when it
-    introduces what follows (ends in ``:``), or when it is the whole
-    answer."""
-    lines = text.split("\n")
-    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
-    if first is None:
-        return text
-    sentences = _sentences(lines[first].strip())
-    if not sentences:
-        return text
-    lead = sentences[0].strip()
-    if (not _NARRATION_LEAD_RE.match(lead) or _FIGURE_RE.search(_MARKER_RE.sub("", lead))
-            or _NEGATIVE_RE.search(lead) or lead.rstrip("*_ ").endswith(":")):
-        return text
-    rest = " ".join(s.strip() for s in sentences[1:]).strip()
-    if rest:
-        lines[first] = rest
-        return "\n".join(lines)
-    if any(ln.strip() for ln in lines[first + 1:]):
-        return "\n".join(lines[:first] + lines[first + 1:])
-    return text
 
 
 def _tidy(text: str) -> str:
