@@ -261,6 +261,14 @@ def _intent_hard_excludes(self, messages: list[dict[str, Any]]) -> tuple[set, st
         excluded |= _inline_boq_hard_excludes(op)
     except Exception:  # noqa: BLE001
         _LOG.debug("inline-boq hard-exclude skipped", exc_info=True)
+    # A template tool that cannot take the ask as written is not offered:
+    # the model must not reach a deliverable the predispatch already declined.
+    try:
+        from app.core.action_router import template_actions_declining
+        op = _latest_operator_ask(messages) or ""
+        excluded |= template_actions_declining(op)
+    except Exception:  # noqa: BLE001
+        _LOG.debug("template hard-exclude skipped", exc_info=True)
     return excluded, op
 
 
