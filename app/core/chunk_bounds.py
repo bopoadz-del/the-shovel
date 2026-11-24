@@ -274,11 +274,15 @@ def _is_heading_line(line: str) -> bool:
 def heading_line_for_page(
     page_text: str,
     title_block: Callable[[str], dict[str, Any]] | None = None,
+    running: Callable[[str], bool] | None = None,
 ) -> str:
     """The line a piece of this page is filed under ("" when there is none).
 
     A drawing sheet is named by its title block (number and title, read by
-    ``title_block``); any other page by its first heading-like line.
+    ``title_block``); any other page by its first heading-like line that is
+    not page furniture (``running``: a line the document repeats on most of
+    its pages). A page whose only heading-like lines are furniture keeps the
+    first of them.
     """
     if not page_text or not page_text.strip():
         return ""
@@ -290,10 +294,34 @@ def heading_line_for_page(
         ]
         if named:
             return " - ".join(named)[: HEADING_RESERVE - 1]
+    first = ""
     for line in page_text.splitlines():
         if _is_heading_line(line):
-            return line.strip()
-    return ""
+            if running is None or not running(line):
+                return line.strip()
+            first = first or line.strip()
+    return first
+
+
+def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] | None:
+    """The document's page furniture among its heading-like lines, or None.
+
+    The same repetition rule the bill reader strips running headers by
+    (``bill_table_geometry.running_lines``): a line that repeats, digits
+    masked, on more than half of at least ``MIN_RUNNING_PAGES`` pages. A
+    running header names the document, not the page, so it cannot tell one
+    page's pieces from another's.
+    """
+    from app.core.bill_table_geometry import _Label, running_lines
+
+    labels = [
+        _Label(text=line.strip(), left=0.0, height=0.0, page=page)
+        for page, body in page_texts.items()
+        for line in body.splitlines()
+        if _is_heading_line(line)
+    ]
+    found = running_lines(labels, len(page_texts))
+    return found.holds if found.masks else None
 
 
 def page_heading_lines(
@@ -305,10 +333,14 @@ def page_heading_lines(
     starts = sorted(
         ((int(p), int(o)) for p, o in (page_starts or [])), key=lambda s: s[1]
     )
-    out: dict[int, str] = {}
+    bodies: dict[int, str] = {}
     for idx, (page, offset) in enumerate(starts):
         end = starts[idx + 1][1] if idx + 1 < len(starts) else len(text)
-        line = heading_line_for_page(text[offset:end], title_block)
+        bodies[page] = text[offset:end]
+    running = _running_heading_lines(bodies)
+    out: dict[int, str] = {}
+    for page, body in bodies.items():
+        line = heading_line_for_page(body, title_block, running)
         if line:
             out[page] = line
     return out
