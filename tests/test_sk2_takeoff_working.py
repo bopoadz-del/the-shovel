@@ -23,6 +23,7 @@ from app.agents.base.formulas.construction_formulas_earthwork import (
     excavation_volume,
 )
 from app.agents.base.formulas.construction_formulas_quantities import concrete_volume
+from app.lib.construction_formulas_quantities import format_concrete_volume_line
 from app.agents.hats.quantities.formulas.construction_formulas_quantities import (
     interior_finishes_takeoff,
     rebar_by_area,
@@ -68,6 +69,24 @@ def test_concrete_working_states_the_waste_rate_it_applied(seed):
         assert _shown(waste * 100.0, text, 6), (waste, text)
         assert _shown(r["net_volume_m3"], text, 3), text
         assert _shown(r["volume_with_waste_m3"], text, 3), text
+
+
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_concrete_chat_line_states_the_waste_rate_the_note_states(seed):
+    """The chat answer line and the working carry the same waste rate."""
+    rng = random.Random(seed)
+    for waste in _waste_rates(rng, 12):
+        r = concrete_volume(
+            length_m=round(rng.uniform(1, 40), 2),
+            width_m=round(rng.uniform(1, 30), 2),
+            thickness_m=round(rng.uniform(0.1, 2), 2),
+            waste_factor=waste,
+        )
+        line = format_concrete_volume_line(r)
+        rate = re.search(r"(-?\d+(?:\.\d+)?)% waste", line)
+        assert rate, line
+        assert abs(float(rate.group(1)) - waste * 100.0) <= 0.5e-6, (waste, line)
+        assert _shown(waste * 100.0, _working(r), 6), r["note"]
 
 
 @pytest.mark.parametrize("seed", _SEEDS)
