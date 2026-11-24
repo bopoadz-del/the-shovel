@@ -199,15 +199,6 @@ def test_course_value_is_read_from_the_entry(entry_id, field_path, course_figure
     assert entry["provenance"]["course_reference"].lower().startswith(COURSE_PREFIX)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SUSPECTED DEFECT (owner ruling: the course governs): the dewatering "
-        "uplift calculator's built-in required factor of safety is 1.25; the "
-        "course entry foundation.uplift_fos says 1.2. The calculator is in "
-        "app/agents/hats/design (SHOVEL's scope), not fixed here."
-    ),
-)
 @pytest.mark.parametrize(
     "entry_id, field_path",
     [
@@ -256,14 +247,6 @@ def test_uplift_calculator_matches_course_when_given_the_course_fos(head_m, raft
     ) == floors
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SUSPECTED DEFECT (same as above): with no factor of safety given, the "
-        "calculator applies 1.25 and returns 13 / 20 floors instead of the "
-        "course's 12 / 19."
-    ),
-)
 @pytest.mark.parametrize(
     "head_m, raft_m, floor_equiv_m, floors",
     [

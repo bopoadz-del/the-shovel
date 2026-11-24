@@ -232,6 +232,33 @@ class Constant:
     meaning: str
     source: Optional[str] = None
 
+    @classmethod
+    def from_knowledge(cls, entry_id: str, field_path: str, unit: str, meaning: str) -> "Constant":
+        """A constant whose value the shipped knowledge base states.
+
+        ``field_path`` is a dotted path inside the entry (``thresholds.x``).
+        The value is read from the entry when the calculator module loads,
+        so the knowledge base, not a literal in the calculator, decides it,
+        and the constant's source is the entry and its own provenance.
+        A missing entry, field or non-number raises: a calculator never
+        falls back to a figure nobody wrote down."""
+        from app.blocks import _knowledge
+
+        entry = _knowledge.shipped_entry(entry_id)
+        if entry is None:
+            raise LookupError(f"knowledge entry {entry_id!r} is not in the shipped knowledge base")
+        node: Any = entry
+        for key in field_path.split("."):
+            if not isinstance(node, dict) or key not in node:
+                raise LookupError(f"knowledge entry {entry_id!r} has no field {field_path!r}")
+            node = node[key]
+        if isinstance(node, bool) or not isinstance(node, (int, float)):
+            raise LookupError(f"knowledge entry {entry_id!r} field {field_path!r} is not a number")
+        prov = entry.get("provenance") or {}
+        written = prov.get("course_reference") or prov.get("source")
+        source = f"knowledge entry {entry_id}" + (f" ({written})" if written else "")
+        return cls(float(node), unit, meaning, source=source)
+
 
 _CONSTANT_READS: "contextvars.ContextVar[Optional[List[Tuple[str, Constant]]]]" = (
     contextvars.ContextVar("formula_constant_reads", default=None)

@@ -13,6 +13,16 @@ from app.agents.base.formulas.construction_formulas_shared import (  # noqa: F40
 )
 
 
+#: Declared constants of dewatering_uplift_check: the acceptance factor is the
+#: one the course knowledge entry states, read from that entry, not a literal.
+_UPLIFT_K = Constants(
+    required_fos=Constant.from_knowledge(
+        "foundation.uplift_fos", "thresholds.min_fos", "ratio",
+        "least factor of safety of counterweight over uplift before dewatering may stop",
+    ),
+)
+
+
 @dataclass
 class DewateringResult:
     uplift_force_t_m2: float
@@ -45,9 +55,12 @@ def dewatering_uplift_check(
     floor_thickness: float = 0.3,
     concrete_unit_weight: float = 2.5,
     water_unit_weight: float = 1.0,
-    required_fos: float = 1.25,
+    required_fos: float = _UPLIFT_K.required_fos,
 ) -> DewateringResult:
-    """Check if dewatering can stop — FOS = counter-weight / uplift >= 1.25."""
+    """Check if dewatering can stop: FOS = counter-weight / uplift >= required_fos.
+
+    With no ``required_fos`` given, the factor is the one the knowledge
+    base's uplift entry states (see ``_UPLIFT_K``)."""
     if water_depth < 0:
         raise ValueError("water_depth must be >= 0")
     if raft_thickness < 0 or floor_count < 0 or floor_thickness < 0:
