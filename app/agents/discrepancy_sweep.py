@@ -77,7 +77,12 @@ def _designations(text: str) -> list[str]:
     """
     out: list[str] = []
     have: set[str] = set()
+    # A designation read over a figure ("Depth 5" in "Depth 5 m") is the
+    # value itself, not what the value is stated for: never an identifier.
+    figures = [m.span() for m, _n in _figure_mentions(text or "")]
     for m in _DESIGNATION_RE.finditer(text or ""):
+        if any(m.start() < end and start < m.end() for start, end in figures):
+            continue
         # A sentence-ending period after "ACI 318." is punctuation, not part
         # of the designation; internal dots ("Table 7.3.1.1") are kept.
         token = re.sub(r"[.,;:]+$", "", m.group(0).strip()).lower().split()
@@ -141,3 +146,34 @@ def sweep_differences(
             ))
             break  # one hit per candidate passage
     return hits
+
+
+# A sentence ends at . ! ? followed by space and a capital, or at a line
+# break. A dot inside a designation ("Table 7.3.1.1", "4.2 m") is followed by
+# a digit, never by a space and a capital, so it does not end the sentence.
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\[(])|\n+")
+
+
+def sweep_targets(draft: str) -> tuple[list[str], str]:
+    """What a drafted answer gives the sweep to look for.
+
+    Returns ``(stated, query)``: ``stated`` is every sentence of the draft
+    that states a typed value (a figure with its unit) AND carries a
+    distinctive identifier -- the only sentences whose value another document
+    could state differently for the same identified thing; ``query`` is the
+    ONE lexical query the caller runs, the identifiers of those sentences,
+    first-seen. A draft with no such sentence gives ``([], "")`` and the
+    caller runs no search. Pure.
+    """
+    stated: list[str] = []
+    ids: list[str] = []
+    for sentence in _SENTENCE_END_RE.split(draft or ""):
+        sentence = sentence.strip()
+        if not sentence or not _stated_figures(sentence):
+            continue
+        found = _designations(sentence)
+        if not found:
+            continue
+        stated.append(sentence)
+        ids.extend(i for i in found if i not in ids)
+    return stated, " ".join(ids)

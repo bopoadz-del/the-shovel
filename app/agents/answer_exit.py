@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -99,6 +100,11 @@ class Turn:
     #: reply may be stated as "the documents did not yield an answer"; an
     #: error must never read as a not-found.
     forced_retry_outcome: str = ""
+    #: The project the turn answers from; the discrepancy sweep searches it.
+    project_id: str = ""
+    #: The sweep queries this turn already ran: the exit may check the same
+    #: answer twice (the loop's end event, then the router's), one search.
+    swept: set[str] = field(default_factory=set)
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -1791,6 +1797,70 @@ def _handed_evidence(turn: Turn | None, rows: Any) -> list[dict[str, Any]]:
     return [dict(e, doc_name=names.get(e["doc_id"]) or e["doc_name"]) for e in turn.evidence]
 
 
+#: Passages the sweep's one lexical search reads; a narrow look, not a re-retrieval.
+_SWEEP_K = 8
+
+
+def sweep_enabled() -> bool:
+    """The discrepancy sweep runs only when ``DISCREPANCY_SWEEP`` is on. Off by
+    default until the read-only replay on the real data (its acceptance)."""
+    return os.environ.get("DISCREPANCY_SWEEP", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _sweep_search(project_id: str, query: str) -> list[tuple[str, str, int | None, Any, str]]:
+    """The sweep's one lexical search: ``(doc_id, doc_name, chunk_index,
+    page, text)`` per passage, named as the retriever names it."""
+    from app.core.rag.embeddings import get_embedder
+    from app.core.rag.retriever import _doc_name_for_id
+    from app.core.rag.vector_store import get_store
+
+    chunks = get_store(dim=get_embedder().dim).bm25_search(project_id, query, k=_SWEEP_K)
+    return [(str(c.doc_id or ""), _doc_name_for_id(str(c.doc_id or "")), c.chunk_index, c.page, c.text or "")
+            for c in chunks]
+
+
+def sweep_evidence(text: str, turn: Turn | None, search: Any = None) -> int:
+    """The discrepancy sweep's caller half (STREAM A2; detector:
+    ``app.agents.discrepancy_sweep``). When the drafted answer states a typed
+    value beside a distinctive identifier, ONE lexical search over the
+    turn's project for that identifier; a passage the turn was not handed
+    that states a DIFFERENT figure for the same identifier joins the turn's
+    evidence. The conflict statement (``evidence_conflicts.detect``) then
+    judges it like any handed passage -- the same thing with values that
+    cannot both hold is "the documents differ" with every value and origin;
+    a different structure is never a conflict. Returns how many passages
+    joined. Never raises: a failed search leaves the answer as drafted."""
+    if turn is None or not turn.project_id or not isinstance(text, str) or not sweep_enabled():
+        return 0
+    try:
+        from app.agents import discrepancy_sweep
+
+        stated, query = discrepancy_sweep.sweep_targets(text)
+        if not stated or not query or query in turn.swept:
+            return 0
+        turn.swept.add(query)
+        handed = {(str(e.get("doc_id") or ""), e.get("chunk_index")) for e in turn.evidence}
+        found = [p for p in (search or _sweep_search)(turn.project_id, query)
+                 if _display_name(p[1]) and (p[0], p[2]) not in handed]
+        keyed = {str(i): p for i, p in enumerate(found)}
+        hits: dict[str, Any] = {}
+        for sentence in stated:
+            for hit in discrepancy_sweep.sweep_differences(sentence, [(k, p[4]) for k, p in keyed.items()]):
+                hits.setdefault(hit.source, hit)
+        for key in hits:
+            doc_id, name, chunk, page_raw, passage = keyed[key]
+            page = _page(page_raw)
+            turn.evidence.append({"doc_id": doc_id, "doc_name": _display_name(name), "page": page,
+                                  "page_or_section": f"p. {page}" if page else "",
+                                  "chunk_index": chunk, "snippet": passage.strip()})
+        # Counts only: no passage, identifier or value leaves the turn.
+        _LOG.info("DISCREPANCY_SWEEP stated=%d searched=%d joined=%d", len(stated), len(found), len(hits))
+        return len(hits)
+    except Exception:  # noqa: BLE001 -- the sweep must never break an answer
+        _LOG.warning("answer_exit: discrepancy sweep failed; answer goes out as drafted", exc_info=True)
+        return 0
+
+
 def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None) -> dict[str, Any]:
     """The answer contract (``app.agents.answer_contract``) on the text that
     leaves: citations become numbered markers whose entries ride out as
@@ -1802,6 +1872,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     if not isinstance(text, str):
         return env
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
+    if not asking:
+        sweep_evidence(text, turn)
     done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
                                  question=(turn.question or None) if turn else None,
                                  evidence=_handed_evidence(turn, rows))
