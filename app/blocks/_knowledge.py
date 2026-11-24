@@ -615,44 +615,6 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
     return bound
 
 
-def _course_value(spec: Any, text: str) -> Optional[float]:
-    """The value the course declares for an input the ask gives no figure for.
-
-    ``course_values`` lists the course's values for the input; one with
-    ``when`` words applies when every word is in the ask (the layer, the
-    case it is stated for), one without applies always. Exactly one value
-    must apply, or the input stays unbound. A typed figure never reaches
-    here: the course fills only what the user left out.
-    """
-    from app.lib.construction_formulas import _words_all_present
-    declared = (spec or {}).get("course_values") if isinstance(spec, dict) else None
-    if not isinstance(declared, list):
-        return None
-    applies = [
-        c for c in declared
-        if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
-        and _words_all_present(text, list(c.get("when") or []))
-    ]
-    return float(applies[0]["value"]) if len(applies) == 1 else None
-
-
-def course_inputs(entry: Dict[str, Any], values: Dict[str, Any]) -> Dict[str, Any]:
-    """Inputs of ``entry`` whose value is one the course declares, named
-    with the course reference, so an answer says where the figure came
-    from."""
-    ref = (entry.get("provenance") or {}).get("course_reference")
-    out: Dict[str, Any] = {}
-    for name, spec in (entry.get("variables") or {}).items():
-        declared = spec.get("course_values") if isinstance(spec, dict) else None
-        if name not in values or not isinstance(declared, list):
-            continue
-        for c in declared:
-            if isinstance(c, dict) and c.get("value") == values[name]:
-                out[name] = {"value": values[name], "when": c.get("when") or [], "source": ref}
-                break
-    return out
-
-
 # A formula title names its result first, then how it is worked: "X from
 # A and B". A bracketed aside, anywhere, is another name or the inputs:
 # "X (A vs B)", "P (also Q) X". The words left before "from" are
@@ -717,3 +679,41 @@ def formula_completed_by_user_text(text: str) -> Optional[tuple]:
     if len(tied) != 1:
         return None
     return tied[0][0], tied[0][1]
+
+
+def _course_value(spec: Any, text: str) -> Optional[float]:
+    """The value the course declares for an input the ask gives no figure for.
+
+    ``course_values`` lists the course's values for the input; one with
+    ``when`` words applies when every word is in the ask (the layer, the
+    case it is stated for), one without applies always. Exactly one value
+    must apply, or the input stays unbound. A typed figure never reaches
+    here: the course fills only what the user left out.
+    """
+    from app.lib.construction_formulas import _words_all_present
+    declared = (spec or {}).get("course_values") if isinstance(spec, dict) else None
+    if not isinstance(declared, list):
+        return None
+    applies = [
+        c for c in declared
+        if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
+        and _words_all_present(text, list(c.get("when") or []))
+    ]
+    return float(applies[0]["value"]) if len(applies) == 1 else None
+
+
+def course_inputs(entry: Dict[str, Any], values: Dict[str, Any]) -> Dict[str, Any]:
+    """Inputs of ``entry`` whose value is one the course declares, named
+    with the course reference, so an answer says where the figure came
+    from."""
+    ref = (entry.get("provenance") or {}).get("course_reference")
+    out: Dict[str, Any] = {}
+    for name, spec in (entry.get("variables") or {}).items():
+        declared = spec.get("course_values") if isinstance(spec, dict) else None
+        if name not in values or not isinstance(declared, list):
+            continue
+        for c in declared:
+            if isinstance(c, dict) and c.get("value") == values[name]:
+                out[name] = {"value": values[name], "when": c.get("when") or [], "source": ref}
+                break
+    return out
