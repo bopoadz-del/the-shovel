@@ -34,6 +34,7 @@ def _entries():
 COVERED = "How far should a parapet coping overhang?"
 UNCOVERED = "Who signed the handover certificate for block C?"
 COVERED_BUT_DOCUMENT = "What parapet coping overhang does the specification say?"
+COVERED_OTHER_ENTRY = "What sets the spacing of road gullies?"
 
 
 @pytest.fixture
@@ -147,18 +148,20 @@ async def _stream_text(monkeypatch, question):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("question", [COVERED, COVERED_OTHER_ENTRY])
 async def test_stream_answers_a_covered_ask_in_an_empty_project(
-        monkeypatch, empty_project, kb_tool):
+        monkeypatch, empty_project, kb_tool, question):
     _not_ready(monkeypatch)
-    text, seen = await _stream_text(monkeypatch, COVERED)
+    text, seen = await _stream_text(monkeypatch, question)
     assert seen, "the model was never called"
     assert text != _UNINDEXED_PROJECT_MESSAGE
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("question", [UNCOVERED, COVERED_BUT_DOCUMENT])
 async def test_stream_refuses_an_uncovered_ask_in_an_empty_project(
-        monkeypatch, empty_project, kb_tool):
+        monkeypatch, empty_project, kb_tool, question):
     _not_ready(monkeypatch)
-    text, seen = await _stream_text(monkeypatch, UNCOVERED)
+    text, seen = await _stream_text(monkeypatch, question)
     assert seen == []
     assert text == _UNINDEXED_PROJECT_MESSAGE
