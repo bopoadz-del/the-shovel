@@ -61,6 +61,23 @@ def test_empty_ask_is_not_covered(made_kb):
     assert kb.entry_covering_ask("   ") is None
 
 
+def test_wordless_ask_never_reads_the_knowledge(monkeypatch):
+    # An ask with no words is decided before the entries are loaded; an ask
+    # with words reads them. Counting the loads separates the two.
+    loads = []
+
+    def counting_load(domain=None):
+        loads.append(domain)
+        return _entries()
+
+    monkeypatch.setattr(kb, "load_knowledge", counting_load)
+    assert kb.entry_covering_ask("?! ...") is None
+    assert kb.entry_covering_ask("") is None
+    assert loads == []
+    kb.entry_covering_ask("lintel bearing")
+    assert len(loads) == 1
+
+
 def test_share_below_the_majority_is_refused(made_kb, monkeypatch):
     ask = "lintel end bearing"
     assert kb.entry_covering_ask(ask) is not None
