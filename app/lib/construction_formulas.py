@@ -1275,6 +1275,30 @@ def _partition_bound_params(
         return bound, []
     return bound, unknown
 
+def _absorbed_not_applied(
+    name: str, fn: Any, bound: Dict[str, Any], caller_figures: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Caller figures a ``**kwargs`` calculator absorbed without declaring them.
+
+    A figure is applied only when it binds an input the calculation declares,
+    in its signature or in its registry inputs. ``_partition_bound_params``
+    hands every unbound key to a ``**kwargs`` calculator, so a typed figure
+    such a calculator never reads would vanish without a word. Only keys the
+    caller sent with a figure are listed; one read out of the ask is not.
+    """
+    sig = _inspect.signature(fn)
+    if not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+        return []
+    named = {key for key, param in sig.parameters.items()
+             if param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)}
+    from app.lib import formula_registry
+    spec = formula_registry.get(name)
+    declared = set(formula_registry.parameters(spec)) if spec is not None else set()
+    return [{"parameter": key, "value": caller_figures[key]}
+            for key in bound
+            if key not in named and key not in declared and key in caller_figures]
+
+
 def bind_calculation_params(fn: Any, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Map incoming kwargs onto ``fn``'s signature names.
 
@@ -3537,6 +3561,7 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     context = _pop_conversion_context(fn, params)
     params = _drop_unwritten_zeros(str(name), fn, params, _CURRENT_ASK.get())
     params, unknown = _partition_bound_params(fn, params)
+    not_applied = _absorbed_not_applied(str(name), fn, params, caller_figures)
     # An argument read out of the ask's words that this calculator does not
     # take is dropped, not an error: only an argument the caller sent can be
     # "unknown" (lane 5: "10 panels of 6 x 0.8 x 25 m" gave width_m and wall,
@@ -3713,6 +3738,14 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     }
     if conversions:
         envelope["conversions"] = conversions
+    if not_applied:
+        # A figure the caller gave that this calculation takes no input for:
+        # the result stands without it, and the envelope says so instead of
+        # dropping it in silence.
+        envelope["not_applied"] = not_applied
+        listed = ", ".join(f"{row['parameter']}={row['value']}" for row in not_applied)
+        envelope["note"] = (f"{envelope['note']} Not applied: {listed}. {name} takes no "
+                            "such input, so its result does not use these figures.")
     if derived:
         # An input worked out of the ask's own figures is shown with its
         # working, so the answer can state where the value came from.
