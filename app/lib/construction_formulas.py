@@ -1851,6 +1851,42 @@ _DIMENSION_ADJECTIVES: Dict[str, str] = {
 }
 
 
+# A type that cannot hold a lone figure: text, a flag, a list or a mapping.
+# A figure written in the ask binds to such an input only under its label.
+_NON_FIGURE_TYPE_RE = re.compile(
+    r"(?:Optional\[)?(?:str|bytes|bool|list|dict|tuple|set|List|Dict|Tuple|Set"
+    r"|Sequence|Mapping|Iterable)(?![A-Za-z0-9_])"
+)
+
+
+def _takes_a_figure(fn: Any, name: str) -> bool:
+    """True when the input ``name`` of ``fn`` can hold one number by its
+    declared type. An undeclared type is open: a figure may bind."""
+    try:
+        param = _inspect.signature(fn).parameters.get(name)
+    except (TypeError, ValueError):
+        return True
+    if param is None or param.annotation is _inspect.Parameter.empty:
+        return True
+    ann = param.annotation
+    text = ann if isinstance(ann, str) else str(ann)
+    text = text.replace("typing.", "").replace("<class '", "").replace("'>", "")
+    # Each member of a written union ("str | float") is read on its own;
+    # one member that is not text, a flag or a container takes a figure.
+    members = [m.strip() for m in text.split("|") if m.strip() not in ("", "None")]
+    return any(_NON_FIGURE_TYPE_RE.match(m) is None for m in members)
+
+
+def _dimension_named_after(raw: str, end: int) -> Optional[str]:
+    """The dimension noun an adjective written straight after a figure names
+    ("250 mm thick" names thickness), else None."""
+    tail = raw[end:end + 24].lower()
+    for adj in sorted(_DIMENSION_ADJECTIVES, key=len, reverse=True):
+        if re.match(rf"\s+{re.escape(adj)}(?![a-z])", tail):
+            return _DIMENSION_ADJECTIVES[adj]
+    return None
+
+
 def _to_param_unit(num: float, unit: Optional[str], dest: str, declared: str = "") -> Any:
     """``num`` written in ``unit``, put into the unit ``dest`` declares (its
     declaration, else the unit its name spells) by the base conversion tool.
@@ -2208,12 +2244,24 @@ def extract_calculation_params_from_text(
         unit = _norm_unit_token(match.group(2))
         if num is None or not unit:
             continue
+        # A figure whose adjective names its dimension ("250 mm thick") is
+        # that dimension: it binds by unit only to an input that measures it.
+        noun = _dimension_named_after(raw, match.end())
+        if noun is not None:
+            consumed.append(match.span())
+            fits = [
+                name for name in (required_by_kind.get(unit) or [])
+                if name not in found and noun in name.lower()
+            ]
+            if len(fits) == 1:
+                found[fits[0]] = _to_param_unit(num, match.group(2), fits[0], required_tokens[fits[0]])
+            continue
         leftovers.setdefault(unit, []).append((num, match.group(2)))
         consumed.append(match.span())
     unplaced: List[Tuple[float, str]] = []
     for unit, figures in leftovers.items():
         dests = [name for name in (required_by_kind.get(unit) or []) if name not in found]
-        if len(figures) == 1 and len(dests) == 1:
+        if len(figures) == 1 and len(dests) == 1 and _takes_a_figure(fn, dests[0]):
             found[dests[0]] = _to_param_unit(*figures[0], dests[0], required_tokens[dests[0]])
         else:
             unplaced.extend(figures)
@@ -2232,7 +2280,7 @@ def extract_calculation_params_from_text(
             open_by_dimension.setdefault(parsed.dimension, []).append(name)
     for dimension, figures in by_dimension.items():
         dests = open_by_dimension.get(dimension) or []
-        if len(figures) == 1 and len(dests) == 1:
+        if len(figures) == 1 and len(dests) == 1 and _takes_a_figure(fn, dests[0]):
             found[dests[0]] = _to_param_unit(*figures[0], dests[0], required_tokens[dests[0]])
 
     bare_rx = re.compile(
@@ -2249,7 +2297,9 @@ def extract_calculation_params_from_text(
         bare_nums.append(num)
         consumed.append(match.span())
     bare_dests = [name for name in (required_by_kind.get("") or []) if name not in found]
-    if len(bare_nums) == 1 and len(bare_dests) == 1:
+    # The one open input must hold a number by its type: a figure is never
+    # text, a flag or a list of rows.
+    if len(bare_nums) == 1 and len(bare_dests) == 1 and _takes_a_figure(fn, bare_dests[0]):
         found[bare_dests[0]] = bare_nums[0]
     return found
 
