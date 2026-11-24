@@ -109,3 +109,45 @@ def test_selector_does_not_pick_a_formula_from_the_wrong_basis(invented, cue, se
 def test_every_basis_has_cue_words(basis):
     assert formula_registry.BASIS_CUES[basis]
     assert set(formula_registry.BASIS_CUES) == set(formula_registry.BASES)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Both bases' words in the figure's own clause: no basis is stated,
+        # so the figure is not refused.
+        ("paid value 840,000 this period to date", 840000.0),
+        # One basis's words only: stated, and refused for the other basis.
+        ("paid value 840,000 this period", None),
+    ],
+)
+def test_clause_holding_both_bases_states_neither(invented, text, expected):
+    assert _bind(invented["zz_basis_cumulative"], text).get("paid_value") == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # No figure for the declared input: nothing bound, nothing refused.
+        ("paid value not yet agreed", None),
+        ("paid value 840,000 so far", 840000.0),
+    ],
+)
+def test_declared_input_left_unbound_is_skipped(invented, text, expected):
+    assert _bind(invented["zz_basis_cumulative"], text).get("paid_value") == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # With no punctuation between them, the next figure still ends this
+        # figure's clause, so the cue after it is not read for this one.
+        ("work value 1,250,000 and 9,000,000 to date", 1250000.0),
+        ("work value 1,250,000 to date and 9,000,000", None),
+        # The figure before this one starts this figure's clause in the same way.
+        ("to date 9,000,000 and work value 1,250,000", 1250000.0),
+        ("9,000,000 and to date work value 1,250,000", None),
+    ],
+)
+def test_neighbouring_figure_bounds_the_clause(invented, text, expected):
+    assert _bind(invented["zz_basis_period"], text).get("work_value") == expected
