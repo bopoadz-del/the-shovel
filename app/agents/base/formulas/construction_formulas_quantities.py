@@ -15,13 +15,9 @@ logger = logging.getLogger(__name__)
 def shown(value) -> Decimal:
     """The exact decimal a working line prints for ``value``.
 
-    A float is written as Python writes it (the shortest text that reads back
-    to the same float), so the operand on the printed line and the operand
+    A float is written as Python writes it (``str``: the shortest text that
+    reads back to the same float), so the operand on the printed line and the operand
     the result is computed from are the same number."""
-    if isinstance(value, Decimal):
-        return value
-    if isinstance(value, float):
-        return Decimal(repr(value))
     return Decimal(str(value))
 
 

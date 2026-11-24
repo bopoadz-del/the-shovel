@@ -21,7 +21,14 @@ from decimal import ROUND_HALF_UP, Decimal, getcontext
 import pytest
 
 from app.agents.base.formulas.construction_formulas_earthwork import backfill_volume
-from app.agents.base.formulas.construction_formulas_quantities import concrete_volume
+from app.agents.base.formulas.construction_formulas_quantities import (
+    _concrete_quantity,
+    concrete_volume,
+    fixed,
+    plain,
+    rate_percent,
+    shown,
+)
 from app.agents.hats.quantities.formulas.construction_formulas_quantities import (
     interior_finishes_takeoff,
     rebar_by_area,
@@ -166,3 +173,29 @@ def test_the_stated_waste_rate_is_exactly_the_rate_applied(waste):
     assert Decimal(line_pct) / 100 == applied
     assert Decimal(factor) == 1 + applied
     assert "e-" not in note_pct + line_pct + factor
+
+
+@pytest.mark.parametrize("value, places, expected", [
+    ("107.405", 2, "107.41"), ("2.0005", 3, "2.001"), ("-1.255", 2, "-1.26"),
+])
+def test_fixed_rounds_the_exact_decimal_half_up(value, places, expected):
+    assert fixed(Decimal(value), places) == Decimal(expected)
+    assert str(fixed(Decimal(value), places)) == expected
+
+
+@pytest.mark.parametrize("value, text", [(0.1, "0.1"), (1e-07, "0.0000001"), (150, "150")])
+def test_shown_and_plain_are_the_figure_as_written(value, text):
+    assert shown(value) == Decimal(text)
+    assert plain(value) == text
+
+
+@pytest.mark.parametrize("fraction, percent", [(0.025, "2.5"), (0.07, "7")])
+def test_rate_percent_is_the_exact_shift_of_the_fraction(fraction, percent):
+    assert rate_percent(fraction) == percent
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_a_missing_element_count_is_one_element(missing):
+    assert _concrete_quantity(missing) == 1.0
+    result = concrete_volume(length_m=2.0, width_m=3.0, thickness_m=0.5, quantity=missing)
+    assert result["net_volume_m3"] == 3.0
