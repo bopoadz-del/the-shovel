@@ -115,18 +115,46 @@ def content_samples(session, project_id: str, limit: int | None = None) -> dict[
 
     from app.core.models import RagChunk
 
-    cap = CONTENT_SAMPLE_CHARS if limit is None else limit
-    out: dict[str, str] = {}
     if not inspect(session.get_bind()).has_table(RagChunk.__tablename__):
         # A database that has never indexed anything (a fresh SQLite) has no
         # chunks table: no document has text yet, so the name alone decides.
-        return out
-    for doc_id, text in session.execute(
+        return {}
+    return _opening_texts(session.execute(
         select(RagChunk.doc_id, RagChunk.text)
         .where(RagChunk.project_id == project_id,
                RagChunk.chunk_index < CONTENT_SAMPLE_CHUNKS)
         .order_by(RagChunk.doc_id, RagChunk.chunk_index)
-    ):
+    ), CONTENT_SAMPLE_CHARS if limit is None else limit)
+
+
+def opening_samples(
+    session, project_ids: Iterable[str], doc_ids: Iterable[str], limit: int | None = None,
+) -> dict[str, str]:
+    """doc_id -> the opening text of its indexed chunks, for these documents
+    in these projects only. The same sample ``content_samples`` reads, so a
+    document's own opening says the same thing to every reader. The project
+    filter leads, so the read uses the chunks table's project index.
+    Read-only; one query; a document with no chunks is absent."""
+    from sqlalchemy import inspect, select
+
+    from app.core.models import RagChunk
+
+    ids = [str(d) for d in dict.fromkeys(doc_ids or []) if d]
+    pids = [str(p) for p in dict.fromkeys(project_ids or []) if p]
+    if not ids or not pids or not inspect(session.get_bind()).has_table(RagChunk.__tablename__):
+        return {}
+    return _opening_texts(session.execute(
+        select(RagChunk.doc_id, RagChunk.text)
+        .where(RagChunk.project_id.in_(pids),
+               RagChunk.doc_id.in_(ids),
+               RagChunk.chunk_index < CONTENT_SAMPLE_CHUNKS)
+        .order_by(RagChunk.doc_id, RagChunk.chunk_index)
+    ), CONTENT_SAMPLE_CHARS if limit is None else limit)
+
+
+def _opening_texts(rows: Iterable[Any], cap: int) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for doc_id, text in rows:
         have = out.get(doc_id, "")
         if len(have) >= cap:
             continue

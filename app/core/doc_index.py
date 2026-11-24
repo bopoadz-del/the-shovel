@@ -5077,6 +5077,36 @@ def _row_document_fields(doc_id: str, kept: list[Any]) -> dict[str, Any]:
     return out
 
 
+def _declared_origins(project_id: str, doc_ids: list[str]) -> dict[str, dict[str, str]]:
+    """``{doc_id: origin}`` for the hit documents whose own opening text
+    declares the encoded table they were generated from
+    (``doc_typing.declared_origin``). A document that speaks for itself is
+    absent, so its row is unchanged. Read in the searched project and the
+    configured general-knowledge libraries (where generated copies live), one
+    read for the whole result set; a failed read leaves every row unchanged
+    and is logged."""
+    from app.core.doc_typing import declared_origin
+    from app.core.doc_typing_backfill import opening_samples
+    from app.core.rag.retriever import _general_knowledge_project_ids
+
+    if not doc_ids:
+        return {}
+    try:
+        with SessionLocal() as session:
+            samples = opening_samples(
+                session, [project_id, *_general_knowledge_project_ids()], doc_ids,
+            )
+    except Exception:
+        logger.warning("declared origin read failed for %d hit(s)", len(doc_ids), exc_info=True)
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for doc_id, sample in samples.items():
+        origin = declared_origin(sample)
+        if origin["kind"] != "document":
+            out[doc_id] = {k: v for k, v in origin.items() if v}
+    return out
+
+
 def _hit_origin(layer: str | None, searched_corpus: str) -> str:
     """The corpus one search hit came from: ``"own"``, ``"general_knowledge"``
     or ``"master_corpus"``.
@@ -5387,6 +5417,12 @@ def _search_project_documents_traced(
             if entry.get("ocr_low_quality"):
                 ocr_flag_by_doc[entry["document_id"]] = True
 
+    # A knowledge copy generated from an encoded table says so on its own
+    # opening line; its values are that table's, not a separate document's.
+    # The row carries it, so a reader comparing two sources' figures can tell
+    # a copy of a table from a document.
+    declared = _declared_origins(project_id, [item["document_id"] for item in ranked])
+
     results: list[dict[str, Any]] = []
     for item in ranked:
         # Already bounded per kept chunk by _join_chunk_texts. Re-cutting to
@@ -5408,6 +5444,8 @@ def _search_project_documents_traced(
         }
         if ocr_flag_by_doc.get(item["document_id"]):
             result_row["ocr_low_quality"] = True
+        if item["document_id"] in declared:
+            result_row["declared_origin"] = declared[item["document_id"]]
         result_row.update(_row_document_fields(
             item["document_id"], kept_by_doc.get(item["document_id"], []),
         ))
