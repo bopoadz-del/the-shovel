@@ -823,30 +823,34 @@ def _cut_item(line: str) -> tuple[str, str | None]:
     return line[: m.end()] + first + (" " + rest if rest else ""), line.strip()
 
 
-def _cut_opening(par: str) -> tuple[str, str | None]:
+def _cut_opening(par: str, scoped: bool = False) -> tuple[str, str | None]:
     """An opening prose paragraph that leads on an absence, cut to that first
     sentence, and the sentences after it word for word (else None). The
     paragraph is read like a list item: every marker a moved sentence
     carried also rides on the first sentence, so the lead still says where
     it came from. Only a one-line prose paragraph whose first sentence is an
-    absence in the answer's scope form is cut; any other paragraph -- one
+    absence in the answer's scope form is cut. ``scoped`` is True when the
+    answer states that scope elsewhere (a later sentence is itself an
+    absence in scope form): then a negated first sentence is that same
+    absence stated first, and it leads too. Any other paragraph -- one
     that states a value, a heading, an item, a table row, a list intro, one
     written over several lines -- stays whole, so an answer of several
     stated parts is never cut to its first part. A stop followed by a word
-    that does not open a sentence (``e.g. the slab``) does not end the first
-    sentence."""
+    that does not open a sentence (``e.g. the slab``), or the stop of ``No.``
+    before a figure (``Bill No. 4``), does not end the first sentence."""
     if "\n" in par.strip() or _HEADING_RE.match(par) or _BULLET_RE.match(par) or _TABLE_RE.match(par):
         return par, None
     if _introduces_list(par):
         return par, None
     pieces = [x for x in _sentences(par.strip()) if x.strip()]
     k = 1
-    while k < len(pieces) and not _opens_sentence(pieces[k]):
+    while k < len(pieces) and (not _opens_sentence(pieces[k])
+                               or (_NUMBER_ABBR_RE.search(pieces[k - 1]) and pieces[k].lstrip()[:1].isdigit())):
         k += 1
     if k >= len(pieces):
         return par, None
     first = "".join(pieces[:k]).strip()
-    if not _is_absence_lead(first):
+    if not (_is_absence_lead(first) or (scoped and _NEGATION_RE.search(first))):
         return par, None
     moved = "".join(pieces[k:]).strip()
     ride = "".join(mk for mk in dict.fromkeys(_MARKER_RE.findall(moved)) if mk not in first)
@@ -855,9 +859,13 @@ def _cut_opening(par: str) -> tuple[str, str | None]:
 
 #: The answer's own scope of absence: the writer says what it searched
 #: ("... is not in the project documents I searched", "No X is in what I
-#: searched"). A negation in the same sentence makes it an absence.
+#: searched"). A negation in the same sentence makes it an absence. ``No.``
+#: before a figure is a number (``Bill No. 10``), not a negation.
 _SEARCH_SCOPE_RE = re.compile(r"\bI\s+searched\b", re.IGNORECASE)
-_NEGATION_RE = re.compile(r"\b(?:not|no|none|neither|nor|nothing)\b|n't\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\b(?:not|no(?!\.\s*\d)|none|neither|nor|nothing)\b|n't\b", re.IGNORECASE)
+#: A piece ending on the abbreviation ``No.``: when a figure follows, the
+#: stop numbers something and does not end the sentence.
+_NUMBER_ABBR_RE = re.compile(r"\bNo\.\s*$", re.IGNORECASE)
 
 
 def _is_absence_lead(sentence: str) -> bool:
@@ -904,7 +912,12 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
     if len(lead_pars) == 1:
         # The opening paragraph leads only as far as its first sentence; the
         # sentences that support it are detail like any later paragraph.
-        short, opening_rest = _cut_opening(lead_pars[0])
+        # Every sentence after the opening one, in any paragraph: one that
+        # is an absence in scope form says the answer reports an absence.
+        later = _sentences(lead_pars[0].strip())[1:] + [
+            s for p in pars[1:] for ln in p.split("\n") for s in _sentences(ln.strip())]
+        scoped = any(_is_absence_lead(s) for s in later)
+        short, opening_rest = _cut_opening(lead_pars[0], scoped)
         lead_pars = [short]
     cut_items: list[str] = []
     lead: list[str] = []
