@@ -140,10 +140,20 @@ _TABLE_COPY = b"# Rates\n\n_Generated from `x/rates.json` by gen._\n\n| a | b |\
 _PLAIN_DOC = b"# Notes\n\nA document that speaks for itself.\n"
 
 
-def test_seed_stores_the_declaration_on_a_new_copy_only(monkeypatch, tmp_path):
-    store = _seed(monkeypatch, tmp_path, {"a.md": _TABLE_COPY, "b.md": _PLAIN_DOC}, None, {})
-    by_name = {d["name"]: d["metadata"] for d in store.added}
-    assert by_name == {"a.md": _META, "b.md": None}
+_UNITS_COPY = b"# Units\n\nGenerated from `y/units.json` by gen.\n"
+_UNITS_META = {"declared_origin": {"kind": "encoded_table", "source": "y/units.json"}}
+
+
+@pytest.mark.parametrize(
+    "files, expected",
+    [
+        ({"a.md": _TABLE_COPY, "b.md": _PLAIN_DOC}, {"a.md": _META, "b.md": None}),
+        ({"c.md": _PLAIN_DOC, "d.md": _UNITS_COPY}, {"c.md": None, "d.md": _UNITS_META}),
+    ],
+)
+def test_seed_stores_the_declaration_on_a_new_copy_only(monkeypatch, tmp_path, files, expected):
+    store = _seed(monkeypatch, tmp_path, files, None, {})
+    assert {d["name"]: d["metadata"] for d in store.added} == expected
     assert store.writes == []
 
 
