@@ -66,6 +66,16 @@ def test_two_names_nearest_one_figure_bind_nothing(text, expected):
 
 
 @pytest.mark.parametrize("text,expected", [
+    # "push" sits three words from each figure: a tie names no figure
+    ("a 40 kN jack push on a 25 kN pull", None),
+    ("a 40 kN push on a 25 kN pull", {"push_force": 40.0, "pull_force": 25.0}),
+])
+def test_a_name_word_equally_near_two_figures_binds_nothing(text, expected):
+    entry = _entry(push_force="kN", pull_force="kN")
+    assert K.bind_entry_variables(entry, text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
     ("a 40 kN push, a 25 kN pull and a 10 kN load",  None),
     # each name has one nearest figure; the spare figure alone refuses it
     ("a 40 kN push and a 25 kN pull, 10 kN spare", None),
