@@ -51,6 +51,45 @@ _CLASH_DISCLAIMER = (
 )
 
 
+def _container_storey_name(el, ifc_util) -> Optional[str]:
+    """Name of the IfcBuildingStorey that contains ``el`` in the model.
+
+    Read from the model's own spatial containment (``get_container``
+    walks up through enclosing spaces). ``None`` when the element is not
+    contained in a storey or the lookup fails; an unnamed storey is "".
+    """
+    try:
+        container = ifc_util.get_container(el, ifc_class="IfcBuildingStorey")
+    except Exception:
+        logger.debug("get_container failed for %s", el, exc_info=True)
+        return None
+    if container is None:
+        return None
+    return getattr(container, "Name", None) or ""
+
+
+def _types_outside_map(model) -> Dict[str, int]:
+    """Count physical elements whose IFC class no IFC_CATEGORY_MAP entry
+    (or a supertype of it) covers, keyed by class name.
+
+    Coverage is read from the schema's own inheritance (``is_a``), so a
+    subtype of a mapped class is covered and only genuinely unmapped
+    classes are reported.
+    """
+    try:
+        physical = model.by_type("IfcElement")
+    except Exception:
+        logger.debug("by_type(IfcElement) failed", exc_info=True)
+        return {}
+    counts: Dict[str, int] = {}
+    for el in physical:
+        if any(el.is_a(mapped) for mapped in IFC_CATEGORY_MAP):
+            continue
+        cls = el.is_a()
+        counts[cls] = counts.get(cls, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 class BIMExtractorBlock(UniversalBlock):
     auto_validate = False
     name = "bim_extractor"
@@ -170,6 +209,7 @@ class BIMExtractorBlock(UniversalBlock):
             categories_skipped,
             psets_failed,
         ) = self._extract_elements(model, ifc_util, max_el, extract_props)
+        types_not_extracted = _types_outside_map(model)
         project_info = self._extract_project_info(model)
         storeys = self._extract_storeys(model)
         spaces = self._extract_spaces(model)
@@ -218,6 +258,10 @@ class BIMExtractorBlock(UniversalBlock):
             # Elements for which get_psets() raised — properties and pset-
             # derived quantities (NetVolume, NetArea, etc.) are missing.
             "psets_failed": psets_failed,
+            # Physical elements of an IFC class no category above covers:
+            # {ifc_class: count}. They are in the model but not in
+            # ``quantities`` or ``building_elements``.
+            "types_not_extracted": types_not_extracted,
             "truncated": any_truncated,
             "truncation_caps": {
                 "category_item_cap": _CATEGORY_ITEM_CAP,
@@ -357,6 +401,13 @@ class BIMExtractorBlock(UniversalBlock):
                         "ifc_type": str(ifc_type),
                         "error": str(exc),
                     })
+
+        # Spatial containment: the storey the model itself places the element
+        # on (direct or through an enclosing space). Absent when the model
+        # does not contain the element in a storey; never guessed.
+        storey = _container_storey_name(el, ifc_util)
+        if storey is not None:
+            el_dict["storey"] = storey
 
         # Material
         try:
