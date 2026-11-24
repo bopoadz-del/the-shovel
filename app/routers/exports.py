@@ -978,21 +978,6 @@ async def price_boq(
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _cost_loaded_workbook(meta: Dict[str, Any], activities: List[Dict[str, Any]]) -> Any:
-    """Write the cost-loaded workbook, or refuse with the CPM kernel's reason.
-
-    A network the kernel cannot schedule (a loop, an unknown predecessor, a
-    duration that is not whole working days) is the caller's input, not a
-    server fault: it is answered 422 with the kernel's own words, never a
-    bare 500 and never a workbook built from numbers the kernel refused."""
-    from app.lib.pm_excel import ScheduleNetworkError, generate_cost_loaded_schedule
-
-    try:
-        return generate_cost_loaded_schedule(meta, activities)
-    except ScheduleNetworkError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
 @router.post("/v1/projects/{project_id}/export/cost-schedule")
 async def export_cost_schedule(
     project_id: str,
@@ -1006,6 +991,7 @@ async def export_cost_schedule(
     if not req.activities:
         raise HTTPException(400, "activities is required and must be non-empty")
     name = req.project_name or proj.get("name") or "Project"
+    from app.lib.pm_excel import generate_cost_loaded_schedule
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
 
     # Bridge raw generate_wbs activities (duration_days/resources/wbs_phase) into
@@ -1018,7 +1004,7 @@ async def export_cost_schedule(
         meta["start_date"] = req.start_date
     if req.day_rate:
         meta["cost_basis"] = "Indicative Labor"
-    wb = _cost_loaded_workbook(meta, activities)
+    wb = generate_cost_loaded_schedule(meta, activities)
     fd, path = tempfile.mkstemp(prefix="cost_sched_", suffix=".xlsx"); os.close(fd)
     wb.save(path)
     return FileResponse(path, media_type=_XLSX_MEDIA,
@@ -1043,6 +1029,7 @@ def _workbook_from_wbs_activities(
     """
     from app.core.conversation_wbs import stamp_hierarchical_wbs_codes
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
+    from app.lib.pm_excel import generate_cost_loaded_schedule
 
     acts = stamp_hierarchical_wbs_codes(list(activities or []), wbs_tree)
     bridged = bridge_wbs_to_cost_loaded(
@@ -1055,7 +1042,7 @@ def _workbook_from_wbs_activities(
         meta["cost_basis"] = "Indicative Labor"
     if target_milestones:
         meta["target_milestones"] = target_milestones
-    return _cost_loaded_workbook(meta, bridged)
+    return generate_cost_loaded_schedule(meta, bridged)
 
 
 @router.post("/v1/projects/{project_id}/export/schedule-from-brief")
@@ -1180,6 +1167,7 @@ async def export_schedule_from_document(
 
     from app.containers.construction import ConstructionContainer
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
+    from app.lib.pm_excel import generate_cost_loaded_schedule
 
     # Brief AND the attached documents' TEXT are BOTH structured into
     # activities (rework-2 #4), merged under source tags so the single egress
@@ -1218,7 +1206,7 @@ async def export_schedule_from_document(
         meta["cost_basis"] = "Indicative Labor"
     if target_milestones:
         meta["target_milestones"] = target_milestones
-    wb = _cost_loaded_workbook(meta, bridged)
+    wb = generate_cost_loaded_schedule(meta, bridged)
     fd, path = tempfile.mkstemp(prefix="sched_doc_", suffix=".xlsx"); os.close(fd)
     wb.save(path)
     return FileResponse(
@@ -1975,6 +1963,7 @@ async def export_schedule_from_boq(
 
     from app.containers.construction import ConstructionContainer
     from app.lib.schedule_bridge import bridge_wbs_to_cost_loaded
+    from app.lib.pm_excel import generate_cost_loaded_schedule
 
     enriched, summary, cpm_error = ConstructionContainer()._attach_cpm_to_activities(
         activities, req.start_date)
@@ -1994,7 +1983,7 @@ async def export_schedule_from_boq(
         meta["start_date"] = req.start_date
     if req.day_rate:
         meta["cost_basis"] = "Indicative Labor"
-    wb = _cost_loaded_workbook(meta, bridged)
+    wb = generate_cost_loaded_schedule(meta, bridged)
     fd, path = tempfile.mkstemp(prefix="sched_boq_", suffix=".xlsx"); os.close(fd)
     wb.save(path)
     return FileResponse(

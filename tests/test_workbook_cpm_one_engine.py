@@ -234,17 +234,33 @@ def test_an_unknown_predecessor_is_refused_with_its_name(net, unknown):
 @pytest.mark.parametrize("net,reason", [
     ([{"id": "A", "duration": 2, "predecessors": ["B"]},
       {"id": "B", "duration": 1, "predecessors": ["A"]}], "loop"),
-    ([{"id": "A", "duration": 2, "predecessors": ["Z"]}], "unknown predecessor"),
+    ([{"id": "A", "duration": 2, "predecessors": ["Z"]}], "unknown predecessor 'Z'"),
 ])
-def test_the_export_answers_a_refused_network_422_with_the_reason(net, reason):
-    from fastapi import HTTPException
+def test_a_refused_network_is_answered_422_with_the_reason(net, reason, monkeypatch):
+    """Through the export route: the kernel's refusal reaches the caller as
+    a 422 carrying its reason (the app's ``_schedule_network_refused``
+    handler), not as the catch-all's bare 500."""
+    from fastapi.testclient import TestClient
 
-    from app.routers.exports import _cost_loaded_workbook
+    from app import main as app_main
+    from app.dependencies import require_user
+    from app.routers import exports as exports_mod
 
-    with pytest.raises(HTTPException) as exc:
-        _cost_loaded_workbook({"project": "p"}, net)
-    assert exc.value.status_code == 422
-    assert reason in exc.value.detail
+    assert app_main.app.exception_handlers[pm_excel.ScheduleNetworkError] is (
+        app_main._schedule_network_refused)
+    monkeypatch.setattr(exports_mod, "_check_owner",
+                        lambda pid, uid: {"name": "p"}, raising=False)
+    app_main.app.dependency_overrides[require_user] = lambda: {"user_id": "u1"}
+    try:
+        with TestClient(app_main.app, raise_server_exceptions=False) as client:
+            res = client.post("/v1/projects/p1/export/cost-schedule",
+                              json={"activities": net})
+    finally:
+        app_main.app.dependency_overrides.pop(require_user, None)
+    assert res.status_code == 422, res.text[:300]
+    body = res.json()
+    assert reason in body["error"]["message"]
+    assert body["error"]["code"] == "VALIDATION_ERROR"
 
 
 @pytest.mark.parametrize("raw,label", [
