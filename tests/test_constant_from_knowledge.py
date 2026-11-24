@@ -94,14 +94,15 @@ def test_unreadable_shipped_file_raises(tmp_path, monkeypatch):
         Constant.from_knowledge("a.one", "thresholds.x", "ratio", "an invented limit")
 
 
-def test_served_override_does_not_change_the_constant(shipped, tmp_path, monkeypatch):
+@pytest.mark.parametrize("shipped_x, served_x", [(1.5, 9.0), (3.0, 0.5)])
+def test_served_override_does_not_change_the_constant(shipped, tmp_path, monkeypatch, shipped_x, served_x):
     # The served file (CONSTRUCTION_KB_FILE) may be swapped at run time; what
     # a calculator computes follows the shipped knowledge base only.
-    shipped([_entry("a.one", {"x": 1.5})])
-    served = _write_kb(tmp_path / "served.json", [_entry("a.one", {"x": 9.0})])
+    shipped([_entry("a.one", {"x": shipped_x})])
+    served = _write_kb(tmp_path / "served.json", [_entry("a.one", {"x": served_x})])
     monkeypatch.setenv("CONSTRUCTION_KB_FILE", served)
-    assert _knowledge.get_rule("a.one")["thresholds"]["x"] == 9.0  # served copy
-    assert Constant.from_knowledge("a.one", "thresholds.x", "ratio", "m").value == 1.5
+    assert _knowledge.get_rule("a.one")["thresholds"]["x"] == served_x  # served copy
+    assert Constant.from_knowledge("a.one", "thresholds.x", "ratio", "m").value == shipped_x
 
 
 @pytest.mark.parametrize("stated, expected", [(1.2, 12), (1.5, 15)])
