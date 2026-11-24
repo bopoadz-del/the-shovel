@@ -31,6 +31,7 @@ from app.agents.hats.quantities.formulas.construction_formulas_quantities import
     interior_finishes_takeoff,
     rebar_by_area,
     rebar_weight,
+    resource_cost_line,
     resource_line_cost,
 )
 
@@ -916,4 +917,5 @@ ADDITIONAL_CALCULATORS = {
     "rebar_by_area": rebar_by_area,
     "interior_finishes_takeoff": interior_finishes_takeoff,
     "resource_line_cost": resource_line_cost,
+    "resource_cost_line": resource_cost_line,
 }

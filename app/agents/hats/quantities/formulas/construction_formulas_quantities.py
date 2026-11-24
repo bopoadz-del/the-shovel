@@ -334,3 +334,89 @@ def resource_line_cost(
                  + (f"material = {q} x {material_rate_per_unit} = {material:.2f}."
                     if has_material else "material: NO SOURCED RATE (no rate supplied).")),
     }
+
+
+def _qty(x: float) -> str:
+    return f"{x:,.6g}"
+
+
+@formula(
+    owner='quantities',
+    display_name='Resource cost line',
+    description=('Cost of one resource on an estimate line: quantity of work x '
+                 'consumption of the resource per unit of work x waste factor x the '
+                 'cited price per resource unit. Waste and markup are applied only '
+                 'when they are supplied; no default markup is ever added.'),
+    inputs={
+        'quantity': Param('count', 0, 1e12, label='quantity of work'),
+        'consumption_per_unit': Param('count', 0, 1e9,
+                                      label='resource consumed per unit of work'),
+        'price_per_resource_unit': Param('currency/count', 0, 1e9,
+                                         label='cited price per resource unit'),
+        'waste_percent': Param('%', 0, 100, label='waste allowance'),
+        'markup_percent': Param('%', 0, 100, label='markup on the resource cost'),
+    },
+    outputs={'resource_quantity': '-', 'resource_cost': 'currency',
+             'markup_amount': 'currency', 'line_total': 'currency', 'working': '-'},
+)
+def resource_cost_line(
+    quantity: float | None = None,
+    consumption_per_unit: float | None = None,
+    price_per_resource_unit: float | None = None,
+    waste_percent: float | None = None,
+    markup_percent: float | None = None,
+) -> dict:
+    """Resource-based cost line: qty x consumption x waste x cited price.
+
+    The quantity, the consumption rate and the price are project facts (a
+    measured quantity, a norm or the document's own build-up, a cited
+    quotation or rate card), so none has a default and a missing one is
+    named. Waste and markup are optional: when absent, none is applied and
+    the working says so -- a markup is never assumed.
+    """
+    supplied = {"quantity": quantity, "consumption_per_unit": consumption_per_unit,
+                "price_per_resource_unit": price_per_resource_unit}
+    missing = [k for k, v in supplied.items() if v is None]
+    if missing:
+        return {"error": ", ".join(missing) + " required; no default is assumed.",
+                "missing": missing}
+    q = float(quantity)
+    rate = float(consumption_per_unit)
+    price = float(price_per_resource_unit)
+    optional = [float(v) for v in (waste_percent, markup_percent) if v is not None]
+    if min([q, rate, price] + optional) < 0:
+        return {"error": "quantity, consumption_per_unit, price_per_resource_unit, "
+                         "waste_percent and markup_percent must be >= 0."}
+    net = q * rate
+    working = [(f"Net resource = quantity {_qty(q)} x consumption {_qty(rate)} "
+                f"= {_qty(net)}")]
+    if waste_percent is None:
+        factor = None
+        gross = net
+        working.append("No waste allowance supplied: none applied.")
+    else:
+        factor = 1.0 + float(waste_percent) / 100.0
+        gross = net * factor
+        working.append(f"With waste {_qty(float(waste_percent))}% = {_qty(net)} x "
+                       f"{factor:.6g} = {_qty(gross)}")
+    cost = gross * price
+    working.append(f"Resource cost = {_qty(gross)} x price {price:,.2f} = {cost:,.2f}")
+    if markup_percent is None:
+        markup = None
+        total = cost
+        working.append("No markup supplied: none applied (no default markup).")
+    else:
+        markup = cost * float(markup_percent) / 100.0
+        total = cost + markup
+        working.append(f"Markup {_qty(float(markup_percent))}% = {markup:,.2f}; "
+                       f"line total = {cost:,.2f} + {markup:,.2f} = {total:,.2f}")
+    return {
+        "resource_quantity_net": round(net, 6),
+        "waste_factor": factor,
+        "resource_quantity": round(gross, 6),
+        "resource_cost": round(cost, 2),
+        "markup_amount": round(markup, 2) if markup is not None else None,
+        "line_total": round(total, 2),
+        "standard": "resource-based estimating (quantity x consumption x waste x price)",
+        "working": working,
+    }

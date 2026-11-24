@@ -118,7 +118,8 @@
   "construction_calc:rebar_by_area",
   "construction_calc:unit_cost_total",
   "construction_calc:interior_finishes_takeoff",
-  "construction_calc:resource_line_cost"
+  "construction_calc:resource_line_cost",
+  "construction_calc:resource_cost_line"
  ],
  "available_tools": [],
  "handoffs": [
@@ -230,6 +231,13 @@
     "id": "resource_line_cost",
     "description": "Material/labour/plant split for one line; productivity and day rate are required project variables",
     "implemented_by": "app.lib.construction_formulas.resource_line_cost",
+    "domain": "quantities",
+    "tier": "operational"
+   },
+   {
+    "id": "resource_cost_line",
+    "description": "Resource cost line: quantity x consumption per unit x waste x cited price; waste and markup only when supplied, never a default markup",
+    "implemented_by": "app.lib.construction_formulas.resource_cost_line",
     "domain": "quantities",
     "tier": "operational"
    }
