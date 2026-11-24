@@ -168,9 +168,12 @@ def sweep_differences(
     ``stated_text`` is the draft's cited sentence. ``candidates`` is
     ``(source, passage_text)`` -- the passages the caller's one narrow lexical
     search returned. A candidate hits only when it shares at least one
-    designation with the stated sentence AND carries a figure that differs
-    from a stated figure (same unit; the product's own close-number tolerance
-    applies). Pure; no retrieval, no model, no I/O.
+    designation with the stated sentence AND states, for that designation, a
+    figure that differs from a stated figure (same unit; the product's own
+    close-number tolerance applies). A figure stated for that designation is
+    one inside its scope (``_identifier_scope``); a figure elsewhere in the
+    passage is stated for something else. Pure; no retrieval, no model, no
+    I/O.
     """
     stated_ids = _designations(stated_text)
     stated = _stated_figures(stated_text)
@@ -185,9 +188,10 @@ def sweep_differences(
                   if any(_same_identifier(a, b) for b in theirs)}
         if not shared:
             continue
+        scoped = _identifier_scope(text, shared)
         for s in stated:
             differing = _competing_figure_sentences(
-                text, s.number, s.unit, frozenset(),
+                scoped, s.number, s.unit, frozenset(),
             )
             if not differing:
                 continue
@@ -200,6 +204,50 @@ def sweep_differences(
             ))
             break  # one hit per candidate passage
     return hits
+
+
+def _identifier_scope(text: str, shared: set[str]) -> str:
+    """The part of a candidate passage that states something FOR one of the
+    ``shared`` designations; a figure outside it is stated for something
+    else ("... comply with <code>. The slab is 200 mm" states no value for
+    the code).
+
+    Two places are in scope, both read by shape:
+
+    - a sentence that names a shared designation;
+    - the body under a heading line led by a shared designation (the line
+      opens with it, states no figure and does not end as a sentence),
+      down to the next line led by any designation -- how a document heads
+      a clause and states its values in the lines beneath.
+
+    Designations are compared with ``_same_identifier``, the relation that
+    decided they are shared.
+    """
+    kept: list[str] = []
+    under = False
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        lead = _leading_designation(line)
+        if lead is not None:
+            heading = not _stated_figures(line) and not line.endswith((".", "!", "?"))
+            under = heading and _names_shared([lead], shared)
+        for sentence in _SENTENCE_END_RE.split(line):
+            if sentence.strip() and (under or _names_shared(_designations(sentence), shared)):
+                kept.append(sentence.strip())
+    return "\n".join(kept)
+
+
+def _leading_designation(line: str) -> str | None:
+    """The designation ``line`` opens with, else None."""
+    opening = " ".join(line.lower().split())
+    return next((d for d in _designations(line) if opening.startswith(d)), None)
+
+
+def _names_shared(found: Iterable[str], shared: set[str]) -> bool:
+    """Does any designation in ``found`` name one of the ``shared`` ones?"""
+    return any(_same_identifier(a, b) for a in shared for b in found)
 
 
 # A sentence ends at . ! ? followed by space and a capital, or at a line

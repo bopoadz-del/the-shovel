@@ -42,6 +42,12 @@ value, item or row is named anywhere.
 4. A different unit is not recalled here (unit equivalence is the conflict
    statement's judgement, not this recall filter's).
 5. A bare number is never a figure (the shared reader already excludes it).
+6. Only a figure stated FOR the shared identifier is compared
+   (`_identifier_scope`): one in a sentence that names it, or in the body
+   under a heading line led by it (no figure, not ending as a sentence) down
+   to the next line led by a designation. A passage that names the
+   identifier in one sentence and gives an unrelated figure in another is no
+   difference.
 
 ## Known limits (stated, not hidden)
 
