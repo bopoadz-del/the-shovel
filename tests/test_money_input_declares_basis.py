@@ -21,6 +21,8 @@ def test_a_known_basis_is_accepted(basis):
 
 @pytest.mark.parametrize("basis", ["to date", "monthly"])
 def test_an_unknown_basis_is_refused_at_declaration(basis):
+    """``Param.__post_init__`` refuses it, so a typo in a formula's
+    declaration fails at import instead of printing no basis."""
     with pytest.raises(ValueError, match="basis must be one of"):
         fr.Param("currency", 0, 1e9, label="amount", basis=basis)
 
