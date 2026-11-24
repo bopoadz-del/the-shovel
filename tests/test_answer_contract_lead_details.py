@@ -269,3 +269,23 @@ def test_same_answer_without_a_conflict_still_splits(rows, question, text, kept)
     assert done.conflicts == []
     assert done.text == kept[0]
     assert kept[1] in (done.details or "")
+
+
+# ── what counts as a list: its first line must be an item or a table row ────
+
+@pytest.mark.parametrize("par", [
+    "    Stainless steel anchors sit at 600 mm centres.\n    Each anchor takes a 12 mm bolt.",
+    "\tSide laps are 100 mm.\n\tEnd laps are 150 mm.",
+    "",
+    "   \n\t",
+])
+def test_a_paragraph_that_does_not_open_on_an_item_is_not_a_list(par):
+    assert answer_contract._is_list(par) is False
+
+
+@pytest.mark.parametrize("par", [
+    "- Side laps are 100 mm.\n  continued on the next line.\n- End laps are 150 mm.",
+    "| Lap | Width |\n| --- | --- |\n| Side | 100 mm |",
+])
+def test_a_paragraph_that_opens_on_an_item_or_row_is_a_list(par):
+    assert answer_contract._is_list(par) is True
