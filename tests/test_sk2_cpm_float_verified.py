@@ -68,7 +68,7 @@ def _largest_slip(acts, aid, holds, limit) -> int:
     return slip
 
 
-_SEEDS = [(11, 8), (29, 12), (47, 15), (83, 10)]
+_SEEDS = [(11, 8), (29, 12), (47, 15), (83, 10), (1, 10), (18, 10)]
 
 
 @pytest.mark.parametrize("seed,size", _SEEDS)
@@ -110,3 +110,40 @@ def test_every_relation_type_is_exercised(kind):
     # check would not verify the pass for the types it never meets.
     assert any(p["type"] == kind for seed, size in _SEEDS
                for a in _network(seed, size) for p in a["predecessors"])
+
+
+def _types_binding_positive_free_float(seed: int, size: int) -> set[str]:
+    """Relation types that set a positive free float in one seeded network.
+
+    A link from j to k sets j's free float when slipping j one day past it
+    moves k. With j's free float above zero and both j and k lasting at least
+    a day, j's start and finish differ and so do k's, so a pass that reads
+    the wrong end of either activity gives a different free float."""
+    acts = _network(seed, size)
+    dur = {a["id"]: a["duration"] for a in acts}
+    early = _early_starts(acts, {})
+    succ: dict[str, list[tuple[str, str]]] = {a["id"]: [] for a in acts}
+    for a in acts:
+        for p in a["predecessors"]:
+            succ[p["id"]].append((a["id"], p["type"]))
+    limit = _finish(acts, early) + 10 * size
+    found: set[str] = set()
+    for a in acts:
+        j = a["id"]
+        if not succ[j] or dur[j] == 0:
+            continue
+        ff = _largest_slip(
+            acts, j, lambda st: all(st[s] == early[s] for s, _ in succ[j]), limit)
+        if ff == 0 or ff >= limit:
+            continue
+        moved = _early_starts(acts, {j: ff + 1})
+        found |= {t for s, t in succ[j] if moved[s] != early[s] and dur[s] > 0}
+    return found
+
+
+@pytest.mark.parametrize("kind", _TYPES)
+def test_every_relation_type_sets_a_positive_free_float(kind):
+    # Appearing in a network is not enough: a link that never sets a positive
+    # free float cannot show which end of an activity the pass reads.
+    assert any(kind in _types_binding_positive_free_float(seed, size)
+               for seed, size in _SEEDS)
