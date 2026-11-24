@@ -57,6 +57,33 @@ def declared_origin(content_sample: str | None) -> dict[str, str | None]:
     return {"kind": "document", "source": None}
 
 
+#: Document metadata key that stores the origin a document declares.
+ORIGIN_METADATA_KEY = "declared_origin"
+
+
+def with_declared_origin(metadata: Mapping[str, Any] | None, text: str | None) -> dict[str, Any] | None:
+    """``metadata`` plus the origin the text declares, for a new document row.
+
+    Only a declared origin is stored; a document that declares none speaks
+    for itself and its metadata is returned unchanged (``None`` stays
+    ``None``). The caller's mapping is never mutated.
+    """
+    origin = declared_origin(text)
+    if origin["kind"] == "document":
+        return dict(metadata) if isinstance(metadata, Mapping) else None
+    out = dict(metadata) if isinstance(metadata, Mapping) else {}
+    out[ORIGIN_METADATA_KEY] = origin
+    return out
+
+
+def stored_origin(metadata: Mapping[str, Any] | None) -> dict[str, str | None]:
+    """The origin stored on a document row; a row with none speaks for itself."""
+    value = metadata.get(ORIGIN_METADATA_KEY) if isinstance(metadata, Mapping) else None
+    if isinstance(value, Mapping) and value.get("kind") and value.get("source"):
+        return {"kind": str(value["kind"]), "source": str(value["source"])}
+    return {"kind": "document", "source": None}
+
+
 def type_for(filename: str, content_sample: str = "") -> str:
     """The registry's type for this name (and content, when given)."""
     verdict = doc_types.classify(filename or "", content_sample or "")

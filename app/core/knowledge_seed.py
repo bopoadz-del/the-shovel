@@ -129,8 +129,13 @@ def seed_knowledge() -> None:
                 stored_as = f"{file_id}_{name}"
                 filepath = os.path.join(data_dir, stored_as)
                 file_crypto.write_document(filepath, raw)
+                # A copy generated from an encoded table says so in its own
+                # text; the row stores that origin so a reader can name the
+                # table rather than call the copy a separate document.
+                from app.core.doc_typing import with_declared_origin
                 doc = store.add_document(
                     gk, name, stored_as, filepath, len(raw), content_sha256=sha,
+                    metadata=with_declared_origin(None, raw.decode("utf-8", "replace")),
                 )
                 doc_index.index_document(gk, doc["id"], chunker="markdown")
                 seeded += 1
