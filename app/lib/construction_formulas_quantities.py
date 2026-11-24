@@ -23,6 +23,9 @@ from app.agents.base.formulas.construction_formulas_quantities import (  # noqa:
     _concrete_quantity,
     concrete_volume,
     logger,
+    plain,
+    rate_percent,
+    shown,
 )
 from app.agents.hats.quantities.formulas.construction_formulas_quantities import (  # noqa: F401 -- moved
     _STEEL_DENSITY,
@@ -206,12 +209,12 @@ def format_concrete_volume_line(inner: dict) -> str:
         waste = 0.0
     vol_s = _format_volume_figure(volume)
     if waste > 0 and net is not None:
-        pct = waste * 100.0
-        factor = 1.0 + waste
+        pct = rate_percent(waste)
+        factor = plain(1 + shown(waste))
         net_s = _format_volume_figure(net)
         return (
-            f"Concrete volume including documented {pct:g}% waste: "
-            f"{vol_s} m³ (net {net_s} × {factor:g})."
+            f"Concrete volume including documented {pct}% waste: "
+            f"{vol_s} m³ (net {net_s} × {factor})."
         )
     return f"Concrete volume: {vol_s} m³."
 

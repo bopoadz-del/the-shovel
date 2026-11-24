@@ -3,8 +3,10 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+from app.agents.base.formulas.construction_formulas_quantities import fixed, plain, shown
 from app.lib.formula_registry import Param, formula
 import math
+from decimal import Decimal
 
 
 _STEEL_DENSITY = 7850.0  # kg/m^3
@@ -171,29 +173,37 @@ def rebar_by_area(
     bar mass per metre = pi/4 x d^2 x density."""
     d = float(bar_diameter_mm)
     unit_mass = math.pi / 4.0 * (d / 1000.0) ** 2 * density_kg_m3  # kg/m
-    bars_per_m = 1000.0 / float(spacing_mm)
-    length_per_m2 = bars_per_m  # 1 m run of bar per bar-line across a 1 m width
     ways = 2 if both_ways else 1
-    total_length = length_per_m2 * float(area_m2) * ways
-    total_mass = total_length * unit_mass
+    # Every working line computes its figure from the operands it prints:
+    # the inputs as written, or an exact sub-expression -- never a figure
+    # already rounded for display (6.667 x 100 x 2 is not 1333.33).
+    spacing_s, area_s = shown(spacing_mm), shown(area_m2)
+    bars_per_m = Decimal(1000) / spacing_s
+    total_length = bars_per_m * area_s * ways  # 1 m of bar per bar-line per m2
+    unit_mass_s = shown(unit_mass)
+    total_mass = total_length * unit_mass_s
+    bars_q, length_q = fixed(bars_per_m, 3), fixed(total_length, 2)
+    unit_q, mass_q = fixed(unit_mass_s, 4), fixed(total_mass, 2)
+    unit_expr = f"(pi/4)*({plain(d)}/1000)^2*{plain(density_kg_m3)}"
+    run_expr = f"1000/{plain(spacing_s)} bars/m x {plain(area_s)} m2 x {ways} way(s)"
     return {
-        "bars_per_m": round(bars_per_m, 3),
-        "total_bar_length_m": round(total_length, 2),
-        "total_mass_kg": round(total_mass, 2),
+        "bars_per_m": float(bars_q),
+        "total_bar_length_m": float(length_q),
+        "total_mass_kg": float(mass_q),
         "both_ways": both_ways,
         "standard": "geometry / bar-mass relation",
-        "note": (f"1000/{spacing_mm} = {bars_per_m:.3f} bars/m x {area_m2} m2 x "
-                 f"{ways} way(s) = {total_length:.2f} m; unit mass = "
-                 f"(pi/4)*({d}/1000)^2*{density_kg_m3:g} = {unit_mass:.4f} kg/m; "
-                 f"{total_length:.2f} m x {unit_mass:.4f} kg/m = {total_mass:.2f} kg."),
+        "note": (f"bars/m = 1000/{plain(spacing_s)} = {bars_q}; "
+                 f"length = {run_expr} = {length_q} m; "
+                 f"unit mass = {unit_expr} = {unit_q} kg/m; "
+                 f"mass = {run_expr} x {unit_expr} kg/m = {mass_q} kg."),
     }
 
-def _floored(difference: float, reported: float) -> str:
+def _floored(difference, reported) -> str:
     """The working for a quantity floored at zero: it states the floor it
     applied, so the printed line never reads ``a - b = 0`` for a negative."""
     if difference < 0:
-        return f"{difference:.2f}, below zero: {reported:.2f}"
-    return f"{reported:.2f}"
+        return f"{fixed(difference, 2)}, below zero: {fixed(reported, 2)}"
+    return f"{fixed(reported, 2)}"
 
 @formula(
     owner='quantities',
@@ -251,43 +261,51 @@ def interior_finishes_takeoff(
     pm = float(perimeter_m)
     rooms = int(room_count)
     h = float(floor_to_ceiling_m)
-    doors_total = rooms * float(doors_per_room)
-    door_area = float(door_width_m) * float(door_height_m)
-    door_area_total = doors_total * door_area
-    door_width_total = doors_total * float(door_width_m)
+    # Exact decimals of the inputs as the basis prints them: each basis line
+    # computes its figure from the operands it shows, never from a figure
+    # already rounded for display.
+    pm_s, h_s = shown(pm), shown(h)
+    per_room_s, width_s = shown(doors_per_room), shown(door_width_m)
+    height_s, window_s = shown(door_height_m), shown(window_deduction_m2)
+    share_s = shown(shared_wall_fraction)
+    doors_total = rooms * per_room_s
+    door_area_total = doors_total * width_s * height_s
+    door_width_total = doors_total * width_s
 
-    gross_wall_face = pm * h
-    paint_difference = gross_wall_face - door_area_total - float(window_deduction_m2)
-    net_wall_paint = max(paint_difference, 0.0)
-    blockwork = net_wall_paint * float(shared_wall_fraction)
-    skirting_difference = pm - door_width_total
-    skirting = max(skirting_difference, 0.0)
+    gross_wall_face = pm_s * h_s
+    paint_difference = gross_wall_face - door_area_total - window_s
+    net_wall_paint = max(paint_difference, Decimal(0))
+    blockwork = net_wall_paint * share_s
+    skirting_difference = pm_s - door_width_total
+    skirting = max(skirting_difference, Decimal(0))
+    doors_expr = f"{rooms} x {plain(per_room_s)} x {plain(width_s)}"
 
     return {
         "floor_screed_m2": round(fa, 2),
         "floor_tiling_m2": round(fa, 2),
         "ceiling_finish_m2": round(fa, 2),
-        "skirting_m": round(skirting, 2),
-        "wall_paint_m2": round(net_wall_paint, 2),
-        "blockwork_m2": round(blockwork, 2),
-        "gross_wall_face_m2": round(gross_wall_face, 2),
-        "door_deduction_m2": round(door_area_total, 2),
+        "skirting_m": float(fixed(skirting, 2)),
+        "wall_paint_m2": float(fixed(net_wall_paint, 2)),
+        "blockwork_m2": float(fixed(blockwork, 2)),
+        "gross_wall_face_m2": float(fixed(gross_wall_face, 2)),
+        "door_deduction_m2": float(fixed(door_area_total, 2)),
         "standard": "geometry (parameterised process)",
         "basis": [
             f"floor area {fa} m2; perimeter {pm} m; rooms {rooms}",
             f"floor-to-ceiling {h} m (project input, not a default)",
             f"doors: {doors_per_room}/room x {rooms} rooms, "
-            f"{door_width_m} x {door_height_m} m = {door_area_total:.2f} m2 deducted",
+            f"{door_width_m} x {door_height_m} m = {fixed(door_area_total, 2)} m2 deducted",
             f"window deduction {window_deduction_m2} m2 (project input)",
             f"shared wall fraction {shared_wall_fraction} (modelling parameter)",
             "wall paint = perimeter x height - doors - windows; "
             "blockwork = wall face x shared fraction; "
             "skirting = perimeter - door widths",
-            f"wall paint = {pm} x {h} - {door_area_total:.2f} - "
-            f"{window_deduction_m2} = {_floored(paint_difference, net_wall_paint)} m2",
-            f"blockwork = {net_wall_paint:.2f} x {shared_wall_fraction} = "
-            f"{blockwork:.2f} m2",
-            f"skirting = {pm} - {door_width_total:.2f} = "
+            f"wall paint = {plain(pm_s)} x {plain(h_s)} - {doors_expr} x "
+            f"{plain(height_s)} - {plain(window_s)} = "
+            f"{_floored(paint_difference, net_wall_paint)} m2",
+            f"blockwork = {plain(net_wall_paint)} x {plain(share_s)} = "
+            f"{fixed(blockwork, 2)} m2",
+            f"skirting = {plain(pm_s)} - {doors_expr} = "
             f"{_floored(skirting_difference, skirting)} m",
         ],
     }

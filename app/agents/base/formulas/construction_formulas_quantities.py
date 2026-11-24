@@ -6,9 +6,42 @@ from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import logging
 import math
+from decimal import ROUND_HALF_UP, Decimal
 
 
 logger = logging.getLogger(__name__)
+
+
+def shown(value) -> Decimal:
+    """The exact decimal a working line prints for ``value``.
+
+    A float is written as Python writes it (the shortest text that reads back
+    to the same float), so the operand on the printed line and the operand
+    the result is computed from are the same number."""
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, float):
+        return Decimal(repr(value))
+    return Decimal(str(value))
+
+
+def plain(value) -> str:
+    """Positional text of an exact decimal (never ``1e-05``), trailing zeros
+    dropped, so a reader can re-enter the figure exactly as printed."""
+    text = format(shown(value).normalize(), "f")
+    return "0" if text in ("-0", "") else text
+
+
+def fixed(value, places: int) -> Decimal:
+    """``value`` rounded half-up to ``places`` decimals: the figure a working
+    line reports, computed from the exact operands the line prints."""
+    return shown(value).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+
+
+def rate_percent(fraction) -> str:
+    """A rate fraction stated as the percent that was applied: an exact
+    decimal shift of the fraction as written, never a rounded ``:g``."""
+    return plain(shown(fraction) * 100)
 
 def _concrete_quantity(quantity: float) -> float | None:
     """Element count. None when the value is not a positive number."""
@@ -111,5 +144,5 @@ def concrete_volume(
         "waste_factor": waste_factor,
         "standard": "geometry",
         "note": (f"Net = {expr} = {net:.3f} m3; "
-                 f"+{waste_factor*100:g}% waste = {with_waste:.3f} m3."),
+                 f"+{rate_percent(waste_factor)}% waste = {with_waste:.3f} m3."),
     }
