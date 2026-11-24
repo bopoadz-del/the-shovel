@@ -29,7 +29,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, high-rise substructure and mass concrete notes, part 1 p55-56",
         "project": null,
         "confidence": "site_experience",
@@ -381,7 +381,7 @@
         "provide tension/anchor piles"
       ],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
@@ -606,7 +606,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p6",
         "project": null,
         "confidence": "site_experience",
@@ -1877,7 +1877,7 @@
         "Confirm the design binder content against the trial-section extraction results."
       ],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, asphalt section 3 p35 (typed sheet; p39 is the retyped copy)",
         "project": null,
         "confidence": "site_experience",
