@@ -553,6 +553,29 @@ def _figures(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _unit_fits(written, declared) -> bool:
+    """True when a figure written in ``written`` is a value in ``declared``.
+
+    The same unit, or a unit whose weight under standard gravity is
+    exactly one ``declared`` (pint's own definitions: kilogram and
+    kilogram_force, pound and force_pound, kg/mm and kilogram_force/mm).
+    The figure's number is taken as written either way; a unit that would
+    need a factor (tonne for kilogram_force) or a force that is not a
+    gravitational unit (newton) does not fit.
+    """
+    if written is None or declared is None:
+        return False
+    if written == declared:
+        return True
+    ureg = _unit_registry()
+    try:
+        weight = ureg.Quantity(1, declared).to(written * ureg.standard_gravity).magnitude
+    except Exception:  # noqa: BLE001 -- dimensions do not meet: no fit
+        _LOG.debug("unit %r does not fit %r", written, declared, exc_info=True)
+        return False
+    return abs(weight - 1.0) < 1e-9
+
+
 def _bind_by_name(text: str, name: str, figures: List[Dict[str, Any]]):
     """The figure written as ``name = n`` / ``name: n`` / ``name of n``."""
     flags = 0 if len(name) < 3 else re.IGNORECASE
@@ -568,8 +591,9 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
 
     By name first. A variable left over binds by its declared unit only
     when it is the one left-over variable of that unit and exactly one
-    unused figure carries that unit. No unit conversion: a figure in a
-    different unit is not this variable's figure.
+    unused figure carries that unit (or the mass unit it is the weight
+    of, see ``_unit_fits``). No unit conversion: a figure in a different
+    unit is not this variable's figure.
     """
     variables = entry.get("variables") or {}
     if not isinstance(variables, dict) or not variables:
@@ -588,7 +612,7 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
         unit = declared[name]
         if unit is None or sum(1 for n in left if declared[n] == unit) != 1:
             return None
-        cands = [f for f in figures if id(f) not in used and f["unit"] == unit]
+        cands = [f for f in figures if id(f) not in used and _unit_fits(f["unit"], unit)]
         if len(cands) != 1:
             return None
         bound[name] = cands[0]["value"]
