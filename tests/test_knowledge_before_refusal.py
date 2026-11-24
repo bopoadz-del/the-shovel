@@ -18,8 +18,8 @@ import json
 
 import pytest
 
-from app.agents.core.context import (  # noqa: F401 - the mutation gate ties
-    KNOWLEDGE_FIRST_NUDGE,                 # these helpers to this file
+from app.agents.core.context import (
+    KNOWLEDGE_FIRST_NUDGE,
     KNOWLEDGE_TOOL_NAME,
     SEARCH_FIRST_NUDGE,
     SEARCH_TOOL_NAME,
@@ -40,25 +40,25 @@ COURSE_CASES = [
     (
         "What minimum factor of safety against uplift applies to a basement slab?",
         "Basement walls shall be tanked with a bonded membrane.",
-        "The project documents do not state the minimum factor of safety "
-        "against uplift for the basement slab.",
+        ("The project documents do not state the minimum factor of safety "
+         "against uplift for the basement slab."),
         "Membrane laps shall be not less than 100 mm.",
         "Uplift resistance shall give a factor of safety of not less than 1.4.",
         "Course notes, foundations module, p3",
-        "The minimum factor of safety against uplift is 1.4 (encoded "
-        "knowledge: Course notes, foundations module, p3).",
+        ("The minimum factor of safety against uplift is 1.4 (encoded "
+         "knowledge: Course notes, foundations module, p3)."),
         "uplift",
     ),
     (
         "What maximum slump is allowed for slipform kerb concrete?",
         "Kerbs shall be laid to the line and level shown.",
-        "I could not find the maximum slump for slipform kerb concrete in "
-        "the project documents.",
+        ("I could not find the maximum slump for slipform kerb concrete in "
+         "the project documents."),
         "Kerb joints shall be at 3 m centres.",
         "Slipform kerb concrete shall have a slump not exceeding 25 mm.",
         "Course notes, pavements module, p8",
-        "Slipform kerb concrete may have a slump of at most 25 mm (encoded "
-        "knowledge: Course notes, pavements module, p8).",
+        ("Slipform kerb concrete may have a slump of at most 25 mm (encoded "
+         "knowledge: Course notes, pavements module, p8)."),
         "slump",
     ),
 ]
@@ -70,10 +70,10 @@ ANSWER_DRAFTS = [
 
 
 def _due(draft: str, **change) -> bool:
-    state = dict(
-        knowledge_offered=True, knowledge_consulted=False,
-        force_synthesis=False, already_ran=False, iterations_left=5,
-    )
+    state = {
+        "knowledge_offered": True, "knowledge_consulted": False,
+        "force_synthesis": False, "already_ran": False, "iterations_left": 5,
+    }
     state.update(change)
     return knowledge_before_refusal_due(draft, **state)
 
