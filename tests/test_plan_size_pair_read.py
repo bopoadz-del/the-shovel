@@ -86,3 +86,24 @@ def test_no_single_reading_asks_for_the_sizes(ask):
     out = run_calculation("concrete_volume", {"text": ask})
     assert out["status"] == "needs_input", out
     assert "length_m" in (out.get("missing") or [])
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        # All three sizes already given (the third as thickness_m): the ask's
+        # text is not read, so no depth_m is added beside the typed thickness.
+        ({"length_m": 5.0, "width_m": 4.0, "thickness_m": 0.3},
+         {"length_m": 5.0, "width_m": 4.0, "thickness_m": 0.3}),
+        # One size missing: the text is read, and setdefault keeps the typed
+        # length and width while the written 200 mm fills depth_m.
+        ({"length_m": 5.0, "width_m": 4.0},
+         {"length_m": 5.0, "width_m": 4.0, "depth_m": 0.2}),
+    ],
+)
+def test_text_is_read_only_while_a_size_is_missing(given, expected):
+    from app.lib.construction_formulas import _fill_lwd_from_text
+
+    out = dict(given)
+    _fill_lwd_from_text("Ground slab 18 m by 9 m, 200 mm thick", out)
+    assert out == expected
