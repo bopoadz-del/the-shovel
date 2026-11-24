@@ -145,9 +145,15 @@ def test_a_negative_limit_is_refused(limit):
     assert "retention_limit" in r["error"]
 
 
-def test_amounts_declare_they_are_totals_to_date():
-    spec = fr.get("interim_payment_to_date")
-    params = fr.parameters(spec)
-    for name in ("work_value_to_date", "previously_certified", "materials_on_site"):
-        assert params[name].basis == "cumulative", name
-    assert params["retention_percent"].required and params["previously_certified"].required
+@pytest.mark.parametrize(
+    "name", ["work_value_to_date", "previously_certified", "materials_on_site"]
+)
+def test_amounts_declare_they_are_totals_to_date(name):
+    params = fr.parameters(fr.get("interim_payment_to_date"))
+    assert params[name].basis == "cumulative", name
+
+
+@pytest.mark.parametrize("name", ["retention_percent", "previously_certified"])
+def test_rate_and_earlier_certificates_have_no_default(name):
+    params = fr.parameters(fr.get("interim_payment_to_date"))
+    assert params[name].required, name
