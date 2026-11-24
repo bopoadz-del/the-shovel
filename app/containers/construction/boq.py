@@ -2713,20 +2713,79 @@ class ConstructionBoqMixin:
             return {"status": "error", "error": "boq_processor block unavailable"}
         return await block.process(input_data, params)
     async def benchmark_lookup(self, input_data: Any, params: Dict) -> Dict:
-        """Historical benchmark lookup — delegates to the historical_benchmark block.
+        """Rate lookup: the typed rate-card first, the historical book second.
 
-        The block ships a small, conservative, region-adjusted rate book for
-        common construction items. Unknown items return an honest error so the
-        caller can supply supplier quotes or add a custom rate.
+        This is the action behind the commercial hat's ``rate_card_lookup``,
+        so it prices from the same card (``app.lib.boq_pricing``) the
+        price-boq endpoint uses:
+
+        - a bill (``line_items`` or a BOQ ``file_path``) is priced line by
+          line from the card for the named ``asset_type``; each line keeps
+          its ``rate_source`` and sample size, and a line with no comparable
+          rate stays NO RATE (never invented);
+        - a single ``item`` with an ``asset_type`` is priced from the card
+          when the card has a comparable rate;
+        - otherwise the historical_benchmark block answers, labelled
+          indicative, with the card's asset types listed so the caller can
+          ask for a card price.
+
+        No asset type is ever guessed: a bill without one returns the card's
+        valid asset types instead of a priced total.
         """
+        data = input_data if isinstance(input_data, dict) else {}
+        p = params or {}
+
+        def _arg(key: str) -> Any:
+            value = p.get(key)
+            return value if value not in (None, "", []) else data.get(key)
+
+        from app.lib import boq_pricing
+
+        asset_arg = _arg("asset_type")
+        asset, currency = boq_pricing.resolve_card(asset_arg, _arg("currency"))
+        line_items = _arg("line_items")
+        file_path = _arg("file_path")
+        if line_items or file_path:
+            return await self._price_bill_from_rate_card(
+                line_items, file_path, asset, currency, asset_arg, boq_pricing,
+            )
+        item = _arg("item") or ""
+        if item and asset and currency:
+            # A stated quantity is kept as given, 0 included; only a missing
+            # one defaults to a single unit.
+            quantity = _arg("quantity")
+            if quantity in (None, ""):
+                quantity = 1
+            priced, _summary = boq_pricing.price_line_items(
+                [{"description": item, "unit": _arg("unit") or "",
+                  "quantity": quantity}],
+                asset, currency,
+            )
+            line = priced[0]
+            if line["rate_source"] != "NO RATE":
+                return {
+                    "status": "success",
+                    "item": item,
+                    "unit": line["unit"],
+                    "unit_rate": line["rate"],
+                    "currency": currency,
+                    "asset_type": asset,
+                    "rate_source": line["rate_source"],
+                    "n": line["n"],
+                    "work_category": line["work_category"],
+                    "rate_basis": (
+                        f"rate card {asset}/{currency}: median of observed "
+                        "rates, an ESTIMATE, not a tendered price"
+                    ),
+                    "card_source": boq_pricing.card_source(),
+                }
+
         block = self._get_historical_benchmark_block()
         if block is None:
             return {
                 "status": "error",
                 "error": "historical_benchmark block unavailable",
             }
-        data = input_data if isinstance(input_data, dict) else {}
-        p = params or {}
         lookup_params = {
             "action": "lookup",
             "item": p.get("item") or data.get("item", ""),
@@ -2734,4 +2793,69 @@ class ConstructionBoqMixin:
             "location": p.get("location") or data.get("location", "US National Average"),
             "project_type": p.get("project_type") or data.get("project_type", "general_building"),
         }
-        return await block.process(data, lookup_params)
+        result = await block.process(data, lookup_params)
+        if isinstance(result, dict) and result.get("status") == "success":
+            result = {
+                **result,
+                "rate_basis": (
+                    "historical benchmark book (indicative), not the rate card"
+                ),
+                "rate_card_asset_types": boq_pricing.available_assets(),
+            }
+        return result
+
+    async def _price_bill_from_rate_card(
+        self, line_items: Any, file_path: Any, asset: Optional[str],
+        currency: Optional[str], asset_arg: Any, boq_pricing: Any,
+    ) -> Dict:
+        """Price a bill from the rate card: the chat twin of price-boq."""
+        options = boq_pricing.available_assets()
+        if not asset or not currency:
+            named = f" '{asset_arg}'" if asset_arg else ""
+            return {
+                "status": "error",
+                "error": (
+                    f"The rate card has no asset type{named} with that "
+                    "currency. Name one of the card's asset types to price "
+                    "this bill."
+                ),
+                "missing": ["asset_type"] if not asset else ["currency"],
+                "rate_card_asset_types": options,
+            }
+        if not line_items:
+            block = self._resolve_block("boq_processor")
+            if block is None:
+                return {"status": "error", "error": "boq_processor block unavailable"}
+            parsed = await block.process({"file_path": file_path}, {})
+            line_items = (parsed or {}).get("line_items") or []
+            if not line_items:
+                return {
+                    "status": "error",
+                    "error": (
+                        "No bill lines could be read from that file; a digital "
+                        "or spreadsheet BOQ is needed."
+                    ),
+                }
+        if not isinstance(line_items, list):
+            return {"status": "error", "error": "line_items must be a list of bill lines"}
+        lines = []
+        for raw in line_items:
+            if not isinstance(raw, dict):
+                continue
+            lines.append({
+                **raw,
+                "quantity": raw.get("quantity", raw.get("qty")),
+            })
+        if not lines:
+            return {"status": "error", "error": "line_items held no bill lines"}
+        priced, summary = boq_pricing.price_line_items(lines, asset, currency)
+        return {
+            "status": "success",
+            "priced_items": priced,
+            "summary": summary,
+            "rate_basis": (
+                f"rate card {asset}/{currency}: medians of observed rates, an "
+                "ESTIMATE, not tendered prices; NO RATE lines are left unpriced"
+            ),
+            "card_source": boq_pricing.card_source(),
+        }
