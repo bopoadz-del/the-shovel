@@ -1897,12 +1897,6 @@ def _input_unit_token(name: str, row_unit: Any, declared: Any) -> str:
     ).strip()
 
 
-def _input_words(name: str, label: Any = "") -> set:
-    """The words an input is named by: its signature name and its label."""
-    text = f"{name} {label or ''}".lower()
-    return {w for w in re.split(r"[^a-z]+", text) if len(w) > 2}
-
-
 _ROLE_WORDS: Dict[str, Any] = {"count": -1, "by_kind": {}}
 
 
@@ -1931,7 +1925,7 @@ def _role_words_by_kind() -> Dict[str, set]:
             kind = binding_kind(_input_unit_token(row["name"], row.get("unit"), declared.get(row["name"])))
             if kind:
                 by_kind.setdefault(kind, set()).update(
-                    _input_words(row["name"], labels.get(row["name"]))
+                    _input_words(row["name"], labels.get(row["name"]) or "")
                 )
     # A word that names inputs of three kinds or more ("per", "total") joins
     # names; it does not tell one role from another.
@@ -2305,7 +2299,7 @@ def extract_calculation_params_from_text(
         kind = binding_kind(token)
         required_by_kind.setdefault(kind, []).append(row["name"])
         required_tokens[row["name"]] = token
-        input_words[row["name"]] = _input_words(row["name"], input_labels.get(row["name"]))
+        input_words[row["name"]] = _input_words(row["name"], input_labels.get(row["name"]) or "")
 
     unit_pat = _figure_unit_pattern(extra_units)
     boundary = r"(?![A-Za-z0-9])"
