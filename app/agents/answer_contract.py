@@ -29,7 +29,11 @@ question, a formula, a project or a document.
    and each cut item word for word, leaves the text and travels as
    structured ``details`` beside the answer. The budget is the answer's own
    shape, never a word count: nothing is deleted, and an answer that is one
-   paragraph is untouched. An answer a conflict statement replaces is read
+   paragraph stating values is untouched. An opening paragraph that leads on
+   an absence ("X is not in the documents I searched") is read like a list
+   item: that sentence is the whole answer and leads, carrying every marker
+   of the sentences after it, and those sentences -- what the documents do
+   hold -- move word for word. An answer a conflict statement replaces is read
    whole: the statement is its lead and nothing is moved out of sight.
    The rule is a reading of a FINISHED answer to a question put to the
    documents: it runs only when the caller says so (``lead``) and the turn
@@ -819,6 +823,57 @@ def _cut_item(line: str) -> tuple[str, str | None]:
     return line[: m.end()] + first + (" " + rest if rest else ""), line.strip()
 
 
+def _cut_opening(par: str) -> tuple[str, str | None]:
+    """An opening prose paragraph that leads on an absence, cut to that first
+    sentence, and the sentences after it word for word (else None). The
+    paragraph is read like a list item: every marker a moved sentence
+    carried also rides on the first sentence, so the lead still says where
+    it came from. Only a one-line prose paragraph whose first sentence is an
+    absence in the answer's scope form is cut; any other paragraph -- one
+    that states a value, a heading, an item, a table row, a list intro, one
+    written over several lines -- stays whole, so an answer of several
+    stated parts is never cut to its first part. A stop followed by a word
+    that does not open a sentence (``e.g. the slab``) does not end the first
+    sentence."""
+    if "\n" in par.strip() or _HEADING_RE.match(par) or _BULLET_RE.match(par) or _TABLE_RE.match(par):
+        return par, None
+    if _introduces_list(par):
+        return par, None
+    pieces = [x for x in _sentences(par.strip()) if x.strip()]
+    k = 1
+    while k < len(pieces) and not _opens_sentence(pieces[k]):
+        k += 1
+    if k >= len(pieces):
+        return par, None
+    first = "".join(pieces[:k]).strip()
+    if not _is_absence_lead(first):
+        return par, None
+    moved = "".join(pieces[k:]).strip()
+    ride = "".join(mk for mk in dict.fromkeys(_MARKER_RE.findall(moved)) if mk not in first)
+    return first + (" " + ride if ride else ""), moved
+
+
+#: The answer's own scope of absence: the writer says what it searched
+#: ("... is not in the project documents I searched", "No X is in what I
+#: searched"). A negation in the same sentence makes it an absence.
+_SEARCH_SCOPE_RE = re.compile(r"\bI\s+searched\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\b(?:not|no|none|neither|nor|nothing)\b|n't\b", re.IGNORECASE)
+
+
+def _is_absence_lead(sentence: str) -> bool:
+    """A sentence that reports an absence in the answer's own scope form: a
+    negation and the writer's ``I searched``. It is a whole answer on its
+    own; what follows it is what the documents do hold, which is detail."""
+    return bool(_SEARCH_SCOPE_RE.search(sentence) and _NEGATION_RE.search(sentence))
+
+
+def _opens_sentence(piece: str) -> bool:
+    """A piece opens a sentence when its first letter or figure, past any
+    opening quote or bracket, is upper case or a digit."""
+    head = piece.lstrip().lstrip("\"'([“‘")
+    return bool(head) and (head[0].isupper() or head[0].isdigit())
+
+
 def _lead_and_details(body: str) -> tuple[str, str | None]:
     """The lead (opening paragraph, headings carrying on into the paragraph
     under them, plus the list it introduces with items cut to their first
@@ -845,6 +900,12 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
     if i < len(pars) and _introduces_list(lead_pars[-1]) and _is_list(pars[i]):
         lead_pars.append(pars[i])
         i += 1
+    opening_rest: str | None = None
+    if len(lead_pars) == 1:
+        # The opening paragraph leads only as far as its first sentence; the
+        # sentences that support it are detail like any later paragraph.
+        short, opening_rest = _cut_opening(lead_pars[0])
+        lead_pars = [short]
     cut_items: list[str] = []
     lead: list[str] = []
     for par in lead_pars:
@@ -856,9 +917,9 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
                 cut_items.append(whole)
         lead.append("\n".join(lines))
     rest = pars[i:]
-    if not cut_items and not rest:
+    if not cut_items and not rest and opening_rest is None:
         return body, None
-    details = ([ "\n".join(cut_items)] if cut_items else []) + rest
+    details = ([opening_rest] if opening_rest else []) + ([ "\n".join(cut_items)] if cut_items else []) + rest
     return "\n\n".join(lead), "\n\n".join(details)
 
 
