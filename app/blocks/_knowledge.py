@@ -596,21 +596,69 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
     return bound
 
 
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.?!])\s+")
+#: Words a question is framed with. They name nothing, so they never make a
+#: question ask for more than the result.
+_QUESTION_FRAME_WORDS = frozenset({
+    "what", "which", "will", "would", "are", "was", "were", "then",
+})
+
+
+def _question_asks_only_for(text: str, title: str) -> bool:
+    """The ask's question asks for the entry's result and nothing else.
+
+    "<givens>. What is the <result>?" is a calculation request without a
+    calculation verb: the givens state the figures, the question names the
+    result. Each question sentence (one that ends in "?") must name a word
+    of the entry's title, and every other word in it must be a title word,
+    a word the givens already introduced, a unit, or a framing word. A
+    question that asks about anything else ("what does the rule say") is
+    not a request to evaluate. An ask with no question is not one either.
+    """
+    from app.lib.construction_formulas import _display_content_words
+
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split((text or "").strip()) if s]
+    questions = [s for s in sentences if s.rstrip().endswith("?")]
+    if not questions:
+        return False
+    named = set(_display_content_words(title))
+    givens = set(_display_content_words(
+        " ".join(s for s in sentences if s not in questions)))
+    for question in questions:
+        words = [w for w in _display_content_words(question)
+                 if not w.isdigit() and w not in _QUESTION_FRAME_WORDS]
+        if not named.intersection(words):
+            return False
+        for word in words:
+            if word in named or word in givens or _parse_unit(word) is not None:
+                continue
+            return False
+    return True
+
+
 def formula_completed_by_user_text(text: str) -> Optional[tuple]:
     """``(rule_id, values)`` for the one formula entry the ask names and
-    supplies, or None."""
+    supplies, or None.
+
+    The ask requests a calculation: by a calculation verb, or by a question
+    that asks only for the entry's result (``_question_asks_only_for``).
+    """
     raw = text or ""
     from app.lib.construction_formulas import (
         _display_content_words, _words_all_present, explicit_calculation_request,
     )
-    if not raw.strip() or not explicit_calculation_request(raw):
+    if not raw.strip():
         return None
+    calc_verb = explicit_calculation_request(raw)
     candidates = []
     for entry in load_knowledge():
         if entry.get("type") != "formula":
             continue
-        words = _display_content_words(str(entry.get("title") or ""))
+        title = str(entry.get("title") or "")
+        words = _display_content_words(title)
         if not words or not _words_all_present(raw, words):
+            continue
+        if not calc_verb and not _question_asks_only_for(raw, title):
             continue
         values = bind_entry_variables(entry, raw)
         if values is None:
