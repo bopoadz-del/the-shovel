@@ -433,7 +433,7 @@ def _window(sent: str, start: int, end: int) -> str:
 
 
 #: English cardinal words: a value written out in words beside its digits
-#: ("ninety-five percent (95%)") is the value's own wording, not a qualifier.
+#: ("forty millimetres (40 mm)") is the value's own wording, not a qualifier.
 #: A closed class of the language, never a list of subjects.
 _CARDINAL_WORDS = frozenset({
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
@@ -446,9 +446,10 @@ _COORD_WORDS = frozenset({"and", "or"})
 def _coordinated(gap: str) -> bool:
     """True when the text between two values holds a coordinator and nothing
     else but the values' own wording (cardinal words, unit words, brackets,
-    commas): "95% and 98%", "ninety-five percent (95%) and ninety-eight percent
-    (98%)", "90%, 93% or 95%". Any other word in the gap ("for verges and")
-    qualifies one value only, so the values are not one coordination."""
+    commas): "40 mm and 50 mm", "forty millimetres (40 mm) and fifty millimetres
+    (50 mm)", "40, 45 or 50 mm". Any other word in the gap ("40 mm to the slab
+    and 50 mm") qualifies one value only, so the values are not one
+    coordination."""
     words = re.findall(r"[A-Za-z]+(?:-[A-Za-z]+)*", gap)
     if not (any(w.lower() in _COORD_WORDS for w in words) or "," in gap or "&" in gap):
         return False
@@ -465,8 +466,8 @@ def _coordinated(gap: str) -> bool:
 def _groups(sent: str, vals: list[Value]) -> list[tuple[int, int]]:
     """Runs of consecutive values of one kind joined only by a coordination,
     as (first index, last index). Coordinated values share the words around
-    the whole run: in "compacted to 95% and 98% of the maximum dry density"
-    the qualifier after the run belongs to both values, not to the last."""
+    the whole run: in "a cover of 40 mm and 50 mm to the outer face" the
+    qualifier after the run belongs to both values, not to the last."""
     runs: list[tuple[int, int]] = []
     i = 0
     while i < len(vals):
