@@ -1,7 +1,7 @@
 """S-K3 item 1: IDS-style requirement checker.
 
 Every test builds its own elements and its own specification; each
-decision is shown with an input on each side of it.
+decision is parametrized with an input on each side of it.
 """
 import pytest
 
@@ -32,125 +32,157 @@ def _only(result):
     return spec
 
 
+def _door_verdict(props, requirement):
+    """Check one door against one requirement: 'pass' or 'fail'."""
+    out = _only(check_ids([_el("d", "IfcDoor", props)], _spec([requirement])))
+    assert out["applicable"] == 1
+    return "fail" if out["failed"] else "pass"
+
+
 # -- required ---------------------------------------------------------------
 
-def test_required_property_present_passes_and_missing_fails():
-    els = [
-        _el("d1", "IfcDoor", {"Psx.Rating": "R1"}),
-        _el("d2", "IfcDoor", {"Psx.Other": "x"}),
-    ]
-    out = _only(check_ids(els, _spec([{"property": "Psx.Rating"}])))
-    assert out["passed"] == 1 and out["failed"] == 1
-    assert out["failures"][0]["id"] == "d2"
-    assert "missing" in out["failures"][0]["reasons"][0]
-    assert out["status"] == "fail"
+@pytest.mark.parametrize("props,expected", [
+    ({"Psx.Rating": "R1"}, "pass"),
+    ({"Psx.Other": "x"}, "fail"),
+])
+def test_required_property_present_passes_and_missing_fails(props, expected):
+    assert _door_verdict(props, {"property": "Psx.Rating"}) == expected
 
 
-def test_required_with_value_checks_the_value():
-    els = [
-        _el("a", "IfcDoor", {"Psx.Rating": "R1"}),
-        _el("b", "IfcDoor", {"Psx.Rating": "R2"}),
-    ]
-    out = _only(check_ids(els, _spec([{"property": "Psx.Rating", "value": "r1"}])))
-    assert [f["id"] for f in out["failures"]] == ["b"]
-    assert out["passed"] == 1
+@pytest.mark.parametrize("requirement,reason", [
+    ({"property": "Psx.Rating"}, "property Psx.Rating is missing"),
+    ({"attribute": "object_type"}, "attribute object_type is missing"),
+    ({"material": True}, "material is missing"),
+])
+def test_failure_reason_names_the_facet(requirement, reason):
+    out = _only(check_ids([_el("d", "IfcDoor", {})], _spec([requirement])))
+    assert out["failures"][0]["reasons"] == [reason]
 
 
-def test_blank_value_counts_as_absent():
-    els = [_el("a", "IfcDoor", {"Psx.Rating": ""}), _el("b", "IfcDoor", {"Psx.Rating": "R"})]
-    out = _only(check_ids(els, _spec([{"property": "Psx.Rating"}])))
-    assert [f["id"] for f in out["failures"]] == ["a"]
+@pytest.mark.parametrize("rating,expected", [("R1", "pass"), ("r1", "pass"), ("R2", "fail")])
+def test_required_with_value_checks_the_value(rating, expected):
+    req = {"property": "Psx.Rating", "value": "r1"}
+    assert _door_verdict({"Psx.Rating": rating}, req) == expected
+
+
+@pytest.mark.parametrize("rating,expected", [("", "fail"), (None, "fail"), ("R", "pass")])
+def test_blank_value_counts_as_absent(rating, expected):
+    assert _door_verdict({"Psx.Rating": rating}, {"property": "Psx.Rating"}) == expected
 
 
 # -- optional ---------------------------------------------------------------
 
-def test_optional_absent_passes_but_present_must_conform():
-    els = [
-        _el("absent", "IfcDoor", {}),
-        _el("bad", "IfcDoor", {"Psx.Width": 700}),
-        _el("good", "IfcDoor", {"Psx.Width": 900}),
-    ]
-    req = [{"property": "Psx.Width", "cardinality": "optional", "min": 800}]
-    out = _only(check_ids(els, _spec(req)))
-    assert [f["id"] for f in out["failures"]] == ["bad"]
-    assert out["passed"] == 2
+@pytest.mark.parametrize("props,expected", [
+    ({}, "pass"),
+    ({"Psx.Width": 700}, "fail"),
+    ({"Psx.Width": 900}, "pass"),
+])
+def test_optional_absent_passes_but_present_must_conform(props, expected):
+    req = {"property": "Psx.Width", "cardinality": "optional", "min": 800}
+    assert _door_verdict(props, req) == expected
 
 
 # -- prohibited -------------------------------------------------------------
 
-def test_prohibited_without_value_fails_on_presence():
-    els = [_el("p", "IfcDoor", {"Psx.Temp": "1"}), _el("q", "IfcDoor", {})]
-    req = [{"property": "Psx.Temp", "cardinality": "prohibited"}]
-    out = _only(check_ids(els, _spec(req)))
-    assert [f["id"] for f in out["failures"]] == ["p"]
+@pytest.mark.parametrize("props,expected", [({"Psx.Temp": "1"}, "fail"), ({}, "pass")])
+def test_prohibited_without_value_fails_on_presence(props, expected):
+    req = {"property": "Psx.Temp", "cardinality": "prohibited"}
+    assert _door_verdict(props, req) == expected
 
 
-def test_prohibited_with_value_fails_only_on_that_value():
-    els = [
-        _el("p", "IfcDoor", {"Psx.Status": "Draft"}),
-        _el("q", "IfcDoor", {"Psx.Status": "Issued"}),
-    ]
-    req = [{"property": "Psx.Status", "cardinality": "prohibited", "value": "draft"}]
-    out = _only(check_ids(els, _spec(req)))
-    assert [f["id"] for f in out["failures"]] == ["p"]
+@pytest.mark.parametrize("status,expected", [("Draft", "fail"), ("Issued", "pass")])
+def test_prohibited_with_value_fails_only_on_that_value(status, expected):
+    req = {"property": "Psx.Status", "cardinality": "prohibited", "value": "draft"}
+    assert _door_verdict({"Psx.Status": status}, req) == expected
 
 
 # -- value constraints ------------------------------------------------------
 
-def test_pattern_is_a_full_match():
-    els = [_el("a", "IfcDoor", {"Psx.Code": "D-101"}), _el("b", "IfcDoor", {"Psx.Code": "XD-101"})]
-    out = _only(check_ids(els, _spec([{"property": "Psx.Code", "pattern": r"D-\d+"}])))
-    assert [f["id"] for f in out["failures"]] == ["b"]
+@pytest.mark.parametrize("code,expected", [("D-101", "pass"), ("XD-101", "fail"), ("D-101a", "fail")])
+def test_pattern_is_a_full_match(code, expected):
+    assert _door_verdict({"Psx.Code": code}, {"property": "Psx.Code", "pattern": r"D-\d+"}) == expected
 
 
-def test_enumeration_is_case_insensitive_membership():
-    els = [_el("a", "IfcDoor", {"Psx.Kind": "Single"}), _el("b", "IfcDoor", {"Psx.Kind": "Triple"})]
-    req = [{"property": "Psx.Kind", "enumeration": ["single", "double"]}]
-    out = _only(check_ids(els, _spec(req)))
-    assert [f["id"] for f in out["failures"]] == ["b"]
+@pytest.mark.parametrize("kind,expected", [("Single", "pass"), ("DOUBLE", "pass"), ("Triple", "fail")])
+def test_enumeration_is_case_insensitive_membership(kind, expected):
+    req = {"property": "Psx.Kind", "enumeration": ["single", "double"]}
+    assert _door_verdict({"Psx.Kind": kind}, req) == expected
 
 
-def test_bounds_are_inclusive_and_refuse_non_numbers():
-    els = [
-        _el("lo", "IfcDoor", {"Psx.W": 800}),
-        _el("hi", "IfcDoor", {"Psx.W": 1200.5}),
-        _el("txt", "IfcDoor", {"Psx.W": "wide"}),
-        _el("ok", "IfcDoor", {"Psx.W": "1000"}),
-    ]
-    req = [{"property": "Psx.W", "min": 800, "max": 1200}]
-    out = _only(check_ids(els, _spec(req)))
-    assert sorted(f["id"] for f in out["failures"]) == ["hi", "txt"]
+@pytest.mark.parametrize("width,expected", [
+    (800, "pass"),
+    (1200, "pass"),
+    ("1000", "pass"),
+    (799.9, "fail"),
+    (1200.5, "fail"),
+    ("wide", "fail"),
+])
+def test_bounds_are_inclusive_and_refuse_non_numbers(width, expected):
+    req = {"property": "Psx.W", "min": 800, "max": 1200}
+    assert _door_verdict({"Psx.W": width}, req) == expected
 
 
-def test_numeric_value_compares_as_number():
-    els = [_el("a", "IfcDoor", {"Psx.N": "2.0"}), _el("b", "IfcDoor", {"Psx.N": 3})]
-    out = _only(check_ids(els, _spec([{"property": "Psx.N", "value": 2}])))
-    assert [f["id"] for f in out["failures"]] == ["b"]
+@pytest.mark.parametrize("flag,expected", [(True, "fail"), (False, "fail"), (1, "pass")])
+def test_a_boolean_is_not_a_number_for_a_bound(flag, expected):
+    # Python counts True as 1; an IDS bound reads only a written number.
+    assert _door_verdict({"Psx.N": flag}, {"property": "Psx.N", "min": 0, "max": 1}) == expected
+
+
+@pytest.mark.parametrize("n,expected", [("2.0", "pass"), (2, "pass"), (3, "fail"), ("2.5", "fail")])
+def test_numeric_value_compares_as_number(n, expected):
+    assert _door_verdict({"Psx.N": n}, {"property": "Psx.N", "value": 2}) == expected
+
+
+@pytest.mark.parametrize("width,expected", [("900mm", "fail"), ("9e2", "pass"), ("1,000", "fail")])
+def test_number_parsing_refuses_text_with_digits(width, expected):
+    assert _door_verdict({"P.W": width}, {"property": "P.W", "min": 800}) == expected
 
 
 # -- applicability ----------------------------------------------------------
 
-def test_applicability_selects_by_entity_and_property():
-    els = [
-        _el("w1", "IfcWall", {"Psx.External": True}),
-        _el("w2", "IfcWall", {"Psx.External": False}),
-        _el("d1", "IfcDoor", {"Psx.External": True}),
-    ]
+@pytest.mark.parametrize("element,in_scope", [
+    (_el("w1", "IfcWall", {"Psx.External": True}), 1),
+    (_el("w2", "IfcWall", {"Psx.External": False}), 0),
+    (_el("d1", "IfcDoor", {"Psx.External": True}), 0),
+])
+def test_applicability_selects_by_entity_and_property(element, in_scope):
     app = [{"entity": "IfcWall"}, {"property": "Psx.External", "value": True}]
-    out = _only(check_ids(els, _spec([{"property": "Psx.U"}], applicability=app)))
-    assert out["applicable"] == 1
-    assert [f["id"] for f in out["failures"]] == ["w1"]
+    out = _only(check_ids([element], _spec([{"property": "Psx.U"}], applicability=app)))
+    assert out["applicable"] == in_scope
 
 
-def test_attribute_and_material_facets():
-    els = [
-        _el("a", "IfcSlab", {}, object_type="FL-01", materials=["Concrete"]),
-        _el("b", "IfcSlab", {}, object_type="", materials=[]),
-    ]
+@pytest.mark.parametrize("entity,failed_ids", [
+    ("ifcdoor", ["d"]),
+    ("IfcWall", ["w"]),
+])
+def test_entity_facet_is_constrained_by_the_entity_it_names(entity, failed_ids):
+    els = [_el("d", "IfcDoor", {}), _el("w", "IfcWall", {})]
+    out = _only(check_ids(els, _spec([{"property": "P.A"}], applicability=[{"entity": entity}])))
+    assert [f["id"] for f in out["failures"]] == failed_ids
+
+
+@pytest.mark.parametrize("attrs,reasons", [
+    ({"object_type": "FL-01", "materials": ["Concrete"]}, 0),
+    ({"object_type": "", "materials": []}, 2),
+    ({"object_type": "FL-01", "materials": []}, 1),
+])
+def test_attribute_and_material_facets(attrs, reasons):
     req = [{"attribute": "object_type"}, {"material": True}]
-    out = _only(check_ids(els, _spec(req, applicability=[{"entity": "IfcSlab"}])))
-    assert [f["id"] for f in out["failures"]] == ["b"]
-    assert len(out["failures"][0]["reasons"]) == 2
+    out = _only(check_ids([_el("s", "IfcSlab", {}, **attrs)],
+                          _spec(req, applicability=[{"entity": "IfcSlab"}])))
+    got = out["failures"][0]["reasons"] if out["failures"] else []
+    assert len(got) == reasons
+
+
+@pytest.mark.parametrize("material,requirement,expected", [
+    ("Concrete", "concrete", "pass"),
+    ("Steel", "concrete", "fail"),
+    ("Steel", True, "pass"),
+])
+def test_named_material_must_match_any_material_does_not_care(material, requirement, expected):
+    els = [_el("s", "IfcSlab", {}, materials=[material])]
+    out = _only(check_ids(els, _spec([{"material": requirement}], applicability=[{"entity": "IfcSlab"}])))
+    assert ("fail" if out["failed"] else "pass") == expected
 
 
 # -- specification cardinality ----------------------------------------------
@@ -164,12 +196,14 @@ def test_required_specification_fails_on_empty_scope_optional_does_not():
     assert optional["status"] == "pass" and optional["scope_issue"] is None
 
 
-def test_prohibited_specification_fails_when_anything_is_in_scope():
+@pytest.mark.parametrize("element,status", [
+    (_el("d", "IfcDoor", {}), "fail"),
+    (_el("w", "IfcWall", {}), "pass"),
+])
+def test_prohibited_specification_fails_when_anything_is_in_scope(element, status):
     req = [{"property": "Psx.A", "cardinality": "optional"}]
-    hit = _only(check_ids([_el("d", "IfcDoor", {})], _spec(req, cardinality="prohibited")))
-    miss = _only(check_ids([_el("w", "IfcWall", {})], _spec(req, cardinality="prohibited")))
-    assert hit["status"] == "fail"
-    assert miss["status"] == "pass"
+    out = _only(check_ids([element], _spec(req, cardinality="prohibited")))
+    assert out["status"] == status
 
 
 # -- unreadable elements ----------------------------------------------------
@@ -183,10 +217,28 @@ def test_unreadable_element_is_not_checked_not_failed():
     assert unmarked["not_checked"] == [] and unmarked["failed"] == 2
 
 
-def test_incomplete_status_when_only_unreadable_elements_remain():
+@pytest.mark.parametrize("unreadable,status", [(["u"], "incomplete"), ([], "fail")])
+def test_incomplete_status_when_only_unreadable_elements_remain(unreadable, status):
     els = [_el("u", "IfcDoor"), _el("r", "IfcDoor", {"Psx.A": 1})]
-    out = _only(check_ids(els, _spec([{"property": "Psx.A"}]), unreadable_ids=["u"]))
-    assert out["status"] == "incomplete"
+    out = _only(check_ids(els, _spec([{"property": "Psx.A"}]), unreadable_ids=unreadable))
+    assert out["status"] == status
+
+
+# -- the specification's own shape ------------------------------------------
+
+_ONE_SPEC = {"name": "doors", "applicability": [{"entity": "IfcDoor"}],
+             "requirements": [{"property": "Psx.A"}]}
+
+
+@pytest.mark.parametrize("specs", [
+    _ONE_SPEC,
+    {"specifications": [_ONE_SPEC]},
+    [_ONE_SPEC],
+])
+def test_a_single_specification_may_be_passed_bare_or_wrapped(specs):
+    out = _only(check_ids([_el("d", "IfcDoor", {"Psx.A": 1})], specs))
+    assert out["name"] == "doors"
+    assert out["status"] == "pass"
 
 
 # -- refusals: no starter set, no silent repair -------------------------------
@@ -194,6 +246,12 @@ def test_incomplete_status_when_only_unreadable_elements_remain():
 @pytest.mark.parametrize("specs", [[], None, {}])
 def test_no_specification_is_refused(specs):
     with pytest.raises(IdsSpecError):
+        check_ids([_el("d", "IfcDoor", {})], specs)
+
+
+@pytest.mark.parametrize("specs", [["not a spec"], [7]])
+def test_a_specification_that_is_not_an_object_is_refused(specs):
+    with pytest.raises(IdsSpecError, match="must be an object"):
         check_ids([_el("d", "IfcDoor", {})], specs)
 
 
@@ -206,54 +264,35 @@ def test_no_specification_is_refused(specs):
     ({"property": "P.A", "enumeration": []}, "enumeration"),
     ({"attribute": "colour"}, "attribute"),
     ({"property": "P.A", "attribute": "name"}, "exactly one"),
+    ("Psx.A", "a facet must be an object"),
+    (["property"], "a facet must be an object"),
 ])
 def test_malformed_requirement_is_refused(facet, needle):
     with pytest.raises(IdsSpecError, match=needle):
         check_ids([_el("d", "IfcDoor", {})], _spec([facet]))
 
 
-def test_empty_requirements_or_applicability_are_refused():
-    with pytest.raises(IdsSpecError, match="requirements"):
-        check_ids([], [{"applicability": [{"entity": "IfcDoor"}], "requirements": []}])
-    with pytest.raises(IdsSpecError, match="applicability"):
-        check_ids([], [{"applicability": [], "requirements": [{"property": "P.A"}]}])
+@pytest.mark.parametrize("spec,needle", [
+    ({"applicability": [{"entity": "IfcDoor"}], "requirements": []}, "requirements"),
+    ({"applicability": [], "requirements": [{"property": "P.A"}]}, "applicability"),
+    ({"applicability": [{"entity": "IfcDoor"}], "requirements": [{"property": "P.A"}],
+      "cardinality": "often"}, "cardinality"),
+])
+def test_empty_requirements_or_applicability_are_refused(spec, needle):
+    with pytest.raises(IdsSpecError, match=needle):
+        check_ids([], [spec])
 
 
-def test_summary_counts_each_status():
-    els = [_el("d", "IfcDoor", {"Psx.A": 1}), _el("w", "IfcWall", {})]
+@pytest.mark.parametrize("door_props,summary", [
+    ({"Psx.A": 1}, {"specifications": 2, "passing": 1, "failing": 1, "incomplete": 0, "elements": 2}),
+    ({}, {"specifications": 2, "passing": 0, "failing": 2, "incomplete": 0, "elements": 2}),
+])
+def test_summary_counts_each_status(door_props, summary):
+    els = [_el("d", "IfcDoor", door_props), _el("w", "IfcWall", {})]
     specs = [
         {"name": "doors", "applicability": [{"entity": "IfcDoor"}],
          "requirements": [{"property": "Psx.A"}]},
         {"name": "walls", "applicability": [{"entity": "IfcWall"}],
          "requirements": [{"property": "Psx.A"}]},
     ]
-    out = check_ids(els, specs)
-    assert out["summary"] == {
-        "specifications": 2, "passing": 1, "failing": 1, "incomplete": 0, "elements": 2,
-    }
-
-
-def test_entity_facet_is_constrained_by_the_entity_it_names():
-    els = [_el("d", "IfcDoor", {}), _el("w", "IfcWall", {})]
-    doors = _only(check_ids(els, _spec([{"property": "P.A"}], applicability=[{"entity": "ifcdoor"}])))
-    walls = _only(check_ids(els, _spec([{"property": "P.A"}], applicability=[{"entity": "IfcWall"}])))
-    assert [f["id"] for f in doors["failures"]] == ["d"]
-    assert [f["id"] for f in walls["failures"]] == ["w"]
-
-
-def test_named_material_must_match_any_material_does_not_care():
-    els = [
-        _el("c", "IfcSlab", {}, materials=["Concrete"]),
-        _el("s", "IfcSlab", {}, materials=["Steel"]),
-    ]
-    app = [{"entity": "IfcSlab"}]
-    named = _only(check_ids(els, _spec([{"material": "concrete"}], applicability=app)))
-    anything = _only(check_ids(els, _spec([{"material": True}], applicability=app)))
-    assert [f["id"] for f in named["failures"]] == ["s"]
-    assert anything["failed"] == 0
-
-
-def test_number_parsing_refuses_text_with_digits():
-    els = [_el("a", "IfcDoor", {"P.W": "900mm"}), _el("b", "IfcDoor", {"P.W": "9e2"})]
-    out = _only(check_ids(els, _spec([{"property": "P.W", "min": 800}])))
-    assert [f["id"] for f in out["failures"]] == ["a"]
+    assert check_ids(els, specs)["summary"] == summary
