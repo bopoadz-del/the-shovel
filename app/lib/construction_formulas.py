@@ -1887,6 +1887,80 @@ def _dimension_named_after(raw: str, end: int) -> Optional[str]:
     return None
 
 
+def _input_unit_token(name: str, row_unit: Any, declared: Any) -> str:
+    """The unit token a figure must carry to bind to input ``name``: the
+    formula's own declaration first, then the described unit, then the
+    unit its name spells."""
+    declared = str(declared or "").strip()
+    return str(
+        (declared if declared != "-" else "") or row_unit or _unit_from_name(name) or ""
+    ).strip()
+
+
+def _input_words(name: str, label: Any = "") -> set:
+    """The words an input is named by: its signature name and its label."""
+    text = f"{name} {label or ''}".lower()
+    return {w for w in re.split(r"[^a-z]+", text) if len(w) > 2}
+
+
+_ROLE_WORDS: Dict[str, Any] = {"count": -1, "by_kind": {}}
+
+
+def _role_words_by_kind() -> Dict[str, set]:
+    """Every word that names a registered input, grouped by the kind of
+    unit a figure must carry to bind to that input. A word written straight
+    after a figure of that kind names the figure's role."""
+    try:
+        from app.lib import formula_registry
+
+        specs = formula_registry.all_specs()
+    except Exception:  # noqa: BLE001 -- no registry, no role words
+        logger.debug("formula registry unavailable for role words", exc_info=True)
+        return {}
+    if _ROLE_WORDS["count"] == len(specs):
+        return _ROLE_WORDS["by_kind"]
+    by_kind: Dict[str, set] = {}
+    for spec in specs:
+        declared = dict(spec.inputs or {})
+        labels = {k: p.label for k, p in (spec.params or {}).items()}
+        try:
+            rows = describe_calculation_params(spec.fn)
+        except (TypeError, ValueError):
+            continue
+        for row in rows:
+            kind = binding_kind(_input_unit_token(row["name"], row.get("unit"), declared.get(row["name"])))
+            if kind:
+                by_kind.setdefault(kind, set()).update(
+                    _input_words(row["name"], labels.get(row["name"]))
+                )
+    # A word that names inputs of three kinds or more ("per", "total") joins
+    # names; it does not tell one role from another.
+    spread: Dict[str, int] = {}
+    for words in by_kind.values():
+        for w in words:
+            spread[w] = spread.get(w, 0) + 1
+    by_kind = {k: {w for w in ws if spread[w] < 3} for k, ws in by_kind.items()}
+    _ROLE_WORDS.update(count=len(specs), by_kind=by_kind)
+    return by_kind
+
+
+def _role_named_after(raw: str, end: int, kind: str, own_words: Iterable[str] = ()) -> Optional[str]:
+    """The role a word written straight after a figure names ("5 % waste"
+    names waste): a word that names an input of the figure's unit kind,
+    in the registry or in this calculator, else None."""
+    word = re.match(r"\s+([A-Za-z]+)", raw[end:end + 40])
+    if word is None:
+        return None
+    w = word.group(1).lower()
+    # A role of the same quantity written in another unit ("markup" is
+    # declared as a fraction, the figure is written in %) is still a role.
+    known = set(own_words)
+    for other, words in _role_words_by_kind().items():
+        if other == kind or _same_kind(other, kind):
+            known |= words
+    return w if w in known else None
+
+
 def _to_param_unit(num: float, unit: Optional[str], dest: str, declared: str = "") -> Any:
     """``num`` written in ``unit``, put into the unit ``dest`` declares (its
     declaration, else the unit its name spells) by the base conversion tool.
@@ -2213,6 +2287,8 @@ def extract_calculation_params_from_text(
     rows = describe_calculation_params(fn, name=spec.name if spec else None)
     required_by_kind: Dict[str, List[str]] = {}
     required_tokens: Dict[str, str] = {}
+    input_words: Dict[str, set] = {}
+    input_labels = {k: p.label for k, p in ((spec.params or {}).items() if spec else ())}
     extra_units: List[str] = []
     for row in rows:
         declared = str(declared_units.get(row["name"]) or "").strip()
@@ -2229,6 +2305,7 @@ def extract_calculation_params_from_text(
         kind = binding_kind(token)
         required_by_kind.setdefault(kind, []).append(row["name"])
         required_tokens[row["name"]] = token
+        input_words[row["name"]] = _input_words(row["name"], input_labels.get(row["name"]))
 
     unit_pat = _figure_unit_pattern(extra_units)
     boundary = r"(?![A-Za-z0-9])"
@@ -2254,6 +2331,19 @@ def extract_calculation_params_from_text(
                 if name not in found and noun in name.lower()
             ]
             if len(fits) == 1:
+                found[fits[0]] = _to_param_unit(num, match.group(2), fits[0], required_tokens[fits[0]])
+            continue
+        # A figure whose next word names a role of its kind ("5 % waste")
+        # is that role: it binds by unit only to an input named by that word.
+        open_of_kind = [n for n in (required_by_kind.get(unit) or []) if n not in found]
+        role = _role_named_after(
+            raw, match.end(), unit,
+            set().union(*(input_words[n] for n in open_of_kind)) if open_of_kind else (),
+        )
+        if role is not None:
+            consumed.append(match.span())
+            fits = [n for n in open_of_kind if role in input_words[n]]
+            if len(fits) == 1 and _takes_a_figure(fn, fits[0]):
                 found[fits[0]] = _to_param_unit(num, match.group(2), fits[0], required_tokens[fits[0]])
             continue
         leftovers.setdefault(unit, []).append((num, match.group(2)))
