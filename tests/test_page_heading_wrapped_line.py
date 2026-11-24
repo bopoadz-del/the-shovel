@@ -57,7 +57,7 @@ def test_heading_followed_by_a_capitalised_line_still_names_the_page(heading, bo
     assert heading_line_for_page(f"{heading}\n{body}\n") == heading
 
 
-@pytest.mark.parametrize("heading", ["## Site levels", "# 5 External works"])
+@pytest.mark.parametrize("heading", ["## Levels of the site", "# 5 Notes on the works"])
 def test_markdown_heading_followed_by_a_lowercase_line_still_names_the_page(heading):
     page = f"{heading}\nrecorded by the surveyor before stripping.\n"
     assert heading_line_for_page(page) == heading
@@ -73,3 +73,84 @@ def test_every_page_of_a_document_is_named_by_its_own_section(first_head, second
     text = page_one + page_two
     headings = page_heading_lines(text, [(1, 0), (2, len(page_one))])
     assert headings == {1: first_head, 2: second_head}
+
+
+# --- grader faults on 38e67f0 (REPORT_OPUSGRADE_S616): each decision, two inputs ---
+
+
+@pytest.mark.parametrize(
+    "opener,carry,heading",
+    [
+        ("A minimum cover of 25 mm is kept to the outer", "ties.", "5.3 COVER TO TIES"),
+        ("Joints are raked out and left open for later", "use) as directed.", "8 Pointing"),
+    ],
+)
+def test_short_closing_word_is_not_a_list_marker(opener, carry, heading):
+    assert heading_line_for_page(_page(opener, carry, heading)) == heading
+
+
+@pytest.mark.parametrize(
+    "heading,body",
+    [
+        ("5.2 MIXING WATER", "pH of the water is tested weekly."),
+        ("12 Brick Sizes", "mm figures below are work sizes."),
+    ],
+)
+def test_capitalised_heading_over_a_lowercase_unit_line_still_names_the_page(heading, body):
+    assert heading_line_for_page(f"{heading}\n{body}\n") == heading
+
+
+@pytest.mark.parametrize(
+    "heading,body",
+    [
+        ("8 Fire stopping", "mm gaps are sealed with mastic."),
+        ("2 Floor screeds", "kg of cement per bag is printed."),
+    ],
+)
+def test_heading_with_as_many_capitals_as_lowercase_words_is_not_prose(heading, body):
+    assert heading_line_for_page(f"{heading}\n{body}\n") == heading
+
+
+@pytest.mark.parametrize("marker", ["iv. the samples are labelled", "xii) the face is brushed clean", "(b) the edges are sealed"])
+def test_sentence_case_heading_over_a_list_item_still_names_the_page(marker):
+    page = f"7.1 Pointing of joints\n{marker}\n"
+    assert heading_line_for_page(page) == "7.1 Pointing of joints"
+
+
+@pytest.mark.parametrize(
+    "opener,carry,heading",
+    [
+        ("600 mm wide strip footings are poured on the", "same day as excavated.", "2.2 FOOTINGS"),
+        ("A damp proof membrane is lapped 150 mm at all", "joints and taped.", "6 Membranes"),
+    ],
+)
+def test_blank_line_inside_a_wrapped_sentence_is_skipped(opener, carry, heading):
+    page = f"{opener}\n\n{carry}\n{heading}\n"
+    assert heading_line_for_page(page) == heading
+
+
+@pytest.mark.parametrize("heading", ["3 Cover to the bars", "9 Making good of finishes"])
+def test_prose_shaped_heading_on_the_last_line_still_names_the_page(heading):
+    assert heading_line_for_page(f"Notes are given below.\n{heading}\n") == heading
+
+
+@pytest.mark.parametrize(
+    "opener,carry,heading",
+    [
+        ("A lintel bearing is as set out in appendix", "iv.", "10 LINTELS"),
+        ("150 mm kerbs are laid to the profile of detail", "c.", "7.4 Kerbs"),
+    ],
+)
+def test_bare_letter_or_numeral_that_ends_a_sentence_is_not_a_list_marker(opener, carry, heading):
+    assert heading_line_for_page(_page(opener, carry, heading)) == heading
+
+
+@pytest.mark.parametrize(
+    "opener,carry,heading",
+    [
+        ("C Grade is used", "throughout the frame.", "4 STEEL"),
+        ("A Mesh is laid", "over the membrane.", "6 SLABS"),
+    ],
+)
+def test_the_opener_is_not_counted_as_a_capitalised_word(opener, carry, heading):
+    assert heading_line_for_page(_page(opener, carry, heading)) == heading

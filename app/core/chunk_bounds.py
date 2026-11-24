@@ -299,7 +299,11 @@ def heading_line_for_page(
     for idx, line in enumerate(lines):
         if not _is_heading_line(line):
             continue
-        if not line.lstrip().startswith("#") and _continues_sentence(lines[idx + 1:]):
+        if (
+            not line.lstrip().startswith("#")
+            and _reads_as_prose(line)
+            and _continues_sentence(lines[idx + 1:])
+        ):
             continue  # a wrapped line of prose, not a heading
         if running is None or not running(line):
             return line.strip()
@@ -328,8 +332,22 @@ def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] 
     return found.holds if found.masks else None
 
 
-# A lowercase list marker ("a)", "(b)", "iv.") opens a list item, not the rest of a sentence.
-_LOWER_ENUMERATOR = re.compile(r"^\(?[a-z]{1,4}[.)]")
+# A list marker opens a list item, not the rest of a sentence: one letter
+# ("a)", "b.") or a roman numeral ("iv.", "xii)"), then the item's own words.
+# A bracketed marker ("(b)") opens on "(", which never reads as a carried sentence.
+_LOWER_ENUMERATOR = re.compile(r"^(?:[a-z]|[ivx]{1,4})[.)]\s+\S")
+
+
+def _reads_as_prose(line: str) -> bool:
+    """True when the line's words after its opener are mostly lowercase.
+
+    A heading capitalises its words ("WATER QUALITY", "Steel Fixings"); a
+    wrapped sentence does not ("A sealant joint is formed between ..."). The
+    opener (a section number or a single capital) is left out of the count.
+    """
+    words = [w for w in line.split()[1:] if w[0].isalpha()]
+    lower = sum(w[0].islower() for w in words)
+    return lower > len(words) - lower
 
 
 def _continues_sentence(following: list[str]) -> bool:
