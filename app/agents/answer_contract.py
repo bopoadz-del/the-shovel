@@ -864,6 +864,25 @@ _NO_THING_LEAD_RE = re.compile(
 _NP_VERB_RE = re.compile(r"\b(?:is|are|was|were|has|have|had|does|do|did|will|shall|can|may|must)\b",
                          re.IGNORECASE)
 _NP_MAX_WORDS = 12
+#: Capital letters whose spoken name opens on a vowel sound ("an MEP drawing").
+_VOWEL_SOUND_LETTERS = "AEFHILMNORSX"
+
+
+def _article(phrase: str) -> str:
+    """"A" or "An" by the sound the phrase opens on, not its first letter:
+    "a unit", "a user", "a one-off" but "an under-slab", "an hour" is not
+    guessed (an h-word takes "A"). A capitalised abbreviation is read letter
+    by letter ("an MEP", "a DN15")."""
+    word = phrase.split()[0]
+    letters = re.sub(r"[^A-Za-z]", "", word)
+    if not letters:
+        return "A"
+    if len(letters) > 1 and letters.isupper():
+        return "An" if letters[0] in _VOWEL_SOUND_LETTERS else "A"
+    low = letters.lower()
+    if low.startswith(("one", "eu", "uni", "use", "usu", "uti", "ure", "uro")):
+        return "A"
+    return "An" if low[0] in "aeiou" else "A"
 
 
 def _absence_names_thing(text: str) -> str:
@@ -896,7 +915,7 @@ def _absence_names_thing(text: str) -> str:
         return text
     verb = m.group("verb")
     if verb in ("is", "was"):
-        subject = ("An " if np_[0].lower() in "aeiou" else "A ") + np_
+        subject = f"{_article(np_)} {np_}"
     else:
         subject = np_[0].upper() + np_[1:]
     lines[first] = f"{indent}{m.group('mark') or ''}{subject} {verb} not {m.group('rest')}{body[m.end():]}"
