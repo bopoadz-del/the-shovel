@@ -127,3 +127,13 @@ def test_evaluation_names_the_course_as_source_of_a_filled_input(
         }
     else:
         assert "course_inputs" not in out
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [{"variables": {}}, {"variables": ["mass_placed", "rate"]}, {}],
+)
+def test_an_entry_with_no_variable_table_binds_nothing(entry):
+    # The guard is the only thing that returns None here: with it gone
+    # the binder walks an empty table and returns {} (or fails on a list).
+    assert kb.bind_entry_variables(entry, "place 500 t at 150 t/hr") is None
