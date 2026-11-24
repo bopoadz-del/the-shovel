@@ -596,6 +596,35 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
     return bound
 
 
+# A formula title names its result first, then how it is worked: "X from
+# A and B". A bracketed aside, anywhere, is another name or the inputs:
+# "X (A vs B)", "P (also Q) X". The words left before "from" are
+# the title's head.
+_TITLE_ASIDE_RE = re.compile(r"\s*\([^)]*\)")
+_TITLE_QUALIFIER_RE = re.compile(r"\s+from\s+", re.IGNORECASE)
+# A counting head word names no thing of its own: "number of X" is asked
+# as "how many X". The phrase the ask uses instead of the head word.
+_COUNT_HEAD_ASKED_AS = {"number": "how many", "amount": "how much"}
+
+
+def _title_head_words(title: str) -> List[str]:
+    from app.lib.construction_formulas import _display_content_words
+    head = _TITLE_QUALIFIER_RE.split(_TITLE_ASIDE_RE.sub("", title or ""), maxsplit=1)[0]
+    return _display_content_words(head)
+
+
+def _head_named(raw: str, head: List[str]) -> bool:
+    """Every head word is in the ask; a leading counting word may be
+    asked by its question phrase instead."""
+    from app.lib.construction_formulas import _words_all_present
+    words = list(head)
+    if words and words[0] in _COUNT_HEAD_ASKED_AS:
+        asked = _COUNT_HEAD_ASKED_AS[words[0]]
+        if re.search(rf"\b{re.escape(asked)}\b", raw.lower()):
+            words = words[1:]
+    return bool(words) and _words_all_present(raw, words)
+
+
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.?!])\s+")
 #: Words a question is framed with. They name nothing, so they never make a
 #: question ask for more than the result.
@@ -637,35 +666,6 @@ def _questions_ask_only_for(questions: List[str], givens: str, title: str) -> bo
                 continue
             return False
     return True
-
-
-# A formula title names its result first, then how it is worked: "X from
-# A and B". A bracketed aside, anywhere, is another name or the inputs:
-# "X (A vs B)", "P (also Q) X". The words left before "from" are
-# the title's head.
-_TITLE_ASIDE_RE = re.compile(r"\s*\([^)]*\)")
-_TITLE_QUALIFIER_RE = re.compile(r"\s+from\s+", re.IGNORECASE)
-# A counting head word names no thing of its own: "number of X" is asked
-# as "how many X". The phrase the ask uses instead of the head word.
-_COUNT_HEAD_ASKED_AS = {"number": "how many", "amount": "how much"}
-
-
-def _title_head_words(title: str) -> List[str]:
-    from app.lib.construction_formulas import _display_content_words
-    head = _TITLE_QUALIFIER_RE.split(_TITLE_ASIDE_RE.sub("", title or ""), maxsplit=1)[0]
-    return _display_content_words(head)
-
-
-def _head_named(raw: str, head: List[str]) -> bool:
-    """Every head word is in the ask; a leading counting word may be
-    asked by its question phrase instead."""
-    from app.lib.construction_formulas import _words_all_present
-    words = list(head)
-    if words and words[0] in _COUNT_HEAD_ASKED_AS:
-        asked = _COUNT_HEAD_ASKED_AS[words[0]]
-        if re.search(rf"\b{re.escape(asked)}\b", raw.lower()):
-            words = words[1:]
-    return bool(words) and _words_all_present(raw, words)
 
 
 def formula_completed_by_user_text(text: str) -> Optional[tuple]:
