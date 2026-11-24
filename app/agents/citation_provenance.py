@@ -887,12 +887,9 @@ def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
     committed to only by a figure the answer states as negative; a bare "3",
     a "+3" or "a gain of 3" does not commit to -3.
     """
-    targets = credit.result_numbers
-    if not targets:
-        return False
     return any(_close(found, target)
                for found in _signed_numbers_in(answer)
-               for target in targets)
+               for target in credit.result_numbers)
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:

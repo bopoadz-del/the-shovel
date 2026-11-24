@@ -247,3 +247,11 @@ def test_other_written_negatives_keep_the_source_line(stated):
     out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
                  f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
     assert "Source: Break-even point" in out, out
+
+
+@pytest.mark.parametrize("working", ["500 - 3 = 497", "1,203 − 3 = 1,200"])
+def test_a_minus_after_a_figure_is_a_subtraction_not_a_negative(working):
+    # contribution = 15 - 18 = -3; "x - 3" subtracts 3, it does not state -3
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
+                 f"Revenue then works out as {working}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" not in out, out

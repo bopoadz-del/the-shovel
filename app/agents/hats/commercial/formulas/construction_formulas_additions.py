@@ -73,10 +73,9 @@ def _amount(x: float) -> str:
 def _figure(x: float) -> str:
     """A working figure written out in full: thousands separators, no
     exponent, every digit up to ten significant figures, so the figures a
-    step prints multiply to the result printed after it."""
+    step prints multiply to the result printed after it. ``:.10g`` already
+    drops trailing zeros and a bare point, so nothing is stripped."""
     text = format(Decimal(f"{x:.10g}"), ",f")
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
     return "0" if text in ("", "-0") else text
 
 
