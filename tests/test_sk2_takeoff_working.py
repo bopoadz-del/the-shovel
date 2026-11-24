@@ -164,3 +164,20 @@ def test_finishes_working_names_the_floor_it_applied(excess):
     assert "below zero" in text
     assert _shown(-(excess + r["door_deduction_m2"]), text, 2), text
     assert not math.isnan(r["blockwork_m2"])
+
+
+# A negative dimension is refused, never turned into a figure with working.
+# Two inputs per take-off: the guard is the first rule of each.
+@pytest.mark.parametrize("fn, kwargs", [
+    (excavation_volume, dict(length_m=-4.0, width_m=3.0, depth_m=1.5)),
+    (excavation_volume, dict(length_m=10.0, width_m=6.0, depth_m=-0.2)),
+    (backfill_volume, dict(excavation_bank_m3=-80.0, structure_volume_m3=20.0)),
+    (backfill_volume, dict(excavation_bank_m3=150.0, structure_volume_m3=-5.0)),
+    (concrete_volume, dict(length_m=-8.0, width_m=4.0, thickness_m=0.25)),
+    (concrete_volume, dict(shape="cylinder", diameter_m=0.6, height_m=-3.0)),
+])
+def test_a_negative_dimension_is_refused_never_computed(fn, kwargs):
+    r = fn(**kwargs)
+    assert "error" in r, r
+    assert ">= 0" in r["error"]
+    assert not any(k.endswith(("_m3", "_m2")) for k in r), r
