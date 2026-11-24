@@ -96,6 +96,15 @@ def test_the_per_unit_is_read_straight_after_the_figure(raw, per, word):
     assert cf._per_unit_after(raw.replace(" per ", " for the "), 3, cf._TEXT_UNIT_RE) is None
 
 
+@pytest.mark.parametrize("raw, word", [("12 N/mm2 here", "N"), ("40 kg/m3 here", "kg")])
+def test_a_compound_unit_written_after_a_figure_is_its_own_unit(raw, word):
+    end = raw.index(" ")
+    assert cf._per_unit_after(raw, end, cf._TEXT_UNIT_RE) is None
+    spaced = raw.replace("/", " per ")
+    got = cf._per_unit_after(spaced, end, cf._TEXT_UNIT_RE)
+    assert got is not None and got[1] == word
+
+
 @pytest.mark.parametrize("token, per", [("currency/m3", "m3"), ("currency/t", "t")])
 def test_a_rate_over_a_unit_is_read_from_the_declared_unit(token, per):
     assert cf._rate_over(token, per, bare=True)

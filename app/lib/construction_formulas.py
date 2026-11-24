@@ -1967,6 +1967,12 @@ def _per_unit_after(raw: str, end: int, unit_pat: str) -> Optional[Tuple[str, st
     )
     if tail is None:
         return None
+    # A word and a slash written as one token that the unit table reads as
+    # one unit ("12 N/mm2", "5 kg/m3") is the figure's own unit, not a
+    # figure written per a unit.
+    written = raw[end:end + tail.end()].strip()
+    if tail.group(1) and re.fullmatch(unit_pat, written, re.IGNORECASE):
+        return None
     return _norm_unit_token(tail.group(2)), tail.group(1) or "", end + tail.end()
 
 
