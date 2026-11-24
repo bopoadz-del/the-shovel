@@ -39,7 +39,9 @@ def test_bare_figure_never_binds_to_a_text_input(figure):
 
 @pytest.mark.parametrize("figure", [310, 280])
 def test_bare_figure_still_binds_to_a_number_input(figure):
-    ask = f"Concrete at {figure} per m3. Cost?"
+    # A figure written per a unit is a rate, not a bare figure
+    # (tests/test_per_unit_figure_is_a_rate.py); this one is written plain.
+    ask = f"Concrete at {figure}. Cost?"
     assert read(_number_input, ask) == {"count": float(figure)}
 
 

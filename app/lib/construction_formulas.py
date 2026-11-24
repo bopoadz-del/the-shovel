@@ -1961,6 +1961,35 @@ def _role_named_after(raw: str, end: int, kind: str, own_words: Iterable[str] = 
     return w if w in known else None
 
 
+def _per_unit_after(raw: str, end: int, unit_pat: str) -> Optional[Tuple[str, str, int]]:
+    """The unit a figure is written per ("310 per m3", "310 AED per m3",
+    "12 m2 per day"), read straight after the figure: (that unit, the word
+    written between figure and "per", where the rate ends), else None.
+    Such a figure is a rate over that unit, not an amount of it."""
+    tail = re.match(
+        rf"\s*([A-Za-z$€£][A-Za-z0-9]{{0,5}})?\s*(?:per(?![A-Za-z])|/)\s*({unit_pat})(?![A-Za-z0-9])",
+        raw[end:end + 48],
+        re.IGNORECASE,
+    )
+    if tail is None:
+        return None
+    return _norm_unit_token(tail.group(2)), tail.group(1) or "", end + tail.end()
+
+
+def _rate_over(token: str, per: str, bare: bool = False) -> bool:
+    """True when an input's unit token is a rate over the unit ``per``
+    (currency/m3 is a rate over m3). With ``bare`` the rate's own amount
+    must carry no unit token either (currency/m2 holds "45 per m2";
+    kN/m2 needs a force written)."""
+    text = str(token or "")
+    if "/" not in text:
+        return False
+    amount, over = text.rsplit("/", 1)
+    if bare and binding_kind(amount):
+        return False
+    return _same_kind(over, per)
+
+
 def _to_param_unit(num: float, unit: Optional[str], dest: str, declared: str = "") -> Any:
     """``num`` written in ``unit``, put into the unit ``dest`` declares (its
     declaration, else the unit its name spells) by the base conversion tool.
@@ -2150,6 +2179,7 @@ def extract_calculation_params_from_text(
     consumed.extend(g[0] for g in grades)
     spec = _formula_spec(fn)
     declared_units = dict(spec.inputs or {}) if spec else {}
+    per_pat = _figure_unit_pattern(str(v) for v in declared_units.values())
 
     for label, dest in sorted(labels.items(), key=lambda kv: len(kv[0]), reverse=True):
         if dest in found:
@@ -2190,8 +2220,16 @@ def extract_calculation_params_from_text(
         num = _parse_text_number(match.group(1))
         if num is None:
             continue
-        found[dest] = _to_param_unit(num, match.group(2) if match.lastindex and match.lastindex >= 2 else None,
-                                     dest, declared_units.get(dest, ""))
+        written = match.group(2) if match.lastindex and match.lastindex >= 2 else None
+        # A figure written per a unit ("concrete is 310 per m3") is a rate:
+        # under a label it fills only an input that is a rate over that unit
+        # or one that declares no unit, never an amount, a length or a %.
+        rate = None if written else _per_unit_after(raw, match.end(), per_pat)
+        if rate is not None:
+            token = _input_unit_token(dest, None, declared_units.get(dest))
+            if binding_kind(token) and not _rate_over(token, rate[0]):
+                continue
+        found[dest] = _to_param_unit(num, written, dest, declared_units.get(dest, ""))
         consumed.append(match.span())
 
     # A period or a comma-space is punctuation. A comma that is followed by
@@ -2200,6 +2238,36 @@ def extract_calculation_params_from_text(
     # multiplication sign written as x ("10x5x0.25"). A hyphen after a digit
     # is a range ("10-12"), not the sign of the second figure.
     number = rf"(?<![\d,])(?<![A-WYZa-wyz])({_TEXT_NUM_RE})(?!\d)(?!,\d)"
+
+    # A figure written per a unit with no unit of its own ("310 per m3",
+    # "310 AED per m3") is a rate over that unit. It binds to the one open
+    # input that is a rate over that unit, and is never read as an amount,
+    # a count or a bare number for any other input.
+    rate_rows = [
+        row for row in describe_calculation_params(fn, name=spec.name if spec else None)
+        if row.get("required") and row["name"] not in found
+    ]
+    pure_rates: Dict[str, List[float]] = {}
+    for match in re.finditer(number, raw):
+        if _overlaps(match.span()):
+            continue
+        rate = _per_unit_after(raw, match.end(), per_pat)
+        if rate is None or re.fullmatch(_TEXT_UNIT_RE, rate[1], re.IGNORECASE):
+            continue
+        num = _parse_text_number(match.group(1))
+        if num is None:
+            continue
+        pure_rates.setdefault(rate[0], []).append(num)
+        consumed.append((match.start(), rate[2]))
+    for per, nums in pure_rates.items():
+        fits = [
+            row["name"] for row in rate_rows
+            if _rate_over(
+                _input_unit_token(row["name"], row.get("unit"), declared_units.get(row["name"])), per, bare=True,
+            )
+        ]
+        if len(nums) == 1 and len(fits) == 1 and _takes_a_figure(fn, fits[0]):
+            found[fits[0]] = nums[0]
 
     # Figure first, dimension after: "12 m long, 8 m wide and 200 mm thick".
     adjectives = "|".join(sorted((re.escape(a) for a in _DIMENSION_ADJECTIVES), key=len, reverse=True))
