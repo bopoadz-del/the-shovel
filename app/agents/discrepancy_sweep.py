@@ -45,6 +45,7 @@ from app.agents.citation_provenance import (
     _figure_mentions,
     _figure_unit,
 )
+from app.agents.clarify_cases import _CLAUSE_VALUE_RE, _REFERENCE_RE
 
 
 @dataclass(frozen=True)
@@ -75,12 +76,14 @@ def _designations(text: str) -> list[str]:
     A clause / code / standard / table designation, read by shape -- never a
     list of known identifiers.
     """
+    t = text or ""
     out: list[str] = []
     have: set[str] = set()
+    taken: list[tuple[int, int]] = []
     # A designation read over a figure ("Depth 5" in "Depth 5 m") is the
     # value itself, not what the value is stated for: never an identifier.
-    figures = [m.span() for m, _n in _figure_mentions(text or "")]
-    for m in _DESIGNATION_RE.finditer(text or ""):
+    figures = [m.span() for m, _n in _figure_mentions(t)]
+    for m in _DESIGNATION_RE.finditer(t):
         if any(m.start() < end and start < m.end() for start, end in figures):
             continue
         # A sentence-ending period after "ACI 318." is punctuation, not part
@@ -91,7 +94,56 @@ def _designations(text: str) -> list[str]:
             continue
         have.add(token)
         out.append(token)
+        taken.append(m.span())
+    # A bare clause number ("4.2.1 Minimum cover ...", "per 4.2.1") is how a
+    # document heads and cites its own clauses without a label word. It is
+    # read by the clarifying-question exit's reference reader, kept only in
+    # the clause shape (three or more numbers joined by dots, so a decimal
+    # "4.5" is never one), and only where it is not already part of a
+    # labelled designation ("Clause 4.2.1") or of a figure.
+    for m in _REFERENCE_RE.finditer(t):
+        token = m.group(0)
+        if not _CLAUSE_VALUE_RE.match(token) or _is_date_shape(token):
+            continue
+        if any(m.start() < end and start < m.end()
+               for start, end in figures + taken):
+            continue
+        if token in have:
+            continue
+        have.add(token)
+        out.append(token)
     return out
+
+
+def _is_date_shape(token: str) -> bool:
+    """A dotted date ("12.03.2026", "2026.03.12") carries a four-digit year
+    part; a clause number does not. Shape only."""
+    return any(len(part) >= 4 for part in token.split("."))
+
+
+def _clause_number(token: str) -> str:
+    """The trailing number of a designation token ("clause 4.2.1" ->
+    "4.2.1", "cl.4.2.1" -> "4.2.1"), or "" when it has none."""
+    m = re.search(r"\d+(?:\.\d+)*$", token)
+    return m.group(0) if m else ""
+
+
+def _same_identifier(a: str, b: str) -> bool:
+    """Two designation tokens name the same thing.
+
+    Equal tokens do. A bare clause number names the same thing as a labelled
+    designation that ends in that number ("4.2.1" and "clause 4.2.1"): the
+    bare form carries no label to disagree with. Two DIFFERENT labels on the
+    same number ("table 7.3.1.1" and "clause 7.3.1.1") never do -- different
+    structures are never one identifier.
+    """
+    if a == b:
+        return True
+    if _CLAUSE_VALUE_RE.match(a):
+        return _clause_number(b) == a
+    if _CLAUSE_VALUE_RE.match(b):
+        return _clause_number(a) == b
+    return False
 
 
 def _stated_figures(text: str) -> list[Stated]:
@@ -120,7 +172,7 @@ def sweep_differences(
     from a stated figure (same unit; the product's own close-number tolerance
     applies). Pure; no retrieval, no model, no I/O.
     """
-    stated_ids = set(_designations(stated_text))
+    stated_ids = _designations(stated_text)
     stated = _stated_figures(stated_text)
 
     # An empty ``stated_ids`` or ``stated`` is handled by the loop itself:
@@ -128,7 +180,9 @@ def sweep_differences(
     # candidate can hit when there is no stated figure to compare against.
     hits: list[SweepHit] = []
     for source, text in candidates:
-        shared = stated_ids & set(_designations(text))
+        theirs = _designations(text)
+        shared = {a for a in stated_ids
+                  if any(_same_identifier(a, b) for b in theirs)}
         if not shared:
             continue
         for s in stated:

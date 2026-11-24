@@ -45,10 +45,15 @@ value, item or row is named anywhere.
 
 ## Known limits (stated, not hidden)
 
-- A bare dotted clause id ("4.2.1") with no letter prefix is not matched by
-  `_DESIGNATION_RE`; the concrete owner case is a *named standard*, which is.
-  The clarifying-question exit's reference reader (`#498`) covers dotted ids;
-  folding it in is a follow-up once that PR merges.
+- A bare clause number ("4.2.1 Minimum cover ...", "see 4.2.1") is read
+  by the clarifying-question exit's reference reader (`clarify_cases`),
+  kept only in the clause shape (three or more dotted numbers; a decimal is
+  never one; a part of four digits is a dotted date and is skipped). A bare
+  number names the same thing as a labelled designation ending in it
+  ("Clause 4.2.1"); two different labels on one number ("Table 4.2.1",
+  "Clause 4.2.1") never do. Limit: a bare heading cannot say which
+  structure it heads, so "Table 4.2.1" in a draft recalls a bare "4.2.1"
+  heading too; the conflict statement still judges the recalled passage.
 - Unit equivalence ("500 mm" vs "0.5 m") is deliberately not judged here; the
   conflict statement owns that negative.
 - A value in a passage that was never handed cannot be reported (the 05:55Z
