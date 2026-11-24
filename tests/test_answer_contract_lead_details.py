@@ -228,9 +228,9 @@ def test_computed_answer_with_nothing_under_it_is_untouched(text, figure):
 
 @pytest.mark.parametrize("text,lead_item,under", [
     ("Bill row count and total:\n"
-     "- Rows whose description holds pump: **4** (Source: Bill A.xlsx)\n"
+     "- Rows whose description holds pump: **4** [1]\n"
      "  Rows: Pump P1; Pump P2; Pump P3; Pump P4",
-     "- Rows whose description holds pump: **4** (Source: Bill A.xlsx)",
+     "- Rows whose description holds pump: **4** [1]",
      "  Rows: Pump P1; Pump P2; Pump P3; Pump P4"),
     ("Sum of amounts:\n"
      "- Sum of amount for rows holding cable: **1,250 AED**\n"
