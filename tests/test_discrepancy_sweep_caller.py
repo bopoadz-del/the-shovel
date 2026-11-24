@@ -152,38 +152,46 @@ def test_a_turn_with_no_project_runs_no_search(monkeypatch, project_id):
     assert calls == []
 
 
-def test_the_search_is_run_on_the_turns_project_with_the_identifiers(monkeypatch):
-    answer, handed, found, _pairs = _DIFFER[1]
-    _out, calls, _ = _run(monkeypatch, answer, handed, found, project_id="proj-77")
-    assert calls == [("proj-77", "clause 12.4")]
+@pytest.mark.parametrize("case, project_id, query", [
+    (0, "proj-31", "table 7.3"),
+    (1, "proj-77", "clause 12.4"),
+])
+def test_the_search_is_run_on_the_turns_project_with_the_identifiers(monkeypatch, case, project_id, query):
+    answer, handed, found, _pairs = _DIFFER[case]
+    _out, calls, _ = _run(monkeypatch, answer, handed, found, project_id=project_id)
+    assert calls == [(project_id, query)]
 
 
-def test_a_passage_already_handed_is_not_added_twice(monkeypatch):
-    answer, handed, _found, _pairs = _DIFFER[0]
-    again = [(handed[0][0], handed[0][1], handed[0][2], None, "Table 7.3: nominal cover 40 mm.")]
+@pytest.mark.parametrize("case", [0, 1])
+def test_a_passage_already_handed_is_not_added_twice(monkeypatch, case):
+    answer, handed, _found, _pairs = _DIFFER[case]
+    again = [(handed[0][0], handed[0][1], handed[0][2], None, handed[0][3].replace("50", "40").replace("250", "300"))]
     _out, calls, turn = _run(monkeypatch, answer, handed, again)
     assert len(calls) == 1
     assert len(turn.evidence) == 1
 
 
-def test_an_unnamed_document_does_not_join(monkeypatch):
-    answer, handed, found, _pairs = _DIFFER[0]
+@pytest.mark.parametrize("case", [0, 1])
+def test_an_unnamed_document_does_not_join(monkeypatch, case):
+    answer, handed, found, _pairs = _DIFFER[case]
     nameless = [(found[0][0], "", found[0][2], None, found[0][4])]
     out, _calls, turn = _run(monkeypatch, answer, handed, nameless)
     assert len(turn.evidence) == 1
     assert not out.get("conflicts")
 
 
-def test_a_failed_search_leaves_the_answer_as_drafted(monkeypatch):
-    answer, handed, found, _pairs = _DIFFER[0]
+@pytest.mark.parametrize("case", [0, 1])
+def test_a_failed_search_leaves_the_answer_as_drafted(monkeypatch, case):
+    answer, handed, found, _pairs = _DIFFER[case]
     out, calls, turn = _run(monkeypatch, answer, handed, found, fail=True)
     assert len(calls) == 1
     assert "differ" not in out["answer"]
     assert len(turn.evidence) == 1
 
 
-def test_the_exit_checking_the_same_answer_twice_searches_once(monkeypatch):
-    answer, handed, found, _pairs = _DIFFER[0]
+@pytest.mark.parametrize("case", [0, 1])
+def test_the_exit_checking_the_same_answer_twice_searches_once(monkeypatch, case):
+    answer, handed, found, _pairs = _DIFFER[case]
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(ae, "_sweep_search", lambda pid, q: calls.append((pid, q)) or list(found))
     turn = _turn(handed)
@@ -192,8 +200,9 @@ def test_the_exit_checking_the_same_answer_twice_searches_once(monkeypatch):
     assert len(calls) == 1
 
 
-def test_an_answer_asking_for_inputs_is_not_swept(monkeypatch):
-    answer, handed, found, _pairs = _DIFFER[0]
+@pytest.mark.parametrize("case", [0, 1])
+def test_an_answer_asking_for_inputs_is_not_swept(monkeypatch, case):
+    answer, handed, found, _pairs = _DIFFER[case]
     calls: list = []
     monkeypatch.setattr(ae, "_sweep_search", lambda pid, q: calls.append(q) or list(found))
     turn = _turn(handed)
