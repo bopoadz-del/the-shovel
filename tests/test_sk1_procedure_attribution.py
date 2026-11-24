@@ -10,12 +10,25 @@ playbook here.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.agents import catalog
 from app.agents.procedures import render_procedures
 
 _ATTRIBUTION_LICENCES = ("CC BY 4.0", "Apache-2.0")
+_REF = re.compile(r"^as ([A-Za-z]\d+)\b")
+
+
+def _own_lineage(hat, proc) -> str:
+    """A lineage reading "as <id>" is the referenced procedure's lineage."""
+    by_id = {p.id.lower(): p for p in hat.playbook.procedures}
+    seen = set()
+    while (m := _REF.match(proc.lineage)) and proc.id not in seen:
+        seen.add(proc.id)
+        proc = by_id.get(m.group(1).lower(), proc)
+    return proc.lineage
 
 
 def _hats_with_procedures():
@@ -30,7 +43,7 @@ def test_two_hats_carry_procedures():
 def test_attribution_follows_lineage_licence(hat):
     rendered = render_procedures(hat)
     for proc in hat.playbook.procedures:
-        named = [lic for lic in _ATTRIBUTION_LICENCES if lic in proc.lineage]
+        named = [lic for lic in _ATTRIBUTION_LICENCES if lic in _own_lineage(hat, proc)]
         if not named:
             assert proc.attribution is None, f"{hat.id}/{proc.id}: attribution without a licence that needs one"
             continue
