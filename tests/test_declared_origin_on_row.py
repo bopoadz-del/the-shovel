@@ -78,6 +78,84 @@ def test_an_unchanged_seeded_copy_is_healed_only_when_out_of_line(stored, meta, 
     assert store.writes == expected_writes
 
 
+class _SeedStore:
+    """Just enough of ``app.core.projects`` for one ``seed_knowledge`` pass."""
+
+    def __init__(self, existing_sha: str | None, existing_meta: dict):
+        self.existing_sha = existing_sha
+        self.existing_meta = existing_meta
+        self.added: list[dict] = []
+        self.writes: list[tuple[str, dict]] = []
+
+    def get_project(self, pid):
+        return {"origin": "admin_drive_approved", "is_approved": True}
+
+    def general_knowledge_project_ids(self):
+        return []
+
+    def find_document_by_sha(self, pid, sha):
+        if sha == self.existing_sha:
+            return {"id": "old", "metadata": self.existing_meta}
+        return None
+
+    def list_documents(self, pid, all_sessions=True):
+        return []
+
+    def add_document(self, pid, name, stored_as, filepath, size, content_sha256=None, metadata=None):
+        self.added.append({"name": name, "metadata": metadata})
+        return {"id": f"new-{len(self.added)}"}
+
+    def update_document_metadata(self, doc_id, metadata):
+        self.writes.append((doc_id, metadata))
+
+
+def _seed(monkeypatch, tmp_path, files: dict[str, bytes], already_seeded: str | None, stored: dict):
+    import hashlib
+
+    from app.core import file_crypto, projects, users
+
+    kdir = tmp_path / "knowledge"
+    kdir.mkdir()
+    for name, raw in files.items():
+        (kdir / name).write_bytes(raw)
+    sha = None
+    if already_seeded:
+        sha = hashlib.sha256(files[already_seeded] + b"::chunker=markdown").hexdigest()
+    store = _SeedStore(sha, stored)
+    for attr in ("get_project", "general_knowledge_project_ids", "find_document_by_sha",
+                 "list_documents", "add_document", "update_document_metadata"):
+        monkeypatch.setattr(projects, attr, getattr(store, attr))
+    monkeypatch.setattr(knowledge_seed, "KNOWLEDGE_DIR", str(kdir))
+    monkeypatch.setattr(knowledge_seed, "_gk_project_id", lambda: "gk-test")
+    monkeypatch.setattr(users, "ensure_user_exists", lambda *a, **k: None)
+    monkeypatch.setattr(file_crypto, "write_document", lambda path, raw: None)
+    monkeypatch.setattr(doc_index, "index_document", lambda *a, **k: None)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    knowledge_seed.seed_knowledge()
+    return store
+
+
+_TABLE_COPY = b"# Rates\n\n_Generated from `x/rates.json` by gen._\n\n| a | b |\n"
+_PLAIN_DOC = b"# Notes\n\nA document that speaks for itself.\n"
+
+
+def test_seed_stores_the_declaration_on_a_new_copy_only(monkeypatch, tmp_path):
+    store = _seed(monkeypatch, tmp_path, {"a.md": _TABLE_COPY, "b.md": _PLAIN_DOC}, None, {})
+    by_name = {d["name"]: d["metadata"] for d in store.added}
+    assert by_name == {"a.md": _META, "b.md": None}
+    assert store.writes == []
+
+
+@pytest.mark.parametrize(
+    "stored, expected_writes",
+    [({}, [("old", _META)]), (dict(_META), [])],
+)
+def test_seed_heals_an_unchanged_copy_without_reindexing(monkeypatch, tmp_path, stored, expected_writes):
+    store = _seed(monkeypatch, tmp_path, {"a.md": _TABLE_COPY}, "a.md", stored)
+    assert store.added == []
+    assert store.writes == expected_writes
+
+
 def _row(monkeypatch, metadata):
     doc = {"doc_type": "reference", "doc_role": "other"}
     if metadata is not None:
