@@ -221,6 +221,12 @@ CASES: Dict[str, Case] = {
           "operator_rate_per_month": 2000, "riggers_rate_per_month": 3000},
          {"crane_capacity_tons": 50.0, "grand_total": 197500.0})),
     # Net = 50 - 2 = 48 t; utilisation = 30/48 = 62.5 % (<= 85 % default) -> pass.
+    # Compounding: 1,000,000 + 10% = 1,100,000, + 5% = 1,155,000; on cost it
+    # would be 1,000,000 x 1.15 = 1,150,000. Money and percentages carry no
+    # physical unit, so there is no unit case.
+    "markup_build_up": Case(
+        {"cost": 1_000_000, "rates_percent": [10, 5], "basis": "compounding"},
+        {"price": 1_155_000.0, "price_on_cost": 1_150_000.0}, "cost", None),
     "crane_lift_capacity": Case(
         {"chart_capacity_t": 50, "deductions_t": 2, "load_t": 30},
         {"net_capacity_t": 48.0, "utilization_percent": 62.5, "passed": True},

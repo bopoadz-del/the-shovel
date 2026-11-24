@@ -21,6 +21,7 @@ from app.agents.base.formulas.construction_formulas_commercial import (  # noqa:
     unit_cost_total,
 )
 from app.agents.hats.commercial.formulas.construction_formulas_commercial import (  # noqa: F401 -- moved
+    markup_build_up,
     roi_calculator,
 )
 from app.agents.hats.contracts.formulas.construction_formulas_commercial import (  # noqa: F401 -- moved
@@ -1771,6 +1772,7 @@ def format_user_priced_takeoff_line(composed: dict) -> str:
 
 ADDITIONAL_CALCULATORS = {
     "roi_calculator": roi_calculator,
+    "markup_build_up": markup_build_up,
     "unit_cost_total": unit_cost_total,
     "cost_per_area": cost_per_area,
     "productivity_rate": productivity_rate,

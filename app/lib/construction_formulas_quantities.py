@@ -477,6 +477,7 @@ FW_ROUTE_NAMES = frozenset({
     "leed_points_estimate",
     "live_load_reduction",
     "manhours_scurve",
+    "markup_build_up",
     "masonry_wall_capacity",
     "material_consumption",
     "mobilization_cost_estimate",

@@ -193,6 +193,7 @@ _SMOKE_INPUTS = {
     "concrete_curing_time": dict(target_strength_fraction=0.70),
     # Additive discipline library — commercial / PM.
     "roi_calculator": dict(gain=1_200_000, cost=1_000_000),
+    "markup_build_up": dict(cost=1_000_000, rates_percent=[10, 5], basis="compounding"),
     "unit_cost_total": dict(quantity=100, unit_rate=250),
     "delay_damages_daily": dict(
         rate_percent=0.1, contract_amount=1_754_504_456.25, currency="SAR",

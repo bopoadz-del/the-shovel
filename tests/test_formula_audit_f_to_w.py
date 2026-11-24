@@ -40,6 +40,7 @@ _AUDIT_SLICE = [
     "leed_points_estimate",
     "live_load_reduction",
     "manhours_scurve",
+    "markup_build_up",
     "masonry_wall_capacity",
     "material_consumption",
     "mobilization_cost_estimate",
@@ -584,6 +585,23 @@ class TestRcBeamShearCapacity:
         k = 1.0 + math.sqrt(200.0 / 550.0)
         vmin = 0.035 * (k ** 1.5) * math.sqrt(30.0)
         assert r["shear_capacity_kn"] == pytest.approx(vmin * 300 * 550 / 1000.0, abs=0.15)
+
+
+class TestMarkupBuildUp:
+    """Tender percentage additions on cost (summed) or compounding (each on
+    the running total, in order)."""
+
+    @pytest.mark.parametrize("basis,price", [
+        ("on cost", 1_150_000.0),     # 1,000,000 x (1 + 10% + 5%)
+        ("compounding", 1_155_000.0),  # 1,000,000 x 1.10 x 1.05
+    ])
+    def test_price_on_each_basis(self, basis, price):
+        r = _ok("markup_build_up", cost=1_000_000, rates_percent=[10, 5], basis=basis)
+        assert r["price"] == pytest.approx(price)
+
+    @pytest.mark.parametrize("basis", ["margin", "on selling price"])
+    def test_unnamed_basis_is_error(self, basis):
+        _err("markup_build_up", cost=1_000, rates_percent=[10], basis=basis)
 
 
 class TestMasonryWallCapacity:

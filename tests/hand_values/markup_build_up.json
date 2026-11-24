@@ -1,0 +1,14 @@
+[
+  {
+    "formula": "markup_build_up",
+    "inputs": {"cost": 1000000, "rates_percent": [10, 5], "basis": "compounding"},
+    "expect": {"price": 1155000, "markup_amount": 155000, "effective_markup_percent": 15.5, "price_on_cost": 1150000, "difference_between_bases": 5000},
+    "working": "Compounding: 1,000,000 + 10% = 1,100,000; 1,100,000 + 5% = 1,155,000. Markup 155,000 = 15.5% of cost. On cost the additions sum to 15%: 1,150,000; the bases differ by 5,000."
+  },
+  {
+    "formula": "markup_build_up",
+    "inputs": {"cost": 200000, "rates_percent": [12.5, 7.5], "basis": "on cost"},
+    "expect": {"price": 240000, "markup_amount": 40000, "effective_markup_percent": 20, "margin_on_price_percent": 16.6667, "price_compounding": 241875},
+    "working": "On cost: 12.5% + 7.5% = 20% of 200,000 = 40,000, price 240,000; margin 40,000 / 240,000 = 16.67%. Compounding would give 200,000 x 1.125 x 1.075 = 241,875."
+  }
+]
