@@ -199,3 +199,34 @@ def test_real_util_signature_accepts_ifc_class():
     import inspect
 
     assert "ifc_class" in inspect.signature(ifc_util.get_container).parameters
+
+
+# ---- properties stay beside the new storey key ------------------------------
+
+def _model_with_pset(cls, pset, prop, value):
+    f = _model(["A"], [(cls, "A")])
+    el = f.by_type(cls)[0]
+    ps = ifcopenshell.api.run("pset.add_pset", f, product=el, name=pset)
+    ifcopenshell.api.run("pset.edit_pset", f, pset=ps, properties={prop: value})
+    return f
+
+
+@pytest.mark.parametrize(
+    "cls, pset, prop, value",
+    [
+        ("IfcWall", "Pset_T1", "FireRating", "R60"),
+        ("IfcColumn", "Pset_T2", "LoadBearing", True),
+    ],
+)
+def test_element_properties_follow_extract_properties(tmp_path, cls, pset, prop, value):
+    model = _model_with_pset(cls, pset, prop, value)
+    path = tmp_path / "m.ifc"
+    model.write(str(path))
+    block = BIMExtractorBlock()
+    on = asyncio.run(block.process({"file_path": str(path)}, {"extract_properties": True}))
+    off = asyncio.run(block.process({"file_path": str(path)}, {"extract_properties": False}))
+    (el_on,) = [e for e in on["building_elements"] if e["ifc_type"] == cls]
+    (el_off,) = [e for e in off["building_elements"] if e["ifc_type"] == cls]
+    assert el_on["properties"][f"{pset}.{prop}"] == value
+    assert "properties" not in el_off
+    assert el_on["storey"] == el_off["storey"] == "A"
