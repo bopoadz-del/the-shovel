@@ -169,3 +169,94 @@ def test_an_empty_activity_list_is_an_empty_workbook_not_a_refusal(empty):
     # no rows, no project duration and no listed order. Without the guard the
     # empty network reaches the kernel and the writer raises.
     assert pm_excel._cpm(empty) == ({}, 0, [])
+
+
+# ── grader findings on #653: typed links, blank-padded ids, refusals ────────
+#
+# Expected dates below are hand passes: an SS link with lag L starts the
+# successor L days after the predecessor STARTS; an FS link with lag L
+# starts it L days after the predecessor FINISHES.
+
+@pytest.mark.parametrize("net,b_es,b_ef,proj,label", [
+    # SS+1: B.ES = A.ES + 1 = 0 + 1 = 1; B.EF = 1 + 4 = 5; project 5.
+    ([{"id": "A", "duration": 3, "predecessors": []},
+      {"id": "B", "duration": 4,
+       "predecessors": [{"id": "A", "type": "SS", "lag": 1}]}], 1, 5, 5, "A SS+1"),
+    # FS+2: B.ES = A.EF + 2 = 2 + 2 = 4; B.EF = 4 + 3 = 7; project 7.
+    ([{"id": "A", "duration": 2, "predecessors": []},
+      {"id": "B", "duration": 3,
+       "predecessors": [{"id": "A", "lag": 2}]}], 4, 7, 7, "A+2"),
+])
+def test_a_typed_or_lagged_link_is_scheduled_as_typed(net, b_es, b_ef, proj, label):
+    cpm, got_proj, _ = pm_excel._cpm(net)
+    assert (cpm["B"]["es"], cpm["B"]["ef"], got_proj) == (b_es, b_ef, proj)
+    ws = pm_excel.generate_cost_loaded_schedule({"project": "p"}, net)["L2 Schedule"]
+    preds = {row[0]: row[4] for row in ws.iter_rows(min_row=4, values_only=True)
+             if row[0] in ("A", "B")}
+    assert preds["B"] == label
+
+
+@pytest.mark.parametrize("raw,kept", [
+    ([{"id": "A", "type": "SS", "lag": 1}, "B"],
+     [{"id": "A", "type": "SS", "lag": 1}, "B"]),
+    ("A, B", ["A, B"]),
+])
+def test_the_bridge_keeps_each_link_as_given(raw, kept):
+    from app.lib.schedule_bridge import bridge_activity
+
+    out = bridge_activity({"id": "C", "duration": 2, "predecessors": raw})
+    assert out["predecessors"] == kept
+
+
+@pytest.mark.parametrize("pad", [" A ", "A\t"])
+def test_a_blank_padded_id_is_keyed_as_the_kernel_keys_it(pad):
+    net = [{"id": pad, "duration": 2, "predecessors": []},
+           {"id": "B", "duration": 3, "predecessors": ["A"]}]
+    cpm, proj, order = pm_excel._cpm(net)
+    # hand pass: A 0-2, B 2-5.
+    assert order == ["A", "B"]
+    assert proj == 5
+    assert (cpm["A"]["ef"], cpm["B"]["es"]) == (2, 2)
+    ws = pm_excel.generate_cost_loaded_schedule({"project": "p"}, net)["L2 Schedule"]
+    assert [row[0] for row in ws.iter_rows(min_row=4, max_row=5, values_only=True)] == ["A", "B"]
+
+
+@pytest.mark.parametrize("net,unknown", [
+    ([{"id": "A", "duration": 2, "predecessors": ["Z"]}], "Z"),
+    ([{"id": "A", "duration": 1, "predecessors": []},
+      {"id": "C", "duration": 2, "predecessors": ["A", "Q"]}], "Q"),
+])
+def test_an_unknown_predecessor_is_refused_with_its_name(net, unknown):
+    with pytest.raises(pm_excel.ScheduleNetworkError, match=f"unknown predecessor '{unknown}'"):
+        pm_excel._cpm(net)
+
+
+@pytest.mark.parametrize("net,reason", [
+    ([{"id": "A", "duration": 2, "predecessors": ["B"]},
+      {"id": "B", "duration": 1, "predecessors": ["A"]}], "loop"),
+    ([{"id": "A", "duration": 2, "predecessors": ["Z"]}], "unknown predecessor"),
+])
+def test_the_export_answers_a_refused_network_422_with_the_reason(net, reason):
+    from fastapi import HTTPException
+
+    from app.routers.exports import _cost_loaded_workbook
+
+    with pytest.raises(HTTPException) as exc:
+        _cost_loaded_workbook({"project": "p"}, net)
+    assert exc.value.status_code == 422
+    assert reason in exc.value.detail
+
+
+@pytest.mark.parametrize("raw,label", [
+    ([{"id": "A", "type": "FF", "lag": -2}], "A FF-2"),
+    ([{"id": "A", "type": "fs", "lag": 0}, "B, C"], "A,B,C"),
+])
+def test_the_preds_cell_shows_each_link_as_the_kernel_reads_it(raw, label):
+    assert pm_excel._links_label(raw) == label
+
+
+@pytest.mark.parametrize("raw", [None, ""])
+def test_no_predecessors_bridge_to_an_empty_list(raw):
+    from app.lib.schedule_bridge import bridge_activity
+
+    assert bridge_activity({"id": "C", "duration": 2, "predecessors": raw})["predecessors"] == []

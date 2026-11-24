@@ -77,6 +77,19 @@ def _manpower(a: Dict[str, Any], crew_per_trade: int) -> int:
     return max(1, n * crew_per_trade)
 
 
+def _links_as_given(raw: Any) -> List[Any]:
+    """An activity's predecessors as a list, each link kept as it was given.
+
+    A mapping link (``{"id", "type", "lag"}``) stays a mapping so its type and
+    lag reach the CPM kernel; an id stays its text. A single value that is not
+    a list (``"A"`` or ``"A, B"``) becomes one entry -- the kernel splits the
+    comma form -- instead of being iterated character by character."""
+    if raw is None or raw == "":
+        return []
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    return [p if isinstance(p, dict) else str(p) for p in items]
+
+
 def bridge_activity(
     a: Dict[str, Any],
     *,
@@ -96,7 +109,7 @@ def bridge_activity(
         "name": a.get("name") or a.get("activity") or "",
         "wbs": _wbs(a),
         "duration": dur,
-        "predecessors": [str(p) for p in (a.get("predecessors") or [])],
+        "predecessors": _links_as_given(a.get("predecessors")),
         "manpower": mp,
     }
     # Carry man-hours through when the activity was planned in them (BOQ-derived
