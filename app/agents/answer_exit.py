@@ -82,6 +82,9 @@ class Turn:
     awaiting_inputs: list[str] = field(default_factory=list)
     #: The user's question, for the language a recovered answer is worded in.
     question: str = ""
+    #: The project the turn answers from: the exit's discrepancy sweep runs
+    #: its one lexical search there ("" -- no project, no sweep).
+    project_id: str = ""
     #: Every tool call of the turn and its whole result, as the messages the
     #: turn's own recovery reads (an assistant call, then its tool message).
     #: Paths that never see the turn's messages -- the wall-clock deadline,
@@ -99,9 +102,6 @@ class Turn:
     #: reply may be stated as "the documents did not yield an answer"; an
     #: error must never read as a not-found.
     forced_retry_outcome: str = ""
-    #: The project the turn answers from: the exit's discrepancy sweep runs
-    #: its one lexical search there ("" -- no project, no sweep).
-    project_id: str = ""
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
