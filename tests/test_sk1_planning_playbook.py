@@ -5,13 +5,15 @@ meeting-minutes-actions is L4), imported through the loader #507 merged.
 Hat-agnostic where the decision is general: every hat that ships procedures
 renders its binding rules, each refusal and each step in order into its own
 prompt block, and the assembled agent prompt carries that block. A procedure
-whose lineage reads "as <id>" shares the referenced procedure's method lineage,
-so it carries the same licence obligation (attribution) -- read from the
-playbook's own text, no procedure named in the rule.
+whose lineage reads "as <id>" is checked across every hat by
+test_sk1_commercial_quantities_playbook (a playbook file may span two hats).
+An attribution that defers its credit to NOTICE must find that licence's
+section in the repository's NOTICE file -- read from the manifest's own text,
+no procedure named in the rule.
 """
 from __future__ import annotations
 
-import re
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +21,7 @@ from app.agents import catalog
 from app.agents.models import Discipline
 from app.agents.procedures import render_procedures
 
-_REF = re.compile(r"^as ([A-Za-z]\d+)\b")
+_NOTICE = Path(__file__).resolve().parents[1] / "NOTICE"
 
 
 def _hats_with_procedures():
@@ -49,18 +51,6 @@ def test_every_step_and_refusal_renders_in_order(hat):
 
 
 @pytest.mark.parametrize("hat", _hats_with_procedures(), ids=lambda h: h.id)
-def test_lineage_reference_shares_attribution(hat):
-    by_id = {p.id.lower(): p for p in hat.playbook.procedures}
-    for proc in hat.playbook.procedures:
-        m = _REF.match(proc.lineage)
-        if not m:
-            continue
-        target = by_id.get(m.group(1).lower())
-        assert target is not None, f"{hat.id}/{proc.id}: lineage names an unknown procedure"
-        assert proc.attribution == target.attribution, f"{hat.id}/{proc.id}"
-
-
-@pytest.mark.parametrize("hat", _hats_with_procedures(), ids=lambda h: h.id)
 def test_agent_prompt_carries_the_hats_procedures(hat, tmp_path):
     from app.agents.runtime import _apply_hat_kernels
 
@@ -75,3 +65,28 @@ def test_agent_prompt_carries_the_hats_procedures(hat, tmp_path):
     for other in others:
         for proc in other.playbook.procedures:
             assert f"### {proc.id}. {proc.title}" not in body
+
+
+def _defers_to_notice(attr) -> bool:
+    return attr is not None and any(
+        "NOTICE" in (v or "") for v in (attr.credit, attr.notice)
+    )
+
+
+def _hats_deferring_to_notice():
+    return [
+        h for h in _hats_with_procedures()
+        if any(_defers_to_notice(p.attribution) for p in h.playbook.procedures)
+    ]
+
+
+@pytest.mark.parametrize("hat", _hats_deferring_to_notice(), ids=lambda h: h.id)
+def test_credit_deferred_to_notice_is_in_notice(hat):
+    assert _NOTICE.is_file(), "an attribution says 'see NOTICE' but the repo ships no NOTICE"
+    sections = {
+        line.strip()
+        for line in _NOTICE.read_text(encoding="utf-8").splitlines()
+    }
+    for proc in hat.playbook.procedures:
+        if _defers_to_notice(proc.attribution):
+            assert proc.attribution.licence in sections, f"{hat.id}/{proc.id}"
