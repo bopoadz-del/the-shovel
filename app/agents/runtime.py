@@ -1999,8 +1999,8 @@ async def _predispatch_file_tool(
             inner = nested
         if tool == "bim_extractor" and isinstance(inner, dict):
             lead_keys = (
-                "status", "ifc_schema", "element_count", "quantities",
-                "clash_report",
+                "status", "ifc_schema", "element_count", "qto_groups",
+                "quantities", "clash_report",
             )
             ordered = {k: inner[k] for k in lead_keys if k in inner}
             for k, v in inner.items():
