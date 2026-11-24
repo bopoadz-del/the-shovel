@@ -69,6 +69,9 @@ def test_agent_prompt_carries_the_hats_procedures(hat, tmp_path):
     assert "## Procedures" in body
     for proc in hat.playbook.procedures:
         assert proc.steps[0] in body
+    # Two hats may share binding rules (one playbook file split across hats),
+    # so "only its own" is read on the procedure headings, not the rules.
     others = [h for h in _hats_with_procedures() if h.id != hat.id]
     for other in others:
-        assert other.playbook.rules not in body
+        for proc in other.playbook.procedures:
+            assert f"### {proc.id}. {proc.title}" not in body
