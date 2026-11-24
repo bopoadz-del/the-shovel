@@ -508,6 +508,7 @@ _POWER_SUFFIX_RE = re.compile(r"^([^\W\d_]+)([23])$")
 # "15 x 15 cm": the unit written after a dimension pair is both figures' unit.
 _DIMENSION_JOIN_RE = re.compile(r"^\s*[x×]\s*$", re.IGNORECASE)
 _NAME_WORD_RE = re.compile(r"[^\W\d_]+")
+_CLAUSE_MARK_RE = re.compile(r"[,;!?\n]|\.(?=\s|$)")
 
 
 def _unit_registry():
@@ -569,45 +570,78 @@ def _figures(text: str) -> List[Dict[str, Any]]:
 
 def _name_distance(text: str, figures: List[Dict[str, Any]], i: int,
                    words: set) -> Optional[int]:
-    """Words between figure ``i`` and the nearest of ``words`` written
-    between its neighbouring figures, or None when none is there."""
+    """Words between figure ``i`` and the nearest of ``words`` written in
+    the figure's own clause, or None when none is there.
+
+    The clause ends at the neighbouring figures and at a clause mark
+    (``,`` ``;`` ``!`` ``?``, a line break or a sentence stop), so in
+    "mould plus soil 9 g, empty mould 4 g" the word "empty" labels 4 g,
+    not the 9 g written just before its comma. A colon does not end the
+    clause (``push: 40 kN``).
+    """
     lo = figures[i - 1]["end"] if i > 0 else 0
     hi = figures[i + 1]["start"] if i + 1 < len(figures) else len(text)
-    before = [w.lower() for w in _NAME_WORD_RE.findall(text[lo:figures[i]["start"]])]
-    after = [w.lower() for w in _NAME_WORD_RE.findall(text[figures[i]["end"]:hi])]
+    head = _CLAUSE_MARK_RE.split(text[lo:figures[i]["start"]])[-1]
+    tail = _CLAUSE_MARK_RE.split(text[figures[i]["end"]:hi])[0]
+    before = [w.lower() for w in _NAME_WORD_RE.findall(head)]
+    after = [w.lower() for w in _NAME_WORD_RE.findall(tail)]
     dists = [len(before) - k for k, w in enumerate(before) if w in words]
     dists += [k + 1 for k, w in enumerate(after) if w in words]
     return min(dists) if dists else None
 
 
+def _own_words(names: List[str], descs: Dict[str, str],
+               title: str = "") -> List[Dict[str, set]]:
+    """Per variable, the words only it declares: first its name's words,
+    then its description's content words (``gross_mass`` described as
+    "container plus wet soil"), each set less every other variable's.
+    A word of the entry's title is no description word: the ask writes
+    it to name the formula, not to label a figure."""
+    from app.lib.construction_formulas import _display_content_words
+    name_w = {n: set(n.lower().split("_")) for n in names}
+    titled = set(_display_content_words(title))
+    desc_w = {n: set(_display_content_words(descs.get(n) or "")) - titled for n in names}
+    others = {n: [o for o in names if o != n] for n in names}
+    by_name = {n: name_w[n] - set().union(*(name_w[o] for o in others[n]))
+               for n in names}
+    by_desc = {n: desc_w[n] - set().union(*(name_w[o] | desc_w[o] for o in others[n]))
+               for n in names}
+    return [by_name, by_desc]
+
+
 def _bind_same_unit(text: str, names: List[str], figures: List[Dict[str, Any]],
-                    cands: List[int]) -> Optional[Dict[str, float]]:
+                    cands: List[int],
+                    descs: Optional[Dict[str, str]] = None,
+                    title: str = "") -> Optional[Dict[str, float]]:
     """Variables sharing one unit, bound to as many figures of that unit.
 
     A name word only one of the variables declares (``loaded_speed`` /
     ``empty_speed``) binds it to the one figure that word is written
-    nearest to. Variables still unbound bind when their figures all carry
-    one value (the order cannot change a result). Anything else is None.
+    nearest to, within that figure's clause. Then, for a variable none of
+    whose name words is written, a word only its declared description has
+    binds it the same way among the figures no name word took. Variables
+    still unbound bind when their figures all carry one value (the order
+    cannot change a result). Anything else is None.
     """
     if len(cands) != len(names):
         return None
-    own = {n: set(n.lower().split("_")) for n in names}
     bound: Dict[str, float] = {}
     left_figs = list(cands)
-    for name in names:
-        words = own[name] - set().union(*(own[o] for o in names if o != name))
-        if not words:
-            continue
-        dist = {i: _name_distance(text, figures, i, words) for i in cands}
-        near = [i for i, d in dist.items() if d is not None]
-        if not near:
-            continue
-        best = min(dist[i] for i in near)
-        at = [i for i in near if dist[i] == best]
-        if len(at) != 1 or at[0] not in left_figs:
-            return None
-        bound[name] = figures[at[0]]["value"]
-        left_figs.remove(at[0])
+    for own in _own_words(names, descs or {}, title):
+        among = list(left_figs)
+        for name in names:
+            if name in bound or not own[name]:
+                continue
+            dist = {i: _name_distance(text, figures, i, own[name]) for i in among}
+            near = [i for i, d in dist.items() if d is not None]
+            if not near:
+                continue
+            best = min(dist[i] for i in near)
+            at = [i for i in near if dist[i] == best]
+            if len(at) != 1 or at[0] not in left_figs:
+                return None
+            bound[name] = figures[at[0]]["value"]
+            left_figs.remove(at[0])
     rest = [n for n in names if n not in bound]
     if rest and len({figures[i]["value"] for i in left_figs}) != 1:
         return None
@@ -663,7 +697,9 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
                 return None
             bound[name] = figures[cands[0]]["value"]
         else:
-            same = _bind_same_unit(text, group, figures, cands)
+            descs = {n: str((variables[n] or {}).get("desc") or "") for n in group}
+            same = _bind_same_unit(text, group, figures, cands, descs,
+                                   str(entry.get("title") or ""))
             if same is None:
                 return None
             bound.update(same)
