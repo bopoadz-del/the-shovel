@@ -24,6 +24,6 @@ from app.agents.hats.safety.formulas.construction_formulas_additions import (  #
 
 ADDITIONAL_CALCULATORS = {
     "guardrail_top_rail_height": guardrail_top_rail_height,
-    "calculate_interim_payment": calculate_interim_payment,
     "interim_payment_to_date": interim_payment_to_date,
+    "calculate_interim_payment": calculate_interim_payment,
 }
