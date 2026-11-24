@@ -222,8 +222,6 @@ def winner_backed(sentence: str, rows: Iterable[dict[str, Any]], thing: Iterable
     a document, so it is not a winner no document states."""
     thing = set(thing)
     names = _governor_names(sentence, thing)
-    if not names:
-        return False
     for row in rows or ():
         for sent in _sentences(_row_text(row)):
             for clause in _CLAUSE_SPLIT_RE.split(sent):
