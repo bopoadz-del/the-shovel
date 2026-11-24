@@ -106,7 +106,7 @@ async def _run_tool_phase(
     """
     from app.agents.runtime import (  # noqa: F401 -- read at call time
         _LOG, _message_is_formula_style_ask, _message_wants_locked_deliverable,
-        _off_loop, _predispatch_file_tool, _predispatch_formula_calc,
+        _off_loop, _predispatch_file_tool, _predispatch_formula_calc, _predispatch_kb_knowledge,
         _predispatch_look_ahead, _predispatch_remaining_deliverables,
         _predispatch_resource_histogram, _predispatch_wbs_duration_override,
         _predispatch_wir_form, _summarize_result,
@@ -321,6 +321,10 @@ async def _run_tool_phase(
         _calc_pre = await _predispatch_formula_calc(
             self, messages, project_id, operator_text=user_message,
         )
+        if not _calc_pre:
+            _calc_pre = await _predispatch_kb_knowledge(
+                self, messages, operator_text=user_message,
+            )
     if _budget.skipped:
         # Visible in the turn trace: which probes the cap dropped and why.
         _LOG.info(

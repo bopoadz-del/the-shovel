@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -623,3 +624,55 @@ def formula_completed_by_user_text(text: str) -> Optional[tuple]:
     if len(tied) != 1:
         return None
     return tied[0][0], tied[0][1]
+
+
+#: Share of an entry's identifying weight an ask must hold for the entry to
+#: cover it: at least half, i.e. the ask carries most of what names the entry.
+ASK_COVERAGE_SHARE = 0.5
+
+
+def _identifying_tokens(entry: Dict[str, Any]) -> set:
+    """The words that name an entry: its id segments and its title."""
+    return _tokens((entry.get("id") or "").replace(".", " ")) | _tokens(entry.get("title"))
+
+
+def _token_weights(entries: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Inverse document frequency of each word over the entries themselves.
+
+    A word every entry uses ("of", "the", "concrete" in a concrete-heavy base)
+    weighs little; a word only one entry uses weighs most. The weights come
+    from the knowledge base's own text, so they move with it.
+    """
+    df: Dict[str, int] = {}
+    for e in entries:
+        for t in _identifying_tokens(e) | _tokens(e.get("statement")):
+            df[t] = df.get(t, 0) + 1
+    n = len(entries)
+    return {t: math.log((n + 1) / (c + 1)) for t, c in df.items()}
+
+
+def entry_covering_ask(text: str) -> Optional[Dict[str, Any]]:
+    """The entry whose identifying words the ask holds by weight, or None.
+
+    Coverage is the IDF-weighted share of the entry's id and title words that
+    appear in the ask; the best-covered entry is returned when that share is at
+    least ``ASK_COVERAGE_SHARE``. An ask that only shares common words with
+    every entry covers none.
+    """
+    qt = _tokens(text)
+    if not qt:
+        return None
+    entries = load_knowledge()
+    weights = _token_weights(entries)
+    best: Optional[tuple] = None
+    for e in entries:
+        ident = _identifying_tokens(e)
+        total = sum(weights.get(t, 0.0) for t in ident)
+        if total <= 0:
+            continue
+        share = sum(weights.get(t, 0.0) for t in ident & qt) / total
+        if best is None or share > best[0]:
+            best = (share, e)
+    if best is None or best[0] < ASK_COVERAGE_SHARE:
+        return None
+    return best[1]

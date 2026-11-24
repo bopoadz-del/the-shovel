@@ -14433,6 +14433,77 @@ async def _predispatch_kb_formula(
     }
 
 
+async def _predispatch_kb_knowledge(
+    agent: "Agent",
+    messages: list,
+    *,
+    operator_text: str | None = None,
+) -> dict[str, Any] | None:
+    """Search the encoded knowledge first when an entry covers the ask.
+
+    Runs when no calculator was pre-dispatched, the agent offers the
+    knowledge tool, the ask is not about what a project record says, and a
+    knowledge entry holds most of the ask's identifying weight
+    (``entry_covering_ask``). The search result, with each entry's
+    provenance, is recorded in the thread like a model tool call, so the
+    model answers from it and names the source. Anything else returns None
+    and the turn continues as before.
+    """
+    from app.agents.core import tool_registry
+
+    if (tool_registry.get(_KB_TOOL) is None
+            or _KB_TOOL not in getattr(agent, "allowed_blocks", ())):
+        return None
+    try:
+        user_msg, _history = _messages_user_and_history(messages)
+        detect = (operator_text or user_msg or "").strip()
+        if not detect or await _off_loop(_document_question, detect):
+            return None
+        from app.blocks._knowledge import entry_covering_ask
+
+        entry = await _off_loop(entry_covering_ask, detect)
+        if entry is None:
+            return None
+        tc = {
+            "id": f"predispatch-{_KB_TOOL}-search",
+            "type": "function",
+            "function": {
+                "name": _KB_TOOL,
+                "arguments": json.dumps({"query": detect}),
+            },
+        }
+        result = await agent._run_tool_call(tc)
+        inner = result.get("result") if isinstance(result, dict) else None
+        if not (isinstance(inner, dict) and inner.get("matches")):
+            return None
+        rendered = json.dumps(inner, default=str)
+        messages.append({"role": "assistant", "content": "", "tool_calls": [tc]})
+        messages.append({
+            "role": "tool", "name": _KB_TOOL, "tool_call_id": tc["id"],
+            "content": rendered,
+        })
+        _inject_predispatch(
+            messages, _KB_TOOL, rendered[:4000],
+            "The encoded construction knowledge was searched for this ask. "
+            "When an entry states the asked value, rule or formula, answer "
+            "from it (evaluate a formula with the stated values) and name "
+            "the source its provenance gives; it is encoded knowledge, not "
+            "a project document. When none states it, answer as you would "
+            "without this result.",
+        )
+        _LOG.info("kb knowledge predispatch: entry=%s", entry.get("id"))
+        return {
+            "name": _KB_TOOL,
+            "ok": True,
+            "predispatched": True,
+            "result": inner,
+            "falls_to_retrieval": False,
+        }
+    except Exception:  # noqa: BLE001 — the turn must still run
+        _LOG.warning("kb knowledge pre-dispatch failed; continuing", exc_info=True)
+        return None
+
+
 def _kb_evaluation(inner: dict[str, Any]) -> dict[str, Any] | None:
     """The evaluated figure in a knowledge-base tool result, or None."""
     ev = inner.get("evaluation")

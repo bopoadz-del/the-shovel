@@ -132,7 +132,7 @@ async def _chat_impl(
         _looks_like_search_preamble, _message_is_formula_style_ask, _message_wants_locked_deliverable,
         _normalize_tool_call_ids, _nudge_for_failed_tool, _off_loop, _parse_dsml_tool_calls,
         _supersede_tool_failure_with_evidence,
-        _postprocess_answer, _predispatch_file_tool, _predispatch_formula_calc,
+        _postprocess_answer, _predispatch_file_tool, _predispatch_formula_calc, _predispatch_kb_knowledge,
         _predispatch_look_ahead, _predispatch_remaining_deliverables,
         _predispatch_resource_histogram, _predispatch_wbs_duration_override,
         _predispatch_wir_form, _project_has_non_rag_context, _project_is_rag_ready_off_process,
@@ -353,6 +353,10 @@ async def _chat_impl(
         _calc_pre = await _predispatch_formula_calc(
             self, messages, project_id, operator_text=user_message,
         )
+        if not _calc_pre:
+            _calc_pre = await _predispatch_kb_knowledge(
+                self, messages, operator_text=user_message,
+            )
     if _calc_pre:
         tool_calls_made.append(_calc_pre)
 
