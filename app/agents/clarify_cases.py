@@ -319,6 +319,38 @@ def _is_summary_ask(question: str) -> bool:
     return not any(w in _GENERIC_VALUE_WORDS for w in words)
 
 
+#: Words that compare the asked thing with a stated figure ("is the rate
+#: HIGHER than 5", "is the depth ABOVE 2 m"). In a yes/no ask they end the
+#: noun phrase that names the thing. A language category, never a case.
+_COMPARISON_WORDS = frozenset({
+    "higher", "lower", "greater", "smaller", "larger", "bigger", "more",
+    "less", "fewer", "above", "below", "over", "under", "exceed",
+    "exceeds", "within", "between", "equal", "than", "least", "most",
+    "enough", "sufficient", "same", "different",
+})
+
+
+def _yes_no_subject(q: str) -> str | None:
+    """The thing a yes/no ask names: "is the <thing> <figure or comparison>".
+
+    "is the cover 40 mm" names "cover"; "is the unit rate of X higher than
+    5 USD/kg" names "unit rate of X". The phrase runs from after the
+    auxiliary (and its article) to the first word that carries a digit or
+    compares, so the asked thing narrows the cases the way a "what is the
+    <thing>" ask does. An ask with no such opening reads nothing (None).
+    """
+    m = re.match(r"(?:is|are|was|were|does|do|did)\s+(?:the\s+|a\s+|an\s+)?(.+)$", q)
+    if not m:
+        return None
+    words: list[str] = []
+    for w in m.group(1).split():
+        bare = w.strip(".,;:()\"'")
+        if any(ch.isdigit() for ch in bare) or bare in _COMPARISON_WORDS:
+            break
+        words.append(w)
+    return " ".join(words) or None
+
+
 def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
     """What the question asks for, as ``(kinds, heads, qualifiers)``.
 
@@ -384,6 +416,8 @@ def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
                 m = re.search(r"\b(?:what|which)\s+(.+)$", q)
                 if m:
                     subj = m.group(1)
+                else:
+                    subj = _yes_no_subject(q)
 
     heads: set[str] = set()
     qualifiers: set[str] = set()
