@@ -5,6 +5,7 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 
 from app.lib.formula_registry import Param, formula
 
@@ -69,6 +70,16 @@ def _amount(x: float) -> str:
     return f"{x:,.2f}"
 
 
+def _figure(x: float) -> str:
+    """A working figure written out in full: thousands separators, no
+    exponent, every digit up to ten significant figures, so the figures a
+    step prints multiply to the result printed after it."""
+    text = format(Decimal(f"{x:.10g}"), ",f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
 @formula(
     owner='commercial',
     display_name='Break-even point',
@@ -117,24 +128,38 @@ def break_even_point(
         return {"error": "expected_units must be >= 0."}
 
     contribution = price - var
-    working = [(f"Contribution per unit = price {_amount(price)} - variable cost "
-                f"{_amount(var)} = {_amount(contribution)}")]
+    working = [(f"Contribution per unit = price {_figure(price)} - variable cost "
+                f"{_figure(var)} = {_figure(contribution)}")]
+    q = None if expected_units is None else float(expected_units)
+
+    def _profit_at_expected(out: dict) -> None:
+        # Stated on both sides of the domain condition: below it the
+        # expected volume makes a loss, and that loss is the answer.
+        if q is None:
+            return
+        profit = q * contribution - fixed
+        working.append(f"Profit at {_figure(q)} units = {_figure(q)} x "
+                       f"{_figure(contribution)} - {_figure(fixed)} = {_amount(profit)}")
+        out["profit_at_expected"] = round(profit, 2)
+
     if contribution <= 0:
         working.append("The price does not exceed the variable cost per unit, so no "
                        "quantity covers the fixed costs: there is no break-even point.")
-        return {"break_even_units": None, "break_even_revenue": None,
-                "contribution_per_unit": round(contribution, 2),
-                "domain": "no break-even: price <= variable cost per unit",
-                "working": working}
+        out = {"break_even_units": None, "break_even_revenue": None,
+               "contribution_per_unit": round(contribution, 2),
+               "domain": "no break-even: price <= variable cost per unit"}
+        _profit_at_expected(out)
+        out["working"] = working
+        return out
 
     units = fixed / contribution
     whole = math.ceil(units - 1e-9)
     revenue = units * price
     ratio = contribution / price
     working += [
-        (f"Break-even quantity = fixed costs {_amount(fixed)} / {_amount(contribution)} "
-         f"= {units:,.4g} units (sell {whole:,} whole units)"),
-        (f"Break-even revenue = {units:,.4g} x {_amount(price)} = {_amount(revenue)} "
+        (f"Break-even quantity = fixed costs {_figure(fixed)} / {_figure(contribution)} "
+         f"= {_figure(units)} units (sell {whole:,} whole units)"),
+        (f"Break-even revenue = {_figure(units)} x {_figure(price)} = {_amount(revenue)} "
          f"(contribution ratio {ratio:.2%})"),
     ]
     out = {
@@ -144,18 +169,15 @@ def break_even_point(
         "contribution_per_unit": round(contribution, 2),
         "contribution_ratio": round(ratio, 6),
     }
-    if expected_units is not None:
-        q = float(expected_units)
-        profit = q * contribution - fixed
-        working.append(f"Profit at {q:,.4g} units = {q:,.4g} x {_amount(contribution)} "
-                       f"- {_amount(fixed)} = {_amount(profit)}")
-        out["profit_at_expected"] = round(profit, 2)
+    _profit_at_expected(out)
+    if q is not None:
         if q > 0:
             margin = (q - units) / q
             out["margin_of_safety_units"] = round(q - units, 4)
             out["margin_of_safety_percent"] = round(margin * 100.0, 2)
             working.append(
-                f"Margin of safety = ({q:,.4g} - {units:,.4g}) / {q:,.4g} = {margin:.2%}"
+                f"Margin of safety = ({_figure(q)} - {_figure(units)}) / {_figure(q)} "
+                f"= {margin:.2%}"
                 + (" (below break-even: a shortfall)" if q < units else ""))
     out["working"] = working
     return out

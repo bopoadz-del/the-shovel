@@ -846,14 +846,53 @@ def _has_number(text: str, targets: list[float]) -> bool:
     )
 
 
-def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
-    """True when the answer states a figure the calculator returned.
+# What marks a figure in prose as negative: a minus sign that is neither the
+# dash of a range ("2-3") nor a subtraction ("500 - 120"),
+# an accounting parenthesis "(3)", or a word that states a negative amount
+# up to two words before the figure ("a loss of 3", "a shortfall of 1,100").
+_NEGATIVE_LEAD_RE = re.compile(
+    r"(?:(?<![\w.])[-\u2212]\s*|\(\s*"
+    r"|\b(?:loss|losses|deficit|shortfall|negative|minus)\b(?:\s+\w+){0,2}\s+)$",
+    re.IGNORECASE,
+)
 
-    ``_NUMBER_RE`` reads a figure without its sign, and prose states a negative
-    result in more ways than a minus ("-3", "a loss of 3", "(3)"), so a
-    negative figure is matched by its magnitude.
+
+def _signed_numbers_in(text: str) -> list[float]:
+    """Figures in prose with the sign the prose gives them."""
+    text = text or ""
+    found: list[float] = []
+    for match in _NUMBER_RE.finditer(text):
+        try:
+            value = float(match.group(0).replace(",", ""))
+        except ValueError:
+            continue
+        lead = text[max(0, match.start() - 40):match.start()]
+        sign = _NEGATIVE_LEAD_RE.search(lead)
+        if sign and sign.group(0).lstrip()[:1] in "-\u2212":
+            # "500 - 120": a minus with a figure before it subtracts.
+            before = lead[:sign.start()].rstrip()
+            if before[-1:].isdigit():
+                sign = None
+        found.append(-value if sign else value)
+    return found
+
+
+def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
+    """True when the answer states a figure the calculator returned, sign
+    included.
+
+    ``_NUMBER_RE`` reads a figure without its sign, and prose states a
+    negative result in more ways than a minus ("-3", "a loss of 3", "(3)"),
+    so the sign is read from what leads the figure. A negative result is
+    committed to only by a figure the answer states as negative; a bare "3",
+    a "+3" or "a gain of 3" does not commit to -3.
     """
-    return _has_number(answer, [abs(n) for n in credit.result_numbers])
+    targets = credit.result_numbers
+    if not targets:
+        return False
+    return any(_close(found, target)
+               for found in _signed_numbers_in(answer)
+               for target in targets)
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:

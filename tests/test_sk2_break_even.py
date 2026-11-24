@@ -111,7 +111,8 @@ def test_working_prints_the_figures_it_reports(seed):
     for fixed, price, var in _cases(seed)[:5]:
         r = break_even_point(fixed, price, var)
         text = "\n".join(r["working"])
-        assert f"{fixed:,.2f}" in text and f"{r['break_even_revenue']:,.2f}" in text
+        assert any(v == pytest.approx(fixed) for v in _printed(text))
+        assert f"{r['break_even_revenue']:,.2f}" in text
 
 
 @pytest.mark.parametrize(
@@ -187,3 +188,62 @@ def test_a_figure_the_calculator_did_not_return_gets_no_source_line(stated):
     out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
                  f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
     assert "Source: Break-even point" not in out, out
+
+
+def _printed(line: str) -> list[float]:
+    import re
+    return [float(t.replace(",", "")) for t in re.findall(r"-?[\d,]*\.?\d+", line)]
+
+
+@pytest.mark.parametrize("fixed,price,variable", [
+    (1_000_000.0, 81.4, 47.0),
+    (2_500_000.0, 0.125, 0.0375),
+])
+def test_printed_working_reconciles(fixed, price, variable):
+    # Read the working as a person does: the figures as printed must give
+    # the result printed after them, with no exponent and no cut price.
+    out = break_even_point(fixed, price, variable)
+    w = out["working"]
+    assert "e+" not in " ".join(w).lower()
+    p, v, c = _printed(w[0])
+    assert (p, v) == pytest.approx((price, variable)) and c == pytest.approx(p - v)
+    f, c2, units = _printed(w[1])[:3]
+    assert units == pytest.approx(f / c2, rel=1e-9)
+    u2, p2, revenue = _printed(w[2])[:3]
+    assert revenue == pytest.approx(u2 * p2, abs=0.005)
+
+
+@pytest.mark.parametrize("fixed,price,variable,q", [
+    (1_000.0, 10.0, 12.0, 50.0),
+    (40_000.0, 5.0, 5.0, 900.0),
+])
+def test_expected_volume_states_its_loss_when_there_is_no_break_even(fixed, price, variable, q):
+    out = break_even_point(fixed, price, variable, expected_units=q)
+    assert out["break_even_units"] is None
+    assert out["profit_at_expected"] == pytest.approx(round(q * (price - variable) - fixed, 2))
+    assert out["working"][-1].startswith(f"Profit at {q:g} units")
+
+
+@pytest.mark.parametrize("fixed,price,variable", [(1_000.0, 10.0, 6.0), (7_200.0, 30.0, 12.0)])
+def test_selling_exactly_the_break_even_quantity_is_not_a_shortfall(fixed, price, variable):
+    units = fixed / (price - variable)
+    at = break_even_point(fixed, price, variable, expected_units=units)
+    assert at["margin_of_safety_units"] == 0
+    assert "shortfall" not in at["working"][-1]
+    below = break_even_point(fixed, price, variable, expected_units=units - 1)
+    assert "shortfall" in below["working"][-1]
+
+
+@pytest.mark.parametrize("stated", ["3", "+3", "a gain of 3"])
+def test_a_figure_stated_with_the_wrong_sign_gets_no_source_line(stated):
+    # contribution = 15 - 18 = -3; an answer giving it as positive misstates it
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
+                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" not in out, out
+
+
+@pytest.mark.parametrize("stated", ["(3)", "a shortfall of 3"])
+def test_other_written_negatives_keep_the_source_line(stated):
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
+                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" in out, out
