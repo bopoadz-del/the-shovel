@@ -31,7 +31,7 @@ import logging
 import os
 import re
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _LOG = logging.getLogger(__name__)
 
@@ -604,33 +604,36 @@ _QUESTION_FRAME_WORDS = frozenset({
 })
 
 
-def _question_asks_only_for(text: str, title: str) -> bool:
-    """The ask's question asks for the entry's result and nothing else.
+def _split_questions(text: str) -> Tuple[List[str], str]:
+    """The ask's question sentences (each ends in "?") and the rest of it,
+    the givens."""
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split((text or "").strip()) if s]
+    questions = [s for s in sentences if s.rstrip().endswith("?")]
+    return questions, " ".join(s for s in sentences if s not in questions)
+
+
+def _questions_ask_only_for(questions: List[str], givens: str, title: str) -> bool:
+    """Each question asks for the entry's result and nothing else.
 
     "<givens>. What is the <result>?" is a calculation request without a
     calculation verb: the givens state the figures, the question names the
-    result. Each question sentence (one that ends in "?") must name a word
-    of the entry's title, and every other word in it must be a title word,
-    a word the givens already introduced, a unit, or a framing word. A
-    question that asks about anything else ("what does the rule say") is
-    not a request to evaluate. An ask with no question is not one either.
+    result. Each question must name a word of the entry's title, and every
+    other word in it must be a title word, a word the givens already
+    introduced, a unit, a figure or a framing word. A question that asks
+    about anything else ("what does the rule say") is not a request to
+    evaluate this entry.
     """
     from app.lib.construction_formulas import _display_content_words
 
-    sentences = [s for s in _SENTENCE_SPLIT_RE.split((text or "").strip()) if s]
-    questions = [s for s in sentences if s.rstrip().endswith("?")]
-    if not questions:
-        return False
     named = set(_display_content_words(title))
-    givens = set(_display_content_words(
-        " ".join(s for s in sentences if s not in questions)))
+    given_words = set(_display_content_words(givens))
     for question in questions:
         words = [w for w in _display_content_words(question)
                  if not w.isdigit() and w not in _QUESTION_FRAME_WORDS]
         if not named.intersection(words):
             return False
         for word in words:
-            if word in named or word in givens or _parse_unit(word) is not None:
+            if word in named or word in given_words or _parse_unit(word) is not None:
                 continue
             return False
     return True
@@ -641,15 +644,17 @@ def formula_completed_by_user_text(text: str) -> Optional[tuple]:
     supplies, or None.
 
     The ask requests a calculation: by a calculation verb, or by a question
-    that asks only for the entry's result (``_question_asks_only_for``).
+    that asks only for the entry's result (``_questions_ask_only_for``).
+    An ask with neither is not a calculation request.
     """
     raw = text or ""
     from app.lib.construction_formulas import (
         _display_content_words, _words_all_present, explicit_calculation_request,
     )
-    if not raw.strip():
-        return None
     calc_verb = explicit_calculation_request(raw)
+    questions, givens = _split_questions(raw)
+    if not raw.strip() or not (calc_verb or questions):
+        return None
     candidates = []
     for entry in load_knowledge():
         if entry.get("type") != "formula":
@@ -658,7 +663,7 @@ def formula_completed_by_user_text(text: str) -> Optional[tuple]:
         words = _display_content_words(title)
         if not words or not _words_all_present(raw, words):
             continue
-        if not calc_verb and not _question_asks_only_for(raw, title):
+        if not calc_verb and not _questions_ask_only_for(questions, givens, title):
             continue
         values = bind_entry_variables(entry, raw)
         if values is None:
