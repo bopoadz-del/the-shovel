@@ -91,13 +91,24 @@ def test_the_summary_prints_the_unobserved_window(unobserved_max, expected):
                     " snapshot_max=350ms" + expected)
 
 
+#: The snapshot threads of the monitors these tests drive (``_run`` adds
+#: each one before it starts). ``cpu_snapshot`` is a module global, so any
+#: other monitor alive in the process -- the app's own, started by a lifespan
+#: whose loop is still open on the same worker -- calls the stub too; its
+#: calls are served at once and never counted, timed or signalled.
+_OWN_SNAPSHOT_THREADS: set = set()
+
+
 def _slow_snapshot(snapshot_s: float, monkeypatch, started=None, fail: bool = False) -> list:
     """``cpu_snapshot`` takes ``snapshot_s`` (it sleeps, as a /proc read
     waiting on the GIL would); ``started`` is set as each one begins. With
-    ``fail`` every reading raises."""
+    ``fail`` every reading raises. Only the driven monitor's own snapshot
+    thread is counted and served this way."""
     calls: list = []
 
     def snapshot():
+        if threading.current_thread() not in _OWN_SNAPSHOT_THREADS:
+            return 0.0, {}
         calls.append(1)
         if started is not None:
             started.set()
@@ -120,12 +131,14 @@ def _run(mon: LagMonitor, body) -> LagMonitor:
         await body(mon)
         await asyncio.sleep(0.15)
 
+    _OWN_SNAPSHOT_THREADS.add(mon._snap_thread)
     mon.start()
     try:
         mon.loop.run_until_complete(run())
     finally:
         mon.stop()
         mon.loop.close()
+        _OWN_SNAPSHOT_THREADS.discard(mon._snap_thread)
     return mon
 
 
@@ -160,6 +173,36 @@ def test_a_slow_snapshot_with_an_idle_loop_is_not_a_stall(snapshot_s, monkeypatc
     assert mon.max_stamp_to_post_ms < 20, mon.max_stamp_to_post_ms
     assert mon.max_snapshot_ms >= snapshot_s * 1000 * 0.9, mon.max_snapshot_ms
     assert mon.snapshots == len(calls)
+
+
+@pytest.mark.parametrize("foreign", [True, False])
+def test_another_live_monitor_in_the_process_is_not_counted(foreign, monkeypatch):
+    """The snapshot count is the driven monitor's own: a second monitor alive
+    on another running loop in the same process (as the app's is while a
+    lifespan loop stays open) calls ``cpu_snapshot`` too, and none of its
+    calls reach the count, the timing or the signal."""
+    calls = _slow_snapshot(0.35, monkeypatch)
+    other_loop = asyncio.new_event_loop()
+    runner = threading.Thread(target=other_loop.run_forever, daemon=True)
+    runner.start()
+    other = LagMonitor(other_loop, threshold_ms=250, tick_ms=20, log=False)
+    if foreign:
+        other.start()
+    try:
+        async def idle(mon):
+            await asyncio.sleep(1.05)
+
+        mon = _run(_monitor(), idle)
+    finally:
+        if foreign:
+            other.stop()
+        other_loop.call_soon_threadsafe(other_loop.stop)
+        runner.join(timeout=2)
+        other_loop.close()
+    assert len(calls) >= 2, "the slow snapshot never ran"
+    assert mon.snapshots == len(calls)
+    if foreign:
+        assert other.snapshots >= 2, "the other monitor never read a snapshot"
 
 
 @pytest.mark.parametrize("block_s", [0.35, 0.5])
