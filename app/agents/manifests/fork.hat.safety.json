@@ -183,6 +183,72 @@
     "domain": "safety",
     "tier": "operational"
    }
+  ],
+  "rules": "records are contemporaneous and factual; a number not given is UNKNOWN, never estimated; acceptance criteria are quoted from the specification in the index or marked UNKNOWN; no individual is blamed in a record; reportable events are flagged for the statutory process first.",
+  "procedures": [
+   {
+    "id": "s4",
+    "title": "Incident record",
+    "purpose": "a factual first record of an incident or near miss for the statutory and contractual processes.",
+    "inputs": "what happened, where, when; persons involved by role; injuries or damage as reported; immediate actions; witnesses; photos; the reporting thresholds from the project's safety plan if in the index.",
+    "refusals": "assigning cause or fault; computing rates from incomplete hours; delaying the statutory flag.",
+    "steps": [
+     "flag reportable classes first with the plan's citation or UNKNOWN",
+     "chronology with times",
+     "conditions as recorded",
+     "immediate actions",
+     "evidence preserved",
+     "open questions for the investigation",
+     "statistics (frequency rates) only from supplied hours and counts via the executor, with the formula shown"
+    ],
+    "output": "the record, the reportable flag, the investigation questions.",
+    "done_when": "no cause is asserted, the reportable flag is explicit.",
+    "lineage": "common incident-record practice; text is ours."
+   },
+   {
+    "id": "s5",
+    "title": "Job safety analysis from a task description",
+    "purpose": "a step-by-step hazard analysis with controls in hierarchy order and stop-work triggers.",
+    "inputs": "the task in the user's words; location and conditions; plant and materials; the method statement if supplied; permit requirements if in the index.",
+    "refusals": "inventing exposure limits or distances; generic hazards unrelated to the described steps.",
+    "steps": [
+     "break the task into steps",
+     "hazards per step",
+     "controls ordered eliminate, substitute, engineer, administer, protect",
+     "a stop-work trigger per high-risk step",
+     "permits and competencies required with citation or UNKNOWN"
+    ],
+    "output": "the step table, the stop-work list, the permits list.",
+    "done_when": "every control is tied to a step and ordered by hierarchy.",
+    "lineage": "CC BY 4.0 prompt library (Constructelligence, credited); text is ours.",
+    "attribution": {
+     "licence": "CC BY 4.0",
+     "credit": "Constructelligence",
+     "link": "https://creativecommons.org/licenses/by/4.0/"
+    }
+   },
+   {
+    "id": "s6",
+    "title": "Toolbox talk from a near miss",
+    "purpose": "a five-minute talk built from a specific near miss, without naming individuals.",
+    "inputs": "the near-miss record; the task and crew it concerns; the control that was missing or failed.",
+    "refusals": "naming or implying a person; moralising; inventing statistics.",
+    "steps": [
+     "what happened in three sentences",
+     "why it matters for this crew's next task",
+     "the one control everyone applies from today",
+     "the question to ask the crew",
+     "the sign-in block"
+    ],
+    "output": "the talk sheet with the sign-in block.",
+    "done_when": "no individual is identifiable, one control is named.",
+    "lineage": "as S5; text is ours.",
+    "attribution": {
+     "licence": "CC BY 4.0",
+     "credit": "Constructelligence",
+     "link": "https://creativecommons.org/licenses/by/4.0/"
+    }
+   }
   ]
  }
 }
