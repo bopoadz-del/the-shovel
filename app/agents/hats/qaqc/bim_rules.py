@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import operator
 import re
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 RULE_KINDS = ("unique", "consistent", "compare")
 
-_OPERATORS: Dict[str, Callable[[float, float], bool]] = {
+_OPERATORS: dict[str, Callable[[float, float], bool]] = {
     "<": operator.lt,
     "<=": operator.le,
     "==": operator.eq,
@@ -47,7 +48,7 @@ class BimRuleError(ValueError):
     """The supplied rule table cannot be checked as written."""
 
 
-def _as_number(value: Any) -> Optional[float]:
+def _as_number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -94,7 +95,7 @@ def _key(value: Any) -> Any:
     return str(value).strip()
 
 
-def _types(applies_to: Any, where: str) -> Optional[set]:
+def _types(applies_to: Any, where: str) -> set | None:
     if applies_to is None:
         return None
     if not isinstance(applies_to, Mapping):
@@ -108,7 +109,7 @@ def _types(applies_to: Any, where: str) -> Optional[set]:
     return {str(n).strip().casefold() for n in names if str(n).strip()}
 
 
-def _compile_rule(rule: Any, index: int) -> Dict[str, Any]:
+def _compile_rule(rule: Any, index: int) -> dict[str, Any]:
     where = f"rule {index + 1}"
     if not isinstance(rule, Mapping):
         raise BimRuleError(f"{where}: a rule must be an object")
@@ -121,7 +122,7 @@ def _compile_rule(rule: Any, index: int) -> Dict[str, Any]:
     group_by = str(rule.get("group_by") or "").strip() or None
     if kind == "consistent" and group_by is None:
         raise BimRuleError(f"{where}: a consistent rule needs group_by")
-    compiled: Dict[str, Any] = {
+    compiled: dict[str, Any] = {
         "name": str(rule.get("name") or f"{kind} {field}"),
         "kind": kind,
         "field": field,
@@ -140,7 +141,7 @@ def _compile_rule(rule: Any, index: int) -> Dict[str, Any]:
     return compiled
 
 
-def compile_rules(rules: Any) -> List[Dict[str, Any]]:
+def compile_rules(rules: Any) -> list[dict[str, Any]]:
     """Validate the whole table before any element is read."""
     if isinstance(rules, Mapping):
         rules = rules.get("rules", [rules] if "kind" in rules else None)
@@ -149,22 +150,22 @@ def compile_rules(rules: Any) -> List[Dict[str, Any]]:
     return [_compile_rule(rule, i) for i, rule in enumerate(rules)]
 
 
-def _in_scope(elements: Sequence[Mapping[str, Any]], types: Optional[set]) -> List[Mapping[str, Any]]:
+def _in_scope(elements: Sequence[Mapping[str, Any]], types: set | None) -> list[Mapping[str, Any]]:
     if types is None:
         return list(elements)
     return [e for e in elements if str(e.get("ifc_type", "")).casefold() in types]
 
 
-def _group_of(element: Mapping[str, Any], group_by: Optional[str]) -> Any:
+def _group_of(element: Mapping[str, Any], group_by: str | None) -> Any:
     if group_by is None:
         return None
     value = field_value(element, group_by)
     return None if value is None else _key(value)
 
 
-def _check_unique(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
-    seen: Dict[Any, List[str]] = {}
-    not_checked: List[str] = []
+def _check_unique(rule: dict[str, Any], scope: Sequence[Mapping[str, Any]]):
+    seen: dict[Any, list[str]] = {}
+    not_checked: list[str] = []
     for el in scope:
         value = field_value(el, rule["field"])
         if value is None or (rule["group_by"] and _group_of(el, rule["group_by"]) is None):
@@ -180,9 +181,9 @@ def _check_unique(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
     return checked, not_checked, violations
 
 
-def _check_consistent(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
-    groups: Dict[Any, Dict[Any, List[str]]] = {}
-    not_checked: List[str] = []
+def _check_consistent(rule: dict[str, Any], scope: Sequence[Mapping[str, Any]]):
+    groups: dict[Any, dict[Any, list[str]]] = {}
+    not_checked: list[str] = []
     for el in scope:
         group = _group_of(el, rule["group_by"])
         value = field_value(el, rule["field"])
@@ -199,11 +200,11 @@ def _check_consistent(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
     return checked, not_checked, violations
 
 
-def _check_compare(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
+def _check_compare(rule: dict[str, Any], scope: Sequence[Mapping[str, Any]]):
     relation = _OPERATORS[rule["op"]]
     checked = 0
-    not_checked: List[str] = []
-    violations: List[Dict[str, Any]] = []
+    not_checked: list[str] = []
+    violations: list[dict[str, Any]] = []
     for el in scope:
         left = _as_number(field_value(el, rule["field"]))
         right = _as_number(field_value(el, rule["other"]))
@@ -220,9 +221,9 @@ def _check_compare(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
     return checked, not_checked, violations
 
 
-def duplicate_ids(elements: Sequence[Mapping[str, Any]]) -> Dict[str, int]:
+def duplicate_ids(elements: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     """GlobalIds that occur more than once (the IFC schema forbids it)."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for el in elements:
         gid = str(el.get("id") or "").strip()
         if gid:
@@ -230,7 +231,7 @@ def duplicate_ids(elements: Sequence[Mapping[str, Any]]) -> Dict[str, int]:
     return {gid: n for gid, n in counts.items() if n > 1}
 
 
-def check_bim_rules(elements: Sequence[Mapping[str, Any]], rules: Any) -> Dict[str, Any]:
+def check_bim_rules(elements: Sequence[Mapping[str, Any]], rules: Any) -> dict[str, Any]:
     """Apply a rule table to extracted elements.
 
     A rule is ``fail`` when it finds a violation, ``pass`` when it read at
@@ -241,7 +242,7 @@ def check_bim_rules(elements: Sequence[Mapping[str, Any]], rules: Any) -> Dict[s
     the model could be read against the table).
     """
     compiled = compile_rules(rules)
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for rule in compiled:
         scope = _in_scope(elements, rule["types"])
         if rule["kind"] == "unique":
