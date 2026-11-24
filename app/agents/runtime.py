@@ -912,6 +912,17 @@ def _project_has_non_rag_context(project_id: str, user_message: str) -> bool:
     # FIXTURE projects must not early-return the unindexed refusal on ask1.
     if _message_wants_vo_draft(user_message) or _message_wants_rfi_draft(user_message):
         return True
+    # An ask the encoded construction knowledge answers needs no project
+    # corpus: the same rule that sends it to the knowledge tool first opens
+    # the gate, so an empty project does not refuse it before that tool runs.
+    try:
+        from app.agents.core import tool_registry
+
+        if (tool_registry.get(_KB_TOOL) is not None
+                and _knowledge_entry_answering(user_message) is not None):
+            return True
+    except Exception as exc:
+        _LOG.warning("encoded-knowledge gate check failed: %s", exc)
     try:
         from app.core.project_memory import build_project_context
 
@@ -14433,6 +14444,22 @@ async def _predispatch_kb_formula(
     }
 
 
+def _knowledge_entry_answering(text: str) -> dict[str, Any] | None:
+    """The encoded-knowledge entry that answers an ask by itself, or None.
+
+    An ask about what a project record says belongs to the documents
+    (``_document_question``); any other ask an entry covers
+    (``entry_covering_ask``) is answered from the encoded knowledge. One rule
+    for the knowledge predispatch and the empty-project gate.
+    """
+    detect = (text or "").strip()
+    if not detect or _document_question(detect):
+        return None
+    from app.blocks._knowledge import entry_covering_ask
+
+    return entry_covering_ask(detect)
+
+
 async def _predispatch_kb_knowledge(
     agent: "Agent",
     messages: list,
@@ -14457,11 +14484,7 @@ async def _predispatch_kb_knowledge(
     try:
         user_msg, _history = _messages_user_and_history(messages)
         detect = (operator_text or user_msg or "").strip()
-        if not detect or await _off_loop(_document_question, detect):
-            return None
-        from app.blocks._knowledge import entry_covering_ask
-
-        entry = await _off_loop(entry_covering_ask, detect)
+        entry = await _off_loop(_knowledge_entry_answering, detect)
         if entry is None:
             return None
         tc = {
