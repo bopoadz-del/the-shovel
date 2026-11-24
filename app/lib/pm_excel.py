@@ -12,7 +12,6 @@ EVM workbook (from PV/EV/AC + BAC):
 """
 from __future__ import annotations
 
-from collections import deque
 from typing import Any, Dict, List, Tuple
 
 import openpyxl
@@ -35,39 +34,46 @@ def _header(ws, row: int, labels: List[str]) -> None:
 
 
 def _cpm(activities: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, int]], int, List[str]]:
-    """Forward/backward CPM pass (finish-to-start). Returns
-    ({id: {es,ef,ls,lf,tf,critical}}, project_duration, topo_order)."""
-    acts = {str(a["id"]): a for a in activities}
+    """Forward/backward CPM pass for the workbook, by the ONE CPM kernel.
+
+    The network is run through the calculation envelope: the registered
+    ``cpm_network`` kernel (which calls ``pm_computations.compute_cpm``) is
+    run by ``run_calculation``, so the workbook's dates and floats are the
+    same numbers every other schedule path computes -- link types and lags
+    included. There is no second forward/backward pass here.
+
+    Returns ``({id: {es,ef,ls,lf,tf,critical}}, project_duration, order)``
+    where ``order`` is the activities' own listed order. A network the
+    kernel cannot schedule (a loop, an unknown predecessor, a duration that
+    is not a whole number of working days) raises ``ValueError`` carrying
+    the kernel's own reason: a workbook is never written from numbers the
+    kernel refused.
+    """
+    from app.lib.construction_formulas import run_calculation
+
     ids = [str(a["id"]) for a in activities]
-    preds = {i: [str(p) for p in acts[i].get("predecessors", [])] for i in ids}
-    succ: Dict[str, List[str]] = {i: [] for i in ids}
-    for i in ids:
-        for p in preds[i]:
-            if p in succ:
-                succ[p].append(i)
-    indeg = {i: sum(1 for p in preds[i] if p in acts) for i in ids}
-    q = deque([i for i in ids if indeg[i] == 0])
-    order: List[str] = []
-    while q:
-        n = q.popleft(); order.append(n)
-        for s in succ[n]:
-            indeg[s] -= 1
-            if indeg[s] == 0:
-                q.append(s)
-    if len(order) != len(ids):          # cycle fallback — keep input order
-        order = ids
-    es: Dict[str, int] = {}; ef: Dict[str, int] = {}
-    for i in order:
-        es[i] = max([ef[p] for p in preds[i] if p in ef], default=0)
-        ef[i] = es[i] + int(acts[i].get("duration", 0))
-    proj = max(ef.values(), default=0)
-    ls: Dict[str, int] = {}; lf: Dict[str, int] = {}
-    for i in reversed(order):
-        lf[i] = min([ls[s] for s in succ[i] if s in ls], default=proj)
-        ls[i] = lf[i] - int(acts[i].get("duration", 0))
-    out = {i: {"es": es[i], "ef": ef[i], "ls": ls[i], "lf": lf[i],
-               "tf": ls[i] - es[i], "critical": (ls[i] - es[i]) <= 0} for i in ids}
-    return out, proj, order
+    if not ids:
+        return {}, 0, []
+    network = [{"id": str(a["id"]), "name": str(a.get("name") or ""),
+                "duration": a.get("duration", 0),
+                "predecessors": [str(p) for p in (a.get("predecessors") or [])]}
+               for a in activities]
+    envelope = run_calculation("cpm_network", {"activities": network})
+    result = envelope.get("result") if isinstance(envelope, dict) else None
+    if not isinstance(envelope, dict) or envelope.get("status") != "success"             or not isinstance(result, dict):
+        reason = (envelope.get("error") if isinstance(envelope, dict) else None)             or "the CPM kernel returned no result"
+        raise ValueError(f"schedule network not computed: {reason}")
+    rows = {str(r["id"]): r for r in result.get("activities") or []}
+    missing = [i for i in ids if i not in rows]
+    if missing:
+        raise ValueError(
+            "schedule network not computed: the CPM kernel returned no dates for "
+            + ", ".join(missing))
+    out = {i: {"es": rows[i]["early_start"], "ef": rows[i]["early_finish"],
+               "ls": rows[i]["late_start"], "lf": rows[i]["late_finish"],
+               "tf": rows[i]["total_float"], "critical": bool(rows[i]["is_critical"])}
+           for i in ids}
+    return out, int(result.get("project_duration") or 0), ids
 
 
 def _add_working_days(start, n: int):
