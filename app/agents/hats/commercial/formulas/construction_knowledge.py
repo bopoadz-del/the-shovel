@@ -10,7 +10,16 @@ from typing import Dict, Optional
 @formula(
     owner='commercial',
     display_name='Payment due on a claim',
-    description='Payment due on a claim: certified amount less retention and previous certificates.',
+    # The card is the contract the model fills the call from, so it states
+    # what the function computes: retention comes off the amount certified
+    # for this period, and earlier certificates only add to the running
+    # total. A card promising "less previous certificates" led the model to
+    # pass a to-date valuation as the certified amount, expecting earlier
+    # certificates to come off it; they never did.
+    description=('Payment due this period: the amount certified for this period less '
+                 'retention on it. Certificates issued before are not deducted here; '
+                 'they only add to the cumulative certified, so give this period\'s '
+                 'amount, not a to-date total.'),
     inputs={
         'claimed_amount': Param('currency', 0, 1e13, label='amount claimed'),
         'certified_amount': Param('currency', 0, 1e13, label='amount certified'),
