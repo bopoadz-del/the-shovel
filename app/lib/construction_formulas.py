@@ -1371,6 +1371,28 @@ def _fill_lwd_from_text(text: str, out: Dict[str, Any], depth_key: str = "depth_
         out.setdefault("length_m", _ask_float(match.group(1)))
         out.setdefault("width_m", _ask_float(match.group(2)))
         out.setdefault(depth_key, _ask_float(match.group(3)))
+        return
+    # A plan size written as two figures and the third dimension written
+    # apart by its own word ("24 m by 12 m, 250 mm thick"). Taken only when
+    # the ask writes exactly one plan size and exactly one thickness, depth
+    # or height; otherwise nothing is read and the calculator asks for its
+    # sizes instead of running on a default depth.
+    try:
+        from app.lib.construction_formulas_quantities import (
+            plan_size_pairs,
+            third_dimension_metres,
+        )
+        pairs = set(plan_size_pairs(text))
+        thirds = third_dimension_metres(text)
+    except (TypeError, ValueError, ImportError):
+        logger.debug("plan-size read skipped", exc_info=True)
+        return
+    if len(pairs) != 1 or len(thirds) != 1:
+        return
+    length, width = next(iter(pairs))
+    out.setdefault("length_m", length)
+    out.setdefault("width_m", width)
+    out.setdefault(depth_key, thirds[0])
 
 def _extract_slab_thickness_from_ask(text: str, out: Dict[str, Any]) -> None:
     """Fill slab_thickness_min from 'spanning 4.8 m' / one-end continuous.

@@ -86,6 +86,70 @@ def dimension_chains(text: str) -> list[list[tuple[float, str | None]]]:
         chains.append(list(zip(numbers, _chain_units([groups[i] for i in (1, 3, 5)]))))
     return chains
 
+
+@functools.lru_cache(maxsize=1)
+def _plan_pair_re() -> re.Pattern[str]:
+    from app.agents.base.formulas.construction_formulas_planning import _FAMILIES
+
+    units = "|".join(re.escape(u) for u in sorted(_FAMILIES["length"], key=len, reverse=True))
+    # A whole figure only: never the first digits of a longer one.
+    dim = rf"({SIGNED_FIGURE})(?![\d.,]?\d)(?:\s*({units})(?![A-WYZa-wyz0-9]))?"
+    # Not the head or tail of a longer chain: no separator before the first
+    # figure and none after the second.
+    return re.compile(
+        rf"(?<![A-Za-z0-9.,])(?<![x×*]\s)(?<![x×*]){dim}{_CHAIN_SEP}{dim}"
+        rf"(?!\s*(?:[x×*]|by(?![A-Za-z]))\s*\d)",
+        re.IGNORECASE,
+    )
+
+
+def plan_size_pairs(text: str) -> list[tuple[float, float]]:
+    """Every two-figure plan size ("24 m by 12 m", "30 x 20 m") in ``text``,
+    in metres. A pair needs a length unit written on at least one figure; a
+    bare figure takes the unit written on the other."""
+    from app.agents.base.formulas.construction_formulas_planning import convert_units
+
+    pairs = []
+    for match in _plan_pair_re().finditer(text or ""):
+        groups = match.groups()
+        units = _chain_units([groups[1], groups[3]])
+        if not all(units):
+            continue
+        numbers = [float(groups[i].replace(",", "")) for i in (0, 2)]
+        length, width = (
+            convert_units(n, u, "m")["value_out"] for n, u in zip(numbers, units)
+        )
+        pairs.append((length, width))
+    return pairs
+
+
+@functools.lru_cache(maxsize=1)
+def _third_dimension_re() -> re.Pattern[str]:
+    from app.agents.base.formulas.construction_formulas_planning import _FAMILIES
+
+    units = "|".join(re.escape(u) for u in sorted(_FAMILIES["length"], key=len, reverse=True))
+    fig = rf"({SIGNED_FIGURE})(?![\d.,]?\d)\s*({units})(?![A-Za-z0-9])"
+    return re.compile(
+        rf"(?<![A-Za-z0-9.,]){fig}\s*(?:thick|deep|high)\b"
+        rf"|\b(?:thickness|depth|height)\s*(?:of|is|=|:)?\s*{fig}",
+        re.IGNORECASE,
+    )
+
+
+def third_dimension_metres(text: str) -> list[float]:
+    """Every thickness / depth / height ``text`` writes with a length unit
+    ("250 mm thick", "depth 1.2 m"), in metres, distinct values only."""
+    from app.agents.base.formulas.construction_formulas_planning import convert_units
+
+    found: list[float] = []
+    for match in _third_dimension_re().finditer(text or ""):
+        groups = match.groups()
+        number, unit = (groups[0], groups[1]) if groups[0] else (groups[2], groups[3])
+        value = convert_units(float(number.replace(",", "")), unit, "m")["value_out"]
+        if value not in found:
+            found.append(value)
+    return found
+
 # A waste percentage the operator stated out loud. The number has to BELONG to
 # the waste -- a contract full of percentages (retention 5%, advance recovery
 # 15%, compaction 95%) must not donate one -- so both spellings bind the figure
