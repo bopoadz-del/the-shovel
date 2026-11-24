@@ -444,3 +444,76 @@ def test_unit_chunks_are_never_merged(monkeypatch, short, kept):
     monkeypatch.setenv("CHUNK_MIN_CHARS", "40")
     chunks, _ = cb.bound_units_with_pages(["Row A | 1 | m3", short], [1, 2])
     assert len(chunks) == kept
+
+
+# ── row-splitter pieces are pieces of their page ──────────────────────────
+def _bill_page(rows: int) -> str:
+    """A self-built bill page: a class heading, the item it scopes, then rows."""
+    lines = [
+        f"K 15{i}.{j}  Depth {i}-{i + 1} m, {d} mm diameter   nr   {i + j}   1,250.00"
+        for i in range(1, rows + 1) for j, d in enumerate((1200, 1500, 1800), 1)
+    ]
+    return (
+        "CLASS K: PIPEWORK - CHAMBERS AND ANCILLARIES\n"
+        "Precast concrete chambers complete with cover slab and benching\n"
+        + "\n".join(lines)
+        + "\nK 190.1  Protective coating, two coats, to external faces   m2   640   45.00\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "chunker, rows, tagged",
+    [
+        ("finer", 5, True),     # the row splitter cut the page: every piece tagged
+        ("default", 5, False),  # the word chunker kept it whole: nothing tagged
+        ("finer", 1, False),    # one piece is the whole segment, not a split
+    ],
+)
+def test_row_splitter_pieces_are_tagged_each_with_its_own_id(
+    monkeypatch, chunker, rows, tagged,
+):
+    from app.core import doc_index
+
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "2000")
+    parents: list[int | None] = [None]  # an earlier segment's entry stays as it was
+    chunks = doc_index._chunk_prose_segment(_bill_page(rows), chunker, parents)
+    mine = parents[1:]
+    assert parents[0] is None and len(mine) == len(chunks)
+    if tagged:
+        assert len(chunks) > 1 and all(p is not None for p in mine)
+        assert len(set(mine)) == len(mine)  # no piece borrows another's page
+    else:
+        assert all(p is None for p in mine)
+
+
+@pytest.mark.parametrize("headed_page", [True, False])
+def test_text_stage_row_pieces_of_a_bill_page_carry_its_heading(monkeypatch, headed_page):
+    """A row piece cut off the top of its bill page is filed under the page's heading."""
+    from app.core import doc_index
+
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "2000")
+    monkeypatch.setattr(doc_index, "_title_block_reader", lambda: None)
+    cover = "1.1 Preamble\nRates include all labour, plant and materials."
+    page = _bill_page(5)
+    heading = page.splitlines()[0]
+    if not headed_page:  # a page with no heading-like line has nothing to carry
+        page = page.split("\n", 1)[1]
+    text = f"{cover}\n{page}"
+    starts = [[1, 0], [2, len(cover) + 1]]
+    chunks, pages = doc_index._text_chunks_with_pages(
+        text, {"page_starts": starts}, "finer", "bill.pdf",
+    )
+    coating = [(c, p) for c, p in zip(chunks, pages) if "Protective coating" in c]
+    assert len(coating) == 1 and coating[0][1] == 2
+    assert "chambers complete" not in coating[0][0]  # the row is cut off its item
+    assert coating[0][0].startswith(heading + "\n") is headed_page
+    assert coating[0][0].count(heading) == (1 if headed_page else 0)
+
+
+@pytest.mark.parametrize("calls", [2, 5])
+def test_new_split_parent_hands_out_a_fresh_id_every_call(calls):
+    """Each caller-cut piece gets an id no other split parent holds."""
+    ids = [cb.new_split_parent() for _ in range(calls)]
+    assert all(isinstance(i, int) and i > 0 for i in ids)
+    assert len(set(ids)) == calls
+    assert cb.new_split_parent() not in ids
