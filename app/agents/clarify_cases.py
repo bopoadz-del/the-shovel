@@ -264,6 +264,32 @@ def _head_noun(phrase: str) -> str:
     return ""
 
 
+def _subject_past_generic(phrase: str) -> str:
+    """The phrase that names the asked thing, past a generic value word.
+
+    A generic head ("quantity", "amount", "value") that takes an ``of``
+    object ("the billed quantity of <thing>") names its thing in that
+    object, the way "what class of X" names X. The object is read as the
+    subject, repeatedly ("the value of the amount of X" -> "X"). A generic
+    head with no ``of`` object is left as it is, so a bare "what is the
+    value?" still narrows nothing.
+    """
+    p = (phrase or "").strip()
+    while True:
+        words = p.split()
+        h = _head_noun(p)
+        if not h or h not in _GENERIC_HEADS:
+            return p
+        clean = [w.lower().strip(".,;:()\"'") for w in words]
+        try:
+            at = clean.index(h)
+        except ValueError:
+            return p
+        if at + 2 > len(words) - 1 or clean[at + 1] != "of":
+            return p
+        p = " ".join(words[at + 2:])
+
+
 def _thing_of(subject: str) -> tuple[str, set[str]]:
     """The thing a case's own phrase names: ``(head noun, words before it)``.
 
@@ -393,7 +419,7 @@ def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
             (i for i, w in enumerate(words) if w.strip(".,;:") in _VERB_WORDS),
             len(words),
         )
-        subj = " ".join(words[:cut_i]).strip()
+        subj = _subject_past_generic(" ".join(words[:cut_i]).strip())
         h = _head_noun(subj)
         if h and h not in _GENERIC_HEADS:
             heads.add(h)
