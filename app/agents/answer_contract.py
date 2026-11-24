@@ -12,6 +12,9 @@ question, a formula, a project or a document.
    note survives only when it is an assumption the result depends on: a line
    stating a value the working uses or an assumption with no value of its
    own. A closing summary goes only when it repeats figures already given.
+   On a document answer, a later paragraph that cites only documents the
+   first paragraph does not cite and states no value of a kind the first
+   paragraph states is context from another document and goes.
 3. NO MACHINERY IN THE TEXT. Status words about how a figure was produced
    ("deterministic", "certified" as a status, "pre-dispatch", the platform's
    calculator and pipeline names) and narration of the search ("the search
@@ -778,6 +781,62 @@ def _drop_closing_request(text: str) -> str:
     return "\n\n".join(pars)
 
 
+#: A paragraph that is a list item or a table row: a bullet, a numbered
+#: item, or a line holding a tab-separated cell.
+_LIST_PAR_RE = re.compile(r"^[ \t]*(?:[-*•]|\d+[.)])[ \t]+|\t", re.MULTILINE)
+
+
+def _value_kinds(text: str) -> set[str]:
+    from app.agents.evidence_conflicts import extract
+
+    return {v.kind for v in extract(_MARKER_RE.sub("", text))}
+
+
+def _drop_other_source_context(text: str, markers: "_Markers") -> str:
+    """Rule 2, a document answer (no calculation, not asking): the answer is
+    the first paragraph. A later paragraph whose every citation names a
+    document the first paragraph does not cite, and which states no value of
+    a kind the first paragraph states, is context from another document,
+    not the answer, and goes.
+
+    It stays when it cites nothing or cites a document the first paragraph
+    cites, when it states a value of a kind the first paragraph states (a
+    second document's figure for the same kind is a comparison or a
+    conflict), when it is a list item or a table row, and when the first
+    paragraph cites nothing or introduces what follows (ends in ``:``)."""
+    pars = re.split(r"\n[ \t]*\n", text.strip())
+    if len(pars) < 2:
+        return text
+    doc = {f"[{e['marker']}]": e["document"] for e in markers.entries}
+    lead = pars[0]
+    lead_docs = {doc[m] for m in _MARKER_RE.findall(lead) if m in doc}
+    if not lead_docs or lead.rstrip("*_ \t").endswith(":"):
+        return text
+    lead_kinds = _value_kinds(lead)
+    kept, gone = [lead], []
+    for par in pars[1:]:
+        docs = {doc.get(m) for m in _MARKER_RE.findall(par)}
+        if (docs and None not in docs and not docs & lead_docs
+                and not _LIST_PAR_RE.search(par) and not kept[-1].rstrip("*_ \t").endswith(":")
+                and not _value_kinds(par) & lead_kinds):
+            gone.append(par)
+            continue
+        kept.append(par)
+    if not gone:
+        return text
+    body = "\n\n".join(kept)
+    # A citation whose every marker went with the context is no longer the
+    # answer's source: its entry goes, and the markers left are renumbered in
+    # order so the reader sees [1], [2], ... with no gap.
+    dropped = set(_MARKER_RE.findall("\n".join(gone))) - set(_MARKER_RE.findall(body))
+    present = [e for e in markers.entries if f"[{e['marker']}]" not in dropped]
+    renumber = {f"[{e['marker']}]": f"[{i}]" for i, e in enumerate(present, 1)}
+    for i, e in enumerate(present, 1):
+        e["marker"] = i
+    markers.entries[:] = present
+    return _MARKER_RE.sub(lambda m: renumber.get(m.group(0), m.group(0)), body)
+
+
 # ── Rule 1: answer first ────────────────────────────────────────────────────
 
 def _answer_first(text: str, computed: bool) -> str:
@@ -883,6 +942,8 @@ def apply(
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
             body = _drop_closing_request(body)
+            if not computed:
+                body = _drop_other_source_context(body, markers)
             body = _answer_first(body, computed)
             body = _narration_first(body)
         body = _tidy(body)
