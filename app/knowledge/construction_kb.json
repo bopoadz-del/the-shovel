@@ -343,7 +343,7 @@
         "If FOS < 1.2, provide tension/anchor piles to make up the deficit (see foundation.uplift_remediation_tension_piles)."
       ],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
@@ -420,7 +420,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
@@ -467,7 +467,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 1, p10",
         "project": null,
         "confidence": "site_experience",
@@ -514,7 +514,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, high-rise substructure notes, part 1 p9-10",
         "project": null,
         "confidence": "site_experience",
@@ -1426,7 +1426,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
         "project": null,
         "confidence": "site_experience",
@@ -1473,7 +1473,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
         "project": null,
         "confidence": "site_experience",
@@ -1956,7 +1956,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
         "project": null,
         "confidence": "site_experience",
@@ -1995,7 +1995,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
         "project": null,
         "confidence": "site_experience",
@@ -2034,7 +2034,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p39",
         "project": null,
         "confidence": "site_experience",
@@ -2073,7 +2073,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p35 and p18",
         "project": null,
         "confidence": "site_experience",
@@ -2112,7 +2112,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p36 and p40",
         "project": null,
         "confidence": "site_experience",
@@ -2151,7 +2151,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p12 and p13",
         "project": null,
         "confidence": "site_experience",
@@ -2190,7 +2190,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 3, p20 and p23",
         "project": null,
         "confidence": "site_experience",
@@ -2491,7 +2491,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p3",
         "project": null,
         "confidence": "site_experience",
@@ -2536,7 +2536,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p11 (formula p9-10)",
         "project": null,
         "confidence": "site_experience",
@@ -2582,7 +2582,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11",
         "project": null,
         "confidence": "site_experience",
@@ -2624,7 +2624,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p10-11, p15",
         "project": null,
         "confidence": "site_experience",
@@ -2673,7 +2673,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p14-15",
         "project": null,
         "confidence": "site_experience",
@@ -2712,7 +2712,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 1, p33",
         "project": null,
         "confidence": "site_experience",
@@ -2763,7 +2763,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2 p24 and section 3, p26",
         "project": null,
         "confidence": "site_experience",
@@ -2802,7 +2802,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p26",
         "project": null,
         "confidence": "site_experience",
@@ -2841,7 +2841,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-27",
         "project": null,
         "confidence": "site_experience",
@@ -2888,7 +2888,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
         "project": null,
         "confidence": "site_experience",
@@ -2939,7 +2939,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p26-30",
         "project": null,
         "confidence": "site_experience",
@@ -2982,7 +2982,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p27",
         "project": null,
         "confidence": "site_experience",
@@ -3029,7 +3029,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p27-28",
         "project": null,
         "confidence": "site_experience",
@@ -3068,7 +3068,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
         "project": null,
         "confidence": "site_experience",
@@ -3111,7 +3111,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
         "project": null,
         "confidence": "site_experience",
@@ -3154,7 +3154,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p24-28",
         "project": null,
         "confidence": "site_experience",
@@ -3193,7 +3193,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "roads / earthworks / geotech site-experience reference",
+        "source": "owner-supplied course material (roads / earthworks / geotech)",
         "course_reference": "owner-supplied course material, roads and earthworks section 2, p14",
         "project": null,
         "confidence": "site_experience",
@@ -3232,7 +3232,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "concrete technology site-experience reference",
+        "source": "owner-supplied course material (concrete technology)",
         "course_reference": "owner-supplied course material, concrete technology part 1, p28",
         "project": null,
         "confidence": "site_experience",
@@ -3275,7 +3275,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "concrete technology site-experience reference",
+        "source": "owner-supplied course material (concrete technology)",
         "course_reference": "owner-supplied course material, concrete technology part 1, pp25-26",
         "project": null,
         "confidence": "site_experience",
@@ -3322,7 +3322,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "concrete technology site-experience reference",
+        "source": "owner-supplied course material (concrete technology)",
         "course_reference": "owner-supplied course material, concrete technology part 1, pp33-34",
         "project": null,
         "confidence": "site_experience",
@@ -3361,7 +3361,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "concrete technology site-experience reference",
+        "source": "owner-supplied course material (concrete technology)",
         "course_reference": "owner-supplied course material, concrete technology part 1, p35",
         "project": null,
         "confidence": "site_experience",
@@ -3408,7 +3408,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "concrete technology site-experience reference",
+        "source": "owner-supplied course material (concrete technology)",
         "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
         "project": null,
         "confidence": "site_experience",
@@ -3451,7 +3451,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "concrete technology site-experience reference",
+        "source": "owner-supplied course material (concrete technology)",
         "course_reference": "owner-supplied course material, concrete technology part 1, pp36-37",
         "project": null,
         "confidence": "site_experience",
@@ -3930,7 +3930,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "mass concrete site-experience reference",
+        "source": "owner-supplied course material (mass concrete)",
         "course_reference": "owner-supplied course material, mass concrete mock-up results, pp12-13, 15-16, 18-19, 21-22",
         "project": null,
         "confidence": "site_experience",
@@ -4135,7 +4135,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, high-rise structure part 3, p10",
         "project": null,
         "confidence": "site_experience",
@@ -4166,7 +4166,7 @@
       },
       "remediation": [],
       "provenance": {
-        "source": "high-rise construction site-experience reference",
+        "source": "owner-supplied course material (high-rise construction)",
         "course_reference": "owner-supplied course material, high-rise structure part 3, p27 and p30 (general notes)",
         "project": null,
         "confidence": "site_experience",
