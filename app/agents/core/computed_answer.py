@@ -40,6 +40,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "source": "source",
         "rows": "Rows",
         "more_rows": "{n} further rows not listed here",
+        "same_rows": "the same rows as above",
         "working": "Working",
         "no_rows": "no matching rows",
         "not_returned": "did not return",
@@ -67,6 +68,7 @@ LABELS: Dict[str, Dict[str, str]] = {
         "source": "المصدر",
         "rows": "البنود",
         "more_rows": "{n} بنود أخرى غير مدرجة هنا",
+        "same_rows": "البنود نفسها المذكورة أعلاه",
         "working": "طريقة الحساب",
         "no_rows": "لا توجد بنود مطابقة",
         "not_returned": "لم تُرجع نتيجة",
@@ -282,7 +284,12 @@ def _what(st: Any, lab: Dict[str, str]) -> str:
 
 
 def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGUAGE,
-                     declared: Sequence[str] = ()) -> List[str]:
+                     declared: Sequence[str] = (),
+                     printed: Optional[List[Tuple[str, ...]]] = None) -> List[str]:
+    """The lines of one statement. ``printed``: the row sets the answer has
+    already listed (in and out); a row set listed there is not listed again,
+    it is named as the same rows (``same_rows``). Without it every row set
+    is listed."""
     if st.figure is None:
         reason = (reason_text(str(getattr(st, "failure", "") or ""), lab, language, declared)
                   or lab["failed"])
@@ -297,7 +304,13 @@ def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGU
         line += f" ({lab['source']}: {st.source})"
     lines = [line]
     if st.rows:
-        lines.append(f"  {lab['rows']}: " + shown_rows(st.rows, lab))
+        rows = tuple(str(r) for r in st.rows)
+        if printed is not None and rows in printed:
+            lines.append(f"  {lab['rows']}: {lab['same_rows']}")
+        else:
+            lines.append(f"  {lab['rows']}: " + shown_rows(rows, lab))
+            if printed is not None:
+                printed.append(rows)
     if getattr(st, "working", ""):
         lines.append(f"  {lab['working']}: {st.working}")
     return lines
@@ -380,14 +393,16 @@ def render_call(heading: str, statements: Sequence[Any], *, asked: Dict[str, Any
 
 
 def _body_lines(statements: Sequence[Any], lab: Dict[str, str], language: str,
-                declared: Sequence[str]) -> List[str]:
+                declared: Sequence[str],
+                printed: Optional[List[Tuple[str, ...]]] = None) -> List[str]:
     """The stated lines of one call: the parts that returned a figure first,
-    then the parts that did not (each still named), each group in its order."""
+    then the parts that did not (each still named), each group in its order.
+    ``printed``: see ``_statement_lines``."""
     ordered = ([st for st in statements if st.figure is not None]
                + [st for st in statements if st.figure is None])
     lines: List[str] = []
     for st in ordered:
-        lines.extend(_statement_lines(st, lab, language, declared))
+        lines.extend(_statement_lines(st, lab, language, declared, printed))
     return lines
 
 
@@ -486,6 +501,23 @@ def covers(result: Call, other: Call) -> bool:
                for st in result.statements)
 
 
+def _found(call: Call) -> Tuple[Any, ...]:
+    """What a call found: per figure it returned, the measure, the figure,
+    its unit and count, its source and the source rows behind it -- never
+    the words it was matched on. Two calls of one tool that found the same
+    are one result, whatever words each was asked with. A part that did not
+    return is kept whole (its selection and its reason), so a call naming a
+    different missing part is never taken for a repeat."""
+    found = tuple((getattr(st, "basis", ""), str(st.what or ""), st.figure, st.unit,
+                   st.count, st.source, tuple(str(r) for r in (st.rows or ())),
+                   str(getattr(st, "working", "") or ""))
+                  for st in call.statements if st.figure is not None)
+    missing = tuple((getattr(st, "basis", ""), str(st.what or ""),
+                     _stated_selection(st), str(getattr(st, "failure", "") or ""))
+                    for st in call.statements if st.figure is None)
+    return found + missing
+
+
 def _only_zero(call: Call) -> bool:
     """True when every figure the call returned is a count of no rows."""
     figures = [st for st in call.statements if st.figure is not None]
@@ -509,8 +541,10 @@ def unanswered(calls: Sequence[Call]) -> List[Call]:
 def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str:
     """The one answer of a turn from its computed calls.
 
-    Results lead, in call order; a result identical to one already shown
-    (same tool, same stated lines) is not repeated. When one tool shows more
+    Results lead, in call order; a result that found what one already shown
+    found (same tool, same figures over the same rows, ``_found``) is not
+    repeated, whatever words it was asked with, and a row list already
+    listed in the answer is named, not listed again. When one tool shows more
     than one different result, each says what was asked. A call with no
     figure is shown only when no result answered its part (``covers``):
     after the results in one plain line, or -- when no call returned a
@@ -523,14 +557,16 @@ def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str
     # A zero leads only when no call found rows. Beside a figure it is the one
     # plain line at the end, and only for a part no lead already answered.
     zeros = [c for c in calls if c.answered and _only_zero(c)] if leads else []
-    shown: List[Tuple[Call, List[str]]] = []
+    kept: List[Call] = []
     for c in calls:
         if not c.answered or c in zeros:
             continue
-        body = _body_lines(c.statements, lab, language, c.declared)
-        if any(o.tool == c.tool and ob == body for o, ob in shown):
+        if any(o.tool == c.tool and _found(o) == _found(c) for o in kept):
             continue
-        shown.append((c, body))
+        kept.append(c)
+    printed: List[Tuple[str, ...]] = []
+    shown: List[Tuple[Call, List[str]]] = [
+        (c, _body_lines(c.statements, lab, language, c.declared, printed)) for c in kept]
     missing = unanswered(calls)
     if not shown:
         return "\n\n".join(render_call(c.heading, c.statements, asked=c.asked, error=c.error,
