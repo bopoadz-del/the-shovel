@@ -837,23 +837,23 @@ def _close(left: float, right: float) -> bool:
 
 
 def _has_number(text: str, targets: list[float]) -> bool:
-    """True when the text states one of the targets.
-
-    ``_NUMBER_RE`` reads a figure without its sign, and prose states a negative
-    result in more ways than a minus ("-3", "a deduction of 3", "(3)"), so a
-    negative target is matched by its magnitude.
-    """
     if not targets:
         return False
     return any(
-        _close(found, abs(target))
+        _close(found, target)
         for found in _numbers_in(text)
         for target in targets
     )
 
 
 def _answer_commits(answer: str, credit: _CalculatorCredit) -> bool:
-    return _has_number(answer, credit.result_numbers)
+    """True when the answer states a figure the calculator returned.
+
+    ``_NUMBER_RE`` reads a figure without its sign, and prose states a negative
+    result in more ways than a minus ("-3", "a loss of 3", "(3)"), so a
+    negative figure is matched by its magnitude.
+    """
+    return _has_number(answer, [abs(n) for n in credit.result_numbers])
 
 
 def _record_supplies_input(text: str, inputs: dict[str, Any]) -> bool:
