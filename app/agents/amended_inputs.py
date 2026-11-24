@@ -170,3 +170,64 @@ def amendment_note(message: str, earlier_user_messages: Iterable[str]) -> Option
         "not copy an earlier result or table, and do not say a changed input "
         "has no effect unless the working shows it."
     )
+
+
+# --- a reply that is one figure with no words of its own ---------------------
+
+def _bare_figure(message: str) -> Optional[str]:
+    """The one figure ``message`` gives when it gives exactly one, under no
+    label of its own, and asks no question ("1,600,000.", "It was 45."); else
+    None."""
+    if _asks_its_own_question(message):
+        return None
+    figures = list(_FIGURE_RE.finditer(message or ""))
+    if len(figures) != 1 or stated_figures(message):
+        return None
+    return figures[0].group(0).strip()
+
+
+def _worked_question(earlier: list[str]) -> tuple[str, list[StatedFigure]]:
+    """The latest earlier message that states figures of its own and does not
+    only change figures stated before it, with every figure the thread states
+    from there on (the latest value under each label)."""
+    for i in range(len(earlier) - 1, -1, -1):
+        own = stated_figures(earlier[i])
+        if not own:
+            continue
+        prior = [f for m in earlier[:i] for f in stated_figures(m)]
+        if _changes(earlier[i], prior) is not None:
+            continue
+        latest: dict[tuple[str, ...], StatedFigure] = {}
+        for m in earlier[i:]:
+            for f in stated_figures(m):
+                key = next((k for k in latest if _same_label(k, f.label)), f.label)
+                latest[key] = f
+        return earlier[i].strip(), list(latest.values())
+    return "", []
+
+
+def supplied_input_note(message: str, earlier_user_messages: Iterable[str]) -> Optional[str]:
+    """A system note for a reply that is one figure with no label, else None.
+
+    Such a reply names no input, so read alone it can be taken for any figure
+    of the question -- it replaced the stated valuation once. It changes none
+    of the figures the user stated under their own words; what it supplies is
+    whatever the previous reply asked the user for. The note names the
+    question, the figures that stand, and the figure supplied."""
+    figure = _bare_figure(message)
+    if figure is None:
+        return None
+    question, stands = _worked_question([m for m in earlier_user_messages if (m or "").strip()])
+    if not question:
+        return None
+    standing = "; ".join(f"{' '.join(f.label)}: {f.text}" for f in stands)
+    return (
+        f"The user's latest message gives one figure, {figure}, with no label "
+        "of its own. It does not replace any figure the user stated earlier; "
+        f"these stand: {standing}. The question is still the earlier one:\n"
+        f"\"{question}\"\n"
+        "If your previous reply asked the user for an input, this figure is "
+        "that input: work the question again from every stated figure plus "
+        "this one, running the calculation again. If your previous reply asked "
+        "for nothing, ask the user which input this figure is."
+    )

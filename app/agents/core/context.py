@@ -429,9 +429,13 @@ def _build_messages(
     # A follow-up that only changes figures the user stated earlier gets the
     # question it amends and the changed inputs, so it is worked again rather
     # than answered from the earlier (now out of date) answer in the thread.
-    from app.agents.amended_inputs import amendment_note
+    # A reply that is one figure with no label of its own supplies what the
+    # previous reply asked for; it is not read as any stated figure.
+    from app.agents.amended_inputs import amendment_note, supplied_input_note
     from app.agents.runtime import _unwrap_rag_folded_operator_text as _operator
-    note = amendment_note(_operator(user_message), [_operator(a) for a in earlier_asks])
+    asked = _operator(user_message)
+    earlier = [_operator(a) for a in earlier_asks]
+    note = amendment_note(asked, earlier) or supplied_input_note(asked, earlier)
     if note:
         msgs.append({"role": "system", "content": note})
     msgs.append({"role": "user", "content": user_message})
