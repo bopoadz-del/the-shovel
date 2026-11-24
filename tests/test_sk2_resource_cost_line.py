@@ -124,3 +124,29 @@ def test_registry_module_reexports_the_hat_formula():
     from app.lib import construction_formulas_quantities as lib
 
     assert lib.resource_cost_line is resource_cost_line
+
+
+_FIGURE = r"(-?[\d,]*\.?\d+)"
+
+
+def _figures(line: str) -> list[float]:
+    import re
+    return [float(t.replace(",", "")) for t in re.findall(_FIGURE, line)]
+
+
+@pytest.mark.parametrize("q,c,p", LINES + [(2_500_000.0, 1.0, 0.125),
+                                           (1_234_567.0, 0.004, 17.375)])
+def test_printed_figures_multiply_to_the_printed_result(q, c, p):
+    # The working is read as a person reads it: the figures as printed, not
+    # the engine's floats. Each step must reconcile on its own figures.
+    out = resource_cost_line(**_base(q, c, p), waste_percent=7.5)
+    net, waste, cost = (next(w for w in out["working"] if w.startswith(head))
+                        for head in ("Net resource", "With waste", "Resource cost"))
+    a, b, r = _figures(net)
+    assert (a, b) == pytest.approx((q, c)) and r == pytest.approx(a * b)
+    _, n, f, g = _figures(waste)
+    assert n == pytest.approx(r) and g == pytest.approx(n * f)
+    g2, price, total = _figures(cost)
+    assert g2 == pytest.approx(g) and price == pytest.approx(p)
+    assert total == pytest.approx(g2 * price, abs=0.005)
+    assert "e+" not in " ".join(out["working"]).lower()

@@ -5,6 +5,7 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import math
+from decimal import Decimal
 
 
 _STEEL_DENSITY = 7850.0  # kg/m^3
@@ -354,7 +355,13 @@ def resource_line_cost(
 
 
 def _qty(x: float) -> str:
-    return f"{x:,.6g}"
+    """A working figure written out in full: thousands separators, no
+    exponent, and every digit up to ten significant figures, so the figures
+    printed in a step multiply to the result printed after it."""
+    text = format(Decimal(f"{x:.10g}"), ",f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
 
 
 @formula(
@@ -417,7 +424,7 @@ def resource_cost_line(
         working.append(f"With waste {_qty(float(waste_percent))}% = {_qty(net)} x "
                        f"{factor:.6g} = {_qty(gross)}")
     cost = gross * price
-    working.append(f"Resource cost = {_qty(gross)} x price {price:,.2f} = {cost:,.2f}")
+    working.append(f"Resource cost = {_qty(gross)} x price {_qty(price)} = {cost:,.2f}")
     if markup_percent is None:
         markup = None
         total = cost
