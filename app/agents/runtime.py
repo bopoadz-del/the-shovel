@@ -21,6 +21,7 @@ import bisect
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -9931,6 +9932,24 @@ def derivation_mismatches(text: str) -> list[tuple[str, float, float]]:
     return out
 
 
+def _derivation_figure(value: float) -> str:
+    """A computed figure written the way the working writes figures.
+
+    Grouped digits and no exponent: the client reads "1,088,000", never
+    "1.088e+06". Four significant figures, as before, but never fewer than
+    the whole-number digits, and trailing zeros after the point dropped.
+    """
+    magnitude = abs(value)
+    if magnitude == 0 or magnitude != magnitude or magnitude == float("inf"):
+        return f"{value:g}"
+    whole_digits = math.floor(math.log10(magnitude)) + 1
+    decimals = min(max(0, 4 - whole_digits), 12)
+    figure = f"{value:,.{decimals}f}"
+    if "." in figure:
+        figure = figure.rstrip("0").rstrip(".")
+    return figure
+
+
 def _annotate_derivation_mismatches(text: str) -> str:
     """Append a note naming each disagreement. Never edits the figures."""
     if not _derivation_enabled() or not text:
@@ -9947,7 +9966,7 @@ def _annotate_derivation_mismatches(text: str) -> str:
         _LOG.warning(
             "derivation mismatch: %s stated %s, computes to %s", expr, stated, computed,
         )
-        lines.append(f"- `{expr}` is **{computed:,.4g}**, not {stated:,.10g}.")
+        lines.append(f"- `{expr}` is **{_derivation_figure(computed)}**, not {stated:,.10g}.")
     more = len(mismatches) - len(lines)
     if more > 0:
         lines.append(f"- …and {more} more.")
