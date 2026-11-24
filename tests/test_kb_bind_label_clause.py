@@ -148,10 +148,12 @@ def test_a_title_word_is_no_name_word(title, text, expected):
     assert K.bind_entry_variables(entry, text) == expected
 
 
-def test_a_name_word_in_the_title_is_left_out_of_own_words():
+@pytest.mark.parametrize("title, expected", [
+    ("Planned quantity check", {"used_qty": {"used"}, "planned_qty": set()}),
+    ("Used quantity check", {"used_qty": set(), "planned_qty": {"planned"}}),
+    ("Quantity check", {"used_qty": {"used"}, "planned_qty": {"planned"}}),
+])
+def test_a_name_word_in_the_title_is_left_out_of_own_words(title, expected):
     names = ["used_qty", "planned_qty"]
     descs = {"used_qty": "", "planned_qty": ""}
-    assert K._own_words(names, descs, "Planned quantity check")[0] == {
-        "used_qty": {"used"}, "planned_qty": set()}
-    assert K._own_words(names, descs, "Quantity check")[0] == {
-        "used_qty": {"used"}, "planned_qty": {"planned"}}
+    assert K._own_words(names, descs, title)[0] == expected
