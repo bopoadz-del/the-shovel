@@ -47,6 +47,7 @@ EXEMPT = {
     "app/core/rag/vector_store.py::_term_chunk_count": "one term's count; term_chunk_counts passes the scope in vis",
     # one named document, already resolved and access-checked by the caller
     "app/core/rag/vector_store.py::doc_chunk_texts": "reads the doc ids the caller named",
+    "app/core/doc_typing_backfill.py::opening_samples": "reads the hit doc ids a session-scoped search returned",
     "app/core/chunk_bounds_plan.py::document_chunk_bounds": "one named document's chunk lengths",
     "app/core/projects.py::_project_chunk_total": "exclusion plan of one named document (maintenance)",
     # tables that hold no chat-session file
