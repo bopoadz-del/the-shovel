@@ -408,7 +408,14 @@ def _row_doc(row: dict[str, Any]) -> str:
 
 
 def _row_text(row: dict[str, Any]) -> str:
-    return str(row.get("snippet") or row.get("passage") or row.get("text") or "")
+    """The row's retrieved text. A note the platform wrote into the passage
+    (``evidence_plan.is_platform_note``) is not the document's text: it can
+    quote the search item, and so a value the user typed, which would then
+    be read as that document's value."""
+    from app.core.rag.evidence_plan import is_platform_note
+
+    text = str(row.get("snippet") or row.get("passage") or row.get("text") or "")
+    return "\n".join(line for line in text.split("\n") if not is_platform_note(line))
 
 
 #: A passage "sentence" can be a whole table row, a heading path or a page of
