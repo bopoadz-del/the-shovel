@@ -174,3 +174,81 @@ def test_search_with_no_matches_adds_nothing(made_kb, tool_present):
     agent = _Agent([runtime._KB_TOOL], [])
     out, messages = _run(agent, "What end bearing does a lintel need?")
     assert out is None and len(agent.calls) == 1 and len(messages) == 2
+
+
+# --- the two chat entries call it (Grok S671, Rule 4) ----------------------
+# Each entry is driven end to end with a model that calls no tool. The
+# calculator probe and the knowledge probe are replaced by recorders, so the
+# only thing under test is the wiring at the call site: the knowledge probe
+# runs when no calculator was pre-dispatched, and not when one was.
+
+_ASK = "What end bearing does a lintel need?"
+
+
+def _kb_record():
+    return {"name": runtime._KB_TOOL, "ok": True, "predispatched": True,
+            "result": {"status": "success", "matches": _MATCH, "count": 1},
+            "falls_to_retrieval": False}
+
+
+def _calc_record():
+    return {"name": "construction_calc", "ok": True, "predispatched": True,
+            "result": {"status": "success", "result": {"value": 1.0}}}
+
+
+def _wire_entry(monkeypatch, calc_fires):
+    seen = {"kb": [], "calc": []}
+
+    async def calc(agent, messages, project_id, *, operator_text=None, **kw):
+        seen["calc"].append(operator_text)
+        return _calc_record() if calc_fires else None
+
+    async def kb_probe(agent, messages, *, operator_text=None, **kw):
+        seen["kb"].append(operator_text)
+        return _kb_record()
+
+    async def call_llm(_self, messages, api_key, **kwargs):
+        return {"status": "success",
+                "choice": {"message": {"role": "assistant",
+                                       "content": "A lintel bears 150 mm each end."}}}
+
+    monkeypatch.setattr(runtime, "_predispatch_formula_calc", calc)
+    monkeypatch.setattr(runtime, "_predispatch_kb_knowledge", kb_probe)
+    monkeypatch.setattr(runtime.Agent, "_call_llm", call_llm)
+    monkeypatch.setenv("SYNTHESIS_STREAMING", "0")
+    return seen
+
+
+def _entry_agent():
+    return runtime.Agent(name="project-assistant", description="t", system_prompt="t",
+                         allowed_blocks=[runtime._KB_TOOL])
+
+
+@pytest.mark.parametrize("calc_fires, kb_runs", [(False, True), (True, False)])
+def test_chat_entry_consults_knowledge_only_when_no_calculator_ran(
+        monkeypatch, calc_fires, kb_runs):
+    from tests._dev_key import DEV_KEY
+    seen = _wire_entry(monkeypatch, calc_fires)
+    out = asyncio.run(_entry_agent().chat(_ASK, api_key=DEV_KEY, project_id=None))
+    assert seen["calc"] == [_ASK], seen
+    assert seen["kb"] == ([_ASK] if kb_runs else []), seen
+    names = [t.get("name") for t in (out.get("tool_calls") or [])]
+    assert (runtime._KB_TOOL in names) is kb_runs, names
+
+
+@pytest.mark.parametrize("calc_fires, kb_runs", [(False, True), (True, False)])
+def test_stream_entry_consults_knowledge_only_when_no_calculator_ran(
+        monkeypatch, calc_fires, kb_runs):
+    seen = _wire_entry(monkeypatch, calc_fires)
+
+    async def drain():
+        return [ev async for ev in _entry_agent().chat_stream(
+            user_message=_ASK, history=[], project_id=None,
+            conversation_id=None, user_id=None)]
+
+    events = asyncio.run(drain())
+    assert seen["calc"] == [_ASK], seen
+    assert seen["kb"] == ([_ASK] if kb_runs else []), seen
+    results = [e.get("name") for e in events
+               if e.get("type") == "tool_result" and e.get("predispatched")]
+    assert (runtime._KB_TOOL in results) is kb_runs, results
