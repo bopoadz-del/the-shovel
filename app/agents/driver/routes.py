@@ -222,6 +222,15 @@ async def run(args: Dict[str, Any], user_message: str, project_id: Optional[str]
     out = await run_workflow(action, context, session)
     if not out.get("handled"):
         return {"ok": False, "error": f"The workflow {action!r} could not run."}
+    if out.get("built") is False:
+        # The plan ran and staged nothing its renderer reads; the failing
+        # steps say why in the engine's own words. Its "could not build" line
+        # is not a deliverable, so it is not handed to the model as one.
+        return {"ok": False, "workflow": action,
+                "not_built": "; ".join(out.get("unbuilt_reasons") or [])
+                             or "the workflow staged nothing to deliver",
+                "next": "This workflow built nothing from this ask. Work the ask from "
+                        "the figures the user gave, with the calculators."}
     if out.get("status") == "error":
         # The workflow ran and refused: an input it needs is missing. Its own
         # words say which; the documents may hold it.
