@@ -145,6 +145,55 @@
         "description": "Validate a concrete mix design against spec",
         "steps": ["input_design_parameters", "run_mix_design_calc", "check_against_spec", "flag_deviations", "recommend_adjustments"]
       }
+    ],
+    "rules": "records are contemporaneous and factual; a number not given is UNKNOWN, never estimated; acceptance criteria are quoted from the specification in the index or marked UNKNOWN; no individual is blamed in a record; reportable events are flagged for the statutory process first.",
+    "procedures": [
+      {
+        "id": "s1",
+        "title": "Inspection and test plan hold-point check",
+        "purpose": "for an activity, list the hold and witness points and their acceptance criteria, each quoted or UNKNOWN.",
+        "inputs": "the activity; the specification sections in the index; the approved inspection and test plan if supplied; the party required at each point.",
+        "refusals": "inventing an acceptance value; passing a point whose criterion is UNKNOWN.",
+        "steps": [
+          "list the points in sequence",
+          "for each, the criterion quoted with its citation or UNKNOWN",
+          "the witnessing party",
+          "the record required",
+          "the notice period for the witness if the specification states it"
+        ],
+        "output": "the point table, the UNKNOWN list to resolve before works proceed.",
+        "done_when": "every point has a quoted criterion or an explicit UNKNOWN.",
+        "lineage": "site-office ITP practice (dgcruzing, MIT); text is ours."
+      },
+      {
+        "id": "s2",
+        "title": "Non-conformance and punch item record",
+        "purpose": "write a non-conformance or punch item with location, requirement, observation, evidence and the status machine.",
+        "inputs": "location; the requirement breached as quoted with citation; what was observed, by whom, when; photos and references; proposed disposition if any.",
+        "refusals": "stating a cause or a responsible party as fact; closing an item without the record of verification.",
+        "steps": [
+          "requirement (quoted), observation (dated), evidence list, disposition options (rework, repair, use as is, reject) with who approves each, status (open, disposition proposed, approved, closed with verification)"
+        ],
+        "output": "the record in that shape with the status line.",
+        "done_when": "requirement is quoted, observation is dated, status is set.",
+        "lineage": "as S1; text is ours."
+      },
+      {
+        "id": "s3",
+        "title": "Daily site diary",
+        "purpose": "a contemporaneous record of the day from the user's notes, with no estimates.",
+        "inputs": "date; weather as recorded; labour and plant counts as given; activities and locations; deliveries; instructions received; visitors; delays and their cause as stated; incidents.",
+        "refusals": "filling a count that was not given; smoothing a delay cause into a conclusion.",
+        "steps": [
+          "order the notes under the fixed headings",
+          "every number as given or UNKNOWN",
+          "delays as \"stated cause\" with who stated it",
+          "link instructions and RFIs by reference"
+        ],
+        "output": "the diary page with a \"to confirm\" list for UNKNOWN entries.",
+        "done_when": "nothing in the page was invented.",
+        "lineage": "as S1; text is ours."
+      }
     ]
   }
 }

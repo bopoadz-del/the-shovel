@@ -136,6 +136,32 @@ def available_assets() -> dict[str, list[str]]:
     return {asset: list(ccys.keys()) for asset, ccys in _CARD["cards"].items()}
 
 
+def card_source() -> str:
+    """The rate-card's own provenance line, so a priced answer can state it."""
+    meta = _CARD.get("_meta") or {}
+    return str(meta.get("source") or "")
+
+
+def resolve_card(asset_type: Any, currency: Any = None) -> tuple[str | None, str | None]:
+    """Match a caller's asset type and currency to a card in the rate-card.
+
+    Matching ignores case and surrounding blanks, because a chat caller writes
+    "data center" for the card "Data Center". With no currency given, the
+    card's first currency is used, as the price-boq endpoint does. Returns
+    ``(asset, currency)``; either is None when it does not name a card, and the
+    caller reports ``available_assets()`` instead of guessing one."""
+    want_asset = str(asset_type or "").strip().casefold()
+    asset = next((a for a in _CARD["cards"] if a.casefold() == want_asset), None)
+    if asset is None:
+        return None, None
+    currencies = list(_CARD["cards"][asset].keys())
+    want_ccy = str(currency or "").strip().casefold()
+    if not want_ccy:
+        return asset, (currencies[0] if currencies else None)
+    ccy = next((c for c in currencies if c.casefold() == want_ccy), None)
+    return asset, ccy
+
+
 def _build_lookup(asset: str, ccy: str) -> tuple[dict[tuple[str, str], tuple[float, int]],
                                                   dict[str, list[tuple[float, int, str]]],
                                                   list[tuple[float, int, str]]]:

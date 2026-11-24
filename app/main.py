@@ -40,6 +40,7 @@ from app.infra.monitoring import (
     observability_middleware,
     sentry_enabled,
 )
+from app.lib.pm_excel import ScheduleNetworkError
 
 configure_structured_logging()
 logger = logging.getLogger(__name__)
@@ -920,6 +921,16 @@ async def _validation_exception_handler(_request: Request, exc: RequestValidatio
             ]},
         ),
     )
+
+
+@app.exception_handler(ScheduleNetworkError)
+async def _schedule_network_refused(_request: Request, exc: ScheduleNetworkError):
+    # A network the CPM kernel cannot schedule (a loop, an unknown
+    # predecessor, a duration that is not whole working days) is the
+    # caller's input, not a server fault. Every route that writes a schedule
+    # workbook answers it 422 with the kernel's own reason, instead of the
+    # bare 500 of the catch-all below.
+    return JSONResponse(status_code=422, content=_envelope(422, str(exc)))
 
 
 @app.exception_handler(Exception)
