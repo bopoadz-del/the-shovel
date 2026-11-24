@@ -146,6 +146,8 @@ _SMOKE_INPUTS = {
     # Referenced from construction_formulas_additions (post-live-chat Q2/Q12).
     "guardrail_top_rail_height": dict(),
     "calculate_interim_payment": dict(gross_valuation=900_000, retention_percent=10),
+    "interim_payment_to_date": dict(work_value_to_date=1_000_000, retention_percent=5,
+                                    previously_certified=600_000),
     # Additive discipline library — structural steel (dual-code).
     "steel_tension_capacity": dict(gross_area_mm2=3000, net_area_mm2=2550,
                                    fy_mpa=345, fu_mpa=450, code="aci"),

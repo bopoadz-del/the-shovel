@@ -69,6 +69,7 @@ def _money(x: float) -> str:
 @formula(
     owner='commercial',
     display_name='Interim payment to date',
+    standard='FIDIC Clause 14.3',
     description=('Amount due on an interim payment certificate: work done to date plus '
                  'materials on site, less retention at the contract rate up to its limit, '
                  'less the amount certified on earlier certificates.'),

@@ -253,6 +253,16 @@ CASES: Dict[str, Case] = {
         ({"worker_mass_kg": 80, "free_fall_m": 1.8,
           "deceleration_distance_m": "120 cm"},
          {"max_arrest_force_kn": 1.96})),
+    # Totals to date: gross = 1,000,000 work + 50,000 materials = 1,050,000;
+    # retention 5% of the work = 50,000; net = 1,000,000; due = net less the
+    # 600,000 already certified = 400,000. Money and percent carry no
+    # physical unit, so there is no unit case.
+    "interim_payment_to_date": Case(
+        {"work_value_to_date": 1_000_000, "retention_percent": 5,
+         "previously_certified": 600_000, "materials_on_site": 50_000},
+        {"gross_to_date": 1_050_000.0, "retention_to_date": 50_000.0,
+         "net_to_date": 1_000_000.0, "amount_due": 400_000.0},
+        "work_value_to_date", None),
 }
 
 

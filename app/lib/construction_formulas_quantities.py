@@ -472,6 +472,7 @@ FW_ROUTE_NAMES = frozenset({
     "generate_doc_number",
     "grout_pressure_calc",
     "guardrail_top_rail_height",
+    "interim_payment_to_date",
     "interior_finishes_takeoff",
     "laser_scan_accuracy",
     "leed_points_estimate",
