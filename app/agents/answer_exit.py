@@ -1234,6 +1234,44 @@ _MACHINERY_TERM_RE = re.compile(
 )
 
 
+#: Words that need a noun after them: a determiner or a preposition. When the
+#: removed term was that noun, deleting it alone would leave "the returns
+#: them" or "out of the for you"; the term is then replaced by the reader's
+#: word for what the answer read, so the sentence keeps its noun.
+_NOUN_LEAD_DETS = ("the", "a", "an", "this", "that", "these", "those", "its",
+                   "our", "my", "your", "their", "each", "every", "any", "no", "some")
+_NOUN_LEAD_PREPS = ("in", "on", "at", "of", "from", "for", "to", "by", "with", "within",
+                    "into", "onto", "about", "via", "per", "across", "among", "between",
+                    "through", "under", "over", "after", "before", "during", "without", "against")
+_MACHINERY_LEAD_RE = re.compile(
+    r"(?P<lead>\b(?P<lw>" + "|".join(_NOUN_LEAD_DETS + _NOUN_LEAD_PREPS) + r")[ \t]+)?"
+    r"(?P<term>" + _MACHINERY_TERM_RE.pattern + r")",
+    re.IGNORECASE,
+)
+
+
+def _term_out(m: re.Match[str], tier: str) -> str:
+    """One machinery term out of the text. Alone it is deleted; as the noun
+    of a determiner or preposition it becomes the reader's word, so the
+    words before it still have their noun."""
+    term = m.group("term")
+    lead_word = m.group("lw")
+    if not lead_word or term.lower() == "indexed":
+        return (m.group("lead") or "") + " "
+    plural = term.lower().endswith("s")
+    if tier == "general":
+        noun = "reference documents" if plural else "reference material"
+    else:
+        noun = "project document sections" if plural else "project material"
+    word = lead_word.lower()
+    if word in _NOUN_LEAD_DETS:
+        det = {"a": "the", "an": "the"}.get(word, word)
+        if noun.endswith("material") and det in ("these", "those"):
+            det = "this" if det == "these" else "that"
+        return f"{_cap_like(lead_word, det)} {noun}"
+    return f"{m.group('lead')}the {noun}"
+
+
 def _cap_like(original: str, new: str) -> str:
     return new[:1].upper() + new[1:] if original[:1].isupper() else new
 
@@ -1309,7 +1347,7 @@ def _machine_wording(text: str, tier: str = "project") -> str:
                                          f"inputs {m.group('post')}")),
         text,
     )
-    return _MACHINERY_TERM_RE.sub(" ", text)
+    return _MACHINERY_LEAD_RE.sub(lambda m: _term_out(m, tier), text)
 
 
 # ── Step names and tool-call mechanics ───────────────────────────────────────
