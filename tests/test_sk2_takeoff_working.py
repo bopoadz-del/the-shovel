@@ -200,3 +200,11 @@ def test_a_negative_dimension_is_refused_never_computed(fn, kwargs):
     assert "error" in r, r
     assert ">= 0" in r["error"]
     assert not any(k.endswith(("_m3", "_m2")) for k in r), r
+
+
+# A calculator reply that is not a result mapping (a refusal string, a list,
+# nothing) yields no chat line, rather than a crash or an invented figure.
+# Two inputs: the type guard is the line's first rule.
+@pytest.mark.parametrize("reply", [None, ["volume_m3", 945.0]])
+def test_concrete_chat_line_is_empty_for_a_reply_that_is_not_a_result(reply):
+    assert format_concrete_volume_line(reply) == ""
