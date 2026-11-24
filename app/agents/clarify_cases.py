@@ -540,8 +540,12 @@ def clarifying_question(question: str, draft: str, cases: list[Case]) -> str | N
         return None
 
     # Bound 5: list only the cases actually found, each with its source.
+    # One value = one case (the collapse above): a value the evidence repeats
+    # is one option, named by its first appearance, so the question offers
+    # each distinct answer once.
     options = []
-    for c in unique:
+    for key in order:
+        c = groups[key][0]
         if c.subject and _norm(c.subject) != _norm(c.value):
             options.append(f"{c.value} in {c.source} ({c.subject})")
         else:
