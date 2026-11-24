@@ -26,7 +26,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents import answer_contract
-from app.agents.evidence_conflicts import asserts_precedence, detect
+from app.agents.evidence_conflicts import _governor_names, asserts_precedence, detect, winner_backed
 
 _LINE = "The documents differ on this:"
 _NONE = "No document states which of them governs."
@@ -199,3 +199,27 @@ def test_a_passive_unbacked_winner_brings_the_conflict_line(question, a, b, told
 ])
 def test_the_winner_reading(sentence, names):
     assert asserts_precedence(sentence) is names
+
+
+# ── the governor reading itself ─────────────────────────────────────────────
+# Read directly: ``detect`` swallows its own errors and reports no conflict,
+# so through it a crash here would look like "backed, left as written".
+
+@pytest.mark.parametrize("sentence, names", [
+    ("Kestrel Code KC-41 governs the cover [1].", {"code", "kc-41"}),  # the first word is never a name
+    ("The blinding grade is governed by Annex T-7 [2].", {"annex", "t-7"}),
+    ("The drawing detail governs the 75 mm dimension.", set()),
+])
+def test_the_governor_names_a_winner_sentence_gives(sentence, names):
+    assert _governor_names(sentence, {"cover", "blind", "grad"}) == names
+
+
+@pytest.mark.parametrize("passage, backed", [
+    ("Cover to the wall shall be as per Kestrel Code KC-41.", True),
+    ("Cover to the wall shall be governed by Kestrel Code KC-41.", True),
+    ("Laps shall be as per Kestrel Code KC-41.", False),
+    ("Cover to the wall is 40 mm; Kestrel Code KC-41 applies to laps.", False),
+])
+def test_winner_backed_reads_the_passage_clause_about_the_thing(passage, backed):
+    rows = [{"doc_id": "d0", "doc_name": "Ashby Method Statement.pdf", "snippet": passage}]
+    assert winner_backed("Kestrel Code KC-41 governs the cover [1].", rows, {"cover", "wall"}) is backed
