@@ -470,3 +470,40 @@ def test_cut_item_keeps_a_page_or_clause_reference_whole(text, lead):
 def test_a_unit_after_a_figure_still_ends_a_sentence(line, first):
     assert answer_contract._sentences(line)[0].strip() == first
 
+
+# ── mutation gate: each new rule changes an answer ──────────────────────────
+
+@pytest.mark.parametrize("line,count", [
+    ("Which page is it on? 12 piles are shown.", 2),
+    ("The list ends here... 3 more items follow.", 2),
+])
+def test_only_a_single_point_can_join_a_reference(line, count):
+    # A question mark or an ellipsis before a number still ends a sentence.
+    assert len(answer_contract._sentences(line)) == count
+
+
+@pytest.mark.parametrize("text,lead", [
+    ("Here are the 3 slab types.\n\nS1 is a flat slab.\n\nS2 is a ribbed slab.",
+     "Here are the 3 slab types."),
+    ("Below is the ramp gradient [1].\n\nThe ramp is clad in granite.",
+     "Below is the ramp gradient [1]."),
+])
+def test_a_forward_line_that_states_a_figure_or_cites_leads_alone(text, lead):
+    rows = [dict(_DOC_ROW)]
+    assert _apply(text, sources=rows).text.startswith(lead)
+    assert "\n\n" not in _apply(text, sources=rows).text
+
+
+@pytest.mark.parametrize("text,lead,details", [
+    ("The schedule lists 2 slab types:\n\n- S1 is 200 mm. It is flat.\n- S2 is 250 mm.\n\nJoints are sealed.",
+     "The schedule lists 2 slab types:\n\n- S1 is 200 mm.\n- S2 is 250 mm.",
+     "- S1 is 200 mm. It is flat.\n\nJoints are sealed."),
+    ("The podium carries 3 loads, as stated in the brief:\n\nDead load is 6 kPa.\n\nWind is per the code.",
+     "The podium carries 3 loads, as stated in the brief:\n\nDead load is 6 kPa.",
+     "Wind is per the code."),
+])
+def test_a_stated_line_ending_on_a_colon_takes_what_it_introduces(text, lead, details):
+    done = _apply(text)
+    assert done.text == lead
+    assert done.details == details
+
