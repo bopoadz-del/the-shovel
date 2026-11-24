@@ -49,6 +49,17 @@ def test_a_tag_no_row_backs_leaves_the_text_and_adds_no_entry(text, kept):
     assert not out.citations
 
 
+@pytest.mark.parametrize("text, rows", [
+    ("The span is 18 m [source: 12].", [{"doc_name": "Deck Sheet 12 Layout.pdf", "page_or_section": "p. 1"}]),
+    ("The year is set [source: 2031].", [{"doc_name": "Survey Report 2031.pdf", "page_or_section": "p. 4"}]),
+])
+def test_a_number_is_not_a_name_even_when_one_file_name_holds_it(text, rows):
+    out = answer_contract.apply(text, sources=rows)
+    assert "source:" not in out.text.lower()
+    assert "[1]" not in out.text
+    assert not out.citations
+
+
 @pytest.mark.parametrize("text", [
     "Duty is 40 l/s [source: Pump House Notes].",
     "Duty is 45 l/s [source: Pump House Notes, p. 3].",
