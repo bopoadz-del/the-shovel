@@ -24,8 +24,10 @@ def test_dewatering_uplift_check_cannot_stop():
     assert r.fos == pytest.approx(0.380, abs=0.001)
     assert r.can_stop is False
     assert r.needs_tension_piles is True
-    # min floors: ceil((23*1.25 - 5.0)/0.75) = ceil(31.67) = 32
-    assert r.min_floors_for_stop == 32
+    # min floors at the course's required FOS 1.2 (foundation.uplift_fos,
+    # roads and earthworks section 1 p10): ceil((23*1.2 - 5.0)/0.75)
+    # = ceil(30.13) = 31
+    assert r.min_floors_for_stop == 31
 
 
 def test_diaphragm_wall_volume_with_tremie_waste():

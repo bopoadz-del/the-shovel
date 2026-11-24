@@ -13,6 +13,38 @@ from app.agents.base.formulas.construction_formulas_shared import (  # noqa: F40
 )
 
 
+def _course_constant(entry_id: str, field_path: str, unit: str, meaning: str) -> Constant:
+    """A value the owner's course fixes, read from its encoded knowledge entry.
+
+    The course governs where it and a calculator differ (owner ruling, 15 Nov):
+    the calculator takes the number from the entry (``field_path`` is a dotted
+    path, e.g. ``thresholds.min_fos``), and the entry's course reference is the
+    constant's source, so the result names where the number comes from. No
+    course value is copied into this module; a missing entry or field raises,
+    never falls back to a number of its own.
+    """
+    from app.blocks import _knowledge as kb
+
+    entry = kb.get_rule(entry_id)
+    if entry is None:
+        raise LookupError(f"course knowledge entry {entry_id!r} not found")
+    node: Any = entry
+    for key in field_path.split("."):
+        if not isinstance(node, dict) or key not in node:
+            raise LookupError(f"course knowledge entry {entry_id!r} has no {field_path!r}")
+        node = node[key]
+    provenance = entry.get("provenance") or {}
+    source = provenance.get("course_reference") or provenance.get("source") or None
+    return Constant(float(node), unit, meaning, source=source)
+
+
+_UPLIFT_K = Constants(
+    required_fos=_course_constant(
+        "foundation.uplift_fos", "thresholds.min_fos", "ratio",
+        "minimum factor of safety against groundwater uplift"),
+)
+
+
 @dataclass
 class DewateringResult:
     uplift_force_t_m2: float
@@ -45,9 +77,11 @@ def dewatering_uplift_check(
     floor_thickness: float = 0.3,
     concrete_unit_weight: float = 2.5,
     water_unit_weight: float = 1.0,
-    required_fos: float = 1.25,
+    required_fos: float = _UPLIFT_K.declared()["required_fos"].value,
 ) -> DewateringResult:
-    """Check if dewatering can stop — FOS = counter-weight / uplift >= 1.25."""
+    """Check if dewatering can stop: FOS = counter-weight / uplift >= the
+    required factor of safety. When none is given, the course's minimum
+    applies (read from its knowledge entry) and the result names the course."""
     if water_depth < 0:
         raise ValueError("water_depth must be >= 0")
     if raft_thickness < 0 or floor_count < 0 or floor_thickness < 0:
@@ -65,6 +99,9 @@ def dewatering_uplift_check(
         f"Counter = {raft_weight:.3f} + {floor_weight:.3f} = {counter_weight:.3f} T/m2",
         f"FOS = {fos:.3f} (required: {required_fos})",
     ]
+    course = _UPLIFT_K.declared()["required_fos"]
+    if course.source and math.isclose(required_fos, course.value):
+        notes.append(f"Required factor of safety {course.value:g}: {course.source}")
     can_stop = fos >= required_fos
     if can_stop:
         notes.append(f"OK - dewatering CAN stop at {floor_count} floors")

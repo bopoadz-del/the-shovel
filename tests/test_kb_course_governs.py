@@ -199,15 +199,8 @@ def test_course_value_is_read_from_the_entry(entry_id, field_path, course_figure
     assert entry["provenance"]["course_reference"].lower().startswith(COURSE_PREFIX)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SUSPECTED DEFECT (owner ruling: the course governs): the dewatering "
-        "uplift calculator's built-in required factor of safety is 1.25; the "
-        "course entry foundation.uplift_fos says 1.2. The calculator is in "
-        "app/agents/hats/design (SHOVEL's scope), not fixed here."
-    ),
-)
+# Owner ruling (15 Nov): the course governs. The calculator reads its
+# required factor of safety from the course entry, so these hold.
 @pytest.mark.parametrize(
     "entry_id, field_path",
     [
@@ -256,14 +249,7 @@ def test_uplift_calculator_matches_course_when_given_the_course_fos(head_m, raft
     ) == floors
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SUSPECTED DEFECT (same as above): with no factor of safety given, the "
-        "calculator applies 1.25 and returns 13 / 20 floors instead of the "
-        "course's 12 / 19."
-    ),
-)
+# With no factor of safety given, the calculator applies the course's 1.2.
 @pytest.mark.parametrize(
     "head_m, raft_m, floor_equiv_m, floors",
     [
@@ -280,3 +266,81 @@ def test_uplift_calculator_unstated_fos_gives_the_course_answer(head_m, raft_m, 
         concrete_unit_weight=2.5,
         water_unit_weight=1.0,
     ) == floors
+
+
+# ---------------------------------------------------------------------------
+# 3. the calculator's course value is read from the entry, with its source
+# ---------------------------------------------------------------------------
+
+
+def _write_kb(tmp_path, entries):
+    import json
+
+    path = tmp_path / "kb.json"
+    path.write_text(json.dumps({"schema_version": "1", "kb_version": "t", "entries": entries}),
+                    encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    "entries, value, source",
+    [
+        # course entry: value read from the dotted path, the course reference is the source
+        (
+            [{"id": "x.fos", "thresholds": {"min_fos": 1.3},
+              "provenance": {"course_reference": "owner-supplied course material, part 9 p4",
+                             "source": "site notes"}}],
+            1.3,
+            "owner-supplied course material, part 9 p4",
+        ),
+        # no course reference: the entry's own source is named instead
+        (
+            [{"id": "x.fos", "thresholds": {"min_fos": 1.5},
+              "provenance": {"course_reference": None, "source": "site notes"}}],
+            1.5,
+            "site notes",
+        ),
+    ],
+)
+def test_course_constant_reads_value_and_source(tmp_path, monkeypatch, entries, value, source):
+    from app.agents.hats.design.formulas.construction_formulas import _course_constant
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(tmp_path, entries))
+    c = _course_constant("x.fos", "thresholds.min_fos", "ratio", "minimum FOS")
+    assert (c.value, c.source) == (pytest.approx(value), source)
+
+
+@pytest.mark.parametrize(
+    "entry_id, field_path",
+    [
+        ("x.absent", "thresholds.min_fos"),  # no such entry
+        ("x.fos", "thresholds.max_fos"),  # entry without that field
+    ],
+)
+def test_course_constant_missing_raises_never_guesses(tmp_path, monkeypatch, entry_id, field_path):
+    from app.agents.hats.design.formulas.construction_formulas import _course_constant
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(
+        tmp_path, [{"id": "x.fos", "thresholds": {"min_fos": 1.3}, "provenance": {}}]))
+    with pytest.raises(LookupError):
+        _course_constant(entry_id, field_path, "ratio", "minimum FOS")
+
+
+def _course_note(**kw):
+    out = dewatering_uplift_check(water_depth=10, raft_thickness=1.0, floor_count=2, **kw)
+    notes = out.notes if hasattr(out, "notes") else out["notes"]
+    reference = kb.get_rule("foundation.uplift_fos")["provenance"]["course_reference"]
+    return [n for n in notes if reference in n]
+
+
+@pytest.mark.parametrize(
+    "kwargs, named",
+    [
+        # no factor given: the course's value applies and the course is named
+        ({}, True),
+        # the caller's own factor (1.5, not the course's): no course is named
+        ({"required_fos": 1.5}, False),
+    ],
+)
+def test_uplift_result_names_the_course_only_when_its_value_applies(kwargs, named):
+    assert bool(_course_note(**kwargs)) is named
