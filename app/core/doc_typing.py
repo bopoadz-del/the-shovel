@@ -39,8 +39,10 @@ _PATH_KEYS = ("drive_path", "local_drive_path", "source_path")
 #: A generated knowledge copy declares, on a line of its own, the encoded
 #: table it was written from (``scripts/kb_from_code.py`` writes it). The
 #: copy's values are that table's values, not a separate document's: a
-#: conflict line must be able to say so.
-_GENERATED_FROM = re.compile(r"^\s*Generated from `([^`\n]+)`", re.MULTILINE)
+#: conflict line must be able to say so. The line may open with markdown
+#: emphasis (``_Generated from ...`` renders as italics): the marker is
+#: typography, not words, so it does not change what the line declares.
+_GENERATED_FROM = re.compile(r"^\s*[_*]{0,3}Generated from `([^`\n]+)`", re.MULTILINE)
 
 
 def declared_origin(content_sample: str | None) -> dict[str, str | None]:

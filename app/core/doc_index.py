@@ -5074,6 +5074,14 @@ def _row_document_fields(doc_id: str, kept: list[Any]) -> dict[str, Any]:
         value = (doc.get(key) or "").strip() if isinstance(doc.get(key), str) else ""
         if value:
             out[key] = value
+    # A copy generated from an encoded table carries that declaration (stored
+    # at seed time from the copy's own text): its values are the table's, so
+    # a reader comparing sources must not count it as a separate document.
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    declared = meta.get("declared_origin") if isinstance(meta.get("declared_origin"), dict) else {}
+    source = str(declared.get("source") or "").strip()
+    if declared.get("kind") == "encoded_table" and source:
+        out["declared_origin"] = {"kind": "encoded_table", "source": source}
     return out
 
 

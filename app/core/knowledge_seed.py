@@ -51,6 +51,38 @@ def _heal_gk_share(store, project_id: str) -> None:
         )
 
 
+def _declared_origin_metadata(raw: bytes) -> dict:
+    """The metadata a knowledge file's own text declares about its origin.
+
+    A generated copy names the encoded table it was written from (see
+    ``doc_typing.declared_origin``); that declaration is stored on the
+    document so a search row can say the values are the table's, not a
+    separate document's. A file that declares nothing stores nothing.
+    """
+    from app.core.doc_typing import declared_origin
+
+    origin = declared_origin(raw.decode("utf-8", "replace"))
+    if origin.get("kind") != "encoded_table":
+        return {}
+    return {"declared_origin": origin}
+
+
+def _heal_declared_origin(store, doc: dict, meta: dict) -> None:
+    """Bring an unchanged, already-seeded document's stored declaration in
+    line with its text. Never raises."""
+    if not meta:
+        return
+    stored = (doc.get("metadata") or {}).get("declared_origin")
+    if stored == meta["declared_origin"]:
+        return
+    try:
+        store.update_document_metadata(doc["id"], meta)
+    except Exception as e:  # noqa: BLE001 — heal must never break boot
+        logger.warning(
+            "knowledge seed: declared-origin heal on '%s' failed: %s", doc.get("id"), e
+        )
+
+
 def seed_knowledge() -> None:
     """Ingest docs/knowledge/*.md into the GK project. Idempotent; never raises."""
     try:
@@ -108,9 +140,13 @@ def seed_knowledge() -> None:
                 # previously seeded coarse.
                 sha = hashlib.sha256(raw + b"::chunker=markdown").hexdigest()
                 name = os.path.basename(path)
+                meta = _declared_origin_metadata(raw)
 
-                # Exact content already present -> nothing to do (idempotent).
-                if store.find_document_by_sha(gk, sha):
+                # Exact content already present -> nothing to re-index
+                # (idempotent); only its stored declaration is brought in line.
+                existing = store.find_document_by_sha(gk, sha)
+                if existing:
+                    _heal_declared_origin(store, existing, meta)
                     continue
 
                 # New or changed: drop any stale doc(s) with the same filename
@@ -131,6 +167,7 @@ def seed_knowledge() -> None:
                 file_crypto.write_document(filepath, raw)
                 doc = store.add_document(
                     gk, name, stored_as, filepath, len(raw), content_sha256=sha,
+                    metadata=meta or None,
                 )
                 doc_index.index_document(gk, doc["id"], chunker="markdown")
                 seeded += 1
