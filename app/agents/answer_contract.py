@@ -615,7 +615,39 @@ def _participle_np(m: re.Match) -> str:
     return head[0].upper() + head[1:] if m.group(0)[0].isupper() else head
 
 
+#: The search verb in each of its forms, and the reader's verb for it.
+_SEARCH_VERB = r"(?P<verb>retriev(?:e|es|ed|ing)|fetch(?:es|ed|ing)?)"
+_READER_VERB = {"retrieve": "find", "retrieves": "finds", "retrieved": "found", "retrieving": "finding",
+                "fetch": "find", "fetches": "finds", "fetched": "found", "fetching": "finding"}
+#: Verb use with the answer itself as the agent: "what I retrieved", "I could
+#: not retrieve", "we have fetched". The speaker of an answer acts on nothing
+#: but the documents, so the verb is the search, whatever its object.
+_SPEAKER_VERB_RE = re.compile(
+    r"\b(?:I|we)\s+(?:(?:could|can|cannot|can't|couldn't|did|didn't|do|don't|was|wasn't|were|have|haven't|has|"
+    r"had|hadn't|am|been|not|never|only|also|just|then|able|unable|to)\s+){0,4}" + _SEARCH_VERB + r"\b",
+    re.IGNORECASE,
+)
+#: Passive use in a sentence that reports an absence: "No rate was
+#: retrieved", "nothing was fetched". Its subject is what the search did not
+#: bring back; a passive with any other subject ("the core sample was
+#: retrieved") is about the works and stays.
+_ABSENT_PASSIVE_RE = re.compile(
+    r"\b(?:no|nothing|none)\b[^.;:!?\n\[\]]{0,80}?\b(?:was|were|is|are|been|be)\s+(?:\w+ly\s+)?"
+    + _SEARCH_VERB + r"\b",
+    re.IGNORECASE,
+)
+
+
+def _reader_verb(m: re.Match) -> str:
+    verb = m.group("verb")
+    new = _READER_VERB[verb.lower()]
+    new = new[0].upper() + new[1:] if verb[0].isupper() else new
+    return m.group(0)[: m.start("verb") - m.start()] + new
+
+
 def _rewrite_search_words(segment: str) -> str:
+    segment = _SPEAKER_VERB_RE.sub(_reader_verb, segment)
+    segment = _ABSENT_PASSIVE_RE.sub(_reader_verb, segment)
     segment = _PARTICIPLE_FROM_RE.sub("read", segment)
     return _PARTICIPLE_NP_RE.sub(lambda m: _participle_np(m), segment)
 
