@@ -271,6 +271,81 @@
      "coordinate_with_delivery"
     ]
    }
+  ],
+  "rules": "bids are recorded as submitted and never corrected; a missing line is MISSING or NOT PRICED, never filled; no normalisation unless the user supplies the adjustment rule; the hat compares and proposes, a person decides; no award recommendation unless asked, and then labelled as a recommendation, not an award.",
+  "procedures": [
+   {
+    "id": "p1",
+    "title": "Tender comparison matrix",
+    "purpose": "an apples-to-apples matrix of bidder returns against the issued documents, highlighting gaps, without picking a winner.",
+    "inputs": "package name; issued documents (drawings revision, specification, programme, bill); each bidder's return (price schedule, cover letter, qualifications); closing date; the client's evaluation criteria if any.",
+    "refusals": "building the spine from the cheapest bidder; silently adding numbers; hiding a qualification in a footnote; sending anything to a bidder.",
+    "steps": [
+     "build the common spine from the issued bill or work breakdown",
+     "one column per bidder",
+     "rows for lump sum, key bill lines, provisional sums, prime-cost items, preliminaries, inclusions, exclusions, programme weeks, start constraints, insurances, bond or security, validity, qualifications, non-conformances",
+     "flag non-conforming returns at the top (late, wrong specification, missing schedule)",
+     "money as stated in the return's currency with tax treatment noted",
+     "end with \"gaps to close before award\" as questions"
+    ],
+    "output": "the matrix, the non-conformance list, the gap questions, the line \"HOLD POINT, not an award recommendation\".",
+    "done_when": "every missing line is visible, qualifications are on the matrix, no winner is selected by default.",
+    "lineage": "site-office tender comparison practice (dgcruzing, MIT); text is ours."
+   },
+   {
+    "id": "p2",
+    "title": "Bid coverage and completeness",
+    "purpose": "map every bid against every requirement of the tender with an explicit status and an evidence note.",
+    "inputs": "the requirements register built from the tender documents (never from a bid); each bid's text and schedules.",
+    "refusals": "scoring before every requirement row has an evidence reference or an explicit MISSING; inferring that silence means inclusion.",
+    "steps": [
+     "for each requirement and bidder set one status: INCLUDED (explicit), EXCLUDED (explicit), SILENT (not addressed), PARTIAL (with limitation), DIFFERENT (substitution offered)",
+     "attach a one-line evidence note citing the bid page",
+     "run the inventory both ways so extra bid items with no requirement are listed as EXTRA",
+     "flag every SILENT on a mandatory requirement"
+    ],
+    "output": "the coverage grid, the EXTRA list, the SILENT-on-mandatory list, the per-bid clarification questions.",
+    "done_when": "no cell is empty, every mandatory SILENT is flagged.",
+    "lineage": "the five-status coverage model of a public MIT project-engineer set; text is ours."
+   },
+   {
+    "id": "p3",
+    "title": "Responsiveness and defects",
+    "purpose": "separate curable from non-curable defects in a bid before any ranking.",
+    "inputs": "the bid, the tender's responsiveness rules (addenda, validity, bond, forms).",
+    "refusals": "curing a defect by assumption; presenting a derived figure as read.",
+    "steps": [
+     "curable defects (addenda not acknowledged, an illegible line that reconciles to the stated total, validity shorter than required, bond not mentioned where required) keep the bid in the ranking with each cure as a named condition",
+     "a figure derived for an illegible line is allowed only when it reconciles exactly to the stated total and is labelled \"derived, confirm\"",
+     "non-curable defects (budgetary pricing only, a stale drawing basis not reconfirmed, mandatory scope the bidder will not carry) make the bid \"not awardable as submitted\", ranked but not recommended"
+    ],
+    "output": "per bid, the defect list with class and condition, the awardability line.",
+    "done_when": "every defect is classed, every cure is a named condition.",
+    "lineage": "as P2; text is ours."
+   },
+   {
+    "id": "p4",
+    "title": "Gates before scores",
+    "purpose": "apply pass or fail gates before any weighted scoring, and score only with user-supplied weights and anchors.",
+    "inputs": "the mandatory conditions (gates) from the tender; the scoring criteria, weights and anchors as supplied; the evidence per bidder.",
+    "refusals": "scoring a bidder who fails a gate; proposing weights or anchors; computing totals outside the formula executor.",
+    "steps": [
+     "evaluate each gate as PASS, FAIL or UNRESOLVED with evidence",
+     "stop scoring for any UNRESOLVED gate and list what resolves it",
+     "for passing bidders, record each score with its anchor and the evidence page",
+     "mark each input as supplied, proposed or approved",
+     "compute weighted totals in the executor and show the working",
+     "run a weight-sensitivity check only if the user asks"
+    ],
+    "output": "gate table, score table with provenance, totals with working, the sensitivity note.",
+    "done_when": "no score exists for a failed or unresolved gate, every score has an anchor and a source.",
+    "lineage": "gates-then-weights practice from a consulting method library (Apache-2.0, credited in NOTICE); text is ours.",
+    "attribution": {
+     "licence": "Apache-2.0",
+     "credit": "see NOTICE",
+     "notice": "Apache-2.0 NOTICE retained"
+    }
+   }
   ]
  }
 }
