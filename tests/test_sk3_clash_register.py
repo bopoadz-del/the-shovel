@@ -47,8 +47,9 @@ def test_no_table_leaves_every_clash_unassigned(clashes):
         assert row["status"] == "open"
 
 
-def test_empty_table_is_given_but_matches_nothing():
-    reg = build_clash_register([_clash("pipes", "beams")], [])
+@pytest.mark.parametrize("cat_a,cat_b", [("pipes", "beams"), ("ducts", "walls")])
+def test_empty_table_is_given_but_matches_nothing(cat_a, cat_b):
+    reg = build_clash_register([_clash(cat_a, cat_b)], [])
     assert reg["table_given"] is True
     assert _only(reg)["reason"] == "no table row matches this clash"
 
@@ -85,20 +86,25 @@ def test_row_without_sides_matches_any_clash(cat_a, cat_b):
     assert _only(build_clash_register([_clash(cat_a, cat_b)], table))["strategy"] == "catch-all-q"
 
 
-def test_one_sided_row_needs_that_side_present():
-    table = [{"b": {"category": "ducts"}, "strategy": "dz"}]
-    reg = build_clash_register([_clash("ducts", "beams"), _clash("pipes", "beams")], table)
-    assert [r["strategy"] for r in reg["rows"]] == ["dz", None]
+@pytest.mark.parametrize("side,clashes,expected", [
+    ("b", [("ducts", "beams"), ("pipes", "beams")], ["dz", None]),
+    ("a", [("walls", "ducts"), ("walls", "slabs")], ["dz", None]),
+])
+def test_one_sided_row_needs_that_side_present(side, clashes, expected):
+    table = [{side: {"category": "ducts"}, "strategy": "dz"}]
+    reg = build_clash_register([_clash(a, b) for a, b in clashes], table)
+    assert [r["strategy"] for r in reg["rows"]] == expected
 
 
-def test_name_duplicate_clash_uses_its_shared_category_on_both_sides():
+@pytest.mark.parametrize("other_side,expected", [("walls", "merge-q"), ("pipes", None)])
+def test_name_duplicate_clash_uses_its_shared_category_on_both_sides(other_side, expected):
     dup = {"type": "name_duplicate", "element_a": "x", "element_b": "y",
            "category": "walls", "severity": "warning"}
-    hit = [{"a": {"category": "walls"}, "b": {"category": "walls"}, "strategy": "merge-q"}]
-    miss = [{"a": {"category": "walls"}, "b": {"category": "pipes"}, "strategy": "merge-q"}]
-    assert _only(build_clash_register([dup], hit))["strategy"] == "merge-q"
-    assert _only(build_clash_register([dup], miss))["strategy"] is None
-    assert _only(build_clash_register([dup], hit))["overlap_mm"] is None
+    table = [{"a": {"category": "walls"}, "b": {"category": other_side}, "strategy": "merge-q"}]
+    row = _only(build_clash_register([dup], table))
+    assert row["strategy"] == expected
+    assert row["category_a"] == row["category_b"] == "walls"
+    assert row["overlap_mm"] is None
 
 
 # --- specificity --------------------------------------------------------------
@@ -115,42 +121,48 @@ def test_ifc_type_row_beats_category_row_whatever_the_order(order):
     assert row["strategy"] == "special-q"
 
 
-def test_ifc_type_row_does_not_apply_to_another_type():
+@pytest.mark.parametrize("ifc_type", ["IfcPipeFitting", None])
+def test_ifc_type_row_does_not_apply_to_another_type(ifc_type):
     table = [
         {"a": {"category": "pipes"}, "strategy": "general-q"},
         {"a": {"ifc_type": "IfcPipeSegment"}, "strategy": "special-q"},
     ]
-    row = _only(build_clash_register([_clash("pipes", "beams", "IfcPipeFitting")], table))
+    row = _only(build_clash_register([_clash("pipes", "beams", ifc_type)], table))
     assert row["strategy"] == "general-q"
 
 
-def test_band_row_beats_same_selector_row_without_band():
+@pytest.mark.parametrize("overlap,expected", [(10, "shallow-q"), (80, "plain-q")])
+def test_band_row_beats_same_selector_row_without_band(overlap, expected):
     table = [
         {"a": {"category": "pipes"}, "strategy": "plain-q"},
         {"a": {"category": "pipes"}, "max_overlap_mm": 50, "strategy": "shallow-q"},
     ]
-    reg = build_clash_register(
-        [_clash("pipes", "beams", overlap=10), _clash("pipes", "beams", overlap=80)], table)
-    assert [r["strategy"] for r in reg["rows"]] == ["shallow-q", "plain-q"]
+    reg = build_clash_register([_clash("pipes", "beams", overlap=overlap)], table)
+    assert _only(reg)["strategy"] == expected
 
 
-def test_tied_rows_with_different_strategies_assign_nothing():
-    table = [
-        {"a": {"category": "pipes"}, "strategy": "one-q"},
-        {"b": {"category": "beams"}, "strategy": "two-q"},
-    ]
-    row = _only(build_clash_register([_clash("pipes", "beams")], table))
+@pytest.mark.parametrize("table,tied", [
+    ([{"a": {"category": "pipes"}, "strategy": "one-q"},
+      {"b": {"category": "beams"}, "strategy": "two-q"}], [0, 1]),
+    ([{"strategy": "loose-q"},
+      {"a": {"ifc_type": "IfcBeam"}, "strategy": "one-q"},
+      {"a": {"category": "pipes"}, "b": {"category": "beams"}, "strategy": "two-q"}], [1, 2]),
+])
+def test_tied_rows_with_different_strategies_assign_nothing(table, tied):
+    row = _only(build_clash_register([_clash("pipes", "beams", None, "IfcBeam")], table))
     assert row["strategy"] is None
-    assert row["tied_rows"] == [0, 1]
+    assert row["tied_rows"] == tied
 
 
-def test_tied_rows_with_the_same_outcome_assign_it():
+@pytest.mark.parametrize("responsible", ["t", None])
+def test_tied_rows_with_the_same_outcome_assign_it(responsible):
     table = [
-        {"a": {"category": "pipes"}, "strategy": "one-q", "responsible": "t"},
-        {"b": {"category": "beams"}, "strategy": "one-q", "responsible": "t"},
+        {"a": {"category": "pipes"}, "strategy": "one-q", "responsible": responsible},
+        {"b": {"category": "beams"}, "strategy": "one-q", "responsible": responsible},
     ]
     row = _only(build_clash_register([_clash("pipes", "beams")], table))
     assert row["strategy"] == "one-q"
+    assert row["responsible"] == responsible
     assert row["table_row"] == 0
 
 
@@ -187,33 +199,39 @@ def test_band_row_cannot_decide_a_clash_without_depth(overlap):
     assert row["overlap_mm"] is None
 
 
-def test_clash_without_depth_still_takes_a_row_with_no_band():
+@pytest.mark.parametrize("overlap", [None, "deep"])
+def test_clash_without_depth_still_takes_a_row_with_no_band(overlap):
     table = [{"a": {"category": "p"}, "strategy": "any-q"},
              {"a": {"category": "other"}, "min_overlap_mm": 5, "strategy": "band-q"}]
-    assert _only(build_clash_register([_clash("p", "q", overlap=None)], table))["strategy"] == "any-q"
+    assert _only(build_clash_register([_clash("p", "q", overlap=overlap)], table))["strategy"] == "any-q"
 
 
 # --- summary ------------------------------------------------------------------
 
-def test_summary_counts_strategies_and_unused_rows():
+@pytest.mark.parametrize("cats,by_strategy,unassigned,unused", [
+    ([("p", "w"), ("d", "w"), ("p", "x"), ("z", "w")], {"s-two": 2, "s-one": 1}, 1, [2]),
+    ([("d", "w"), ("d", "x"), ("p", "w"), ("never", "w")],
+     {"s-one": 2, "s-dead": 1, "s-two": 1}, 0, []),
+])
+def test_summary_counts_strategies_and_unused_rows(cats, by_strategy, unassigned, unused):
     table = [
         {"a": {"category": "p"}, "strategy": "s-two"},
         {"a": {"category": "d"}, "strategy": "s-one"},
         {"a": {"category": "never"}, "strategy": "s-dead"},
     ]
-    clashes = [_clash("p", "w"), _clash("d", "w"), _clash("p", "x"), _clash("z", "w")]
-    reg = build_clash_register(clashes, table)
-    assert reg["by_strategy"] == {"s-two": 2, "s-one": 1}
-    assert list(reg["by_strategy"]) == ["s-two", "s-one"]
-    assert reg["unassigned"] == 1
-    assert reg["table_rows_unused"] == [2]
+    reg = build_clash_register([_clash(a, b) for a, b in cats], table)
+    assert reg["by_strategy"] == by_strategy
+    assert list(reg["by_strategy"]) == list(by_strategy)
+    assert reg["unassigned"] == unassigned
+    assert reg["table_rows_unused"] == unused
     assert [r["ref"] for r in reg["rows"]] == [1, 2, 3, 4]
 
 
-def test_non_dict_clash_entries_are_skipped():
-    reg = build_clash_register(["junk", _clash("p", "q")], [{"strategy": "s"}])
+@pytest.mark.parametrize("junk,ref", [(["junk"], 2), ([None, 7], 3)])
+def test_non_dict_clash_entries_are_skipped(junk, ref):
+    reg = build_clash_register(junk + [_clash("p", "q")], [{"strategy": "s"}])
     assert reg["clash_rows"] == 1
-    assert reg["rows"][0]["ref"] == 2
+    assert reg["rows"][0]["ref"] == ref
 
 
 # --- table validation ---------------------------------------------------------
@@ -240,9 +258,12 @@ def test_bad_table_is_rejected_naming_the_row(table, fragment):
     assert fragment in str(err.value)
 
 
-def test_valid_band_passes_validation():
-    reg = build_clash_register([_clash("p", "q", overlap=30)],
-                               [{"strategy": "s", "min_overlap_mm": 10, "max_overlap_mm": 50.5}])
+@pytest.mark.parametrize("band", [
+    {"min_overlap_mm": 10, "max_overlap_mm": 50.5},
+    {"min_overlap_mm": 0},
+])
+def test_valid_band_passes_validation(band):
+    reg = build_clash_register([_clash("p", "q", overlap=30)], [{"strategy": "s", **band}])
     assert _only(reg)["strategy"] == "s"
 
 
@@ -261,10 +282,11 @@ def _report(**extra):
             "detection_method": "aabb_intersection", **extra}
 
 
-def test_hook_puts_register_first_and_keeps_detection():
-    out = _block()._with_clash_register(_report(), {"clash_strategy_table": [{"strategy": "s"}]})
+@pytest.mark.parametrize("table,by_strategy", [([{"strategy": "s"}], {"s": 1}), (None, {})])
+def test_hook_puts_register_first_and_keeps_detection(table, by_strategy):
+    out = _block()._with_clash_register(_report(), {"clash_strategy_table": table})
     assert list(out)[0] == "register"
-    assert out["register"]["by_strategy"] == {"s": 1}
+    assert out["register"]["by_strategy"] == by_strategy
     assert out["register"]["complete"] is True
     assert out["clashes"] == [_clash("p", "q")]
 
@@ -276,9 +298,13 @@ def test_hook_marks_a_cut_detection_incomplete(extra):
     assert out["register"]["table_given"] is False
 
 
-def test_hook_reports_a_bad_table_and_keeps_the_clashes():
-    out = _block()._with_clash_register(_report(), {"clash_strategy_table": [{"stratgy": "s"}]})
-    assert "row 0" in out["register"]["error"]
+@pytest.mark.parametrize("table,fragment", [
+    ([{"stratgy": "s"}], "row 0"),
+    ({"strategy": "s"}, "must be a list"),
+])
+def test_hook_reports_a_bad_table_and_keeps_the_clashes(table, fragment):
+    out = _block()._with_clash_register(_report(), {"clash_strategy_table": table})
+    assert fragment in out["register"]["error"]
     assert out["register"]["complete"] is True
     assert out["clash_count"] == 1
 
