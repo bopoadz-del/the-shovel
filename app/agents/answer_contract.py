@@ -839,6 +839,70 @@ def _narration_first(text: str) -> str:
     return text
 
 
+#: A presence predicate: what a record does with a thing it holds. "No
+#: <thing> is <predicate>" and "<a thing> is not <predicate>" say the same
+#: of a record, so the thing can lead. "in" / "on" count only before a
+#: determiner (a place: "in the bill"), not "in excess of". A predicate of
+#: size or degree ("no pile is longer than ...", "no bolt is within
+#: tolerance") is a universal claim and is never turned.
+_PRESENCE_PREDICATE = (
+    r"(?:(?:in|on|among)[ \t]+(?:the|this|that|these|those|any|either|its|their|your|our|a|an)|stated|given|shown|listed|billed|measured|recorded|priced|"
+    r"specified|named|included|found|mentioned|quoted|provided|available|identified|scheduled|"
+    r"carried|set\s+out|defined|entered|captured|reported|documented|itemi[sz]ed)\b"
+)
+#: Words after "No" that do not start a noun phrase naming a thing.
+_NOT_A_THING = r"(?:one|more|less|fewer|further|longer|matter|doubt|other|such|sooner|later)\b"
+#: "No <thing> is in the documents I searched." -- an absence that opens on
+#: "No". Rule 1's form names the thing and negates the verb: "<What> is not
+#: in the project documents I searched."
+_NO_THING_LEAD_RE = re.compile(
+    rf"^(?P<mark>\*\*)?No[ \t]+(?!{_NOT_A_THING})"
+    r"(?P<np>[^\s,;:!?()\[\]\"“”—–][^,;:!?()\[\]\"“”—–\n]*?)"
+    rf"[ \t]+(?P<verb>is|are|was|were)[ \t]+(?P<rest>{_PRESENCE_PREDICATE})",
+)
+#: A finite verb inside the would-be noun phrase means "No" opened a clause.
+_NP_VERB_RE = re.compile(r"\b(?:is|are|was|were|has|have|had|does|do|did|will|shall|can|may|must)\b",
+                         re.IGNORECASE)
+_NP_MAX_WORDS = 12
+
+
+def _absence_names_thing(text: str) -> str:
+    """An absence answer opens on the missing thing, on any kind of turn.
+
+    Rule 1's form for an absence is "<What> is not in the project documents
+    I searched." When the first line of the answer says it the other way
+    round -- "No <thing> is in / stated in / billed in ..." -- the thing is
+    made the subject and the verb is negated: "A <thing> is not in ...".
+    Only a presence predicate (where a record holds a thing: in, stated,
+    listed, billed ...) is turned; for those the two forms say the same.
+
+    It stays as written when "No" opens no noun phrase ("No, ...", "No one
+    ...", "No more than ..."), when the predicate is one of size or degree
+    ("No pile is longer than ..."), when the noun phrase already carries a
+    negative or a finite verb (it is a clause, not a thing), or when it runs
+    past a short phrase."""
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    line = lines[first]
+    body = line.lstrip()
+    indent = line[: len(line) - len(body)]
+    m = _NO_THING_LEAD_RE.match(body)
+    if not m:
+        return text
+    np_ = m.group("np").strip()
+    if len(np_.split()) > _NP_MAX_WORDS or _NEGATIVE_RE.search(np_) or _NP_VERB_RE.search(np_):
+        return text
+    verb = m.group("verb")
+    if verb in ("is", "was"):
+        subject = ("An " if np_[0].lower() in "aeiou" else "A ") + np_
+    else:
+        subject = np_[0].upper() + np_[1:]
+    lines[first] = f"{indent}{m.group('mark') or ''}{subject} {verb} not {m.group('rest')}{body[m.end():]}"
+    return "\n".join(lines)
+
+
 def _tidy(text: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -885,6 +949,7 @@ def apply(
             body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
+            body = _absence_names_thing(body)
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 

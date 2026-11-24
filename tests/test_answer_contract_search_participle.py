@@ -40,7 +40,8 @@ _SEARCH_WORD = re.compile(r"\b(?:retrieved|fetched|passages?|excerpts?|chunks?)\
      "The only waterproofing note read from it is a general clause on membranes."),
     # A search-unit noun is machinery too: in the reader's words, documents.
     ("No lintel schedule is in the retrieved passages.",
-     "No lintel schedule is in the documents I read."),
+     # the absence lead is also turned to the contract form (absence_names_thing)
+     "A lintel schedule is not in the documents I read."),
     ("The sill height is not given in the fetched context.",
      "The sill height is not given in the documents I read."),
 ])
@@ -96,7 +97,8 @@ def test_a_cited_document_name_keeps_its_words(text, name):
 
 @pytest.mark.parametrize("text", [
     "The curing period is 7 days for slabs.\nColumns cure for 10 days.\n",
-    "No fire rating is stated for the plant room doors.\n",
+    # written in the contract's absence form, so no other rule turns it either
+    "The fire rating is not stated for the plant room doors.\n",
 ])
 def test_an_answer_with_no_search_word_is_unchanged(text):
     assert answer_contract.apply(text).text == text

@@ -84,7 +84,8 @@ def test_close_after_stop_ends_sentence(text, expected):
     # a machinery-only sentence with a bracketed example goes WHOLE
     ('I searched the project documents for deck tiling (e.g. "Deck A - lump", "Deck B - lump") '
      "rather than a measured quantity.\n\nNo measured deck tiling quantity is in the bill.",
-     "No measured deck tiling quantity is in the bill."),
+     # the absence lead that is left is turned to the contract form (absence_names_thing)
+     "A measured deck tiling quantity is not in the bill."),
     ("I checked the documents on file for the kerb mix [see the general notes, rev. C] in full.\n\n"
      "The kerb mix is not stated in the documents.",
      "The kerb mix is not stated in the documents."),
