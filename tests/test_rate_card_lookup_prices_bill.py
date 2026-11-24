@@ -228,3 +228,142 @@ async def test_card_rate_is_used_before_the_historical_book(
 
     assert stub.calls == []
     assert got["asset_type"] == asset
+
+
+# ── a bill read from a BOQ file (GROKGRADE S664 finding 1) ─────────────
+
+
+def _write_bill(tmp_path, rows: list[dict]) -> str:
+    """An unpriced spreadsheet BOQ built from the given lines."""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Item", "Description", "Unit", "Quantity", "Rate", "Amount"])
+    for i, row in enumerate(rows, 1):
+        ws.append([str(i), row["description"], row["unit"], row["quantity"], None, None])
+    path = tmp_path / "bill.xlsx"
+    wb.save(path)
+    return str(path)
+
+
+def _use_real_boq_processor(container, monkeypatch):
+    """The real boq_processor block, so the file is parsed the same way
+    under every block profile."""
+    from app.blocks.boq_processor import BOQProcessorBlock
+
+    block = BOQProcessorBlock()
+    real = container._resolve_block
+    monkeypatch.setattr(
+        container, "_resolve_block",
+        lambda name: block if name == "boq_processor" else real(name),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quantities", [(7.0, 3.0), (2.5, 40.0)])
+async def test_bill_file_is_read_and_priced_from_the_card(
+    container, monkeypatch, tmp_path, quantities,
+):
+    _use_real_boq_processor(container, monkeypatch)
+    asset, ccy = _cards()[0]
+    lines = [_row_line(asset, ccy, q) for q in quantities]
+    want, want_summary = boq_pricing.price_line_items(lines, asset, ccy)
+
+    got = await container.benchmark_lookup(
+        {"file_path": _write_bill(tmp_path, lines)},
+        {"asset_type": asset, "currency": ccy},
+    )
+
+    assert got["status"] == "success"
+    assert [i["qty"] for i in got["priced_items"]] == list(quantities)
+    assert got["summary"]["grand_total"] == want_summary["grand_total"]
+    assert got["summary"]["grand_total"] == pytest.approx(
+        sum(i["qty"] * i["rate"] for i in want), abs=0.01,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["no bill in here\n", "just prose, no table\n"])
+async def test_bill_file_with_no_lines_is_refused(
+    container, monkeypatch, tmp_path, content,
+):
+    _use_real_boq_processor(container, monkeypatch)
+    asset, ccy = _cards()[0]
+    path = tmp_path / "notes.txt"
+    path.write_text(content, encoding="utf-8")
+
+    got = await container.benchmark_lookup(
+        {"file_path": str(path)}, {"asset_type": asset, "currency": ccy},
+    )
+
+    assert got["status"] == "error"
+    assert got["error"].startswith("No bill lines could be read")
+    assert "priced_items" not in got
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parsed", [{"line_items": []}, None])
+async def test_bill_file_parser_returning_nothing_is_refused(container, monkeypatch, parsed):
+    class _EmptyParser:
+        async def process(self, data, params):
+            return parsed
+
+    monkeypatch.setattr(container, "_resolve_block", lambda name: _EmptyParser())
+    asset, ccy = _cards()[0]
+
+    got = await container.benchmark_lookup(
+        {"file_path": "bill.xlsx"}, {"asset_type": asset, "currency": ccy},
+    )
+
+    assert got["status"] == "error"
+    assert got["error"].startswith("No bill lines could be read")
+
+
+# ── a single item keeps a stated quantity of zero (finding 2) ───────────
+
+
+def _spy_pricing(monkeypatch) -> list[list[dict]]:
+    """Records the lines handed to the real pricer, then prices them."""
+    seen: list[list[dict]] = []
+    real = boq_pricing.price_line_items
+
+    def spy(lines, asset, ccy):
+        seen.append([dict(line) for line in lines])
+        return real(lines, asset, ccy)
+
+    monkeypatch.setattr(boq_pricing, "price_line_items", spy)
+    return seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quantity,want", [(0, 0), (0.0, 0.0), (5.0, 5.0), (12, 12)])
+async def test_single_item_keeps_a_stated_quantity(container, monkeypatch, quantity, want):
+    seen = _spy_pricing(monkeypatch)
+    asset, ccy = _cards()[0]
+    line = _row_line(asset, ccy, 1.0)
+
+    got = await container.benchmark_lookup(
+        {"item": line["description"], "unit": line["unit"], "quantity": quantity},
+        {"asset_type": asset, "currency": ccy},
+    )
+
+    assert got["status"] == "success"
+    assert seen[0][0]["quantity"] == want
+    assert type(seen[0][0]["quantity"]) is type(want)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data_extra", [{}, {"quantity": ""}, {"quantity": None}])
+async def test_single_item_without_a_quantity_prices_one_unit(container, monkeypatch, data_extra):
+    seen = _spy_pricing(monkeypatch)
+    asset, ccy = _cards()[0]
+    line = _row_line(asset, ccy, 1.0)
+
+    got = await container.benchmark_lookup(
+        {"item": line["description"], "unit": line["unit"], **data_extra},
+        {"asset_type": asset, "currency": ccy},
+    )
+
+    assert got["status"] == "success"
+    assert seen[0][0]["quantity"] == 1

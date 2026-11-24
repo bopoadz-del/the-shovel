@@ -2751,9 +2751,14 @@ class ConstructionBoqMixin:
             )
         item = _arg("item") or ""
         if item and asset and currency:
+            # A stated quantity is kept as given, 0 included; only a missing
+            # one defaults to a single unit.
+            quantity = _arg("quantity")
+            if quantity in (None, ""):
+                quantity = 1
             priced, _summary = boq_pricing.price_line_items(
                 [{"description": item, "unit": _arg("unit") or "",
-                  "quantity": _arg("quantity") or 1}],
+                  "quantity": quantity}],
                 asset, currency,
             )
             line = priced[0]
