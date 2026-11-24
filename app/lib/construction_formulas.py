@@ -1864,6 +1864,72 @@ def _figure_before_label(pat: str, raw: str, overlaps: Any) -> Optional[Any]:
     return _first_open(rx, raw, overlaps)
 
 
+def _bind_label_word_before_figure(
+    labels: Dict[str, str],
+    declared_units: Dict[str, Any],
+    raw: str,
+    number: str,
+    found: Dict[str, Any],
+    consumed: List[Tuple[int, int]],
+    overlaps: Any,
+    own_names: Tuple[str, ...] = (),
+) -> None:
+    """Label word first, figure and unit after: "live 4.0 kN/m2".
+
+    The words written right before a figure name an input when one of them
+    is a word of exactly one input's labels among the open inputs that
+    measure the figure's kind of unit. A word no label holds, or one that
+    two such inputs share, names nothing; an input named for two figures
+    binds neither. A word inside the calculator's own name, where the ask
+    writes that name, names the calculator and not a figure ("cut and fill
+    balance for 12 m3" does not make 12 m3 the fill).
+    """
+    name_spans: List[Tuple[int, int]] = []
+    for phrase in own_names:
+        parts = re.findall(r"[a-z0-9]+", str(phrase or "").lower())
+        if len(parts) < 2:
+            continue
+        pattern = r"(?<![A-Za-z0-9])" + r"[\W_]+".join(map(re.escape, parts)) + r"(?![A-Za-z0-9])"
+        name_spans.extend(m.span() for m in re.finditer(pattern, raw, re.IGNORECASE))
+    words_to_dests: Dict[str, set] = {}
+    for label, dest in labels.items():
+        for word in label.split("_"):
+            if len(word) >= 3 and word.isalpha():
+                words_to_dests.setdefault(word, set()).add(dest)
+    rx = re.compile(
+        rf"(?<![A-Za-z0-9])([A-Za-z]+(?:[ \t]+[A-Za-z]+){{0,2}})[ \t]+{number}"
+        rf"\s*({_TEXT_UNIT_RE})(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    named: Dict[str, List[Tuple[Tuple[int, int], float, str]]] = {}
+    for match in rx.finditer(raw):
+        span = (match.start(2), match.end(3))
+        if overlaps(span):
+            continue
+        written_unit = match.group(3)
+        dests: set = set()
+        for word_match in re.finditer(r"[A-Za-z]+", match.group(1)):
+            at = match.start(1) + word_match.start()
+            if any(lo <= at < hi for lo, hi in name_spans):
+                continue
+            word = word_match.group(0).lower()
+            for dest in words_to_dests.get(word, ()):
+                declared = str(declared_units.get(dest) or _unit_from_name(dest) or "")
+                if dest not in found and declared and _same_kind(written_unit, declared):
+                    dests.add(dest)
+        if len(dests) != 1:
+            continue
+        num = _parse_text_number(match.group(2))
+        if num is not None:
+            named.setdefault(dests.pop(), []).append((span, num, written_unit))
+    for dest, figures in named.items():
+        if len(figures) != 1:
+            continue
+        span, num, written_unit = figures[0]
+        found[dest] = _to_param_unit(num, written_unit, dest, declared_units.get(dest, ""))
+        consumed.append(span)
+
+
 def extract_calculation_params_from_text(
     fn: Any,
     text: str,
@@ -2000,6 +2066,13 @@ def extract_calculation_params_from_text(
             continue
         found[dest] = _to_param_unit(num, match.group(2), dest, declared_units.get(dest, ""))
         consumed.append(match.span())
+
+    own_names = (
+        (str(spec.display_name or ""), spec.name.replace("_", " ")) if spec else ()
+    )
+    _bind_label_word_before_figure(
+        labels, declared_units, raw, number, found, consumed, _overlaps, own_names,
+    )
 
     accepted = {
         row["name"] for row in describe_calculation_params(fn)
