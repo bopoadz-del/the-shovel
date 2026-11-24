@@ -3174,6 +3174,39 @@ _SPREADSHEET_NO_BAND = "(no band stated on this sheet)"
 # section title, a subtotal) scopes every measured row that follows it.
 
 
+# Excel holds a number to 15 significant digits (the precision it displays
+# and computes with). A cached formula result is written to the package as the
+# nearest binary double, so 0.1 + 0.2 is stored as 0.30000000000000004. Read
+# back at full repr, that tail lands in the row chunk as a figure the sheet
+# itself never shows, and it never matches the figure as typed or printed.
+_XLSX_SIGNIFICANT_DIGITS = 15
+
+
+def _xlsx_cell_text(value: Any) -> str:
+    """One .xlsx cell as the trimmed text the sheet states.
+
+    A float is read at Excel's own precision, and a whole number prints
+    without a decimal tail. A datetime with no time of day is the date alone,
+    the way the .xls row reader prints a date cell. Every other value prints
+    as ``str``, trimmed.
+    """
+    import datetime as _dt
+    import math
+
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return str(value)
+        rounded = float(f"{value:.{_XLSX_SIGNIFICANT_DIGITS}g}")
+        if rounded.is_integer() and abs(rounded) < 10 ** _XLSX_SIGNIFICANT_DIGITS:
+            return str(int(rounded))
+        return str(rounded)
+    if isinstance(value, _dt.datetime) and value.time() == _dt.time(0, 0):
+        return value.date().isoformat()
+    return str(value).strip()
+
+
 def _spreadsheet_sheets(
     file_path: str, ext: str,
 ) -> list[tuple[str, list[list[str]]]]:
@@ -3194,7 +3227,7 @@ def _spreadsheet_sheets(
                 (
                     name,
                     [
-                        [("" if c is None else str(c).strip()) for c in row]
+                        [_xlsx_cell_text(c) for c in row]
                         for row in ws.iter_rows(values_only=True)
                     ],
                 )
