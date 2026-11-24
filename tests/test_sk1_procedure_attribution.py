@@ -21,9 +21,16 @@ _ATTRIBUTION_LICENCES = ("CC BY 4.0", "Apache-2.0")
 _REF = re.compile(r"^as ([A-Za-z]\d+)\b")
 
 
-def _own_lineage(hat, proc) -> str:
-    """A lineage reading "as <id>" is the referenced procedure's lineage."""
-    by_id = {p.id.lower(): p for p in hat.playbook.procedures}
+def _all_procedures():
+    # Procedure ids are unique across hats (test_sk1_hat_procedures_contract),
+    # and one playbook file may span two hats, so "as <id>" resolves over all.
+    return {p.id.lower(): p for h in _hats_with_procedures() for p in h.playbook.procedures}
+
+
+def _own_lineage(proc) -> str:
+    """A lineage reading "as <id>" is the referenced procedure's lineage,
+    wherever that procedure ships."""
+    by_id = _all_procedures()
     seen = set()
     while (m := _REF.match(proc.lineage)) and proc.id not in seen:
         seen.add(proc.id)
@@ -43,7 +50,7 @@ def test_two_hats_carry_procedures():
 def test_attribution_follows_lineage_licence(hat):
     rendered = render_procedures(hat)
     for proc in hat.playbook.procedures:
-        named = [lic for lic in _ATTRIBUTION_LICENCES if lic in _own_lineage(hat, proc)]
+        named = [lic for lic in _ATTRIBUTION_LICENCES if lic in _own_lineage(proc)]
         if not named:
             assert proc.attribution is None, f"{hat.id}/{proc.id}: attribution without a licence that needs one"
             continue
