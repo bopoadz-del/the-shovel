@@ -3176,12 +3176,48 @@ _ARITH_EXPRESSION_RE = re.compile(
 )
 
 
+# A figure as written: not the tail of a word or unit ("m2", "C25"), and not
+# followed by a letter that makes it part of a code. Operators are
+# normalised first, so "890x310" reads as two figures.
+_WRITTEN_FIGURE_RE = re.compile(r"(?<![A-Za-z0-9_.,])\d+(?:,\d{3})*(?:\.\d+)?(?![A-Za-z0-9_])")
+
+
+def _written_figures(text: str) -> frozenset[float]:
+    """The distinct figures ``text`` writes, compared to 9 decimals."""
+    out: set[float] = set()
+    for match in _WRITTEN_FIGURE_RE.finditer(_normalise_arithmetic(text or "")):
+        try:
+            out.add(round(float(match.group(0).replace(",", "")), 9))
+        except ValueError:
+            continue
+    return frozenset(out)
+
+
+def operands_are_the_whole_ask(ask: str, operands: Iterable[float]) -> bool:
+    """True when every figure the ask writes is one of ``operands``.
+
+    A sum the server works out from the ask stands for the ask only when it
+    uses the ask's figures. When the ask writes figures the sum leaves out
+    (a door's 0.9 x 2.1 inside a painting programme, one crash day at a
+    rate inside a least-cost crash), the sum is a fragment of a larger
+    working: it is not the answer, and returning it as calculated would
+    present the fragment as the result. Figures compare as distinct values,
+    so an ask whose text repeats a figure is still covered.
+    """
+    written = _written_figures(ask)
+    if not written:
+        return False
+    used = {round(float(x), 9) for x in operands}
+    return written <= used
+
+
 def self_contained_arithmetic(ask: str) -> tuple[str, float] | None:
     """(expression, value) when the ask carries its own arithmetic operands.
 
     A self-contained arithmetic ask ("calculate 890 × 310") is evaluated here
     so the model never performs the multiplication. Returns None when the ask
-    has no calc verb or no two-figure arithmetic expression.
+    has no calc verb, no two-figure arithmetic expression, or writes figures
+    the expression does not use (the expression is then a fragment).
     """
     raw = (ask or "").strip()
     if not raw or not _ARITH_VERB_RE.search(raw):
@@ -3193,8 +3229,11 @@ def self_contained_arithmetic(ask: str) -> tuple[str, float] | None:
         if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", expr):
             continue
         value = _safe_arithmetic_value(expr)
-        if value is not None:
-            return expr, value
+        if value is None:
+            continue
+        if not operands_are_the_whole_ask(raw, _written_figures(expr)):
+            continue
+        return expr, value
     return None
 
 
@@ -3329,6 +3368,10 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
                 "swallowed %s in quantity_times_rate_from_ask() — continuing",
                 "Exception", exc_info=True,
             )
+            qty_rate = None
+        if qty_rate is not None and not operands_are_the_whole_ask(ask, qty_rate):
+            # One quantity at one rate inside a longer working is a
+            # fragment of it, not the ask's total.
             qty_rate = None
         if qty_rate is not None:
             quantity, unit_rate = qty_rate
