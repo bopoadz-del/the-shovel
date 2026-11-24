@@ -48,11 +48,15 @@ def test_earlier_certificates_never_move_the_net(certified, previous):
     assert after["cumulative_certified"] == pytest.approx(previous + certified)
 
 
-def test_card_does_not_promise_a_deduction_the_function_does_not_make():
+@pytest.mark.parametrize("certified, rate, previous", [
+    (318_000.0, 0.1, 641_000.0),
+    (96_500.0, 0.05, 2_140_000.0),
+])
+def test_card_does_not_promise_a_deduction_the_function_does_not_make(certified, rate, previous):
     # Read the behaviour first: do earlier certificates change the net?
-    base = {"claimed_amount": 318_000.0, "certified_amount": 318_000.0, "retention_rate": 0.1}
+    base = {"claimed_amount": certified, "certified_amount": certified, "retention_rate": rate}
     without = _ok(base)["net_payment_due"]
-    with_prev = _ok({**base, "cumulative_previous_certified": 641_000.0})["net_payment_due"]
+    with_prev = _ok({**base, "cumulative_previous_certified": previous})["net_payment_due"]
     deducts_previous = abs(with_prev - without) > 1e-6
     line = _card_line().lower()
     promises = re.search(r"\bless\b[^.]*\bprevious", line) is not None
