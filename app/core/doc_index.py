@@ -1877,8 +1877,33 @@ def chunk_text_with_overlap(
         next_i = end - overlap if end - overlap > i else end
         if next_i <= i:
             next_i = end
-        i = next_i
+        i = _overlap_start(text, next_i, end, whole_lines=text[end - 1] == "\n")
     return chunks
+
+
+def _overlap_start(text: str, start: int, end: int, *, whole_lines: bool) -> int:
+    """Where the carried overlap ``text[start:end]`` may begin.
+
+    A character offset lands mid-token: the next chunk opened on a word
+    fragment, and a fragment of a figure (``C40`` -> ``0``) reads as a
+    number the document never wrote. The overlap starts after the first
+    whitespace in the window instead, so it carries whole words only.
+    When the chunk broke at a line start (a BOQ row, a paragraph, a line),
+    it carries whole lines only, so the next chunk starts on a row's own
+    code and not on the tail figures of the row before it. A window with
+    no such boundary keeps the character offset (text with no whitespace
+    has no word to protect).
+    """
+    if start >= end:
+        return end
+    if whole_lines:
+        nl = text.find("\n", start, end)
+        return nl + 1 if nl >= 0 else end
+    if start > 0 and not text[start - 1].isspace():
+        for k in range(start, end):
+            if text[k].isspace():
+                return k + 1
+    return start
 
 
 def chunk_markdown(
