@@ -407,3 +407,64 @@ def test_an_answer_not_yet_saying_why_it_stops_ends_on_the_notice(which, body):
     out = runtime._end_cut_answer(body, notice)
     assert out.endswith(notice)
     assert out.count(notice) == 1
+
+
+# ── a cut lead keeps the citation of what it names ─────────────────────────
+
+_TWO_ROWS = [{"doc_name": "bill.xlsx", "page_or_section": "Sheet 2"},
+             {"doc_name": "spec.pdf", "page_or_section": "p. 7"}]
+
+
+@pytest.mark.parametrize("text,lead_end", [
+    ("No unit rate for anchor bolts is in the tender schedule I searched.\n\n"
+     "The tender schedule lists bolts only as a lump sum [1].",
+     "searched. [1]"),
+    ("The paving area is not in the drainage report I searched.\n\n"
+     "Gully spacing is set by the road profile [2]. The drainage report gives catchments only [1].",
+     "searched. [1]"),
+])
+def test_lead_takes_the_marker_of_a_moved_sentence_naming_the_same_thing(text, lead_end):
+    done = _apply(text, sources=_TWO_ROWS)
+    assert done.text.endswith(lead_end)
+    assert done.details and lead_end[-3:] in done.details
+
+
+@pytest.mark.parametrize("text", [
+    "No unit rate for anchor bolts is in the tender schedule I searched.\n\n"
+    "The foundation drawing shows the bolt layout [1].",
+    "The paving area is not in the drainage report I searched.\n\n"
+    "Kerb heights follow the highway standard [2].",
+])
+def test_lead_sharing_no_phrase_with_a_cited_sentence_gets_no_marker(text):
+    done = _apply(text, sources=_TWO_ROWS)
+    assert "[" not in done.text
+    assert done.details and "[" in done.details
+
+
+@pytest.mark.parametrize("lead,later", [
+    ("The tender schedule prices anchor bolts at 12 each [2].",
+     "The tender schedule lists bolts only as a lump sum [1]."),
+    ("The drainage report gives a 1 in 10 year storm [1].",
+     "The drainage report gives catchments only [2]."),
+])
+def test_lead_that_already_cites_is_left_as_it_is(lead, later):
+    done = _apply(lead + "\n\n" + later, sources=_TWO_ROWS)
+    assert done.text == lead
+
+
+@pytest.mark.parametrize("lead,details,want", [
+    ("The chilled-water pipe length is not billed.", "For chilled water the specification gives hangers only [3].",
+     "The chilled-water pipe length is not billed. [3]"),
+    ("## Result\nThe roof sheeting area is not stated.", "Roof sheeting is shown on sheet 4 [1].",
+     "## Result\nThe roof sheeting area is not stated. [1]"),
+])
+def test_cite_lead_reads_joined_words_and_skips_headings(lead, details, want):
+    assert answer_contract._cite_lead(lead, details) == want
+
+
+@pytest.mark.parametrize("lead,details", [
+    ("The chilled-water pipe length is not billed.", "For chilled water the specification gives hangers only."),
+    ("The roof sheeting area is not stated.", "That this with from those [1]."),
+])
+def test_cite_lead_without_a_cited_shared_phrase_changes_nothing(lead, details):
+    assert answer_contract._cite_lead(lead, details) == lead

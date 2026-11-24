@@ -933,7 +933,50 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
     if not cut_items and not rest and opening_rest is None:
         return body, None
     details = ([opening_rest] if opening_rest else []) + ([ "\n".join(cut_items)] if cut_items else []) + rest
-    return "\n\n".join(lead), "\n\n".join(details)
+    return _cite_lead("\n\n".join(lead), "\n\n".join(details)), "\n\n".join(details)
+
+
+#: A word that can carry a phrase: four or more letters. Words of grammar
+#: (``that``, ``with``, ``from``) join phrases but name nothing.
+_WORD_RE = re.compile(r"[A-Za-z]+")
+_GRAMMAR_WORDS = frozenset(
+    "about also been being could does each either from have into more most only other "
+    "over same some such than that their them then there these they this those under "
+    "were what when where which while will with would".split())
+
+
+def _phrases(sentence: str) -> set[tuple[str, str]]:
+    """The two-word phrases a sentence uses: each pair of adjacent words of
+    four or more letters, neither a word of grammar, lower-cased. A marker
+    is not a word, and a hyphen between two words still joins them
+    (``chilled-water`` is ``chilled water``)."""
+    words = [w.lower() for w in _WORD_RE.findall(_MARKER_RE.sub(" ", sentence))]
+    return {(a, b) for a, b in zip(words, words[1:])
+            if len(a) >= 4 and len(b) >= 4 and a not in _GRAMMAR_WORDS and b not in _GRAMMAR_WORDS}
+
+
+def _cite_lead(lead: str, details: str) -> str:
+    """A lead that lost every marker to the details keeps the citation of
+    what it names. A lead line with no marker takes the marker of each moved
+    sentence that uses one of the line's own two-word phrases (``the priced
+    bill`` -- ``The priced Bill of Quantities [1]``): that sentence speaks of
+    the same thing, so its source is the lead's source too. A lead that
+    already cites, a line sharing no phrase with a cited sentence, or details
+    with no marker leave the lead as it is: a citation is carried, never
+    invented."""
+    if _MARKER_RE.search(lead) or not _MARKER_RE.search(details):
+        return lead
+    cited = [(_phrases(s), _MARKER_RE.findall(s))
+             for ln in details.split("\n") for s in _sentences(ln.strip()) if _MARKER_RE.search(s)]
+    out = []
+    for ln in lead.split("\n"):
+        if ln.strip() and not _HEADING_RE.match(ln):
+            own = _phrases(ln)
+            carried = [mk for ph, mks in cited if own & ph for mk in mks]
+            if carried:
+                ln = ln.rstrip() + " " + "".join(dict.fromkeys(carried))
+        out.append(ln)
+    return "\n".join(out)
 
 
 #: A sentence that opens on the writer's own search: "I searched ...",
