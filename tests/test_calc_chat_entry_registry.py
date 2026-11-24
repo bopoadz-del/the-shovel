@@ -244,6 +244,14 @@ CASES: Dict[str, Case] = {
             {"name": "Y", "technical": 70, "commercial": 90, "hse": 80,
              "local_content": 60}]},
         {}, "tenderers", None),
+    # Net resource = 100 x 2 = 200; with 10% waste 220; cost = 220 x 50 =
+    # 11,000; markup 10% = 1,100; line total 12,100. Counts, percents and
+    # money per count carry no physical unit, so there is no unit case.
+    "resource_cost_line": Case(
+        {"quantity": 100, "consumption_per_unit": 2, "price_per_resource_unit": 50,
+         "waste_percent": 10, "markup_percent": 10},
+        {"resource_quantity": 220.0, "resource_cost": 11_000.0, "line_total": 12_100.0},
+        "consumption_per_unit", None),
     # F = m g (1 + H/d) = 80 * 9.81 * (1 + 1.8/1.2) = 784.8 * 2.5 = 1962 N
     # = 1.96 kN, within the 8 kN limit. No required input.
     "fall_arrest_force": Case(
@@ -253,14 +261,6 @@ CASES: Dict[str, Case] = {
         ({"worker_mass_kg": 80, "free_fall_m": 1.8,
           "deceleration_distance_m": "120 cm"},
          {"max_arrest_force_kn": 1.96})),
-    # Net resource = 100 x 2 = 200; with 10% waste 220; cost = 220 x 50 =
-    # 11,000; markup 10% = 1,100; line total 12,100. Counts, percents and
-    # money per count carry no physical unit, so there is no unit case.
-    "resource_cost_line": Case(
-        {"quantity": 100, "consumption_per_unit": 2, "price_per_resource_unit": 50,
-         "waste_percent": 10, "markup_percent": 10},
-        {"resource_quantity": 220.0, "resource_cost": 11_000.0, "line_total": 12_100.0},
-        "consumption_per_unit", None),
 }
 
 
