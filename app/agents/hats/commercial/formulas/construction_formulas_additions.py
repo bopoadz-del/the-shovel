@@ -60,3 +60,100 @@ def calculate_interim_payment(
             "Verify if retention cap has been reached on this project."
         ),
     }
+
+
+def _money(x: float) -> str:
+    return f"{x:,.2f}"
+
+
+@formula(
+    owner='commercial',
+    display_name='Interim payment to date',
+    description=('Amount due on an interim payment certificate: work done to date plus '
+                 'materials on site, less retention at the contract rate up to its limit, '
+                 'less the amount certified on earlier certificates.'),
+    inputs={
+        'work_value_to_date': Param('currency', 0, 1e13, label='value of work done to date',
+                                    basis='cumulative'),
+        'retention_percent': Param('%', 0, 100, label='retention'),
+        'previously_certified': Param('currency', 0, 1e13,
+                                      label='amount certified on earlier certificates',
+                                      basis='cumulative'),
+        'materials_on_site': Param('currency', 0, 1e13, label='materials on site',
+                                   basis='cumulative'),
+        'retention_limit': Param('currency', 0, 1e13, label='retention limit'),
+    },
+    outputs={'gross_to_date': 'currency', 'retention_to_date': 'currency',
+             'net_to_date': 'currency', 'amount_due': 'currency', 'working': '-'},
+)
+def interim_payment_to_date(
+    work_value_to_date: float,
+    retention_percent: float,
+    previously_certified: float,
+    materials_on_site: float = 0.0,
+    retention_limit: float | None = None,
+) -> dict:
+    """Interim certificate worked from the totals to date.
+
+    Every amount is a total to date, so the amount due is what is owed now
+    less what earlier certificates already certified -- not a period figure
+    with retention taken again. Retention is held on the work done, at the
+    contract's rate, until it reaches the contract's limit; materials on site
+    are added after retention (FIDIC 14.3: retention at (c), plant and
+    materials at (e)). The rate, the earlier certificates and the limit are
+    the contract's figures: the rate and the earlier certificates have no
+    default, and with no limit given none is applied and the working says so.
+    A total of earlier certificates above the net to date gives a negative
+    amount due, stated as such, never clipped to nil.
+    """
+    if retention_percent is None:
+        return {"error": "retention_percent is required (the contract's retention rate); "
+                         "it has no default.", "missing": ["retention_percent"]}
+    if previously_certified is None:
+        return {"error": "previously_certified is required (the total of earlier "
+                         "certificates; 0 for the first); it has no default.",
+                "missing": ["previously_certified"]}
+    work = float(work_value_to_date)
+    mos = float(materials_on_site or 0.0)
+    prev = float(previously_certified)
+    rate = float(retention_percent)
+    if min(work, mos, prev) < 0:
+        return {"error": "work_value_to_date, materials_on_site and previously_certified "
+                         "must be >= 0."}
+    if not (0.0 <= rate <= 100.0):
+        return {"error": "retention_percent must be between 0 and 100."}
+    if retention_limit is not None and float(retention_limit) < 0:
+        return {"error": "retention_limit must be >= 0."}
+
+    gross = work + mos
+    retention_at_rate = work * rate / 100.0
+    capped = retention_limit is not None and retention_at_rate > float(retention_limit)
+    retention = float(retention_limit) if capped else retention_at_rate
+    net = gross - retention
+    due = net - prev
+
+    working = [
+        f"Gross to date = work done {_money(work)} + materials on site {_money(mos)} "
+        f"= {_money(gross)}",
+        f"Retention = {rate:g}% x work done {_money(work)} = {_money(retention_at_rate)}"
+        + (f", held at the retention limit {_money(float(retention_limit))}" if capped
+           else (f" (limit {_money(float(retention_limit))} not reached)"
+                 if retention_limit is not None else " (no retention limit given)")),
+        f"Net to date = {_money(gross)} - {_money(retention)} = {_money(net)}",
+        f"Due this certificate = {_money(net)} - earlier certificates {_money(prev)} "
+        f"= {_money(due)}",
+    ]
+    out = {
+        "gross_to_date": round(gross, 2),
+        "retention_to_date": round(retention, 2),
+        "retention_limit_reached": capped,
+        "net_to_date": round(net, 2),
+        "previously_certified": round(prev, 2),
+        "amount_due": round(due, 2),
+        "working": working,
+        "standard": "FIDIC Clause 14.3",
+    }
+    if due < 0:
+        out["note"] = ("Earlier certificates exceed the net value to date: this "
+                       "certificate is a deduction of " + _money(-due) + ".")
+    return out

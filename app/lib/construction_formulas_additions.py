@@ -16,6 +16,7 @@ from app.lib.formula_registry import formula
 # imported back so existing imports of this module keep working.
 from app.agents.hats.commercial.formulas.construction_formulas_additions import (  # noqa: F401 -- moved
     calculate_interim_payment,
+    interim_payment_to_date,
 )
 from app.agents.hats.safety.formulas.construction_formulas_additions import (  # noqa: F401 -- moved
     guardrail_top_rail_height,
@@ -24,4 +25,5 @@ from app.agents.hats.safety.formulas.construction_formulas_additions import (  #
 ADDITIONAL_CALCULATORS = {
     "guardrail_top_rail_height": guardrail_top_rail_height,
     "calculate_interim_payment": calculate_interim_payment,
+    "interim_payment_to_date": interim_payment_to_date,
 }
