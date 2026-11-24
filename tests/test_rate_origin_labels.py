@@ -24,6 +24,12 @@ _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
      "app/lib/data/one_table.json"),
     ("Title\nGenerated from `config/other/rates.yaml`; edit the source.\nbody",
      "config/other/rates.yaml"),
+    # Markdown emphasis around the declaration is typography: an italic
+    # (underscore) or bold (asterisks) line declares the same table.
+    ("# A table copy\n\n_Generated from `lib/tables/first.json` (single source)._\n",
+     "lib/tables/first.json"),
+    ("Title\n**Generated from `data/second_table.yaml`**\nbody",
+     "data/second_table.yaml"),
 ])
 def test_a_generated_copy_declares_its_encoded_table(text, source):
     assert doc_typing.declared_origin(text) == {"kind": "encoded_table", "source": source}
@@ -34,6 +40,9 @@ def test_a_generated_copy_declares_its_encoded_table(text, source):
     # The phrase inside running text, not on a line of its own, is not a
     # declaration; nor is a path without the backtick quoting.
     "The values were generated from `somewhere` in prose.\nGenerated from app/x.json\n",
+    # Emphasis does not turn a prose mention into a declaration, and a list
+    # bullet (marker, then a space) is not the declaration line either.
+    "_The values were generated from `somewhere` last year._\n* Generated from `a/b.json`\n",
     None,
 ])
 def test_a_document_without_the_declaration_speaks_for_itself(text):
