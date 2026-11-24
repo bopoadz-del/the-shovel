@@ -60,8 +60,10 @@ def _cpm(activities: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, int]], i
                for a in activities]
     envelope = run_calculation("cpm_network", {"activities": network})
     result = envelope.get("result") if isinstance(envelope, dict) else None
-    if not isinstance(envelope, dict) or envelope.get("status") != "success"             or not isinstance(result, dict):
-        reason = (envelope.get("error") if isinstance(envelope, dict) else None)             or "the CPM kernel returned no result"
+    if (not isinstance(envelope, dict) or envelope.get("status") != "success"
+            or not isinstance(result, dict)):
+        reason = ((envelope.get("error") if isinstance(envelope, dict) else None)
+                  or "the CPM kernel returned no result")
         raise ValueError(f"schedule network not computed: {reason}")
     rows = {str(r["id"]): r for r in result.get("activities") or []}
     missing = [i for i in ids if i not in rows]

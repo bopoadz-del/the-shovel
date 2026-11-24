@@ -161,3 +161,11 @@ def test_a_one_item_list_for_a_scalar_input_is_its_item(es, ef, ls, lf):
     assert listed["status"] == "success", listed
     assert listed["result"]["total_float"] == ls - es
     assert listed["result"]["is_critical"] is (ls - es <= 0)
+
+
+@pytest.mark.parametrize("empty", [[], ()])
+def test_an_empty_activity_list_is_an_empty_workbook_not_a_refusal(empty):
+    # No activities is not a network the kernel must refuse: the workbook has
+    # no rows, no project duration and no listed order. Without the guard the
+    # empty network reaches the kernel and the writer raises.
+    assert pm_excel._cpm(empty) == ({}, 0, [])
