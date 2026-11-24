@@ -184,7 +184,7 @@
    {
     "id": "monte_carlo_percentiles",
     "description": "Seeded Monte Carlo of a total of three-point (low, most likely, high) items: P50/P80/P90, mean, chance within the most likely total",
-    "implemented_by": "app.lib.construction_formulas_planning.monte_carlo_percentiles",
+    "implemented_by": "app.lib.construction_formulas.monte_carlo_percentiles",
     "domain": "planning",
     "tier": "strategic"
    },
