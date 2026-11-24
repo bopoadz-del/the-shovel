@@ -6,19 +6,15 @@ note), imported through the loader #507 merged.
 Hat-agnostic: on every hat that ships procedures, the assembled agent prompt
 keeps the hat's own guidance first and the procedures behind it (a playbook is
 guidance under the hat, never in front of it), every refusal and step reaches
-the prompt, and a lineage reading "as <id>" carries the referenced
-procedure's attribution.
+the prompt. A lineage reading "as <id>" is checked across every hat by
+test_sk1_commercial_quantities_playbook (a playbook file may span two hats).
 """
 from __future__ import annotations
-
-import re
 
 import pytest
 
 from app.agents import catalog
 from app.agents.models import Discipline
-
-_REF = re.compile(r"^as ([A-Za-z]\d+)\b")
 
 
 def _hats_with_procedures():
@@ -46,12 +42,3 @@ def test_procedures_sit_behind_the_hats_guidance(hat, tmp_path):
         assert proc.refusals in body
         for step in proc.steps:
             assert step in body
-
-
-@pytest.mark.parametrize("hat", _hats_with_procedures(), ids=lambda h: h.id)
-def test_lineage_reference_carries_attribution(hat):
-    by_id = {p.id.lower(): p for p in hat.playbook.procedures}
-    for proc in hat.playbook.procedures:
-        m = _REF.match(proc.lineage)
-        if m:
-            assert proc.attribution == by_id[m.group(1).lower()].attribution, f"{hat.id}/{proc.id}"
