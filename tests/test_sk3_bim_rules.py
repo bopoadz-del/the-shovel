@@ -260,3 +260,32 @@ def test_nothing_readable_is_not_applicable_not_pass(props, status):
     out = check_bim_rules([_el("a", props=props)], [{"kind": "unique", "field": "Px.Mark"}])
     assert out["status"] == status
     assert out["elements_read"] == 1
+
+
+@pytest.mark.parametrize("left,status", [
+    (True, "not_applicable"),
+    (False, "not_applicable"),
+    (1, "pass"),
+])
+def test_compare_a_boolean_is_not_a_number(left, status):
+    els = [_el("a", props={"Px.A": left, "Px.B": 5})]
+    rule = check_bim_rules(
+        els, [{"kind": "compare", "field": "Px.A", "op": "<", "other": "Px.B"}]
+    )["rules"][0]
+    assert rule["status"] == status
+
+
+@pytest.mark.parametrize("second,not_checked", [
+    ({"object_type": "T1", "props": {}}, ["b"]),
+    ({"props": {"Px.Rating": "90"}}, ["b"]),
+    ({"object_type": "T1", "props": {"Px.Rating": "60"}}, []),
+])
+def test_consistent_element_missing_value_or_group_is_not_checked(second, not_checked):
+    els = [
+        _el("a", object_type="T1", props={"Px.Rating": "60"}),
+        _el("b", **second),
+    ]
+    rule = check_bim_rules(
+        els, [{"kind": "consistent", "field": "Px.Rating", "group_by": "object_type"}]
+    )["rules"][0]
+    assert (rule["status"], rule["not_checked"]) == ("pass", not_checked)
