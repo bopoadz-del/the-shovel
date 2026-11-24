@@ -11,7 +11,17 @@ import pytest
 from app.agents import answer_contract, answer_exit
 
 
+#: One Sources row: the turn read a document. It carries no passage, so no
+#: conflict can be read from it.
+_DOC_ROW = {"doc_name": "Site handbook.pdf", "page_or_section": "p. 4"}
+
+
 def _apply(text: str, **kw):
+    """A finished answer to a question put to the documents, unless a test
+    says otherwise."""
+    kw.setdefault("lead", True)
+    if "sources" not in kw and "evidence" not in kw:
+        kw["sources"] = [dict(_DOC_ROW)]
     return answer_contract.apply(text, **kw)
 
 
@@ -217,13 +227,13 @@ def test_fence_absent_splits(text, details):
      "Level 3 has 42 parking bays.", "Level 2 has 38.\n\nThe basement has none."),
 ])
 def test_exit_result_carries_details(answer, lead, details):
-    out = answer_exit.check_result({"answer": answer, "sources": []})
+    out = answer_exit.check_result({"answer": answer, "sources": [dict(_DOC_ROW)]})
     assert out["answer"] == lead
     assert out["details"] == details
 
 
 def test_exit_result_without_details_has_no_field():
-    out = answer_exit.check_result({"answer": "The gate is grey.", "sources": []})
+    out = answer_exit.check_result({"answer": "The gate is grey.", "sources": [dict(_DOC_ROW)]})
     assert "details" not in out
 
 
@@ -289,3 +299,90 @@ def test_a_paragraph_that_does_not_open_on_an_item_is_not_a_list(par):
 ])
 def test_a_paragraph_that_opens_on_an_item_or_row_is_a_list(par):
     assert answer_contract._is_list(par) is True
+
+
+# ── only a finished answer to a question put to the documents is split ──────
+
+_TWO_PARS = [
+    ("The gate is grey.\n\nThe fence is green.", "The fence is green."),
+    ("Level 3 has 42 parking bays.\n\nLevel 2 has 38.\n\nThe basement has none.", "The basement has none."),
+]
+
+
+@pytest.mark.parametrize("text,later", _TWO_PARS)
+def test_a_text_not_offered_as_a_lead_is_read_whole(text, later):
+    # A document built from a stored answer calls the contract without lead.
+    done = answer_contract.apply(text, sources=[dict(_DOC_ROW)])
+    assert later in done.text
+    assert done.details is None
+
+
+@pytest.mark.parametrize("text,later", _TWO_PARS)
+def test_the_same_text_offered_as_a_lead_is_split(text, later):
+    done = answer_contract.apply(text, sources=[dict(_DOC_ROW)], lead=True)
+    assert later not in done.text
+    assert later in done.details
+
+
+@pytest.mark.parametrize("text,later", _TWO_PARS)
+def test_a_reply_that_read_no_document_is_read_whole(text, later):
+    done = answer_contract.apply(text, sources=[], evidence=[], lead=True)
+    assert later in done.text
+    assert done.details is None
+
+
+@pytest.mark.parametrize("text,later", _TWO_PARS)
+def test_a_handed_passage_alone_counts_as_reading_a_document(text, later):
+    passage = {"doc_id": "d1", "doc_name": "Site handbook.pdf", "page": 4,
+               "snippet": "General arrangement of the site entrance."}
+    done = answer_contract.apply(text, sources=[], evidence=[passage], lead=True)
+    assert later in done.details
+
+
+def _exit_with_turn(text: str, cut: bool) -> dict:
+    turn, token = answer_exit.begin_turn("what colour is it?")
+    try:
+        if cut:
+            answer_exit.note_cut()
+        return answer_exit.check_result({"answer": text, "sources": [dict(_DOC_ROW)]}, turn)
+    finally:
+        answer_exit.reset_turn(token)
+
+
+@pytest.mark.parametrize("text,later", _TWO_PARS)
+def test_an_answer_cut_part_way_is_read_whole_at_the_exit(text, later):
+    out = _exit_with_turn(text, cut=True)
+    assert later in out["answer"]
+    assert "details" not in out
+
+
+@pytest.mark.parametrize("text,later", _TWO_PARS)
+def test_the_same_answer_finished_is_split_at_the_exit(text, later):
+    out = _exit_with_turn(text, cut=False)
+    assert later not in out["answer"]
+    assert later in out["details"]
+
+
+@pytest.mark.parametrize("cut_text", [
+    "The slab is 250 mm thick. The topping is laid after the",
+    "Piles are 600 mm in diameter. They are bored to",
+])
+def test_ending_an_answer_cut_by_the_output_limit_marks_the_turn(cut_text):
+    from app.agents.runtime import _end_cut_answer
+
+    turn, token = answer_exit.begin_turn("q")
+    try:
+        assert turn.cut is False
+        _end_cut_answer(cut_text)
+        assert turn.cut is True
+    finally:
+        answer_exit.reset_turn(token)
+
+
+def test_note_cut_without_a_turn_is_a_no_op():
+    token = answer_exit._TURN.set(None)
+    try:
+        answer_exit.note_cut()
+        assert answer_exit.current_turn() is None
+    finally:
+        answer_exit._TURN.reset(token)

@@ -99,6 +99,10 @@ class Turn:
     #: reply may be stated as "the documents did not yield an answer"; an
     #: error must never read as a not-found.
     forced_retry_outcome: str = ""
+    #: True when the answer stopped part-way (the model's output limit, or
+    #: the stream dropped): its end says why it stops, so it is not a
+    #: finished answer and is read whole (answer contract, rule 5).
+    cut: bool = False
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -113,6 +117,13 @@ def open_turn(question: str = "") -> Turn:
 
 def current_turn() -> Turn | None:
     return _TURN.get()
+
+
+def note_cut() -> None:
+    """The current turn's answer stopped part-way (see ``Turn.cut``)."""
+    turn = _TURN.get()
+    if turn is not None:
+        turn.cut = True
 
 
 def reset_turn(token: contextvars.Token) -> None:
@@ -1804,7 +1815,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
     done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
                                  question=(turn.question or None) if turn else None,
-                                 evidence=_handed_evidence(turn, rows))
+                                 evidence=_handed_evidence(turn, rows),
+                                 lead=not (turn is not None and turn.cut))
     env[key] = done.text
     if done.citations:
         env["citations"] = done.citations

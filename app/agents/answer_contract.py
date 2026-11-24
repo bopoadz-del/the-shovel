@@ -31,6 +31,11 @@ question, a formula, a project or a document.
    shape, never a word count: nothing is deleted, and an answer that is one
    paragraph is untouched. An answer a conflict statement replaces is read
    whole: the statement is its lead and nothing is moved out of sight.
+   The rule is a reading of a FINISHED answer to a question put to the
+   documents: it runs only when the caller says so (``lead``) and the turn
+   read a document (a Sources row or a handed passage). Every other text is
+   read whole -- an answer cut part-way (its end says why it stops), a reply
+   that read no document, and a document built from a stored answer.
 6. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
    a refusal into an answer: a tier is copied from the turn's own Sources row
    or left ``None``; a refusal (an answer with no figure) keeps every sentence
@@ -912,6 +917,7 @@ def apply(
     asking: bool = False,
     question: str | None = None,
     evidence: Iterable[dict[str, Any]] | None = None,
+    lead: bool = False,
 ) -> Contracted:
     """The answer in contract form. ``sources`` are the turn's Sources rows
     (used only to fill a citation's page, passage and tier); ``computed`` is
@@ -924,11 +930,14 @@ def apply(
     every passage the turn was handed (pre-injected excerpts and tool
     passages): conflicts are checked over it as well as over ``sources``,
     since a Sources row names only what the answer cited and may carry no
-    passage."""
+    passage. ``lead`` is True when the text is a finished answer leaving
+    the turn for the reader: only then may rule 5 move text into
+    ``details``."""
     if not isinstance(text, str) or not text.strip():
         return Contracted(text=text)
     try:
         rows = [r for r in (sources or []) if isinstance(r, dict)]
+        handed = [r for r in (evidence or []) if isinstance(r, dict)]
         coverage = None
         m = _COVERAGE_RE.search(text)
         if m:
@@ -947,11 +956,10 @@ def apply(
         body = _tidy(body)
         whole = body
         details: str | None = None
-        if not asking and not computed:
+        if lead and not asking and not computed and (rows or handed):
             body, details = _lead_and_details(body)
         from app.agents.evidence_conflicts import detect
 
-        handed = [r for r in (evidence or []) if isinstance(r, dict)]
         # Read over the whole text (citations already markers): lead and details.
         found = detect(body + ("\n\n" + details if details else ""), rows + handed, question)
         structured: list[dict[str, Any]] = []
