@@ -595,14 +595,15 @@ def _own_words(names: List[str], descs: Dict[str, str],
     """Per variable, the words only it declares: first its name's words,
     then its description's content words (``gross_mass`` described as
     "container plus wet soil"), each set less every other variable's.
-    A word of the entry's title is no description word: the ask writes
-    it to name the formula, not to label a figure."""
+    A word of the entry's title is no label word, whether its name or
+    its description declares it: the ask writes it to name the formula,
+    not to label a figure."""
     from app.lib.construction_formulas import _display_content_words
     name_w = {n: set(n.lower().split("_")) for n in names}
     titled = set(_display_content_words(title))
     desc_w = {n: set(_display_content_words(descs.get(n) or "")) - titled for n in names}
     others = {n: [o for o in names if o != n] for n in names}
-    by_name = {n: name_w[n] - set().union(*(name_w[o] for o in others[n]))
+    by_name = {n: name_w[n] - set().union(*(name_w[o] for o in others[n])) - titled
                for n in names}
     by_desc = {n: desc_w[n] - set().union(*(name_w[o] | desc_w[o] for o in others[n]))
                for n in names}

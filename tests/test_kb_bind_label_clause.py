@@ -125,3 +125,33 @@ def test_a_title_word_is_no_description_word(text, expected):
                     "hold": ("t", "Capacity of one barge hold")})
     entry["title"] = "Barge trip count"
     assert K.bind_entry_variables(entry, text) == expected
+
+
+
+_USED_PLANNED = _entry({"used_qty": ("t", "Material actually drawn from stock"),
+                        "planned_qty": ("t", "Material the plan allowed")})
+
+
+@pytest.mark.parametrize("title,text,expected", [
+    # "planned" names the formula here, before the colon; the figure it
+    # sits nearest is labelled "actually drawn", so it binds the used qty
+    ("Material used beyond the planned quantity",
+     "material used beyond the planned quantity: actually drawn 70 t, plan allowed 50 t",
+     {"used_qty": 70.0, "planned_qty": 50.0}),
+    # the same name word, absent from the title, still labels its figure
+    ("Material overrun",
+     "the material overrun: planned 50 t, used 70 t",
+     {"used_qty": 70.0, "planned_qty": 50.0}),
+])
+def test_a_title_word_is_no_name_word(title, text, expected):
+    entry = dict(_USED_PLANNED, title=title)
+    assert K.bind_entry_variables(entry, text) == expected
+
+
+def test_a_name_word_in_the_title_is_left_out_of_own_words():
+    names = ["used_qty", "planned_qty"]
+    descs = {"used_qty": "", "planned_qty": ""}
+    assert K._own_words(names, descs, "Planned quantity check")[0] == {
+        "used_qty": {"used"}, "planned_qty": set()}
+    assert K._own_words(names, descs, "Quantity check")[0] == {
+        "used_qty": {"used"}, "planned_qty": {"planned"}}
