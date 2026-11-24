@@ -51,7 +51,7 @@
     "construction_calc:fineness_modulus",
     "construction_calc:shear_stress_check"
   ],
-  "available_tools": ["commissioning_checklist"],
+  "available_tools": ["commissioning_checklist", "ids_check"],
   "handoffs": [
     {
       "to": "contracts",
