@@ -212,8 +212,15 @@ def test_course_value_is_read_from_the_entry(entry_id, field_path, course_figure
     ],
 )
 def test_uplift_calculator_default_follows_the_course(entry_id, field_path):
-    pairs = [(kb.get_rule(entry_id), field_path, dewatering_uplift_check, "required_fos")]
-    assert disagreements(pairs) == []
+    # The calculator reads its factor when it runs, so the value it applies
+    # with no factor given is what the run records, not a signature default.
+    from app.lib.formula_registry import recording_constants
+
+    with recording_constants() as rec:
+        dewatering_uplift_check(water_depth=10.0, raft_thickness=2.0, floor_count=3)
+    applied = {r["name"]: r for r in rec.rows}["required_fos"]
+    assert applied["value"] == pytest.approx(course_value(kb.get_rule(entry_id), field_path))
+    assert applied.get("source")
 
 
 def _floors(**kw):
@@ -327,6 +334,72 @@ def test_course_constant_missing_raises_never_guesses(tmp_path, monkeypatch, ent
     with pytest.raises(LookupError) as err:
         _course_constant(entry_id, field_path, "ratio", "minimum FOS")
     assert says in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "field_value",
+    [
+        True,          # a flag: float(True) would read as 1.0
+        "one point two",  # a word: float() would raise ValueError
+        "1.2",         # a number written as text is still not a number field
+    ],
+)
+def test_course_constant_non_number_is_a_missing_value(tmp_path, monkeypatch, field_value):
+    from app.agents.hats.design.formulas.construction_formulas import _course_constant
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(
+        tmp_path, [{"id": "x.fos", "thresholds": {"min_fos": field_value}, "provenance": {}}]))
+    with pytest.raises(LookupError, match="is not a number"):
+        _course_constant("x.fos", "thresholds.min_fos", "ratio", "minimum FOS")
+
+
+@pytest.mark.parametrize(
+    "entries, fos_given, outcome",
+    [
+        # no uplift entry, factor given by the caller: the check runs
+        ([], 1.5, "runs"),
+        # no uplift entry, no factor given: only this check fails, and says why
+        ([], None, "not found"),
+        # entry present, no factor given: the course's factor applies
+        ([{"id": "foundation.uplift_fos", "thresholds": {"min_fos": 1.4},
+           "provenance": {"course_reference": "owner-supplied course material, p1"}}], None, "runs"),
+    ],
+)
+def test_module_loads_without_the_entry_and_only_the_check_needs_it(
+        tmp_path, monkeypatch, entries, fos_given, outcome):
+    import app.agents.hats.design.formulas.construction_formulas as mod
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(tmp_path, entries))
+    kw = {} if fos_given is None else {"required_fos": fos_given}
+    if outcome == "runs":
+        r = mod.dewatering_uplift_check(water_depth=10.0, raft_thickness=2.0, floor_count=3, **kw)
+        assert r.fos == pytest.approx(5.0 / 10.0 + 3 * 0.3 * 2.5 / 10.0)
+    else:
+        with pytest.raises(LookupError, match=outcome):
+            mod.dewatering_uplift_check(water_depth=10.0, raft_thickness=2.0, floor_count=3, **kw)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [],  # an empty knowledge base
+        [{"id": "foundation.uplift_fos", "thresholds": {}, "provenance": {}}],  # entry, no field
+    ],
+)
+def test_calculator_module_imports_without_the_course_value(tmp_path, entries):
+    # A fresh interpreter: the import itself must not read the course value.
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, CONSTRUCTION_KB_FILE=_write_kb(tmp_path, entries))
+    done = subprocess.run(
+        [sys.executable, "-c",
+         "import app.agents.hats.design.formulas.construction_formulas"],
+        cwd=str(Path(__file__).resolve().parents[1]), env=env,
+        capture_output=True, text=True, timeout=300,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
 
 
 @pytest.mark.parametrize("water_depth, refused", [(-0.5, True), (-3.0, True), (0.0, False), (4.0, False)])

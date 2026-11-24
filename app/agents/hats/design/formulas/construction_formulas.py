@@ -33,16 +33,28 @@ def _course_constant(entry_id: str, field_path: str, unit: str, meaning: str) ->
         if not isinstance(node, dict) or key not in node:
             raise LookupError(f"course knowledge entry {entry_id!r} has no {field_path!r}")
         node = node[key]
+    # A flag is not a number (float(True) is 1.0) and a word is not one
+    # either: both are a missing value, said the same way as a missing field.
+    if isinstance(node, bool) or not isinstance(node, (int, float)) or not math.isfinite(node):
+        raise LookupError(
+            f"course knowledge entry {entry_id!r} field {field_path!r} is not a number")
     provenance = entry.get("provenance") or {}
     source = provenance.get("course_reference") or provenance.get("source") or None
     return Constant(float(node), unit, meaning, source=source)
 
 
-_UPLIFT_K = Constants(
-    required_fos=_course_constant(
-        "foundation.uplift_fos", "thresholds.min_fos", "ratio",
-        "minimum factor of safety against groundwater uplift"),
-)
+def _uplift_constants() -> Constants:
+    """The uplift check's course constants, read when the check runs.
+
+    Never at import: a knowledge base without the entry must not stop the
+    module (and every other calculator in it) from loading; only a check
+    that needs the course's factor and cannot find it fails, and says why.
+    """
+    return Constants(
+        required_fos=_course_constant(
+            "foundation.uplift_fos", "thresholds.min_fos", "ratio",
+            "minimum factor of safety against groundwater uplift"),
+    )
 
 
 @dataclass
@@ -77,11 +89,16 @@ def dewatering_uplift_check(
     floor_thickness: float = 0.3,
     concrete_unit_weight: float = 2.5,
     water_unit_weight: float = 1.0,
-    required_fos: float = _UPLIFT_K.declared()["required_fos"].value,
+    required_fos: Optional[float] = None,
 ) -> DewateringResult:
     """Check if dewatering can stop: FOS = counter-weight / uplift >= the
     required factor of safety. When none is given, the course's minimum
     applies (read from its knowledge entry) and the result names the course."""
+    course: Optional[Constant] = None
+    if required_fos is None:
+        course_k = _uplift_constants()
+        required_fos = course_k.required_fos
+        course = course_k.declared()["required_fos"]
     if water_depth < 0:
         raise ValueError("water_depth must be >= 0")
     if raft_thickness < 0 or floor_count < 0 or floor_thickness < 0:
@@ -99,8 +116,7 @@ def dewatering_uplift_check(
         f"Counter = {raft_weight:.3f} + {floor_weight:.3f} = {counter_weight:.3f} T/m2",
         f"FOS = {fos:.3f} (required: {required_fos})",
     ]
-    course = _UPLIFT_K.declared()["required_fos"]
-    if course.source and math.isclose(required_fos, course.value):
+    if course is not None and course.source:
         notes.append(f"Required factor of safety {course.value:g}: {course.source}")
     can_stop = fos >= required_fos
     if can_stop:
