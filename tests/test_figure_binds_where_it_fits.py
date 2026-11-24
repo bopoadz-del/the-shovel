@@ -111,3 +111,31 @@ def test_thick_figure_binds_to_the_input_that_measures_thickness(figure):
 @pytest.mark.parametrize("figure", [250, 200])
 def test_figure_without_an_adjective_still_binds_by_its_unit(figure):
     assert read(_span, f"Opening {figure} mm, is it enough?") == {"span_mm": float(figure)}
+
+
+# --- type: an input the signature does not declare a type for -------------
+
+from app.lib.construction_formulas import _takes_a_figure  # noqa: E402
+
+
+def _open_inputs(a, b):
+    return {"a": a, "b": b}
+
+
+def _typed_inputs(note: str, rows: List[float]) -> dict:
+    return {"note": note, "rows": rows}
+
+
+@pytest.mark.parametrize("fn, name", [(_open_inputs, "a"), (_open_inputs, "b")])
+def test_an_undeclared_type_is_open_to_a_figure(fn, name):
+    assert _takes_a_figure(fn, name) is True
+
+
+@pytest.mark.parametrize("fn, name", [(_typed_inputs, "depth"), (_open_inputs, "span")])
+def test_a_name_the_signature_lacks_is_read_as_open_not_a_crash(fn, name):
+    assert _takes_a_figure(fn, name) is True
+
+
+@pytest.mark.parametrize("name", ["note", "rows"])
+def test_a_declared_text_or_list_input_is_closed_to_a_figure(name):
+    assert _takes_a_figure(_typed_inputs, name) is False
