@@ -70,27 +70,51 @@ def test_value_and_source_come_from_the_entry(shipped, entries, entry_id, field_
 
 
 @pytest.mark.parametrize(
-    "entries, entry_id, field_path",
+    "entries, entry_id, field_path, says",
     [
-        ([_entry("a.one", {"x": 1.5})], "a.two", "thresholds.x"),  # no such entry
-        ([_entry("a.one", {"x": 1.5})], "a.one", "thresholds.y"),  # no such field
-        ([_entry("a.one", {"x": 1.5})], "a.one", "thresholds.x.deeper"),  # path past a number
-        ([_entry("a.one", {"x": ">= 1.5"})], "a.one", "thresholds.x"),  # words, not a number
-        ([_entry("a.one", {"x": True})], "a.one", "thresholds.x"),  # a flag, not a number
-        ([_entry("a.one", {"x": None})], "a.one", "thresholds.x"),  # stated as nothing
+        ([_entry("a.one", {"x": 1.5})], "a.two", "thresholds.x", "not in the shipped"),  # no such entry
+        ([_entry("a.one", {"x": 1.5})], "a.one", "thresholds.y", "has no field"),  # no such field
+        ([_entry("a.one", {"x": 1.5})], "a.one", "thresholds.x.deeper", "has no field"),  # path past a number
+        ([_entry("a.one", {"x": ">= 1.5"})], "a.one", "thresholds.x", "is not a number"),  # words
+        ([_entry("a.one", {"x": True})], "a.one", "thresholds.x", "is not a number"),  # a flag
+        ([_entry("a.one", {"x": None})], "a.one", "thresholds.x", "is not a number"),  # stated as nothing
     ],
 )
-def test_no_number_in_the_entry_raises_never_falls_back(shipped, entries, entry_id, field_path):
+def test_no_number_in_the_entry_raises_never_falls_back(shipped, entries, entry_id, field_path, says):
+    # The error names what is missing: the entry, the field, or a number.
     shipped(entries)
-    with pytest.raises(LookupError):
+    with pytest.raises(LookupError, match=says):
         Constant.from_knowledge(entry_id, field_path, "ratio", "an invented limit")
+
+
+@pytest.mark.parametrize(
+    "entries, wanted, found",
+    [
+        ([_entry("a.one", {"x": 1}), _entry("b.two", {"x": 2})], "b.two", {"x": 2}),
+        ([_entry("a.one", {"x": 1}), _entry("b.two", {"x": 2})], "a.one", {"x": 1}),
+        ([_entry("a.one", {"x": 1})], "c.three", None),
+    ],
+)
+def test_shipped_entry_finds_the_entry_by_id(shipped, entries, wanted, found):
+    shipped(entries)
+    entry = _knowledge.shipped_entry(wanted)
+    assert (entry["thresholds"] if entry is not None else None) == found
+
+
+@pytest.mark.parametrize("text", ["{ not json", ""])
+def test_shipped_entry_unreadable_file_raises(tmp_path, monkeypatch, text):
+    bad = tmp_path / "broken.json"
+    bad.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(_knowledge, "_KB_PATH", str(bad))
+    with pytest.raises(LookupError, match="unreadable"):
+        _knowledge.shipped_entry("a.one")
 
 
 def test_unreadable_shipped_file_raises(tmp_path, monkeypatch):
     bad = tmp_path / "broken.json"
     bad.write_text("{ not json", encoding="utf-8")
     monkeypatch.setattr(_knowledge, "_KB_PATH", str(bad))
-    with pytest.raises(LookupError):
+    with pytest.raises(LookupError, match="unreadable"):
         Constant.from_knowledge("a.one", "thresholds.x", "ratio", "an invented limit")
 
 
