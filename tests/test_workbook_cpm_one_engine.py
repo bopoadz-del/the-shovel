@@ -221,6 +221,20 @@ def test_a_blank_padded_id_is_keyed_as_the_kernel_keys_it(pad):
     assert [row[0] for row in ws.iter_rows(min_row=4, max_row=5, values_only=True)] == ["A", "B"]
 
 
+@pytest.mark.parametrize("preds,b_es", [
+    # hand pass: A 0-2, X 0-4; B starts after its predecessors finish.
+    (("A",), 2),
+    (("A", {"id": "X", "type": "FS", "lag": 1}), 5),
+])
+def test_a_tuple_of_links_is_read_link_by_link(preds, b_es):
+    net = [{"id": "A", "duration": 2, "predecessors": []},
+           {"id": "X", "duration": 4, "predecessors": ()},
+           {"id": "B", "duration": 3, "predecessors": preds}]
+    cpm, proj, _ = pm_excel._cpm(net)
+    assert cpm["B"]["es"] == b_es
+    assert proj == b_es + 3
+
+
 @pytest.mark.parametrize("net,unknown", [
     ([{"id": "A", "duration": 2, "predecessors": ["Z"]}], "Z"),
     ([{"id": "A", "duration": 1, "predecessors": []},
