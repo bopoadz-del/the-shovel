@@ -14482,15 +14482,23 @@ async def _predispatch_kb_knowledge(
             "role": "tool", "name": _KB_TOOL, "tool_call_id": tc["id"],
             "content": rendered,
         })
-        _inject_predispatch(
-            messages, _KB_TOOL, rendered[:4000],
-            "The encoded construction knowledge was searched for this ask. "
-            "When an entry states the asked value, rule or formula, answer "
-            "from it (evaluate a formula with the stated values) and name "
-            "the source its provenance gives; it is encoded knowledge, not "
-            "a project document. When none states it, answer as you would "
-            "without this result.",
-        )
+        # A search result is evidence for an answer, never the answer (G-8):
+        # the note carries no "Authoritative draft" marker, so a turn whose
+        # model is unreachable does not print these matches as its reply.
+        messages.append({
+            "role": "user",
+            "content": (
+                f"PLATFORM PRE-DISPATCH: {_KB_TOOL} searched the encoded "
+                "construction knowledge for this ask. Search result (evidence "
+                "for your answer, not an answer):\n"
+                f"{rendered[:4000]}\n"
+                "When an entry states the asked value, rule or formula, answer "
+                "from it (evaluate a formula with the stated values) and name "
+                "the source its provenance gives; it is encoded knowledge, not "
+                "a project document. When none states it, answer as you would "
+                "without this result."
+            ),
+        })
         _LOG.info("kb knowledge predispatch: entry=%s", entry.get("id"))
         return {
             "name": _KB_TOOL,
