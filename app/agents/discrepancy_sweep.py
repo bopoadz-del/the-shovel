@@ -161,6 +161,53 @@ def _stated_figures(text: str) -> list[Stated]:
     return out
 
 
+def _measured(text: str) -> list:
+    """The measured values in ``text`` as the conflict statement reads them
+    (a quantity in a unit, or money in one currency), each normalised to its
+    kind's base unit. A date, a grade or a labelled phrase is not measured."""
+    return [v for v in _typed_values(text or "") if isinstance(v.norm, tuple)]
+
+
+def _converted_difference(stated_text: str, text: str) -> tuple[str, str] | None:
+    """The first stated value and a candidate value of the SAME kind that
+    differs after unit conversion ("40 mm" against "0.05 m"), else None.
+
+    The reader and the equality are the conflict statement's own
+    (``evidence_conflicts.extract`` / ``same``), so this recall and the
+    judgement it feeds agree on what one value is: a figure written in
+    another unit of the same kind that converts to the stated value ("50 mm",
+    "0.05 m") is the same value and never recalled, nor is one that rounds to
+    it (the product's close-number tolerance on the base values). A value of
+    another kind (a length against a mass) is never compared.
+    """
+    theirs = _measured(text)
+    for mine in _measured(stated_text):
+        for other in theirs:
+            if other.kind != mine.kind or _same_value(mine, other):
+                continue
+            if _close(*_in_stated_unit(mine, other)):
+                continue
+            return mine.raw.strip(), other.raw.strip()
+    return None
+
+
+def _in_stated_unit(mine, other) -> tuple[float, float]:
+    """The stated value as written and the other value expressed in the
+    stated value's unit, so the close-number tolerance applies at the scale
+    the draft wrote it (in base metres, 40 mm and 41 mm would sit inside the
+    tolerance's absolute floor). A value written as zero has no scale; the
+    base values are compared then."""
+    written = [float(n.replace(",", "")) for n in _WRITTEN_NUMBER_RE.findall(mine.raw)]
+    number = sum(written) / len(written) if written else 0.0
+    base = sum(mine.norm) / 2
+    if not number or not base:
+        return base, sum(other.norm) / 2
+    return number, sum(other.norm) / 2 / (base / number)
+
+
+_WRITTEN_NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+
+
 def sweep_differences(
     stated_text: str,
     candidates: Iterable[tuple[str, str]],
@@ -286,48 +333,3 @@ def sweep_targets(draft: str) -> tuple[list[str], str]:
         stated.append(sentence)
         ids.extend(i for i in found if i not in ids)
     return stated, " ".join(ids)
-def _measured(text: str) -> list:
-    """The measured values in ``text`` as the conflict statement reads them
-    (a quantity in a unit, or money in one currency), each normalised to its
-    kind's base unit. A date, a grade or a labelled phrase is not measured."""
-    return [v for v in _typed_values(text or "") if isinstance(v.norm, tuple)]
-
-
-def _converted_difference(stated_text: str, text: str) -> tuple[str, str] | None:
-    """The first stated value and a candidate value of the SAME kind that
-    differs after unit conversion ("40 mm" against "0.05 m"), else None.
-
-    The reader and the equality are the conflict statement's own
-    (``evidence_conflicts.extract`` / ``same``), so this recall and the
-    judgement it feeds agree on what one value is: a figure written in
-    another unit of the same kind that converts to the stated value ("50 mm",
-    "0.05 m") is the same value and never recalled, nor is one that rounds to
-    it (the product's close-number tolerance on the base values). A value of
-    another kind (a length against a mass) is never compared.
-    """
-    theirs = _measured(text)
-    for mine in _measured(stated_text):
-        for other in theirs:
-            if other.kind != mine.kind or _same_value(mine, other):
-                continue
-            if _close(*_in_stated_unit(mine, other)):
-                continue
-            return mine.raw.strip(), other.raw.strip()
-    return None
-
-
-def _in_stated_unit(mine, other) -> tuple[float, float]:
-    """The stated value as written and the other value expressed in the
-    stated value's unit, so the close-number tolerance applies at the scale
-    the draft wrote it (in base metres, 40 mm and 41 mm would sit inside the
-    tolerance's absolute floor). A value written as zero has no scale; the
-    base values are compared then."""
-    written = [float(n.replace(",", "")) for n in _WRITTEN_NUMBER_RE.findall(mine.raw)]
-    number = sum(written) / len(written) if written else 0.0
-    base = sum(mine.norm) / 2
-    if not number or not base:
-        return base, sum(other.norm) / 2
-    return number, sum(other.norm) / 2 / (base / number)
-
-
-_WRITTEN_NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
