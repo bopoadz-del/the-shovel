@@ -432,6 +432,53 @@ def _window(sent: str, start: int, end: int) -> str:
     return " ".join(before) + " " + " ".join(after)
 
 
+#: English cardinal words: a value written out in words beside its digits
+#: ("ninety-five percent (95%)") is the value's own wording, not a qualifier.
+#: A closed class of the language, never a list of subjects.
+_CARDINAL_WORDS = frozenset({
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+    "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    "hundred", "thousand", "million"})
+_COORD_WORDS = frozenset({"and", "or"})
+
+
+def _coordinated(gap: str) -> bool:
+    """True when the text between two values holds a coordinator and nothing
+    else but the values' own wording (cardinal words, unit words, brackets,
+    commas): "95% and 98%", "ninety-five percent (95%) and ninety-eight percent
+    (98%)", "90%, 93% or 95%". Any other word in the gap ("for verges and")
+    qualifies one value only, so the values are not one coordination."""
+    words = re.findall(r"[A-Za-z]+(?:-[A-Za-z]+)*", gap)
+    if not (any(w.lower() in _COORD_WORDS for w in words) or "," in gap or "&" in gap):
+        return False
+    for w in words:
+        low = w.lower()
+        if low in _COORD_WORDS or all(p in _CARDINAL_WORDS for p in low.split("-")):
+            continue
+        if _unit(w) is not None or _unit(low) is not None:
+            continue
+        return False
+    return True
+
+
+def _groups(sent: str, vals: list[Value]) -> list[tuple[int, int]]:
+    """Runs of consecutive values of one kind joined only by a coordination,
+    as (first index, last index). Coordinated values share the words around
+    the whole run: in "compacted to 95% and 98% of the maximum dry density"
+    the qualifier after the run belongs to both values, not to the last."""
+    runs: list[tuple[int, int]] = []
+    i = 0
+    while i < len(vals):
+        j = i
+        while (j + 1 < len(vals) and vals[j + 1].kind == vals[i].kind
+               and _coordinated(sent[vals[j].end: vals[j + 1].start])):
+            j += 1
+        runs.append((i, j))
+        i = j + 1
+    return runs
+
+
 def _candidates(rows: list[dict[str, Any]]) -> list[_Cand]:
     out: list[_Cand] = []
     for ri, row in enumerate(rows):
@@ -445,15 +492,17 @@ def _candidates(rows: list[dict[str, Any]]) -> list[_Cand]:
             masked = sent
             for v in sorted(vals, key=lambda v: -v.start):
                 masked = masked[: v.start] + " " * (v.end - v.start) + masked[v.end:]
-            for i, v in enumerate(vals):
-                lo = vals[i - 1].end if i else 0
-                hi = vals[i + 1].start if i + 1 < len(vals) else len(sent)
-                local = sent[lo: v.start] + " " + sent[v.end: hi]
+            for first, last in _groups(sent, vals):
+                start, end = vals[first].start, vals[last].end
+                lo = vals[first - 1].end if first else 0
+                hi = vals[last + 1].start if last + 1 < len(vals) else len(sent)
+                local = sent[lo: start] + " " + sent[end: hi]
                 if len(vals) == 1:
                     near = _terms(masked)
                 else:
-                    near = _terms(_window(masked, v.start, v.end))
-                out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si), masked))
+                    near = _terms(_window(masked, start, end))
+                for v in vals[first: last + 1]:
+                    out.append(_Cand(doc, row, v, near, _terms(local) & near, (ri, si), masked))
     return out
 
 
