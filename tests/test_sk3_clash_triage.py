@@ -221,19 +221,31 @@ class _StubBlock:
                 "clash_report": self.reports[input_data["file_path"]]}
 
 
-@pytest.mark.parametrize("reports, expected", [
-    ({"a.ifc": {"triage": {"clashes_triaged": 1}, "clashes": [_c("D1", "B1", "ducts", "beams")]},
+@pytest.mark.parametrize("params, reports, expected", [
+    # model named by ifc_file is joined to the discipline list
+    ({"ifc_file": "a.ifc", "discipline_models": ["b.ifc"]},
+     {"a.ifc": {"triage": {"clashes_triaged": 1}, "clashes": [_c("D1", "B1", "ducts", "beams")]},
       "b.ifc": {"clashes": []}},
      {"a.ifc": {"clashes_triaged": 1}}),
-    ({"a.ifc": {"clashes": []},
+    ({"discipline_models": ["a.ifc", "b.ifc"]},
+     {"a.ifc": {"clashes": []},
       "b.ifc": {"triage": {"clashes_triaged": 0}, "clashes": []}},
      {"b.ifc": {"clashes_triaged": 0}}),
 ])
-def test_container_reports_each_models_triage(reports, expected):
+def test_container_reports_each_models_triage(params, reports, expected):
     import asyncio
-    from app.containers.construction import ConstructionContainer
-    c = ConstructionContainer.__new__(ConstructionContainer)
+    from app.containers.construction.documents import ConstructionDocumentsMixin
+    c = ConstructionDocumentsMixin.__new__(ConstructionDocumentsMixin)
     c._get_bim_extractor_block = lambda: _StubBlock(reports)
-    out = asyncio.run(c.bim_clash_detection({}, {"discipline_models": ["a.ifc", "b.ifc"]}))
+    c._normalize_block_clash = lambda clash, model_file: _normalized(clash, model_file)
+    c._group_clashes_by_discipline = lambda clashes: {}
+    c._generate_coordination_agenda = lambda clashes: []
+    out = asyncio.run(ConstructionDocumentsMixin.bim_clash_detection(c, {}, params))
     assert out["status"] == "success"
+    assert out["model_summary"]["files_analyzed"] == ["a.ifc", "b.ifc"]
     assert out["triage_by_model"] == expected
+
+
+def _normalized(clash, model_file):
+    from app.containers.construction import ConstructionContainer
+    return ConstructionContainer._normalize_block_clash(None, clash, model_file)
