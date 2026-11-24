@@ -226,10 +226,24 @@ def test_fence_absent_splits(text, details):
     ("Level 3 has 42 parking bays.\n\nLevel 2 has 38.\n\nThe basement has none.",
      "Level 3 has 42 parking bays.", "Level 2 has 38.\n\nThe basement has none."),
 ])
-def test_exit_result_carries_details(answer, lead, details):
-    out = answer_exit.check_result({"answer": answer, "sources": [dict(_DOC_ROW)]})
-    assert out["answer"] == lead
+def test_end_event_carries_details(answer, lead, details):
+    out = answer_exit.check_end_event({"type": "end", "content": answer, "sources": [dict(_DOC_ROW)]})
+    assert out["content"] == lead
     assert out["details"] == details
+
+
+@pytest.mark.parametrize("answer,lead,details", [
+    ("The gate is grey.\n\nThe fence is green.", "The gate is grey.", "The fence is green."),
+    ("Level 3 has 42 parking bays.\n\nLevel 2 has 38.\n\nThe basement has none.",
+     "Level 3 has 42 parking bays.", "Level 2 has 38.\n\nThe basement has none."),
+])
+def test_whole_turn_result_is_read_whole(answer, lead, details):
+    # A whole-turn result is read by readers with no fold (a delegating
+    # agent, the heavy-reasoning stream's tokens, a JSON client): its answer
+    # keeps every paragraph and carries no details (OPUSGRADE S617 fault 3).
+    out = answer_exit.check_result({"answer": answer, "sources": [dict(_DOC_ROW)]})
+    assert lead in out["answer"] and details in out["answer"]
+    assert "details" not in out
 
 
 def test_exit_result_without_details_has_no_field():
@@ -344,7 +358,9 @@ def _exit_with_turn(text: str, cut: bool) -> dict:
     try:
         if cut:
             answer_exit.note_cut()
-        return answer_exit.check_result({"answer": text, "sources": [dict(_DOC_ROW)]}, turn)
+        out = answer_exit.check_end_event({"type": "end", "content": text, "sources": [dict(_DOC_ROW)]},
+                                          turn=turn)
+        return dict(out, answer=out["content"])
     finally:
         answer_exit.reset_turn(token)
 
@@ -407,3 +423,50 @@ def test_an_answer_not_yet_saying_why_it_stops_ends_on_the_notice(which, body):
     out = runtime._end_cut_answer(body, notice)
     assert out.endswith(notice)
     assert out.count(notice) == 1
+
+
+# ── a framing line never leads alone (OPUSGRADE S617 fault 1) ───────────────
+
+@pytest.mark.parametrize("text,lead,details", [
+    ("Based on the specification:\n\nThe slab is 200 mm thick with C40 concrete.\n\nCover is 50 mm to all bars.",
+     "Based on the specification:\n\nThe slab is 200 mm thick with C40 concrete.", "Cover is 50 mm to all bars."),
+    ("Here is what the documents say.\n\nThe lift pit is 1.6 m deep.\n\nThe sump is in the north corner.",
+     "Here is what the documents say.\n\nThe lift pit is 1.6 m deep.", "The sump is in the north corner."),
+    ("The drawings give the following:\n\nThe ramp falls at 1 in 12.\n\nHandrails are on both sides.",
+     "The drawings give the following:\n\nThe ramp falls at 1 in 12.", "Handrails are on both sides."),
+])
+def test_framing_line_takes_the_answer_into_the_lead(text, lead, details):
+    done = _apply(text)
+    assert done.text == lead
+    assert done.details == details
+
+
+@pytest.mark.parametrize("text,lead", [
+    ("The generator sits on the roof plant deck.\n\nFuel is piped from the basement tank.",
+     "The generator sits on the roof plant deck."),
+    ("The lobby floor is honed granite.\n\nThe skirting matches the floor.",
+     "The lobby floor is honed granite."),
+])
+def test_a_plain_statement_is_an_answer_not_framing(text, lead):
+    assert _apply(text).text == lead
+
+
+# ── a reference never splits a cut item (OPUSGRADE S617 fault 2) ────────────
+
+@pytest.mark.parametrize("text,lead", [
+    ("Steps:\n\n1. Pour the slab per p. 12. Then cure 7 days.\n2. Strip forms.",
+     "Steps:\n\n1. Pour the slab per p. 12.\n2. Strip forms."),
+    ("Checks:\n\n- Test cubes as cl. 4.2 requires. Record each result.\n- Sign the log.",
+     "Checks:\n\n- Test cubes as cl. 4.2 requires.\n- Sign the log."),
+])
+def test_cut_item_keeps_a_page_or_clause_reference_whole(text, lead):
+    assert _apply(text).text == lead
+
+
+@pytest.mark.parametrize("line,first", [
+    ("The upstand is 5 m. 12 bars run along it.", "The upstand is 5 m."),
+    ("Each pile is 18 m. 40 piles are shown.", "Each pile is 18 m."),
+])
+def test_a_unit_after_a_figure_still_ends_a_sentence(line, first):
+    assert answer_contract._sentences(line)[0].strip() == first
+
