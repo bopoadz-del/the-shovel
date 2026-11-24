@@ -30,9 +30,7 @@ chunk per measured row.
 
 from __future__ import annotations
 
-import bisect
 import difflib
-import math
 import re
 import statistics
 from collections import defaultdict
@@ -935,43 +933,99 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
         raw[m].add(_norm(lab.text))
     # OCR reads one running line several ways (a letter misread on some
     # pages), and each reading alone can fall short of most pages. A form's
-    # pages and texts are those of every form alike it (the same likeness
-    # ``Running.holds`` tests a label by), so a line is counted once however
-    # it was misread. Only readings that recur are pooled: a misreading of a
-    # running line repeats (the same letter is misread on many pages), while
-    # a heading printed once per page, alike its neighbours but for its own
-    # name, is read on one page each and is not one line. A one-page reading
-    # counts alone, as before; ``Running.holds`` still finds it by likeness.
-    alike = _alike_forms(on)
-    recurs = {m for m, ps in on.items() if len(ps) >= MIN_READING_PAGES}
-    counted = {m: [o for o in alike[m] if o in recurs] if m in recurs else [m] for m in on}
-    pages_of = {m: set().union(*(on[o] for o in counted[m])) for m in on}
-    texts_of = {m: set().union(*(raw[o] for o in counted[m])) for m in on}
+    # pages and texts are those of every recurring form that is a misreading
+    # of it (:func:`_misread`), so a line is counted once however it was
+    # misread. Only readings that recur are pooled; a one-page reading counts
+    # alone, as before, and ``Running.holds`` still finds it by likeness. Two
+    # different headings alike in their letters ("Internal Finishes",
+    # "External Finishes") differ by more than one glyph of a word, are not a
+    # misreading of each other, and stay two lines.
+    recurs = sorted(m for m, ps in on.items() if len(ps) >= MIN_READING_PAGES)
+    pooled = _misread_forms(recurs, recurs)
+    pages_of = {m: set().union(*(on[o] for o in pooled.get(m, [m]))) for m in on}
+    texts_of = {m: set().union(*(raw[o] for o in pooled.get(m, [m]))) for m in on}
     masks = {m for m, ps in pages_of.items() if len(ps) * 2 > pages}
-    varying = [m for m in masks if "#" in m and len(texts_of[m]) > 1]
-    label = (max(varying, key=lambda m: (len(texts_of[m]), len(raw[m]), m))
-             if varying else None)
-    # A misreading of the label that kept every digit field is the label; one
-    # that lost a digit (a figure read as a letter) is not read for its fields.
-    readings = set(alike[label]) if label else set()
+    # A line varies when its digit fields take more than one value; its
+    # readings' spelling slips are not values.
+    values = {m: {tuple(_DIGITS_RE.findall(t)) for t in texts_of[m]} for m in masks}
+    varying = [m for m in masks if "#" in m and len(values[m]) > 1]
+    label = max(varying, key=lambda m: (len(values[m]), m)) if varying else None
+    # Every reading of the label, one-page readings included, is the label;
+    # one that lost a digit (a figure read as a letter) is not read for its
+    # fields.
+    readings = set(_misread_forms([label], on)[label]) if label else set()
     forms = frozenset(m for m in readings if m.count("#") == label.count("#"))
     masks.difference_update(m for m in varying if m not in readings)
     return Running(masks, label, forms)
 
 
-def _alike_forms(forms: Iterable[str]) -> dict[str, list[str]]:
-    """``{form: every form alike it, itself included}``. Two strings this
-    alike differ in length by at most the factor the likeness allows, so each
-    form is compared only with the forms in that length window."""
-    by_len = sorted(forms, key=len)
-    lengths = [len(f) for f in by_len]
-    r = RUNNING_SIMILARITY
+def _slipped_word(a: str, b: str) -> bool:
+    """Two different words that are one word misread: a single glyph read as
+    at most two (``rn`` for ``m``, ``c`` for ``e``) or one dropped or added,
+    the rest of the word read alike. A change that takes half the word or
+    more (a one-letter word, ``in``/``ex``) is a different word."""
+    if a == b:
+        return False
+    head = 0
+    while head < min(len(a), len(b)) and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while (tail < min(len(a), len(b)) - head
+           and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
+        tail += 1
+    # What lies between the shared head and tail is the slip.
+    span_a, span_b = len(a) - head - tail, len(b) - head - tail
+    return (min(span_a, span_b) <= 1 and max(span_a, span_b) <= 2
+            and max(span_a, span_b) * 2 < max(len(a), len(b)))
+
+
+def _misread(a: str, b: str) -> bool:
+    """``b`` is ``a`` misread: the lines are alike (:func:`_alike`) and have
+    the same words but one, and that one is a slip (:func:`_slipped_word`).
+    A line read wrong in two words is not pooled; it counts alone."""
+    if a == b:
+        return True
+    wa, wb = a.split(), b.split()
+    if len(wa) != len(wb):
+        return False
+    differ = [(x, y) for x, y in zip(wa, wb) if x != y]
+    return len(differ) == 1 and _slipped_word(*differ[0]) and _alike(a, b)
+
+
+def _misread_forms(anchors: Iterable[str], forms: Iterable[str]) -> dict[str, list[str]]:
+    """``{anchor: every form that is a misreading of it, itself included}``.
+
+    A misreading shares every word but one with its line, and that word less
+    its slipped glyphs is the line's word less its own (``rn`` and ``m`` both
+    dropped leave ``tein al``'s head and tail). So both are filed under the
+    line with that word cut that way; an anchor is compared only with the
+    forms filed under one of its own keys, never with every form."""
+    filed: dict[tuple[int, tuple[str, ...], str], list[str]] = defaultdict(list)
+    for f in forms:
+        for key in _blanked(f):
+            filed[key].append(f)
     out: dict[str, list[str]] = {}
-    for m in by_len:
-        lo = bisect.bisect_left(lengths, math.floor(len(m) * r / (2 - r)))
-        hi = bisect.bisect_right(lengths, math.ceil(len(m) * (2 - r) / r))
-        out[m] = [o for o in by_len[lo:hi] if _alike(m, o)]
+    for m in anchors:
+        near = {o for key in _blanked(m) for o in filed.get(key, ())}
+        out[m] = sorted(o for o in near | {m} if _misread(m, o))
     return out
+
+
+def _blanked(form: str) -> set[tuple[int, tuple[str, ...], str]]:
+    """The keys a form is filed under: each word in turn set apart, and that
+    word with no glyph, or one or two glyphs in a row, cut out of it (the
+    most a slip in :func:`_slipped_word` changes). A slip's span is under
+    half the longer word, so each word's own span is under half of it: a cut
+    of half a word or more is never needed."""
+    words = tuple(form.split())
+    keys: set[tuple[int, tuple[str, ...], str]] = set()
+    for i, word in enumerate(words):
+        rest = words[:i] + words[i + 1:]
+        keys.add((i, rest, word))
+        for cut in (c for c in (1, 2) if 2 * c < len(word)):
+            for at in range(len(word) - cut + 1):
+                keys.add((i, rest, word[:at] + word[at + cut:]))
+    return keys
 
 
 def furniture_band(printed: Sequence[_Label], running: Running) -> dict[int, float]:

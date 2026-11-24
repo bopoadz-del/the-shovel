@@ -156,3 +156,165 @@ def test_misread_furniture_is_never_a_path_level(runs, labels):
 def test_lines_that_only_share_a_page_spread_are_not_merged(runs, stays):
     running = g.running_lines(_printed(_bill(runs, STEADY_LABELS)), 6)
     assert (not running.holds(runs[2])) is stays
+
+
+# Two different headings alike in their letters, each reprinted on the three
+# pages of its own section: two lines, never one misread line.
+@pytest.mark.parametrize("first, second, one_line", [
+    ("Internal Finishes", "External Finishes", False),
+    ("Internal Walls", "External Walls", False),
+    ("Westbrook Terminal Works", "Westbrook Terrninal Works", True),
+    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", True),
+], ids=["finishes-two-headings", "walls-two-headings", "glyph-read-as-two", "glyph-read-as-one"])
+def test_alike_headings_that_each_recur_are_pooled_only_when_one_is_misread(first, second, one_line):
+    runs = [first] * 3 + [second] * 3
+    rows = g.extract_bill_rows(_bill(runs, STEADY_LABELS))
+    paths = {r.fields["description"]: r.path for r in rows}
+    top = {item: paths[item][0].split(" / ")[0] for item in ("Item 1", "Item 5")}
+    if one_line:
+        assert top == {"Item 1": "EARTHWORKS", "Item 5": "DRAINAGE"}
+    else:
+        assert top == {"Item 1": first, "Item 5": second}
+
+
+@pytest.mark.parametrize("a, b, misread", [
+    ("bill", "biil", True),          # one glyph for one
+    ("terminal", "terrninal", True),  # one glyph read as two
+    ("terminal", "termnal", True),    # one glyph dropped
+    ("internal", "external", False),  # two glyphs for two: another word
+    ("a", "b", False),                # the whole word changed
+    ("works", "worms", True),
+    ("roads", "roofs", False),        # two separate changes
+    ("terminal", "terxyzinal", False),  # one glyph read as three
+], ids=["one-for-one", "one-for-two", "dropped", "two-for-two", "whole-word", "late-glyph",
+        "two-changes", "one-for-three"])
+def test_a_word_is_misread_by_one_glyph_only(a, b, misread):
+    assert g._slipped_word(a, b) is misread
+    assert g._slipped_word(b, a) is misread
+
+
+@pytest.mark.parametrize("b, alike", [
+    ("a" * 17 + "xyz", True),    # 17 of 20 shared: 34/40 = 0.85, on the bound
+    ("a" * 16 + "wxyz", False),  # 16 of 20 shared: 32/40 = 0.80, under it
+], ids=["on-the-bound", "under-the-bound"])
+def test_likeness_holds_at_its_bound(b, alike):
+    assert g._alike("a" * 17 + "bcd", b) is alike
+
+
+@pytest.mark.parametrize("anchor, other", [
+    ("westbrook terminal works", "westbrook terrninal works"),  # the misreading is longer
+    ("westbrook terrninal works", "westbrook terminal works"),  # the misreading is shorter
+], ids=["longer-reading", "shorter-reading"])
+def test_a_misreading_is_found_whichever_form_is_longer(anchor, other):
+    found = g._misread_forms([anchor], [anchor, other, "harbour quay extension"])
+    assert sorted(found[anchor]) == sorted([anchor, other])
+
+
+PARTS = ["Part 1 Works"] * 3 + ["Part 2 Works"] * 3
+CONTRACT = ["Contract 4 Westbrook Works", "Contract 4 Wcstbrook Works"] * 3
+
+
+@pytest.mark.parametrize("runs, labels, form, kept", [
+    # A reading of the label is the label: it stays a running line.
+    (MISREAD_RUN, MISREAD_LABELS, "biil # page #-#", True),
+    # A line whose digits change with the section is a heading, not furniture.
+    (PARTS, STEADY_LABELS, "part # works", False),
+    # A misread line whose digits never change does not vary: still furniture.
+    (CONTRACT, STEADY_LABELS, "contract # westbrook works", True),
+], ids=["label-reading", "section-number", "constant-number-misread"])
+def test_which_digit_lines_stay_running_lines(runs, labels, form, kept):
+    running = g.running_lines(_printed(_bill(runs, labels)), 6)
+    assert running.page_label == "bill # page #-#"
+    assert (form in running.masks) is kept
+
+
+def _lowered_label_bill(page4):
+    # Page 4 prints one extra line above its label, so its label sits lower.
+    words: list[g.Word] = []
+    for p in range(1, 7):
+        label = page4 if p == 4 else STEADY_LABELS[p - 1]
+        above = [(MISREAD_RUN[p - 1], H)] + ([("Addendum", H)] if p == 4 else []) + [(label, H)]
+        words += _page(p, above, [("Excavation", HEAVY), [f"Item {p}", "m3", "10", "5", "50"]])
+    return words
+
+
+@pytest.mark.parametrize("page4, read", [
+    ("BiIl 2 Page 2-4", True),   # a misread label keeping its digits is read
+    ("BiIl 2 Page 2-A", False),  # one that lost a digit is not
+], ids=["digits-kept", "digit-lost"])
+def test_the_furniture_band_and_diagnostic_read_a_misread_label(page4, read):
+    printed = _printed(_lowered_label_bill(page4))
+    running = g.running_lines(printed, 6)
+    band = g.furniture_band(printed, running)
+    assert (band[4] > band[1]) is read
+    diag = g.geometry_diagnostic(printed, 6)
+    assert (4 in diag["page_label"]) is read
+
+
+@pytest.mark.parametrize("headings, reprints", [(400, 1), (400, 2)],
+                         ids=["one-page-headings", "recurring-headings"])
+def test_headings_are_not_compared_pairwise(headings, reprints, monkeypatch):
+    # Each page prints its label and distinct headings, alike in length and
+    # word count, each on one page or reprinted on two: the work grows with
+    # the headings, not with their pairs.
+    pages = 100
+    printed = [g._Label(f"Bill 1 Page 1-{p}", 40, H, page=p) for p in range(1, pages + 1)]
+    printed += [g._Label(f"Heading {chr(97 + i % 26)}{chr(97 + i // 26 % 26)} item work",
+                         40, H, page=1 + (i * reprints + r) % pages)
+                for i in range(headings) for r in range(reprints)]
+    calls = []
+    real = g._misread
+    monkeypatch.setattr(g, "_misread", lambda a, b: calls.append(1) or real(a, b))
+    running = g.running_lines(printed, pages)
+    assert running.page_label == "bill # page #-#"
+    assert len(calls) <= 2 * headings
+
+
+@pytest.mark.parametrize("spellings, label", [
+    # A line read three ways on every page has more texts than the page
+    # label, but its digits take three values to the label's six: the label
+    # is the line whose digits vary most, not the one read most ways.
+    (["Works", "Wcrks", "Werks"], "page #"),
+    (["Works"], "page #"),
+], ids=["misspelled-line", "one-spelling"])
+def test_the_page_label_is_the_line_whose_digits_vary_most(spellings, label):
+    printed = [g._Label(f"Page {p}", 40, H, page=p) for p in range(1, 7)]
+    printed += [g._Label(f"Part {1 + (p - 1) // 2} {word}", 40, H, page=p)
+                for p in range(1, 7) for word in spellings]
+    assert g.running_lines(printed, 6).page_label == label
+
+
+# The running line read right on three of six pages; on each other page a
+# different one-off misreading. One-off readings are not pooled, so the line
+# falls short of most pages; the same misreadings each seen twice are pooled.
+ONE_OFF_READINGS = ["Westbrook Terminal Works"] * 3 + [
+    "Wcstbrook Terminal Works", "Westbrook Terrninal Works", "Westbrook Terminal Wurks"]
+
+
+@pytest.mark.parametrize("runs, is_running", [
+    (ONE_OFF_READINGS, False),
+    (MISREAD_RUN, True),
+], ids=["one-off-readings", "recurring-readings"])
+def test_only_recurring_readings_add_their_pages(runs, is_running):
+    running = g.running_lines(_printed(_bill(runs, STEADY_LABELS)), 6)
+    assert ("westbrook terminal works" in running.masks) is is_running
+
+
+@pytest.mark.parametrize("b, misread", [
+    ("wcstbrook terminal works", True),    # one word slipped
+    ("wcstbrook terrninal works", False),  # two words slipped: counts alone
+    ("westbrook terminal wurks", True),    # the last word slipped
+    ("westbrook terminal wurks x", False),  # and a word added: another line
+], ids=["one-word", "two-words", "last-word", "word-added"])
+def test_a_misreading_differs_from_its_line_in_one_word(b, misread):
+    line = "westbrook terminal works"
+    assert g._misread(line, b) is misread
+    assert g._misread(b, line) is misread
+
+
+@pytest.mark.parametrize("a, b, misread", [
+    ("bill # page #", "biil # page #", True),  # 22/24 alike: the line misread
+    ("bill #", "biil #", False),               # 10/12 alike: under the likeness
+], ids=["long-enough", "too-short"])
+def test_a_one_glyph_slip_still_needs_the_line_likeness(a, b, misread):
+    assert g._misread(a, b) is misread
