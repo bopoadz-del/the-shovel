@@ -433,3 +433,95 @@ def _course_note(**kw):
 )
 def test_uplift_result_names_the_course_only_when_its_value_applies(kwargs, named):
     assert bool(_course_note(**kwargs)) is named
+
+
+# ---------------------------------------------------------------------------
+# GROKGRADE S666 d89da60 findings 2, 3 and the "also seen" line
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field_value, refused",
+    [
+        (float("nan"), True),   # JSON NaN: a float, yet no factor of safety
+        (float("inf"), True),   # JSON Infinity: no check could ever pass
+        (1.3, False),           # a finite number is read as it is
+    ],
+)
+def test_course_constant_non_finite_is_a_missing_value(tmp_path, monkeypatch, field_value, refused):
+    from app.agents.hats.design.formulas.construction_formulas import _course_constant
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(
+        tmp_path, [{"id": "x.fos", "thresholds": {"min_fos": field_value}, "provenance": {}}]))
+    if refused:
+        with pytest.raises(LookupError, match="is not a number"):
+            _course_constant("x.fos", "thresholds.min_fos", "ratio", "minimum FOS")
+    else:
+        assert _course_constant("x.fos", "thresholds.min_fos", "ratio", "minimum FOS").value == 1.3
+
+
+def _uplift_entry(provenance):
+    return [{"id": "foundation.uplift_fos", "thresholds": {"min_fos": 1.4}, "provenance": provenance}]
+
+
+@pytest.mark.parametrize(
+    "provenance, note",
+    [
+        # the entry names no source: the factor applies, no source line is made up
+        ({}, None),
+        # the entry names its course: the result says where 1.4 comes from
+        ({"course_reference": "owner-supplied course material, p7"},
+         "Required factor of safety 1.4: owner-supplied course material, p7"),
+    ],
+)
+def test_uplift_result_names_a_source_only_when_the_entry_has_one(tmp_path, monkeypatch, provenance, note):
+    import app.agents.hats.design.formulas.construction_formulas as mod
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(tmp_path, _uplift_entry(provenance)))
+    r = mod.dewatering_uplift_check(water_depth=10.0, raft_thickness=2.0, floor_count=3)
+    source_lines = [n for n in r.notes if n.startswith("Required factor of safety")]
+    assert source_lines == ([] if note is None else [note])
+    # 1.4 applied either way: counter 5.0 + 2.25 = 7.25 over uplift 10 -> 0.725 < 1.4
+    assert r.can_stop is False
+
+
+@pytest.mark.parametrize(
+    "entries, water_depth, raised",
+    [
+        # no uplift entry, negative depth: the caller's bad input is named first
+        ([], -1.0, ValueError),
+        # no uplift entry, a valid depth: only then is the missing entry the error
+        ([], 1.0, LookupError),
+        # entry present, negative depth: still the caller's input error
+        (_uplift_entry({}), -1.0, ValueError),
+    ],
+)
+def test_uplift_inputs_are_checked_before_the_course_is_read(tmp_path, monkeypatch, entries, water_depth, raised):
+    import app.agents.hats.design.formulas.construction_formulas as mod
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(tmp_path, entries))
+    with pytest.raises(raised):
+        mod.dewatering_uplift_check(water_depth=water_depth, raft_thickness=2.0, floor_count=3)
+
+
+@pytest.mark.parametrize(
+    "entries, fos_given, refused",
+    [
+        ([], 0.0, True),                     # a zero factor from the caller
+        ([], -1.2, True),                    # a negative factor from the caller
+        ([], 1.2, False),                    # a positive factor from the caller runs
+        ([{"id": "foundation.uplift_fos", "thresholds": {"min_fos": 0}, "provenance": {}}],
+         None, True),                        # a zero factor from the course is refused too
+    ],
+)
+def test_uplift_refuses_a_factor_of_safety_not_above_zero(tmp_path, monkeypatch, entries, fos_given, refused):
+    import app.agents.hats.design.formulas.construction_formulas as mod
+
+    monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(tmp_path, entries))
+    kw = {} if fos_given is None else {"required_fos": fos_given}
+    if refused:
+        with pytest.raises(ValueError, match="required_fos"):
+            mod.dewatering_uplift_check(water_depth=10.0, raft_thickness=2.0, floor_count=3, **kw)
+    else:
+        assert mod.dewatering_uplift_check(
+            water_depth=10.0, raft_thickness=2.0, floor_count=3, **kw).can_stop is False

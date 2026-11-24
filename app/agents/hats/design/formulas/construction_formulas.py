@@ -94,16 +94,20 @@ def dewatering_uplift_check(
     """Check if dewatering can stop: FOS = counter-weight / uplift >= the
     required factor of safety. When none is given, the course's minimum
     applies (read from its knowledge entry) and the result names the course."""
+    # The caller's own inputs are checked before the course is read: a bad
+    # input is the caller's error whatever the knowledge base holds.
+    if water_depth < 0:
+        raise ValueError("water_depth must be >= 0")
+    if raft_thickness < 0 or floor_count < 0 or floor_thickness < 0:
+        raise ValueError("raft_thickness, floor_count and floor_thickness must be >= 0")
+    if concrete_unit_weight <= 0 or water_unit_weight <= 0:
+        raise ValueError("unit weights and required_fos must be > 0")
     course: Optional[Constant] = None
     if required_fos is None:
         course_k = _uplift_constants()
         required_fos = course_k.required_fos
         course = course_k.declared()["required_fos"]
-    if water_depth < 0:
-        raise ValueError("water_depth must be >= 0")
-    if raft_thickness < 0 or floor_count < 0 or floor_thickness < 0:
-        raise ValueError("raft_thickness, floor_count and floor_thickness must be >= 0")
-    if concrete_unit_weight <= 0 or water_unit_weight <= 0 or required_fos <= 0:
+    if required_fos <= 0:
         raise ValueError("unit weights and required_fos must be > 0")
     uplift = water_depth * water_unit_weight
     raft_weight = raft_thickness * concrete_unit_weight
