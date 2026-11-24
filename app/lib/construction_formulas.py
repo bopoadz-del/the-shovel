@@ -2278,7 +2278,70 @@ def extract_calculation_params_from_text(
     bare_dests = [name for name in (required_by_kind.get("") or []) if name not in found]
     if len(bare_nums) == 1 and len(bare_dests) == 1:
         found[bare_dests[0]] = bare_nums[0]
+    _drop_figures_of_other_basis(spec, raw, found)
     return found
+
+
+# A clause ends at a semicolon, a line break, or a comma or full stop that is
+# not inside a figure ("1,250.5").
+_CLAUSE_BREAK_RE = re.compile(r"[;\n]|[.,](?!\d)")
+
+
+def _basis_cue_re(cue: str) -> "re.Pattern[str]":
+    words = cue.replace("-", " ").split()
+    return re.compile(
+        r"(?<![A-Za-z])" + r"[\s-]+".join(map(re.escape, words)) + r"(?![A-Za-z])",
+        re.IGNORECASE,
+    )
+
+
+def _figure_bases(raw: str) -> List[Tuple[float, str]]:
+    """``(value, basis)`` for each figure in ``raw`` written on a stated basis.
+
+    A figure's clause runs from the clause break or figure before it to the
+    clause break or figure after it, so a cue beside one figure never marks
+    the next. The clause states a basis when it holds the cue words of
+    exactly one basis (``formula_registry.BASIS_CUES``); both or neither
+    states none.
+    """
+    from app.lib.formula_registry import BASIS_CUES
+
+    cues = {basis: [_basis_cue_re(c) for c in words] for basis, words in BASIS_CUES.items()}
+    figures = list(re.finditer(_TEXT_NUM_RE, raw))
+    breaks = [m.start() for m in _CLAUSE_BREAK_RE.finditer(raw)]
+    out: List[Tuple[float, str]] = []
+    for i, fig in enumerate(figures):
+        lo = max([b + 1 for b in breaks if b < fig.start()]
+                 + [figures[i - 1].end() if i else 0])
+        hi = min([b for b in breaks if b >= fig.end()]
+                 + [figures[i + 1].start() if i + 1 < len(figures) else len(raw)])
+        clause = raw[lo:fig.start()] + " " + raw[fig.end():hi]
+        stated = [b for b, rxs in cues.items() if any(rx.search(clause) for rx in rxs)]
+        num = _parse_text_number(fig.group(0))
+        if len(stated) == 1 and num is not None:
+            out.append((num, stated[0]))
+    return out
+
+
+def _drop_figures_of_other_basis(spec: Any, raw: str, found: Dict[str, Any]) -> None:
+    """An input that declares its basis never takes a figure the ask wrote on
+    the other basis: a total to date is not this period's amount, nor the
+    reverse. The input is left open, so the calculator asks for it and no
+    answer is worked from the wrong figure. Undeclared inputs are untouched.
+    """
+    declared = {
+        dest: param.basis
+        for dest, param in (spec.params.items() if spec else ())
+        if param.basis and dest in found
+    }
+    written = _figure_bases(raw) if declared else []
+    for dest, basis in declared.items():
+        val = found[dest]
+        if not isinstance(val, bool) and isinstance(val, (int, float)) and any(
+            other != basis and math.isclose(num, float(val), rel_tol=1e-9)
+            for num, other in written
+        ):
+            found.pop(dest)
 
 def _ask_figure_counts(values: Any) -> Dict[float, int]:
     counts: Dict[float, int] = {}

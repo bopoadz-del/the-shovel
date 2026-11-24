@@ -98,6 +98,17 @@ class Param:
 #: or the total to date (which includes every earlier period).
 BASES = ("period", "cumulative")
 
+#: The words that say on which basis a written figure was stated, one row per
+#: basis in ``BASES``. A figure whose own clause holds the words of exactly
+#: one basis was written on that basis. The vocabulary of the two readings,
+#: never of a document; extend a row to teach the reader a new phrasing.
+BASIS_CUES = {
+    "period": ("this period", "for the period", "period only", "this month",
+               "for the month", "this valuation"),
+    "cumulative": ("to date", "cumulative", "cumulatively", "so far",
+                   "running total"),
+}
+
 
 @dataclass(frozen=True)
 class ParamSpec:
