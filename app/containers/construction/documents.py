@@ -1141,6 +1141,7 @@ class ConstructionDocumentsMixin:
         clashes: List[Dict] = []
         total_elements = 0
         models_processed: List[str] = []
+        triage_by_model: Dict[str, Dict] = {}
         detection_method = "name_duplicate_proxy"
         for model_file in discipline_models:
             result = await block.process({"file_path": model_file}, block_params)
@@ -1154,6 +1155,8 @@ class ConstructionDocumentsMixin:
             total_elements += result.get("element_count", 0)
             clash_report = result.get("clash_report", {})
             detection_method = clash_report.get("detection_method", detection_method)
+            if clash_report.get("triage"):
+                triage_by_model[model_file] = clash_report["triage"]
             for c in clash_report.get("clashes", []):
                 clashes.append(self._normalize_block_clash(c, model_file))
 
@@ -1176,6 +1179,7 @@ class ConstructionDocumentsMixin:
             },
             "clashes": clashes[:100] if not p.get("full_report") else clashes,
             "by_discipline": by_discipline,
+            "triage_by_model": triage_by_model,
             "coordination_meeting_agenda": self._generate_coordination_agenda(clashes),
         }
     async def om_manual_generator(self, input_data: Any, params: Dict) -> Dict:

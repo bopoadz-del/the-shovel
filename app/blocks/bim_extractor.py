@@ -178,6 +178,7 @@ class BIMExtractorBlock(UniversalBlock):
             clash_report = self._basic_clash_report(
                 model, building_elements, params
             )
+            clash_report = self._with_clash_triage(clash_report, params)
 
         # Cap response payload so a 50k-element model can't blow up the chat
         # context. Each cap fires independently; the top-level ``truncated``
@@ -431,6 +432,26 @@ class BIMExtractorBlock(UniversalBlock):
         if params and key in params:
             return params[key]
         return self.config.get(key, default)
+
+    def _with_clash_triage(self, clash_report: Dict, params: Dict | None) -> Dict:
+        """Put the triage summary first in the clash report.
+
+        It goes first so a chat payload cut at a fixed length keeps the
+        groups and pairs ahead of the raw pair list. The move table comes
+        from the caller (``clash_move_priority``). A bad table becomes
+        ``triage.error`` and the detection result is kept as it was.
+        """
+        from app.blocks.clash_triage import triage_clashes
+
+        table = (params or {}).get("clash_move_priority")
+        try:
+            triage = triage_clashes(clash_report.get("clashes") or [], table)
+        except ValueError as e:
+            triage = {"error": str(e)}
+        # A capped pair list is a partial clash set: say so, do not let the
+        # groups read as the whole model.
+        triage["complete"] = not clash_report.get("pair_cap_reached") and not clash_report.get("timed_out")
+        return {"triage": triage, **clash_report}
 
     def _basic_clash_report(
         self, model, elements: List[Dict], params: Dict | None = None

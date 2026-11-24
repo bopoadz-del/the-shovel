@@ -1051,15 +1051,23 @@ class ConstructionContainer(
         """Normalize a bim_extractor clash into the container clash shape so the
         thin shaping helpers (by-discipline grouping, coordination agenda) work."""
         category = clash.get("category", "unknown")
+        # A geometric (AABB) clash names a category per side and has no single
+        # "category". Reading only "category" filed every geometric clash
+        # under "unknown". Each side's category is a discipline involved.
+        sides = [clash[k] for k in ("category_a", "category_b") if clash.get(k)]
+        disciplines = list(dict.fromkeys(sides)) or [category]
         return {
             "clash_id": f"CLASH-{abs(hash((model_file, clash.get('element_a'), clash.get('element_b')))) % 100000:05d}",
             "type": clash.get("type", "name_duplicate"),
             "description": clash.get("description", ""),
             "severity": clash.get("severity", "warning"),
-            "involved_disciplines": [category],
+            "involved_disciplines": disciplines,
             "category": category,
             "element_a": clash.get("element_a"),
             "element_b": clash.get("element_b"),
+            "overlap_mm": clash.get("overlap_mm"),
+            "moves": clash.get("moves"),
+            "moves_reason": clash.get("moves_reason"),
             "model_file": model_file,
         }
     def _group_clashes_by_discipline(self, clashes: List[Dict]) -> Dict:
