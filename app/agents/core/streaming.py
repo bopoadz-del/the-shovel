@@ -793,7 +793,11 @@ async def _chat_stream_impl(
                         with_tools=False, user_id=user_id,
                         deadline=_llm_deadline(),
                     )
-                    if forced_resp.get("status") == "error":
+                    # Traced like the chat_stream forced retry below: the
+                    # log names the rule that replaced the reply with the
+                    # fallback (never the text), so a turn that ends on
+                    # "I was unable to generate a response" says why.
+                    if forced_retry_failed("chat_stream streamed-synth", forced_resp):
                         final_text = _EMPTY_RESPONSE_FALLBACK
                     else:
                         served_model = (forced_resp.get("raw") or {}).get("model") or served_model
@@ -810,7 +814,11 @@ async def _chat_stream_impl(
                         # and is one no test can kill. Pinned instead by
                         # test_a_retry_that_leaks_again_is_refused_too,
                         # which asserts the OUTCOME rather than the line.
-                        if not final_text.strip() or (await _off_loop(_final_text_needs_forced_retry, final_text, user_message=user_message
+                        # forced_retry_reason's first rule is "empty", so an
+                        # empty reply is caught (and traced) here too.
+                        if (await _off_loop(
+                            forced_retry_still_unusable, "chat_stream streamed-synth",
+                            final_text, raw_len=len(_fm.get("content") or ""),
                         )):
                             final_text = _EMPTY_RESPONSE_FALLBACK
                     final_text = _sanitize_inline_paths(_sanitize_citation_labels(final_text))
