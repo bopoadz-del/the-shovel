@@ -39,8 +39,13 @@ value, item or row is named anywhere.
 2. Only a *different* figure (same unit) is recalled; a repeated figure is
    not.
 3. A rounding to the same figure is not recalled (`_close`).
-4. A different unit is not recalled here (unit equivalence is the conflict
-   statement's judgement, not this recall filter's).
+4. A figure in another unit of the SAME kind is compared after conversion,
+   with the conflict statement's own reader and equality
+   (`evidence_conflicts.extract` / `same`), so recall and judgement agree on
+   what one value is: "40 mm" against "0.05 m" is recalled, "50 mm" against
+   "0.05 m" is the same value and is not. The close-number tolerance applies
+   at the scale the draft wrote the value. A unit of another kind (a length
+   against a mass) is never compared.
 5. A bare number is never a figure (the shared reader already excludes it).
 6. Only a figure stated FOR the shared identifier is compared
    (`_identifier_scope`): one in a sentence that names it, or in the body
@@ -60,8 +65,8 @@ value, item or row is named anywhere.
   "Clause 4.2.1") never do. Limit: a bare heading cannot say which
   structure it heads, so "Table 4.2.1" in a draft recalls a bare "4.2.1"
   heading too; the conflict statement still judges the recalled passage.
-- Unit equivalence ("500 mm" vs "0.5 m") is deliberately not judged here; the
-  conflict statement owns that negative.
+- Only measured values (a quantity in a unit, money in one currency) are
+  compared across units; a date, a grade or a labelled phrase is not swept.
 - A value in a passage that was never handed cannot be reported (the 05:55Z
   known limit); the sweep only widens recall within one narrow search, it is
   not a re-retrieval of the whole project.

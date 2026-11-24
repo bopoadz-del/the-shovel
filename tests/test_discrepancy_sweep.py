@@ -65,16 +65,18 @@ def test_different_identifier_is_not_recalled(stated, candidates):
 @pytest.mark.parametrize("stated,candidates", [
     (
         "The cover is 50 mm per ACI 318.",
-        [("drawing.pdf", "The cover is 60 m per ACI 318.")],
+        [("drawing.pdf", "The cover is 60 kg per ACI 318.")],
     ),
     (
         "The span is 4.5 m per BS 8110.",
-        [("report.pdf", "The span is 5.0 cm per BS 8110.")],
+        [("report.pdf", "The span is 5.0 kN per BS 8110.")],
     ),
 ])
 def test_different_unit_is_not_recalled(stated, candidates):
-    # Same designation, but the candidate's figure is a different unit; the
-    # unit equivalence is the conflict statement's judgement, not this recall.
+    # Same designation, but the candidate's figure is in a unit of another
+    # kind (a mass, a force against a length): never compared. A unit of the
+    # same kind is compared after conversion
+    # (tests/test_discrepancy_sweep_cross_unit.py).
     assert sweep_differences(stated, candidates) == []
 
 
