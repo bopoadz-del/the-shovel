@@ -145,17 +145,17 @@ def _context_units():
             yield family, unit
 
 
-def test_every_unit_in_the_table_has_a_definition():
-    undefined = []
-    for family, table in _FAMILIES.items():
-        for unit in table:
-            if family in _CONTEXT_DEFINED:
-                known = _CONTEXT_DEFINED[family]
-                if _CONTEXT_SAME_AS.get(unit, unit) not in known:
-                    undefined.append((family, unit))
-            elif family not in _DEFINED or _SAME_AS.get(unit, unit) not in _DEFINED[family]:
-                undefined.append((family, unit))
-    assert undefined == [], f"units without a verified definition: {undefined}"
+@pytest.mark.parametrize("family", list(_FAMILIES))
+def test_every_unit_in_the_table_has_a_definition(family):
+    # One case per family in the table, so a new family, or a new unit in an
+    # existing one, fails here until its definition is written above.
+    if family in _CONTEXT_DEFINED:
+        known, same_as = _CONTEXT_DEFINED[family], _CONTEXT_SAME_AS
+    else:
+        assert family in _DEFINED, f"family without verified definitions: {family}"
+        known, same_as = _DEFINED[family], _SAME_AS
+    undefined = [unit for unit in _FAMILIES[family] if same_as.get(unit, unit) not in known]
+    assert undefined == [], f"{family}: units without a verified definition: {undefined}"
 
 
 @pytest.mark.parametrize("family,unit", list(_plain_units()))
