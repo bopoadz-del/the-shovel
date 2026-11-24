@@ -311,19 +311,35 @@ def test_course_constant_reads_value_and_source(tmp_path, monkeypatch, entries, 
 
 
 @pytest.mark.parametrize(
-    "entry_id, field_path",
+    "entry_id, field_path, says",
     [
-        ("x.absent", "thresholds.min_fos"),  # no such entry
-        ("x.fos", "thresholds.max_fos"),  # entry without that field
+        # no such entry: the error says the entry is missing, not a field
+        ("x.absent", "thresholds.min_fos", "'x.absent' not found"),
+        # entry without that field: the error names the missing field
+        ("x.fos", "thresholds.max_fos", "has no 'thresholds.max_fos'"),
     ],
 )
-def test_course_constant_missing_raises_never_guesses(tmp_path, monkeypatch, entry_id, field_path):
+def test_course_constant_missing_raises_never_guesses(tmp_path, monkeypatch, entry_id, field_path, says):
     from app.agents.hats.design.formulas.construction_formulas import _course_constant
 
     monkeypatch.setenv("CONSTRUCTION_KB_FILE", _write_kb(
         tmp_path, [{"id": "x.fos", "thresholds": {"min_fos": 1.3}, "provenance": {}}]))
-    with pytest.raises(LookupError):
+    with pytest.raises(LookupError) as err:
         _course_constant(entry_id, field_path, "ratio", "minimum FOS")
+    assert says in str(err.value)
+
+
+@pytest.mark.parametrize("water_depth, refused", [(-0.5, True), (-3.0, True), (0.0, False), (4.0, False)])
+def test_uplift_check_refuses_a_negative_water_depth(water_depth, refused):
+    from app.agents.hats.design.formulas.construction_formulas import (
+        dewatering_uplift_check as check,
+    )
+
+    if refused:
+        with pytest.raises(ValueError, match="water_depth"):
+            check(water_depth=water_depth, raft_thickness=1.0, floor_count=2)
+    else:
+        assert check(water_depth=water_depth, raft_thickness=1.0, floor_count=2) is not None
 
 
 def _course_note(**kw):
