@@ -170,8 +170,9 @@ detail see `README.md`, `.env.example`, and `.claude/skills/run-the-fork/SKILL.m
 
 ### Stale docs to ignore
 - `README.md` and `.claude/skills/run-the-fork/SKILL.md` claim the React frontend
-  was deleted and only `app/static/index.html` is served. That is outdated: the
-  Vite React app in `frontend/` is the real UI (served from `frontend/dist`).
+  was deleted and only a static app/static/index.html is served. That is outdated
+  (app/static/ is no longer in the tree): the Vite React app in `frontend/` is
+  the real UI (served from `frontend/dist`).
 
 ### Before creating a module
 
