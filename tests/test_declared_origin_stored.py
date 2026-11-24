@@ -79,14 +79,12 @@ def _stored(name):
     raise AssertionError(f"{name} was not seeded")
 
 
-def test_the_seed_stores_each_copys_declared_origin(seed_env):
-    for i, (text, _src) in enumerate(_DECLARING):
-        (seed_env / f"copy_{i}.md").write_text(text, encoding="utf-8")
-    for i, text in enumerate(_SILENT):
-        (seed_env / f"note_{i}.md").write_text(text, encoding="utf-8")
+@pytest.mark.parametrize("declaring,silent", list(zip(_DECLARING, _SILENT)))
+def test_the_seed_stores_each_copys_declared_origin(seed_env, declaring, silent):
+    text, src = declaring
+    (seed_env / "copy.md").write_text(text, encoding="utf-8")
+    (seed_env / "note.md").write_text(silent, encoding="utf-8")
     from app.core.knowledge_seed import seed_knowledge
     seed_knowledge()
-    for i, (_text, src) in enumerate(_DECLARING):
-        assert _stored(f"copy_{i}.md") == {"kind": "encoded_table", "source": src}
-    for i in range(len(_SILENT)):
-        assert _stored(f"note_{i}.md") == {"kind": "document", "source": None}
+    assert _stored("copy.md") == {"kind": "encoded_table", "source": src}
+    assert _stored("note.md") == {"kind": "document", "source": None}
