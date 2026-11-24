@@ -343,8 +343,21 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
       at all (``agreement_names_no_thing``: no typed value, and no word left
       beyond the agreement words, the words pointing at the evidence and the
       documents' own names, as in "the sources are consistent"). An
-      agreement sentence about another thing stays."""
-    from app.agents.evidence_conflicts import _terms, agreement_names_no_thing, asserts_agreement, extract, same
+      agreement sentence about another thing stays.
+    * A sentence naming a winner for that thing (``evidence_conflicts.
+      names_winner_about``: governs, prevails, takes precedence -- not asked
+      about, not negated -- and it states a differing value or uses a word
+      of the thing) when no ranking statement in the evidence backs one: the
+      conflict line says no document states which governs. A winner the
+      evidence backs, and a winner sentence about another thing, stay."""
+    from app.agents.evidence_conflicts import (
+        _terms,
+        agreement_names_no_thing,
+        asserts_agreement,
+        extract,
+        names_winner_about,
+        same,
+    )
 
     rules = []
     for c in found:
@@ -358,7 +371,7 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
                 classes.append(typed)
         if len(classes) >= 2:
             docs = [str(v.get("document") or "") for v in c["values"]]
-            rules.append((kind, classes, set(c.get("thing") or []), docs))
+            rules.append((kind, classes, set(c.get("thing") or []), docs, c.get("governs") is None))
     out: list[str] = []
     for line in body.split("\n"):
         lead = re.match(r"^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?", line).group(0)
@@ -368,7 +381,7 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
             vals = extract(sent)
             agrees = asserts_agreement(sent)
             gone = False
-            for kind, classes, thing, docs in rules:
+            for kind, classes, thing, docs, unranked in rules:
                 hits = {i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}
                 about = bool(thing & _terms(sent))
                 # A typed value the conflict line does not carry (a result
@@ -376,9 +389,11 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
                 # restatement: only the competing value is superseded, so
                 # the sentence holding it stays.
                 more = any(not any(same(x, k) for k in classes) for x in vals)
-                if len(hits) == 1 and about and not more:
-                    gone = True
-                elif agrees and (hits or about or agreement_names_no_thing(sent, docs)):
+                restates = len(hits) == 1 and about and not more
+                agreement = agrees and (hits or about or agreement_names_no_thing(sent, docs))
+                # A winner no ranking statement backs: the line says none does.
+                winner = unranked and names_winner_about(sent, classes, thing)
+                if restates or agreement or winner:
                     gone = True
             if not gone:
                 kept.append(sent.strip())

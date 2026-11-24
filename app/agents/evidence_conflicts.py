@@ -175,6 +175,38 @@ def _claims_agreement(answer: str) -> bool:
     return any(asserts_agreement(s) for s in _sentences(answer))
 
 
+#: Before a precedence word: the sentence asks which one wins ("check which
+#: governs", "whether the drawing prevails") instead of naming a winner.
+_ASKS_WHICH_RE = re.compile(r"\b(?:which|whether)\b(?:\s+\w+){0,3}\s*$", re.IGNORECASE)
+#: Before a precedence word anywhere in the sentence: a negation ("no
+#: document states that the bill governs", "neither takes precedence").
+_DENIES_RE = re.compile(r"\b(?:not|no|never|neither|nor|none|nothing)\b|n't", re.IGNORECASE)
+
+
+def asserts_precedence(sentence: str) -> bool:
+    """The sentence names a winner: a precedence word (governs, prevails,
+    takes precedence, has priority) that is not asked about ("which
+    governs") and has no negation before it in the sentence."""
+    s = sentence or ""
+    for m in _PREC_RE.finditer(s):
+        before = s[: m.start()]
+        if _ASKS_WHICH_RE.search(before) or _DENIES_RE.search(before):
+            continue
+        return True
+    return False
+
+
+def names_winner_about(sentence: str, values: Iterable[Value], thing: Iterable[str]) -> bool:
+    """The sentence names a winner (``asserts_precedence``) for this thing:
+    it states one of the differing values or uses a word of the thing."""
+    if not asserts_precedence(sentence):
+        return False
+    vals = list(values)
+    if any(same(x, k) for x in extract(sentence) for k in vals):
+        return True
+    return bool(set(thing) & _terms(sentence))
+
+
 #: Words a sentence uses to point at the evidence itself, not at a thing in
 #: it ("the sources are consistent", "both documents match").
 _EVIDENCE_TERMS = frozenset(_stem(w) for w in (
@@ -715,12 +747,6 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     told = all(_says_text(c.value.norm, answer) for c in classes)
                 else:
                     told = all(any(same(c.value, a) for a in said if a.kind == kind) for c in classes)
-                if told and not _claims_agreement(answer):
-                    continue  # the answer already states every differing value as differing
-                key = (kind, frozenset(str(c.value.norm) for c in classes))
-                if key in seen:
-                    continue
-                seen.add(key)
                 order = {id(r): i for i, r in enumerate(rows)}
                 kept.sort(key=lambda c: order.get(id(c.row), 0))
                 gov, basis, gkind, lkind = _precedence([c.doc for c in kept], rows)
@@ -728,6 +754,20 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     gval = next(c.value for c in kept if c.doc == gov)
                     if not all(same(gval, c.value) for c in kept if _names(gkind, c.doc)):
                         gov = basis = None
+                if told and not _claims_agreement(answer):
+                    # The answer already states every differing value as
+                    # differing -- unless it also names a winner for this
+                    # thing that no ranking statement in the evidence backs:
+                    # then it has told the user something no document says.
+                    thing = _thing(kept, q_terms or query)
+                    unbacked = gov is None and any(
+                        names_winner_about(s, [c.value for c in classes], thing) for s in _sentences(answer))
+                    if not unbacked:
+                        continue
+                key = (kind, frozenset(str(c.value.norm) for c in classes))
+                if key in seen:
+                    continue
+                seen.add(key)
                 out.append({
                     "kind": kind,
                     "thing": _thing(kept, q_terms or query),
