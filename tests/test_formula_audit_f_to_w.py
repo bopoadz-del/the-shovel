@@ -912,14 +912,19 @@ class TestMonteCarloPercentiles:
     """Items with no spread (low = most likely = high) leave nothing to
     sample: every trial total is the plain sum, so P50 = P80 = P90 = it."""
 
-    def test_no_spread_gives_the_sum(self):
-        # 3 + 4.5 = 7.5 on every trial.
-        r = _ok("monte_carlo_percentiles", low=[3, 4.5], most_likely=[3, 4.5],
-                high=[3, 4.5], iterations=200, seed=5)
-        assert (r["p50"], r["p80"], r["p90"]) == (7.5, 7.5, 7.5)
+    @pytest.mark.parametrize("items,total", [([3, 4.5], 7.5), ([10, 0, 2], 12)])
+    def test_no_spread_gives_the_sum(self, items, total):
+        # 3 + 4.5 = 7.5 and 10 + 0 + 2 = 12 on every trial.
+        r = _ok("monte_carlo_percentiles", low=items, most_likely=items,
+                high=items, iterations=200, seed=5)
+        assert (r["p50"], r["p80"], r["p90"]) == (total, total, total)
 
-    def test_low_above_most_likely_is_error(self):
-        _err("monte_carlo_percentiles", low=[6], most_likely=[5], high=[9])
+    @pytest.mark.parametrize("low,most_likely,high", [
+        ([6], [5], [9]),          # low above most likely
+        ([1, 2], [2, 9], [3, 8]),  # most likely above high
+    ])
+    def test_item_out_of_order_is_error(self, low, most_likely, high):
+        _err("monte_carlo_percentiles", low=low, most_likely=most_likely, high=high)
 
 
 _LENGTH_SI = ("m", "meter", "metre")
