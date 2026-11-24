@@ -805,8 +805,6 @@ def _drop_other_source_context(text: str, markers: "_Markers") -> str:
     conflict), when it is a list item or a table row, and when the first
     paragraph cites nothing or introduces what follows (ends in ``:``)."""
     pars = re.split(r"\n[ \t]*\n", text.strip())
-    if len(pars) < 2:
-        return text
     doc = {f"[{e['marker']}]": e["document"] for e in markers.entries}
     lead = pars[0]
     lead_docs = {doc[m] for m in _MARKER_RE.findall(lead) if m in doc}
