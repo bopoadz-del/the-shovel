@@ -70,6 +70,7 @@ _META = {"declared_origin": {"kind": "encoded_table", "source": "x/rates.json"}}
         ({"declared_origin": {"kind": "encoded_table", "source": "old.json"}}, _META, [("d1", _META)]),
         (dict(_META), _META, []),  # already in line: no write
         ({}, {}, []),  # the file declares nothing: no write
+        (dict(_META), {}, []),  # the file no longer declares: never written as empty
     ],
 )
 def test_an_unchanged_seeded_copy_is_healed_only_when_out_of_line(stored, meta, expected_writes):
@@ -185,6 +186,7 @@ def test_the_row_carries_a_stored_declaration(monkeypatch, metadata, expected):
         None,
         {},
         {"declared_origin": {"kind": "document", "source": None}},
+        {"declared_origin": {"kind": "document", "source": "x/rates.json"}},
         {"declared_origin": {"kind": "encoded_table", "source": "  "}},
         {"declared_origin": "x/rates.json"},
     ],
