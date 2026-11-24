@@ -3200,16 +3200,23 @@ def _spreadsheet_sheets(
                 )
                 for name, ws in ((n, wb[n]) for n in wb.sheetnames)
             ]
-    # .xls (legacy BIFF)
+    # .xls (legacy BIFF). BIFF stores every number as a float and every date
+    # as a day serial, so a raw cell value prints a quantity of 40 as "40.0"
+    # and a date as "45678.0". Each cell is read through the same converter
+    # the document-text reader uses, so the row chunk states a figure exactly
+    # as the flat text of the same sheet does.
     import xlrd
 
     book = xlrd.open_workbook(file_contents=file_crypto.read_document(file_path))
     out: list[tuple[str, list[list[str]]]] = []
     for sheet in book.sheets():
-        rows = [
-            [str(sheet.cell_value(r, c)).strip() for c in range(sheet.ncols)]
-            for r in range(sheet.nrows)
-        ]
+        rows = []
+        for r in range(sheet.nrows):
+            row = []
+            for cell in sheet.row(r):
+                value = _text_extractors._xls_cell(cell, book.datemode)
+                row.append("" if value is None else str(value).strip())
+            rows.append(row)
         out.append((sheet.name, rows))
     return out
 
