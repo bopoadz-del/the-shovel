@@ -2340,6 +2340,12 @@ class ConstructionScheduleMixin:
                     "total_float_days": r.total_float,
                     "critical": r.is_critical,
                 })
+                # The start date was parsed to date the network; a dated
+                # pass hands its calendar dates back with the day numbers.
+                if r.early_start is not None:
+                    new["early_start_date"] = r.early_start.isoformat()
+                if r.early_finish is not None:
+                    new["early_finish_date"] = r.early_finish.isoformat()
                 if r.is_critical:
                     critical_ids.append(r.id)
             enriched.append(new)
@@ -2349,6 +2355,8 @@ class ConstructionScheduleMixin:
             "critical_path_activity_ids": list(cpm_out.critical_path),
             "critical_count": len(cpm_out.critical_path),
         }
+        if cpm_out.project_finish is not None:
+            summary["project_finish"] = cpm_out.project_finish.isoformat()
         return enriched, summary, None
     # Install-verb keywords: a procurement item links to an activity only when
     # the activity names the equipment AND is an install/erect step — so
