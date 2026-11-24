@@ -16,14 +16,17 @@ import re
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.browser._llm_stub import _cases
 from tests.browser.test_ui_phys_nightly import _ask, _create_project, _login
 
 pytestmark = pytest.mark.browser
 
-_QUESTIONS = [
-    ("What is the curing time for the east deck pour?", "List the open crane lift permits."),
-    ("Summarise the dewatering log for week 3.", "Which scaffold tags failed inspection?"),
-]
+# Two questions per set, taken from the UI-PHYS catalog. The stubbed model
+# answers only catalog asks; an invented question gets its honest error
+# bubble ("Something went wrong"), which is what kept this test red after the
+# sidebar race was fixed. Plain answers: no tool, no upload needed.
+_SET_IDS = (("G2", "G3"), ("G6", "G1"))
+_QUESTIONS = [tuple(_cases()[cid]["ask"] for cid in ids) for ids in _SET_IDS]
 
 
 def _user_texts(page: Page) -> list[str]:
