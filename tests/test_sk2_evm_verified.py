@@ -94,3 +94,19 @@ def test_no_actual_cost_leaves_cpi_and_its_band_undefined(pv, ev):
     assert r["CPI"] is None
     assert r["EAC"] is None
     assert r["status"]["cpi_health"] == "UNDEFINED"
+
+
+@pytest.mark.parametrize(
+    ("given", "absent"),
+    [
+        ({"pv": 5_000.0, "ev": 4_000.0}, "AC/ACWP"),
+        ({"pv": 5_000.0, "ac": 4_500.0}, "EV/BCWP"),
+        ({"ev": 4_000.0}, "PV/BCWS"),
+    ],
+)
+def test_a_missing_measure_is_named_never_invented(given, absent):
+    r = calculate_evm(bac=50_000.0, **given)
+    assert "error" in r
+    assert absent in r["error"]
+    for key in ("CPI", "SPI", "CV", "SV", "EAC"):
+        assert key not in r
