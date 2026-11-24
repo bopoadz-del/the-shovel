@@ -59,12 +59,11 @@ def test_procedure_ids_unique_within_and_across_hats():
     assert len(set(seen.values())) >= 2
 
 
-def test_base_never_inherits_any_hat_procedure():
-    base = catalog.get_base()
-    assert not base.playbook.procedures
-    for hat in _hats_with_procedures():
-        merged = catalog.resolve_hat_with_base(hat)
-        assert [p.id for p in merged.playbook.procedures] == [p.id for p in hat.playbook.procedures]
+@pytest.mark.parametrize("hat", _hats_with_procedures(), ids=lambda h: h.id)
+def test_base_never_inherits_a_hat_procedure(hat):
+    assert not catalog.get_base().playbook.procedures
+    merged = catalog.resolve_hat_with_base(hat)
+    assert [p.id for p in merged.playbook.procedures] == [p.id for p in hat.playbook.procedures]
 
 
 def test_hatted_agent_prompt_carries_each_hats_block(tmp_path):
