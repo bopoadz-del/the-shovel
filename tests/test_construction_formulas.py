@@ -166,6 +166,7 @@ _SMOKE_INPUTS = {
     "interior_finishes_takeoff": dict(
         floor_area_m2=100, perimeter_m=90, room_count=8, floor_to_ceiling_m=2.7,
         door_width_m=0.9, door_height_m=2.1, doors_per_room=1),
+    "resource_cost_line": dict(quantity=240, consumption_per_unit=0.35, price_per_resource_unit=410),
     "resource_line_cost": dict(
         quantity=100, daily_output=10, day_rate=280,
         material_rate_per_unit=50, plant_fraction_of_labour=0.03),

@@ -60,6 +60,7 @@ _AUDIT_SLICE = [
     "rebar_by_area",
     "rebar_lap_length",
     "rebar_weight",
+    "resource_cost_line",
     "resource_line_cost",
     "roi_calculator",
     "scaffold_load_capacity",
@@ -1525,3 +1526,30 @@ def test_audit_validate_design_status(given, valid):
     r = _ok("validate_design_status", design_status=given)
     assert r["valid"] is valid
     assert given in r["message"]
+
+
+# ── resource_cost_line ───────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("params,want", [
+    # Hand: 240 x 0.35 = 84 resource units; x 410 = 34,440; no waste or markup
+    # supplied, so none applied and the total is the cost.
+    (dict(quantity=240, consumption_per_unit=0.35, price_per_resource_unit=410),
+     {"resource_quantity": 84.0, "resource_cost": 34_440.0, "line_total": 34_440.0}),
+    # Hand: 1,850 x 12.5 = 23,125; 5% waste -> 24,281.25; x 3.2 = 77,700.
+    (dict(quantity=1_850, consumption_per_unit=12.5, price_per_resource_unit=3.2,
+          waste_percent=5),
+     {"resource_quantity": 24_281.25, "resource_cost": 77_700.0, "line_total": 77_700.0}),
+])
+def test_audit_resource_cost_line(params, want):
+    r = _ok("resource_cost_line", **params)
+    for key, value in want.items():
+        assert r[key] == pytest.approx(value), key
+
+
+@pytest.mark.parametrize("dropped", ["quantity", "consumption_per_unit",
+                                     "price_per_resource_unit"])
+def test_audit_resource_cost_line_asks_for_a_missing_input(dropped):
+    params = dict(quantity=240, consumption_per_unit=0.35, price_per_resource_unit=410)
+    params.pop(dropped)
+    env = _err("resource_cost_line", expect="needs_input", **params)
+    assert env["missing"] == [dropped]

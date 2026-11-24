@@ -377,9 +377,9 @@ def _qty(x: float) -> str:
              'markup_amount': 'currency', 'line_total': 'currency', 'working': '-'},
 )
 def resource_cost_line(
-    quantity: float | None = None,
-    consumption_per_unit: float | None = None,
-    price_per_resource_unit: float | None = None,
+    quantity: float,
+    consumption_per_unit: float,
+    price_per_resource_unit: float,
     waste_percent: float | None = None,
     markup_percent: float | None = None,
 ) -> dict:

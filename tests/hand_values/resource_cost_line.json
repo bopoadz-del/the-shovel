@@ -1,0 +1,15 @@
+[
+  {
+    "formula": "resource_cost_line",
+    "inputs": {"quantity": 100, "consumption_per_unit": 2, "price_per_resource_unit": 50,
+               "waste_percent": 10, "markup_percent": 10},
+    "expect": {"resource_quantity": 220, "resource_cost": 11000, "line_total": 12100},
+    "working": "Net resource 100 x 2 = 200; with 10% waste 200 x 1.10 = 220; cost 220 x 50 = 11,000; markup 10% of 11,000 = 1,100; line total 12,100."
+  },
+  {
+    "formula": "resource_cost_line",
+    "inputs": {"quantity": 240, "consumption_per_unit": 0.35, "price_per_resource_unit": 410},
+    "expect": {"resource_quantity": 84, "resource_cost": 34440, "line_total": 34440},
+    "working": "Net resource 240 x 0.35 = 84; no waste and no markup supplied, so none applied; cost 84 x 410 = 34,440, which is the line total."
+  }
+]

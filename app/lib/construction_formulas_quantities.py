@@ -498,6 +498,7 @@ FW_ROUTE_NAMES = frozenset({
     "rebar_by_area",
     "rebar_lap_length",
     "rebar_weight",
+    "resource_cost_line",
     "resource_line_cost",
     "roi_calculator",
     "scaffold_load_capacity",
