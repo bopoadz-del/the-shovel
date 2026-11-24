@@ -47,7 +47,10 @@ function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
   )
   const components = useMemo<Components>(() => ({
     // A marker is a control that opens its entry in the Sources panel; the
-    // document it stands for is never written into the answer itself.
+    // document it stands for is never written into the answer itself. Its
+    // text is "[n]", not a bare digit, so the answer read aloud, copied or
+    // read as text keeps the marker ("38,000 [1]", not "38,000 1"); its
+    // accessible name stays "Source n".
     a({ href, title, children }) {
       const marker = citationMarkerFromHref(href)
       if (marker === null) return <a href={href} title={title}>{children}</a>
@@ -60,7 +63,7 @@ function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
           title={`Source ${marker}`}
           onClick={() => onCitation?.(marker)}
         >
-          {marker}
+          {`[${marker}]`}
         </button>
       )
     },

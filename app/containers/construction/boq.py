@@ -17,6 +17,9 @@ _FIG_NUM = r"([0-9][0-9,.]*[0-9]|[0-9])"
 # label from grabbing a figure that belongs to a later clause.
 _FIG_GAP = r"[^0-9%]{0,30}?"
 _FIG_PCT = r"([0-9]+(?:\.[0-9]+)?)\s*(?:%|percent)"
+# A word placing an amount before the current period ("previous",
+# "previously", "prior", "earlier", "already").
+_BEFORE_WORD = r"(?:previous(?:ly)?|prior|earlier|already)"
 
 
 _CCY = r"(?:sar|aed|usd|qar|omr|bhd|kwd|\$)"
@@ -324,7 +327,14 @@ def _payment_figures_from_message(text: str) -> Dict[str, float]:
     )
     if v is not None:
         out["advance_percent"] = v
-    v = _amount(rf"previous\s+certif\w*(?:\s+total)?{_FIG_GAP}{_FIG_NUM}")
+    # The amount certified before this period is named by a word saying
+    # "before" next to a form of "certify", in either order and in any of
+    # its inflections: "previous certificates", "previously certified",
+    # "prior certification", "certified previously". Reading only the one
+    # spelling "previous certif..." dropped the adverb form, and the
+    # certificate then ran with nothing certified before.
+    v = (_amount(rf"\b{_BEFORE_WORD}\s+certif\w*(?:\s+total)?{_FIG_GAP}{_FIG_NUM}")
+         or _amount(rf"\bcertif\w*\s+{_BEFORE_WORD}{_FIG_GAP}{_FIG_NUM}"))
     if v:
         out["previous_certified"] = v
     return out

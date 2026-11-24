@@ -488,6 +488,47 @@ def message_wants_cash_flow(text: str) -> bool:
     return any(p in low for p in _CASH_FLOW_PHRASES)
 
 
+# One figure as a person writes it in a list: "3", "2.5", "1,500",
+# "12,000.75". A comma is a thousands separator only between digits with
+# no space after it; ", " separates the items of the list.
+_LISTED_FIGURE = r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w.]|,\d)"
+_LIST_SEPARATOR = r"(?:\s*;\s*|,\s+)"
+_PERIOD_SERIES_RE = re.compile(
+    rf"{_LISTED_FIGURE}(?:{_LIST_SEPARATOR}{_LISTED_FIGURE}){{2,}}"
+)
+
+
+def message_supplies_period_series(text: str) -> bool:
+    """True when the message writes out its own run of three or more figures
+    one after another ("1.0, 2.0, 3.0" / "1,000, 1,500, 2,000" / "4; 5; 6").
+    A slash is not a separator: "01/03/2027" is a date, not three figures."""
+    return bool(_PERIOD_SERIES_RE.search(text or ""))
+
+
+# A TEMPLATE action draws its deliverable from its own shape, not from figures
+# the user wrote period by period. Each entry names what a template cannot
+# take as written; the action then declines the turn on EVERY path that could
+# hand it over (the runtime predispatch, the predefined front doors, the
+# model's tool list), so the turn stays with the calculators and the model.
+# ``cash_flow_forecast`` builds its curve from ONE money total and a horizon:
+# given the user's own series it can neither read them (it stops on "I need
+# the contract value") nor honour them (it prints its own curve).
+_TEMPLATE_CANNOT_TAKE = {
+    "cash_flow_forecast": message_supplies_period_series,
+}
+
+
+def template_declines_ask(action: Optional[str], text: str) -> bool:
+    """True when ``action`` is a template that cannot take this ask as written."""
+    cannot = _TEMPLATE_CANNOT_TAKE.get(action or "")
+    return bool(cannot and cannot(text or ""))
+
+
+def template_actions_declining(text: str) -> set[str]:
+    """Every template action that cannot take this ask as written."""
+    return {a for a in _TEMPLATE_CANNOT_TAKE if template_declines_ask(a, text)}
+
+
 # RFI drafts often name Drawing S-### / A-### refs; drawing_qto keywords
 # then win. Detector is the steal-guard (live tip 50c37f ask1).
 _RFI_DRAFT_PHRASES = (

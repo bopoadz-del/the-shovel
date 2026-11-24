@@ -451,7 +451,8 @@ async def stream(agent: Any, user_message: str, history: Optional[list] = None,
         for call in calls:
             name = (call.get("function") or {}).get("name") or ""
             args = _args(call)
-            yield {"type": "tool_call", "tool": name, "name": name, "args_preview": json.dumps(args)[:200]}
+            yield turn_progress.tool_call({"type": "tool_call", "tool": name, "name": name,
+                                            "args_preview": json.dumps(args)[:200]})
             if name == tools.SELECT_HAT:
                 chosen = str(args.get("hat") or "")
                 if chosen in disciplines:

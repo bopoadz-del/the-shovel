@@ -31,7 +31,7 @@ import {
   rememberSession,
   renameTitleError,
 } from '../chat/session'
-import { activityForTool, plainMetadata } from '../chat/userFacingText'
+import { activityLine } from '../chat/userFacingText'
 import {
   belongsToProjectList,
   readSessionDocuments,
@@ -41,7 +41,7 @@ import {
 } from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
-import { readCoverage } from '../chat/citationMarkers'
+import { readCitations, readCoverage } from '../chat/citationMarkers'
 import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
@@ -1135,16 +1135,24 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
   // ── Chat session switching (Quarry CHAT HISTORY) ──────────────────────────
 
   const loadSessionHistory = useCallback((convId: string) => {
-    apiGet<{ messages: Array<{ role: string; content: string }> }>(
+    apiGet<{ messages: Array<{ role: string; content: string; citations?: unknown; coverage?: unknown; provenance?: unknown }> }>(
       `/v1/agents/conversations/${convId}/messages`,
     )
       .then((hist) => {
-        const loaded = (hist.messages ?? []).map((m) => {
+        const loaded = (hist.messages ?? []).map((m): ChatMessage => {
           const role = (m.role === 'user' ? 'user' : 'assistant') as MessageRole
+          if (role === 'user') return { id: msgId(), role, content: m.content }
+          // A reopened answer keeps what rode beside it live (W3): its
+          // citation entries and coverage for the Sources panel, and its
+          // provenance for "Why this answer". The server numbers the stored
+          // text and its entries together, so the markers link as they did.
           return {
             id: msgId(),
             role,
-            content: role === 'assistant' ? sanitizeAssistantContent(m.content) : m.content,
+            content: sanitizeAssistantContent(m.content),
+            citations: readCitations(m.citations),
+            coverage: readCoverage(m.coverage),
+            provenance: Array.isArray(m.provenance) ? (m.provenance as ProvenanceEntry[]) : undefined,
           }
         })
         const kept = historyBelongsToSession(convId, activeIdRef.current, loaded)
@@ -1327,30 +1335,6 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
       }
     }
 
-    /** Build a human-readable status label for an agent tool_call event. */
-    function toolStatusLabel(toolName: string, argsPreview: string): string {
-      let args: Record<string, unknown> = {}
-      try {
-        args = JSON.parse(argsPreview) as Record<string, unknown>
-      } catch { /* truncated JSON — ignore */ }
-
-      switch (toolName) {
-        case 'search_project_documents': {
-          const q = typeof args['query'] === 'string' ? args['query'] : ''
-          return q ? `Searching documents for "${q}"…` : 'Searching documents…'
-        }
-        case 'delegate_to_agent': {
-          const agent = typeof args['agent_name'] === 'string' ? args['agent_name'] : ''
-          const shown = plainMetadata(agent)
-          return shown ? `Delegating to ${shown}…` : 'Delegating to specialist…'
-        }
-        case 'remember_fact':
-          return 'Saving fact to memory…'
-        default:
-          return activityForTool(toolName)
-      }
-    }
-
     try {
       // Repointed to the ORCHESTRATOR front door (not the agent directly). The
       // orchestrator decides: predefined reasoning for a known workflow, else it
@@ -1476,10 +1460,10 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
                 )
               }
             } else if (evtType === 'tool_call') {
-              // Show ephemeral status inside the assistant bubble while tools run.
-              const toolName = typeof evt['tool'] === 'string' ? evt['tool'] : 'tool'
-              const argsPreview = typeof evt['args_preview'] === 'string' ? evt['args_preview'] : ''
-              const status = toolStatusLabel(toolName, argsPreview)
+              // One short, true line while a tool runs: the server's label
+              // for the kind of work (W4). The tool's name, its arguments and
+              // the model's query are never shown.
+              const status = activityLine(evt)
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
@@ -1534,7 +1518,7 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawSources = Array.isArray(evt['sources']) ? (evt['sources'] as ChatMessage['sources']) : []
               const rawExports = Array.isArray(evt['exports']) ? (evt['exports'] as ChatMessage['exports']) : []
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
-              const rawCitations = Array.isArray(evt['citations']) ? (evt['citations'] as AnswerCitation[]) : []
+              const rawCitations = readCitations(evt['citations']) ?? []
               const rawCoverage = readCoverage(evt['coverage'])
               setMessages((prev) =>
                 prev.map((m) =>

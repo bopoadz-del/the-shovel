@@ -350,7 +350,9 @@ def test_every_computed_call_of_the_turn_is_shown_in_call_order(first, second):
     messages = _turn("both please", _tool_msg("bill_rows_aggregate", a[1]),
                      _tool_msg("bill_rows_aggregate", b[1]))
     out = runtime._recover_answer_from_tool_messages("", messages)
-    assert out.startswith("2 computed results in this turn")
+    assert "2 computed results in this turn" in out.rstrip().splitlines()[-1], out
+    first = out.splitlines()[0]
+    assert first.startswith("Bill row count and total: ") and any(ch.isdigit() for ch in first), out
     one, two = a[1]["bills"][0]["filename"], b[1]["bills"][0]["filename"]
     assert one in out and two in out and out.index(one) < out.index(two)
 

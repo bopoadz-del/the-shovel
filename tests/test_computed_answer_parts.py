@@ -204,13 +204,15 @@ def test_the_heading_is_the_tool_name_only_in_the_default_language(name, languag
     assert heading_for(name, language) == expected
 
 
-@pytest.mark.parametrize("parts, language, first", [
+@pytest.mark.parametrize("parts, language, last", [
     (["A:\n- 1", "B:\n- 2"], "en", EN["several"].format(n=2)),
     (["A:\n- 1", "", "B:\n- 2", "C:\n- 3"], "ar", AR["several"].format(n=3)),
 ])
-def test_several_calls_open_with_how_many_are_shown(parts, language, first):
+def test_several_calls_close_with_how_many_are_shown(parts, language, last):
+    # The count is not the answer, so it follows the calls; the first call opens.
     out = join_calls(parts, language)
-    assert out.split("\n\n")[0] == first
+    assert out.split("\n\n")[-1] == last
+    assert out.split("\n\n")[0] == parts[0]
     assert all(p in out for p in parts if p)
 
 

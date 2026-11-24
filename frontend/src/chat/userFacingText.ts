@@ -33,8 +33,16 @@ export function plainMetadata(text: string): string {
     .trim()
 }
 
-/** Status line for a tool whose id has no dedicated sentence. */
-export function activityForTool(toolName: string): string {
-  const words = plainMetadata(toolName || '')
-  return words ? `Running ${words}…` : 'Running a tool…'
+/** The line shown while a stream event's work runs. */
+export const WORKING_LINE = 'Working through your request…'
+
+/**
+ * The activity line for a ``tool_call`` stream event: the label the server
+ * gives the KIND of work (searching, calculating, working), never the
+ * tool's name, its arguments or the model's query. An event without a
+ * label is shown as plain work.
+ */
+export function activityLine(evt: Record<string, unknown>): string {
+  const label = typeof evt['label'] === 'string' ? evt['label'].trim() : ''
+  return label || WORKING_LINE
 }

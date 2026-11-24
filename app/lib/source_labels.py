@@ -446,8 +446,9 @@ def calculator_default_lines(
 
 
 def default_sentence(calculation: str, key: str, value: Any) -> str:
-    """One sentence naming a default the calculator used, by the input's label
-    and a value as a reader writes it: "The shape used, rectangular, is ..."."""
+    """One sentence naming a default the calculation used, by the input's label
+    and a value as a reader writes it: "The shape used, rectangular, is an
+    assumed default, ..." -- no calculator, tool or pipeline word."""
     from app.lib import formula_registry
 
     spec = formula_registry.get(calculation or "")
@@ -455,8 +456,12 @@ def default_sentence(calculation: str, key: str, value: Any) -> str:
     row = {"unit": declared.unit if declared else (spec.inputs or {}).get(key, "") if spec else "",
            "hi": declared.hi if declared else None}
     shown = readable_value(value) if isinstance(value, str) else _shown_quantity(value, row)
-    return (f"The {parameter_label(calculation, key)} used, {shown}, is the platform "
-            "calculator's default, not a figure from the project documents.")
+    # The sentence is the reader's: it names the input and says the value was
+    # assumed, never the machinery that assumed it. A sentence the answer
+    # contract counts as machinery (rule 3) survived only because its "not"
+    # read as a refusal; an honest default line needs no such exemption.
+    return (f"The {parameter_label(calculation, key)} used, {shown}, is an assumed "
+            "default, not a figure from the project documents.")
 
 
 def calculator_currency_defaults(

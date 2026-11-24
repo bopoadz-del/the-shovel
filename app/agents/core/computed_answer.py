@@ -39,13 +39,14 @@ LABELS: Dict[str, Dict[str, str]] = {
         "within": " in the section {terms}",
         "source": "source",
         "rows": "Rows",
+        "more_rows": "{n} further rows not listed here",
         "working": "Working",
         "no_rows": "no matching rows",
         "not_returned": "did not return",
         "asked": "Asked",
         "no_figure": "the tool returned no figure",
         "failed": "the tool could not complete the request",
-        "several": "{n} computed results in this turn, all shown below.",
+        "several": "{n} computed results in this turn, all shown above.",
         "sep": ", ",
         "list_sep": "; ",
         "quantity": "quantity",
@@ -65,13 +66,14 @@ LABELS: Dict[str, Dict[str, str]] = {
         "within": " في القسم {terms}",
         "source": "المصدر",
         "rows": "البنود",
+        "more_rows": "{n} بنود أخرى غير مدرجة هنا",
         "working": "طريقة الحساب",
         "no_rows": "لا توجد بنود مطابقة",
         "not_returned": "لم تُرجع نتيجة",
         "asked": "المطلوب",
         "no_figure": "لم تُرجع الأداة أي رقم",
         "failed": "تعذّر على الأداة إتمام الطلب",
-        "several": "{n} نتائج محسوبة في هذا الدور، وجميعها معروضة أدناه.",
+        "several": "{n} نتائج محسوبة في هذا الدور، وجميعها معروضة أعلاه.",
         "sep": "، ",
         "list_sep": "؛ ",
         "quantity": "الكمية",
@@ -295,10 +297,44 @@ def _statement_lines(st: Any, lab: Dict[str, str], language: str = DEFAULT_LANGU
         line += f" ({lab['source']}: {st.source})"
     lines = [line]
     if st.rows:
-        lines.append(f"  {lab['rows']}: " + lab["list_sep"].join(st.rows))
+        lines.append(f"  {lab['rows']}: " + shown_rows(st.rows, lab))
     if getattr(st, "working", ""):
         lines.append(f"  {lab['working']}: {st.working}")
     return lines
+
+
+#: How much of a computed row set the answer prints inline. The figure and
+#: its count already state the whole set; the row list beside it lets the
+#: reader see what was matched, and a list longer than a reader scans is a
+#: second answer, not a support for the first. The bounds are the same for
+#: every tool, question and language: at most ROWS_SHOWN rows, and no more
+#: rows than fit in ROWS_SHOWN_CHARS characters (always at least one row).
+#: The rows left out are COUNTED in one closing segment worded from LABELS,
+#: so the printed list never reads as the whole set. The whole set stays in
+#: the tool's structured result (``Statement.rows``), which every check that
+#: reads the turn's rows (``answer_counted_rows``, ``answer_row_totals``)
+#: takes from the result, not from this text.
+ROWS_SHOWN = 10
+ROWS_SHOWN_CHARS = 600
+
+
+def shown_rows(rows: Sequence[str], lab: Dict[str, str]) -> str:
+    """The inline text of a row list: the leading rows within the bounds,
+    then, when any row is left out, how many were (``more_rows``)."""
+    sep = lab["list_sep"]
+    kept: List[str] = []
+    used = 0
+    for row in rows:
+        text = str(row)
+        cost = len(text) + (len(sep) if kept else 0)
+        if kept and (len(kept) >= ROWS_SHOWN or used + cost > ROWS_SHOWN_CHARS):
+            break
+        kept.append(text)
+        used += cost
+    left = len(rows) - len(kept)
+    if left > 0:
+        kept.append(lab["more_rows"].format(n=left))
+    return sep.join(kept)
 
 
 def _typed_by_user(value: Any, question: str) -> bool:
@@ -364,12 +400,27 @@ def heading_for(display_name: str, language: str) -> str:
 
 
 def join_calls(rendered: Iterable[str], language: str) -> str:
-    """Every computed call of the turn; with more than one, a first line says
-    how many there are, so none reads as the whole answer by omission."""
+    """Every computed call of the turn; with more than one, a line after them
+    says how many there are, so none reads as the whole answer by omission.
+    The count is not an answer, so it never opens one: the first call does."""
     parts = [r for r in rendered if r]
     if len(parts) > 1:
-        parts.insert(0, labels_for(language)["several"].format(n=len(parts)))
+        parts.append(labels_for(language)["several"].format(n=len(parts)))
     return "\n\n".join(parts)
+
+
+def _opening_line(heading: str, asked_line: str, body: Sequence[str]) -> Tuple[str, List[str]]:
+    """A result block's first line and the lines after it.
+
+    A heading says which tool spoke, not what it found, so it never stands
+    on a line of its own above a figure: the block's first stated line (a
+    figure; ``_body_lines`` puts those first) shares the heading's line,
+    after what was asked when that is shown. Later lines follow as they
+    were. With no stated line the heading is the line, as before."""
+    head = f"{heading} ({asked_line})" if asked_line else heading
+    if body and body[0].startswith("- "):
+        return f"{head}: {body[0][2:]}", list(body[1:])
+    return f"{head}:", list(body)
 
 
 _TOKEN_RE = re.compile(r"\w+(?:[.,]\w+)*")
@@ -490,13 +541,13 @@ def answer_turn(calls: Sequence[Call], language: str, question: str = "") -> str
         per_tool[c.tool] = per_tool.get(c.tool, 0) + 1
     blocks: List[str] = []
     for c, body in shown:
-        head = [f"{c.heading}:"]
         asked_line = _asked_line(c.asked, lab, question) if per_tool[c.tool] > 1 else ""
-        if asked_line:
-            head.append(f"- {asked_line}")
-        blocks.append("\n".join(head + body))
+        first, rest = _opening_line(c.heading, asked_line, body)
+        blocks.append("\n".join([first] + rest))
     if len(blocks) > 1:
-        blocks.insert(0, lab["several"].format(n=len(blocks)))
+        # After the results, never above them: a count of results is not
+        # the answer, and an answer's first line is.
+        blocks.append(lab["several"].format(n=len(blocks)))
     zero_parts: List[str] = []
     for z in zeros:
         if any(covers(lead, z) for lead in leads):
@@ -554,4 +605,5 @@ __all__: Tuple[str, ...] = (
     "LABELS", "REASONS", "RESULT_CUT_UNREADABLE", "has_words", "question_language", "render_call", "heading_for", "join_calls",
     "Call", "selection", "covers", "unanswered", "answer_turn",
     "tool_call_args", "failure_text", "scrub", "reason_text", "MAX_CODE_CHARS",
+    "shown_rows", "ROWS_SHOWN", "ROWS_SHOWN_CHARS",
 )

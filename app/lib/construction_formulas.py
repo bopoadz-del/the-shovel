@@ -248,7 +248,85 @@ def calculator_name_from_text(text: str) -> Optional[str]:
             return uniq[0]
         if len(uniq) > 1:
             return None
-    return None
+    return _calculator_by_content_words(raw)
+
+
+# Words that carry no calculator meaning: function words and the unit tokens
+# every calculator shares. Two calculators never differ by one of these.
+_CONTENT_STOP_WORDS = frozenset(
+    "a an the of on in to for per and or with from by at as is are what how "
+    "kn kpa mpa mm m2 m3 kg min pct tons ton currency month days day ratio "
+    "count".split()
+)
+
+# A calculator is taken from its content words only when it leads the next
+# one by at least this many distinct words: the ask then describes that
+# calculator and no other. A narrower lead is a guess between two.
+_CONTENT_WORD_LEAD = 3
+
+
+def _content_words(text: str) -> set:
+    out = set()
+    for word in re.findall(r"[a-z]+", (text or "").lower()):
+        if len(word) <= 2 or word in _CONTENT_STOP_WORDS:
+            continue
+        # "cranes" / "crane", "shifts" / "shift": one word, two spellings.
+        out.add(word[:-1] if word.endswith("s") and len(word) > 4 else word)
+    return out
+
+
+_CONTENT_VOCAB: Dict[int, List[Tuple[str, set]]] = {}
+
+
+def _calculator_content_vocab() -> List[Tuple[str, set]]:
+    """(registry name, content words) per calculator, read from what each
+    formula declares about itself: its name, display name, input labels and
+    output names. Built once per registry state."""
+    from app.lib.formula_registry import all_specs
+
+    specs = all_specs()
+    key = len(specs)
+    cached = _CONTENT_VOCAB.get(key)
+    if cached is None:
+        cached = []
+        for spec in specs:
+            if spec.name not in CALCULATORS:
+                continue
+            parts = [spec.name.replace("_", " "), spec.display_name or ""]
+            for input_name, param in (spec.inputs or {}).items():
+                parts.append(getattr(param, "label", "") or input_name.replace("_", " "))
+            parts.extend(out.replace("_", " ") for out in (spec.outputs or {}))
+            cached.append((spec.name, _content_words(" ".join(parts))))
+        _CONTENT_VOCAB.clear()
+        _CONTENT_VOCAB[key] = cached
+    return cached
+
+
+def _calculator_by_content_words(raw: str) -> Optional[str]:
+    """The calculator an ask describes without naming it, or None.
+
+    Reached only when no name rule hits. The ask must give a figure to
+    compute with, and one calculator must share at least
+    ``_CONTENT_WORD_LEAD`` more of its declared words (inputs, outputs,
+    name) with the ask than any other: "panel 80 m2, 4 m high, shape factor
+    1.3, wind 20 m/s; force and overturning moment?" writes the inputs and
+    outputs of one formula. A tie or a narrow lead is no answer.
+    """
+    if not re.search(r"\d", raw):
+        return None
+    ask = _content_words(raw)
+    if not ask:
+        return None
+    scored = sorted(
+        ((len(words & ask), name) for name, words in _calculator_content_vocab()),
+        reverse=True,
+    )
+    if not scored or scored[0][0] == 0:
+        return None
+    runner_up = scored[1][0] if len(scored) > 1 else 0
+    if scored[0][0] - runner_up < _CONTENT_WORD_LEAD:
+        return None
+    return scored[0][1]
 
 # PMI (BCWS/BCWP/ACWP/BAC) and long PE-sheet names → calculate_evm kwargs.
 # ``run_calculation`` keeps only exact signature names, so uppercase / long
@@ -1864,6 +1942,72 @@ def _figure_before_label(pat: str, raw: str, overlaps: Any) -> Optional[Any]:
     return _first_open(rx, raw, overlaps)
 
 
+def _bind_label_word_before_figure(
+    labels: Dict[str, str],
+    declared_units: Dict[str, Any],
+    raw: str,
+    number: str,
+    found: Dict[str, Any],
+    consumed: List[Tuple[int, int]],
+    overlaps: Any,
+    own_names: Tuple[str, ...] = (),
+) -> None:
+    """Label word first, figure and unit after: "live 4.0 kN/m2".
+
+    The words written right before a figure name an input when one of them
+    is a word of exactly one input's labels among the open inputs that
+    measure the figure's kind of unit. A word no label holds, or one that
+    two such inputs share, names nothing; an input named for two figures
+    binds neither. A word inside the calculator's own name, where the ask
+    writes that name, names the calculator and not a figure ("cut and fill
+    balance for 12 m3" does not make 12 m3 the fill).
+    """
+    name_spans: List[Tuple[int, int]] = []
+    for phrase in own_names:
+        parts = re.findall(r"[a-z0-9]+", str(phrase or "").lower())
+        if len(parts) < 2:
+            continue
+        pattern = r"(?<![A-Za-z0-9])" + r"[\W_]+".join(map(re.escape, parts)) + r"(?![A-Za-z0-9])"
+        name_spans.extend(m.span() for m in re.finditer(pattern, raw, re.IGNORECASE))
+    words_to_dests: Dict[str, set] = {}
+    for label, dest in labels.items():
+        for word in label.split("_"):
+            if len(word) >= 3 and word.isalpha():
+                words_to_dests.setdefault(word, set()).add(dest)
+    rx = re.compile(
+        rf"(?<![A-Za-z0-9])([A-Za-z]+(?:[ \t]+[A-Za-z]+){{0,2}})[ \t]+{number}"
+        rf"\s*({_TEXT_UNIT_RE})(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    named: Dict[str, List[Tuple[Tuple[int, int], float, str]]] = {}
+    for match in rx.finditer(raw):
+        span = (match.start(2), match.end(3))
+        if overlaps(span):
+            continue
+        written_unit = match.group(3)
+        dests: set = set()
+        for word_match in re.finditer(r"[A-Za-z]+", match.group(1)):
+            at = match.start(1) + word_match.start()
+            if any(lo <= at < hi for lo, hi in name_spans):
+                continue
+            word = word_match.group(0).lower()
+            for dest in words_to_dests.get(word, ()):
+                declared = str(declared_units.get(dest) or _unit_from_name(dest) or "")
+                if dest not in found and declared and _same_kind(written_unit, declared):
+                    dests.add(dest)
+        if len(dests) != 1:
+            continue
+        num = _parse_text_number(match.group(2))
+        if num is not None:
+            named.setdefault(dests.pop(), []).append((span, num, written_unit))
+    for dest, figures in named.items():
+        if len(figures) != 1:
+            continue
+        span, num, written_unit = figures[0]
+        found[dest] = _to_param_unit(num, written_unit, dest, declared_units.get(dest, ""))
+        consumed.append(span)
+
+
 def extract_calculation_params_from_text(
     fn: Any,
     text: str,
@@ -2000,6 +2144,13 @@ def extract_calculation_params_from_text(
             continue
         found[dest] = _to_param_unit(num, match.group(2), dest, declared_units.get(dest, ""))
         consumed.append(match.span())
+
+    own_names = (
+        (str(spec.display_name or ""), spec.name.replace("_", " ")) if spec else ()
+    )
+    _bind_label_word_before_figure(
+        labels, declared_units, raw, number, found, consumed, _overlaps, own_names,
+    )
 
     accepted = {
         row["name"] for row in describe_calculation_params(fn)
@@ -2154,6 +2305,59 @@ def _missing_required(fn: Any, bound: Dict[str, Any], name: Optional[str] = None
                 missing.append(row["name"])
     return missing + [key for key in _declared_required(name)
                       if _is_blank(bound.get(key)) and key not in missing]
+
+
+#: "25 kN/m3", "2,400 kg/m³": a figure written per cubic metre. Times a
+#: volume it gives the unit written before the slash.
+_PER_CUBIC_METRE_RE = re.compile(
+    rf"({SIGNED_FIGURE})\s*([A-Za-z]+)\s*/\s*m(?:3|³|\^3)(?![A-Za-z0-9])")
+
+#: "5 floors, each slab ...": a count of what the sentence then sizes once.
+_EACH_COUNT_RE = re.compile(r"(?<![\d.])(\d+)\s+[A-Za-z]+\s*,?\s+each\b", re.IGNORECASE)
+
+
+def _derive_missing_by_unit(
+    fn: Any, params: Dict[str, Any], missing: List[str], ask: str,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """A missing input the ask states as a product of its own figures.
+
+    One L x W x T chain (a volume in m3) times one figure written per m3
+    ("25 kN/m3") is a quantity in the unit before the slash (kN). A count
+    the ask says repeats the sized element ("5 floors, each slab ...")
+    multiplies it. The product fills the one missing input declared in that
+    unit. Anything less than one chain, one per-m3 figure, at most one
+    repeat count and one missing input of that unit derives nothing, and the
+    input is asked for as before. No figure is assumed.
+    """
+    if not missing or not ask:
+        return params, []
+    densities = _PER_CUBIC_METRE_RE.findall(ask)
+    from app.lib.construction_formulas_quantities import dimension_chains
+
+    chains = dimension_chains(ask)
+    counts = _EACH_COUNT_RE.findall(ask)
+    if len(densities) != 1 or len(chains) != 1 or len(counts) > 1:
+        return params, []
+    figure, unit = densities[0]
+    declared = _declared_units(fn)
+    targets = [key for key in missing
+               if _norm_unit_token(declared.get(key)) == _norm_unit_token(unit)]
+    if len(targets) != 1:
+        return params, []
+    from app.agents.base.formulas.construction_formulas_planning import convert_units
+
+    sides = [convert_units(n, u, "m")["value_out"] if u else n for n, u in chains[0]]
+    count = int(counts[0]) if counts else 1
+    density = _ask_float(figure)
+    value = count * sides[0] * sides[1] * sides[2] * density
+    row = {
+        "parameter": targets[0],
+        "value": value,
+        "unit": unit,
+        "from": (f"{count} x {sides[0]:g} x {sides[1]:g} x {sides[2]:g} m3"
+                 f" x {density:g} {unit}/m3"),
+    }
+    return {**params, targets[0]: value}, [row]
 
 
 def _declared_required(name: Optional[str]) -> List[str]:
@@ -2762,20 +2966,33 @@ def _units_written_for(figure: float, text: str) -> List[str]:
     return found
 
 
+_CHAIN_BEFORE = re.compile(r"\d\s*[x×*]\s*$", re.IGNORECASE)
+_CHAIN_AFTER = re.compile(r"\s*[x×*]\s*\d", re.IGNORECASE)
+
+
 def _words_written_after(figure: float, text: str) -> str:
     """The unit words the ask writes right after this figure, up to the end
     of the clause (at most six words); empty when the figure is not written
-    or is written twice with different words."""
+    or is written twice with different words.
+
+    Every place the figure is written counts, a bare one too: "30 kN/m
+    ultimate ... f'c 30" writes 30 once with words and once with none, so
+    neither writing is the figure's own unit (else a strength would read a
+    load's "kN/m"). A figure that is one side of a product ("0.9 x 2.1
+    door per room") has no words of its own: what follows the product names
+    the thing measured, not a unit of its last side."""
     found = set()
     num = re.compile(r"(?<![\w.,])(" + _TEXT_NUM_RE + r")(?![\d,.]*\d)")
     for match in num.finditer(text or ""):
         value = _parse_text_number(match.group(1))
         if value is None or not _numbers_agree(value, figure):
             continue
+        if _CHAIN_BEFORE.search(text[:match.start()]) or _CHAIN_AFTER.match(text, match.end()):
+            found.add("")
+            continue
         rest = re.split(r"[.;:?!,()]|\s(?:and|for|with|to|over|in|on)\s", text[match.end():], maxsplit=1)[0]
         words = " ".join(rest.split()[:6]).strip()
-        if words and re.match(r"[A-Za-z%/]", words):
-            found.add(words)
+        found.add(words if words and re.match(r"[A-Za-z%/]", words) else "")
     return next(iter(found)) if len(found) == 1 else ""
 
 
@@ -2789,7 +3006,9 @@ def _written_only_negative(figure: float, text: str) -> bool:
             and not any(_numbers_agree(v, figure) for v in values))
 
 
-_RATE_WORDS = re.compile(r"[A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?\s*(?:/\s*|\s+per\s+)[A-Za-z]+(?:-[A-Za-z]+)?")
+# The rate's last unit is read whole: "kN/m2" is a pressure, and stopping
+# at "kN/m" would name it a force per length.
+_RATE_WORDS = re.compile(r"[A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?\s*(?:/\s*|\s+per\s+)[A-Za-z]+\d*(?:-[A-Za-z]+)?")
 
 
 def _attach_written_units(name: str, fn: Any, bound: Dict[str, Any], caller: Dict[str, float],
@@ -3010,12 +3229,48 @@ _ARITH_EXPRESSION_RE = re.compile(
 )
 
 
+# A figure as written: not the tail of a word or unit ("m2", "C25"), and not
+# followed by a letter that makes it part of a code. Operators are
+# normalised first, so "890x310" reads as two figures.
+_WRITTEN_FIGURE_RE = re.compile(r"(?<![A-Za-z0-9_.,])\d+(?:,\d{3})*(?:\.\d+)?(?![A-Za-z0-9_])")
+
+
+def _written_figures(text: str) -> frozenset[float]:
+    """The distinct figures ``text`` writes, compared to 9 decimals."""
+    out: set[float] = set()
+    for match in _WRITTEN_FIGURE_RE.finditer(_normalise_arithmetic(text or "")):
+        try:
+            out.add(round(float(match.group(0).replace(",", "")), 9))
+        except ValueError:
+            continue
+    return frozenset(out)
+
+
+def operands_are_the_whole_ask(ask: str, operands: Iterable[float]) -> bool:
+    """True when every figure the ask writes is one of ``operands``.
+
+    A sum the server works out from the ask stands for the ask only when it
+    uses the ask's figures. When the ask writes figures the sum leaves out
+    (a door's 0.9 x 2.1 inside a painting programme, one crash day at a
+    rate inside a least-cost crash), the sum is a fragment of a larger
+    working: it is not the answer, and returning it as calculated would
+    present the fragment as the result. Figures compare as distinct values,
+    so an ask whose text repeats a figure is still covered.
+    """
+    written = _written_figures(ask)
+    if not written:
+        return False
+    used = {round(float(x), 9) for x in operands}
+    return written <= used
+
+
 def self_contained_arithmetic(ask: str) -> tuple[str, float] | None:
     """(expression, value) when the ask carries its own arithmetic operands.
 
     A self-contained arithmetic ask ("calculate 890 × 310") is evaluated here
     so the model never performs the multiplication. Returns None when the ask
-    has no calc verb or no two-figure arithmetic expression.
+    has no calc verb, no two-figure arithmetic expression, or writes figures
+    the expression does not use (the expression is then a fragment).
     """
     raw = (ask or "").strip()
     if not raw or not _ARITH_VERB_RE.search(raw):
@@ -3027,8 +3282,11 @@ def self_contained_arithmetic(ask: str) -> tuple[str, float] | None:
         if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", expr):
             continue
         value = _safe_arithmetic_value(expr)
-        if value is not None:
-            return expr, value
+        if value is None:
+            continue
+        if not operands_are_the_whole_ask(raw, _written_figures(expr)):
+            continue
+        return expr, value
     return None
 
 
@@ -3164,6 +3422,10 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
                 "Exception", exc_info=True,
             )
             qty_rate = None
+        if qty_rate is not None and not operands_are_the_whole_ask(ask, qty_rate):
+            # One quantity at one rate inside a longer working is a
+            # fragment of it, not the ask's total.
+            qty_rate = None
         if qty_rate is not None:
             quantity, unit_rate = qty_rate
             total = quantity * unit_rate
@@ -3260,6 +3522,9 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         str(name), params, context)
     params = _coerce_bound_values(fn, params, frozenset(c.get("parameter") for c in conversions),
                                   _stated_percents(ask_text))
+    params, derived = _derive_missing_by_unit(
+        fn, params, _missing_required(fn, params, name=str(name)),
+        _CURRENT_ASK.get() or ask_text)
     params, rejected = formula_registry.check_inputs(str(name), params)
     refused = {row["parameter"] for row in unit_rejected}
     rejected = unit_rejected + [row for row in rejected if row["parameter"] not in refused]
@@ -3421,6 +3686,10 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     }
     if conversions:
         envelope["conversions"] = conversions
+    if derived:
+        # An input worked out of the ask's own figures is shown with its
+        # working, so the answer can state where the value came from.
+        envelope["derived_inputs"] = derived
     # The calculator's own written method (its formula and the factors it
     # applies): a constant the body uses is stated, not silent (D1 rule C).
     method = formula_registry.written_method(fn)

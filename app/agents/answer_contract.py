@@ -79,14 +79,76 @@ _SOURCE_LINE_RE = re.compile(
 
 _FILE_EXTS = r"pdf|docx?|xlsx?|xlsm|csv|txt|md|pptx?|dwg|dxf|ifc|xer|xml|json|zip|rar|png|jpe?g"
 #: A parenthesised or bracketed citation that names a file:
-#: ``(Spec Section 03.pdf, p. 4)``, ``[Source: BOQ.xlsx]``.
-_INLINE_FILE_CITE_RE = re.compile(
-    rf"[ \t]*[(\[](?:[ \t]*sources?[ \t]*:)?[ \t]*(?P<body>[^()\[\]\n]{{0,200}}?\.(?:{_FILE_EXTS})\b[^()\[\]\n]{{0,60}}?)[)\]]",
-    re.IGNORECASE,
-)
+#: ``(Spec Section 03.pdf, p. 4)``, ``[Source: BOQ (Priced).xlsx]``.
+_SOURCE_PREFIX_RE = re.compile(r"^[ 	]*sources?[ 	]*:", re.IGNORECASE)
+_CITE_BODY_MAX = 260
+_CLOSE = {"(": ")", "[": "]"}
+
+
+def _group_end(line: str, start: int) -> int:
+    """Index of the bracket closing the one at ``start``, or -1. Round and
+    square brackets nest inside each other; a mismatched close ends the
+    search (the group is not a citation)."""
+    stack = [_CLOSE[line[start]]]
+    for i in range(start + 1, min(len(line), start + 2 + _CITE_BODY_MAX)):
+        ch = line[i]
+        if ch in _CLOSE:
+            stack.append(_CLOSE[ch])
+        elif ch in ")]":
+            if ch != stack.pop():
+                return -1
+            if not stack:
+                return i
+    return -1
+
+
+def _names_a_file(body: str) -> bool:
+    """True when the group's own text (not a group nested in it) carries a
+    file extension: ``Bill (Priced).xlsx`` names a file; ``the bill [Bill.xlsx]
+    shows`` does not, its nested group does."""
+    depth = 0
+    flat = []
+    for ch in body:
+        if ch in ")]":
+            depth = max(depth - 1, 0)
+        flat.append(ch if depth == 0 else " ")
+        if ch in _CLOSE:
+            depth += 1
+    return bool(_FILE_NAME_END_RE.search("".join(flat)))
+
+
+def _inline_citations(line: str, markers: "_Markers") -> str:
+    """Every bracketed citation that names a file, as its marker. The group
+    is read by its balanced brackets, so a file name that carries its own
+    brackets (``Bill of Quantities (Priced).xlsx``, ``Drawings (6 of 7).pdf``)
+    is one citation, not text the recogniser stops at."""
+    out: list[str] = []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        end = _group_end(line, i) if ch in _CLOSE else -1
+        if end > 0:
+            inner = line[i + 1:end]
+            body = _SOURCE_PREFIX_RE.sub("", inner, count=1).strip()
+            if body and len(body) <= _CITE_BODY_MAX and _names_a_file(body):
+                head = "".join(out).rstrip(" 	")
+                out = [head, " " + markers.marker(body)]
+                i = end + 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out).rstrip()
+
+
 _PAGE_RE = re.compile(r"(?:,|\s)\s*(?P<sec>(?:pp?\.|pages?|section|clause|§)\s*[\w.\-–, ]+?)\s*$", re.IGNORECASE)
 _PARENS_TAIL_RE = re.compile(r"\((?P<inner>[^()]*)\)\s*$")
 _FILE_NAME_END_RE = re.compile(rf"\.(?:{_FILE_EXTS})\b", re.IGNORECASE)
+#: What may stand between a file name and the locator after it, in any
+#: script: Latin, Arabic and full-width commas and semicolons, a colon, a
+#: dash, a space. Punctuation only, no word of any language.
+_LOCATOR_LEAD = " \t,;:،؛，；—–-"
+#: The colons a label ends with; a file name holds none.
+_LABEL_COLONS = ":："
 
 
 def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -113,11 +175,21 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     named = None
     for named in _FILE_NAME_END_RE.finditer(text):
         pass
-    start = named.end() if named else 0
-    sec = _PAGE_RE.search(text, start) if kind == "document" else None
-    if sec:
-        section = sec.group("sec").strip()
-        text = text[: sec.start()].strip().rstrip(",")
+    if named and kind == "document":
+        # Read by structure, so it holds in every language. A file name
+        # holds no colon, so a label ahead of it ("Source:", or the same
+        # word in Arabic) ends at the last colon before the name. The name
+        # ends at its extension, so what follows it, past the separating
+        # punctuation, is its locator, whatever words it is written in.
+        head = text[: named.end()]
+        cut = max(head.rfind(c) for c in _LABEL_COLONS)
+        section = text[named.end():].strip(_LOCATOR_LEAD).strip()
+        text = head[cut + 1:].strip()
+    elif kind == "document":
+        sec = _PAGE_RE.search(text)
+        if sec:
+            section = sec.group("sec").strip()
+            text = text[: sec.start()].strip().rstrip(",")
     entry: dict[str, Any] = {
         "document": text,
         "section": section,
@@ -139,7 +211,9 @@ def _entry_from_body(body: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _name_key(name: str) -> str:
     stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE)
-    return re.sub(r"[^a-z0-9]+", "", stem.lower())
+    # Letters and digits of any script: an Arabic name keys by its own
+    # letters, not to the empty key every non-Latin name used to share.
+    return re.sub(r"[\W_]+", "", stem.casefold())
 
 
 @dataclass
@@ -178,7 +252,7 @@ def _doc_words(name: str) -> str:
     """A document's name as words for a sentence (its file extension off);
     empty when the name holds no word at all."""
     stem = re.sub(rf"\.(?:{_FILE_EXTS})$", "", (name or "").strip(), flags=re.IGNORECASE).strip()
-    return stem if re.search(r"[A-Za-z]{2,}", stem) else ""
+    return stem if re.search(r"[^\W\d_]{2,}", stem) else ""
 
 
 def _nameable(c: dict[str, Any]) -> bool:
@@ -233,8 +307,10 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
     * A sentence that states only ONE of a conflict's differing values for
       that thing. Read by the typed values (``evidence_conflicts.extract``/
       ``same``, citation spans blanked); a sentence about another thing (none
-      of the thing's words) and a sentence stating two or more of the values
-      stay.
+      of the thing's words), a sentence stating two or more of the values and
+      a sentence that also states a typed value which is none of the
+      conflict's values (a result worked from it, a second quantity: news the
+      conflict line does not carry) stay.
     * A sentence asserting that the documents agree
       (``evidence_conflicts.asserts_agreement``: an agreement word with no
       negation just before it) about that thing: it states one or more of the
@@ -270,7 +346,12 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
             for kind, classes, thing, docs in rules:
                 hits = {i for i, k in enumerate(classes) for x in vals if x.kind == kind and same(x, k)}
                 about = bool(thing & _terms(sent))
-                if len(hits) == 1 and about:
+                # A typed value the conflict line does not carry (a result
+                # worked from the value, a second quantity) is news, not a
+                # restatement: only the competing value is superseded, so
+                # the sentence holding it stays.
+                more = any(not any(same(x, k) for k in classes) for x in vals)
+                if len(hits) == 1 and about and not more:
                     gone = True
                 elif agrees and (hits or about or agreement_names_no_thing(sent, docs)):
                     gone = True
@@ -307,7 +388,7 @@ def _move_citations(text: str, markers: _Markers) -> str:
     for line in lines:
         m = _SOURCE_LINE_RE.match(line)
         if not m:
-            out.append(_INLINE_FILE_CITE_RE.sub(lambda c: " " + markers.marker(c.group("body")), line).rstrip())
+            out.append(_inline_citations(line, markers))
             continue
         tags = [t for t in dict.fromkeys(markers.marker(p) for p in _split_parts(m.group("body"))) if t]
         if not tags:
@@ -449,6 +530,87 @@ def _strip_machinery_sentence(sentence: str) -> str:
     return s
 
 
+#: A word that says a thing came out of the search, used to describe it:
+#: "the retrieved rows", "text retrieved from it". Such a sentence often
+#: carries meaning a reader needs (what was absent, what the answer rests
+#: on), so the word is rewritten in place rather than the sentence dropped.
+_SEARCH_PARTICIPLE = r"(?:retrieved|fetched)"
+#: Where a noun phrase after the participle ends: punctuation, a citation,
+#: or a word that starts a clause or a prepositional phrase.
+_NP_END = (
+    r"(?=\s*(?:[\[\](),.;:!?\"“”—–]|$)|\s+(?:for|from|of|in|on|at|by|with|to|under|about|is|are|was|were|be|been|"
+    r"came|come|comes|show|shows|showed|contain|contains|cover|covers|give|gives|hold|holds|list|lists|"
+    r"and|or|but|that|which|where|so|as)\b)"
+)
+_NP_FUNCTION_WORD = (
+    r"(?:for|from|of|in|on|at|by|with|to|under|about|out|is|are|was|were|be|been|and|or|but|that|which|it|them)\b"
+)
+#: Adjective use: the participle stands before its noun phrase, which never
+#: opens on a function word.
+_PARTICIPLE_NP_RE = re.compile(
+    r"\b" + _SEARCH_PARTICIPLE + r"\s+(?!" + _NP_FUNCTION_WORD + r")"
+    r"((?:[A-Za-z][\w'-]*\s+){0,2}?[A-Za-z][\w'-]*)" + _NP_END,
+    re.IGNORECASE,
+)
+#: After its noun, pointing at a document the sentence already names (a
+#: pronoun or a citation): ``the note retrieved from it``.
+_PARTICIPLE_FROM_RE = re.compile(
+    r"\b" + _SEARCH_PARTICIPLE + r"(?=\s+(?:from|out\s+of)\s+(?:it|them|this|that|these|those|\[))", re.IGNORECASE)
+#: What may stand before an adjective use. After a form of "be" or "have"
+#: the participle is a verb ("the sample was retrieved"), not the search.
+_DETERMINER_BEFORE_RE = re.compile(
+    r"(?:^|[.!?:;(\-–—]\s*|\b(?:the|these|those|this|that|any|all|no|its|their|our|of|in|from|among)\s+)$",
+    re.IGNORECASE,
+)
+#: A search-unit noun is itself machinery; in the reader's words it is a document.
+_SEARCH_UNIT_RE = re.compile(r"\b(?:excerpt|passage|chunk|snippet)(s?)\b|\bcontext\b", re.IGNORECASE)
+#: Quoted text and bracketed spans (citations, file names) are the documents'
+#: own words: they are never rewritten.
+_VERBATIM_RE = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”|\[[^\]\n]*\]")
+
+
+def _reader_unit(m: re.Match) -> str:
+    """A search-unit noun as the reader names it: a document."""
+    if m.group(0).lower() == "context":
+        return "documents"
+    return "document" + (m.group(1) or "")
+
+
+def _reader_noun(phrase: str) -> str:
+    return _SEARCH_UNIT_RE.sub(lambda m: _reader_unit(m), phrase)
+
+
+def _participle_np(m: re.Match) -> str:
+    """One adjective use of a search participle, in the reader's words."""
+    if not _DETERMINER_BEFORE_RE.search(m.string[:m.start()]):
+        # After a verb such as "was": the participle is a verb, not the search.
+        return m.group(0)
+    head = _reader_noun(m.group(1)) + " I read"
+    # A participle that opened a sentence hands its capital to the noun.
+    return head[0].upper() + head[1:] if m.group(0)[0].isupper() else head
+
+
+def _rewrite_search_words(segment: str) -> str:
+    segment = _PARTICIPLE_FROM_RE.sub("read", segment)
+    return _PARTICIPLE_NP_RE.sub(lambda m: _participle_np(m), segment)
+
+
+def _search_words_in_place(text: str) -> str:
+    """Each search participle in the reader's words, everywhere outside
+    quotes and brackets: ``not in the retrieved rows`` becomes ``not in the
+    rows I read`` -- the scope of the claim stays, the machinery goes, and a
+    negative sentence still says what was absent. A sentence is never
+    dropped here and no figure is touched."""
+    out: list[str] = []
+    last = 0
+    for m in _VERBATIM_RE.finditer(text):
+        out.append(_rewrite_search_words(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_rewrite_search_words(text[last:]))
+    return "".join(out)
+
+
 def _strip_machinery(text: str) -> str:
     out: list[str] = []
     for line in text.split("\n"):
@@ -464,7 +626,9 @@ def _strip_machinery(text: str) -> str:
             out.append(line)
         elif kept:
             out.append(new)
-    return "\n".join(out)
+    # What stays is in the reader's words: a search participle left in a kept
+    # sentence (a refusal keeps its sentences) is rewritten, not kept.
+    return "\n".join(_search_words_in_place(line) for line in out)
 
 
 # ── Rule 2: padding ─────────────────────────────────────────────────────────
@@ -544,6 +708,49 @@ def _drop_padding(text: str, computed: bool = True) -> str:
             line = lead + " ".join(kept)
         out.append(line)
     return "\n".join(out)
+
+
+#: A sentence addressed to the reader that asks them for the next step:
+#: an imperative to supply or direct something ("Upload the priced BOQ and
+#: I'll price it", "point me at that file"), optionally after a condition
+#: ("If the pipework is billed elsewhere, point me at that file and I'll pull
+#: the line") or a "please"; or the writer's own offer made conditional on
+#: the reader ("I can pull the line if you send the file").
+#: An imperative to supply something counts only when the sentence names
+#: the writer as the one who receives it or acts next ("... and I'll pull
+#: the line", "send it to me"): "Send the notice to the Engineer" is an
+#: instruction the answer gives, not a request for the writer.
+_REQUEST_RE = re.compile(
+    r"^(?:(?:if|once|when|where|should)\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?)?(?:please[ \t]+|just[ \t]+)?"
+    r"(?:(?:point|tell|give|show)\s+me|let\s+me\s+know"
+    r"|(?:upload|re-?upload|share|send|provide|attach|forward)\b[^.!?]*\b(?:me|i'll|i\s+(?:can|will|could))\b)\b"
+    r"|^(?:i\s+can|i\s+could|i'll|i\s+will|i'd\s+be\s+able\s+to)\b[^.!?]*\bif\s+you\b",
+    re.IGNORECASE,
+)
+
+
+def _is_request_paragraph(par: str) -> bool:
+    """Every sentence of the paragraph asks the reader for a next step (or
+    offers further help), and it states no figure and carries no citation
+    marker -- it adds nothing the reader can use from this answer."""
+    if _MARKER_RE.search(par) or _FIGURE_RE.search(par):
+        return False
+    sentences = [s.strip() for ln in par.split("\n")
+                 for s in _sentences(_BULLET_RE.sub("", ln).strip().lstrip("*_ ").strip()) if s.strip()]
+    return bool(sentences) and all(_REQUEST_RE.match(s) or _OFFER_RE.match(s) for s in sentences)
+
+
+def _drop_closing_request(text: str) -> str:
+    """Rule 2, every kind of answer: a closing paragraph that only asks the
+    reader for a next step ("upload X", "point me at the file and I'll pull
+    the line") and states no figure and no marker is padding and goes. The
+    answer before it stays; an answer that is nothing but such a paragraph
+    stays as written. A turn that ends on its own question for inputs a
+    step still needs (``asking``) never reaches this rule."""
+    pars = re.split(r"\n[ \t]*\n", text.strip())
+    while len(pars) > 1 and _is_request_paragraph(pars[-1]):
+        pars.pop()
+    return "\n\n".join(pars)
 
 
 # ── Rule 1: answer first ────────────────────────────────────────────────────
@@ -733,6 +940,7 @@ def apply(
         if not asking:
             body = _strip_machinery(body)
             body = _drop_padding(body, computed)
+            body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
         body = _tidy(body)

@@ -2454,21 +2454,11 @@ def _message_wants_cash_flow(text: str) -> bool:
     ))
 
 
-# One figure as a person writes it in a list: "3", "2.5", "1,500",
-# "12,000.75". A comma is a thousands separator only between digits with
-# no space after it; ", " separates the items of the list.
-_LISTED_FIGURE = r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w.]|,\d)"
-_LIST_SEPARATOR = r"(?:\s*;\s*|,\s+)"
-_PERIOD_SERIES_RE = re.compile(
-    rf"{_LISTED_FIGURE}(?:{_LIST_SEPARATOR}{_LISTED_FIGURE}){{2,}}"
-)
-
-
 def _message_supplies_period_series(text: str) -> bool:
-    """True when the message writes out its own run of three or more figures
-    one after another ("1.0, 2.0, 3.0" / "1,000, 1,500, 2,000" / "4; 5; 6").
-    A slash is not a separator: "01/03/2027" is a date, not three figures."""
-    return bool(_PERIOD_SERIES_RE.search(text or ""))
+    """True when the message writes out its own run of three or more figures.
+    One reader for every path: ``app.core.action_router``."""
+    from app.core.action_router import message_supplies_period_series
+    return message_supplies_period_series(text)
 
 
 def _message_wants_cash_flow_forecast(text: str) -> bool:
@@ -2485,7 +2475,8 @@ def _message_wants_cash_flow_forecast(text: str) -> bool:
     """
     if not _message_wants_cash_flow(text):
         return False
-    return not _message_supplies_period_series(text)
+    from app.core.action_router import template_declines_ask
+    return not template_declines_ask("cash_flow_forecast", text)
 
 
 def _message_wants_om_manual(text: str) -> bool:
