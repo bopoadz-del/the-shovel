@@ -854,12 +854,10 @@ def _frames(par: str) -> bool:
     sentence points forward ("Here is what the documents say."). A plain
     statement with no figure ("The generator sits on the roof.") answers;
     it does not frame."""
-    lines = _nonblank(par)
-    if not lines or _MARKER_RE.search(par):
-        return False
     bare = _MARKER_RE.sub("", par)
-    if _FIGURE_RE.search(bare) or _NEGATIVE_RE.search(bare):
+    if _MARKER_RE.search(par) or _FIGURE_RE.search(bare) or _NEGATIVE_RE.search(bare):
         return False
+    lines = _nonblank(par)
     if lines[-1].rstrip().endswith(":"):
         return True
     return len(lines) == 1 and len(_sentences(lines[0].strip())) == 1 and bool(_FORWARD_RE.search(bare))
