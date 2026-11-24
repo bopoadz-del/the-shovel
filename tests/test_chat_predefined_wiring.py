@@ -73,6 +73,9 @@ def test_endpoint_routes_to_predefined_via_dynamic_understand(client, monkeypatc
     """With the flag on, dynamic UNDERSTAND (mocked) recognizes the workflow and
     the endpoint streams the predefined path (deterministic, no LLM in exec)."""
     monkeypatch.setenv("ORCHESTRATOR_PREDEFINED", "1")
+    # The schedule must be buildable for the predefined path to keep the turn:
+    # a workflow that builds nothing hands it back to the agent.
+    _wbs_fakes.install(monkeypatch)
 
     async def fake_understand(prompt, has_documents=False):
         return {"workflow": "schedule", "action": "generate_wbs", "mode": "produce",
