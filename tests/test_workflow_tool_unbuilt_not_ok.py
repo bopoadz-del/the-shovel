@@ -79,3 +79,27 @@ def test_a_built_histogram_is_still_ok(text, monkeypatch):
     out = _tool("resource_histogram", text)
     assert out["ok"] is True and out["answer"].startswith("Manpower histogram"), out
     assert "not_built" not in out
+
+
+@pytest.mark.parametrize("named, offered", [
+    ("generate_wbs", ["resource_histogram"]),
+    ("resource_histogram", ["generate_wbs"]),
+])
+def test_a_workflow_outside_the_catalogue_is_not_run(named, offered, monkeypatch):
+    """The tool runs only a workflow the catalogue offers; any other name is
+    refused before the engine is reached, and the offered one still runs."""
+    from app.core import predefined_reasoning
+
+    ran = []
+
+    async def engine(action, context, session):
+        ran.append(action)
+        return {"handled": True, "built": True, "answer": "done"}
+    monkeypatch.setattr(predefined_reasoning, "run_workflow", engine)
+    monkeypatch.setattr(driver_routes, "catalogue", lambda: offered)
+    out = _tool(named, OWN_FIGURE_ASKS[0])
+    assert out == {"ok": False, "error": f"No workflow named {named!r}."}
+    assert ran == []
+    # The offered workflow is reached through the same door.
+    assert _tool(offered[0], OWN_FIGURE_ASKS[0])["ok"] is True
+    assert ran == offered
