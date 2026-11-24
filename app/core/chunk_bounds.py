@@ -331,8 +331,8 @@ def page_heading_lines(
 ) -> dict[int, str]:
     """``{page: heading line}`` for every page of ``text`` that has one.
 
-    A page with no heading of its own is filed under the section still open
-    at the end of the nearest earlier page that had one.
+    A page with no heading of its own, or only page furniture, is filed under
+    the section still open at the end of the nearest earlier page that had one.
     """
     starts = sorted(
         ((int(p), int(o)) for p, o in (page_starts or [])), key=lambda s: s[1]
@@ -346,22 +346,27 @@ def page_heading_lines(
     in_force = ""
     for page, page_text in bodies.items():
         line = heading_line_for_page(page_text, title_block, running)
+        if line and in_force and running is not None and running(line):
+            line = ""  # furniture names no page; the open section does
         if line:
             out[page] = line
-            in_force = _section_in_force(page_text, line)
+            in_force = _section_in_force(page_text, line, running)
         elif in_force:
             # A page that only continues the section before it is filed under that section.
             out[page] = in_force
     return out
 
 
-def _section_in_force(page_text: str, filed: str) -> str:
+def _section_in_force(
+    page_text: str, filed: str, running: Callable[[str], bool] | None = None
+) -> str:
     """The section heading still open at the end of a page ("" when none carries on).
 
     The last numbered or markdown heading the page holds (found by the same
     rule that files the page), else the line the page is filed under. A page
     named by its drawing title block carries nothing: a sheet name is not a
-    section the next page continues.
+    section the next page continues, and neither is page furniture
+    (``running``): a line repeated on most pages opens no section.
     """
     lines = page_text.splitlines()
     if filed not in (ln.strip() for ln in lines):
@@ -369,6 +374,8 @@ def _section_in_force(page_text: str, filed: str) -> str:
     for idx in range(len(lines) - 1, -1, -1):
         head = lines[idx].strip()
         sectioned = head.startswith("#") or bool(_NUMBERED_HEADING.match(head))
+        if sectioned and running is not None and running(head):
+            continue
         if sectioned and heading_line_for_page("\n".join(lines[idx:])) == head:
             return head
     return filed

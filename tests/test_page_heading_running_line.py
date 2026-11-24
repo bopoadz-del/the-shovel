@@ -59,9 +59,11 @@ def test_page_label_with_changing_number_is_furniture(label):
 
 
 @pytest.mark.parametrize("header", [_HEADER_A, _HEADER_B])
-def test_page_with_only_furniture_keeps_it(header):
-    # Page 3 has no heading of its own: it keeps the running line rather
-    # than losing its heading altogether.
+def test_page_with_only_furniture_carries_the_open_section(header):
+    # Page 3 has no heading of its own: it is filed under the section still
+    # open from page 2, not the running line (which names no page). A page
+    # with only furniture and no open section keeps the furniture:
+    # tests/test_page_heading_continuation_furniture.py.
     pages = [
         [header, "5.1 STEELWORK", _BODY],
         [header, "5.2 CLADDING", _BODY],
@@ -69,7 +71,7 @@ def test_page_with_only_furniture_keeps_it(header):
     ]
     text, starts = _doc(pages)
     got = cb.page_heading_lines(text, starts)
-    assert got == {1: "5.1 STEELWORK", 2: "5.2 CLADDING", 3: header}
+    assert got == {1: "5.1 STEELWORK", 2: "5.2 CLADDING", 3: "5.2 CLADDING"}
 
 
 @pytest.mark.parametrize("header", [_HEADER_A, _HEADER_B])
