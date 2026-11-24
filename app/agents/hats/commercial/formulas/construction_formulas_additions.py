@@ -3,7 +3,9 @@
 Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 """
 from __future__ import annotations
+
 import math
+
 from app.lib.formula_registry import Param, formula
 
 
@@ -115,8 +117,8 @@ def break_even_point(
         return {"error": "expected_units must be >= 0."}
 
     contribution = price - var
-    working = [f"Contribution per unit = price {_amount(price)} - variable cost "
-               f"{_amount(var)} = {_amount(contribution)}"]
+    working = [(f"Contribution per unit = price {_amount(price)} - variable cost "
+                f"{_amount(var)} = {_amount(contribution)}")]
     if contribution <= 0:
         working.append("The price does not exceed the variable cost per unit, so no "
                        "quantity covers the fixed costs: there is no break-even point.")
@@ -130,10 +132,10 @@ def break_even_point(
     revenue = units * price
     ratio = contribution / price
     working += [
-        f"Break-even quantity = fixed costs {_amount(fixed)} / {_amount(contribution)} "
-        f"= {units:,.4g} units (sell {whole:,} whole units)",
-        f"Break-even revenue = {units:,.4g} x {_amount(price)} = {_amount(revenue)} "
-        f"(contribution ratio {ratio:.2%})",
+        (f"Break-even quantity = fixed costs {_amount(fixed)} / {_amount(contribution)} "
+         f"= {units:,.4g} units (sell {whole:,} whole units)"),
+        (f"Break-even revenue = {units:,.4g} x {_amount(price)} = {_amount(revenue)} "
+         f"(contribution ratio {ratio:.2%})"),
     ]
     out = {
         "break_even_units": round(units, 4),
