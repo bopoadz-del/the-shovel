@@ -821,10 +821,8 @@ def test_f113_b_no_scores_refused(tenderers):
     _refuses(F113, {"tenderers": tenderers}, _F113_OUT)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "suspected defect: through run_calculation a single scored submission is "
-    "refused ('Which scores does each tenderer have') although the kernel "
-    "scores it; two or more submissions are scored"))
+# A single scored submission reaches the kernel as a one-item list (the
+# envelope's binder used to unwrap every one-item list, which refused it).
 @pytest.mark.parametrize("tenderer, total", [
     # 80 x 0.45 + 70 x 0.45 = 67.5
     ({"name": "X", "technical_score": 80, "commercial_score": 70}, 67.5),

@@ -233,6 +233,49 @@
     "domain": "quantities",
     "tier": "operational"
    }
+  ],
+  "rules": "the hat never states a market rate, never estimates a quantity, never proposes a markup; it checks consistency, sums what the documents contain, and names what to verify. Arithmetic runs in the formula executor with the working shown.",
+  "procedures": [
+   {
+    "id": "q2",
+    "title": "Takeoff review checklist",
+    "purpose": "a systematic review of a produced takeoff for one trade on one project type.",
+    "inputs": "takeoff summary; drawing set and revision; trade scope; stated exclusions; project type.",
+    "refusals": "re-measuring; accepting a takeoff that feeds a bid without a reconciliation to a known number.",
+    "steps": [
+     "revision and superseded-sheet checks first",
+     "double-count traps for the trade",
+     "commonly missed scope for the project type",
+     "measurement rules to confirm against the specification",
+     "arithmetic and rounding traps",
+     "one evidence field per check"
+    ],
+    "output": "a tick-able checklist with the source sheet and evidence field per item; the five checks to run first.",
+    "done_when": "revision control is a step, every item has a place for evidence.",
+    "lineage": "as Q1; text is ours.",
+    "attribution": {
+     "licence": "CC BY 4.0",
+     "credit": "Constructelligence",
+     "link": "https://creativecommons.org/licenses/by/4.0/"
+    }
+   },
+   {
+    "id": "q5",
+    "title": "Bill-row consistency",
+    "purpose": "before a bill or a bid is relied on, check the three identities every priced schedule must satisfy.",
+    "inputs": "the bill rows (quantity, rate, amount), section subtotals, the stated total.",
+    "refusals": "correcting a row; carrying a total that does not reconcile.",
+    "steps": [
+     "for each row, quantity times rate equals amount within rounding",
+     "each section's rows sum to its subtotal",
+     "subtotals sum to the stated total",
+     "no negative quantity",
+     "list every failure with the row reference"
+    ],
+    "output": "the failure list with row references and the reconciliation line.",
+    "done_when": "the three identities are tested on every row and the result is stated, pass or fail.",
+    "lineage": "reconciliation rules common to public MIT sets; text is ours."
+   }
   ]
  }
 }

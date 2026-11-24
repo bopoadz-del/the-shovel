@@ -117,6 +117,69 @@
         "description": "Build up cost for concrete + rebar + formwork package",
         "steps": ["input_quantities", "run_cost_buildup_concrete", "run_cost_buildup_rebar", "run_cost_buildup_formwork", "sum_totals", "apply_indirect_markup"]
       }
+    ],
+    "rules": "the hat never states a market rate, never estimates a quantity, never proposes a markup; it checks consistency, sums what the documents contain, and names what to verify. Arithmetic runs in the formula executor with the working shown.",
+    "procedures": [
+      {
+        "id": "q1",
+        "title": "Unit-rate consistency review",
+        "purpose": "a second pair of eyes on whether rates and quantities hang together, before a bid goes in.",
+        "inputs": "line items with quantities and rates; basis notes; labour rates used; price date and escalation assumption; project type and region.",
+        "refusals": "saying whether a rate is market-correct; supplying a rate; silently correcting arithmetic.",
+        "steps": [
+          "flag lines where quantity and rate do not make sense together (unit mismatch, order of magnitude)",
+          "flag items that look missing for the scope and project type",
+          "flag arithmetic inconsistencies between similar lines",
+          "name the three figures to check against the user's own data first"
+        ],
+        "output": "a table (line, what looks wrong, why, what to check, owner).",
+        "done_when": "the review is internal-consistency only and every flag names a check.",
+        "lineage": "CC BY 4.0 prompt library (Constructelligence, credited); text is ours.",
+        "attribution": {
+          "licence": "CC BY 4.0",
+          "credit": "Constructelligence",
+          "link": "https://creativecommons.org/licenses/by/4.0/"
+        }
+      },
+      {
+        "id": "q3",
+        "title": "Interim payment certificate check",
+        "purpose": "verify the arithmetic of a payment application against the schedule of values and the previous certificate.",
+        "inputs": "schedule of values; previous certificate totals; this period's completed work and stored materials per line; the retention rate from the contract; approved variations.",
+        "refusals": "a retention rate not found in the contract or supplied; carrying a stored-materials line without the supporting evidence the contract requires.",
+        "steps": [
+          "per line, completed to date = previous + this period + stored",
+          "balance to finish = scheduled value minus completed to date",
+          "retention = completed to date times the cited rate (separate rates for work and stored materials if the contract says so)",
+          "total earned less retention minus previous certificates = amount due",
+          "reconcile the contract sum with approved variations",
+          "flag lines over 100 percent and negative balances"
+        ],
+        "output": "the certificate table with the working, the reconciliation, the flags.",
+        "done_when": "every figure traces to a line and a cited rate.",
+        "lineage": "standard certificate arithmetic as in public MIT sets; text is ours."
+      },
+      {
+        "id": "q4",
+        "title": "Change pricing narrative",
+        "purpose": "a variation price narrative where the method is explained before the numbers, and the numbers are inputs.",
+        "inputs": "the instruction or event; the quantities and rates supplied (from the bill or a build-up the user provides); the pricing basis the contract prescribes (bill rates, pro-rata, daywork, agreed rates).",
+        "refusals": "proposing rates or markups; pricing from memory; mixing time-related cost into the direct cost without saying so.",
+        "steps": [
+          "state the basis the contract prescribes with the clause as cited or UNKNOWN",
+          "explain the method per element (measured against bill rates, pro-rata from a bill rate, daywork records, quotation)",
+          "then the numbers table with sources",
+          "then exclusions and assumptions the reader must confirm"
+        ],
+        "output": "method narrative, numbers table with sources, exclusions, hold-point line.",
+        "done_when": "every number has a source, the method precedes the numbers.",
+        "lineage": "CC BY 4.0 prompt library (Constructelligence, credited); text is ours.",
+        "attribution": {
+          "licence": "CC BY 4.0",
+          "credit": "Constructelligence",
+          "link": "https://creativecommons.org/licenses/by/4.0/"
+        }
+      }
     ]
   }
 }

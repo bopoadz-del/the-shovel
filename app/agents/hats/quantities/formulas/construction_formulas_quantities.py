@@ -182,9 +182,18 @@ def rebar_by_area(
         "total_mass_kg": round(total_mass, 2),
         "both_ways": both_ways,
         "standard": "geometry / bar-mass relation",
-        "note": (f"{bars_per_m:.2f} bars/m x {area_m2} m2 x {ways} way(s) = "
-                 f"{total_length:.1f} m; x {unit_mass:.4f} kg/m = {total_mass:.1f} kg."),
+        "note": (f"1000/{spacing_mm} = {bars_per_m:.3f} bars/m x {area_m2} m2 x "
+                 f"{ways} way(s) = {total_length:.2f} m; unit mass = "
+                 f"(pi/4)*({d}/1000)^2*{density_kg_m3:g} = {unit_mass:.4f} kg/m; "
+                 f"{total_length:.2f} m x {unit_mass:.4f} kg/m = {total_mass:.2f} kg."),
     }
+
+def _floored(difference: float, reported: float) -> str:
+    """The working for a quantity floored at zero: it states the floor it
+    applied, so the printed line never reads ``a - b = 0`` for a negative."""
+    if difference < 0:
+        return f"{difference:.2f}, below zero: {reported:.2f}"
+    return f"{reported:.2f}"
 
 @formula(
     owner='quantities',
@@ -248,9 +257,11 @@ def interior_finishes_takeoff(
     door_width_total = doors_total * float(door_width_m)
 
     gross_wall_face = pm * h
-    net_wall_paint = max(gross_wall_face - door_area_total - float(window_deduction_m2), 0.0)
+    paint_difference = gross_wall_face - door_area_total - float(window_deduction_m2)
+    net_wall_paint = max(paint_difference, 0.0)
     blockwork = net_wall_paint * float(shared_wall_fraction)
-    skirting = max(pm - door_width_total, 0.0)
+    skirting_difference = pm - door_width_total
+    skirting = max(skirting_difference, 0.0)
 
     return {
         "floor_screed_m2": round(fa, 2),
@@ -272,6 +283,12 @@ def interior_finishes_takeoff(
             "wall paint = perimeter x height - doors - windows; "
             "blockwork = wall face x shared fraction; "
             "skirting = perimeter - door widths",
+            f"wall paint = {pm} x {h} - {door_area_total:.2f} - "
+            f"{window_deduction_m2} = {_floored(paint_difference, net_wall_paint)} m2",
+            f"blockwork = {net_wall_paint:.2f} x {shared_wall_fraction} = "
+            f"{blockwork:.2f} m2",
+            f"skirting = {pm} - {door_width_total:.2f} = "
+            f"{_floored(skirting_difference, skirting)} m",
         ],
     }
 
