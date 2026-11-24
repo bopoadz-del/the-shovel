@@ -154,16 +154,16 @@ def test_consistent_compares_only_inside_a_group(types, status):
     assert rule["status"] == status
 
 
-def test_consistent_violation_lists_each_value_with_its_elements():
-    els = [
-        _el("a", object_type="T1", props={"Px.Rating": "60"}),
-        _el("b", object_type="T1", props={"Px.Rating": "90"}),
-        _el("c", object_type="T1", props={"Px.Rating": "60"}),
-    ]
+@pytest.mark.parametrize("ratings,expected", [
+    (["60", "90", "60"], {"60.0": ["a", "c"], "90.0": ["b"]}),
+    (["EI30", "EI30", "EI60"], {"EI30": ["a", "b"], "EI60": ["c"]}),
+])
+def test_consistent_violation_lists_each_value_with_its_elements(ratings, expected):
+    els = [_el(g, object_type="T1", props={"Px.Rating": r}) for g, r in zip("abc", ratings)]
     rule = check_bim_rules(
         els, [{"kind": "consistent", "field": "Px.Rating", "group_by": "object_type"}]
     )["rules"][0]
-    assert rule["violations"] == [{"group": "T1", "values": {"60.0": ["a", "c"], "90.0": ["b"]}}]
+    assert rule["violations"] == [{"group": "T1", "values": expected}]
 
 
 # ---- compare ---------------------------------------------------------------
@@ -198,12 +198,16 @@ def test_compare_non_number_is_not_checked(right, status, not_checked):
     assert (rule["status"], rule["not_checked"]) == (status, not_checked)
 
 
-def test_compare_violation_names_both_values():
-    els = [_el("a", props={"Px.A": 9, "Px.B": 3})]
+@pytest.mark.parametrize("left,right", [
+    (9, 3),
+    ("4.5", "1"),
+])
+def test_compare_violation_names_both_values(left, right):
+    els = [_el("a", props={"Px.A": left, "Px.B": right})]
     rule = check_bim_rules(
         els, [{"kind": "compare", "field": "Px.A", "op": "<", "other": "Px.B"}]
     )["rules"][0]
-    assert rule["violations"] == [{"element": "a", "Px.A": 9.0, "Px.B": 3.0}]
+    assert rule["violations"] == [{"element": "a", "Px.A": float(left), "Px.B": float(right)}]
 
 
 # ---- scope -----------------------------------------------------------------

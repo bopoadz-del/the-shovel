@@ -220,13 +220,6 @@ def _check_compare(rule: Dict[str, Any], scope: Sequence[Mapping[str, Any]]):
     return checked, not_checked, violations
 
 
-_CHECKERS = {
-    "unique": _check_unique,
-    "consistent": _check_consistent,
-    "compare": _check_compare,
-}
-
-
 def duplicate_ids(elements: Sequence[Mapping[str, Any]]) -> Dict[str, int]:
     """GlobalIds that occur more than once (the IFC schema forbids it)."""
     counts: Dict[str, int] = {}
@@ -251,7 +244,12 @@ def check_bim_rules(elements: Sequence[Mapping[str, Any]], rules: Any) -> Dict[s
     results: List[Dict[str, Any]] = []
     for rule in compiled:
         scope = _in_scope(elements, rule["types"])
-        checked, not_checked, violations = _CHECKERS[rule["kind"]](rule, scope)
+        if rule["kind"] == "unique":
+            checked, not_checked, violations = _check_unique(rule, scope)
+        elif rule["kind"] == "consistent":
+            checked, not_checked, violations = _check_consistent(rule, scope)
+        else:
+            checked, not_checked, violations = _check_compare(rule, scope)
         if violations:
             status = "fail"
         elif checked:
