@@ -8,6 +8,8 @@ own input; every decision is checked from both sides.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.agents.clarify_cases import (
     Case,
     _question_asks,
@@ -22,18 +24,26 @@ def _cases(*rows: tuple[str, str, str]) -> list[Case]:
 
 # --- the reader --------------------------------------------------------
 
-def test_subject_ends_at_a_comparison_word():
-    assert _yes_no_subject("is the hire rate of tower cranes above 9 eur/day") == (
-        "hire rate of tower cranes"
-    )
-    assert _yes_no_subject("are the pump pressures lower than the limit") == (
-        "pump pressures"
-    )
+@pytest.mark.parametrize(
+    ("ask", "subject"),
+    [
+        ("is the hire rate of tower cranes above 9 eur/day", "hire rate of tower cranes"),
+        ("are the pump pressures lower than the limit", "pump pressures"),
+    ],
+)
+def test_subject_ends_at_a_comparison_word(ask, subject):
+    assert _yes_no_subject(ask) == subject
 
 
-def test_subject_ends_at_a_figure():
-    assert _yes_no_subject("is the screed depth 65 mm") == "screed depth"
-    assert _yes_no_subject("was a slab thickness 0.25 m") == "slab thickness"
+@pytest.mark.parametrize(
+    ("ask", "subject"),
+    [
+        ("is the screed depth 65 mm", "screed depth"),
+        ("was a slab thickness 0.25 m", "slab thickness"),
+    ],
+)
+def test_subject_ends_at_a_figure(ask, subject):
+    assert _yes_no_subject(ask) == subject
 
 
 def test_not_a_yes_no_opening_reads_nothing():
@@ -41,15 +51,18 @@ def test_not_a_yes_no_opening_reads_nothing():
     assert _yes_no_subject("list the pump pressures") is None
 
 
-def test_yes_no_ask_gets_a_head_and_qualifiers():
-    kinds, heads, quals = _question_asks(
-        "Is the hire rate of tower cranes higher or lower than 9 EUR/day?"
-    )
+@pytest.mark.parametrize(
+    ("ask", "head", "qualifier"),
+    [
+        ("Is the hire rate of tower cranes higher or lower than 9 EUR/day?", "rate", "hire"),
+        ("Is the screed depth more than 65 mm?", "depth", "screed"),
+    ],
+)
+def test_yes_no_ask_gets_a_head_and_qualifiers(ask, head, qualifier):
+    kinds, heads, quals = _question_asks(ask)
     assert "measure" in kinds
-    assert heads == {"rate"}
-    assert "hire" in quals
-    kinds, heads, _ = _question_asks("Is the screed depth more than 65 mm?")
-    assert heads == {"depth"}
+    assert heads == {head}
+    assert qualifier in quals
 
 
 # --- the decision: ask, or stand as written ------------------------------
