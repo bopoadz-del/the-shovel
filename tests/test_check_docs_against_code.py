@@ -165,8 +165,11 @@ def test_main_exit_code(tmp_path, capsys, doc, code):
 # ── the repo's own agent docs ─────────────────────────────────────────────
 
 
-def test_the_agent_docs_name_only_what_the_tree_holds():
-    """Every path, file name and symbol AGENTS.md (and CLAUDE.md, if present)
-    puts in backticks exists in this checkout."""
-    bad = cdac.run(_REPO, list(cdac.DEFAULT_DOCS))
+@pytest.mark.parametrize("doc", ["AGENTS.md", "docs/ORDER-no-hardwiring.md"])
+def test_the_agent_docs_name_only_what_the_tree_holds(doc):
+    """Every path, file name and symbol the agent docs (AGENTS.md and the
+    standing order it sends every agent to) put in backticks exists in this
+    checkout. A doc that is gone fails here rather than passing empty."""
+    assert (_REPO / doc).is_file(), doc
+    bad = cdac.run(_REPO, [doc])
     assert bad == [], "\n".join(f"{c.doc}:{c.line}: {c.kind} `{c.token}`" for c in bad)
