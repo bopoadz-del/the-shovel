@@ -80,3 +80,15 @@ def test_the_same_verb_that_is_not_the_search_stays(text):
 def test_a_turn_asking_for_inputs_keeps_its_wording(text):
     # Rule 3 does not run on a turn that ends on its own question.
     assert answer_contract.apply(text, asking=True).text == text
+
+
+@pytest.mark.parametrize("text, kept", [
+    ("I retrieved two rows", "I found"),
+    ("we Fetched", "we Found"),
+    ("we have been retrieving", "we have been finding"),
+])
+def test_the_reader_verb_keeps_the_form_and_the_case(text, kept):
+    # The rewrite keeps everything before the verb, the verb's tense, and
+    # its leading capital.
+    m = answer_contract._SPEAKER_VERB_RE.search(text)
+    assert answer_contract._reader_verb(m) == kept
