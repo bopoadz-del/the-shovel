@@ -42,7 +42,7 @@ def _network_pass(activities: List[Dict]) -> Optional[Tuple[List[Dict], int]]:
 
     Runs only when no activity states its own ``total_float`` and at least
     one states predecessors: the durations and the logic are then the whole
-    schedule, and ``app.lib.pm_computations.compute_cpm`` derives each
+    schedule, and ``app.lib.pm_computations.run_cpm`` derives each
     activity's early/late times and float from them. Returns copies of the
     activities carrying those times, plus the project duration in the
     network's own duration unit. None leaves the caller on the schedule's
@@ -53,7 +53,7 @@ def _network_pass(activities: List[Dict]) -> Optional[Tuple[List[Dict], int]]:
         return None
     if not any(a.get("predecessors") for a in activities):
         return None
-    from app.lib.pm_computations import compute_cpm
+    from app.lib.pm_computations import run_cpm
     from app.schemas.cpm import CPMInput
 
     nodes = []
@@ -64,7 +64,7 @@ def _network_pass(activities: List[Dict]) -> Optional[Tuple[List[Dict], int]]:
         nodes.append({"id": str(a.get("id") or ""), "name": str(a.get("name") or ""),
                       "duration": a.get("duration", 0), "predecessors": deps})
     try:
-        out = compute_cpm(CPMInput(activities=nodes))
+        out = run_cpm(CPMInput(activities=nodes))
     except (ValueError, TypeError, KeyError) as exc:
         logger.info("network pass skipped: %s", exc)
         return None

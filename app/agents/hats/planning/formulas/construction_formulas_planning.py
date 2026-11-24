@@ -92,20 +92,33 @@ def _network_links(raw: Any) -> List[Dict[str, Any]]:
                  'project duration and the critical path.'),
     inputs={
         'activities': Param(label='activities with durations and predecessors'),
+        'project_start': Param(label='project start date'),
+        'calendar': Param(label='working calendar (working weekdays and holidays)'),
+        'near_critical_band_days': Param('working days', 0, 100000,
+                                         label='near-critical float band'),
     },
     outputs={'project_duration': 'working days', 'critical_path': '-',
              'activities': '-', 'working': '-'},
     main_output='project_duration',
 )
-def cpm_network(activities: List[Dict]) -> dict:
+def cpm_network(activities: List[Dict], project_start: Optional[str] = None,
+                calendar: Optional[Dict] = None,
+                near_critical_band_days: Optional[float] = None) -> dict:
     """CPM over the network the user supplied. Each activity is a mapping
     with ``id``, ``duration`` (whole working days) and ``predecessors``.
 
     Total float TF = LS - ES; free float FF = the slack to the earliest
     successor date (an activity with no successor has FF = TF, because its
     late finish is the project finish). Durations are taken as given: no
-    crashing, no calendar, no near-critical band is applied."""
+    crashing is applied. Calendar dates are given only when the caller
+    states a ``project_start`` (an ISO date), on the caller's ``calendar``
+    (``work_weekdays`` Monday=0, ``holidays``; Monday to Friday when none is
+    given); near-critical activities are named only inside a band the caller
+    chose. A refusal names its kind in ``error_type`` (a loop in the network
+    is ``CircularDependencyError``) so a caller never reads the prose."""
     import json
+
+    from pydantic import ValidationError
 
     from app.lib.pm_computations import CircularDependencyError, compute_cpm
     from app.schemas.cpm import CPMInput
@@ -137,31 +150,57 @@ def cpm_network(activities: List[Dict]) -> dict:
                      "duration": int(dur_f),
                      "predecessors": _network_links(act.get("predecessors"))})
 
+    settings: Dict[str, Any] = {"activities": rows}
+    if project_start not in (None, ""):
+        settings["project_start"] = project_start
+    if calendar not in (None, "", {}):
+        settings["calendar"] = calendar
+    if near_critical_band_days not in (None, ""):
+        settings["near_critical_band_days"] = near_critical_band_days
     try:
-        out = compute_cpm(CPMInput(activities=rows))
+        network = CPMInput(**settings)
+    except ValidationError as exc:
+        return {"error": f"the network cannot be scheduled: {exc}.",
+                "error_type": "ValueError"}
+    try:
+        out = compute_cpm(network)
     except CircularDependencyError as exc:
-        return {"error": f"the network has a loop: {exc}."}
+        return {"error": f"the network has a loop: {exc}.",
+                "error_type": "CircularDependencyError"}
     except ValueError as exc:
-        return {"error": f"the network cannot be scheduled: {exc}."}
+        return {"error": f"the network cannot be scheduled: {exc}.",
+                "error_type": "ValueError"}
 
     table, working = [], []
     for r in out.results:
-        table.append({
-            "id": r.id, "duration": r.duration,
+        row = {
+            "id": r.id, "name": r.name, "duration": r.duration,
             "early_start": r.early_start_day, "early_finish": r.early_finish_day,
             "late_start": r.late_start_day, "late_finish": r.late_finish_day,
             "total_float": r.total_float, "free_float": r.free_float,
             "is_critical": r.is_critical,
-        })
+        }
+        row.update({f"{key}_date": getattr(r, key).isoformat()
+                    for key in ("early_start", "early_finish", "late_start", "late_finish")
+                    if getattr(r, key) is not None})
+        table.append(row)
         working.append(
             f"{r.id}: EF = ES + d = {r.early_start_day} + {r.duration} = "
             f"{r.early_finish_day}; LS = LF - d = {r.late_finish_day} - {r.duration} = "
             f"{r.late_start_day}; TF = LS - ES = {r.late_start_day} - "
             f"{r.early_start_day} = {r.total_float}; FF = {r.free_float}"
             + (" (critical)" if r.is_critical else ""))
+    dated = ({"project_finish": out.project_finish.isoformat()}
+             if out.project_finish is not None else {})
+    banded = ({"near_critical": out.near_critical,
+               "near_critical_band_days": out.near_critical_band_days}
+              if out.near_critical is not None else {})
     return {
         "project_duration": out.project_duration,
         "critical_path": out.critical_path,
+        "critical_percentage": out.critical_percentage,
+        **dated,
+        **banded,
         "activities": table,
         "working": working,
         "standard": "CPM forward and backward pass",

@@ -3684,6 +3684,10 @@ def run_calculation(name: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             out["required"] = result["required"]
         if isinstance(result.get("required_pairs"), list):
             out["required_pairs"] = result["required_pairs"]
+        # The refusal's kind, when the calculator names it: a caller tells
+        # one refusal from another by this field, never by the prose.
+        if isinstance(result.get("error_type"), str) and result["error_type"]:
+            out["error_type"] = result["error_type"]
         return out
 
     # Phase 2 F–W (#43–84) leftovers: stamp unit / unitless on the four
