@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.containers.construction import ConstructionContainer
+from app.containers.construction import ConstructionContainer, boq
 from app.lib import boq_pricing
 
 
@@ -38,6 +38,11 @@ def _row_line(asset: str, ccy: str, quantity: float) -> dict:
 @pytest.fixture
 def container():
     return ConstructionContainer()
+
+
+@pytest.mark.parametrize("name", ["benchmark_lookup", "_price_bill_from_rate_card"])
+def test_rate_lookup_lives_on_the_boq_mixin(name):
+    assert getattr(ConstructionContainer, name) is getattr(boq.ConstructionBoqMixin, name)
 
 
 # ── resolve_card: two inputs per decision ───────────────────────────────
@@ -87,7 +92,8 @@ async def test_bill_is_priced_from_the_card(container, asset, ccy):
     assert got["summary"]["no_rate"] == 0
     assert got["summary"]["grand_total"] > 0
     assert f"{asset}/{ccy}" in got["rate_basis"]
-    assert got["card_source"] == boq_pricing.card_source()
+    assert got["card_source"] == boq_pricing._CARD["_meta"]["source"]
+    assert got["card_source"]
 
 
 @pytest.mark.asyncio

@@ -151,8 +151,6 @@ def resolve_card(asset_type: Any, currency: Any = None) -> tuple[str | None, str
     ``(asset, currency)``; either is None when it does not name a card, and the
     caller reports ``available_assets()`` instead of guessing one."""
     want_asset = str(asset_type or "").strip().casefold()
-    if not want_asset:
-        return None, None
     asset = next((a for a in _CARD["cards"] if a.casefold() == want_asset), None)
     if asset is None:
         return None, None
