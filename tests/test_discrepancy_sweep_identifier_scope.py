@@ -79,3 +79,20 @@ def test_a_sentence_led_by_the_identifier_is_not_a_heading(stated, passage):
 ])
 def test_scope_keeps_only_what_is_stated_for_the_identifier(passage, shared, kept):
     assert _identifier_scope(passage, shared) == kept
+
+
+@pytest.mark.parametrize("stated, passage", [
+    ("Under XQ 412 the minimum cover is 40 mm.", "Under XQ 413 the minimum cover is 50 mm."),
+    ("Per Spec 77 the joint width is 12 mm.", "Per Spec 78 the joint width is 20 mm."),
+])
+def test_scope_is_read_only_for_a_passage_sharing_an_identifier(monkeypatch, stated, passage):
+    """A passage that shares no identifier is skipped before any scope is
+    read: the sweep's narrow look does no work on unrelated passages."""
+    from app.agents import discrepancy_sweep
+
+    read: list[str] = []
+    real = discrepancy_sweep._identifier_scope
+    monkeypatch.setattr(discrepancy_sweep, "_identifier_scope",
+                        lambda text, shared: read.append(text) or real(text, shared))
+    assert discrepancy_sweep.sweep_differences(stated, [("doc", passage)]) == []
+    assert read == []

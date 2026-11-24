@@ -227,8 +227,6 @@ def _identifier_scope(text: str, shared: set[str]) -> str:
     under = False
     for line in (text or "").splitlines():
         line = line.strip()
-        if not line:
-            continue
         lead = _leading_designation(line)
         if lead is not None:
             heading = not _stated_figures(line) and not line.endswith((".", "!", "?"))
