@@ -191,3 +191,31 @@ def test_a_chat_turn_records_the_project_it_answers_from(call, project):
 
     asyncio.run(call(loop.chat, Agent()))
     assert seen == [project]
+
+
+@pytest.mark.parametrize(("project", "query", "k"), [("proj-a", "bs 8500", 20), ("proj-z", "table 6.2", 7)])
+def test_the_search_is_the_project_lexical_ranking(project, query, k, monkeypatch):
+    """The one search is the store's BM25 ranking over the turn's project."""
+    from app.core.rag import vector_store
+
+    seen: list = []
+    chunk = NS(doc_id="d", chunk_index=0, page=None, text=query)
+
+    class Store:
+        def bm25_search(self, project_id, q, k):
+            seen.append((project_id, q, k))
+            return [chunk]
+
+    monkeypatch.setattr(vector_store, "get_store", lambda *a, **kw: Store())
+    assert answer_exit._lexical_search(project, query, k) == [chunk]
+    assert seen == [(project, query, k)]
+
+
+@pytest.mark.parametrize("names", [{"d1": "Spec A.pdf"}, {"d7": "Notes Rev B.docx", "d8": "Schedule.xlsx"}])
+def test_the_passage_documents_are_named_from_the_documents_table(names, monkeypatch):
+    from app.core import projects
+
+    seen: list = []
+    monkeypatch.setattr(projects, "document_names", lambda ids: seen.append(list(ids)) or dict(names))
+    assert answer_exit._document_names(list(names)) == names
+    assert seen == [list(names)]
