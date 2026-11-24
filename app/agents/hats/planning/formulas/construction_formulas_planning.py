@@ -5,6 +5,8 @@ Moved unchanged by scripts/move_formulas.py (F-DRIVER Phase A).
 from __future__ import annotations
 from app.lib.formula_registry import Param, formula
 import logging
+import math
+import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -582,3 +584,87 @@ def productivity_manpower_duration(
         )
     results["note"] = "; ".join(note_parts)
     return results
+
+
+#: The percentiles a schedule or cost risk answer states.
+_RISK_PERCENTILES = (50, 80, 90)
+
+
+def _nearest_rank(ordered: List[float], percent: float) -> float:
+    """The nearest-rank percentile of an ascending sample: the smallest
+    value with at least ``percent`` per cent of the sample at or below it."""
+    return ordered[math.ceil(percent / 100.0 * len(ordered)) - 1]
+
+
+@formula(
+    owner='planning',
+    display_name='Monte Carlo P50 / P80 / P90',
+    description=('Seeded Monte Carlo of a total made of items with a user-supplied '
+                 'three-point range each (low, most likely, high; triangular): the '
+                 'P50, P80 and P90 totals, the mean, and the chance of finishing '
+                 'within the most likely total. Works for durations or costs.'),
+    inputs={
+        'low': Param('-', 0, 1e13, label='low (optimistic) value of each item'),
+        'most_likely': Param('-', 0, 1e13, label='most likely value of each item'),
+        'high': Param('-', 0, 1e13, label='high (pessimistic) value of each item'),
+        'iterations': Param('count', 100, 200000, label='number of trials'),
+        'seed': Param('count', 0, 2**31 - 1, label='random seed'),
+    },
+    outputs={'p50': '-', 'p80': '-', 'p90': '-', 'mean': '-', 'working': '-'},
+)
+def monte_carlo_percentiles(
+    low: List[float],
+    most_likely: List[float],
+    high: List[float],
+    iterations: int = 10000,
+    seed: int = 1,
+) -> dict:
+    """P50/P80/P90 of a sum of triangular items, reproducible from its seed.
+
+    The ranges are the user's: nothing is widened, narrowed or defaulted.
+    The trial count and the seed have defaults, and both are stated in the
+    working, so the same inputs always give the same answer and anyone can
+    re-run it. Percentiles are nearest-rank on the sorted trial totals.
+    """
+    items = [list(v) if isinstance(v, (list, tuple)) else [v]
+             for v in (low, most_likely, high)]
+    lows, modes, highs = ([float(x) for x in seq] for seq in items)
+    if not (len(lows) == len(modes) == len(highs)):
+        return {"error": (f"low, most_likely and high must list the same items: "
+                          f"got {len(lows)}, {len(modes)} and {len(highs)}.")}
+    if not lows:
+        return {"error": "At least one item with low, most_likely and high is required."}
+    bad = [i + 1 for i, (a, c, b) in enumerate(zip(lows, modes, highs))
+           if not a <= c <= b]
+    if bad:
+        return {"error": ("Each item needs low <= most_likely <= high; it does not "
+                          f"hold for item(s) {', '.join(map(str, bad))}.")}
+    trials = int(iterations)
+    rng = random.Random(int(seed))
+    totals = sorted(
+        sum(rng.triangular(a, b, c) for a, c, b in zip(lows, modes, highs))
+        for _ in range(trials))
+    likely = sum(modes)
+    within = sum(1 for t in totals if t <= likely) / trials
+    out: Dict[str, Any] = {
+        f"p{p}": round(_nearest_rank(totals, p), 4) for p in _RISK_PERCENTILES}
+    out.update({
+        "mean": round(sum(totals) / trials, 4),
+        "min_trial": round(totals[0], 4),
+        "max_trial": round(totals[-1], 4),
+        "most_likely_total": round(likely, 4),
+        "probability_within_most_likely_percent": round(within * 100.0, 2),
+        "iterations": trials,
+        "seed": int(seed),
+    })
+    out["working"] = [
+        (f"{len(lows)} item(s), each drawn from a triangular distribution "
+         f"(low, most likely, high) as supplied; {trials:,} trials, seed {int(seed)}."),
+        (f"Range of the total: {sum(lows):,.4f} to {sum(highs):,.4f}; "
+         f"sum of the most likely values {likely:,.4f}."),
+        ("P50 / P80 / P90 (nearest rank of the sorted trial totals) = "
+         + " / ".join(f"{out[f'p{p}']:,.4f}" for p in _RISK_PERCENTILES)),
+        (f"{out['probability_within_most_likely_percent']:.2f}% of trials finish "
+         f"at or within the sum of the most likely values."),
+    ]
+    return out

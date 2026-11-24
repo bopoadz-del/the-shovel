@@ -482,6 +482,7 @@ FW_ROUTE_NAMES = frozenset({
     "mobilization_cost_estimate",
     "modulus_of_elasticity_concrete",
     "modulus_of_rupture",
+    "monte_carlo_percentiles",
     "next_ncr_status",
     "pe_unit_convert",
     "plumbing_flow_programme",

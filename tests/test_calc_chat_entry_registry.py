@@ -237,6 +237,11 @@ CASES: Dict[str, Case] = {
          {"daily_tonnage_per_crane": 370.5, "cranes_required": 2})),
     # Weights .45/.45/.07/.03. X: 36 + 31.5 + 6.3 + 1.5 = 75.3;
     # Y: 31.5 + 40.5 + 5.6 + 1.8 = 79.4 -> Y ranks first. Scores carry no unit.
+    # Items with no spread: every trial total is 3 + 4 = 7, so P50 = P90 = 7.
+    # The items carry whatever unit the user states, so there is no unit case.
+    "monte_carlo_percentiles": Case(
+        {"low": [3, 4], "most_likely": [3, 4], "high": [3, 4], "iterations": 200},
+        {"p50": 7.0, "p90": 7.0}, "low", None),
     "evaluate_tender": Case(
         {"tenderers": [
             {"name": "X", "technical": 80, "commercial": 70, "hse": 90,

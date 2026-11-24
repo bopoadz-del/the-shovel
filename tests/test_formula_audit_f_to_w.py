@@ -45,6 +45,7 @@ _AUDIT_SLICE = [
     "mobilization_cost_estimate",
     "modulus_of_elasticity_concrete",
     "modulus_of_rupture",
+    "monte_carlo_percentiles",
     "next_ncr_status",
     "pe_unit_convert",
     "plumbing_flow_programme",
@@ -905,6 +906,20 @@ class TestModulusOfRupture:
 
     def test_zero_fck_is_error(self):
         _err("modulus_of_rupture", fck_n_mm2=0)
+
+
+class TestMonteCarloPercentiles:
+    """Items with no spread (low = most likely = high) leave nothing to
+    sample: every trial total is the plain sum, so P50 = P80 = P90 = it."""
+
+    def test_no_spread_gives_the_sum(self):
+        # 3 + 4.5 = 7.5 on every trial.
+        r = _ok("monte_carlo_percentiles", low=[3, 4.5], most_likely=[3, 4.5],
+                high=[3, 4.5], iterations=200, seed=5)
+        assert (r["p50"], r["p80"], r["p90"]) == (7.5, 7.5, 7.5)
+
+    def test_low_above_most_likely_is_error(self):
+        _err("monte_carlo_percentiles", low=[6], most_likely=[5], high=[9])
 
 
 _LENGTH_SI = ("m", "meter", "metre")
