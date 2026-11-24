@@ -12,7 +12,6 @@ EVM workbook (from PV/EV/AC + BAC):
 """
 from __future__ import annotations
 
-from collections import deque
 from typing import Any, Dict, List, Tuple
 
 import openpyxl
@@ -34,40 +33,83 @@ def _header(ws, row: int, labels: List[str]) -> None:
         c.font, c.fill, c.alignment = _HDR_FONT, _HDR_FILL, Alignment(horizontal="center")
 
 
+class ScheduleNetworkError(ValueError):
+    """The CPM kernel refused the network (a loop, an unknown predecessor, a
+    duration that is not a whole number of working days). The message is the
+    kernel's own reason, so a caller can hand it to the user unchanged."""
+
+
+def _activity_id(a: Dict[str, Any]) -> str:
+    """An activity's id as the CPM kernel keys it (surrounding blanks off)."""
+    return str(a.get("id") if a.get("id") is not None else "").strip()
+
+
+def _links_label(raw: Any) -> str:
+    """The workbook's Preds cell: each link as the kernel reads it -- the
+    predecessor id, its type when it is not FS, and its lag when it has one."""
+    from app.agents.hats.planning.formulas.construction_formulas_planning import (
+        _network_links,
+    )
+
+    out = []
+    for link in _network_links(raw):
+        lag = link.get("lag") or 0
+        text = link["predecessor_id"]
+        if link.get("type") and link["type"] != "FS":
+            text += f" {link['type']}"
+        if lag:
+            text += f"{'+' if float(lag) > 0 else ''}{lag}"
+        out.append(text)
+    return ",".join(out)
+
+
 def _cpm(activities: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, int]], int, List[str]]:
-    """Forward/backward CPM pass (finish-to-start). Returns
-    ({id: {es,ef,ls,lf,tf,critical}}, project_duration, topo_order)."""
-    acts = {str(a["id"]): a for a in activities}
-    ids = [str(a["id"]) for a in activities]
-    preds = {i: [str(p) for p in acts[i].get("predecessors", [])] for i in ids}
-    succ: Dict[str, List[str]] = {i: [] for i in ids}
-    for i in ids:
-        for p in preds[i]:
-            if p in succ:
-                succ[p].append(i)
-    indeg = {i: sum(1 for p in preds[i] if p in acts) for i in ids}
-    q = deque([i for i in ids if indeg[i] == 0])
-    order: List[str] = []
-    while q:
-        n = q.popleft(); order.append(n)
-        for s in succ[n]:
-            indeg[s] -= 1
-            if indeg[s] == 0:
-                q.append(s)
-    if len(order) != len(ids):          # cycle fallback — keep input order
-        order = ids
-    es: Dict[str, int] = {}; ef: Dict[str, int] = {}
-    for i in order:
-        es[i] = max([ef[p] for p in preds[i] if p in ef], default=0)
-        ef[i] = es[i] + int(acts[i].get("duration", 0))
-    proj = max(ef.values(), default=0)
-    ls: Dict[str, int] = {}; lf: Dict[str, int] = {}
-    for i in reversed(order):
-        lf[i] = min([ls[s] for s in succ[i] if s in ls], default=proj)
-        ls[i] = lf[i] - int(acts[i].get("duration", 0))
-    out = {i: {"es": es[i], "ef": ef[i], "ls": ls[i], "lf": lf[i],
-               "tf": ls[i] - es[i], "critical": (ls[i] - es[i]) <= 0} for i in ids}
-    return out, proj, order
+    """Forward/backward CPM pass for the workbook, by the ONE CPM kernel.
+
+    The network is run through the calculation envelope: the registered
+    ``cpm_network`` kernel (which calls ``pm_computations.compute_cpm``) is
+    run by ``run_calculation``, so the workbook's dates and floats are the
+    same numbers every other schedule path computes. Each activity's
+    predecessors are handed to the kernel as given -- an id, a
+    comma-separated string of ids, or a mapping with ``id`` and optional
+    ``type`` (FS/SS/FF/SF) and ``lag`` -- so a typed or lagged link is
+    scheduled as typed, not flattened to a string. There is no second
+    forward/backward pass here.
+
+    Returns ``({id: {es,ef,ls,lf,tf,critical}}, project_duration, order)``
+    where ``order`` is the activities' own listed order and every id is
+    keyed as the kernel keys it (see ``_activity_id``). A network the
+    kernel cannot schedule raises ``ScheduleNetworkError`` carrying the
+    kernel's own reason: a workbook is never written from numbers the
+    kernel refused.
+    """
+    from app.lib.construction_formulas import run_calculation
+
+    ids = [_activity_id(a) for a in activities]
+    if not ids:
+        return {}, 0, []
+    network = [{"id": _activity_id(a), "name": str(a.get("name") or ""),
+                "duration": a.get("duration", 0),
+                "predecessors": a.get("predecessors")}
+               for a in activities]
+    envelope = run_calculation("cpm_network", {"activities": network})
+    result = envelope.get("result") if isinstance(envelope, dict) else None
+    if (not isinstance(envelope, dict) or envelope.get("status") != "success"
+            or not isinstance(result, dict)):
+        reason = ((envelope.get("error") if isinstance(envelope, dict) else None)
+                  or "the CPM kernel returned no result")
+        raise ScheduleNetworkError(f"schedule network not computed: {reason}")
+    rows = {str(r["id"]): r for r in result.get("activities") or []}
+    missing = [i for i in ids if i not in rows]
+    if missing:
+        raise ScheduleNetworkError(
+            "schedule network not computed: the CPM kernel returned no dates for "
+            + ", ".join(missing))
+    out = {i: {"es": rows[i]["early_start"], "ef": rows[i]["early_finish"],
+               "ls": rows[i]["late_start"], "lf": rows[i]["late_finish"],
+               "tf": rows[i]["total_float"], "critical": bool(rows[i]["is_critical"])}
+           for i in ids}
+    return out, int(result.get("project_duration") or 0), ids
 
 
 def _add_working_days(start, n: int):
@@ -85,7 +127,7 @@ def _add_working_days(start, n: int):
 
 def generate_cost_loaded_schedule(meta: Dict[str, Any], activities: List[Dict[str, Any]]):
     cpm, proj, order = _cpm(activities)
-    acts = {str(a["id"]): a for a in activities}
+    acts = {_activity_id(a): a for a in activities}
     ccy = meta.get("currency") or ""
     # Cost is only rendered when a real/indicative figure was supplied — a
     # schedule from a brief has no estimate, so we never show a fabricated
@@ -104,7 +146,7 @@ def generate_cost_loaded_schedule(meta: Dict[str, Any], activities: List[Dict[st
     for i in order:
         a, c = acts[i], cpm[i]
         s.cell(r, 1, i); s.cell(r, 2, a.get("wbs", "")); s.cell(r, 3, a.get("name", ""))
-        s.cell(r, 4, a.get("duration", 0)); s.cell(r, 5, ",".join(str(p) for p in a.get("predecessors", [])))
+        s.cell(r, 4, a.get("duration", 0)); s.cell(r, 5, _links_label(a.get("predecessors")))
         s.cell(r, 6, c["es"]); s.cell(r, 7, c["ef"]); s.cell(r, 8, c["ls"]); s.cell(r, 9, c["lf"])
         s.cell(r, 10, c["tf"]); s.cell(r, 11, "YES" if c["critical"] else "")
         cc = s.cell(r, 12, (a.get("cost", 0) if has_cost else None)); cc.font = _INPUT; cc.number_format = _MONEY

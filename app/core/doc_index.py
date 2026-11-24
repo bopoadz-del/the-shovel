@@ -1877,8 +1877,33 @@ def chunk_text_with_overlap(
         next_i = end - overlap if end - overlap > i else end
         if next_i <= i:
             next_i = end
-        i = next_i
+        i = _overlap_start(text, next_i, end, whole_lines=text[end - 1] == "\n")
     return chunks
+
+
+def _overlap_start(text: str, start: int, end: int, *, whole_lines: bool) -> int:
+    """Where the carried overlap ``text[start:end]`` may begin.
+
+    A character offset lands mid-token: the next chunk opened on a word
+    fragment, and a fragment of a figure (``C40`` -> ``0``) reads as a
+    number the document never wrote. The overlap starts after the first
+    whitespace in the window instead, so it carries whole words only.
+    When the chunk broke at a line start (a BOQ row, a paragraph, a line),
+    it carries whole lines only, so the next chunk starts on a row's own
+    code and not on the tail figures of the row before it. A window with
+    no such boundary keeps the character offset (text with no whitespace
+    has no word to protect).
+    """
+    if start >= end:
+        return end
+    if whole_lines:
+        nl = text.find("\n", start, end)
+        return nl + 1 if nl >= 0 else end
+    if start > 0 and not text[start - 1].isspace():
+        for k in range(start, end):
+            if text[k].isspace():
+                return k + 1
+    return start
 
 
 def chunk_markdown(
@@ -1896,8 +1921,11 @@ def chunk_markdown(
     different chunk from its column header ("Book | Form | Design | Pricing
     basis"); retrieval then matched the headerless fragment poorly and the model
     couldn't map the value to its column. Keeping the table whole (with its
-    heading) fixes both retrieval and extraction. A table larger than
-    ``max_table_chars`` falls back to char-chunking so it can't blow the budget.
+    heading) fixes both retrieval and extraction. A table larger than the cap
+    (``max_table_chars``, lowered to the index ceiling ``CHUNK_MAX_CHARS`` when
+    that is smaller, so the ceiling never re-cuts it) is cut into row groups,
+    each led by the same heading, column-header row and separator
+    (``_markdown_table_chunks``); no data row is printed without its header.
     """
     if not text or not text.strip():
         return []
@@ -1906,12 +1934,14 @@ def chunk_markdown(
     segments: list[tuple] = []  # (kind, text)
     prose_buf: list[str] = []
     last_heading = ""
+    # The heading in force where the buffered prose begins (set on its first line).
+    prose_heading = ""
 
     def _flush_prose():
         if prose_buf:
             joined = "\n".join(prose_buf).strip()
             if joined:
-                segments.append(("prose", joined))
+                segments.append(("prose", joined, prose_heading, []))
             prose_buf.clear()
 
     i = 0
@@ -1919,6 +1949,7 @@ def chunk_markdown(
     while i < n:
         line = lines[i]
         stripped = line.strip()
+        heading_before = last_heading
         if stripped.startswith("#"):
             last_heading = stripped
         # A table = a "|" row immediately followed by a |---|---| separator.
@@ -1935,25 +1966,107 @@ def chunk_markdown(
                 j += 1
             body = "\n".join(tbl)
             table_text = f"{last_heading}\n{body}" if last_heading else body
-            segments.append(("table", table_text))
+            segments.append(("table", table_text, last_heading, tbl))
             i = j
             continue
+        if not prose_buf:
+            prose_heading = heading_before
         prose_buf.append(line)
         i += 1
     _flush_prose()
 
+    from app.core.chunk_bounds import chunk_max_chars
+
+    cap = max_table_chars
+    ceiling = chunk_max_chars()
+    if 0 < ceiling < cap:
+        cap = ceiling
     chunks: list[str] = []
-    for kind, seg in segments:
+    for kind, seg, heading, tbl in segments:
         seg = seg.strip()
         if not seg:
             continue
-        if kind == "table" and len(seg) <= max_table_chars:
+        if kind == "table" and len(seg) <= cap:
             chunks.append(seg)
-        else:
-            chunks.extend(
-                chunk_text_with_overlap(seg, target_chars=target_chars, overlap=overlap)
-            )
+            continue
+        groups = _markdown_table_chunks(heading, tbl, cap) if kind == "table" else []
+        if groups:
+            chunks.extend(groups)
+            continue
+        pieces = chunk_text_with_overlap(seg, target_chars=target_chars, overlap=overlap)
+        if kind == "prose":
+            pieces = _lead_with_heading(seg, heading, pieces)
+        chunks.extend(pieces)
     return chunks
+
+
+_MARKDOWN_HEADING_LINE = re.compile(r"^[ \t]*#.*$", re.M)
+
+
+def _lead_with_heading(seg: str, start_heading: str, pieces: list[str]) -> list[str]:
+    """Prose pieces of one segment, each opening on the heading it sits under.
+
+    ``pieces`` are the char-chunked pieces of ``seg`` in order; each is a
+    stripped substring of it. A piece whose first line is not a heading gets
+    the heading in force where it starts (the last heading line of ``seg``
+    before it, else ``start_heading``, the heading in force where ``seg``
+    begins) put in front, so a mid-section piece says which section it is
+    from, as a table chunk already does. Text before any heading is left as
+    is. The heading test is the one ``chunk_markdown`` uses (a line opening
+    on ``#``); no word of the note is read.
+    """
+    heads = [(m.start(), m.group(0).strip()) for m in _MARKDOWN_HEADING_LINE.finditer(seg)]
+    out: list[str] = []
+    cursor = 0
+    for piece in pieces:
+        at = seg.find(piece, cursor)
+        if at < 0:
+            at = cursor
+        else:
+            cursor = at + 1
+        first = piece.lstrip().split("\n", 1)[0]
+        if first.startswith("#"):
+            out.append(piece)
+            continue
+        heading = start_heading.strip()
+        for pos, line in heads:
+            if pos >= at:
+                break
+            heading = line
+        out.append(f"{heading}\n{piece}" if heading else piece)
+    return out
+
+
+def _markdown_table_chunks(heading: str, table: list[str], cap: int) -> list[str]:
+    """An oversize markdown table as row groups that each carry its header.
+
+    ``table`` is the table's own lines: column-header row, separator, data
+    rows. Each group is ``heading`` (when the note has one), the header row,
+    the separator, then as many whole data rows as fit in ``cap`` chars, so a
+    data row is never cut and never reaches the index without the column
+    names that say what its cells are. Returns [] when there is no data row,
+    or when the lead (heading + header + separator) takes more than half of
+    ``cap`` and repeating it would leave room for too few rows; the caller
+    then char-chunks the table as before.
+    """
+    if len(table) < 3:
+        return []
+    lead = "\n".join(([heading.strip()] if heading.strip() else []) + table[:2])
+    if 2 * len(lead) > cap:
+        return []
+    groups: list[str] = []
+    rows: list[str] = []
+    size = len(lead)
+    for row in table[2:]:
+        if rows and size + 1 + len(row) > cap:
+            groups.append(lead + "\n" + "\n".join(rows))
+            rows = []
+            size = len(lead)
+        rows.append(row)
+        size += 1 + len(row)
+    if rows:
+        groups.append(lead + "\n" + "\n".join(rows))
+    return groups
 
 
 def _chunker_for_document(filename: str, requested: str = "default") -> str:
@@ -2926,7 +3039,13 @@ def index_project(
 # primary text indexing.
 
 _BOQ_NAME_RE = re.compile(
-    r"\bbo[q]\b|bill[\s_-]*of[\s_-]*quantit|schedule[\s_-]*of[\s_-]*quantit|priced",
+    # The ``boq`` token is bounded by lookarounds, not ``\b``: underscore is a
+    # word character, so ``\bboq\b`` missed ``Tender_BOQ_rev2.pdf`` and
+    # ``BOQ_Section4.pdf``, a separator shape real corpora use. ``_``, ``-``,
+    # ``.`` and space count alike, as in ``_DRAWING_NAME_RE``. ``s?`` takes
+    # the plural (``BOQs.pdf``).
+    r"(?<![A-Za-z0-9])boqs?(?![A-Za-z0-9])"
+    r"|bill[\s_-]*of[\s_-]*quantit|schedule[\s_-]*of[\s_-]*quantit|priced",
     re.IGNORECASE,
 )
 
@@ -3174,6 +3293,39 @@ _SPREADSHEET_NO_BAND = "(no band stated on this sheet)"
 # section title, a subtotal) scopes every measured row that follows it.
 
 
+# Excel holds a number to 15 significant digits (the precision it displays
+# and computes with). A cached formula result is written to the package as the
+# nearest binary double, so 0.1 + 0.2 is stored as 0.30000000000000004. Read
+# back at full repr, that tail lands in the row chunk as a figure the sheet
+# itself never shows, and it never matches the figure as typed or printed.
+_XLSX_SIGNIFICANT_DIGITS = 15
+
+
+def _xlsx_cell_text(value: Any) -> str:
+    """One .xlsx cell as the trimmed text the sheet states.
+
+    A float is read at Excel's own precision, and a whole number prints
+    without a decimal tail. A datetime with no time of day is the date alone,
+    the way the .xls row reader prints a date cell. Every other value prints
+    as ``str``, trimmed.
+    """
+    import datetime as _dt
+    import math
+
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return str(value)
+        rounded = float(f"{value:.{_XLSX_SIGNIFICANT_DIGITS}g}")
+        if rounded.is_integer() and abs(rounded) < 10 ** _XLSX_SIGNIFICANT_DIGITS:
+            return str(int(rounded))
+        return str(rounded)
+    if isinstance(value, _dt.datetime) and value.time() == _dt.time(0, 0):
+        return value.date().isoformat()
+    return str(value).strip()
+
+
 def _spreadsheet_sheets(
     file_path: str, ext: str,
 ) -> list[tuple[str, list[list[str]]]]:
@@ -3194,7 +3346,7 @@ def _spreadsheet_sheets(
                 (
                     name,
                     [
-                        [("" if c is None else str(c).strip()) for c in row]
+                        [_xlsx_cell_text(c) for c in row]
                         for row in ws.iter_rows(values_only=True)
                     ],
                 )
@@ -3435,6 +3587,24 @@ def _spreadsheet_row_chunks(
                 idx = colmap.get(field)
                 if idx is not None and idx < len(cells) and cells[idx] != "":
                     parts.append(f"{label}: {cells[idx]}")
+            # Every other cell the row states keeps its place, labelled with
+            # the sheet's own header text. The resolver only names the
+            # description and figure columns; an item reference, a bill
+            # column or a remark the sheet prints beside them is still part
+            # of the row, and dropping it leaves the row unreachable by the
+            # reference the document gives it. Columns already printed under
+            # a fixed label (Item and the figure fields) are not repeated.
+            emitted_idxs = {
+                colmap[f]
+                for f in ("description", "quantity", "unit", "rate", "total")
+                if f in colmap
+            }
+            for idx in range(len(cells)):
+                if idx in emitted_idxs or cells[idx] == "":
+                    continue
+                head = header_cells[idx].strip() if idx < len(header_cells) else ""
+                if head:
+                    parts.append(f"{head}: {cells[idx]}")
             chunks.append("; ".join(parts))
     return chunks
 

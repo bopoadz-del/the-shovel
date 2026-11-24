@@ -11,17 +11,22 @@ directory (``--ignore=tests/browser``).
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.browser._llm_stub import _cases
 from tests.browser.test_ui_phys_nightly import _ask, _create_project, _login
 
 pytestmark = pytest.mark.browser
 
-_QUESTIONS = [
-    ("What is the curing time for the east deck pour?", "List the open crane lift permits."),
-    ("Summarise the dewatering log for week 3.", "Which scaffold tags failed inspection?"),
-]
+# Two questions per set, taken from the UI-PHYS catalog. The stubbed model
+# answers only catalog asks; an invented question gets its honest error
+# bubble ("Something went wrong"), which is what kept this test red after the
+# sidebar race was fixed. Plain answers: no tool, no upload needed.
+_SET_IDS = (("G2", "G3"), ("G6", "G1"))
+_QUESTIONS = [tuple(_cases()[cid]["ask"] for cid in ids) for ids in _SET_IDS]
 
 
 def _user_texts(page: Page) -> list[str]:
@@ -41,7 +46,14 @@ def test_a_session_survives_reload_and_navigation(page: Page, live_app, set_inde
     _create_project(page, f"Sessions Persist UI {set_index}")
     project_url = page.url
 
-    heads = [h.strip() for h in page.locator(".left-panel__section-head").all_text_contents()]
+    # The URL changes before the workspace has rendered its sidebar: the
+    # Sessions head appears once the active project is set and Documents once
+    # the document list has loaded. all_text_contents() does not wait, so wait
+    # for both heads before reading their order.
+    head = page.locator(".left-panel__section-head")
+    expect(head.filter(has_text=re.compile(r"^\s*Sessions\s*$"))).to_have_count(1, timeout=15_000)
+    expect(head.filter(has_text=re.compile(r"^\s*Documents\s*$"))).to_have_count(1, timeout=15_000)
+    heads = [h.strip() for h in head.all_text_contents()]
     assert heads.index("Sessions") < heads.index("Documents"), heads
 
     _ask(page, first_q)

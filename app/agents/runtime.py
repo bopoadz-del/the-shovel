@@ -13232,6 +13232,7 @@ class Agent:
     _fetch_named_missing_input = _core_context._fetch_named_missing_input
     _search_before_refusal = _core_context._search_before_refusal
     _search_first_nudges = _core_context._search_first_nudges
+    _tool_offered = _core_context._tool_offered
     _intent_hard_excludes = _core_context._intent_hard_excludes
 
     chat_stream = _core_loop.chat_stream
