@@ -631,10 +631,37 @@ def _subject_phrase(text: str, start: int, end: int) -> str:
     """
     t = text or ""
     lo, hi = _sentence_span(t, start)
-    phrase = _noun_phrase(t[lo:start])
+    phrase = _cell_phrase(t[lo:start], before=True)
     if phrase:
         return phrase
-    return _noun_phrase(t[end:hi])
+    return _cell_phrase(t[end:hi], before=False)
+
+
+#: A field separator inside one sentence: a table cell bar, a tab, or a
+#: semicolon between record fields / clauses. A spreadsheet row or a
+#: "Sheet: X; Item: Y; Quantity: Z" record has no sentence break, so
+#: without this the subject of a value is the whole row before it.
+_FIELD_SEP_RE = re.compile(r"\s*[|\t;]\s*")
+
+
+def _cell_phrase(fragment: str, *, before: bool) -> str:
+    """The noun phrase of the field nearest the value.
+
+    ``fragment`` is the text on one side of the value inside its sentence.
+    It is split on field separators; the field next to the value is read
+    first, and a field with no words in it (a number cell) is stepped over
+    toward the next one. Read by shape only: no list of headers or labels.
+    """
+    fields = _FIELD_SEP_RE.split(fragment or "")
+    if before:
+        fields.reverse()
+    for field in fields:
+        if not re.search(r"[A-Za-z]{2,}", field):
+            continue
+        phrase = _noun_phrase(field)
+        if phrase:
+            return phrase
+    return ""
 
 
 def cases_from_passages(passages: Iterable[tuple[str, str]]) -> list[Case]:
