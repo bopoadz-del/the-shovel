@@ -596,12 +596,19 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
     return bound
 
 
-# A formula title names its result first, then how it is worked: "X from
-# A and B". A bracketed aside, anywhere, is another name or the inputs:
-# "X (A vs B)", "P (also Q) X". The words left before "from" are
-# the title's head.
+# A formula title names its result first, then how or where it is
+# worked: "X from A and B", "X of a member", "X to lay a quantity". The
+# words before the title's first preposition are its head; what follows
+# qualifies it, and an ask may name that qualifier in its own words or
+# not at all. A bracketed aside, anywhere, is another name or the
+# inputs: "X (A vs B)", "P (also Q) X". A counting head word ("number
+# of X") names no thing of its own, so its head runs on past "of".
 _TITLE_ASIDE_RE = re.compile(r"\s*\([^)]*\)")
-_TITLE_QUALIFIER_RE = re.compile(r"\s+from\s+", re.IGNORECASE)
+# Closed-class words that open a qualifying phrase in a title.
+_TITLE_QUALIFIER_WORDS = frozenset({
+    "from", "of", "per", "for", "to", "with", "under", "on", "in", "by",
+    "as", "at", "into", "over", "than", "via",
+})
 # A counting head word names no thing of its own: "number of X" is asked
 # as "how many X". The phrase the ask uses instead of the head word.
 _COUNT_HEAD_ASKED_AS = {"number": "how many", "amount": "how much"}
@@ -609,8 +616,14 @@ _COUNT_HEAD_ASKED_AS = {"number": "how many", "amount": "how much"}
 
 def _title_head_words(title: str) -> List[str]:
     from app.lib.construction_formulas import _display_content_words
-    head = _TITLE_QUALIFIER_RE.split(_TITLE_ASIDE_RE.sub("", title or ""), maxsplit=1)[0]
-    return _display_content_words(head)
+    head: List[str] = []
+    for word in re.findall(r"[a-z0-9]+", _TITLE_ASIDE_RE.sub("", title or "").lower()):
+        if word in _TITLE_QUALIFIER_WORDS:
+            named = _display_content_words(" ".join(head))
+            if named and not (len(named) == 1 and named[0] in _COUNT_HEAD_ASKED_AS):
+                break
+        head.append(word)
+    return _display_content_words(" ".join(head))
 
 
 def _head_named(raw: str, head: List[str]) -> bool:
@@ -630,7 +643,8 @@ def formula_completed_by_user_text(text: str) -> Optional[tuple]:
     supplies, or None.
 
     The ask names an entry when it carries the head of the entry's title
-    (its words before "from", bracketed asides left out). Among named entries whose inputs
+    (its words before the first qualifying preposition, bracketed asides
+    left out; see ``_title_head_words``). Among named entries whose inputs
     all bind, the one with the most title words in the ask wins, then the
     one with fewest title words missing; any tie is no selection.
     """
