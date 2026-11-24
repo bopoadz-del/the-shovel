@@ -29,7 +29,8 @@ question, a formula, a project or a document.
    and each cut item word for word, leaves the text and travels as
    structured ``details`` beside the answer. The budget is the answer's own
    shape, never a word count: nothing is deleted, and an answer that is one
-   paragraph is untouched.
+   paragraph is untouched. An answer a conflict statement replaces is read
+   whole: the statement is its lead and nothing is moved out of sight.
 6. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
    a refusal into an answer: a tier is copied from the turn's own Sources row
    or left ``None``; a refusal (an answer with no figure) keeps every sentence
@@ -944,6 +945,7 @@ def apply(
             body = _answer_first(body, computed)
             body = _narration_first(body)
         body = _tidy(body)
+        whole = body
         details: str | None = None
         if not asking and not computed:
             body, details = _lead_and_details(body)
@@ -959,10 +961,12 @@ def apply(
                 # The conflict statement leads; a sentence asserting only one
                 # of the differing values for that thing, or asserting that the
                 # documents agree about it, is replaced by it.
+                # A replaced answer is read whole (rule 5 yields): the
+                # conflict statement is its lead and every paragraph it did
+                # not supersede stays in the text the user reads, beside it.
                 stated = [c for c in found if _nameable(c)]
-                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated))
-                if details:
-                    details = _tidy(_drop_superseded(details, stated)) or None
+                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(whole, stated))
+                details = None
         # A marker whose line went (padding, a dropped note) is not lost: it
         # rides on the last line, so every citation entry has its marker. A
         # marker that travels in the details is not lost.

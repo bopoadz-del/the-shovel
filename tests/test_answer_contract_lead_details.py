@@ -225,3 +225,47 @@ def test_exit_result_carries_details(answer, lead, details):
 def test_exit_result_without_details_has_no_field():
     out = answer_exit.check_result({"answer": "The gate is grey.", "sources": []})
     assert "details" not in out
+
+
+# ── a conflict-replaced answer is read whole: rule 5 yields ─────────────────
+
+_CONFLICT_CASES = [
+    ([{"doc_name": "Pile Cap Specification.pdf",
+       "snippet": "Minimum cover to pile cap reinforcement is 75 mm."},
+      {"doc_name": "Pile Cap Method Statement.pdf",
+       "snippet": "Spacers give a cover to pile cap reinforcement of 50 mm."}],
+     "What cover is required to the pile cap reinforcement?",
+     "The pile caps are cast in grade C40 concrete.\n\n"
+     "The cover to the pile cap reinforcement is 50 mm.\n\n"
+     "Laps are forty bar diameters.",
+     ["The pile caps are cast in grade C40 concrete.", "Laps are forty bar diameters."]),
+    ([{"doc_name": "Podium Slab Specification.pdf", "snippet": "The podium slab thickness is 250 mm."},
+      {"doc_name": "Podium Slab Drawing Notes.pdf", "snippet": "The podium slab thickness is 300 mm."}],
+     "What is the podium slab thickness?",
+     "The podium is a flat slab on drop panels.\n\n"
+     "The podium slab thickness is 300 mm.\n\n"
+     "Movement joints are at 30 m centres.",
+     ["The podium is a flat slab on drop panels.", "Movement joints are at 30 m centres."]),
+]
+
+
+@pytest.mark.parametrize("rows,question,text,kept", _CONFLICT_CASES)
+def test_conflict_replaced_answer_keeps_every_other_paragraph_in_the_text(rows, question, text, kept):
+    done = _apply(text, sources=rows, question=question)
+    assert done.conflicts
+    assert done.details is None
+    assert done.text.startswith("The documents differ")
+    for par in kept:
+        assert par in done.text
+
+
+@pytest.mark.parametrize("rows,question,text,kept", _CONFLICT_CASES)
+def test_same_answer_without_a_conflict_still_splits(rows, question, text, kept):
+    # The other side: the same answer over documents that agree has no
+    # conflict to state, so rule 5 applies and the later paragraphs move.
+    agree = [dict(rows[0]), dict(rows[1], snippet=rows[0]["snippet"])]
+    done = _apply(text.replace(" 50 mm", " 75 mm").replace(" 300 mm", " 250 mm"),
+                  sources=agree, question=question)
+    assert done.conflicts == []
+    assert done.text == kept[0]
+    assert kept[1] in (done.details or "")

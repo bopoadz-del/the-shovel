@@ -45,6 +45,10 @@ function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
     () => (isUser ? message.content : linkCitationMarkers(message.content, message.citations)),
     [isUser, message.content, message.citations],
   )
+  const detailsMarkdown = useMemo(
+    () => (isUser || !message.details ? '' : linkCitationMarkers(message.details, message.citations)),
+    [isUser, message.details, message.citations],
+  )
   const components = useMemo<Components>(() => ({
     // A marker is a control that opens its entry in the Sources panel; the
     // document it stands for is never written into the answer itself. Its
@@ -108,6 +112,19 @@ function ChatBubble({ message, onDownload, onExport, onCitation }: Props) {
           )}
         </div>
 
+        {/* Rule 5 of the answer contract: the lead above is the answer; the
+            supporting text the contract moved out of it travels here, word
+            for word, folded under the answer and opened on request. It sits
+            outside the answer's own text, like the Sources panel. */}
+        {detailsMarkdown && !message.streaming && (
+          <details className="chat-bubble__details">
+            <summary className="chat-bubble__details-summary">More detail</summary>
+            <div className="chat-bubble__details-body">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{detailsMarkdown}</ReactMarkdown>
+            </div>
+          </details>
+        )}
+
         {message.role === 'assistant' && !message.streaming && message.content && (onDownload || exports.length > 0) && (
           <div className="chat-bubble__actions">
             {onDownload && (
@@ -170,6 +187,7 @@ function propsEqual(prev: Props, next: Props): boolean {
     a.id === b.id &&
     a.role === b.role &&
     a.content === b.content &&
+    a.details === b.details &&
     !!a.streaming === !!b.streaming &&
     !!a.error === !!b.error &&
     a.toolStatus === b.toolStatus &&

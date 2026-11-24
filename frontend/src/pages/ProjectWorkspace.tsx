@@ -41,7 +41,7 @@ import {
 } from '../chat/sessionDocuments'
 import { INTERRUPTED_MESSAGE, isInterruptedStream } from '../lib/streamOutcome'
 import DocumentGraph from '../documents/DocumentGraph'
-import { readCitations, readCoverage } from '../chat/citationMarkers'
+import { readCitations, readCoverage, readDetails } from '../chat/citationMarkers'
 import type { AnswerCitation, AnswerCoverage } from '../chat/types'
 import './pages.css'
 import './workspace.css'
@@ -181,6 +181,8 @@ interface ChatMessage {
   citations?: AnswerCitation[]
   /** Coverage from the SSE 'end' event (a Sources panel line, never answer text). */
   coverage?: AnswerCoverage
+  /** Supporting text the answer contract moved out of the lead (rule 5). */
+  details?: string
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -1520,10 +1522,11 @@ function ProjectWorkspaceInner({ id }: { id: string | undefined }) {
               const rawProvenance = Array.isArray(evt['provenance']) ? (evt['provenance'] as ProvenanceEntry[]) : []
               const rawCitations = readCitations(evt['citations']) ?? []
               const rawCoverage = readCoverage(evt['coverage'])
+              const rawDetails = readDetails(evt['details'])
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage }
+                    ? { ...m, content: finalContent, streaming: false, toolStatus: undefined, sources: rawSources, exports: rawExports, provenance: rawProvenance, citations: rawCitations, coverage: rawCoverage, details: rawDetails }
                     : m
                 )
               )
