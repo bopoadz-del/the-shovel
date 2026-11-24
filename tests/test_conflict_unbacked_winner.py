@@ -12,7 +12,10 @@ Decisions, two inputs each:
   1. unbacked winner about the thing -> conflict line, winner sentence gone;
   2. winner the evidence backs -> left as written;
   3. a sentence that asks which governs, or denies a winner -> left as written;
-  4. a winner sentence about another thing -> left as written.
+  4. a winner sentence about another thing -> left as written;
+  5. a winner a passage about the thing names itself ("shall be as per X")
+     -> left as written, in either voice; the same name pointed at another
+     thing backs nothing.
 
 Every document, value and question here is invented for this file; the
 expected values are written by hand.
@@ -128,6 +131,57 @@ def test_a_winner_about_another_thing_is_left_as_written(question, a, b, told, k
     assert other in out.text and _LINE not in out.text
 
 
+# ── 5. a winner a passage about the thing names itself ─────────────────────
+#
+# A document can point the thing at a named standard or document ("shall be
+# as per", "shall be governed by"). An answer repeating that winner took it
+# from the evidence: it stays, in either voice. The same name pointed at
+# ANOTHER thing does not back it.
+
+_STANDARDS = [
+    pytest.param("Kestrel Code KC-41", "{thing} shall be as per Kestrel Code KC-41.", id="as-per"),
+    pytest.param("Annex T-7", "{thing} shall be governed by Annex T-7 throughout.", id="governed-by"),
+]
+_VOICES = ["{std} governs the {thing} [1].", "The {thing} is governed by {std} [1]."]
+
+
+def _thing_of(question):
+    return question.rstrip("?").split(" the ", 1)[1].split(" under ")[0].split(" to ")[0]
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+@pytest.mark.parametrize("std, ref", _STANDARDS)
+@pytest.mark.parametrize("voice", _VOICES)
+def test_a_winner_a_passage_about_the_thing_names_is_left_as_written(question, a, b, told, kind, std, ref, voice):
+    thing = _thing_of(question)
+    a = (a[0], a[1] + " " + ref.format(thing=thing.capitalize()))
+    claim = voice.format(std=std, thing=thing)
+    out, rows = _apply(question, a, b, f"{told} {claim}")
+    assert detect(f"{told} {claim}", rows, question) == []
+    assert claim in out.text and _LINE not in out.text
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+@pytest.mark.parametrize("std, ref", _STANDARDS)
+@pytest.mark.parametrize("voice", _VOICES)
+def test_control_the_same_name_pointed_at_another_thing_backs_nothing(question, a, b, told, kind, std, ref, voice):
+    thing = _thing_of(question)
+    a = (a[0], a[1] + " " + ref.format(thing="Pipe bedding"))
+    claim = voice.format(std=std, thing=thing)
+    out, rows = _apply(question, a, b, f"{told} {claim}")
+    assert detect(f"{told} {claim}", rows, question)
+    assert out.text.startswith(_LINE) and _NONE in out.text
+    assert claim not in out.text
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+def test_a_passive_unbacked_winner_brings_the_conflict_line(question, a, b, told, kind):
+    claim = f"The {_thing_of(question)} is governed by the {kind.lower()}."
+    out, rows = _apply(question, a, b, f"{told} {claim}")
+    assert detect(f"{told} {claim}", rows, question)
+    assert _NONE in out.text and claim not in out.text
+
+
 # ── the reading itself ──────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("sentence, names", [
@@ -135,6 +189,7 @@ def test_a_winner_about_another_thing_is_left_as_written(question, a, b, told, k
     ("The specification shall prevail for cover.", True),
     ("Here the schedule takes precedence.", True),
     ("The bill has priority on quantities.", True),
+    ("The cover is governed by the specification.", True),
     ("Check which governs your chamber type.", False),
     ("Ask whether the drawing prevails.", False),
     ("No document states which of them governs.", False),

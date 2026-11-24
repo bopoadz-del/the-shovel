@@ -326,7 +326,7 @@ def _conflict_lines(found: list[dict[str, Any]], markers: _Markers) -> tuple[lis
     return lines, structured
 
 
-def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
+def _drop_superseded(body: str, found: list[dict[str, Any]], rows: list[dict[str, Any]] | None = None) -> str:
     """The sentences the leading conflict statement replaces.
 
     * A sentence that states only ONE of a conflict's differing values for
@@ -349,7 +349,8 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
       about, not negated -- and it states a differing value or uses a word
       of the thing) when no ranking statement in the evidence backs one: the
       conflict line says no document states which governs. A winner the
-      evidence backs, and a winner sentence about another thing, stay."""
+      evidence backs (a passage about the thing names that winner itself), and
+      a winner sentence about another thing, stay."""
     from app.agents.evidence_conflicts import (
         _terms,
         agreement_names_no_thing,
@@ -392,7 +393,7 @@ def _drop_superseded(body: str, found: list[dict[str, Any]]) -> str:
                 restates = len(hits) == 1 and about and not more
                 agreement = agrees and (hits or about or agreement_names_no_thing(sent, docs))
                 # A winner no ranking statement backs: the line says none does.
-                winner = unranked and names_winner_about(sent, classes, thing)
+                winner = unranked and names_winner_about(sent, classes, thing, rows or ())
                 if restates or agreement or winner:
                     gone = True
             if not gone:
@@ -914,7 +915,7 @@ def apply(
                 # of the differing values for that thing, or asserting that the
                 # documents agree about it, is replaced by it.
                 stated = [c for c in found if _nameable(c)]
-                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated))
+                body = _tidy("\n".join(lines) + "\n\n" + _drop_superseded(body, stated, rows + handed))
         # A marker whose line went (padding, a dropped note) is not lost: it
         # rides on the last line, so every citation entry has its marker.
         lost = "".join(f"[{e['marker']}]" for e in markers.entries if f"[{e['marker']}]" not in body)

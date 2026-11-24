@@ -183,12 +183,64 @@ _ASKS_WHICH_RE = re.compile(r"\b(?:which|whether)\b(?:\s+\w+){0,3}\s*$", re.IGNO
 _DENIES_RE = re.compile(r"\b(?:not|no|never|neither|nor|none|nothing)\b|n't", re.IGNORECASE)
 
 
+#: A precedence word in an answer sentence: the C3 words and the passive
+#: "governed by" -- the voice a sentence is written in never decides whether
+#: it names a winner.
+_CLAIM_PREC_RE = re.compile(r"\b(?:precedence|prevail|prevails|govern|governs|governed|priority)\b",
+                            re.IGNORECASE)
+#: A passage clause that points a thing at a named document or standard: a
+#: precedence word, or a reference ("as per", "in accordance with", "conform
+#: to", "comply with").
+_REFERS_RE = re.compile(
+    r"\b(?:precedence|prevail|prevails|govern|governs|governed|priority|as\s+per|in\s+accordance\s+with|"
+    r"conforms?\s+to|compl(?:y|ies)\s+with)\b", re.IGNORECASE)
+_CITE_RE = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
+_NAME_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-/]*[A-Za-z0-9]|[A-Za-z0-9]")
+
+
+def _governor_names(sentence: str, thing: Iterable[str]) -> set[str]:
+    """The proper names a winner sentence gives: its tokens that carry a
+    digit or a capital (not the sentence's first word), less its cited
+    markers, its typed values, its precedence words and the thing's words
+    ("ACI 318-14", "Section Drawing"; never "governs" or "50 mm")."""
+    s = _CITE_RE.sub(" ", sentence or "")
+    for v in sorted(extract(s), key=lambda v: -v.start):
+        s = s[: v.start] + " " * (v.end - v.start) + s[v.end:]
+    words = set(thing) | _STOP
+    out = set()
+    for i, m in enumerate(_NAME_TOKEN_RE.finditer(s)):
+        tok = m.group(0).rstrip(".")
+        proper = any(ch.isdigit() for ch in tok) or (i and any(ch.isupper() for ch in tok))
+        if proper and not _CLAIM_PREC_RE.fullmatch(tok) and tok.lower() not in words and _stem(tok.lower()) not in words:
+            out.add(tok.lower())
+    return out
+
+
+def winner_backed(sentence: str, rows: Iterable[dict[str, Any]], thing: Iterable[str]) -> bool:
+    """A passage about this thing names the winner sentence's governor in its
+    own precedence or reference wording: the answer took the winner from
+    a document, so it is not a winner no document states."""
+    thing = set(thing)
+    names = _governor_names(sentence, thing)
+    if not names:
+        return False
+    for row in rows or ():
+        for sent in _sentences(_row_text(row)):
+            for clause in _CLAUSE_SPLIT_RE.split(sent):
+                if not _REFERS_RE.search(clause) or not (thing & _terms(clause)):
+                    continue
+                said = {m.group(0).rstrip(".").lower() for m in _NAME_TOKEN_RE.finditer(clause)}
+                if names & said:
+                    return True
+    return False
+
+
 def asserts_precedence(sentence: str) -> bool:
     """The sentence names a winner: a precedence word (governs, prevails,
     takes precedence, has priority) that is not asked about ("which
     governs") and has no negation before it in the sentence."""
     s = sentence or ""
-    for m in _PREC_RE.finditer(s):
+    for m in _CLAIM_PREC_RE.finditer(s):
         before = s[: m.start()]
         if _ASKS_WHICH_RE.search(before) or _DENIES_RE.search(before):
             continue
@@ -196,15 +248,19 @@ def asserts_precedence(sentence: str) -> bool:
     return False
 
 
-def names_winner_about(sentence: str, values: Iterable[Value], thing: Iterable[str]) -> bool:
+def names_winner_about(sentence: str, values: Iterable[Value], thing: Iterable[str],
+                       rows: Iterable[dict[str, Any]] = ()) -> bool:
     """The sentence names a winner (``asserts_precedence``) for this thing:
-    it states one of the differing values or uses a word of the thing."""
+    it states one of the differing values or uses a word of the thing --
+    and no passage about the thing names that winner itself
+    (``winner_backed``)."""
     if not asserts_precedence(sentence):
         return False
     vals = list(values)
-    if any(same(x, k) for x in extract(sentence) for k in vals):
-        return True
-    return bool(set(thing) & _terms(sentence))
+    thing = set(thing)
+    if not (any(same(x, k) for x in extract(sentence) for k in vals) or thing & _terms(sentence)):
+        return False
+    return not winner_backed(sentence, rows, thing)
 
 
 #: Words a sentence uses to point at the evidence itself, not at a thing in
@@ -761,7 +817,7 @@ def detect(answer: str, rows: Iterable[dict[str, Any]] | None, question: str | N
                     # then it has told the user something no document says.
                     thing = _thing(kept, q_terms or query)
                     unbacked = gov is None and any(
-                        names_winner_about(s, [c.value for c in classes], thing) for s in _sentences(answer))
+                        names_winner_about(s, [c.value for c in classes], thing, rows) for s in _sentences(answer))
                     if not unbacked:
                         continue
                 key = (kind, frozenset(str(c.value.norm) for c in classes))
