@@ -150,20 +150,35 @@ def test_covered_ask_records_the_search_with_provenance(made_kb, tool_present):
     assert "not a project document" in messages[-1]["content"]
 
 
-def test_an_unreached_model_does_not_print_the_search_as_the_answer(made_kb, tool_present):
+def _probe_thread():
+    agent = _Agent([runtime._KB_TOOL], _MATCH)
+    out, messages = _run(agent, "What end bearing does a lintel need?")
+    assert out is not None
+    return messages
+
+
+def _drafted_thread():
+    drafted = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
+    runtime._inject_predispatch(drafted, "made_tool", "Lintel bearing: 150 mm each end.",
+                                "Present this draft.")
+    return drafted
+
+
+@pytest.mark.parametrize(
+    "thread, recovered",
+    [
+        (_probe_thread, ""),
+        (_drafted_thread, "Lintel bearing: 150 mm each end."),
+    ],
+    ids=["knowledge_search_is_evidence", "real_draft_is_recovered"],
+)
+def test_an_unreached_model_does_not_print_the_search_as_the_answer(
+        made_kb, tool_present, thread, recovered):
     # The recorded search is evidence for the model, never the reply (G-8):
     # with the provider down, nothing is recovered from it, so the caller
     # keeps its honest failure message. A real pre-dispatched draft in the
     # same position is still recovered, so the rule tells the two apart.
-    agent = _Agent([runtime._KB_TOOL], _MATCH)
-    out, messages = _run(agent, "What end bearing does a lintel need?")
-    assert out is not None
-    assert runtime._recover_after_provider_failure(messages) == ""
-
-    drafted = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
-    runtime._inject_predispatch(drafted, "made_tool", "Lintel bearing: 150 mm each end.",
-                                "Present this draft.")
-    assert runtime._recover_after_provider_failure(drafted) == "Lintel bearing: 150 mm each end."
+    assert runtime._recover_after_provider_failure(thread()) == recovered
 
 
 def test_uncovered_ask_runs_no_search(made_kb, tool_present):
