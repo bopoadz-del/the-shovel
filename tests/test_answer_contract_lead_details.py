@@ -386,3 +386,24 @@ def test_note_cut_without_a_turn_is_a_no_op():
         assert answer_exit.current_turn() is None
     finally:
         answer_exit._TURN.reset(token)
+
+
+@pytest.mark.parametrize("which", ["_LENGTH_CUT_NOTICE", "_SYNTH_CUTOFF_NOTICE"])
+@pytest.mark.parametrize("body", ["The slab is 250 mm thick.", "Piles are 600 mm in diameter."])
+def test_an_answer_already_saying_why_it_stops_gets_no_second_notice(which, body):
+    from app.agents import runtime
+
+    notice = getattr(runtime, which)
+    out = runtime._end_cut_answer(f"{body}\n\n{notice}", notice)
+    assert out.count(notice) == 1
+
+
+@pytest.mark.parametrize("which", ["_LENGTH_CUT_NOTICE", "_SYNTH_CUTOFF_NOTICE"])
+@pytest.mark.parametrize("body", ["The slab is 250 mm thick. The topping", "Piles are 600 mm in diameter. They"])
+def test_an_answer_not_yet_saying_why_it_stops_ends_on_the_notice(which, body):
+    from app.agents import runtime
+
+    notice = getattr(runtime, which)
+    out = runtime._end_cut_answer(body, notice)
+    assert out.endswith(notice)
+    assert out.count(notice) == 1
