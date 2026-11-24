@@ -741,15 +741,24 @@ def _drop_padding(text: str, computed: bool = True) -> str:
 #: ("If the pipework is billed elsewhere, point me at that file and I'll pull
 #: the line") or a "please"; or the writer's own offer made conditional on
 #: the reader ("I can pull the line if you send the file").
+#: The lead-in before the imperative may state a purpose as well as a
+#: condition ("To get the rate, point me at the priced bill"); either way
+#: the sentence only asks the reader to act. The writer's offer may also
+#: follow the reader's condition ("If you tell me which bill it sits under,
+#: I'll pull that section"): the same offer as "I can ... if you ...", with
+#: its clauses reversed.
 #: An imperative to supply something counts only when the sentence names
 #: the writer as the one who receives it or acts next ("... and I'll pull
 #: the line", "send it to me"): "Send the notice to the Engineer" is an
 #: instruction the answer gives, not a request for the writer.
+_WRITER_ACTS = r"(?:i'll|i\s+(?:can|will|could)|i'd\s+be\s+able\s+to)\b"
 _REQUEST_RE = re.compile(
-    r"^(?:(?:if|once|when|where|should)\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?)?(?:please[ \t]+|just[ \t]+)?"
+    r"^(?:(?:if|once|when|where|should|to\s+[a-z]+)\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?)?"
+    r"(?:please[ \t]+|just[ \t]+)?"
     r"(?:(?:point|tell|give|show)\s+me|let\s+me\s+know"
     r"|(?:upload|re-?upload|share|send|provide|attach|forward)\b[^.!?]*\b(?:me|i'll|i\s+(?:can|will|could))\b)\b"
-    r"|^(?:i\s+can|i\s+could|i'll|i\s+will|i'd\s+be\s+able\s+to)\b[^.!?]*\bif\s+you\b",
+    r"|^(?:i\s+can|i\s+could|i'll|i\s+will|i'd\s+be\s+able\s+to)\b[^.!?]*\bif\s+you\b"
+    r"|^(?:if|once|when)\s+you\b[^.!?]{0,200}?,[ \t]*(?:then[ \t]+)?" + _WRITER_ACTS,
     re.IGNORECASE,
 )
 
