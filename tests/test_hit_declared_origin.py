@@ -75,6 +75,47 @@ def test_opening_samples_read_only_the_named_documents(monkeypatch, tmp_path, do
         assert bf.opening_samples(s, ["qzp"], doc_ids) == expected
 
 
+@pytest.mark.parametrize("with_table, expected", [
+    (True, {"d1": "qz first"}),
+    (False, {}),
+])
+def test_a_store_that_never_indexed_has_no_opening(with_table, expected):
+    """A database with no chunks table (a fresh store) has no text yet: the
+    reader answers with nothing instead of failing the search."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.core.models import RagChunk
+
+    engine = create_engine("sqlite://")
+    if with_table:
+        RagChunk.__table__.create(bind=engine)
+    with Session(engine) as s:
+        if with_table:
+            s.add(RagChunk(chunk_id="d1-0", project_id="qzp", doc_id="d1",
+                           chunk_index=0, text="qz first",
+                           embedding=np.zeros(8, dtype=np.float32),
+                           created_at="2026-01-01T00:00:00Z"))
+            s.commit()
+        assert bf.opening_samples(s, ["qzp"], ["d1"]) == expected
+
+
+@pytest.mark.parametrize("texts, limit, opening", [
+    (["", "qz lead", "", "qz tail"], None, "qz lead\n\nqz tail"),
+    (["qz lead word", "qz tail word"], 15, "qz lead word\nqz"),
+])
+def test_both_readers_give_a_document_the_same_opening(monkeypatch, tmp_path, texts, limit, opening):
+    """``opening_samples`` (one hit's documents) and ``content_samples`` (a
+    whole project) read the same opening for a document, blank chunks and
+    the cap included."""
+    session_local = _store(monkeypatch, tmp_path, [("qzp", "d1", texts)])
+    with session_local() as s:
+        whole = bf.content_samples(s, "qzp", limit)
+        named = bf.opening_samples(s, ["qzp"], ["d1"], limit)
+    assert named == whole
+    assert named == {"d1": opening}
+
+
 # ── 2. only a declared encoded table is kept ─────────────────────────────
 
 
@@ -98,6 +139,23 @@ def test_a_copy_in_a_knowledge_library_is_read(monkeypatch, tmp_path, libraries,
     monkeypatch.setattr("app.core.rag.retriever._general_knowledge_project_ids",
                         lambda: list(libraries))
     assert ("dk" in doc_index._declared_origins("qzuser", ["dk"])) is found
+
+
+@pytest.mark.parametrize("doc_ids, reads", [([], 0), (["dx"], 1)])
+def test_a_search_with_no_hits_does_not_read_the_store(monkeypatch, tmp_path, doc_ids, reads):
+    """The origin read runs on every search: one with no hit opens no
+    database session."""
+    real = _store(monkeypatch, tmp_path, [("qzp", "dx", [_DECLARED])])
+    monkeypatch.setattr("app.core.rag.retriever._general_knowledge_project_ids", lambda: [])
+    opened = []
+
+    def _counting():
+        opened.append(1)
+        return real()
+
+    monkeypatch.setattr(doc_index, "SessionLocal", _counting)
+    doc_index._declared_origins("qzp", doc_ids)
+    assert len(opened) == reads
 
 
 # ── 3. the search row ─────────────────────────────────────────────────────

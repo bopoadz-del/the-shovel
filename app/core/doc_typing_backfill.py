@@ -115,16 +115,23 @@ def content_samples(session, project_id: str, limit: int | None = None) -> dict[
 
     from app.core.models import RagChunk
 
+    cap = CONTENT_SAMPLE_CHARS if limit is None else limit
+    out: dict[str, str] = {}
     if not inspect(session.get_bind()).has_table(RagChunk.__tablename__):
         # A database that has never indexed anything (a fresh SQLite) has no
         # chunks table: no document has text yet, so the name alone decides.
-        return {}
-    return _opening_texts(session.execute(
+        return out
+    for doc_id, text in session.execute(
         select(RagChunk.doc_id, RagChunk.text)
         .where(RagChunk.project_id == project_id,
                RagChunk.chunk_index < CONTENT_SAMPLE_CHUNKS)
         .order_by(RagChunk.doc_id, RagChunk.chunk_index)
-    ), CONTENT_SAMPLE_CHARS if limit is None else limit)
+    ):
+        have = out.get(doc_id, "")
+        if len(have) >= cap:
+            continue
+        out[doc_id] = (have + "\n" + (text or "") if have else (text or ""))[:cap]
+    return out
 
 
 def opening_samples(
@@ -153,13 +160,16 @@ def opening_samples(
 
 
 def _opening_texts(rows: Iterable[Any], cap: int) -> dict[str, str]:
-    out: dict[str, str] = {}
+    """doc_id -> its chunk texts joined in row order, cut to ``cap``. The
+    text ``content_samples`` builds: chunks before a document's first
+    non-empty one add nothing, so a blank opening chunk does not lead the
+    sample with a line break."""
+    parts: dict[str, list[str]] = {}
     for doc_id, text in rows:
-        have = out.get(doc_id, "")
-        if len(have) >= cap:
-            continue
-        out[doc_id] = (have + "\n" + (text or "") if have else (text or ""))[:cap]
-    return out
+        have = parts.setdefault(doc_id, [])
+        if have or text:
+            have.append(text or "")
+    return {doc_id: "\n".join(texts)[:cap] for doc_id, texts in parts.items()}
 
 
 def plan_doc_typing(session, project_id: str) -> dict[str, Any]:
