@@ -61,7 +61,16 @@ def test_empty_ask_is_not_covered(made_kb):
     assert kb.entry_covering_ask("   ") is None
 
 
-def test_wordless_ask_never_reads_the_knowledge(monkeypatch):
+@pytest.mark.parametrize(
+    "ask, expected_loads",
+    [
+        ("?! ...", 0),
+        ("", 0),
+        ("lintel bearing", 1),
+        ("bearing of a lintel", 1),
+    ],
+)
+def test_wordless_ask_never_reads_the_knowledge(monkeypatch, ask, expected_loads):
     # An ask with no words is decided before the entries are loaded; an ask
     # with words reads them. Counting the loads separates the two.
     loads = []
@@ -71,11 +80,8 @@ def test_wordless_ask_never_reads_the_knowledge(monkeypatch):
         return _entries()
 
     monkeypatch.setattr(kb, "load_knowledge", counting_load)
-    assert kb.entry_covering_ask("?! ...") is None
-    assert kb.entry_covering_ask("") is None
-    assert loads == []
-    kb.entry_covering_ask("lintel bearing")
-    assert len(loads) == 1
+    kb.entry_covering_ask(ask)
+    assert len(loads) == expected_loads
 
 
 def test_share_below_the_majority_is_refused(made_kb, monkeypatch):
