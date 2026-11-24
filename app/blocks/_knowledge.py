@@ -502,9 +502,12 @@ def validate_transition(
 # ---------------------------------------------------------------------------
 _FIGURE_RE = re.compile(
     r"(?<![\w.])(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
-    r"(%|[^\W\d_][\w³²]*(?:\s+[^\W\d_]+)?)?"
+    r"(%|[^\W\d_][\w³²]*(?:/[^\W\d_][\w³²]*)?(?:\s+[^\W\d_]+)?)?"
 )
 _POWER_SUFFIX_RE = re.compile(r"^([^\W\d_]+)([23])$")
+# "15 x 15 cm": the unit written after a dimension pair is both figures' unit.
+_DIMENSION_JOIN_RE = re.compile(r"^\s*[x×]\s*$", re.IGNORECASE)
+_NAME_WORD_RE = re.compile(r"[^\W\d_]+")
 
 
 def _unit_registry():
@@ -518,13 +521,16 @@ def _unit_registry():
 
 
 def _parse_unit(text: str):
-    """pint units for ``text`` or None. ``m3`` reads as ``m**3``."""
+    """pint units for ``text`` or None. ``m3`` reads as ``m**3``, also on
+    either side of a ``/`` (``m3/hr``)."""
     raw = (text or "").strip()
     if not raw:
         return None
-    m = _POWER_SUFFIX_RE.match(raw)
-    if m:
-        raw = f"{m.group(1)}**{m.group(2)}"
+    parts = []
+    for part in raw.split("/"):
+        m = _POWER_SUFFIX_RE.match(part.strip())
+        parts.append(f"{m.group(1)}**{m.group(2)}" if m else part)
+    raw = "/".join(parts)
     try:
         return _unit_registry().parse_units(raw)
     except Exception:  # noqa: BLE001 -- not a unit: the figure has none
@@ -537,10 +543,12 @@ def _figures(text: str) -> List[Dict[str, Any]]:
 
     A two-word unit (``cubic meter``) is tried before its first word, so
     the longest reading wins; a word that is not a unit leaves the figure
-    without one (it can then bind only by name).
+    without one (it can then bind only by name). A figure with no unit
+    joined to the next by ``x`` (``15 x 15 cm``) takes that figure's unit.
     """
+    raw = text or ""
     out: List[Dict[str, Any]] = []
-    for m in _FIGURE_RE.finditer(text or ""):
+    for m in _FIGURE_RE.finditer(raw):
         value = float(m.group(1).replace(",", ""))
         unit = None
         tail = m.group(2) or ""
@@ -549,8 +557,63 @@ def _figures(text: str) -> List[Dict[str, Any]]:
             unit = _parse_unit(" ".join(words[:n]))
             if unit is not None:
                 break
-        out.append({"value": value, "unit": unit, "start": m.start(1)})
+        out.append({"value": value, "unit": unit,
+                    "start": m.start(1), "end": m.end(1)})
+    for i in range(len(out) - 2, -1, -1):
+        fig, nxt = out[i], out[i + 1]
+        if (fig["unit"] is None and nxt["unit"] is not None
+                and _DIMENSION_JOIN_RE.match(raw[fig["end"]:nxt["start"]])):
+            fig["unit"] = nxt["unit"]
     return out
+
+
+def _name_distance(text: str, figures: List[Dict[str, Any]], i: int,
+                   words: set) -> Optional[int]:
+    """Words between figure ``i`` and the nearest of ``words`` written
+    between its neighbouring figures, or None when none is there."""
+    lo = figures[i - 1]["end"] if i > 0 else 0
+    hi = figures[i + 1]["start"] if i + 1 < len(figures) else len(text)
+    before = [w.lower() for w in _NAME_WORD_RE.findall(text[lo:figures[i]["start"]])]
+    after = [w.lower() for w in _NAME_WORD_RE.findall(text[figures[i]["end"]:hi])]
+    dists = [len(before) - k for k, w in enumerate(before) if w in words]
+    dists += [k + 1 for k, w in enumerate(after) if w in words]
+    return min(dists) if dists else None
+
+
+def _bind_same_unit(text: str, names: List[str], figures: List[Dict[str, Any]],
+                    cands: List[int]) -> Optional[Dict[str, float]]:
+    """Variables sharing one unit, bound to as many figures of that unit.
+
+    A name word only one of the variables declares (``loaded_speed`` /
+    ``empty_speed``) binds it to the one figure that word is written
+    nearest to. Variables still unbound bind when their figures all carry
+    one value (the order cannot change a result). Anything else is None.
+    """
+    if len(cands) != len(names):
+        return None
+    own = {n: set(n.lower().split("_")) for n in names}
+    bound: Dict[str, float] = {}
+    left_figs = list(cands)
+    for name in names:
+        words = own[name] - set().union(*(own[o] for o in names if o != name))
+        if not words:
+            continue
+        dist = {i: _name_distance(text, figures, i, words) for i in cands}
+        near = [i for i, d in dist.items() if d is not None]
+        if not near:
+            continue
+        best = min(dist[i] for i in near)
+        at = [i for i in near if dist[i] == best]
+        if len(at) != 1 or at[0] not in left_figs:
+            return None
+        bound[name] = figures[at[0]]["value"]
+        left_figs.remove(at[0])
+    rest = [n for n in names if n not in bound]
+    if rest and len({figures[i]["value"] for i in left_figs}) != 1:
+        return None
+    for name, i in zip(rest, left_figs):
+        bound[name] = figures[i]["value"]
+    return bound
 
 
 def _bind_by_name(text: str, name: str, figures: List[Dict[str, Any]]):
@@ -566,9 +629,10 @@ def _bind_by_name(text: str, name: str, figures: List[Dict[str, Any]]):
 def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str, float]]:
     """Every declared variable of ``entry`` bound from ``text``, or None.
 
-    By name first. A variable left over binds by its declared unit only
-    when it is the one left-over variable of that unit and exactly one
-    unused figure carries that unit. No unit conversion: a figure in a
+    By name first. A variable left over binds by its declared unit when
+    it is the one left-over variable of that unit and exactly one unused
+    figure carries that unit. Left-over variables sharing a unit bind only
+    as ``_bind_same_unit`` settles them. No unit conversion: a figure in a
     different unit is not this variable's figure.
     """
     variables = entry.get("variables") or {}
@@ -584,15 +648,27 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
             used.add(id(fig))
     left = [n for n in variables if n not in bound]
     declared = {n: _parse_unit(str((variables[n] or {}).get("unit") or "")) for n in left}
+    done: set = set()
     for name in left:
+        if name in done:
+            continue
         unit = declared[name]
-        if unit is None or sum(1 for n in left if declared[n] == unit) != 1:
+        if unit is None:
             return None
-        cands = [f for f in figures if id(f) not in used and f["unit"] == unit]
-        if len(cands) != 1:
-            return None
-        bound[name] = cands[0]["value"]
-        used.add(id(cands[0]))
+        group = [n for n in left if declared[n] == unit]
+        cands = [i for i, f in enumerate(figures)
+                 if id(f) not in used and f["unit"] == unit]
+        if len(group) == 1:
+            if len(cands) != 1:
+                return None
+            bound[name] = figures[cands[0]]["value"]
+        else:
+            same = _bind_same_unit(text, group, figures, cands)
+            if same is None:
+                return None
+            bound.update(same)
+        done.update(group)
+        used.update(id(figures[i]) for i in cands)
     return bound
 
 
