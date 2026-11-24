@@ -10,13 +10,17 @@ evidence, and the existing conflict statement then does the rest (every
 value, every origin with its standing, "the documents differ", the user
 decides).
 
-This module is the DETECTION half and is deliberately pure: no retrieval, no
+``sweep_differences`` is the DETECTION half and is deliberately pure: no retrieval, no
 model, no I/O. It decides, from the draft's cited sentence and the candidate
 passages the caller already retrieved, which candidates state a *different*
-figure for the *same* distinctive identifier. The caller owns the single
-lexical search (``bm25_search``) and the evidence merge; the trace records
-identifiers as digests (also the caller, so no passage text or identifier
-leaves the turn).
+figure for the *same* distinctive identifier.
+
+``sweep_rows`` is the CALLER half the answer exit runs: it takes the draft's
+sentences that state a typed value beside an identifier, makes the ONE
+lexical search (injected: the exit passes the project's ``bm25_search``) with
+those identifiers, and returns each differing passage as an evidence row of
+the shape the turn already records. Its log line carries counts only, so no
+passage text or identifier leaves the turn.
 
 Readers are reused, not re-implemented, from ``citation_provenance`` (the
 same typed readers the conflict statement uses):
@@ -35,9 +39,11 @@ No case, document, value, row, standard or item is named anywhere here.
 
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from app.agents.citation_provenance import (
     _DESIGNATION_RE,
@@ -45,6 +51,8 @@ from app.agents.citation_provenance import (
     _figure_mentions,
     _figure_unit,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -141,3 +149,62 @@ def sweep_differences(
             ))
             break  # one hit per candidate passage
     return hits
+
+
+#: How many passages the one narrow search reads.
+SWEEP_K = 20
+
+
+def stated_sentences(draft: str) -> list[str]:
+    """The draft's sentences that state a typed value next to a distinctive
+    identifier -- the only statements the sweep checks."""
+    from app.agents.evidence_conflicts import _sentences
+
+    return [s for s in _sentences(draft or "") if _designations(s) and _stated_figures(s)]
+
+
+def sweep_rows(
+    draft: str,
+    handed: Iterable[dict],
+    search: Callable[[str, int], Sequence[Any]],
+    names: Callable[[list[str]], dict[str, str]],
+) -> list[dict[str, Any]]:
+    """The caller half: the evidence rows the sweep adds to the turn.
+
+    ``draft`` is the answer as drafted; ``handed`` the evidence rows the turn
+    already has (a passage already handed is never searched for again).
+    ``search(query, k)`` is the ONE lexical search over the project, run once
+    with the stated sentences' identifiers; it returns chunks (``doc_id``,
+    ``chunk_index``, ``text``, ``page``). ``names(doc_ids)`` names the
+    documents of the passages found. Each passage that states a different
+    figure for the same identifier comes back as an evidence row of the same
+    shape the turn records for handed passages. A passage whose document has
+    no name is not returned: it could not be cited.
+    """
+    stated = stated_sentences(draft)
+    if not stated:
+        return []
+    identifiers = list(dict.fromkeys(i for s in stated for i in _designations(s)))
+    have = {(str(r.get("doc_id") or ""), r.get("chunk_index")) for r in handed if isinstance(r, dict)}
+    fresh = [c for c in search(" ".join(identifiers), SWEEP_K)
+             if str(getattr(c, "text", "") or "").strip()
+             and (str(c.doc_id or ""), c.chunk_index) not in have]
+    candidates = [(str(i), str(c.text)) for i, c in enumerate(fresh)]
+    hit: set[int] = set()
+    for sentence in stated:
+        hit.update(int(h.source) for h in sweep_differences(sentence, candidates))
+    found = [fresh[i] for i in sorted(hit)]
+    _LOG.info("discrepancy_sweep: identifiers=%d searched=%d differing=%d",
+              len(identifiers), len(fresh), len(found))
+    named = names(list(dict.fromkeys(str(c.doc_id or "") for c in found))) if found else {}
+    rows: list[dict[str, Any]] = []
+    for c in found:
+        name = named.get(str(c.doc_id or ""), "")
+        if not name:
+            continue
+        page = getattr(c, "page", None)
+        page = page if isinstance(page, int) and not isinstance(page, bool) else None
+        rows.append({"doc_id": str(c.doc_id), "doc_name": name, "page": page,
+                     "page_or_section": f"p. {page}" if page else "",
+                     "chunk_index": c.chunk_index, "snippet": str(c.text).strip()})
+    return rows

@@ -56,6 +56,7 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
     token = start_turn_memo()
     asked = _user_message_of(self, args, kwargs)
     turn, turn_token = answer_exit.begin_turn(asked)
+    turn.project_id = _call_arg(self, args, kwargs, "project_id")
     from app.lib import construction_formulas as _calc_words
 
     # The user's own words reach every calculator run this turn makes.
@@ -74,13 +75,19 @@ async def chat(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
 
 def _user_message_of(agent: Any, args: tuple, kwargs: dict) -> str:
     """The user turn a ``chat`` call carries, by name or by position."""
+    return _call_arg(agent, args, kwargs, "user_message")
+
+
+def _call_arg(agent: Any, args: tuple, kwargs: dict, name: str) -> str:
+    """A text argument of a ``chat`` call, by name or by position ("" when absent)."""
     import inspect
 
     try:
         bound = inspect.signature(agent._chat_impl).bind_partial(*args, **kwargs)
     except (TypeError, ValueError):
-        return str(kwargs.get("user_message") or "")
-    value = bound.arguments.get("user_message")
+        value = kwargs.get(name)
+        return value if isinstance(value, str) else ""
+    value = bound.arguments.get(name)
     return value if isinstance(value, str) else ""
 
 
@@ -1023,6 +1030,8 @@ async def chat_stream(
     # offloads to) record this turn's evidence into the same record.
     _exit_turn = answer_exit.open_turn()
     _exit_turn.question = user_message or ""
+    # The exit's discrepancy sweep searches this project for the other value.
+    _exit_turn.project_id = project_id or ""
     # The user's own words reach every calculator run this turn makes.
     from app.lib import construction_formulas as _calc_words
 

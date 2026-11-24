@@ -99,6 +99,9 @@ class Turn:
     #: reply may be stated as "the documents did not yield an answer"; an
     #: error must never read as a not-found.
     forced_retry_outcome: str = ""
+    #: The project the turn answers from: the exit's discrepancy sweep runs
+    #: its one lexical search there ("" -- no project, no sweep).
+    project_id: str = ""
 
 
 _TURN: contextvars.ContextVar[Turn | None] = contextvars.ContextVar("answer_exit_turn", default=None)
@@ -1791,6 +1794,45 @@ def _handed_evidence(turn: Turn | None, rows: Any) -> list[dict[str, Any]]:
     return [dict(e, doc_name=names.get(e["doc_id"]) or e["doc_name"]) for e in turn.evidence]
 
 
+def _lexical_search(project_id: str, query: str, k: int) -> list[Any]:
+    """The project's lexical (BM25) ranking, the one search the sweep makes."""
+    from app.core.rag.vector_store import get_store
+
+    return get_store().bm25_search(project_id, query, k=k)
+
+
+def _document_names(doc_ids: list[str]) -> dict[str, str]:
+    from app.core.projects import document_names
+
+    return document_names(doc_ids)
+
+
+def _sweep_for_other_values(turn: Turn, text: str) -> None:
+    """A2 discrepancy sweep, the caller half: when the draft states a typed
+    value next to a distinctive identifier, ONE narrow lexical search over
+    the turn's project looks for a passage that gives a different value for
+    the same identifier; each one found joins the turn's evidence, so the
+    conflict statement states every value with its source. Runs off the
+    event loop (the exit check is offloaded); any failure leaves the evidence
+    as it was."""
+    if not turn.project_id:
+        return
+    try:
+        from app.agents import discrepancy_sweep
+
+        project_id = turn.project_id
+        found = discrepancy_sweep.sweep_rows(
+            text, turn.evidence,
+            search=lambda query, k: _lexical_search(project_id, query, k),
+            names=_document_names,
+        )
+        for row in found:
+            row["doc_name"] = _display_name(row["doc_name"])
+        turn.evidence.extend(r for r in found if r["doc_name"])
+    except Exception:  # noqa: BLE001 -- the sweep must never break an answer
+        _LOG.exception("answer_exit: discrepancy sweep failed; evidence unchanged")
+
+
 def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None) -> dict[str, Any]:
     """The answer contract (``app.agents.answer_contract``) on the text that
     leaves: citations become numbered markers whose entries ride out as
@@ -1802,6 +1844,8 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     if not isinstance(text, str):
         return env
     asking = bool(turn and (turn.questions or turn.awaiting_inputs))
+    if turn is not None and not asking:
+        _sweep_for_other_values(turn, text)
     done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
                                  question=(turn.question or None) if turn else None,
                                  evidence=_handed_evidence(turn, rows))
