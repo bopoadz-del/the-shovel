@@ -245,3 +245,45 @@ class _Agent:
 ])
 def test_a_chat_call_names_its_project_by_name_or_position(args, kwargs, expected):
     assert agent_loop._chat_arg(_Agent(), args, kwargs, "project_id") == expected
+
+
+# ── the search adapter: one bm25 search on the turn's project, each passage
+# named as the retriever names it ───────────────────────────────────────────
+
+class _Chunk:
+    def __init__(self, doc_id, chunk_index, page, text):
+        self.doc_id, self.chunk_index, self.page, self.text = doc_id, chunk_index, page, text
+
+
+class _Store:
+    def __init__(self, chunks):
+        self.chunks, self.calls = chunks, []
+
+    def bm25_search(self, project_id, query, k=50):
+        self.calls.append((project_id, query, k))
+        return list(self.chunks)
+
+
+class _Embedder:
+    dim = 8
+
+
+@pytest.mark.parametrize("project_id, query, chunks, names, expected", [
+    ("proj-5", "table 7.3",
+     [_Chunk("d2", 7, 3, "Table 7.3: cover 40 mm.")], {"d2": "Wall Drawing.pdf"},
+     [("d2", "Wall Drawing.pdf", 7, 3, "Table 7.3: cover 40 mm.")]),
+    ("proj-6", "clause 12.4",
+     [_Chunk("e2", 4, None, "Clause 12.4: 300 mm."), _Chunk("e3", 1, 2, "Clause 12.4: 250 mm.")],
+     {"e2": "Deck Section.pdf"},
+     [("e2", "Deck Section.pdf", 4, None, "Clause 12.4: 300 mm."), ("e3", "", 1, 2, "Clause 12.4: 250 mm.")]),
+])
+def test_the_search_adapter_reads_one_lexical_search_named_by_document(
+        monkeypatch, project_id, query, chunks, names, expected):
+    from app.core.rag import embeddings, retriever, vector_store
+
+    store = _Store(chunks)
+    monkeypatch.setattr(vector_store, "get_store", lambda dim=None, **_kw: store)
+    monkeypatch.setattr(embeddings, "get_embedder", lambda *a, **kw: _Embedder())
+    monkeypatch.setattr(retriever, "_doc_name_for_id", lambda doc_id: names.get(doc_id, ""))
+    assert ae._sweep_search(project_id, query) == expected
+    assert store.calls == [(project_id, query, ae._SWEEP_K)]
