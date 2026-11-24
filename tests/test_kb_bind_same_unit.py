@@ -67,6 +67,8 @@ def test_two_names_nearest_one_figure_bind_nothing(text, expected):
 
 @pytest.mark.parametrize("text,expected", [
     ("a 40 kN push, a 25 kN pull and a 10 kN load",  None),
+    # each name has one nearest figure; the spare figure alone refuses it
+    ("a 40 kN push and a 25 kN pull, 10 kN spare", None),
     ("a 40 kN push and a 25 kN pull", {"push_force": 40.0, "pull_force": 25.0}),
 ])
 def test_more_figures_than_inputs_of_a_unit_bind_nothing(text, expected):
@@ -81,3 +83,16 @@ def test_more_figures_than_inputs_of_a_unit_bind_nothing(text, expected):
 def test_a_single_input_of_its_unit_still_needs_its_one_figure(text, expected):
     entry = _entry(push_force="kN", reach="m")
     assert K.bind_entry_variables(entry, text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "   "])
+def test_empty_unit_text_is_no_unit(text):
+    assert K._parse_unit(text) is None
+
+
+@pytest.mark.parametrize("entry", [
+    {"id": "t.entry", "type": "formula", "variables": {}},
+    {"id": "t.entry", "type": "formula"},
+])
+def test_an_entry_with_no_inputs_binds_nothing(entry):
+    assert K.bind_entry_variables(entry, "a 40 kN push and a 6 m reach") is None
