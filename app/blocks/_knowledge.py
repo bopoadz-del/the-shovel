@@ -538,11 +538,36 @@ def _parse_unit(text: str):
         return None
 
 
+def _spelled_unit(word: str):
+    """The unit ``word`` spells out when it follows a qualifier word
+    (``210 working days``), or None.
+
+    Only a unit written as a word counts there. The registry's first
+    reading is taken, as ``parse_units`` takes it; a reading with a prefix
+    (``as`` = attosecond) or a word that is only the unit's symbol and not
+    its name (``in``, ``a``, ``at``) is read as the ordinary word it also
+    is.
+    """
+    ureg = _unit_registry()
+    low = word.lower()
+    readings = ureg.parse_unit_name(low)
+    if not readings:
+        return None
+    prefix, name, _suffix = readings[0]
+    if prefix:
+        return None
+    if low == ureg.get_symbol(name) and low != name:
+        return None
+    return _parse_unit(low)
+
+
 def _figures(text: str) -> List[Dict[str, Any]]:
     """Every figure in ``text`` with its span and the unit written after it.
 
     A two-word unit (``cubic meter``) is tried before its first word, so
-    the longest reading wins; a word that is not a unit leaves the figure
+    the longest reading wins; when neither reads, the second word is read
+    as a unit written after a qualifier (``210 working days``, see
+    ``_spelled_unit``). A word that is not a unit leaves the figure
     without one (it can then bind only by name). A figure with no unit
     joined to the next by ``x`` (``15 x 15 cm``) takes that figure's unit.
     """
@@ -557,6 +582,8 @@ def _figures(text: str) -> List[Dict[str, Any]]:
             unit = _parse_unit(" ".join(words[:n]))
             if unit is not None:
                 break
+        if unit is None and len(words) == 2:
+            unit = _spelled_unit(words[1])
         out.append({"value": value, "unit": unit,
                     "start": m.start(1), "end": m.end(1)})
     for i in range(len(out) - 2, -1, -1):
