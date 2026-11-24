@@ -837,10 +837,16 @@ def _close(left: float, right: float) -> bool:
 
 
 def _has_number(text: str, targets: list[float]) -> bool:
+    """True when the text states one of the targets.
+
+    ``_NUMBER_RE`` reads a figure without its sign, and prose states a negative
+    result in more ways than a minus ("-3", "a deduction of 3", "(3)"), so a
+    negative target is matched by its magnitude.
+    """
     if not targets:
         return False
     return any(
-        _close(found, target)
+        _close(found, abs(target))
         for found in _numbers_in(text)
         for target in targets
     )

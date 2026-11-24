@@ -146,3 +146,44 @@ def test_the_registry_runs_the_formula(fixed, q):
     r = spec.fn(fixed_costs=fixed, price_per_unit=30, variable_cost_per_unit=10,
                 expected_units=q)
     assert r["break_even_units"] == pytest.approx(fixed / 20)
+
+
+# ── a negative figure the calculator returned keeps its Source line ─────────
+
+def _gated(inputs: dict, answer: str) -> str:
+    import json
+
+    from app.agents.citation_provenance import gate
+    from app.lib.construction_formulas import run_calculation
+
+    env = run_calculation("break_even_point", dict(inputs))
+    args = {"calculation": "break_even_point", "params": inputs}
+    msgs = [
+        {"role": "user", "content": "Calculate the break-even point."},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "c1", "function": {"name": "construction_calc",
+                                     "arguments": json.dumps(args)}}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "construction_calc",
+         "content": json.dumps(env, default=str)},
+    ]
+    return gate(answer, None, msgs)
+
+
+@pytest.mark.parametrize("price,variable,stated", [
+    # contribution = 15 - 18 = -3, stated with a minus sign
+    (15.0, 18.0, "-3"),
+    # contribution = 20 - 25 = -5, stated as a loss in words
+    (20.0, 25.0, "a loss of 5"),
+])
+def test_a_negative_calculator_figure_keeps_the_source_line(price, variable, stated):
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": price,
+                  "variable_cost_per_unit": variable},
+                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" in out, out
+
+
+@pytest.mark.parametrize("stated", ["7", "-7"])
+def test_a_figure_the_calculator_did_not_return_gets_no_source_line(stated):
+    out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
+                 f"The contribution per unit is {stated}.\nSource: Break-even point (platform calculator)")
+    assert "Source: Break-even point" not in out, out

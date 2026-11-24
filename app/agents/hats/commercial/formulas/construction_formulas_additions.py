@@ -81,7 +81,7 @@ def _amount(x: float) -> str:
         'price_per_unit': Param('currency', 0, 1e12, label='selling price per unit'),
         'variable_cost_per_unit': Param('currency', 0, 1e12,
                                         label='variable cost per unit'),
-        'expected_units': Param('nr', 0, 1e12, label='expected quantity'),
+        'expected_units': Param('count', 0, 1e12, label='expected quantity'),
     },
     outputs={'break_even_units': 'nr', 'break_even_revenue': 'currency',
              'contribution_per_unit': 'currency', 'working': '-'},
