@@ -28,7 +28,7 @@ def test_a_unit_written_over_a_slash_is_one_unit(text, unit, value):
 
 @pytest.mark.parametrize("text,units", [
     ("a panel 20 x 30 cm thick", ["centimeter", "centimeter"]),
-    ("a panel 20 and 30 cm thick", [None, "centimeter"]),
+    ("a panel 20 wide and 30 cm thick", [None, "centimeter"]),
 ])
 def test_a_dimension_pair_shares_the_unit_written_after_it(text, units):
     got = [None if f["unit"] is None else str(f["unit"]) for f in K._figures(text)]

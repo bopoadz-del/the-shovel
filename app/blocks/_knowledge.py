@@ -505,8 +505,11 @@ _FIGURE_RE = re.compile(
     r"(%|[^\W\d_][\w³²]*(?:/[^\W\d_][\w³²]*)?(?:\s+[^\W\d_]+)?)?"
 )
 _POWER_SUFFIX_RE = re.compile(r"^([^\W\d_]+)([23])$")
-# "15 x 15 cm": the unit written after a dimension pair is both figures' unit.
-_DIMENSION_JOIN_RE = re.compile(r"^\s*[x×]\s*$", re.IGNORECASE)
+# "15 x 15 cm", "20, 28 and 36 minutes": the unit written after the last
+# figure of a dimension pair or a list is every listed figure's unit. Only
+# a bare joiner counts: a word of its own between two figures ends the list.
+_SHARED_UNIT_JOIN_RE = re.compile(
+    r"^\s*(?:[x×]|,|,?\s*(?:and|or))\s*$", re.IGNORECASE)
 _NAME_WORD_RE = re.compile(r"[^\W\d_]+")
 
 
@@ -565,11 +568,15 @@ def _figures(text: str) -> List[Dict[str, Any]]:
     """Every figure in ``text`` with its span and the unit written after it.
 
     A two-word unit (``cubic meter``) is tried before its first word, so
-    the longest reading wins; when neither reads, the second word is read
+    the longest reading wins, but only when its second word is a unit
+    written as a word (``_spelled_unit``): ``minutes at`` is minutes
+    followed by the word "at", not minute times technical atmosphere. When
+    neither reads, the second word is read
     as a unit written after a qualifier (``210 working days``, see
     ``_spelled_unit``). A word that is not a unit leaves the figure
     without one (it can then bind only by name). A figure with no unit
-    joined to the next by ``x`` (``15 x 15 cm``) takes that figure's unit.
+    joined to the next by ``x``, a comma, ``and`` or ``or`` (``15 x 15 cm``,
+    ``20, 28 and 36 minutes``) takes that figure's unit.
     """
     raw = text or ""
     out: List[Dict[str, Any]] = []
@@ -579,6 +586,8 @@ def _figures(text: str) -> List[Dict[str, Any]]:
         tail = m.group(2) or ""
         words = tail.split()
         for n in range(len(words), 0, -1):
+            if n > 1 and _spelled_unit(words[n - 1]) is None:
+                continue
             unit = _parse_unit(" ".join(words[:n]))
             if unit is not None:
                 break
@@ -589,7 +598,7 @@ def _figures(text: str) -> List[Dict[str, Any]]:
     for i in range(len(out) - 2, -1, -1):
         fig, nxt = out[i], out[i + 1]
         if (fig["unit"] is None and nxt["unit"] is not None
-                and _DIMENSION_JOIN_RE.match(raw[fig["end"]:nxt["start"]])):
+                and _SHARED_UNIT_JOIN_RE.match(raw[fig["end"]:nxt["start"]])):
             fig["unit"] = nxt["unit"]
     return out
 
