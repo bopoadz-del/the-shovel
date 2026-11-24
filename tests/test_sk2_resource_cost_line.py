@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.lib.construction_formulas_quantities import resource_cost_line
+from app.agents.hats.quantities.formulas.construction_formulas_quantities import (
+    resource_cost_line,
+)
 
 # Two seeded lines: (quantity, consumption per unit, price per resource unit).
 LINES = [
@@ -116,3 +118,9 @@ def test_registered_and_run_through_the_registry(q, c, p):
 
     fn = CALCULATORS["resource_cost_line"]
     assert fn(**_base(q, c, p))["line_total"] == pytest.approx(round(q * c * p, 2))
+
+
+def test_registry_module_reexports_the_hat_formula():
+    from app.lib import construction_formulas_quantities as lib
+
+    assert lib.resource_cost_line is resource_cost_line
