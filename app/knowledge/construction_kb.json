@@ -486,7 +486,10 @@
       "variables": {
         "min_fos": {
           "unit": "dimensionless",
-          "desc": "Required uplift factor of safety (counterweight / uplift)"
+          "desc": "Required uplift factor of safety (counterweight / uplift)",
+          "course_values": [
+            {"value": 1.2}
+          ]
         },
         "uplift": {
           "unit": "ton/meter**2",
@@ -2174,7 +2177,12 @@
         },
         "paver_rate": {
           "unit": "tonne/hour",
-          "desc": "Paver production rate for the layer"
+          "desc": "Paver production rate for the layer",
+          "course_values": [
+            {"value": 280, "when": ["sub", "base"]},
+            {"value": 320, "when": ["base", "course"]},
+            {"value": 240, "when": ["wearing"]}
+          ]
         }
       },
       "thresholds": {

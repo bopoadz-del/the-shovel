@@ -219,6 +219,9 @@ def evaluate(rule_id: str, **values: Any) -> Dict[str, Any]:
         "credibility_tier": entry.get("credibility_tier"),
         "warnings": _build_warnings(entry),
     }
+    from_course = course_inputs(entry, values)
+    if from_course:
+        out["course_inputs"] = from_course
     # A count rounded UP (machines, layers, floors) shows the figure it was
     # rounded from, so a reader sees 2.03 -> 3 and not only 3. Read from the
     # expression's own structure: one ceiling() node, its argument evaluated.
@@ -569,7 +572,10 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
     By name first. A variable left over binds by its declared unit only
     when it is the one left-over variable of that unit and exactly one
     unused figure carries that unit. No unit conversion: a figure in a
-    different unit is not this variable's figure.
+    different unit is not this variable's figure. A variable with no
+    figure of its unit takes the value its course declares, if one
+    applies (:func:`_course_value`) and every figure in ``text`` is
+    already bound to another variable.
     """
     variables = entry.get("variables") or {}
     if not isinstance(variables, dict) or not variables:
@@ -583,17 +589,68 @@ def bind_entry_variables(entry: Dict[str, Any], text: str) -> Optional[Dict[str,
             bound[name] = fig["value"]
             used.add(id(fig))
     left = [n for n in variables if n not in bound]
+    from_course: Dict[str, float] = {}
     declared = {n: _parse_unit(str((variables[n] or {}).get("unit") or "")) for n in left}
     for name in left:
         unit = declared[name]
         if unit is None or sum(1 for n in left if declared[n] == unit) != 1:
             return None
         cands = [f for f in figures if id(f) not in used and f["unit"] == unit]
+        if not cands:
+            course = _course_value(variables[name], text)
+            if course is None:
+                return None
+            from_course[name] = course
+            continue
         if len(cands) != 1:
             return None
         bound[name] = cands[0]["value"]
         used.add(id(cands[0]))
+    # The course fills an input only when every typed figure is already an
+    # input: a figure left over may be the user's own value for it, written
+    # in a form not read here, and a typed value wins over the course's.
+    if from_course and len(used) != len(figures):
+        return None
+    bound.update(from_course)
     return bound
+
+
+def _course_value(spec: Any, text: str) -> Optional[float]:
+    """The value the course declares for an input the ask gives no figure for.
+
+    ``course_values`` lists the course's values for the input; one with
+    ``when`` words applies when every word is in the ask (the layer, the
+    case it is stated for), one without applies always. Exactly one value
+    must apply, or the input stays unbound. A typed figure never reaches
+    here: the course fills only what the user left out.
+    """
+    from app.lib.construction_formulas import _words_all_present
+    declared = (spec or {}).get("course_values") if isinstance(spec, dict) else None
+    if not isinstance(declared, list):
+        return None
+    applies = [
+        c for c in declared
+        if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
+        and _words_all_present(text, list(c.get("when") or []))
+    ]
+    return float(applies[0]["value"]) if len(applies) == 1 else None
+
+
+def course_inputs(entry: Dict[str, Any], values: Dict[str, Any]) -> Dict[str, Any]:
+    """Inputs of ``entry`` whose value is one the course declares, named
+    with the course reference, so an answer says where the figure came
+    from."""
+    ref = (entry.get("provenance") or {}).get("course_reference")
+    out: Dict[str, Any] = {}
+    for name, spec in (entry.get("variables") or {}).items():
+        declared = spec.get("course_values") if isinstance(spec, dict) else None
+        if name not in values or not isinstance(declared, list):
+            continue
+        for c in declared:
+            if isinstance(c, dict) and c.get("value") == values[name]:
+                out[name] = {"value": values[name], "when": c.get("when") or [], "source": ref}
+                break
+    return out
 
 
 # A formula title names its result first, then how it is worked: "X from
