@@ -1802,11 +1802,18 @@ def _handed_evidence(turn: Turn | None, rows: Any) -> list[dict[str, Any]]:
     return [dict(e, doc_name=names.get(e["doc_id"]) or e["doc_name"]) for e in turn.evidence]
 
 
-def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None) -> dict[str, Any]:
+def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None = None,
+                    fold: bool = False) -> dict[str, Any]:
     """The answer contract (``app.agents.answer_contract``) on the text that
     leaves: citations become numbered markers whose entries ride out as
     ``citations``, the coverage footer rides out as ``coverage``, machinery
-    wording and padding go. Form only -- nothing it does adds a claim."""
+    wording and padding go. Form only -- nothing it does adds a claim.
+
+    ``fold`` is True only where the reader renders the lead with its details
+    one click away (the stream's ``end`` event, read by the chat bubble).
+    Every other reader -- a delegating agent, the heavy-reasoning stream's
+    tokens, a JSON API client -- reads ``answer`` alone, so it gets the
+    whole text and no ``details``: nothing rule 5 moves is lost to it."""
     from app.agents import answer_contract
 
     text = env.get(key)
@@ -1816,7 +1823,7 @@ def _apply_contract(env: dict[str, Any], key: str, rows: Any, turn: Turn | None 
     done = answer_contract.apply(text, sources=rows if isinstance(rows, list) else None, asking=asking,
                                  question=(turn.question or None) if turn else None,
                                  evidence=_handed_evidence(turn, rows),
-                                 lead=not (turn is not None and turn.cut))
+                                 lead=fold and not (turn is not None and turn.cut))
     env[key] = done.text
     if done.citations:
         env["citations"] = done.citations
@@ -1906,7 +1913,7 @@ def check_end_event(event: dict[str, Any], streamed: str = "", turn: Turn | None
         checked = check_text_or_fallback(content, turn=turn, index=index, sources=rows)
         if checked != content or "content" in event or streamed:
             fixed["content"] = checked
-            fixed = _apply_contract(fixed, "content", rows, turn)
+            fixed = _apply_contract(fixed, "content", rows, turn, fold=True)
     if isinstance(rows, list):
         fixed["sources"] = check_sources(rows, turn=turn, index=index)
     # The turn's awaiting-inputs STATE rides out on the end event: the field

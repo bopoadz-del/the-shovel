@@ -454,12 +454,37 @@ def _paired(text: str) -> set[str]:
     return out
 
 
+def _reference_point(text: str, i: int, j: int) -> bool:
+    """True when the single point at ``text[i]`` closes a short word (one to
+    four letters) and a number follows it after spaces -- ``p. 12``,
+    ``cl. 4.2``, ``Fig. 3``: the word and the number name one place, so the
+    point does not end the sentence. A unit written after a figure
+    (``5 m. 12 bars``) is not such a word: that point still ends one. The
+    trade is deliberate: a sentence that opens on a figure after a short
+    closing word stays joined to the one before it, which keeps more text
+    together and never leaves half a reference standing alone."""
+    if text[i] != "." or j != i + 1:
+        return False
+    k = j
+    while k < len(text) and text[k] == " ":
+        k += 1
+    if k == j or k >= len(text) or not text[k].isdigit():
+        return False
+    w = i
+    while w > 0 and text[w - 1].isalpha():
+        w -= 1
+    if not 1 <= i - w <= 4:
+        return False
+    before = text[:w].rstrip()
+    return not (before and before[-1].isdigit())
+
+
 def _sentences(text: str) -> list[str]:
     """The sentences of one line. A sentence ends at ``.``/``!``/``?``
     followed by space or the end; a point inside a figure (``12.5``) or a name
-    (``p.12``) does not end it, and neither does one inside a paired bracket
-    or quotation -- ``(e.g. "A", "B")`` is part of the sentence around it, so
-    no rule that keeps or drops whole sentences can leave half of a quoted or
+    (``p.12``, ``p. 12``: see :func:`_reference_point`) does not end it,
+    and neither does one inside a paired bracket or quotation --
+    ``(e.g. "A", "B")`` is part of the sentence around it, so no rule that keeps or drops whole sentences can leave half of a quoted or
     bracketed clause standing as a sentence of its own."""
     paired = _paired(text)
     out: list[str] = []
@@ -484,7 +509,7 @@ def _sentences(text: str) -> list[str]:
             j = i + 1
             while j < n and text[j] in ".!?":
                 j += 1
-            if not stack and (j == n or text[j].isspace()):
+            if not stack and (j == n or text[j].isspace()) and not _reference_point(text, i, j):
                 if text[start:j].strip():
                     out.append(text[start:j])
                 start = j
@@ -819,6 +844,27 @@ def _cut_item(line: str) -> tuple[str, str | None]:
     return line[: m.end()] + first + (" " + rest if rest else ""), line.strip()
 
 
+#: A sentence that points at what comes after it instead of stating it.
+_FORWARD_RE = re.compile(r"\b(?:here\s+(?:is|are)|the\s+following|as\s+follows|below)\b", re.IGNORECASE)
+
+
+def _frames(par: str) -> bool:
+    """A framing paragraph: it states no figure, citation marker or absence,
+    and it only introduces what follows -- it ends on ``:`` or its one
+    sentence points forward ("Here is what the documents say."). A plain
+    statement with no figure ("The generator sits on the roof.") answers;
+    it does not frame."""
+    lines = _nonblank(par)
+    if not lines or _MARKER_RE.search(par):
+        return False
+    bare = _MARKER_RE.sub("", par)
+    if _FIGURE_RE.search(bare) or _NEGATIVE_RE.search(bare):
+        return False
+    if lines[-1].rstrip().endswith(":"):
+        return True
+    return len(lines) == 1 and len(_sentences(lines[0].strip())) == 1 and bool(_FORWARD_RE.search(bare))
+
+
 def _lead_and_details(body: str) -> tuple[str, str | None]:
     """The lead (opening paragraph, headings carrying on into the paragraph
     under them, plus the list it introduces with items cut to their first
@@ -841,8 +887,16 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
         # section -- everything up to the next heading answers under it.
         while i < len(pars) and not heading(pars[i]):
             i += 1
+    # The lead carries the answer, not only a framing line: framing
+    # paragraphs ("Based on the specification:", "Here is what the documents
+    # say.") take the paragraph after them into the lead, so they never stand
+    # alone over a closed fold holding every fact.
+    while i < len(pars) and all(heading(p) or _frames(p) for p in pars[:i]):
+        i += 1
     lead_pars = pars[:i]
-    if i < len(pars) and _introduces_list(lead_pars[-1]) and _is_list(pars[i]):
+    # A lead that ends introducing what follows (``...:`` or a heading)
+    # takes the paragraph it introduces, list or not.
+    if i < len(pars) and _introduces_list(lead_pars[-1]) and not heading(pars[i]):
         lead_pars.append(pars[i])
         i += 1
     cut_items: list[str] = []
