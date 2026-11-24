@@ -517,6 +517,29 @@ def _unit_registry():
         return _UREG
 
 
+def _unit_fits(written, declared) -> bool:
+    """True when a figure written in ``written`` is a value in ``declared``.
+
+    The same unit, or a unit whose weight under standard gravity is
+    exactly one ``declared`` (pint's own definitions: kilogram and
+    kilogram_force, pound and force_pound, kg/mm and kilogram_force/mm).
+    The figure's number is taken as written either way; a unit that would
+    need a factor (tonne for kilogram_force) or a force that is not a
+    gravitational unit (newton) does not fit.
+    """
+    if written is None or declared is None:
+        return False
+    if written == declared:
+        return True
+    ureg = _unit_registry()
+    try:
+        weight = ureg.Quantity(1, declared).to(written * ureg.standard_gravity).magnitude
+    except Exception:  # noqa: BLE001 -- dimensions do not meet: no fit
+        _LOG.debug("unit %r does not fit %r", written, declared, exc_info=True)
+        return False
+    return abs(weight - 1.0) < 1e-9
+
+
 def _parse_unit(text: str):
     """pint units for ``text`` or None. ``m3`` reads as ``m**3``."""
     raw = (text or "").strip()
@@ -551,29 +574,6 @@ def _figures(text: str) -> List[Dict[str, Any]]:
                 break
         out.append({"value": value, "unit": unit, "start": m.start(1)})
     return out
-
-
-def _unit_fits(written, declared) -> bool:
-    """True when a figure written in ``written`` is a value in ``declared``.
-
-    The same unit, or a unit whose weight under standard gravity is
-    exactly one ``declared`` (pint's own definitions: kilogram and
-    kilogram_force, pound and force_pound, kg/mm and kilogram_force/mm).
-    The figure's number is taken as written either way; a unit that would
-    need a factor (tonne for kilogram_force) or a force that is not a
-    gravitational unit (newton) does not fit.
-    """
-    if written is None or declared is None:
-        return False
-    if written == declared:
-        return True
-    ureg = _unit_registry()
-    try:
-        weight = ureg.Quantity(1, declared).to(written * ureg.standard_gravity).magnitude
-    except Exception:  # noqa: BLE001 -- dimensions do not meet: no fit
-        _LOG.debug("unit %r does not fit %r", written, declared, exc_info=True)
-        return False
-    return abs(weight - 1.0) < 1e-9
 
 
 def _bind_by_name(text: str, name: str, figures: List[Dict[str, Any]]):
