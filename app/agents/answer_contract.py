@@ -22,10 +22,12 @@ question, a formula, a project or a document.
    entry (document, page or section, passage, tier) that travels beside the
    answer. The ``N of M project documents indexed`` footer leaves the text
    and travels as structured ``coverage``.
-5. THE LEAD IS THE ANSWER; THE REST IS DETAIL. On a turn that did not
-   compute, the text the user reads first is the opening paragraph (a
-   heading carries on into the paragraph under it) with the list it
-   introduces, each item cut to its first sentence. Every later paragraph,
+5. THE LEAD IS THE ANSWER; THE REST IS DETAIL. On every kind of turn --
+   a document answer and a computed one alike -- the text the user reads
+   first is the opening paragraph (a heading carries on into the paragraph
+   under it) with the list it introduces, each item cut to its first
+   sentence; the indented lines under an item (a computed figure's rows or
+   working) are part of that item and travel with it. Every later paragraph,
    and each cut item word for word, leaves the text and travels as
    structured ``details`` beside the answer. The budget is the answer's own
    shape, never a word count: nothing is deleted, and an answer that is one
@@ -33,7 +35,7 @@ question, a formula, a project or a document.
    whole: the statement is its lead and nothing is moved out of sight.
    The rule is a reading of a FINISHED answer to a question put to the
    documents: it runs only when the caller says so (``lead``) and the turn
-   read a document (a Sources row or a handed passage). Every other text is
+   read a document or computed (a Sources row or a handed passage). Every other text is
    read whole -- an answer cut part-way (its end says why it stops), a reply
    that read no document, and a document built from a stored answer.
 6. Honesty is unchanged. Nothing here adds a figure, raises a tier or turns
@@ -786,11 +788,19 @@ def _drop_closing_request(text: str) -> str:
 
 # ── Rule 1: answer first ────────────────────────────────────────────────────
 
+def _continues(line: str) -> bool:
+    """True when ``line``, under a list item, continues that item: it is
+    indented and is not an item of its own."""
+    return bool(line.strip()) and line[:1] in (" ", "\t") and not _BULLET_RE.match(line)
+
+
 def _answer_first(text: str, computed: bool) -> str:
     """On a turn that computed, the first line carries a figure: a lead-in
     line with no figure goes ahead of nothing -- the first figure line moves
     to the top. A turn that did not compute is left in its order (a refusal
-    or a direct statement may carry no figure at all)."""
+    or a direct statement may carry no figure at all). A figure line that is
+    a list item moves with the indented lines under it (see :func:`_items`):
+    its rows or working are never left behind under another line."""
     if not computed:
         return text
     lines = [ln for ln in text.split("\n")]
@@ -800,8 +810,13 @@ def _answer_first(text: str, computed: bool) -> str:
     fig = next((i for i in nonblank if _FIGURE_RE.search(lines[i])), None)
     if fig is None:
         return text
-    head = lines.pop(fig)
-    return "\n".join([head] + lines)
+    end = fig + 1
+    if _BULLET_RE.match(lines[fig]):
+        while end < len(lines) and _continues(lines[end]):
+            end += 1
+    head = lines[fig:end]
+    del lines[fig:end]
+    return "\n".join(head + lines)
 
 
 # ── Rule 5: the lead and the details ────────────────────────────────────────
@@ -830,18 +845,35 @@ def _introduces_list(par: str) -> bool:
     return last.endswith(":") or bool(_HEADING_RE.match(last))
 
 
-def _cut_item(line: str) -> tuple[str, str | None]:
+def _items(par: str) -> list[list[str]]:
+    """The lines of a paragraph grouped as the reader sees them: a list item
+    with the indented lines under it (they continue that item) is one group;
+    every other line is a group of its own."""
+    groups: list[list[str]] = []
+    for ln in par.split("\n"):
+        if groups and _BULLET_RE.match(groups[-1][0]) and _continues(ln):
+            groups[-1].append(ln)
+        else:
+            groups.append([ln])
+    return groups
+
+
+def _cut_item(item: list[str]) -> tuple[str, str | None]:
     """A list item cut to its first sentence, and the item word for word when
-    it was cut (else None). Every marker the item carried stays on it."""
+    it was cut (else None). The indented lines under an item are part of it:
+    an item that has them is cut to its first sentence too, and they travel
+    with it. Every marker the item carried stays on it."""
+    line, under = item[0], item[1:]
     m = _BULLET_RE.match(line)
     if not m:
-        return line, None
+        return "\n".join(item), None
     sentences = [x.strip() for x in _sentences(line[m.end():]) if x.strip()]
-    if len(sentences) < 2:
+    if len(sentences) < 2 and not under:
         return line, None
-    first = sentences[0]
-    rest = "".join(mk for mk in dict.fromkeys(_MARKER_RE.findall(" ".join(sentences[1:]))) if mk not in first)
-    return line[: m.end()] + first + (" " + rest if rest else ""), line.strip()
+    first = sentences[0] if sentences else line[m.end():].strip()
+    after = " ".join(sentences[1:] + [u.strip() for u in under])
+    rest = "".join(mk for mk in dict.fromkeys(_MARKER_RE.findall(after)) if mk not in first)
+    return line[: m.end()] + first + (" " + rest if rest else ""), "\n".join([line.strip()] + under)
 
 
 #: A sentence that points at what comes after it instead of stating it.
@@ -901,8 +933,8 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
     lead: list[str] = []
     for par in lead_pars:
         lines = []
-        for ln in par.split("\n"):
-            short, whole = _cut_item(ln)
+        for item in _items(par):
+            short, whole = _cut_item(item)
             lines.append(short)
             if whole:
                 cut_items.append(whole)
@@ -1008,7 +1040,7 @@ def apply(
         body = _tidy(body)
         whole = body
         details: str | None = None
-        if lead and not asking and not computed and (rows or handed):
+        if lead and not asking and (rows or handed):
             body, details = _lead_and_details(body)
         from app.agents.evidence_conflicts import detect
 

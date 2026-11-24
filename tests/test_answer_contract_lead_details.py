@@ -189,11 +189,102 @@ def test_marker_in_details_is_not_repeated_on_the_lead():
 
 # ── where the rule does not apply ───────────────────────────────────────────
 
-def test_computed_turn_is_not_split():
-    text = "Volume = 30 x 20 x 1.5 = 900 m3\n\nThe raft dimensions come from the drawing."
-    done = _apply(text, computed=True)
+def test_asking_turn_is_not_split_even_when_computed():
+    text = "I need the wall height to continue.\n\nThe length is known from the plan."
+    done = _apply(text, asking=True, computed=True)
     assert done.details is None
-    assert "The raft dimensions" in done.text
+
+
+# ── a computed turn folds like any finished answer ─────────────────────────
+
+_CALC_ROW = {"doc_name": "Calculator", "page_or_section": "calculated"}
+
+
+@pytest.mark.parametrize("text,lead,details", [
+    ("Volume = 30 x 20 x 1.5 = 900 m3\n\nThe raft dimensions come from the drawing.",
+     "Volume = 30 x 20 x 1.5 = 900 m3",
+     "The raft dimensions come from the drawing."),
+    ("Area = 12 x 8 = 96 m2\n\nThe slab outline is taken from the plan.\n\nNo opening is deducted.",
+     "Area = 12 x 8 = 96 m2",
+     "The slab outline is taken from the plan.\n\nNo opening is deducted."),
+])
+def test_computed_turn_folds_later_paragraphs(text, lead, details):
+    done = _apply(text, computed=True)
+    assert done.text == lead
+    assert done.details == details
+
+
+@pytest.mark.parametrize("text,figure", [
+    ("Volume = 30 x 20 x 1.5 = 900 m3", "900 m3"),
+    ("Count of rows holding pump:\n- Rows holding pump: **4**", "**4**"),
+])
+def test_computed_answer_with_nothing_under_it_is_untouched(text, figure):
+    done = _apply(text, computed=True, sources=[dict(_CALC_ROW)])
+    assert done.details is None
+    assert figure in done.text
+
+
+# ── the indented lines under a list item are part of the item ──────────────
+
+@pytest.mark.parametrize("text,lead_item,under", [
+    ("Bill row count and total:\n"
+     "- Rows whose description holds pump: **4** (Source: Bill A.xlsx)\n"
+     "  Rows: Pump P1; Pump P2; Pump P3; Pump P4",
+     "- Rows whose description holds pump: **4** (Source: Bill A.xlsx)",
+     "  Rows: Pump P1; Pump P2; Pump P3; Pump P4"),
+    ("Sum of amounts:\n"
+     "- Sum of amount for rows holding cable: **1,250 AED**\n"
+     "  Working: 500 + 750 = 1,250",
+     "- Sum of amount for rows holding cable: **1,250 AED**",
+     "  Working: 500 + 750 = 1,250"),
+])
+def test_item_lines_under_a_computed_figure_fold_with_it(text, lead_item, under):
+    done = _apply(text, computed=True, sources=[dict(_CALC_ROW)])
+    assert done.text.splitlines()[0] == lead_item
+    assert under.strip() not in done.text
+    assert done.details is not None and under in done.details
+    assert lead_item[2:] in done.details
+    assert _words(text) <= _words(done.text) | _words(done.details)
+
+
+@pytest.mark.parametrize("text,lead_item,under", [
+    ("The pumps are:\n- Pump P1 is the booster set.\n  It sits on the roof plant deck.",
+     "- Pump P1 is the booster set.",
+     "  It sits on the roof plant deck."),
+    ("The doors are:\n- D-01 is a fire door\n  Rated 60 minutes on the schedule.",
+     "- D-01 is a fire door",
+     "  Rated 60 minutes on the schedule."),
+])
+def test_item_lines_under_a_document_item_fold_with_it(text, lead_item, under):
+    done = _apply(text)
+    assert done.text.splitlines()[-1] == lead_item
+    assert done.details is not None and under in done.details
+
+
+@pytest.mark.parametrize("text,kept", [
+    # a second item, not indented: an item of its own, kept in the lead
+    ("The pumps are:\n- Pump P1 on level 1\n- Pump P2 on level 2",
+     "- Pump P2 on level 2"),
+    # an indented bullet is a sub-item, not a line continuing the one above
+    ("The pumps are:\n- Pump P1 on level 1\n  - Pump P2 on level 2",
+     "  - Pump P2 on level 2"),
+])
+def test_lines_that_are_items_stay_in_the_lead(text, kept):
+    done = _apply(text)
+    assert kept in done.text.split("\n")
+    assert done.details is None
+
+
+@pytest.mark.parametrize("marker_line,marker", [
+    ("  Located on the roof plant deck [1].", "[1]"),
+    ("  Duty and standby pair [2].", "[2]"),
+])
+def test_marker_under_an_item_stays_on_the_item(marker_line, marker):
+    rows = [dict(_DOC_ROW), {"doc_name": "Pump schedule.pdf", "page_or_section": "p. 2"}]
+    text = "The pumps are:\n- Pump P1 is the booster set\n" + marker_line
+    done = _apply(text, sources=rows)
+    assert marker in done.text.split("\n")[-1]
+    assert marker_line.strip() in (done.details or "")
 
 
 def test_asking_turn_is_not_split():
@@ -507,3 +598,27 @@ def test_a_stated_line_ending_on_a_colon_takes_what_it_introduces(text, lead, de
     assert done.text == lead
     assert done.details == details
 
+
+
+# ── answer-first moves a figure item with the lines under it ────────────────
+
+@pytest.mark.parametrize("text,first_two", [
+    ("Totals:\n- Pumps: **4**\n  Rows: P1; P2; P3; P4",
+     ["- Pumps: **4**", "  Rows: P1; P2; P3; P4"]),
+    ("Totals:\n- Cable: **1,250 AED**\n  Working: 500 + 750 = 1,250\n- Trays: **12**",
+     ["- Cable: **1,250 AED**", "  Working: 500 + 750 = 1,250"]),
+])
+def test_answer_first_lifts_an_item_with_its_lines(text, first_two):
+    out = answer_contract._answer_first(text, computed=True)
+    assert out.split("\n")[:2] == first_two
+
+
+@pytest.mark.parametrize("text,second", [
+    # a figure line that is not an item lifts alone
+    ("Totals:\nPumps counted: 4\n  noted on the schedule", "Totals:"),
+    # an item without lines under it lifts alone; the next item stays put
+    ("Totals:\n- Pumps: **4**\n- Trays: **12**", "Totals:"),
+])
+def test_answer_first_lifts_a_line_alone_otherwise(text, second):
+    out = answer_contract._answer_first(text, computed=True)
+    assert out.split("\n")[1] == second
