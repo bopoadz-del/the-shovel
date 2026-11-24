@@ -596,23 +596,7 @@ def _nearest_rank(ordered: List[float], percent: float) -> float:
     return ordered[math.ceil(percent / 100.0 * len(ordered)) - 1]
 
 
-@formula(
-    owner='planning',
-    display_name='Monte Carlo P50 / P80 / P90',
-    description=('Seeded Monte Carlo of a total made of items with a user-supplied '
-                 'three-point range each (low, most likely, high; triangular): the '
-                 'P50, P80 and P90 totals, the mean, and the chance of finishing '
-                 'within the most likely total. Works for durations or costs.'),
-    inputs={
-        'low': Param('-', 0, 1e13, label='low (optimistic) value of each item'),
-        'most_likely': Param('-', 0, 1e13, label='most likely value of each item'),
-        'high': Param('-', 0, 1e13, label='high (pessimistic) value of each item'),
-        'iterations': Param('count', 100, 200000, label='number of trials'),
-        'seed': Param('count', 0, 2**31 - 1, label='random seed'),
-    },
-    outputs={'p50': '-', 'p80': '-', 'p90': '-', 'mean': '-', 'working': '-'},
-)
-def monte_carlo_percentiles(
+def _monte_carlo_total(
     low: List[float],
     most_likely: List[float],
     high: List[float],
@@ -668,3 +652,59 @@ def monte_carlo_percentiles(
          f"at or within the sum of the most likely values."),
     ]
     return out
+
+
+def _three_point_inputs(unit: str, what: str) -> Dict[str, Param]:
+    """The inputs of a three-point Monte Carlo whose items are ``what``,
+    declared in ``unit`` so a figure written in another unit of the same
+    kind is converted and one of another kind is refused."""
+    return {
+        'low': Param(unit, 0, 1e13, label=f'low (optimistic) {what} of each item'),
+        'most_likely': Param(unit, 0, 1e13, label=f'most likely {what} of each item'),
+        'high': Param(unit, 0, 1e13, label=f'high (pessimistic) {what} of each item'),
+        'iterations': Param('count', 100, 200000, label='number of trials'),
+        'seed': Param('count', 0, 2**31 - 1, label='random seed'),
+    }
+
+
+@formula(
+    owner='planning',
+    display_name='Monte Carlo P50 / P80 / P90 (duration)',
+    description=('Seeded Monte Carlo of a total duration made of items with a '
+                 'user-supplied three-point range each (low, most likely, high; '
+                 'triangular): the P50, P80 and P90 totals, the mean, and the chance '
+                 'of finishing within the most likely total.'),
+    inputs=_three_point_inputs('days', 'duration'),
+    outputs={'p50': 'days', 'p80': 'days', 'p90': 'days', 'mean': 'days', 'working': '-'},
+)
+def monte_carlo_percentiles(
+    low: List[float],
+    most_likely: List[float],
+    high: List[float],
+    iterations: int = 10000,
+    seed: int = 1,
+) -> dict:
+    """Duration risk: P50/P80/P90 of a sum of triangular durations."""
+    return _monte_carlo_total(low, most_likely, high, iterations, seed)
+
+
+@formula(
+    owner='planning',
+    display_name='Monte Carlo P50 / P80 / P90 (cost)',
+    description=('Seeded Monte Carlo of a total cost made of items with a '
+                 'user-supplied three-point range each (low, most likely, high; '
+                 'triangular): the P50, P80 and P90 totals, the mean, and the chance '
+                 'of coming in within the most likely total.'),
+    inputs=_three_point_inputs('currency', 'cost'),
+    outputs={'p50': 'currency', 'p80': 'currency', 'p90': 'currency',
+             'mean': 'currency', 'working': '-'},
+)
+def monte_carlo_cost_percentiles(
+    low: List[float],
+    most_likely: List[float],
+    high: List[float],
+    iterations: int = 10000,
+    seed: int = 1,
+) -> dict:
+    """Cost risk: P50/P80/P90 of a sum of triangular costs."""
+    return _monte_carlo_total(low, most_likely, high, iterations, seed)

@@ -182,8 +182,15 @@
     "tier": "strategic"
    },
    {
+    "id": "monte_carlo_cost_percentiles",
+    "description": "Seeded Monte Carlo of a total cost of three-point (low, most likely, high) items: P50/P80/P90, mean, chance within the most likely total",
+    "implemented_by": "app.lib.construction_formulas.monte_carlo_cost_percentiles",
+    "domain": "planning",
+    "tier": "strategic"
+   },
+   {
     "id": "monte_carlo_percentiles",
-    "description": "Seeded Monte Carlo of a total of three-point (low, most likely, high) items: P50/P80/P90, mean, chance within the most likely total",
+    "description": "Seeded Monte Carlo of a total duration of three-point (low, most likely, high) items in days: P50/P80/P90, mean, chance within the most likely total",
     "implemented_by": "app.lib.construction_formulas.monte_carlo_percentiles",
     "domain": "planning",
     "tier": "strategic"

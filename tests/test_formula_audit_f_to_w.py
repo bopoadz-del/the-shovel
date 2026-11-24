@@ -45,6 +45,7 @@ _AUDIT_SLICE = [
     "mobilization_cost_estimate",
     "modulus_of_elasticity_concrete",
     "modulus_of_rupture",
+    "monte_carlo_cost_percentiles",
     "monte_carlo_percentiles",
     "next_ncr_status",
     "pe_unit_convert",
@@ -925,6 +926,23 @@ class TestMonteCarloPercentiles:
     ])
     def test_item_out_of_order_is_error(self, low, most_likely, high):
         _err("monte_carlo_percentiles", low=low, most_likely=most_likely, high=high)
+
+
+class TestMonteCarloCostPercentiles:
+    """The cost entry: fixed costs (low = most likely = high) sum exactly."""
+
+    @pytest.mark.parametrize("items,total", [([1200, 800], 2000), ([50000], 50000)])
+    def test_no_spread_gives_the_sum(self, items, total):
+        r = _ok("monte_carlo_cost_percentiles", low=items, most_likely=items,
+                high=items, iterations=200, seed=3)
+        assert (r["p50"], r["p80"], r["p90"]) == (total, total, total)
+
+    @pytest.mark.parametrize("low,most_likely,high", [
+        ([900], [800], [1000]),           # low above most likely
+        ([100, 200], [150, 700], [160, 600]),  # most likely above high
+    ])
+    def test_item_out_of_order_is_error(self, low, most_likely, high):
+        _err("monte_carlo_cost_percentiles", low=low, most_likely=most_likely, high=high)
 
 
 _LENGTH_SI = ("m", "meter", "metre")

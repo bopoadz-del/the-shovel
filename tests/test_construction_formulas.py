@@ -148,6 +148,8 @@ _SMOKE_INPUTS = {
     "calculate_interim_payment": dict(gross_valuation=900_000, retention_percent=10),
     "monte_carlo_percentiles": dict(low=[3, 5], most_likely=[4, 6], high=[8, 9],
                                     iterations=500, seed=2),
+    "monte_carlo_cost_percentiles": dict(low=[300, 500], most_likely=[400, 600],
+                                         high=[800, 900], iterations=500, seed=2),
     # Additive discipline library — structural steel (dual-code).
     "steel_tension_capacity": dict(gross_area_mm2=3000, net_area_mm2=2550,
                                    fy_mpa=345, fu_mpa=450, code="aci"),

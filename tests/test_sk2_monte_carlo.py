@@ -176,3 +176,49 @@ def test_a_single_figure_per_range_is_one_item(single):
 def test_no_items_is_refused():
     assert "error" in monte_carlo_percentiles([], [], [])
     assert "error" in monte_carlo_percentiles((), (), ())
+
+
+# ── each entry declares the kind of its items: days or money ───────────────
+# A figure written in another unit of the same kind is converted to the
+# declared unit; a figure of the other kind is refused, never summed.
+
+def _converted(name, low):
+    from app.lib import formula_registry as fr
+    values = {"low": low, "most_likely": [20], "high": [30]}
+    return fr.convert_written_units(name, values)
+
+
+@pytest.mark.parametrize("written,days", [("2 weeks", 14.0), ("36 hours", 1.5)])
+def test_a_duration_in_another_time_unit_becomes_days(written, days):
+    out, conversions, rejected = _converted("monte_carlo_percentiles", [written])
+    assert rejected == [], rejected
+    assert out["low"] == [pytest.approx(days)]
+    assert conversions and conversions[0]["to_unit"] == "days"
+
+
+@pytest.mark.parametrize("written", ["5000 AED", "1200 USD"])
+def test_money_given_as_a_duration_is_refused(written):
+    _, _, rejected = _converted("monte_carlo_percentiles", [written])
+    assert len(rejected) == 1, rejected
+
+
+@pytest.mark.parametrize("written,amount", [("5000 AED", 5000.0), ("1200 USD", 1200.0)])
+def test_a_cost_in_a_currency_is_taken_as_written(written, amount):
+    out, _, rejected = _converted("monte_carlo_cost_percentiles", [written])
+    assert rejected == [], rejected
+    assert out["low"] == [amount]
+
+
+@pytest.mark.parametrize("written", ["3 days", "2 weeks"])
+def test_a_duration_given_as_a_cost_is_refused(written):
+    _, _, rejected = _converted("monte_carlo_cost_percentiles", [written])
+    assert len(rejected) == 1, rejected
+
+
+@pytest.mark.parametrize("seed", [1, 7])
+def test_the_cost_and_duration_entries_share_one_sampler(seed):
+    ranges = dict(low=[2, 5], most_likely=[4, 6], high=[9, 8], iterations=2000, seed=seed)
+    cost = run_calculation("monte_carlo_cost_percentiles", ranges)["result"]
+    days = _ok(**ranges)
+    assert {k: cost[k] for k in ("p50", "p80", "p90", "mean")} == \
+        {k: days[k] for k in ("p50", "p80", "p90", "mean")}
