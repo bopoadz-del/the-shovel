@@ -125,6 +125,11 @@ def test_served_override_does_not_change_the_constant(shipped, tmp_path, monkeyp
     shipped([_entry("a.one", {"x": shipped_x})])
     served = _write_kb(tmp_path / "served.json", [_entry("a.one", {"x": served_x})])
     monkeypatch.setenv("CONSTRUCTION_KB_FILE", served)
+    # The served reader keeps one cached copy across calls. Start from an
+    # empty cache so this case never reads the copy an earlier case left
+    # (two invented files can share an mtime; the loader's cache identity is
+    # its own fix, not this test's subject).
+    monkeypatch.setattr(_knowledge, "_KB_CACHE", None)
     assert _knowledge.get_rule("a.one")["thresholds"]["x"] == served_x  # served copy
     assert Constant.from_knowledge("a.one", "thresholds.x", "ratio", "m").value == shipped_x
 
