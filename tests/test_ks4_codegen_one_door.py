@@ -24,12 +24,20 @@ _ADVERTISED = re.compile(r"^- (\w+)\(", re.M)
 _CODE_BLOCK = re.compile(r"```python\n(.*?)```", re.S)
 
 
-def _prompt() -> str:
-    return build_codegen_prompt("critical path of the network", {})
+# Two different requests: the library section and the example are part of
+# the system prompt whatever the task is, so both must hold for each.
+_TASKS = [
+    ("critical path of the network", {}),
+    ("crash the schedule to finish earlier", {"target_days": 8}),
+]
 
 
-def _advertised_functions() -> list:
-    section = _PM_SECTION.search(_prompt())
+def _prompt(task: str = _TASKS[0][0], variables=None) -> str:
+    return build_codegen_prompt(task, variables or {})
+
+
+def _advertised_functions(task: str = _TASKS[0][0], variables=None) -> list:
+    section = _PM_SECTION.search(_prompt(task, variables))
     assert section, "the prompt has no project-management library section"
     return _ADVERTISED.findall(section.group(0))
 
@@ -83,10 +91,13 @@ def _snippet(body: str, acts: str) -> str:
     )
 
 
-def test_every_advertised_function_exists_with_the_advertised_parameters():
-    names = _advertised_functions()
+@pytest.mark.parametrize("task, variables", _TASKS)
+def test_every_advertised_function_exists_with_the_advertised_parameters(
+    task, variables
+):
+    names = _advertised_functions(task, variables)
     assert names, "no library function is advertised"
-    section = _PM_SECTION.search(_prompt()).group(0)
+    section = _PM_SECTION.search(_prompt(task, variables)).group(0)
     for name in names:
         fn = getattr(pm_computations, name, None)
         assert callable(fn), f"the prompt advertises {name}, which does not exist"
@@ -120,8 +131,11 @@ def test_advertised_pass_runs_inside_the_envelope_in_the_sandbox(
     assert envelope_calls == ["cpm_network"]
 
 
-def test_the_prompt_example_runs_in_the_sandbox_inside_the_envelope(envelope_calls):
-    blocks = _CODE_BLOCK.findall(_prompt())
+@pytest.mark.parametrize("task, variables", _TASKS)
+def test_the_prompt_example_runs_in_the_sandbox_inside_the_envelope(
+    envelope_calls, task, variables
+):
+    blocks = _CODE_BLOCK.findall(_prompt(task, variables))
     assert blocks, "the prompt carries no example"
     out = run_sandboxed(blocks[0])
     assert out.success, out.error
@@ -130,14 +144,18 @@ def test_the_prompt_example_runs_in_the_sandbox_inside_the_envelope(envelope_cal
     assert envelope_calls == ["cpm_network"]
 
 
-def test_the_bare_pass_does_not_touch_the_envelope(envelope_calls):
+@pytest.mark.parametrize("durations, expected", [((3, 5, 2), 10), ((4, 1), 5)])
+def test_the_bare_pass_does_not_touch_the_envelope(
+    envelope_calls, durations, expected
+):
     # The reason the prompt must not name it: the same network through the
     # bare pass gives the same number with no envelope at all.
-    code = _snippet("result = compute_cpm(data).project_duration", _series(3, 5, 2))
+    code = _snippet("result = compute_cpm(data).project_duration",
+                    _series(*durations))
     code = code.replace("import run_cpm,", "import compute_cpm, run_cpm,")
     out = run_sandboxed(code)
     assert out.success, out.error
-    assert out.result == 10
+    assert out.result == expected
     assert envelope_calls == []
 
 
@@ -160,11 +178,13 @@ def test_compress_schedule_returns_what_the_prompt_says(
     assert envelope_calls == ["cpm_network", "cpm_network"]
 
 
-def test_an_empty_network_is_not_sent_to_the_envelope(envelope_calls):
-    out = run_sandboxed(
-        "from app.lib.pm_computations import run_cpm\n"
-        "from app.schemas.cpm import CPMInput\n"
-        "result = run_cpm(CPMInput(activities=[])).project_duration\n")
+@pytest.mark.parametrize("body", [
+    "result = run_cpm(data).project_duration",
+    # compression runs two passes; neither has a network to send
+    "result = compress_schedule(data, {})[0].project_duration",
+])
+def test_an_empty_network_is_not_sent_to_the_envelope(envelope_calls, body):
+    out = run_sandboxed(_snippet(body, ""))
     assert out.success, out.error
     assert out.result == 0
     assert envelope_calls == []
