@@ -95,6 +95,19 @@ def test_a_negative_rate_is_refused_by_number(rates, named):
     assert "error" in r and named in r["error"]
 
 
+@pytest.mark.parametrize("cost,rates,basis,price", [
+    # The boundary of the negative-rate rule: a 0% addition is a rate, not
+    # a refusal. 1,000 x (1 + 0% + 10%) = 1,100 on cost.
+    (1_000, [0, 10], "on cost", 1_100.0),
+    # 2,000 x 1.05 x 1.00 = 2,100 compounding.
+    (2_000, [5, 0], "compounding", 2_100.0),
+])
+def test_a_zero_rate_is_accepted_at_the_negative_boundary(cost, rates, basis, price):
+    r = markup_build_up(cost, rates, basis)
+    assert "error" not in r
+    assert r["price"] == price
+
+
 @pytest.mark.parametrize("cost", [-1, -250_000])
 def test_a_negative_cost_is_refused(cost):
     assert "error" in markup_build_up(cost, [10], "on cost")
