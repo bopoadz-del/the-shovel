@@ -223,3 +223,72 @@ def test_the_governor_names_a_winner_sentence_gives(sentence, names):
 def test_winner_backed_reads_the_passage_clause_about_the_thing(passage, backed):
     rows = [{"doc_id": "d0", "doc_name": "Ashby Method Statement.pdf", "snippet": passage}]
     assert winner_backed("Kestrel Code KC-41 governs the cover [1].", rows, {"cover", "wall"}) is backed
+
+
+# ── self-check: the paths the mutants showed untested ──────────────────────
+# A ranked winner sentence ABOUT the thing (test 2's claim names no thing,
+# so it never reached the ranking check), and a winner sentence that stays
+# while a conflict IS reported because the answer states only one value.
+
+def _one_value(told):
+    return told.split("]. ", 1)[0] + "]."
+
+
+def _ranking(a, b, kind):
+    loser = next(n for n in (a[0], b[0]) if kind.lower() not in n.lower())
+    other = next(w for w in ("Bill", "Drawing", "Specification") if w in loser)
+    return ("Quayside General Conditions.pdf", f"Where the {other} and the {kind} disagree, the {kind} shall prevail.")
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+def test_a_ranked_winner_about_the_thing_is_left_as_written(question, a, b, told, kind):
+    claim = f"The {kind.lower()} governs the {_thing_of(question)}."
+    out, rows = _apply(question, a, b, f"{told} {claim}", extra=(_ranking(a, b, kind),))
+    assert detect(f"{told} {claim}", rows, question) == []
+    assert claim in out.text and _LINE not in out.text
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+def test_control_the_same_winner_without_the_ranking_brings_the_line(question, a, b, told, kind):
+    claim = f"The {kind.lower()} governs the {_thing_of(question)}."
+    out, rows = _apply(question, a, b, f"{told} {claim}")
+    assert detect(f"{told} {claim}", rows, question)
+    assert _NONE in out.text and claim not in out.text
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+def test_a_ranked_winner_stays_when_a_one_value_answer_brings_the_line(question, a, b, told, kind):
+    claim = f"The {kind.lower()} governs the {_thing_of(question)}."
+    answer = f"{_one_value(told)} {claim}"
+    out, rows = _apply(question, a, b, answer, extra=(_ranking(a, b, kind),))
+    assert out.conflicts and out.conflicts[0]["governs"] is not None
+    assert claim in out.text
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+@pytest.mark.parametrize("std, ref", _STANDARDS)
+def test_a_passage_backed_winner_stays_when_a_one_value_answer_brings_the_line(question, a, b, told, kind, std, ref):
+    thing = _thing_of(question)
+    a = (a[0], a[1] + " " + ref.format(thing=thing.capitalize()))
+    claim = f"The {thing} is governed by {std} [1]."
+    out, rows = _apply(question, a, b, f"{_one_value(told)} {claim}")
+    assert out.conflicts and out.conflicts[0]["governs"] is None
+    assert claim in out.text
+
+
+@pytest.mark.parametrize("question, a, b, told, kind", _CASES)
+@pytest.mark.parametrize("std, ref", _STANDARDS)
+def test_control_an_unbacked_winner_goes_when_a_one_value_answer_brings_the_line(question, a, b, told, kind, std, ref):
+    claim = f"The {_thing_of(question)} is governed by {std} [1]."
+    out, rows = _apply(question, a, b, f"{_one_value(told)} {claim}")
+    assert out.conflicts and _NONE in out.text
+    assert claim not in out.text
+
+
+@pytest.mark.parametrize("passage", [
+    "Cover to the wall is listed beside Kestrel Code KC-41 in the index.",
+    "Kestrel Code KC-41 replaced the old table of cover to the wall.",
+])
+def test_a_passage_naming_the_governor_without_reference_wording_backs_nothing(passage):
+    rows = [{"doc_id": "d0", "doc_name": "Ashby Method Statement.pdf", "snippet": passage}]
+    assert winner_backed("Kestrel Code KC-41 governs the cover [1].", rows, {"cover", "wall"}) is False
