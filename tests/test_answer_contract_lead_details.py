@@ -87,6 +87,21 @@ def test_one_paragraph_of_several_sentences_is_untouched():
     assert done.text == text and done.details is None
 
 
+@pytest.mark.parametrize("text,lead", [
+    ("The slab is 250 mm thick on level 2 (Source: Site handbook.pdf, p. 4).",
+     "The slab is 250 mm thick on level 2 [1]."),
+    ("The contractor is Northgate Ltd. The engineer is the city works office (Source: Site handbook.pdf, p. 4).",
+     "The contractor is Northgate Ltd. The engineer is the city works office [1]."),
+])
+def test_one_paragraph_answer_the_contract_rewrites_has_no_details(text, lead):
+    """The contract changes the text (its citation becomes a marker), so the
+    answer is returned rewritten -- and with nothing moved there are no
+    details at all, not an empty fold."""
+    done = _apply(text)
+    assert done.text == lead
+    assert done.details is None
+
+
 # ── a list the lead introduces stays, items cut to their first sentence ─────
 
 @pytest.mark.parametrize("text,lead,moved", [
