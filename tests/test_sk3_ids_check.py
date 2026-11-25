@@ -296,3 +296,25 @@ def test_summary_counts_each_status(door_props, summary):
          "requirements": [{"property": "Psx.A"}]},
     ]
     assert check_ids(els, specs)["summary"] == summary
+
+
+@pytest.mark.parametrize("bound,width,expected", [
+    (900, 900, "pass"),
+    (900, 901, "fail"),
+    (1100, 1100, "pass"),
+    (1100, 1099, "fail"),
+])
+def test_equal_min_and_max_is_an_exact_value_not_a_malformed_range(bound, width, expected):
+    # min == max is a valid one-point range; only min > max is refused.
+    req = {"property": "Psx.W", "min": bound, "max": bound}
+    assert _door_verdict({"Psx.W": width}, req) == expected
+
+
+@pytest.mark.parametrize("extra_walls,elements", [(0, 1), (3, 4)])
+def test_summary_counts_the_elements_read_not_the_specifications(extra_walls, elements):
+    els = [_el("d", "IfcDoor", {"Psx.A": 1})]
+    els += [_el(f"w{i}", "IfcWall", {}) for i in range(extra_walls)]
+    els.append("not an element")
+    summary = check_ids(els, _spec([{"property": "Psx.A"}]))["summary"]
+    assert summary["specifications"] == 1
+    assert summary["elements"] == elements
