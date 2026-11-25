@@ -104,6 +104,30 @@ def test_refusal_comes_back_as_the_kind_the_kernel_names(acts, exc_type):
     assert type(info.value) is exc_type
 
 
+@pytest.mark.parametrize("status, refused", [
+    ("success", False),
+    ("error", True),
+    ("needs_input", True),
+])
+def test_only_a_success_envelope_is_read_as_a_schedule(monkeypatch, status, refused):
+    """The envelope's status decides, not whether a result happens to ride
+    along: a non-success envelope is a refusal even when it carries a
+    result-shaped body."""
+    data = CPMInput(activities=_chain_network())
+    good = cf.run_calculation("cpm_network", {
+        "activities": [{"id": a.id, "duration": a.duration,
+                        "predecessors": [p.predecessor_id for p in a.predecessors]}
+                       for a in data.activities]})
+    assert good["status"] == "success"
+    env = dict(good, status=status, error="refused here")
+    monkeypatch.setattr(cf, "run_calculation", lambda name, params=None: env)
+    if refused:
+        with pytest.raises(ValueError, match="refused here"):
+            run_cpm(data)
+    else:
+        assert run_cpm(data) == compute_cpm(data)
+
+
 @pytest.mark.parametrize("acts, kind", [
     ([{"id": "U", "duration": 1, "predecessors": "V"},
       {"id": "V", "duration": 1, "predecessors": "U"}], "CircularDependencyError"),
