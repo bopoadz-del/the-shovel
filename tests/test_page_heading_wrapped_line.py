@@ -154,3 +154,31 @@ def test_bare_letter_or_numeral_that_ends_a_sentence_is_not_a_list_marker(opener
 )
 def test_the_opener_is_not_counted_as_a_capitalised_word(opener, carry, heading):
     assert heading_line_for_page(_page(opener, carry, heading)) == heading
+
+
+@pytest.mark.parametrize("marker", ["viii) the joints are raked out", "xiii. the bays are cast in turn"])
+def test_four_letter_roman_numeral_is_a_list_marker(marker):
+    page = f"7.1 Pointing of joints\n{marker}\n"
+    assert heading_line_for_page(page) == "7.1 Pointing of joints"
+
+
+@pytest.mark.parametrize(
+    "opener,carry,heading",
+    [
+        ("A sealant bead is run where the frames are made", "up. Joints are then tooled.", "8 SEALANTS"),
+        ("300 mm wide bays are laid and the forms are struck", "in. Each bay is then cured.", "5.2 Slab Bays"),
+    ],
+)
+def test_two_letter_word_that_ends_a_sentence_is_not_a_list_marker(opener, carry, heading):
+    assert heading_line_for_page(_page(opener, carry, heading)) == heading
+
+
+@pytest.mark.parametrize(
+    "opener,carry,heading",
+    [
+        ("2 Bars at 150 200 250 centres to", "each face of the wall.", "2.1 REINFORCEMENT"),
+        ("7 Ties of 6 8 10 mm at", "spacings shown on the drawings.", "7.3 Links"),
+    ],
+)
+def test_figures_in_a_wrapped_line_are_not_counted_as_capitalised_words(opener, carry, heading):
+    assert heading_line_for_page(_page(opener, carry, heading)) == heading
