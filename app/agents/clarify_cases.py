@@ -73,6 +73,7 @@ _STOPWORDS = {
     "their", "our", "your", "his", "her", "which", "what", "when",
     "where", "who", "whom", "how", "not", "no", "yes", "as", "than",
     "then", "there", "here", "each", "any", "some", "all", "every", "one",
+    "i", "me", "we", "us", "you", "he", "him", "she", "they", "them",
 }
 
 #: Month names and abbreviations. A calendar date ("Jan-25", "30-Jan-25")
@@ -659,9 +660,18 @@ def _cell_phrase(fragment: str, *, before: bool) -> str:
         if not re.search(r"[A-Za-z]{2,}", field):
             continue
         phrase = _noun_phrase(field)
-        if phrase:
+        if phrase and not _names_nothing(phrase):
             return phrase
     return ""
+
+
+def _names_nothing(phrase: str) -> bool:
+    """True when every word of a field is a stopword ("they", "it is"): a
+    pronoun or function-word cell refers to a thing, it does not name one,
+    so the reader steps over it to the next field, as it does a number
+    cell."""
+    words = [w.strip(".,;:()\"'").lower() for w in phrase.split()]
+    return all(w in _STOPWORDS for w in words if w)
 
 
 def cases_from_passages(passages: Iterable[tuple[str, str]]) -> list[Case]:

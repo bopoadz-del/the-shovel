@@ -116,3 +116,44 @@ def test_option_subject_is_short_for_a_table_row(ask, draft, rows):
     assert question is not None
     assert "|" not in question
     assert "Desc" not in question and "Item " not in question
+
+
+# A cell whose words are all stopwords (a pronoun: "they are 25 mm") refers
+# to a thing but does not name one. Read as the subject, "they" matched no
+# asked thing. It is stepped over like a number cell, so the subject is the
+# worded cell before it.
+@pytest.mark.parametrize(
+    "text,value,expected",
+    [
+        ("Item: movement joints | they are 25 mm wide", "25 mm", "item: movement joints"),
+        ("Screed to plant room | it is 75 mm thick", "75 mm", "screed to plant room"),
+    ],
+)
+def test_pronoun_cell_is_stepped_over(text, value, expected):
+    assert _subject_of(text, value) == expected
+
+
+# Must not fire: a cell with one content word beside the stopwords still
+# names its thing, and stays the subject.
+@pytest.mark.parametrize(
+    "text,value,expected",
+    [
+        ("Item: movement joints | their width is 25 mm", "25 mm", "their width"),
+        ("Screed to plant room | the depth is 75 mm", "75 mm", "depth"),
+    ],
+)
+def test_worded_cell_beside_stopwords_still_names(text, value, expected):
+    assert _subject_of(text, value) == expected
+
+
+# Degenerate: every cell before the value names nothing. The reader falls
+# back to the words after the value, as it does for a row of number cells.
+@pytest.mark.parametrize(
+    "text,value,expected",
+    [
+        ("they | it is 25 mm wide movement joints", "25 mm", "wide movement joints"),
+        ("we | them | 40 mm concrete cover", "40 mm", "concrete cover"),
+    ],
+)
+def test_all_cells_name_nothing_falls_back_after(text, value, expected):
+    assert _subject_of(text, value) == expected
