@@ -147,3 +147,33 @@ def test_every_relation_type_sets_a_positive_free_float(kind):
     # free float cannot show which end of an activity the pass reads.
     assert any(kind in _types_binding_positive_free_float(seed, size)
                for seed, size in _SEEDS)
+
+
+# The forward pass never places a successor before its link allows, so every
+# slack it hands ``calculate_float`` is >= 0 and the floor above is never
+# reached through ``cpm_network``. The function's own contract still says a
+# slip cannot be negative: given early dates that break a link (dates read
+# back from elsewhere rather than computed), it reports no free float instead
+# of a negative one, and it leaves a positive slack as it is.
+@pytest.mark.parametrize("kind, dates, expected", [
+    # successor starts 2 days before the FS link allows: no float, not -2
+    ("FS", {"P": (0, 4), "S": (2, 5)}, 0),
+    # successor starts 1 day before the SS link (lag 3) allows: no float, not -1
+    ("SS", {"P": (0, 4), "S": (2, 5)}, 0),
+    # links kept, with room: the slack itself (FS 7-4-1 = 2, SS 7-0-3 = 4)
+    ("FS", {"P": (0, 4), "S": (7, 10)}, 2),
+    ("SS", {"P": (0, 4), "S": (7, 10)}, 4),
+])
+def test_free_float_never_negative_on_dates_that_break_a_link(kind, dates, expected):
+    from app.lib.pm_computations import calculate_float
+    from app.schemas.cpm import Activity, Dependency, DependencyType
+
+    lag = 1 if kind == "FS" else 3
+    acts = {
+        "P": Activity(id="P", duration=4),
+        "S": Activity(id="S", duration=3, predecessors=[
+            Dependency(predecessor_id="P", type=DependencyType(kind), lag=lag)]),
+    }
+    ff = calculate_float(acts, dates)
+    assert ff["P"] == expected
+    assert ff["S"] == -1  # no successor: the caller substitutes total float
