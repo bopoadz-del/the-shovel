@@ -839,6 +839,73 @@ def _narration_first(text: str) -> str:
     return text
 
 
+#: A word after a sentence-opening "No" that does not open the noun phrase of
+#: the missing thing: "No more than ...", "No other ...", "No one ...",
+#: "No such ...". Moving the negation off such a word changes the meaning.
+_NOT_ABSENT_NP = (
+    r"(?:more|less|fewer|other|one|longer|such|single|matter|doubt|further|later|sooner|way|need|than)\b"
+)
+#: The absent thing's noun phrase: no citation, bracket or clause punctuation.
+_ABSENT_NP = r"(?P<np>(?!" + _NOT_ABSENT_NP + r")[^\s\[\](),;:][^\[\](),;:]*?)"
+#: Where the thing is absent from: ``in ...``, optionally after the participle
+#: of a document stating it (``is stated in``).
+_ABSENCE_SCOPE = r"(?P<scope>(?:(?:stated|given|listed|shown|recorded|included|specified|mentioned)\s+)?in\s+\S.*)"
+#: "No <thing> is (stated) in <scope>" -- the negation stands on the subject.
+_NO_SUBJECT_RE = re.compile(
+    r"^(?P<pre>[*_]{0,2})No\s+" + _ABSENT_NP + r"\s+(?P<verb>is|are|was|were)\s+" + _ABSENCE_SCOPE + r"$",
+    re.IGNORECASE | re.DOTALL,
+)
+#: "There is no <thing> in <scope>".
+_THERE_NO_RE = re.compile(
+    r"^(?P<pre>[*_]{0,2})There\s+(?P<verb>is|are|was|were)\s+no\s+" + _ABSENT_NP + r"\s+" + _ABSENCE_SCOPE + r"$",
+    re.IGNORECASE | re.DOTALL,
+)
+#: A scope clause that goes on to name the topic ("in the documents about X",
+#: "in the bill for X") splits the missing thing in two; it is left as written.
+_SCOPE_TOPIC_RE = re.compile(r"\s(?:about|regarding|concerning|of|on|for|than)\s", re.IGNORECASE)
+
+
+def _absence_lead(text: str, computed: bool) -> str:
+    """An absence lead names the missing thing first (rule 1): "<What> is
+    not in <scope>". When the first sentence of the first line puts the
+    negation on the subject instead -- "No <what> is in <scope>", "There is
+    no <what> in <scope>" -- the negation moves to the verb. The noun
+    phrase, the verb's number and the scope stay word for word; nothing is
+    added to them.
+
+    Left as written: a turn that computed (its first line is the figure),
+    a "no" that does not open a noun phrase ("No, ...", "No more than ..."),
+    a noun phrase that carries a citation or clause punctuation, a scope
+    whose clause goes on to name the topic, and any sentence after the
+    first."""
+    if computed:
+        return text
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    line = lines[first]
+    indent = line[: len(line) - len(line.lstrip())]
+    sentences = _sentences(line.strip())
+    if not sentences:
+        return text
+    lead = sentences[0].strip()
+    m = _NO_SUBJECT_RE.match(lead) or _THERE_NO_RE.match(lead)
+    if not m:
+        return text
+    np_ = m.group("np").strip()
+    scope = m.group("scope")
+    clause = re.split(r"[,;:(\[—–]|\s-\s", scope, maxsplit=1)[0]
+    if _SCOPE_TOPIC_RE.search(" " + clause + " ") or re.search(r"\bthan\b", np_, re.IGNORECASE):
+        return text
+    if np_[0].islower():
+        np_ = np_[0].upper() + np_[1:]
+    rewritten = f"{m.group('pre')}{np_} {m.group('verb').lower()} not {scope}"
+    stripped = line.strip()
+    lines[first] = indent + rewritten + stripped[len(sentences[0].rstrip()):]
+    return "\n".join(lines)
+
+
 def _tidy(text: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -885,6 +952,7 @@ def apply(
             body = _drop_closing_request(body)
             body = _answer_first(body, computed)
             body = _narration_first(body)
+            body = _absence_lead(body, computed)
         body = _tidy(body)
         from app.agents.evidence_conflicts import detect
 

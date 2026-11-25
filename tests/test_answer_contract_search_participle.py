@@ -40,7 +40,8 @@ _SEARCH_WORD = re.compile(r"\b(?:retrieved|fetched|passages?|excerpts?|chunks?)\
      "The only waterproofing note read from it is a general clause on membranes."),
     # A search-unit noun is machinery too: in the reader's words, documents.
     ("No lintel schedule is in the retrieved passages.",
-     "No lintel schedule is in the documents I read."),
+     # the absence lead then names the missing thing first (absence-lead rule)
+     "Lintel schedule is not in the documents I read."),
     ("The sill height is not given in the fetched context.",
      "The sill height is not given in the documents I read."),
 ])
