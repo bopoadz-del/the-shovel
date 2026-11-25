@@ -95,6 +95,7 @@ def test_every_registered_basis_is_known():
 
 
 @pytest.mark.parametrize("key, basis", [
+    ("claimed_amount", "period"),
     ("certified_amount", "period"),
     ("cumulative_previous_certified", "cumulative"),
 ])
@@ -110,17 +111,20 @@ def test_the_claim_payment_inputs_say_which_amount_they_take(key, basis):
     assert driver_tools.BASIS_WORDS[other] not in part
 
 
-@pytest.mark.parametrize("certified, previous", [(100_000.0, 0.0), (40_000.0, 250_000.0)])
-def test_the_declared_bases_match_what_the_function_computes(certified, previous):
+@pytest.mark.parametrize("claimed, certified, previous", [
+    (100_000.0, 100_000.0, 0.0), (55_000.0, 40_000.0, 250_000.0)])
+def test_the_declared_bases_match_what_the_function_computes(claimed, certified, previous):
     """The bases are true of the arithmetic: retention comes off the period
-    amount alone, and the cumulative input only moves the running total."""
+    amount alone, the claim is compared with the same period's certificate,
+    and the cumulative input only moves the running total."""
     from app.lib.construction_formulas import run_calculation
 
     env = run_calculation("calculate_payment", {
-        "claimed_amount": certified, "certified_amount": certified,
+        "claimed_amount": claimed, "certified_amount": certified,
         "retention_rate": 0.1, "cumulative_previous_certified": previous,
     })
     assert env["status"] == "success", env
     res = env["result"]
     assert res["net_payment_due"] == pytest.approx(certified * 0.9)
     assert res["cumulative_certified"] == pytest.approx(previous + certified)
+    assert res["disputed_amount"] == pytest.approx(claimed - certified)
