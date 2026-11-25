@@ -115,3 +115,73 @@ def test_yes_no_ask_drops_a_different_thing_but_keeps_the_named_one():
     )
     assert q is not None
     assert "1.8 m" not in q
+
+
+# --- edges of the reader (Self-check, 25 Nov) ----------------------------
+
+@pytest.mark.parametrize(
+    ("ask", "subject"),
+    [
+        ("does the slab thickness exceed 0.3 m", "slab thickness"),
+        ("did the pump pressures exceed 6 bar", "pump pressures"),
+    ],
+)
+def test_do_does_did_open_a_yes_no_ask(ask, subject):
+    assert _yes_no_subject(ask) == subject
+
+
+@pytest.mark.parametrize(
+    ("ask", "subject"),
+    [
+        ("are there any joints wider than 20 mm", "there any joints"),
+        ("is the slab thinner or thicker than 0.3 m", "slab"),
+    ],
+)
+def test_a_comparative_ends_the_phrase_by_its_than(ask, subject):
+    # "wider", "thinner", "thicker" are on no word list: the "than" after
+    # them (directly, or after an "or"/"and" pair) marks the comparison.
+    assert _yes_no_subject(ask) == subject
+
+
+@pytest.mark.parametrize(
+    ("ask", "subject"),
+    [
+        ("is the rate lower, or higher than 5", "rate"),
+        ("is the cover (above 40 mm)", "cover"),
+    ],
+)
+def test_punctuation_on_a_comparison_word_still_ends_the_phrase(ask, subject):
+    assert _yes_no_subject(ask) == subject
+
+
+@pytest.mark.parametrize("ask", ["is 40 mm enough", "are 3 bolts sufficient"])
+def test_no_words_before_the_figure_reads_nothing(ask):
+    assert _yes_no_subject(ask) is None
+
+
+@pytest.mark.parametrize(
+    ("ask", "named"),
+    [("are they below 3 m", "they"), ("did we exceed 6 bar", "we")],
+)
+def test_a_pronoun_names_no_thing(ask, named):
+    # The reader returns the pronoun, but a pronoun is not a head noun:
+    # the ask narrows nothing, exactly as before the yes/no reader existed.
+    assert _yes_no_subject(ask) == named
+    kinds, heads, quals = _question_asks(ask)
+    assert "measure" in kinds
+    assert heads == set() and quals == set()
+
+
+@pytest.mark.parametrize(
+    "ask", ["Are they deeper than 50 mm?", "Is it more than 50 mm?"],
+)
+def test_a_pronoun_yes_no_ask_still_asks_between_two_cases(ask):
+    # A pronoun points back at an earlier turn, so it must not narrow the
+    # cases to none and silence the clarifier.
+    cases = _cases(
+        ("podium screed depth", "65 mm", "spec_a.pdf"),
+        ("roof screed depth", "90 mm", "spec_b.pdf"),
+    )
+    q = clarifying_question(ask, "The screed depth is 65 mm.", cases)
+    assert q is not None
+    assert "65 mm" in q and "90 mm" in q

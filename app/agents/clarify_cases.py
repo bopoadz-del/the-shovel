@@ -73,6 +73,7 @@ _STOPWORDS = {
     "their", "our", "your", "his", "her", "which", "what", "when",
     "where", "who", "whom", "how", "not", "no", "yes", "as", "than",
     "then", "there", "here", "each", "any", "some", "all", "every", "one",
+    "i", "me", "we", "us", "you", "he", "him", "she", "they", "them",
 }
 
 #: Month names and abbreviations. A calendar date ("Jan-25", "30-Jan-25")
@@ -342,13 +343,28 @@ def _yes_no_subject(q: str) -> str | None:
     m = re.match(r"(?:is|are|was|were|does|do|did)\s+(?:the\s+|a\s+|an\s+)?(.+)$", q)
     if not m:
         return None
+    raw = m.group(1).split()
+    bares = [w.strip(".,;:()\"'") for w in raw]
     words: list[str] = []
-    for w in m.group(1).split():
-        bare = w.strip(".,;:()\"'")
-        if any(ch.isdigit() for ch in bare) or bare in _COMPARISON_WORDS:
+    for i, bare in enumerate(bares):
+        if (
+            any(ch.isdigit() for ch in bare)
+            or bare in _COMPARISON_WORDS
+            or _compares_by_than(bares, i)
+        ):
             break
-        words.append(w)
+        words.append(raw[i])
     return " ".join(words) or None
+
+
+def _compares_by_than(bares: list[str], i: int) -> bool:
+    """True when word ``i`` is a comparative because "than" follows it
+    ("wider than", "thinner or thicker than"). English marks the
+    comparison by its grammar, so no list of comparatives is needed."""
+    nxt = bares[i + 1:i + 4]
+    if nxt[:1] == ["than"]:
+        return True
+    return len(nxt) == 3 and nxt[0] in ("or", "and") and nxt[2] == "than"
 
 
 def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
