@@ -854,6 +854,16 @@ RUNNING_SIMILARITY = 0.85
 #: A misreading adds its pages to the running line it is alike only when the
 #: same misreading is seen on at least this many pages.
 MIN_READING_PAGES = 2
+#: Glyphs an OCR engine reads for one another (casefolded). A reading of a
+#: line is a misreading only when its one slipped word differs from the
+#: line's by one of these pairs, in either direction. Two real headings one
+#: letter apart ("doors"/"floors", "piling"/"tiling") differ by a pair that is
+#: not here and stay two lines, wherever their pages fall.
+OCR_GLYPH_CONFUSIONS: frozenset[tuple[str, str]] = frozenset({
+    ("rn", "m"), ("nn", "m"), ("vv", "w"), ("cl", "d"), ("li", "h"),
+    ("ii", "u"), ("ri", "n"), ("l", "i"), ("i", "j"), ("c", "e"),
+    ("c", "o"), ("e", "o"), ("u", "v"),
+})
 #: A continuation mark is the same suffix after at least this many headings.
 MIN_MARK_HEADINGS = 2
 #: The longest suffix (characters) read as a continuation mark.
@@ -931,23 +941,20 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
         m = _masked(lab.text)
         on[m].add(lab.page)
         raw[m].add(_norm(lab.text))
-    # OCR reads one running line several ways (a letter misread on some
+    # OCR reads one running line several ways (a glyph misread on some
     # pages), and each reading alone can fall short of most pages. A form's
     # pages and texts are those of every recurring form that is a misreading
     # of it (:func:`_misread`), so a line is counted once however it was
-    # misread. Only readings that recur are pooled; a one-page reading counts
-    # alone, as before, and ``Running.holds`` still finds it by likeness. Two
-    # different headings alike in their letters ("Internal Finishes",
-    # "External Finishes") differ by more than one glyph of a word, are not a
-    # misreading of each other, and stay two lines. Two headings one glyph
-    # apart ("Internal Doors", "Internal Floors") are told apart by the pages:
-    # each section holds a run of pages of its own, one wholly before the
-    # other, while a misreading falls among its line's other readings
-    # (:func:`_interleaved`). Forms whose pages do not interleave are not
-    # pooled.
+    # misread, whether the misreadings are scattered among its pages or hold
+    # a run of pages of their own. Only readings that recur are pooled; a
+    # one-page reading counts alone, as before, and ``Running.holds`` still
+    # finds it by likeness. A misreading differs from its line in one word,
+    # by one glyph confusion (:data:`OCR_GLYPH_CONFUSIONS`). Two different
+    # headings alike in their letters ("Internal Finishes" / "External
+    # Finishes", "Internal Doors" / "Internal Floors") differ by more than
+    # that, and stay two lines however a bill repeats its sections.
     recurs = sorted(m for m, ps in on.items() if len(ps) >= MIN_READING_PAGES)
-    pooled = {m: [o for o in found if _interleaved(on[m], on[o])]
-              for m, found in _misread_forms(recurs, recurs).items()}
+    pooled = _misread_forms(recurs, recurs)
     pages_of = {m: set().union(*(on[o] for o in pooled.get(m, [m]))) for m in on}
     texts_of = {m: set().union(*(raw[o] for o in pooled.get(m, [m]))) for m in on}
     masks = {m for m, ps in pages_of.items() if len(ps) * 2 > pages}
@@ -965,19 +972,12 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     return Running(masks, label, forms)
 
 
-def _interleaved(a: set[int], b: set[int]) -> bool:
-    """True when neither page set lies wholly before the other: the two
-    readings share the same run of pages. Sets that only meet at a boundary
-    (``{1, 2, 3}`` and ``{4, 5, 6}``, or ``{1, 2, 3}`` and ``{3, 4}``) are two
-    runs, one after the other."""
-    return min(a) < max(b) and min(b) < max(a)
-
-
 def _slipped_word(a: str, b: str) -> bool:
-    """Two different words that are one word misread: a single glyph read as
-    at most two (``rn`` for ``m``, ``c`` for ``e``) or one dropped or added,
-    the rest of the word read alike. A change that takes half the word or
-    more (a one-letter word, ``in``/``ex``) is a different word."""
+    """Two different words that are one word misread: one glyph confusion
+    (:data:`OCR_GLYPH_CONFUSIONS`, ``rn`` for ``m``, ``c`` for ``e``) at one
+    place, the rest of the word read alike. A change that takes half the
+    word or more (a one-letter word) is a different word, and so is any
+    change that is not a glyph confusion (``d`` for ``fl``, a glyph added)."""
     if a == b:
         return False
     head = 0
@@ -988,9 +988,10 @@ def _slipped_word(a: str, b: str) -> bool:
            and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
         tail += 1
     # What lies between the shared head and tail is the slip.
-    span_a, span_b = len(a) - head - tail, len(b) - head - tail
-    return (min(span_a, span_b) <= 1 and max(span_a, span_b) <= 2
-            and max(span_a, span_b) * 2 < max(len(a), len(b)))
+    slip_a, slip_b = a[head:len(a) - tail], b[head:len(b) - tail]
+    return (((slip_a, slip_b) in OCR_GLYPH_CONFUSIONS
+             or (slip_b, slip_a) in OCR_GLYPH_CONFUSIONS)
+            and max(len(slip_a), len(slip_b)) * 2 < max(len(a), len(b)))
 
 
 def _misread(a: str, b: str) -> bool:
