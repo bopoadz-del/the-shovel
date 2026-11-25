@@ -71,6 +71,35 @@ def test_a_bare_figure_binds_nowhere_when_two_criteria_are_unlabelled():
     assert read_records(_OFFERS, ["price", "technical", "safety"]) is None
 
 
+@pytest.mark.parametrize("text, criteria", [
+    ("Two offers: North price 1.2 M technical 88, South price 1.0 M 64.", ["price", "technical"]),
+    ("Two quotes: East sum 2.4 M quality 70, West quality 55 2.0 M.", ["sum", "quality"]),
+])
+def test_a_bare_figure_binds_nowhere_when_every_criterion_is_labelled(text, criteria):
+    # Every criterion carries a label somewhere, so no criterion is left
+    # for the bare figure; the run is no set of records.
+    assert read_records(text, criteria) is None
+
+
+@pytest.mark.parametrize("text, criteria", [
+    # The clause would otherwise be a full record: the name, one labelled
+    # figure and one bare figure for the single unlabelled criterion.
+    ("Two offers: Price technical 88 1.2 M, South technical 64 1.0 M.", ["price", "technical"]),
+    ("Two quotes: Quality sum 2.4 M 70, West sum 2.0 M 55.", ["sum", "quality"]),
+])
+def test_a_capitalised_criterion_word_is_never_a_record_name(text, criteria):
+    assert read_records(text, criteria) is None
+
+
+@pytest.mark.parametrize("text, criteria, name", [
+    ("Two offers: Pricey technical 88 1.2 M, South technical 64 1.0 M.", ["price", "technical"], "Pricey"),
+    ("Two quotes: Qualia sum 2.4 M 70, West sum 2.0 M 55.", ["sum", "quality"], "Qualia"),
+])
+def test_a_name_that_only_starts_like_a_criterion_is_a_record_name(text, criteria, name):
+    rows = read_records(text, criteria)
+    assert rows is not None and rows[0]["name"] == name
+
+
 @pytest.mark.parametrize("text, expected_price", [
     ("Two offers: North 1.2 M technical 88, South 900 k technical 64.", 900_000.0),
     ("Two offers: North 1.2 M technical 88, South 1.0 million technical 64.", 1_000_000.0),
