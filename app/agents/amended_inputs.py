@@ -72,6 +72,31 @@ def _label_before(text: str, start: int, end: int) -> tuple[str, ...]:
     return tuple(words)
 
 
+# A minus sign written straight before a figure, not inside a word or range.
+_SIGN_RE = re.compile(r"(?:^|[^\w.,])[-\u2212]$")
+
+
+def _signed(text: str, m: re.Match) -> tuple[float, str]:
+    """The value and written form of figure ``m``, keeping a minus sign written
+    straight before it ("-198,000")."""
+    value = float(m.group(1).replace(",", "") + (m.group(2) or ""))
+    written = m.group(0).strip()
+    if _SIGN_RE.search(text[:m.start()]):
+        return -value, "-" + written
+    return value, written
+
+
+def _labelled(text: str) -> list[tuple[tuple[str, ...], re.Match]]:
+    out: list[tuple[tuple[str, ...], re.Match]] = []
+    previous_end = 0
+    for m in _FIGURE_RE.finditer(text or ""):
+        label = _label_before(text, previous_end, m.start())
+        previous_end = m.end()
+        if label:
+            out.append((label, m))
+    return out
+
+
 def stated_figures(text: str) -> list[StatedFigure]:
     """Every figure in ``text`` with the words its own clause puts before it.
 
@@ -79,15 +104,30 @@ def stated_figures(text: str) -> list[StatedFigure]:
     label and is not returned; nor is the second of two figures with only a
     joining word between them ("20 by 15")."""
     out: list[StatedFigure] = []
-    previous_end = 0
-    for m in _FIGURE_RE.finditer(text or ""):
-        label = _label_before(text, previous_end, m.start())
-        previous_end = m.end()
-        if not label:
-            continue
-        value = float(m.group(1).replace(",", "") + (m.group(2) or ""))
-        out.append(StatedFigure(label, value, bool(m.group(3)), m.group(0).strip()))
+    for label, m in _labelled(text):
+        value, written = _signed(text, m)
+        out.append(StatedFigure(label, value, bool(m.group(3)), written))
     return out
+
+
+def _names_a_thing(text: str, m: re.Match) -> bool:
+    """A whole number written straight after its words and followed, in the
+    same clause, by more words that are not a joining word ("clause 14 say",
+    "item 3 cover"): it names something, it is not an amount to work with."""
+    if m.group(2) or m.group(3) or "," in m.group(1) or _SIGN_RE.search(text[:m.start()]):
+        return False
+    rest = text[m.end():]
+    clause_end = _CLAUSE_END_RE.search(rest)
+    words = _WORD_RE.findall(rest[:clause_end.start()] if clause_end else rest)
+    return bool(words) and words[0].lower() not in _EDGE_WORDS
+
+
+def _input_figures(text: str) -> list[StatedFigure]:
+    """The stated figures of ``text`` that are amounts, not the number of a
+    thing it names."""
+    labelled = _labelled(text)
+    figures = stated_figures(text)
+    return [f for f, (_, m) in zip(figures, labelled) if not _names_a_thing(text, m)]
 
 
 def _same_label(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
@@ -111,7 +151,10 @@ def _changes(message: str, stated: list[StatedFigure]) -> Optional[list[tuple[St
         return None
     pairs: list[tuple[StatedFigure, StatedFigure]] = []
     for new in figures:
-        earlier = [s for s in stated if _same_label(s.label, new.label)]
+        # The same words first; words that are a part of another label only
+        # when no label is the same ("valuation" is not "previous valuation").
+        earlier = ([s for s in stated if s.label == new.label]
+                   or [s for s in stated if _same_label(s.label, new.label)])
         if not earlier:
             return None
         if not _same_value(earlier[-1], new):
@@ -176,34 +219,47 @@ def amendment_note(message: str, earlier_user_messages: Iterable[str]) -> Option
 
 def _bare_figure(message: str) -> Optional[str]:
     """The one figure ``message`` gives when it gives exactly one, under no
-    label of its own, and asks no question ("1,600,000.", "It was 45."); else
-    None."""
+    label of its own, and asks no question ("1,600,000.", "It was 45.",
+    "-12,000."); else None."""
     if _asks_its_own_question(message):
         return None
     figures = list(_FIGURE_RE.finditer(message or ""))
     if len(figures) != 1 or stated_figures(message):
         return None
-    return figures[0].group(0).strip()
+    return _signed(message, figures[0])[1]
 
 
-def _worked_question(earlier: list[str]) -> tuple[str, list[StatedFigure]]:
-    """The latest earlier message that states figures of its own and does not
-    only change figures stated before it, with every figure the thread states
-    from there on (the latest value under each label)."""
+def _worked_question(earlier: list[str]) -> tuple[str, list[StatedFigure], list[str]]:
+    """The question the thread is still working, the figures that stand for it
+    and the lone figures already given for it, in order.
+
+    Walking back from the latest message, only lone figures and messages that
+    only change stated figures may sit between the question and now; the
+    question is the first other message, and it must state an amount of its own.
+    Any other message (a new question, a remark) means the thread is not
+    working a stated question, and nothing is returned. Each figure of the
+    question stands until a later message changes that very figure."""
     for i in range(len(earlier) - 1, -1, -1):
-        own = stated_figures(earlier[i])
-        if not own:
+        message = earlier[i]
+        if _bare_figure(message) is not None:
             continue
         prior = [f for m in earlier[:i] for f in stated_figures(m)]
-        if _changes(earlier[i], prior) is not None:
+        if _changes(message, prior) is not None:
             continue
-        latest: dict[tuple[str, ...], StatedFigure] = {}
-        for m in earlier[i:]:
-            for f in stated_figures(m):
-                key = next((k for k in latest if _same_label(k, f.label)), f.label)
-                latest[key] = f
-        return earlier[i].strip(), list(latest.values())
-    return "", []
+        stands = _input_figures(message)
+        if not stands:
+            return "", [], []
+        supplied: list[str] = []
+        for later in earlier[i + 1:]:
+            figure = _bare_figure(later)
+            if figure is not None:
+                supplied.append(figure)
+                continue
+            for old, new in _changes(later, stands) or []:
+                at = next(k for k, s in enumerate(stands) if s is old)
+                stands[at] = StatedFigure(old.label, new.value, new.percent, new.text)
+        return message.strip(), stands, supplied
+    return "", [], []
 
 
 def supplied_input_note(message: str, earlier_user_messages: Iterable[str]) -> Optional[str]:
@@ -213,18 +269,22 @@ def supplied_input_note(message: str, earlier_user_messages: Iterable[str]) -> O
     of the question -- it replaced the stated valuation once. It changes none
     of the figures the user stated under their own words; what it supplies is
     whatever the previous reply asked the user for. The note names the
-    question, the figures that stand, and the figure supplied."""
+    question, the figures that stand, any lone figure given for it earlier, and
+    the figure supplied."""
     figure = _bare_figure(message)
     if figure is None:
         return None
-    question, stands = _worked_question([m for m in earlier_user_messages if (m or "").strip()])
+    question, stands, supplied = _worked_question(
+        [m for m in earlier_user_messages if (m or "").strip()])
     if not question:
         return None
     standing = "; ".join(f"{' '.join(f.label)}: {f.text}" for f in stands)
+    given = (f" The user already gave, in earlier replies and in this order: "
+             f"{', '.join(supplied)}; those stand too." if supplied else "")
     return (
         f"The user's latest message gives one figure, {figure}, with no label "
         "of its own. It does not replace any figure the user stated earlier; "
-        f"these stand: {standing}. The question is still the earlier one:\n"
+        f"these stand: {standing}.{given} The question is still the earlier one:\n"
         f"\"{question}\"\n"
         "If your previous reply asked the user for an input, this figure is "
         "that input: work the question again from every stated figure plus "
