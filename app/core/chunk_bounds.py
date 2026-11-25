@@ -305,16 +305,6 @@ def _table_row_indexes(lines: list[str]) -> set[int]:
     return rows
 
 
-def _heading_candidates(body: str) -> list[str]:
-    """The heading-like lines of ``body`` in order, rows of its tables left out."""
-    lines = body.splitlines()
-    rows = _table_row_indexes(lines)
-    return [
-        line for i, line in enumerate(lines)
-        if i not in rows and _is_heading_line(line)
-    ]
-
-
 def _is_heading_line(line: str) -> bool:
     text = line.strip().lstrip("#").strip()
     if not text or len(text) >= HEADING_RESERVE or text[-1] in ".,;":
@@ -355,8 +345,12 @@ def heading_line_for_page(
         if named:
             return " - ".join(named)[: HEADING_RESERVE - 1]
     first = ""
+    lines = page_text.splitlines()
     # A table row (a header or a numbered item row) names cells, not a section.
-    for line in _heading_candidates(page_text):
+    rows = _table_row_indexes(lines)
+    for idx, line in enumerate(lines):
+        if idx in rows or not _is_heading_line(line):
+            continue
         if running is None or not running(line):
             return line.strip()
         first = first or line.strip()
