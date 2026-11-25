@@ -11,7 +11,7 @@ from app.lib.formula_registry import Param, formula
     display_name='Interim payment',
     description='Net interim payment from a gross valuation and a retention percentage.',
     inputs={
-        'gross_valuation': Param('currency', 0, 1e13, label='gross valuation'),
+        'gross_valuation': Param('currency', 0, 1e13, label='gross valuation', basis='period'),
         'retention_percent': Param('%', 0, 100, label='retention'),
     },
     outputs={'gross_valuation': 'currency', 'retention_percent': '%', 'retention_amount': 'currency', 'net_payment': 'currency'},

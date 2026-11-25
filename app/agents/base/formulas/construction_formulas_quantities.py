@@ -111,5 +111,5 @@ def concrete_volume(
         "waste_factor": waste_factor,
         "standard": "geometry",
         "note": (f"Net = {expr} = {net:.3f} m3; "
-                 f"+{waste_factor*100:.0f}% waste = {with_waste:.3f} m3."),
+                 f"+{waste_factor*100:g}% waste = {with_waste:.3f} m3."),
     }

@@ -46,7 +46,6 @@ from tests.exam11_checks import (
 pytestmark = pytest.mark.browser
 
 _W2 = pytest.mark.xfail(strict=True, reason="W2 not landed: per-session documents")
-_W3 = pytest.mark.xfail(strict=True, reason="W3 not landed: citations in the side panel only")
 
 # Two questions per item, taken from the UI-PHYS catalog: the stub answers
 # only catalog asks (an invented question gets its honest error bubble, which
@@ -185,7 +184,6 @@ def test_11_4_a_produced_file_is_saved_and_tagged(page: Page, live_app, pair):
     )
 
 
-@_W3
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("which", [0, 1])
 def test_11_5_citations_only_in_the_side_panel(page: Page, live_app, ui_phys_catalog, which):
