@@ -86,3 +86,47 @@ def test_apply_drops_lead_in_request(closing: str) -> None:
 def test_asking_turn_keeps_lead_in_request(closing: str) -> None:
     text = f"{_ANSWER}\n\n{closing}"
     assert answer_contract.apply(text, asking=True).text == text
+
+
+# ── the reader's condition, "then", or "I'd be able to": the paragraph goes ──
+
+@pytest.mark.parametrize("closing", [
+    "If you send the revised drawing, then I'll update the take-off.",
+    "When you have the priced bill, then I can extend the membrane line.",
+    "If you upload the approved submittal, I'd be able to check the lap width.",
+    "Once you confirm the revision, I'd be able to read the level off it.",
+])
+def test_reader_condition_offer_variants_go(closing: str) -> None:
+    assert _drop_closing_request(f"{_ANSWER}\n\n{closing}") == _ANSWER
+
+
+# ── a condition on the documents, not the reader, before the writer's own
+# ── statement of method or limit: it stays (the rule must not fire) ─────────
+
+@pytest.mark.parametrize("statement", [
+    "When the drawing gives two levels, I'll take the lower one as the formation level.",
+    "If the two schedules disagree, I can only quote the later revision.",
+])
+def test_document_condition_then_writer_method_stays(statement: str) -> None:
+    text = f"{_ANSWER}\n\n{statement}"
+    assert _drop_closing_request(text) == text
+
+
+# ── edges: the new shapes still stay when they are the whole answer, or when
+# ── they carry a figure or a citation marker ────────────────────────────────
+
+@pytest.mark.parametrize("closing", [
+    "To get the rate, point me at the priced bill and I'll extend it.",
+    "If you tell me which revision applies, I will read the line from it.",
+])
+def test_lead_in_request_alone_stays(closing: str) -> None:
+    assert _drop_closing_request(closing) == closing
+
+
+@pytest.mark.parametrize("closing", [
+    "To get the rate for the 450 m2 area, point me at the priced bill and I'll extend it.",
+    "If you tell me which revision applies [2], I will read the line from it.",
+])
+def test_lead_in_request_with_figure_or_marker_stays(closing: str) -> None:
+    text = f"{_ANSWER}\n\n{closing}"
+    assert _drop_closing_request(text) == text
