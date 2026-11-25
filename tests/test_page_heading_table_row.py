@@ -77,9 +77,9 @@ def test_a_semicolon_heading_above_a_table_is_not_a_row(heading):
     assert heading_line_for_page(page) == heading
 
 
-def test_an_empty_page_has_no_heading():
-    assert heading_line_for_page("") == ""
-    assert heading_line_for_page("\n  \n") == ""
+@pytest.mark.parametrize("page", ["", "\n  \n"])
+def test_an_empty_page_has_no_heading(page):
+    assert heading_line_for_page(page) == ""
 
 
 @pytest.mark.parametrize("heading", ["4.1 Concrete Works", "## Earthworks"])
