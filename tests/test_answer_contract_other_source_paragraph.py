@@ -33,17 +33,22 @@ def _apply(text, **kw):
 
 # ── context from another document, no value of the lead's kind: it goes ────
 
-@pytest.mark.parametrize("text, lead, document", [
+@pytest.mark.parametrize("text, gone, document", [
     (("The billed area of the podium screed is 4,180 m² [source: Podium Ledger.xlsx].\n\n"
       "The screed mix is specified at 25 N/mm² with a 50 mm minimum depth [source: Screed Specification.pdf]."),
-     "The billed area of the podium screed is 4,180 m² [1].", "Podium Ledger.xlsx"),
+     "screed mix", "Podium Ledger.xlsx"),
     (("No unit rate for the louvre panels is in the priced ledger [source: Annex Ledger.xlsx].\n\n"
       "The louvre finish is set out in the facade schedule as anodised, 1.5 mm thick [source: Facade Schedule.pdf]."),
-     "No unit rate for the louvre panels is in the priced ledger [1].", "Annex Ledger.xlsx"),
+     "anodised", "Annex Ledger.xlsx"),
 ])
-def test_other_source_context_goes(text, lead, document):
+def test_other_source_context_goes(text, gone, document):
     out = _apply(text)
-    assert out.text == lead
+    # The answer is the first paragraph exactly as the contract renders it on
+    # its own: the context paragraph goes and nothing else changes. Comparing
+    # with that rendering, not with a literal, keeps the other rules' wording
+    # of the lead (absence form, sentence marks) out of this rule's test.
+    assert out.text == _apply(text.split("\n\n")[0]).text
+    assert gone not in out.text and "[1]" in out.text
     assert [c["document"] for c in out.citations] == [document]
     assert [c["marker"] for c in out.citations] == [1]
 
