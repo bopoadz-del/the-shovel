@@ -67,11 +67,14 @@ def test_only_the_negation_moves_rest_is_byte_identical(text, tail):
     assert out[: len(text) - len(text.lstrip())] == text[: len(text) - len(text.lstrip())]
 
 
-def test_markdown_emphasis_before_the_lead_is_kept():
-    assert ac._absence_lead("**No pile cap depth is in the drawings I searched.**", False) == \
-        "**Pile cap depth is not in the drawings I searched.**"
-    assert ac._absence_lead("_There is no slab camber in the notes I read._", False) == \
-        "_Slab camber is not in the notes I read._"
+@pytest.mark.parametrize("text,expected", [
+    ("**No pile cap depth is in the drawings I searched.**",
+     "**Pile cap depth is not in the drawings I searched.**"),
+    ("_There is no slab camber in the notes I read._",
+     "_Slab camber is not in the notes I read._"),
+])
+def test_markdown_emphasis_before_the_lead_is_kept(text, expected):
+    assert ac._absence_lead(text, False) == expected
 
 
 # ---- must NOT fire ------------------------------------------------------
