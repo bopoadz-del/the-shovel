@@ -150,3 +150,18 @@ def test_printed_figures_multiply_to_the_printed_result(q, c, p):
     assert g2 == pytest.approx(g) and price == pytest.approx(p)
     assert total == pytest.approx(g2 * price, abs=0.005)
     assert "e+" not in " ".join(out["working"]).lower()
+
+
+@pytest.mark.parametrize("q,c,p", [(20_000_000_000.0, 1.0, 0.5),
+                                   (500.0, 0.00004, 90.0)])
+def test_a_figure_beyond_ten_digits_or_below_a_ten_thousandth_prints_in_full(q, c, p):
+    # Ten significant figures in ``g`` form switch to an exponent at 1e10 and
+    # below 1e-4; the working must still print every figure positionally so a
+    # reader can multiply them.
+    import re
+    out = resource_cost_line(**_base(q, c, p))
+    text = " ".join(out["working"])
+    assert not re.search(r"\de[+-]?\d", text.lower())
+    net = next(w for w in out["working"] if w.startswith("Net resource"))
+    a, b, r = _figures(net)
+    assert (a, b) == pytest.approx((q, c)) and r == pytest.approx(q * c)
