@@ -15,6 +15,7 @@ import {
   sessionDocumentsFor,
   sessionDocumentsLoaded,
   sessionDocumentsView,
+  uploadSessionFor,
   withSessionId,
 } from './sessionDocuments.js'
 
@@ -155,3 +156,35 @@ for (const sid of [null, '   ']) {
     assert.equal(documentPath('p1', 'd9', '/preview/raw', sid), '/v1/projects/p1/documents/d9/preview/raw')
   })
 }
+
+// The workspace always has a chat open, so "is there a session" cannot pick
+// project vs session. The control the user used picks it: "+ Add to project"
+// sends no session, "+ Upload file" sends the open one.
+for (const sid of ['ws-p1-1000', 'ws-p7-2000']) {
+  test(`a project upload carries no session; a session upload carries ${sid}`, () => {
+    assert.deepEqual(withSessionId(new FakeForm(), uploadSessionFor('project', sid)).fields, [])
+    assert.deepEqual(withSessionId(new FakeForm(), uploadSessionFor('session', sid)).fields,
+      [['session_id', sid]])
+  })
+}
+
+test('only the project target drops the session; no session stays none', () => {
+  for (const target of ['session', 'Project', '', undefined]) {
+    assert.equal(uploadSessionFor(target, 'ws-p1-1000'), 'ws-p1-1000', String(target))
+  }
+  assert.equal(uploadSessionFor('session', null), null)
+  assert.equal(uploadSessionFor('project', null), null)
+})
+
+test('the sidebar has one picker per target, each wired to its own', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../pages/ProjectWorkspace.tsx', import.meta.url), 'utf8')
+  const wiring = (id) => {
+    const at = src.indexOf(`id="${id}"`)
+    assert.ok(at > 0, id)
+    return src.slice(at, src.indexOf('/>', at))
+  }
+  assert.match(wiring('doc-file-input'), /handleFileChange\(e, 'session'\)/)
+  assert.match(wiring('doc-project-file-input'), /handleFileChange\(e, 'project'\)/)
+  assert.match(src, /withSessionId\(form, uploadSessionFor\(target, sessionId\)\)/)
+})

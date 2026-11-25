@@ -13,6 +13,15 @@ export function withSessionId(form, sessionId) {
   return form
 }
 
+/** The session an upload is filed under. The workspace always has a chat
+ *  open, so the target is chosen by the control the user used, not by
+ *  whether a session exists: ``'project'`` files the upload as a project
+ *  document (no session, searchable with the project's files), any other
+ *  target attaches it to the open session. */
+export function uploadSessionFor(target, sessionId) {
+  return target === 'project' ? null : sessionId
+}
+
 /** The by-id route of one document (``tail``: ``/preview``,
  *  ``/preview/raw``, ``/download``), naming the open chat. A file attached to
  *  a chat is reachable by id only from that chat (the server answers 404

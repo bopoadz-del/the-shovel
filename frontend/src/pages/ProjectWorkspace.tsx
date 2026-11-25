@@ -36,6 +36,7 @@ import {
   belongsToProjectList,
   readSessionDocuments,
   sessionDocumentsView,
+  uploadSessionFor,
   withSessionId,
   type SessionDocumentsState,
 } from '../chat/sessionDocuments'
@@ -364,8 +365,9 @@ function friendlyErrorMessage(raw: string): string {
 
 interface DocumentsPanelProps {
   projectId: string
-  /** The open chat session (W2): an upload is recorded on it and listed
-   *  under "This session" only, never in the project's documents. */
+  /** The open chat session (W2): "+ Upload file" records an upload on it,
+   *  listed under "This session" only, never in the project's documents;
+   *  "+ Add to project" files the upload as a project document. */
   sessionId?: string | null
   documents: DocumentRecord[]
   onDocumentAdded: (doc: DocumentRecord) => void
@@ -402,7 +404,10 @@ export function DocumentsPanel({
   const replaceInputRef = useRef<HTMLInputElement>(null)
   const replaceTarget = useRef<string | null>(null)
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'project' | 'session',
+  ) {
     const file = e.target.files?.[0]
     if (!file) return
     setUploadError(null)
@@ -410,7 +415,7 @@ export function DocumentsPanel({
     try {
       const form = new FormData()
       form.append('file', file)
-      withSessionId(form, sessionId)
+      withSessionId(form, uploadSessionFor(target, sessionId))
       const resp = await apiPostForm<{ document: DocumentRecord }>(
         `/v1/projects/${projectId}/documents`,
         form,
@@ -427,7 +432,7 @@ export function DocumentsPanel({
     } finally {
       setUploading(false)
       // Reset the input so the same file can be re-uploaded if needed
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      e.target.value = ''
     }
   }
 
@@ -596,9 +601,17 @@ export function DocumentsPanel({
           type="file"
           id="doc-file-input"
           className="docs-upload__input"
-          onChange={(e) => void handleFileChange(e)}
+          onChange={(e) => void handleFileChange(e, 'session')}
           disabled={uploading}
           aria-label="Choose file to upload"
+        />
+        <input
+          type="file"
+          id="doc-project-file-input"
+          className="docs-upload__input"
+          onChange={(e) => void handleFileChange(e, 'project')}
+          disabled={uploading}
+          aria-label="Choose file to add to the project"
         />
         <label
           htmlFor="doc-file-input"
@@ -606,6 +619,13 @@ export function DocumentsPanel({
           aria-busy={uploading}
         >
           {uploading ? 'Uploading…' : '+ Upload file'}
+        </label>
+        <label
+          htmlFor="doc-project-file-input"
+          className={`docs-upload__btn btn btn--ghost${uploading ? ' btn--disabled' : ''}`}
+          title="Add a document to the project: every chat can search it"
+        >
+          + Add to project
         </label>
         {uploadError && (
           <p className="docs-upload__error" role="alert">{uploadError}</p>
