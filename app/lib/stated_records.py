@@ -11,6 +11,11 @@ Every rule reads the ask's own words: a criterion is a label the weights
 name, a record is a clause that opens on a name and carries figures, and a
 figure with no label of its own belongs to the one weighted criterion no
 record labels. Anything in doubt binds nothing.
+
+The bound inputs must also be inputs the scorer can take as written: the
+weights are fractions or percentages, an amount is a positive sum, every
+other criterion is a 0-100 figure the ask calls a score, and no rule the
+ask states for a criterion differs from the scorer's own.
 """
 from __future__ import annotations
 
@@ -49,6 +54,16 @@ _RULE_RE = re.compile(
 )
 
 _WORD_RE = re.compile(r"[a-z]+")
+
+# Words that call a figure a score. The scorer reads every criterion that is
+# not an amount as a 0-100 score, so a figure binds there only when the ask
+# itself calls it one.
+_SCORE_WORD = r"(?:scores?|scored|points?|marks?|ratings?)"
+_SCORE_SUFFIX_RE = re.compile(rf"(?<=[A-Za-z])\s+{_SCORE_WORD}$", re.IGNORECASE)
+_SCORE_MIN, _SCORE_MAX = 0.0, 100.0
+# Weights the scorer can apply: fractions of one or percentages of 100,
+# with the tolerances the scorer itself reads percentages with.
+_WEIGHT_TOTALS = ((1.0, 0.005), (100.0, 0.5))
 
 
 def _words(label: str) -> list[str]:
@@ -135,7 +150,7 @@ def _parse_record(segment: str, criteria: list[str]) -> tuple[str, dict[str, flo
         scale = m.group("scale")
         if scale:
             value *= _SCALE.get(scale, _SCALE.get(scale.lower(), 1.0))
-        label = (m.group("label") or "").strip()
+        label = _SCORE_SUFFIX_RE.sub("", (m.group("label") or "").strip())
         if label:
             crit = _criterion_for(label, criteria)
             if crit is None or crit in labelled:
@@ -190,21 +205,92 @@ def stated_records(text: str, criteria: list[str]) -> list[dict[str, Any]] | Non
     return None
 
 
-def _rule_disagrees(text: str, criteria: list[str]) -> bool:
-    """True when the ask states a score rule other than lowest / amount.
+def _crit_re(crit: str) -> str:
+    """The criterion's words as written, each optionally plural."""
+    return r"\s+".join(rf"{re.escape(w)}s?" for w in crit.split("_"))
+
+
+def _agrees(rule: str, crit: str) -> bool:
+    rule = re.sub(r"\s+", "", rule.lower())
+    own = re.escape(crit.replace("_", ""))
+    return re.fullmatch(rf"lowest(?:{own})?/{own}(?:[x*×]100)?", rule) is not None
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"\.(?!\d)\s*|\?\s*|\n+", text or "") if s.strip()]
+
+
+def _rule_disagrees(text: str, criteria: list[str], amounts: set[str]) -> bool:
+    """True when the ask states a score rule other than the scorer's.
 
     The scorer this binds to scores an amount as lowest / amount x 100. An
-    ask that writes any other rule for a criterion is not that scorer's ask.
+    ask that writes any other rule for a criterion is not that scorer's ask,
+    in either form: "<criterion> score = <rule>", or a sentence that says
+    how an amount criterion is scored ("<criterion> is scored ...",
+    "scoring of <criterion> ...") without writing the scorer's rule.
     """
     for m in _RULE_RE.finditer(text or ""):
         crit = _criterion_for(m.group("crit"), criteria)
-        if crit is None:
-            continue
-        rule = re.sub(r"\s+", "", m.group("rule").lower())
-        own = re.escape(crit.replace("_", ""))
-        if not re.fullmatch(rf"lowest(?:{own})?/{own}(?:[x*×]100)?", rule):
+        if crit is not None and not _agrees(m.group("rule"), crit):
             return True
+    for crit in amounts:
+        c = _crit_re(crit)
+        said = re.compile(
+            rf"\b{c}\b[^0-9,;]*?\bscor(?:e|es|ed|ing)\b|\bscor(?:e|es|ed|ing)\s+(?:of|for|on)\s+(?:the\s+)?{c}\b",
+            re.IGNORECASE,
+        )
+        for sentence in _sentences(text):
+            if not said.search(sentence):
+                continue
+            stated = [
+                r for r in _RULE_RE.finditer(sentence)
+                if _criterion_for(r.group("crit"), criteria) == crit
+            ]
+            if not stated or not all(_agrees(r.group("rule"), crit) for r in stated):
+                return True
     return False
+
+
+def _called_a_score(text: str, crit: str) -> bool:
+    """True when the ask calls the criterion's figures scores.
+
+    "<criterion> score(s) / scored / points / marks / rating", optionally
+    with "is"/"are" between, or "scores for / of / on <criterion>".
+    """
+    c = _crit_re(crit)
+    return re.search(
+        rf"\b{c}\s+(?:(?:is|are)\s+)?{_SCORE_WORD}\b|\b{_SCORE_WORD}\s+(?:for|of|on)\s+(?:the\s+)?{c}\b",
+        text or "",
+        re.IGNORECASE,
+    ) is not None
+
+
+def _weights_apply(weights: dict[str, float]) -> bool:
+    """True when the weights are fractions of one or percentages of 100."""
+    total = sum(weights.values())
+    return any(abs(total - want) <= tol for want, tol in _WEIGHT_TOTALS)
+
+
+def _figures_fit(text: str, records: list[dict[str, Any]], criteria: list[str], amounts: set[str]) -> bool:
+    """True when every figure is one the scorer can take as written.
+
+    An amount is a positive sum (the scorer divides by it). Any other
+    criterion is a 0-100 score, and only when the ask calls it a score: a
+    figure under a label the ask never calls a score may be days, weeks or
+    a dose, where lower can be better, and the scorer would rank it the
+    wrong way round.
+    """
+    for crit in criteria:
+        values = [r[crit] for r in records]
+        if crit in amounts:
+            if any(v <= 0 for v in values):
+                return False
+            continue
+        if not _called_a_score(text, crit):
+            return False
+        if any(not (_SCORE_MIN <= v <= _SCORE_MAX) for v in values):
+            return False
+    return True
 
 
 def _takes_records_and_weights(fn: Any) -> str | None:
@@ -239,11 +325,17 @@ def records_completed_by_user_text(text: str) -> tuple[str, dict[str, Any]] | No
     weights = stated_weights(raw)
     if not weights:
         return None
+    if not _weights_apply(weights):
+        return None
     criteria = list(weights)
-    if _rule_disagrees(raw, criteria):
+    from app.agents.hats.procurement.formulas.construction_knowledge import _names_an_amount
+
+    # The scorer's own test of which criteria are amounts; one copy.
+    amounts = {c for c in criteria if _names_an_amount(c)}
+    if _rule_disagrees(raw, criteria, amounts):
         return None
     records = stated_records(raw, criteria)
-    if not records:
+    if not records or not _figures_fit(raw, records, criteria, amounts):
         return None
     from app.lib.formula_registry import all_specs
 

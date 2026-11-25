@@ -23,10 +23,10 @@ from app.lib.stated_records import (
 _BIDS = (
     "Four bids: P 3.20 M quality 75, Q 2.90 M quality 60, R 3.60 M quality 92, "
     "S 3.05 M quality 81. Weights cost 60 / quality 40, cost score = lowest/cost*100. "
-    "Which bid wins?"
+    "Quality scores are out of 100. Which bid wins?"
 )
 _OFFERS = (
-    "Two offers: North 1.2 M technical 88, South 1.0 M technical 64. "
+    "Two offers: North 1.2 M technical score 88, South 1.0 M technical score 64. "
     "Weights price 50 / technical 50. Who wins?"
 )
 
@@ -293,3 +293,127 @@ def test_no_selection_without_stated_weights(text, binds):
 def test_a_vetoed_deliverable_is_no_supplied_calculation_even_with_records(monkeypatch, vetoed, supplied):
     monkeypatch.setattr(runtime, "_not_a_supplied_calculation", lambda raw: vetoed)
     assert bool(runtime._user_supplied_registered_calculation(_OFFERS)) is supplied
+
+
+# -- the scorer's contract: only inputs it can take as written bind -----------
+
+_TWO = "Two suppliers: Acme 1.2 M {c} {a}, Beta 1.2 M {c} {b}. Weights price 50 / {w} 50."
+
+
+@pytest.mark.parametrize("crit, a, b", [
+    ("delivery", 30, 90),       # days: lower is better, never called a score
+    ("programme", 40, 20),      # weeks
+])
+def test_a_figure_the_ask_never_calls_a_score_binds_nothing(crit, a, b):
+    text = _TWO.format(c=crit, a=a, b=b, w=crit)
+    assert records_completed_by_user_text(text) is None
+
+
+@pytest.mark.parametrize("crit, a, b, first", [
+    ("delivery score", 30, 90, "Beta"),
+    ("programme score", 40, 20, "Acme"),
+])
+def test_the_same_figure_called_a_score_binds_and_ranks_higher_first(crit, a, b, first):
+    word = crit.split()[0]
+    text = _TWO.format(c=crit, a=a, b=b, w=word)
+    name, bound = records_completed_by_user_text(text)
+    from app.lib.formula_registry import get
+
+    out = get(name).fn(**bound)
+    assert out["recommended"]["name"] == first
+
+
+@pytest.mark.parametrize("text, binds", [
+    ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
+     "Weights price 50 / quality 50. Quality marks are from the panel.", True),
+    ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
+     "Weights price 50 / quality 50. Ratings for quality are from the panel.", True),
+    ("Two suppliers: Acme 1.2 M quality 70, Beta 1.0 M quality 60. "
+     "Weights price 50 / quality 50. Delivery marks are from the panel.", False),
+])
+def test_a_score_word_must_name_the_criterion_it_scores(text, binds):
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("sentence", [
+    "Price is scored linearly, lowest 100 and highest 0.",
+    "Scoring of cost is by rank.",
+])
+def test_a_prose_amount_rule_other_than_the_scorers_binds_nothing(sentence):
+    crit = "cost" if "cost" in sentence else "price"
+    text = (f"Two offers: North 2.0 M technical score 80, South 2.2 M technical score 90. "
+            f"Weights {crit} 50 / technical 50. {sentence} Who wins?")
+    control = text.replace(sentence + " ", "")
+    assert records_completed_by_user_text(control) is not None
+    assert records_completed_by_user_text(text) is None
+
+
+@pytest.mark.parametrize("sentence", [
+    "Price is scored as price score = lowest/price*100.",
+    "Price scoring: price score = lowest price / price x 100.",
+])
+def test_a_prose_sentence_that_writes_the_scorers_own_rule_still_binds(sentence):
+    text = ("Two offers: North 2.0 M technical score 80, South 2.2 M technical score 90. "
+            f"Weights price 50 / technical 50. {sentence} Who wins?")
+    assert records_completed_by_user_text(text) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "Two mixes: M1 cement 350 water 175, M2 cement 400 water 160. Weights cement 50 / water 50.",
+    "Two blends: B1 sand 60 gravel 40, B2 sand 55 gravel 45. Weights sand 70 / gravel 30.",
+])
+def test_records_and_weights_that_are_not_scores_or_amounts_bind_nothing(text):
+    assert records_completed_by_user_text(text) is None
+
+
+@pytest.mark.parametrize("weights, binds", [
+    ("price 30 / technical 30", False),    # sums to 60: neither fractions nor percent
+    ("price 0 / technical 0", False),      # nothing to weigh
+    ("price 0.5 / technical 0.5", True),   # fractions of one
+    ("price 50 / technical 50", True),     # percentages
+    ("price 50.4 / technical 50", True),   # inside the scorer's own percent tolerance
+    ("price 51 / technical 50", False),    # outside it
+])
+def test_only_weights_the_scorer_can_apply_bind(weights, binds):
+    text = _OFFERS.replace("price 50 / technical 50", weights)
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("north, binds", [
+    ("0 technical score 88", False),       # a zero amount: the scorer divides by it
+    ("1.2 M technical score 880", False),  # over the score scale
+    ("1.2 M technical score 100", True),   # the top of the scale
+    ("1.2 M technical score 0", True),     # the bottom of the scale
+])
+def test_figures_outside_the_scorers_scale_bind_nothing(north, binds):
+    text = _OFFERS.replace("1.2 M technical score 88", north)
+    assert (records_completed_by_user_text(text) is not None) is binds
+
+
+@pytest.mark.parametrize("bad", [
+    "North 1.2 M ~ technical 88, South 1.0 M ~ technical 64.",
+    "North 1.2 M + technical 88, South 1.0 M + technical 64.",
+])
+def test_stray_text_between_figures_makes_no_record(bad):
+    good = bad.replace(" ~", "").replace(" +", "")
+    assert read_records(good, ["price", "technical"]) is not None
+    assert read_records(bad, ["price", "technical"]) is None
+
+
+@pytest.mark.parametrize("text", [
+    "Two offers: North 1.2 M technical 88 technical 70, South 1.0 M technical 64.",
+    "Two quotes: East quality 70 quality 50 2.4 M, West quality 55 2.0 M.",
+])
+def test_one_criterion_twice_in_one_record_makes_no_record(text):
+    crit = "technical" if "technical" in text else "quality"
+    amount = "price" if crit == "technical" else "sum"
+    assert read_records(text, [amount, crit]) is None
+
+
+@pytest.mark.parametrize("label, key", [
+    ("gas", "gas"),          # a three-letter word ending in s keeps its s
+    ("bus fares", "bus_fare"),
+    ("costs", "cost"),
+])
+def test_only_words_longer_than_three_letters_lose_a_plural_s(label, key):
+    assert stated_records._key(label) == key
