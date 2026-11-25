@@ -86,6 +86,14 @@ def test_pairs_are_unordered_and_keep_the_deepest_overlap(clashes, pairs):
 
 # --- who moves comes only from the caller's table ---------------------------
 
+@pytest.mark.parametrize("ranks, clash", [
+    (None, _c("D1", "B1", "ducts", "beams")),
+    ({}, _c("P7", "W2", "pipes", "walls")),
+])
+def test_an_empty_or_missing_rank_map_is_no_table_not_unranked_sides(ranks, clash):
+    assert decide_move(clash, ranks) == (None, "no move-priority table supplied")
+
+
 @pytest.mark.parametrize("table, clash, mover, reason_part", [
     (None, _c("D1", "B1", "ducts", "beams"), None, "no move-priority table supplied"),
     ([{"category": "beams", "rank": 1}, {"category": "ducts", "rank": 3}],
