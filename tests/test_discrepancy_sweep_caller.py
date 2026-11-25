@@ -286,4 +286,60 @@ def test_the_search_adapter_reads_one_lexical_search_named_by_document(
     monkeypatch.setattr(embeddings, "get_embedder", lambda *a, **kw: _Embedder())
     monkeypatch.setattr(retriever, "_doc_name_for_id", lambda doc_id: names.get(doc_id, ""))
     assert ae._sweep_search(project_id, query) == expected
-    assert store.calls == [(project_id, query, ae._SWEEP_K)]
+    assert store.calls == [(project_id, query, 8)]
+
+
+# ── the switch: off unless set on ──────────────────────────────────────────
+
+@pytest.mark.parametrize("value", [None, "", "0", "off"])
+def test_the_sweep_is_off_unless_switched_on(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("DISCREPANCY_SWEEP", raising=False)
+    else:
+        monkeypatch.setenv("DISCREPANCY_SWEEP", value)
+    assert ae.sweep_enabled() is False
+    answer, handed, found, _pairs = _DIFFER[0]
+    _out, calls, _turn = _run(monkeypatch, answer, handed, found)
+    assert calls == []
+
+
+@pytest.mark.parametrize("value", ["1", "true", "On"])
+def test_the_sweep_runs_when_switched_on(monkeypatch, value):
+    monkeypatch.setenv("DISCREPANCY_SWEEP", value)
+    assert ae.sweep_enabled() is True
+
+
+# ── one query: an identifier stated in two sentences is searched once ──────
+
+@pytest.mark.parametrize("draft, query", [
+    ("The cover to Table 7.3 is 50 mm. The bar spacing in Table 7.3 is 200 mm.", "table 7.3"),
+    ("Per BS 8500 the cover is 40 mm. Under Clause 4.2 the spacing is 150 mm. BS 8500 gives 30 MPa.",
+     "bs 8500 clause 4.2"),
+])
+def test_an_identifier_stated_twice_is_queried_once(draft, query):
+    stated, got = sweep_targets(draft)
+    assert got == query
+    assert len(stated) >= 2
+
+
+# ── the whole-turn door records the turn's project ─────────────────────────
+
+class _ProjectProbe:
+    def __init__(self):
+        self.seen = []
+
+    async def _chat_impl(self, user_message, history=None, api_key=None, project_id=None):
+        self.seen.append(ae.current_turn().project_id)
+        return {"answer": "No figure here.", "sources": []}
+
+
+@pytest.mark.parametrize("args, kwargs, expected", [
+    (("hello",), {"project_id": "proj-7"}, "proj-7"),
+    (("hello", None, None, "proj-3"), {}, "proj-3"),
+])
+def test_the_chat_door_gives_the_exit_its_project(args, kwargs, expected):
+    import asyncio
+
+    probe = _ProjectProbe()
+    asyncio.run(agent_loop.chat(probe, *args, **kwargs))
+    assert probe.seen == [expected]
