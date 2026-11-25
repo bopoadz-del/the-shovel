@@ -260,17 +260,51 @@ def _is_date_line(text: str) -> bool:
 _TABLE_CELL_SPLIT = re.compile(r"\s*\|\s*")
 
 
-def _is_table_row(text: str) -> bool:
-    """Two or more non-blank cells split by the table cell separator."""
-    return sum(1 for cell in _TABLE_CELL_SPLIT.split(text) if cell) >= 2
+def _cell_count(line: str) -> int:
+    """The non-blank cells of ``line`` split by the table cell separator."""
+    return sum(1 for cell in _TABLE_CELL_SPLIT.split(line.strip()) if cell)
+
+
+def _table_row_indexes(lines: list[str]) -> set[int]:
+    """Indexes of the lines of ``lines`` that are rows of a table.
+
+    A line of two or more cells is a row when it opens on the separator
+    (markdown table syntax) or when the nearest non-blank line before or
+    after it has two or more cells too: the extractors write a table as a
+    block of rows. A single such line between other text is a title that
+    happens to hold the separator, and a markdown ``#`` heading is never a
+    row.
+    """
+    celled = [
+        bool(line.strip())
+        and not line.lstrip().startswith("#")
+        and _cell_count(line) >= 2
+        for line in lines
+    ]
+    filled = [i for i, line in enumerate(lines) if line.strip()]
+    rows: set[int] = set()
+    for pos, i in enumerate(filled):
+        if not celled[i]:
+            continue
+        near = [filled[j] for j in (pos - 1, pos + 1) if 0 <= j < len(filled)]
+        if lines[i].lstrip().startswith("|") or any(celled[j] for j in near):
+            rows.add(i)
+    return rows
+
+
+def _heading_candidates(body: str) -> list[str]:
+    """The heading-like lines of ``body`` in order, rows of its tables left out."""
+    lines = body.splitlines()
+    rows = _table_row_indexes(lines)
+    return [
+        line for i, line in enumerate(lines)
+        if i not in rows and _is_heading_line(line)
+    ]
 
 
 def _is_heading_line(line: str) -> bool:
     text = line.strip().lstrip("#").strip()
     if not text or len(text) >= HEADING_RESERVE or text[-1] in ".,;":
-        return False
-    # A table row (a header or a numbered item row) names cells, not a section.
-    if _is_table_row(text):
         return False
     if len(text.split()) > _MAX_HEADING_WORDS:
         return False
@@ -308,11 +342,11 @@ def heading_line_for_page(
         if named:
             return " - ".join(named)[: HEADING_RESERVE - 1]
     first = ""
-    for line in page_text.splitlines():
-        if _is_heading_line(line):
-            if running is None or not running(line):
-                return line.strip()
-            first = first or line.strip()
+    # A table row (a header or a numbered item row) names cells, not a section.
+    for line in _heading_candidates(page_text):
+        if running is None or not running(line):
+            return line.strip()
+        first = first or line.strip()
     return first
 
 
@@ -330,8 +364,7 @@ def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] 
     labels = [
         _Label(text=line.strip(), left=0.0, height=0.0, page=page)
         for page, body in page_texts.items()
-        for line in body.splitlines()
-        if _is_heading_line(line)
+        for line in _heading_candidates(body)
     ]
     found = running_lines(labels, len(page_texts))
     return found.holds if found.masks else None
