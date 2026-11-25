@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.evidence_conflicts import _coordinated, _groups, detect, extract
+from app.agents.evidence_conflicts import _candidates, _coordinated, _groups, _terms, detect, extract
 
 
 def _rows(*pairs: tuple[str, str]) -> list[dict[str, str]]:
@@ -90,8 +90,35 @@ def test_coordination_gap(gap, joined):
         # Two kinds side by side are never one coordination.
         ("a 150 mm layer and 93% of the maximum dry density", [(0, 0), (1, 1)]),
         ("a 40 kN load or 25 mm deflection", [(0, 0), (1, 1)]),
+        # A bare coordinator between two kinds: the gap alone would join
+        # them, the kinds keep them apart.
+        ("a layer of 150 mm and 93% of the maximum dry density", [(0, 0), (1, 1)]),
+        ("a load of 40 kN or 25 mm under it", [(0, 0), (1, 1)]),
     ],
 )
 def test_runs_join_one_kind_only(clause, runs):
     vals = [v for v in extract(clause) if v.kind != "text"]
     assert _groups(clause, vals) == runs
+
+
+@pytest.mark.parametrize(
+    "passage, before_word, after_word",
+    [
+        # The run is long: the word before it is more than a window's width
+        # from the last value, so only the run's own window reaches it.
+        ("Specimens were rolled to eighty-eight percent (88%), ninety percent (90%), "
+         "ninety-one percent (91%), ninety-two percent (92%) or ninety-three percent (93%) "
+         "of modified Proctor density.", "rolled", "Proctor"),
+        ("Bar cover was set at forty millimetres (40 mm), forty-five millimetres (45 mm), "
+         "fifty millimetres (50 mm), fifty-five millimetres (55 mm) and sixty millimetres "
+         "(60 mm) to the outer face of the wall.", "cover", "outer"),
+    ],
+)
+def test_every_value_of_a_run_shares_the_run_neighbourhood(passage, before_word, after_word):
+    cands = _candidates(_rows(("Test Report", passage)))
+    assert len(cands) == 5
+    shared = cands[0].sent_terms
+    assert all(c.sent_terms == shared for c in cands)
+    assert _terms(before_word) <= shared and _terms(after_word) <= shared
+    assert all(_terms(before_word) <= c.local_terms and _terms(after_word) <= c.local_terms
+               for c in cands)
