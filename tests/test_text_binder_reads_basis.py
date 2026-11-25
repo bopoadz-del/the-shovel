@@ -151,3 +151,62 @@ def test_declared_input_left_unbound_is_skipped(invented, text, expected):
 )
 def test_neighbouring_figure_bounds_the_clause(invented, text, expected):
     assert _bind(invented["zz_basis_period"], text).get("work_value") == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A hyphenated cue is the same cue; joined letters are not.
+        ("work value 1,250,000 to-date", None),
+        ("work value 1,250,000 todate", 1250000.0),
+        # A cue must be whole words: a longer word that starts with one is not it.
+        ("work value 1,250,000 to dateline", 1250000.0),
+        ("work value 1,250,000 to date", None),
+        # A full stop after the figure ends its clause; a decimal point does not.
+        ("work value 1,250,000. To date 9,000,000", 1250000.0),
+        ("work value 1,250.5 to date", None),
+    ],
+)
+def test_cue_words_and_clause_edges(invented, text, expected):
+    assert _bind(invented["zz_basis_period"], text).get("work_value") == expected
+
+
+@pytest.mark.parametrize("text", ["", "work value"])
+def test_no_figure_binds_nothing(invented, text):
+    assert _bind(invented["zz_basis_period"], text) == {}
+
+
+@pytest.mark.parametrize(
+    ("value", "kept"),
+    [
+        # A flag is not an amount, even when it equals a figure written on the
+        # other basis (True == 1.0), so it is never dropped as one.
+        (True, True),
+        (1.0, False),
+    ],
+)
+def test_only_an_amount_is_dropped(invented, value, kept):
+    from app.lib.construction_formulas import _drop_figures_of_other_basis
+
+    found = {"work_value": value}
+    _drop_figures_of_other_basis(formula_registry.get("zz_basis_period"), "1 to date", found)
+    assert ("work_value" in found) is kept
+
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A comma written straight against a figure is not a clause break, so
+        # the cue before it still marks the figure. (The label binder does not
+        # bind a label written flush against a figure, so this is read from
+        # the clause reader itself.)
+        ("to date,1,250,000", [(1250000.0, "cumulative")]),
+        # A comma followed by a space is a clause break.
+        ("to date, 1,250,000", []),
+    ],
+)
+def test_comma_against_a_figure_is_not_a_clause_break(text, expected):
+    from app.lib.construction_formulas import _figure_bases
+
+    assert _figure_bases(text) == expected
