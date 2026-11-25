@@ -255,3 +255,20 @@ def test_a_minus_after_a_figure_is_a_subtraction_not_a_negative(working):
     out = _gated({"fixed_costs": 12.0, "price_per_unit": 15.0, "variable_cost_per_unit": 18.0},
                  f"Revenue then works out as {working}.\nSource: Break-even point (platform calculator)")
     assert "Source: Break-even point" not in out, out
+
+
+@pytest.mark.parametrize("fixed,price,variable", [
+    (20_000_000_000.0, 10.0, 5.0),
+    (1_000.0, 0.00008, 0.00003),
+])
+def test_a_figure_beyond_ten_digits_or_below_a_ten_thousandth_prints_in_full(
+        fixed, price, variable):
+    # Ten significant figures in ``g`` form switch to an exponent at 1e10 and
+    # below 1e-4; the working must still print every figure positionally.
+    import re
+    w = break_even_point(fixed, price, variable)["working"]
+    assert not re.search(r"\de[+-]?\d", " ".join(w).lower())
+    p, v, c = _printed(w[0])
+    assert (p, v) == pytest.approx((price, variable)) and c == pytest.approx(p - v)
+    f, c2, units = _printed(w[1])[:3]
+    assert f == pytest.approx(fixed) and units == pytest.approx(f / c2, rel=1e-9)
