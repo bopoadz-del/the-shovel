@@ -57,3 +57,32 @@ def test_page_is_filed_under_the_subject_not_the_code(code, subject):
 def test_label_with_only_empty_marks_after_it_is_still_a_heading(line):
     # The value is only brackets: no token is left, so it names no code.
     assert _is_heading_line(line) is True
+
+
+@pytest.mark.parametrize("label", ["SUBCONTRACT REFERENCE NO", "SUPPLIER DELIVERY REF NO"])
+def test_a_label_at_the_length_bound_is_read_as_a_label(label):
+    assert len(label) == 24
+    assert _is_heading_line(f"{label}: KX/07") is False
+
+
+@pytest.mark.parametrize("label", ["SUBCONTRACTS REFERENCE NO", "SUPPLIER DELIVERY REFS NO"])
+def test_words_past_the_label_bound_are_a_title(label):
+    # 25 characters before the colon: the words are part of the line, not a label.
+    assert len(label) == 25
+    assert _is_heading_line(f"{label}: KX/07") is True
+
+
+@pytest.mark.parametrize("line", ["SK-12 GA", "C/04 WC LAYOUT"])
+def test_a_two_letter_word_beside_a_code_is_a_title(line):
+    assert _is_heading_line(line) is True
+
+
+@pytest.mark.parametrize("line", ["REF-MNO-0031 B", "Ref: KX/07 C"])
+def test_a_single_letter_beside_a_code_is_still_a_code(line):
+    # A revision letter is not a word.
+    assert _is_heading_line(line) is False
+
+
+@pytest.mark.parametrize("line", ["REF: C0451", "OUR REF: 22B07"])
+def test_a_code_of_letters_and_digits_is_not_a_word(line):
+    assert _is_heading_line(line) is False
