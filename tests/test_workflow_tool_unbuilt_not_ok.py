@@ -103,3 +103,54 @@ def test_a_workflow_outside_the_catalogue_is_not_run(named, offered, monkeypatch
     # The offered workflow is reached through the same door.
     assert _tool(offered[0], OWN_FIGURE_ASKS[0])["ok"] is True
     assert ran == offered
+
+
+def _engine_returns(monkeypatch, action, result):
+    from app.core import predefined_reasoning
+
+    async def engine(_action, context, session):
+        return dict(result)
+    monkeypatch.setattr(predefined_reasoning, "run_workflow", engine)
+    monkeypatch.setattr(driver_routes, "catalogue", lambda: [action])
+
+
+@pytest.mark.parametrize("action, answer", [
+    ("payment_certificate", "Certificate 4: net due 18,250.00 after retention."),
+    ("cost_estimate", "Estimate: 3 items, total 96,400.00."),
+])
+def test_a_result_that_carries_no_built_flag_is_still_ok(action, answer, monkeypatch):
+    """A container action's result has no ``built`` key at all. Only an
+    explicit ``built`` False is a dead end; an absent flag is a deliverable."""
+    _engine_returns(monkeypatch, action, {"handled": True, "status": "success",
+                                          "answer": answer, "exports": []})
+    out = _tool(action, OWN_FIGURE_ASKS[1])
+    assert out["ok"] is True and out["answer"] == answer, out
+    assert "not_built" not in out
+
+
+@pytest.mark.parametrize("action, refusal", [
+    ("payment_certificate", "The certificate needs the contract value."),
+    ("cost_estimate", "The estimate needs at least one rate."),
+])
+def test_a_refusal_that_carries_no_built_flag_asks_for_the_input(action, refusal, monkeypatch):
+    """A refusal without a ``built`` flag stays a missing-input turn, not a dead end."""
+    _engine_returns(monkeypatch, action, {"handled": True, "status": "error",
+                                          "answer": refusal, "exports": []})
+    out = _tool(action, OWN_FIGURE_ASKS[0])
+    assert out["ok"] is False and out["missing"] == refusal, out
+    assert "not_built" not in out
+
+
+@pytest.mark.parametrize("reasons, expected", [
+    ([], "the workflow staged nothing to deliver"),
+    (["structure: no activities", "render: empty tree"],
+     "structure: no activities; render: empty tree"),
+])
+def test_an_unbuilt_workflow_always_says_why(reasons, expected, monkeypatch):
+    """Every failing step is named; with none recorded the tool still says
+    that nothing was staged, never an empty reason."""
+    _engine_returns(monkeypatch, "generate_wbs", {"handled": True, "built": False,
+                                                  "unbuilt_reasons": reasons,
+                                                  "status": "success", "answer": "x"})
+    out = _tool("generate_wbs", OWN_FIGURE_ASKS[0])
+    assert out["ok"] is False and out["not_built"] == expected, out
