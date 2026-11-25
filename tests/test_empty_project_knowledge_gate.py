@@ -35,6 +35,16 @@ COVERED = "How far should a parapet coping overhang?"
 UNCOVERED = "Who signed the handover certificate for block C?"
 COVERED_BUT_DOCUMENT = "What parapet coping overhang does the specification say?"
 COVERED_OTHER_ENTRY = "What sets the spacing of road gullies?"
+UNCOVERED_OTHER = "When was the tower crane on grid 4 dismantled?"
+COVERED_OTHER_BUT_DOCUMENT = "What road gully spacing does the drawing show?"
+
+# Each covered ask with the entry it must reach.
+COVERED_ASKS = [
+    (COVERED, "roofing.parapet_coping_overhang"),
+    (COVERED_OTHER_ENTRY, "drainage.gully_spacing"),
+]
+UNCOVERED_ASKS = [UNCOVERED, UNCOVERED_OTHER]
+DOCUMENT_ASKS = [COVERED_BUT_DOCUMENT, COVERED_OTHER_BUT_DOCUMENT]
 
 
 @pytest.fixture
@@ -57,45 +67,56 @@ def kb_tool(monkeypatch):
 
 # --- the shared rule ---------------------------------------------------------
 
-def test_covered_ask_is_answered_by_an_entry(empty_project):
-    entry = runtime._knowledge_entry_answering(COVERED)
-    assert entry is not None and entry["id"] == "roofing.parapet_coping_overhang"
+@pytest.mark.parametrize("question,entry_id", COVERED_ASKS)
+def test_covered_ask_is_answered_by_an_entry(empty_project, question, entry_id):
+    entry = runtime._knowledge_entry_answering(question)
+    assert entry is not None and entry["id"] == entry_id
 
 
-def test_uncovered_ask_has_no_answering_entry(empty_project):
-    assert runtime._knowledge_entry_answering(UNCOVERED) is None
+@pytest.mark.parametrize("question", UNCOVERED_ASKS)
+def test_uncovered_ask_has_no_answering_entry(empty_project, question):
+    assert runtime._knowledge_entry_answering(question) is None
 
 
-def test_ask_about_a_document_stays_with_the_documents(empty_project):
-    assert runtime._knowledge_entry_answering(COVERED_BUT_DOCUMENT) is None
-    assert runtime._knowledge_entry_answering(COVERED) is not None
+@pytest.mark.parametrize(
+    "document_ask,plain_ask",
+    [(doc, plain) for doc, (plain, _id) in zip(DOCUMENT_ASKS, COVERED_ASKS)],
+)
+def test_ask_about_a_document_stays_with_the_documents(empty_project, document_ask, plain_ask):
+    assert runtime._knowledge_entry_answering(document_ask) is None
+    assert runtime._knowledge_entry_answering(plain_ask) is not None
 
 
-def test_blank_ask_has_no_answering_entry(empty_project):
-    assert runtime._knowledge_entry_answering("   ") is None
+@pytest.mark.parametrize("blank", ["", "   ", None])
+def test_blank_ask_has_no_answering_entry(empty_project, blank):
+    assert runtime._knowledge_entry_answering(blank) is None
 
 
 # --- the gate ----------------------------------------------------------------
 
-def test_gate_opens_for_an_ask_the_knowledge_answers(empty_project, kb_tool):
-    assert runtime._project_has_non_rag_context("empty-proj", COVERED) is True
+@pytest.mark.parametrize("question,_id", COVERED_ASKS)
+def test_gate_opens_for_an_ask_the_knowledge_answers(empty_project, kb_tool, question, _id):
+    assert runtime._project_has_non_rag_context("empty-proj", question) is True
 
 
-def test_gate_stays_shut_for_an_ask_it_does_not(empty_project, kb_tool):
-    assert runtime._project_has_non_rag_context("empty-proj", UNCOVERED) is False
+@pytest.mark.parametrize("question", UNCOVERED_ASKS)
+def test_gate_stays_shut_for_an_ask_it_does_not(empty_project, kb_tool, question):
+    assert runtime._project_has_non_rag_context("empty-proj", question) is False
 
 
-def test_gate_stays_shut_for_a_document_question(empty_project, kb_tool):
-    assert runtime._project_has_non_rag_context("empty-proj", COVERED_BUT_DOCUMENT) is False
+@pytest.mark.parametrize("question", DOCUMENT_ASKS)
+def test_gate_stays_shut_for_a_document_question(empty_project, kb_tool, question):
+    assert runtime._project_has_non_rag_context("empty-proj", question) is False
 
 
-def test_gate_stays_shut_when_no_knowledge_tool_is_registered(empty_project, monkeypatch):
+@pytest.mark.parametrize("question,_id", COVERED_ASKS)
+def test_gate_stays_shut_when_no_knowledge_tool_is_registered(empty_project, monkeypatch, question, _id):
     real_get = tool_registry.get
     monkeypatch.setattr(
         tool_registry, "get",
         lambda name: None if name == runtime._KB_TOOL else real_get(name),
     )
-    assert runtime._project_has_non_rag_context("empty-proj", COVERED) is False
+    assert runtime._project_has_non_rag_context("empty-proj", question) is False
 
 
 def test_knowledge_load_error_leaves_the_gate_to_project_context(monkeypatch, kb_tool):
