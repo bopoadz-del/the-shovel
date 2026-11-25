@@ -73,6 +73,7 @@ _STOPWORDS = {
     "their", "our", "your", "his", "her", "which", "what", "when",
     "where", "who", "whom", "how", "not", "no", "yes", "as", "than",
     "then", "there", "here", "each", "any", "some", "all", "every", "one",
+    "i", "me", "we", "us", "you", "he", "him", "she", "they", "them",
 }
 
 #: Month names and abbreviations. A calendar date ("Jan-25", "30-Jan-25")
@@ -264,6 +265,18 @@ def _head_noun(phrase: str) -> str:
     return ""
 
 
+def _before_than(words: list[str], i: int) -> bool:
+    """True when word ``i`` is a comparative because "than" follows it
+    directly ("wider than") or after an "or"/"and" pair ("thinner or
+    thicker than"). A comparison names how the asked thing relates to a
+    figure, not the thing, so it ends the question's subject phrase.
+    English marks it by grammar, so no list of comparatives is needed."""
+    nxt = words[i + 1:i + 4]
+    if nxt[:1] == ["than"]:
+        return True
+    return len(nxt) == 3 and nxt[0] in ("or", "and") and nxt[2] == "than"
+
+
 def _subject_past_generic(phrase: str) -> str:
     """The phrase that names the asked thing, past a generic value word.
 
@@ -415,8 +428,12 @@ def _question_asks(question: str) -> tuple[set[str], set[str], set[str]] | None:
     qualifiers: set[str] = set()
     if subj:
         words = subj.split()
+        bares = [w.strip(".,;:()\"'") for w in words]
         cut_i = next(
-            (i for i, w in enumerate(words) if w.strip(".,;:") in _VERB_WORDS),
+            (
+                i for i, w in enumerate(bares)
+                if w in _VERB_WORDS or _before_than(bares, i)
+            ),
             len(words),
         )
         subj = _subject_past_generic(" ".join(words[:cut_i]).strip())
