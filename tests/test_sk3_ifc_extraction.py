@@ -155,6 +155,26 @@ def test_each_element_carries_its_container_storey(tmp_path, storeys, placed):
     assert got == sorted(placed)
 
 
+@pytest.mark.parametrize(
+    "placed",
+    [
+        [("IfcWall", "A")],
+        [("IfcColumn", "A"), ("IfcBeam", "A")],
+    ],
+)
+def test_element_on_an_unnamed_storey_keeps_an_empty_storey(tmp_path, placed):
+    # Contained in a storey the model leaves unnamed: the element is still
+    # on a storey ("" key), unlike an uncontained element (no key at all).
+    model = _model(["A"], placed)
+    for st in model.by_type("IfcBuildingStorey"):
+        st.Name = None
+    result = _extract(tmp_path, model)
+    classes = {cls for cls, _ in placed}
+    rows = [e for e in result["building_elements"] if e["ifc_type"] in classes]
+    assert len(rows) == len(placed)
+    assert all(e.get("storey") == "" for e in rows)
+
+
 @pytest.mark.parametrize("loose", [("IfcWall",), ("IfcColumn", "IfcBeam")])
 def test_uncontained_element_has_no_storey_key(tmp_path, loose):
     result = _extract(tmp_path, _model(["A"], [], loose=loose))
