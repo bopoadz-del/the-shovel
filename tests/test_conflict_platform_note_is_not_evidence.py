@@ -81,3 +81,48 @@ def test_a_bracketed_section_label_leading_document_text_is_still_text(label):
                  lead + "\n" + label + "Retention percentage (4%) of each interim payment.")]
     docs = {d for _v, d in _values(detect(answer, rows))}
     assert docs == {"Harbour Wall Conditions.pdf", "Harbour Wall General Terms.pdf"}
+
+
+_STEEL_ROWS = [
+    _row("Pier Deck Specification.pdf", "Deck steelwork shall be grade S355."),
+    _row("Pier Deck Drawing D-210.pdf", "Deck steelwork: grade S275."),
+]
+_RANKINGS = [
+    ("Should the Drawings and the Specification disagree, the Drawings shall prevail",
+     "Pier Deck Drawing D-210.pdf"),
+    ("Where the Specification and the Drawings conflict, the Specification shall govern",
+     "Pier Deck Specification.pdf"),
+]
+
+
+@pytest.mark.parametrize("statement, _governs", _RANKINGS)
+def test_a_precedence_statement_only_a_platform_note_quotes_names_no_winner(statement, _governs):
+    """``_precedence`` reads the same row text: a ranking that sits only in a
+    note quoting the search item is no document's precedence statement."""
+    note = _CUT_NOTE.format(item=statement)
+    rows = _STEEL_ROWS + [_row("Pier General Conditions.pdf", "Notices shall be in writing.\n" + note)]
+    found = detect("The deck steel is grade S355.", rows)
+    assert found and found[0]["governs"] is None
+    assert found[0]["basis_document"] is None
+
+
+@pytest.mark.parametrize("statement, governs", _RANKINGS)
+def test_the_same_precedence_statement_in_the_documents_own_text_names_the_winner(statement, governs):
+    rows = _STEEL_ROWS + [_row("Pier General Conditions.pdf", "Notices shall be in writing.\n" + statement + ".")]
+    found = detect("The deck steel is grade S355.", rows)
+    assert found and found[0]["governs"] == governs
+    assert found[0]["basis_document"] == "Pier General Conditions.pdf"
+
+
+@pytest.mark.parametrize("case, cell", [(0, "Late Completion Charges: 0.06%"),
+                                        (2, "Retention Percentage: 4%")])
+def test_document_lines_around_a_dropped_note_stay_separate_lines(case, cell):
+    """Dropping a note keeps the document's own lines apart: a table cell
+    that ends in its value is not glued to the next line's first word (which
+    would hide the value and lose a real conflict)."""
+    answer, governing, lead, item = _CASES[case]
+    other = "\n".join([lead, cell, _CUT_NOTE.format(item=item),
+                       "Interim payments are certified monthly by the Supervisor."])
+    rows = [_row("Harbour Wall Conditions.pdf", governing), _row("Harbour Wall General Terms.pdf", other)]
+    docs = {d for _v, d in _values(detect(answer, rows))}
+    assert docs == {"Harbour Wall Conditions.pdf", "Harbour Wall General Terms.pdf"}
