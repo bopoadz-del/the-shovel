@@ -17,7 +17,14 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.evidence_conflicts import _candidates, _coordinated, _groups, _terms, detect, extract
+from app.agents.evidence_conflicts import (
+    _candidates,
+    _coordinated,
+    _groups,
+    _terms,
+    detect,
+    extract,
+)
 
 
 def _rows(*pairs: tuple[str, str]) -> list[dict[str, str]]:
@@ -106,12 +113,12 @@ def test_runs_join_one_kind_only(clause, runs):
     [
         # The run is long: the word before it is more than a window's width
         # from the last value, so only the run's own window reaches it.
-        ("Specimens were rolled to eighty-eight percent (88%), ninety percent (90%), "
-         "ninety-one percent (91%), ninety-two percent (92%) or ninety-three percent (93%) "
-         "of modified Proctor density.", "rolled", "Proctor"),
-        ("Bar cover was set at forty millimetres (40 mm), forty-five millimetres (45 mm), "
-         "fifty millimetres (50 mm), fifty-five millimetres (55 mm) and sixty millimetres "
-         "(60 mm) to the outer face of the wall.", "cover", "outer"),
+        (("Specimens were rolled to eighty-eight percent (88%), ninety percent (90%), "
+          "ninety-one percent (91%), ninety-two percent (92%) or ninety-three percent (93%) "
+          "of modified Proctor density."), "rolled", "Proctor"),
+        (("Bar cover was set at forty millimetres (40 mm), forty-five millimetres (45 mm), "
+          "fifty millimetres (50 mm), fifty-five millimetres (55 mm) and sixty millimetres "
+          "(60 mm) to the outer face of the wall."), "cover", "outer"),
     ],
 )
 def test_every_value_of_a_run_shares_the_run_neighbourhood(passage, before_word, after_word):
