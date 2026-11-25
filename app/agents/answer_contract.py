@@ -830,6 +830,23 @@ def _introduces_list(par: str) -> bool:
     return last.endswith(":") or bool(_HEADING_RE.match(last))
 
 
+#: Words that point at the block after them as a ":" does. A bare "below"
+#: is not one: it also places a thing ("the slab below grade").
+_NEXT_BLOCK_RE = re.compile(
+    r"\b(?:the\s+following|as\s+follows"
+    r"|(?:shown|listed|set\s+out|given|tabulated|summari[sz]ed|list|table)\s+below"
+    r"|below\s+(?:is|are|lists?|shows?|gives?))\b",
+    re.IGNORECASE,
+)
+
+
+def _names_next_block(par: str) -> bool:
+    """The paragraph's last sentence points at what follows in words ("the
+    list below covers ...", "as follows.") rather than with a ``:``."""
+    sentences = [s for s in _sentences(_nonblank(par)[-1].strip()) if s.strip()]
+    return bool(sentences) and bool(_NEXT_BLOCK_RE.search(sentences[-1]))
+
+
 def _cut_item(line: str) -> tuple[str, str | None]:
     """A list item cut to its first sentence, and the item word for word when
     it was cut (else None). Every marker the item carried stays on it."""
@@ -893,8 +910,13 @@ def _lead_and_details(body: str) -> tuple[str, str | None]:
         i += 1
     lead_pars = pars[:i]
     # A lead that ends introducing what follows (``...:`` or a heading)
-    # takes the paragraph it introduces, list or not.
-    if i < len(pars) and _introduces_list(lead_pars[-1]) and not heading(pars[i]):
+    # takes the paragraph it introduces, list or not. A lead whose last
+    # sentence names the next block in words ("the list below ...") takes
+    # it only when that block is a list or a table.
+    if i < len(pars) and not heading(pars[i]) and (
+        _introduces_list(lead_pars[-1])
+        or (_names_next_block(lead_pars[-1]) and _is_list(pars[i]))
+    ):
         lead_pars.append(pars[i])
         i += 1
     cut_items: list[str] = []

@@ -522,3 +522,68 @@ def test_a_stated_line_ending_on_a_colon_takes_what_it_introduces(text, lead, de
     assert done.text == lead
     assert done.details == details
 
+
+
+# ── a lead that names the next block in words takes it when it is a list ────
+
+@pytest.mark.parametrize("text,lead,details", [
+    ("The register holds 412 drawings, so the table below covers the first 40 only.\n\n"
+     "| Discipline | Count |\n| --- | --- |\n| Civil | 22 |\n| MEP | 18 |\n\n"
+     "Later pages list the remaining disciplines.",
+     "The register holds 412 drawings, so the table below covers the first 40 only.\n\n"
+     "| Discipline | Count |\n| --- | --- |\n| Civil | 22 |\n| MEP | 18 |",
+     "Later pages list the remaining disciplines."),
+    ("Three pours are open. They are listed below.\n\n"
+     "- Raft bay 2\n- Core wall lift 4\n\n"
+     "Each pour needs a signed permit.",
+     "Three pours are open. They are listed below.\n\n"
+     "- Raft bay 2\n- Core wall lift 4",
+     "Each pour needs a signed permit."),
+    ("The open snags are as follows.\n\n1. Door closer loose\n2. Grout cracked\n\nNone is urgent.",
+     "The open snags are as follows.\n\n1. Door closer loose\n2. Grout cracked",
+     "None is urgent."),
+])
+def test_a_lead_naming_the_next_list_in_words_takes_it(text, lead, details):
+    done = _apply(text)
+    assert done.text == lead
+    assert done.details == details
+
+
+@pytest.mark.parametrize("text,lead", [
+    # "below" places a thing; it points at nothing.
+    ("The tank sits 3 m below the plant deck.\n\n- Volume 40 m3\n- Steel shell",
+     "The tank sits 3 m below the plant deck."),
+    ("The duct runs 2 m below grade.\n\n| Run | Depth |\n| --- | --- |\n| A | 2 m |",
+     "The duct runs 2 m below grade."),
+    # The pointer is not in the last sentence.
+    ("The table below is from the 2023 survey. It shows 5 boreholes.\n\n- BH1\n- BH2",
+     "The table below is from the 2023 survey. It shows 5 boreholes."),
+    ("The list below is partial. Only 2 sheets were read.\n\n- A-101\n- A-102",
+     "The list below is partial. Only 2 sheets were read."),
+])
+def test_a_lead_not_pointing_at_the_next_list_leaves_it(text, lead):
+    done = _apply(text)
+    assert done.text == lead
+    assert done.details.startswith(("-", "|"))
+
+
+@pytest.mark.parametrize("text,lead", [
+    # The block named is prose, not a list or a table.
+    ("The lift has 2 cars, set out below.\n\nEach car serves every floor.",
+     "The lift has 2 cars, set out below."),
+    ("The duty of the 2 pumps is given below.\n\nIt delivers 12 l/s at 30 m head.",
+     "The duty of the 2 pumps is given below."),
+])
+def test_a_lead_naming_a_prose_block_leads_alone(text, lead):
+    done = _apply(text)
+    assert done.text == lead
+
+
+@pytest.mark.parametrize("par,named", [
+    ("The rates are tabulated below.", True),
+    ("Below are the 4 cores.", True),
+    ("The rates sit below the line.", False),
+    ("Below grade the wall is 300 mm.", False),
+])
+def test_names_next_block_reads_the_words(par, named):
+    assert answer_contract._names_next_block(par) is named
