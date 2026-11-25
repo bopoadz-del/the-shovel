@@ -142,6 +142,26 @@ def test_judge_retrieval_rule_alone(needle, hit, miss):
     assert "(no sources cited)" in none["reasons"][0]
 
 
+@pytest.mark.parametrize("needle,name,doc_id,other", [
+    ("Pump_Schedule", "pump_schedule_rev2.xlsx", "", "fan_schedule.xlsx"),
+    ("DOC-9", "", "doc-9", "doc-8"),
+])
+def test_judge_retrieval_rule_ignores_case_on_both_sides(
+        needle, name, doc_id, other):
+    # The golden set's needle may be written in any case; the cited source
+    # matches it whatever the case of either side. A different source still
+    # misses, so the rule is not just "any source passes".
+    entry = _entry(retrieval=needle)
+    good = judge(entry, _res("An answer.",
+                             sources=[{"doc_name": name, "doc_id": doc_id}]))
+    assert good["verdict"] == "PASS", good["reasons"]
+    assert good["retrieval_ok"] is True
+    bad = judge(entry, _res("An answer.",
+                            sources=[{"doc_name": other, "doc_id": other}]))
+    assert bad["verdict"] == "FAIL"
+    assert bad["retrieval_ok"] is False
+
+
 @pytest.mark.parametrize("sources", [[], [{"doc_name": "x.pdf"}]])
 def test_judge_without_a_retrieval_rule_does_not_grade_sources(sources):
     v = judge(_entry(expect=[r"ok"]), _res("ok", sources=sources))
