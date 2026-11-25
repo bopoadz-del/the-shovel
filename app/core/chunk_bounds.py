@@ -257,38 +257,51 @@ def _is_date_line(text: str) -> bool:
 
 # The cell separator the table extractors write (" | "). Only the pipe:
 # ";" and tabs, which chunk_noise.cells also splits on, occur in headings.
-_TABLE_CELL_SPLIT = re.compile(r"\s*\|\s*")
+_TABLE_CELL_SEPARATOR = "|"
+# Two lines of two cells each are as often two titles holding the separator
+# as a table: a run of equal lines is taken as a table only with more shape
+# than that, at least this many columns or this many rows.
+_TABLE_MIN_COLUMNS = 3
+_TABLE_MIN_ROWS = 3
 
 
-def _cell_count(line: str) -> int:
-    """The non-blank cells of ``line`` split by the table cell separator."""
-    return sum(1 for cell in _TABLE_CELL_SPLIT.split(line.strip()) if cell)
+def _separator_count(line: str) -> int:
+    """The cell separators of ``line``; a markdown ``#`` heading holds none."""
+    if line.lstrip().startswith("#"):
+        return 0
+    return line.count(_TABLE_CELL_SEPARATOR)
 
 
 def _table_row_indexes(lines: list[str]) -> set[int]:
     """Indexes of the lines of ``lines`` that are rows of a table.
 
-    A line of two or more cells is a row when it opens on the separator
-    (markdown table syntax) or when the nearest non-blank line before or
-    after it has two or more cells too: the extractors write a table as a
-    block of rows. A single such line between other text is a title that
-    happens to hold the separator, and a markdown ``#`` heading is never a
-    row.
+    The extractors write every row of one table with one separator per
+    column gap, blank cells kept, so a one-cell section row carries as many
+    separators as its header. A table is therefore a run of consecutive
+    non-blank lines with the same separator count, of at least
+    ``_TABLE_MIN_COLUMNS`` columns or ``_TABLE_MIN_ROWS`` rows. A line that
+    opens on the separator and holds two or more is a markdown table row on
+    its own. A title holding the separator, alone or above a table of a
+    different width, is no row, and a markdown ``#`` heading never is.
     """
-    celled = [
-        bool(line.strip())
-        and not line.lstrip().startswith("#")
-        and _cell_count(line) >= 2
-        for line in lines
-    ]
     filled = [i for i, line in enumerate(lines) if line.strip()]
-    rows: set[int] = set()
-    for pos, i in enumerate(filled):
-        if not celled[i]:
-            continue
-        near = [filled[j] for j in (pos - 1, pos + 1) if 0 <= j < len(filled)]
-        if lines[i].lstrip().startswith("|") or any(celled[j] for j in near):
-            rows.add(i)
+    counts = {i: _separator_count(lines[i]) for i in filled}
+    rows = {
+        i for i in filled
+        if counts[i] >= 2 and lines[i].lstrip().startswith(_TABLE_CELL_SEPARATOR)
+    }
+    start = 0
+    while start < len(filled):
+        width = counts[filled[start]]
+        end = start + 1
+        while end < len(filled) and counts[filled[end]] == width:
+            end += 1
+        run = filled[start:end]
+        if width and len(run) >= 2 and (
+            width + 1 >= _TABLE_MIN_COLUMNS or len(run) >= _TABLE_MIN_ROWS
+        ):
+            rows.update(run)
+        start = end
     return rows
 
 
@@ -364,7 +377,11 @@ def _running_heading_lines(page_texts: dict[int, str]) -> Callable[[str], bool] 
     labels = [
         _Label(text=line.strip(), left=0.0, height=0.0, page=page)
         for page, body in page_texts.items()
-        for line in _heading_candidates(body)
+        # Every heading-like line, table rows too: a table header repeated
+        # page after page is furniture, and is only known as such when its
+        # repeats are counted.
+        for line in body.splitlines()
+        if _is_heading_line(line)
     ]
     found = running_lines(labels, len(page_texts))
     return found.holds if found.masks else None
