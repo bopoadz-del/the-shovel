@@ -99,3 +99,49 @@ def test_text_without_row_codes_keeps_fallback_breaks(text: str) -> None:
     chunks = chunk_text_with_overlap(text, target_chars=300, overlap=50)
     assert len(chunks) > 3
     assert all(len(c) <= 300 for c in chunks[:-1])
+
+
+# A prose line that opens like a code but is not one: a lower-case letter, or a
+# capital and a number with no dotted part. Neither is a row break: the chunks
+# are those of the same text with that letter swapped for a sign no pattern
+# can match (same length, so only a row break could move a boundary).
+_LOOK_ALIKES = [
+    ("a 2.5 m wide haul road runs along the east boundary of the site.", "a 2.5", "~ 2.5"),
+    ("A 4 storey frame is braced by the core walls on each level.", "A 4 s", "~ 4 s"),
+    ("b 12.75 m of kerb is renewed where the trench crosses the road.", "b 12.75", "~ 12.75"),
+    ("C 30 concrete is placed in the blinding under every footing.", "C 30 c", "~ 30 c"),
+]
+
+
+@pytest.mark.parametrize("line, code, sign", _LOOK_ALIKES,
+                         ids=["lower-case-dotted", "capital-undotted",
+                              "lower-case-dotted-2", "capital-undotted-2"])
+def test_a_look_alike_line_start_is_no_row_break(line: str, code: str, sign: str) -> None:
+    text = "\n".join(_filler("Site", 7) + [line] + _filler("Site", 12))
+    swapped = text.replace("\n" + code, "\n" + sign)
+    assert swapped != text and len(swapped) == len(text)
+    breaks = [len(c) for c in chunk_text_with_overlap(text, target_chars=300, overlap=50)]
+    assert breaks == [len(c) for c in chunk_text_with_overlap(swapped, target_chars=300, overlap=50)]
+
+
+# The same line with a real row code at its start IS a break: the control that
+# shows the comparison above can see a row break at all.
+@pytest.mark.parametrize("code", ["D 512.4", "E 604.12"], ids=["code-D", "code-E"])
+def test_a_row_code_at_line_start_moves_the_break(code: str) -> None:
+    text = "\n".join(_filler("Site", 7) + [f"{code} concrete is placed in the blinding."] + _filler("Site", 12))
+    swapped = text.replace("\n" + code[0], "\n~")
+    breaks = [len(c) for c in chunk_text_with_overlap(text, target_chars=300, overlap=50)]
+    assert breaks != [len(c) for c in chunk_text_with_overlap(swapped, target_chars=300, overlap=50)]
+
+
+# A row match starts on the row's own line, never on a blank line above it,
+# so the break the chunker takes from ``match.start()`` is that line's start.
+@pytest.mark.parametrize("above, row", [
+    ("Bill notes end here.\n\n\n", "D 512.1\tSupply concrete"),
+    ("Preliminaries close.\n  \t\n", "  E 604.3\tExcavate trench"),
+], ids=["blank-lines-above", "whitespace-line-above"])
+def test_a_row_match_starts_on_its_own_line(above: str, row: str) -> None:
+    from app.core.doc_index import _BOQ_ITEM_PATTERN
+    match = _BOQ_ITEM_PATTERN.search(above + row)
+    assert match is not None
+    assert match.start() == len(above)
