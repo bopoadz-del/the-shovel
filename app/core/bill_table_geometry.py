@@ -939,9 +939,15 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     # alone, as before, and ``Running.holds`` still finds it by likeness. Two
     # different headings alike in their letters ("Internal Finishes",
     # "External Finishes") differ by more than one glyph of a word, are not a
-    # misreading of each other, and stay two lines.
+    # misreading of each other, and stay two lines. Two headings one glyph
+    # apart ("Internal Doors", "Internal Floors") are told apart by the pages:
+    # each section holds a run of pages of its own, one wholly before the
+    # other, while a misreading falls among its line's other readings
+    # (:func:`_interleaved`). Forms whose pages do not interleave are not
+    # pooled.
     recurs = sorted(m for m, ps in on.items() if len(ps) >= MIN_READING_PAGES)
-    pooled = _misread_forms(recurs, recurs)
+    pooled = {m: [o for o in found if _interleaved(on[m], on[o])]
+              for m, found in _misread_forms(recurs, recurs).items()}
     pages_of = {m: set().union(*(on[o] for o in pooled.get(m, [m]))) for m in on}
     texts_of = {m: set().union(*(raw[o] for o in pooled.get(m, [m]))) for m in on}
     masks = {m for m, ps in pages_of.items() if len(ps) * 2 > pages}
@@ -957,6 +963,14 @@ def running_lines(printed: Sequence[_Label], pages: int) -> Running:
     forms = frozenset(m for m in readings if m.count("#") == label.count("#"))
     masks.difference_update(m for m in varying if m not in readings)
     return Running(masks, label, forms)
+
+
+def _interleaved(a: set[int], b: set[int]) -> bool:
+    """True when neither page set lies wholly before the other: the two
+    readings share the same run of pages. Sets that only meet at a boundary
+    (``{1, 2, 3}`` and ``{4, 5, 6}``, or ``{1, 2, 3}`` and ``{3, 4}``) are two
+    runs, one after the other."""
+    return min(a) < max(b) and min(b) < max(a)
 
 
 def _slipped_word(a: str, b: str) -> bool:

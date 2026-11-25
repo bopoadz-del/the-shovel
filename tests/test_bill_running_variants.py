@@ -81,11 +81,11 @@ def _bill(runs, labels):
 
 STEADY_LABELS = ["Bill 1 Page 1-1", "Bill 1 Page 1-2", "Bill 1 Page 1-3",
                  "Bill 2 Page 2-4", "Bill 2 Page 2-5", "Bill 2 Page 2-6"]
-# One running line read three ways (a letter misread), two pages each:
-# no single form is on most of the six pages.
-MISREAD_RUN = ["Westbrook Terminal Works", "Westbrook Terminal Works",
-               "Wcstbrook Terminal Works", "Wcstbrook Terminal Works",
-               "Westbrook Terrninal Works", "Westbrook Terrninal Works"]
+# One running line read three ways (a letter misread), two pages each and
+# scattered over the bill: no single form is on most of the six pages.
+MISREAD_RUN = ["Westbrook Terminal Works", "Wcstbrook Terminal Works",
+               "Westbrook Terrninal Works", "Westbrook Terminal Works",
+               "Wcstbrook Terminal Works", "Westbrook Terrninal Works"]
 # Three different lines, two pages each: the same page spread, not one line.
 THREE_LINES = ["Westbrook Terminal Works", "Westbrook Terminal Works",
                "Harbour Quay Extension", "Harbour Quay Extension",
@@ -159,22 +159,47 @@ def test_lines_that_only_share_a_page_spread_are_not_merged(runs, stays):
 
 
 # Two different headings alike in their letters, each reprinted on the three
-# pages of its own section: two lines, never one misread line.
-@pytest.mark.parametrize("first, second, one_line", [
-    ("Internal Finishes", "External Finishes", False),
-    ("Internal Walls", "External Walls", False),
-    ("Westbrook Terminal Works", "Westbrook Terrninal Works", True),
-    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", True),
-], ids=["finishes-two-headings", "walls-two-headings", "glyph-read-as-two", "glyph-read-as-one"])
-def test_alike_headings_that_each_recur_are_pooled_only_when_one_is_misread(first, second, one_line):
-    runs = [first] * 3 + [second] * 3
+# pages of its own section: two lines, never one misread line. A one-glyph
+# slip between them ("Doors"/"Floors") is told apart by the pages: each holds
+# a run of its own; a misreading falls among its line's other readings.
+BLOCKS = [0, 0, 0, 1, 1, 1]
+SCATTERED = [0, 1, 0, 1, 1, 0]
+
+
+@pytest.mark.parametrize("first, second, layout, one_line", [
+    ("Internal Finishes", "External Finishes", SCATTERED, False),
+    ("Internal Walls", "External Walls", SCATTERED, False),
+    ("Internal Doors", "Internal Floors", BLOCKS, False),
+    ("External Piling", "External Tiling", BLOCKS, False),
+    ("Westbrook Terminal Works", "Westbrook Terrninal Works", BLOCKS, False),
+    ("Westbrook Terminal Works", "Westbrook Terrninal Works", SCATTERED, True),
+    ("Westbrook Terminal Works", "Wcstbrook Terminal Works", SCATTERED, True),
+    ("Internal Doors", "Internal Floors", SCATTERED, True),
+], ids=["finishes-two-headings", "walls-two-headings", "doors-floors-two-sections",
+        "piling-tiling-two-sections", "slip-in-a-run-of-its-own", "glyph-read-as-two",
+        "glyph-read-as-one", "doors-floors-scattered"])
+def test_alike_headings_that_each_recur_are_pooled_only_when_one_is_misread(
+        first, second, layout, one_line):
+    runs = [(first, second)[i] for i in layout]
     rows = g.extract_bill_rows(_bill(runs, STEADY_LABELS))
     paths = {r.fields["description"]: r.path for r in rows}
     top = {item: paths[item][0].split(" / ")[0] for item in ("Item 1", "Item 5")}
     if one_line:
         assert top == {"Item 1": "EARTHWORKS", "Item 5": "DRAINAGE"}
     else:
-        assert top == {"Item 1": first, "Item 5": second}
+        assert top == {"Item 1": runs[0], "Item 5": runs[4]}
+
+
+@pytest.mark.parametrize("a, b, interleaved", [
+    ({1, 2, 3}, {4, 5, 6}, False),   # one run wholly before the other
+    ({4, 5, 6}, {1, 2, 3}, False),   # either order
+    ({1, 2, 3}, {3, 4}, False),      # the runs meet on one page
+    ({1, 3, 5}, {2, 4, 6}, True),    # scattered over the same pages
+    ({1, 6}, {3, 4}, True),          # one inside the other
+    ({1, 4}, {3, 5}, True),          # overlapping by one page
+], ids=["before", "after", "meet", "scattered", "inside", "overlap"])
+def test_two_readings_interleave_only_over_the_same_pages(a, b, interleaved):
+    assert g._interleaved(a, b) is interleaved
 
 
 @pytest.mark.parametrize("a, b, misread", [
@@ -186,19 +211,28 @@ def test_alike_headings_that_each_recur_are_pooled_only_when_one_is_misread(firs
     ("works", "worms", True),
     ("roads", "roofs", False),        # two separate changes
     ("terminal", "terxyzinal", False),  # one glyph read as three
+    ("ab", "ac", False),              # the slip is half the word: another word
+    ("abc", "abd", True),             # under half the word
+    ("pit", "pits", True),            # a glyph added at the end of a short word
+    ("pit", "pots", False),           # a glyph changed and one added
 ], ids=["one-for-one", "one-for-two", "dropped", "two-for-two", "whole-word", "late-glyph",
-        "two-changes", "one-for-three"])
+        "two-changes", "one-for-three", "half-the-word", "under-half", "added-at-end",
+        "changed-and-added"])
 def test_a_word_is_misread_by_one_glyph_only(a, b, misread):
     assert g._slipped_word(a, b) is misread
     assert g._slipped_word(b, a) is misread
 
 
-@pytest.mark.parametrize("b, alike", [
-    ("a" * 17 + "xyz", True),    # 17 of 20 shared: 34/40 = 0.85, on the bound
-    ("a" * 16 + "wxyz", False),  # 16 of 20 shared: 32/40 = 0.80, under it
-], ids=["on-the-bound", "under-the-bound"])
-def test_likeness_holds_at_its_bound(b, alike):
-    assert g._alike("a" * 17 + "bcd", b) is alike
+@pytest.mark.parametrize("a, b, alike", [
+    ("a" * 17 + "bcd", "a" * 17 + "xyz", True),    # 34/40 = 0.85, on the bound
+    ("a" * 17 + "bcd", "a" * 16 + "wxyz", False),  # 32/40 = 0.80, under it
+    # Different lengths: the length bound itself is 34/40 = 0.85, on it.
+    ("x" * 17, "x" * 17 + "y" * 6, True),
+    ("x" * 17, "x" * 17 + "y" * 7, False),          # 34/41, under it
+], ids=["on-the-bound", "under-the-bound", "lengths-on-the-bound", "lengths-under-the-bound"])
+def test_likeness_holds_at_its_bound(a, b, alike):
+    assert g._alike(a, b) is alike
+    assert g._alike(b, a) is alike
 
 
 @pytest.mark.parametrize("anchor, other", [
