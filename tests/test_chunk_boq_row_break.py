@@ -145,3 +145,47 @@ def test_a_row_match_starts_on_its_own_line(above: str, row: str) -> None:
     match = _BOQ_ITEM_PATTERN.search(above + row)
     assert match is not None
     assert match.start() == len(above)
+
+
+# The gap between the letter and the number may be any run of spaces or tabs
+# on the row's own line (``D  512.1``, ``E<tab>604.3``), not one space only: a
+# bill typed with those gaps keeps every row whole, as the one-space bill does.
+def _spaced_bill(letter: str, section: int, gap: str) -> list[str]:
+    return [row.replace(f"{letter} {section}.", f"{letter}{gap}{section}.", 1)
+            for row in _bill(letter, section, 16,
+                             "Supply and fix precast kerb units on a concrete bed",
+                             "including haunching and jointing as specified in clause",
+                             "measured along the face of the kerb")]
+
+
+@pytest.mark.parametrize("letter, section, gap", [
+    ("D", 512, "  "), ("D", 512, "\t"), ("E", 604, "   "), ("E", 604, " \t"),
+], ids=["two-spaces", "tab", "three-spaces", "space-tab"])
+def test_a_wide_gap_after_the_letter_keeps_every_row_whole(letter: str, section: int, gap: str) -> None:
+    rows = _spaced_bill(letter, section, gap)
+    assert all(row.startswith(f"{letter}{gap}{section}.") for row in rows)
+    chunks = chunk_text_with_overlap("\n".join(rows), target_chars=500, overlap=50)
+    torn = [row.split("\n")[0][:12] for row in rows if not any(row in c for c in chunks)]
+    assert torn == [], f"rows not whole in any chunk: {torn}"
+
+
+@pytest.mark.parametrize("code", ["D  512.4", "E\t604.12"], ids=["two-spaces", "tab"])
+def test_a_wide_gap_row_code_at_line_start_moves_the_break(code: str) -> None:
+    text = "\n".join(_filler("Site", 7) + [f"{code} concrete is placed in the blinding."] + _filler("Site", 12))
+    swapped = text.replace("\n" + code[0], "\n~")
+    breaks = [len(c) for c in chunk_text_with_overlap(text, target_chars=300, overlap=50)]
+    assert breaks != [len(c) for c in chunk_text_with_overlap(swapped, target_chars=300, overlap=50)]
+
+
+# A dotted number glued to a word (``D 512.4mm``) is a size, not an item code:
+# the code must end at a word boundary, so that line is no row break.
+@pytest.mark.parametrize("line, code", [
+    ("D 512.4mm bars are lapped at every construction joint in the wall.", "D 512.4mm"),
+    ("E 60.25x the bar diameter is the lap length used in the slab.", "E 60.25x"),
+], ids=["unit-glued", "factor-glued"])
+def test_a_number_glued_to_a_word_is_no_row_break(line: str, code: str) -> None:
+    text = "\n".join(_filler("Site", 7) + [line] + _filler("Site", 12))
+    swapped = text.replace("\n" + code[0], "\n~")
+    assert swapped != text and len(swapped) == len(text)
+    breaks = [len(c) for c in chunk_text_with_overlap(text, target_chars=300, overlap=50)]
+    assert breaks == [len(c) for c in chunk_text_with_overlap(swapped, target_chars=300, overlap=50)]
