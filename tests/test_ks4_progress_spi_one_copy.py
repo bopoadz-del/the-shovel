@@ -122,3 +122,25 @@ def test_progress_spi_helper_passes_the_envelope_error_through(monkeypatch, mess
         lambda name, params=None: {"status": "error", "error": message},
     )
     assert schedule_mod._progress_spi(50.0, 40.0) == (None, message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_data,params", [
+    ({}, {}),
+    ({"contract_value": 900000.0}, {"reporting_period": "March"}),
+])
+async def test_tracker_with_no_figures_is_an_error_not_a_ratio(container, input_data, params):
+    out = await container.progress_tracker(input_data=input_data, params=params)
+    assert out["status"] == "error"
+    assert "overall_progress" not in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params,want_spi", [
+    ({"planned_percent": 40.0}, 0.0),
+    ({"actual_percent": 30.0}, None),
+])
+async def test_tracker_with_one_figure_still_answers(container, params, want_spi):
+    out = await container.progress_tracker(input_data={}, params=params)
+    assert out["status"] == "success", out
+    assert out["overall_progress"]["schedule_performance_index"] == want_spi
