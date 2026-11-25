@@ -9,7 +9,8 @@ and sorts each one into a claim it can test against the tracked tree:
 
 * **repo path**: a token that contains ``/`` and whose first segment is an
   entry at the repo root (``app/...``, ``scripts/...``, ``.cursor/...``). It
-  must exist as a file or directory, as ``<path>.py`` or as a package. A path
+  must exist as a file, as a directory (a package is one) or as
+  ``<path>.py``. A path
   git ignores (a build output, a run-state file) is a runtime artifact, not a
   claim about the code, so it is not checked. A token whose first segment is
   not a root entry (a model id, a unit such as ``AED/m2``, an eslint rule) is
@@ -114,7 +115,6 @@ class Tree:
             path in self.files
             or path in self.dirs
             or f"{path}.py" in self.files
-            or f"{path}/__init__.py" in self.files
         )
 
 

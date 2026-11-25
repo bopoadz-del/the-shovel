@@ -142,6 +142,31 @@ def test_patterns_commands_and_plain_words_make_no_claim(tmp_path, token):
 
 
 @pytest.mark.parametrize(
+    "token",
+    [
+        "pkg/*.py",
+        "tools/*.sh",
+        "pkg/$NAME.py",
+        "tools/$X/run.sh",
+        "pkg/runner.py --flag",
+        "tools/do_thing.sh arg",
+    ],
+)
+def test_a_pattern_or_command_over_a_root_path_makes_no_claim(tmp_path, token):
+    """Mutation killed: dropping the ``*``, ``$`` or space guard. Each token is
+    rooted at a tree entry and names nothing that exists, so without its guard
+    it would be reported as a stale path."""
+    assert _stale(_repo(tmp_path), f"run `{token}`\n") == []
+
+
+@pytest.mark.parametrize("token", ["RENAMED.PY", "Lint.YML"])
+def test_an_upper_case_source_extension_is_still_a_file_name(tmp_path, token):
+    """Mutation killed: matching the extension case-sensitively, which lets a
+    stale ``NAME.PY`` pass as no claim at all."""
+    assert _stale(_repo(tmp_path), f"run `{token}`\n") == [("file", token)]
+
+
+@pytest.mark.parametrize(
     ("doc", "line"), [("ok `pkg/runner.py`\n`pkg/gone.py`\n", 2), ("`gone.py`\n", 1)]
 )
 def test_a_stale_reference_names_its_doc_line(tmp_path, doc, line):
