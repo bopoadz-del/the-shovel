@@ -417,3 +417,15 @@ def test_one_criterion_twice_in_one_record_makes_no_record(text):
 ])
 def test_only_words_longer_than_three_letters_lose_a_plural_s(label, key):
     assert stated_records._key(label) == key
+
+
+@pytest.mark.parametrize("rule", [
+    "technical score = rating x 10",       # the figures are ratings, not the scores the scorer takes
+    "technical score: points / 2",
+])
+def test_a_rule_that_rescales_a_weighted_score_criterion_binds_nothing(rule):
+    text = ("Two offers: North 1.2 M technical score 8, South 1.0 M technical score 6. "
+            "Weights price 50 / technical 50. Who wins?")
+    assert records_completed_by_user_text(text) is not None
+    ruled = text.replace(". Who wins?", f", {rule}. Who wins?")
+    assert records_completed_by_user_text(ruled) is None
