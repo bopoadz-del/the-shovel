@@ -289,3 +289,55 @@ def test_consistent_element_missing_value_or_group_is_not_checked(second, not_ch
         els, [{"kind": "consistent", "field": "Px.Rating", "group_by": "object_type"}]
     )["rules"][0]
     assert (rule["status"], rule["not_checked"]) == ("pass", not_checked)
+
+
+@pytest.mark.parametrize("left,right,status,not_checked", [
+    ("900mm", "1000", "not_applicable", ["a"]),
+    ("1200", "1000 x", "not_applicable", ["a"]),
+    ("900", "1000", "pass", []),
+    (" 1200 ", "1000", "fail", []),
+])
+def test_compare_reads_a_number_only_when_the_whole_value_is_one(left, right, status, not_checked):
+    els = [_el("a", props={"Px.A": left, "Px.B": right})]
+    rule = check_bim_rules(
+        els, [{"kind": "compare", "field": "Px.A", "op": "<", "other": "Px.B"}]
+    )["rules"][0]
+    assert (rule["status"], rule["not_checked"]) == (status, not_checked)
+
+
+@pytest.mark.parametrize("storey_a,storey_b,status", [
+    ("L1", "L1", "fail"),
+    ("L1", "L2", "pass"),
+])
+def test_a_nested_top_level_key_falls_through_to_the_property(storey_a, storey_b, status):
+    els = [
+        _el("a", storey={"elevation": 0.0}, props={"storey": storey_a, "Px.Mark": "D1"}),
+        _el("b", storey={"elevation": 3.0}, props={"storey": storey_b, "Px.Mark": "D1"}),
+    ]
+    rule = check_bim_rules(
+        els, [{"kind": "unique", "field": "Px.Mark", "group_by": "storey"}]
+    )["rules"][0]
+    assert rule["status"] == status
+    assert rule["checked"] == 2
+
+
+@pytest.mark.parametrize("second,status", [
+    ("FR60 ", "pass"),
+    (" FR60", "pass"),
+    ("FR90", "fail"),
+])
+def test_consistent_compares_text_with_surrounding_space_trimmed(second, status):
+    els = [
+        _el("a", object_type="T1", props={"Px.Rating": "FR60"}),
+        _el("b", object_type="T1", props={"Px.Rating": second}),
+    ]
+    rule = check_bim_rules(
+        els, [{"kind": "consistent", "field": "Px.Rating", "group_by": "object_type"}]
+    )["rules"][0]
+    assert rule["status"] == status
+
+
+@pytest.mark.parametrize("kind", ["Unique", " UNIQUE "])
+def test_rule_kind_is_read_without_regard_to_case(kind):
+    compiled = compile_rules([{"kind": kind, "field": "name"}])
+    assert compiled[0]["kind"] == "unique"
