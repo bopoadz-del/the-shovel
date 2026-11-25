@@ -57,6 +57,13 @@ def test_generic_word_without_of_object_stays_generic(question):
         ("amount of the retention money", "the retention money"),
         ("slab thickness", "slab thickness"),
         ("cover to reinforcement", "cover to reinforcement"),
+        # A generic head followed by a preposition other than "of" names
+        # no object: the phrase stays whole.
+        ("quantity in the bill", "quantity in the bill"),
+        ("amount for retention money", "amount for retention money"),
+        # A trailing "of" with nothing after it is no object either.
+        ("billed quantity of", "billed quantity of"),
+        ("amount of", "amount of"),
     ],
 )
 def test_subject_past_generic(phrase, expected):
