@@ -73,8 +73,24 @@ def _unguarded_upload_refusals(text: str) -> list[str]:
         'A separate rule: say "The bolt grade is not in the drawings I searched."\n',
         "- If no line item matched, tell the user:\n"
         '  "I could not find that item. Upload your drawing register and ask again."\n',
+        # A "searched" line that ALSO asks for an upload is not the twin.
+        '- If no price was retrieved, say **"<Item> is not in the schedule I searched; '
+        'upload the newer schedule."**\n',
+        "- Missing drawing: reply \"The code is not in the register I searched. "
+        'Please upload the full register."\n',
+        # A bold-wrapped quote is a template even with no "say" before it.
+        '- Price missing:\n  **"No price on file - upload your tender schedule."**\n',
+        'Fallback for a drawing that is not there:\n**"Upload your drawing register first."**\n',
     ],
-    ids=["bare-upload", "twin-in-another-rule", "item-missing-asks-upload"],
+    ids=[
+        "bare-upload",
+        "twin-in-another-rule",
+        "item-missing-asks-upload",
+        "searched-line-also-asks-upload",
+        "searched-line-also-asks-upload-inline",
+        "bold-template-no-say-cue",
+        "bold-template-no-say-cue-2",
+    ],
 )
 def test_the_scanner_flags_an_invented_upload_refusal_with_no_searched_twin(prompt):
     assert len(_unguarded_upload_refusals(prompt)) == 1
